@@ -370,6 +370,16 @@ impl SqlRelationType {
             col.repr_canonicalize();
         }
     }
+
+    /// Constructs a `SqlRelationType` from a `ReprRelationType` by converting
+    /// each column type via [`SqlColumnType::from_repr`]. This is a lossy
+    /// inverse of `ReprRelationType::from(&SqlRelationType)`.
+    pub fn from_repr(repr: &ReprRelationType) -> Self {
+        SqlRelationType {
+            column_types: repr.column_types.iter().map(SqlColumnType::from_repr).collect(),
+            keys: repr.keys.clone(),
+        }
+    }
 }
 
 impl RustType<ProtoRelationType> for SqlRelationType {

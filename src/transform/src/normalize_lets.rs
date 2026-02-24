@@ -284,11 +284,7 @@ mod support {
                         .value::<UniqueKeys>()
                         .expect("UniqueKeys required")
                         .clone();
-                    let cols = repr_cols
-                        .iter()
-                        .map(mz_repr::SqlColumnType::from_repr)
-                        .collect();
-                    types.insert(*id, mz_repr::SqlRelationType::new(cols).with_keys(keys));
+                    types.insert(*id, mz_repr::ReprRelationType::new(repr_cols).with_keys(keys));
                 }
             }
             todo.extend(expr.children().rev().zip_eq(view.children_rev()));
@@ -317,7 +313,7 @@ mod support {
                         .iter()
                         .zip_eq(typ.column_types.iter())
                         .all(|(t1, t2)| {
-                            t1.scalar_type
+                            mz_repr::SqlScalarType::from_repr(&t1.scalar_type)
                                 .base_eq_or_repr_eq_for_assertion(&t2.scalar_type)
                         })
                     {
@@ -327,7 +323,7 @@ mod support {
                         )))?;
                     }
 
-                    typ.clone_from(new_type);
+                    *typ = mz_repr::SqlRelationType::from_repr(new_type);
                 } else {
                     panic!("Type not found for: {:?}", i);
                 }

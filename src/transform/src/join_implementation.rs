@@ -163,11 +163,7 @@ impl JoinImplementation {
                 return Ok(());
             }
 
-            let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
-            let input_repr_col_types: Vec<Vec<mz_repr::ReprColumnType>> = input_types
-                .iter()
-                .map(|t| t.column_types.iter().map(mz_repr::ReprColumnType::from).collect())
-                .collect();
+            let input_types = inputs.iter().map(|i| i.repr_typ()).collect::<Vec<_>>();
 
             // Canonicalize the equivalence classes
             if matches!(implementation, Unimplemented) {
@@ -181,12 +177,12 @@ impl JoinImplementation {
                 // the case.
                 mz_expr::canonicalize::canonicalize_equivalences(
                     equivalences,
-                    input_repr_col_types.iter(),
+                    input_types.iter().map(|t| &t.column_types),
                 );
             }
 
             // Common information of broad utility.
-            let input_mapper = JoinInputMapper::new_from_input_types(&input_types);
+            let input_mapper = JoinInputMapper::new_from_input_repr_types(&input_types);
 
             // The first fundamental question is whether we should employ a delta query or not.
             //
@@ -211,8 +207,8 @@ impl JoinImplementation {
             // they might be larger than any user-created index.
 
             let unique_keys = input_types
-                .into_iter()
-                .map(|typ| typ.keys)
+                .iter()
+                .map(|typ| typ.keys.clone())
                 .collect::<Vec<_>>();
             let mut available_arrangements = vec![Vec::new(); inputs.len()];
             let mut filters = Vec::with_capacity(inputs.len());

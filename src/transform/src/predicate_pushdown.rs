@@ -94,7 +94,7 @@ use mz_expr::{
 };
 use mz_ore::soft_assert_eq_no_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
-use mz_repr::{Datum, SqlColumnType, SqlScalarType};
+use mz_repr::{Datum, ReprColumnType, SqlColumnType, SqlScalarType};
 
 use crate::{TransformCtx, TransformError};
 
@@ -163,9 +163,11 @@ impl PredicatePushdown {
                 MirRelationExpr::Filter { input, predicates } => {
                     // Reduce the predicates to determine as best as possible
                     // whether they are literal errors before working with them.
-                    let input_type = input.typ();
+                    let input_type = input.repr_typ();
+                    let input_sql_col_types: Vec<SqlColumnType> =
+                        input_type.column_types.iter().map(SqlColumnType::from_repr).collect();
                     for predicate in predicates.iter_mut() {
-                        predicate.reduce(&input_type.column_types, ReduceContext::Optimizer);
+                        predicate.reduce(&input_sql_col_types, ReduceContext::Optimizer);
                     }
 
                     // It can be helpful to know if there are any non-literal errors,
@@ -242,14 +244,14 @@ impl PredicatePushdown {
                                         // `MirScalarExpr` to a join constraint, we
                                         // need to retain the `!isnull(col1)`
                                         // information.
-                                        if expr1.typ(&input_type.column_types).nullable {
+                                        if expr1.repr_typ(&input_type.column_types).nullable {
                                             pred_not_translated.push(
                                                 expr1
                                                     .clone()
                                                     .call_unary(UnaryFunc::IsNull(func::IsNull))
                                                     .call_unary(UnaryFunc::Not(func::Not)),
                                             );
-                                        } else if expr2.typ(&input_type.column_types).nullable {
+                                        } else if expr2.repr_typ(&input_type.column_types).nullable {
                                             pred_not_translated.push(
                                                 expr2
                                                     .clone()
@@ -276,11 +278,9 @@ impl PredicatePushdown {
                                 pred_not_translated.push(predicate)
                             }
 
-                            let input_repr_col_types: Vec<mz_repr::ReprColumnType> =
-                                input_type.column_types.iter().map(mz_repr::ReprColumnType::from).collect();
                             mz_expr::canonicalize::canonicalize_equivalences(
                                 equivalences,
-                                std::iter::once(&input_repr_col_types),
+                                std::iter::once(&input_type.column_types),
                             );
 
                             let (retain, push_downs) = Self::push_filters_through_join(
@@ -577,17 +577,13 @@ impl PredicatePushdown {
                     //      comes from a single input.
                     //   2) equivalences of the form `expr1 = expr2`, where both
                     //      expressions come from the same single input.
-                    let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
-                    let input_repr_col_types: Vec<Vec<mz_repr::ReprColumnType>> = input_types
-                        .iter()
-                        .map(|t| t.column_types.iter().map(mz_repr::ReprColumnType::from).collect())
-                        .collect();
+                    let input_types = inputs.iter().map(|i| i.repr_typ()).collect::<Vec<_>>();
                     mz_expr::canonicalize::canonicalize_equivalences(
                         equivalences,
-                        input_repr_col_types.iter(),
+                        input_types.iter().map(|t| &t.column_types),
                     );
 
-                    let input_mapper = mz_expr::JoinInputMapper::new_from_input_types(&input_types);
+                    let input_mapper = mz_expr::JoinInputMapper::new_from_input_repr_types(&input_types);
                     // Predicates to push at each input, and to lift out the join.
                     let mut push_downs = vec![Vec::new(); inputs.len()];
 
@@ -603,7 +599,7 @@ impl PredicatePushdown {
                             .count()
                             > 1
                         {
-                            relation.take_safely(Some(relation.typ_with_input_types(&input_types)));
+                            relation.take_safely(Some(mz_repr::SqlRelationType::from_repr(&relation.repr_typ_with_input_types(&input_types))));
                             return Ok(());
                         }
 
@@ -777,13 +773,9 @@ impl PredicatePushdown {
                         };
                     }
 
-                    let input_repr_col_types2: Vec<Vec<mz_repr::ReprColumnType>> = input_types
-                        .iter()
-                        .map(|t| t.column_types.iter().map(mz_repr::ReprColumnType::from).collect())
-                        .collect();
                     mz_expr::canonicalize::canonicalize_equivalences(
                         equivalences,
-                        input_repr_col_types2.iter(),
+                        input_types.iter().map(|t| &t.column_types),
                     );
 
                     Self::update_join_inputs_with_push_downs(inputs, push_downs);
@@ -848,11 +840,9 @@ impl PredicatePushdown {
                 // Apply the predicates in `list` to value. Canonicalize
                 // `list` so that plans are always deterministic.
                 let mut list = list.into_iter().collect::<Vec<_>>();
-                let repr_col_types: Vec<mz_repr::ReprColumnType> =
-                    value.typ().column_types.iter().map(mz_repr::ReprColumnType::from).collect();
                 mz_expr::canonicalize::canonicalize_predicates(
                     &mut list,
-                    &repr_col_types,
+                    &value.repr_typ().column_types,
                 );
                 *value = value.take_dangerous().filter(list);
             }
@@ -1164,7 +1154,7 @@ impl PredicatePushdown {
     /// extract `expr1` and `expr2`.
     fn extract_equal_or_both_null(
         s: &mut MirScalarExpr,
-        column_types: &[SqlColumnType],
+        column_types: &[ReprColumnType],
     ) -> Option<(MirScalarExpr, MirScalarExpr)> {
         if let MirScalarExpr::CallVariadic {
             func: VariadicFunc::Or(_),
@@ -1185,7 +1175,7 @@ impl PredicatePushdown {
     fn extract_equal_or_both_null_inner(
         or_arg1: &MirScalarExpr,
         or_arg2: &MirScalarExpr,
-        column_types: &[SqlColumnType],
+        column_types: &[ReprColumnType],
     ) -> Option<(MirScalarExpr, MirScalarExpr)> {
         use mz_expr::BinaryFunc;
         if let MirScalarExpr::CallBinary {
@@ -1210,9 +1200,11 @@ impl PredicatePushdown {
     /// Reduces the given expression and returns its AND-ed terms.
     fn extract_reduced_conjunction_terms(
         mut s: MirScalarExpr,
-        column_types: &[SqlColumnType],
+        column_types: &[ReprColumnType],
     ) -> Vec<MirScalarExpr> {
-        s.reduce(column_types, ReduceContext::Optimizer);
+        let sql_column_types: Vec<SqlColumnType> =
+            column_types.iter().map(SqlColumnType::from_repr).collect();
+        s.reduce(&sql_column_types, ReduceContext::Optimizer);
 
         if let MirScalarExpr::CallVariadic {
             func: VariadicFunc::And(_),

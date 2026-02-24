@@ -26,7 +26,7 @@
 //! which we will transfer to the columns of `D` thereby forming `C`.
 
 use itertools::Itertools;
-use mz_repr::SqlRelationType;
+use mz_repr::ReprRelationType;
 use std::collections::BTreeMap;
 
 use mz_expr::{Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
@@ -213,8 +213,8 @@ fn attempt_join_simplification(
             .collect::<Vec<_>>();
 
         // Record the types of the inputs, for use in both loops below.
-        let typ0 = inputs[0].typ();
-        let typ1 = inputs[1].typ();
+        let typ0 = inputs[0].repr_typ();
+        let typ1 = inputs[1].repr_typ();
 
         // Consider replacing the second input for the benefit of the first.
         if distinct_on_keys_of(&typ1, &rtl) && input_mapper.input_arity(1) == equivalences.len() {
@@ -430,7 +430,7 @@ fn list_replacements_join(
         // Each unique key could be a semijoin candidate.
         // We want to check that the join equivalences exactly match the key,
         // and then transcribe the corresponding columns in the other input.
-        if distinct_on_keys_of(&inputs[1].typ(), &rtl) {
+        if distinct_on_keys_of(&inputs[1].repr_typ(), &rtl) {
             let columns = ltr
                 .iter()
                 .map(|(k0, k1)| (*k0, *k0, *k1))
@@ -460,7 +460,7 @@ fn list_replacements_join(
         // Each unique key could be a semijoin candidate.
         // We want to check that the join equivalences exactly match the key,
         // and then transcribe the corresponding columns in the other input.
-        if distinct_on_keys_of(&inputs[0].typ(), &ltr) {
+        if distinct_on_keys_of(&inputs[0].repr_typ(), &ltr) {
             let columns = ltr
                 .iter()
                 .map(|(k0, k1)| (*k1, *k0, *k0))
@@ -493,7 +493,7 @@ fn list_replacements_join(
 }
 
 /// True iff some unique key of `typ` is contained in the keys of `map`.
-fn distinct_on_keys_of(typ: &SqlRelationType, map: &BTreeMap<usize, usize>) -> bool {
+fn distinct_on_keys_of(typ: &ReprRelationType, map: &BTreeMap<usize, usize>) -> bool {
     typ.keys
         .iter()
         .any(|key| key.iter().all(|k| map.contains_key(k)))

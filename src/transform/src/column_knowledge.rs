@@ -21,7 +21,7 @@ use mz_expr::{
 use mz_ore::cast::CastFrom;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::{assert_none, soft_panic_or_log};
-use mz_repr::{Datum, ReprScalarType, Row, SqlColumnType, SqlRelationType, SqlScalarType};
+use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, SqlColumnType, SqlScalarType};
 
 use crate::{TransformCtx, TransformError};
 
@@ -221,7 +221,8 @@ impl ColumnKnowledge {
                 }
                 MirRelationExpr::Map { input, scalars } => {
                     let mut input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
-                    let mut column_types = input.typ().column_types;
+                    let mut column_types: Vec<ReprColumnType> =
+                        input.repr_typ().column_types;
                     for scalar in scalars.iter_mut() {
                         input_knowledge.push(optimize(
                             scalar,
@@ -229,17 +230,18 @@ impl ColumnKnowledge {
                             &input_knowledge[..],
                             knowledge_stack,
                         )?);
-                        column_types.push(scalar.typ(&column_types));
+                        column_types.push(scalar.repr_typ(&column_types));
                     }
                     Ok(input_knowledge)
                 }
                 MirRelationExpr::FlatMap { input, func, exprs } => {
                     let mut input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
-                    let input_typ = input.typ();
+                    let input_col_types: Vec<ReprColumnType> =
+                        input.repr_typ().column_types;
                     for expr in exprs {
                         optimize(
                             expr,
-                            &input_typ.column_types,
+                            &input_col_types,
                             &input_knowledge[..],
                             knowledge_stack,
                         )?;
@@ -250,11 +252,12 @@ impl ColumnKnowledge {
                 }
                 MirRelationExpr::Filter { input, predicates } => {
                     let mut input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
-                    let input_typ = input.typ();
+                    let input_col_types: Vec<ReprColumnType> =
+                        input.repr_typ().column_types;
                     for predicate in predicates.iter_mut() {
                         optimize(
                             predicate,
-                            &input_typ.column_types,
+                            &input_col_types,
                             &input_knowledge[..],
                             knowledge_stack,
                         )?;
@@ -336,13 +339,10 @@ impl ColumnKnowledge {
                     // keys of the inputs. It is unnecessary to aggregate the keys
                     // of the inputs since input keys are unnecessary for reducing
                     // `MirScalarExpr`s.
-                    let folded_inputs_typ =
-                        inputs
-                            .iter()
-                            .fold(SqlRelationType::empty(), |mut typ, input| {
-                                typ.column_types.append(&mut input.typ().column_types);
-                                typ
-                            });
+                    let folded_input_col_types: Vec<ReprColumnType> =
+                        inputs.iter().flat_map(|input| {
+                            input.repr_typ().column_types
+                        }).collect();
 
                     for equivalence in equivalences.iter_mut() {
                         let mut knowledge = DatumKnowledge::top();
@@ -352,7 +352,7 @@ impl ColumnKnowledge {
                             if !matches!(implementation, IndexedFilter(..)) {
                                 optimize(
                                     expr,
-                                    &folded_inputs_typ.column_types,
+                                    &folded_input_col_types,
                                     &knowledges,
                                     knowledge_stack,
                                 )?;
@@ -381,13 +381,14 @@ impl ColumnKnowledge {
                     expected_group_size: _,
                 } => {
                     let input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
-                    let input_typ = input.typ();
+                    let input_col_types: Vec<ReprColumnType> =
+                        input.repr_typ().column_types;
                     let mut output = group_key
                         .iter_mut()
                         .map(|k| {
                             optimize(
                                 k,
-                                &input_typ.column_types,
+                                &input_col_types,
                                 &input_knowledge[..],
                                 knowledge_stack,
                             )
@@ -397,7 +398,7 @@ impl ColumnKnowledge {
                         use mz_expr::AggregateFunc;
                         let knowledge = optimize(
                             &mut aggregate.expr,
-                            &input_typ.column_types,
+                            &input_col_types,
                             &input_knowledge[..],
                             knowledge_stack,
                         )?;
@@ -453,9 +454,11 @@ impl ColumnKnowledge {
                 MirRelationExpr::TopK { input, limit, .. } => {
                     let input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
                     if let Some(limit) = limit.as_mut() {
+                        let input_col_types: Vec<ReprColumnType> =
+                            input.repr_typ().column_types;
                         optimize(
                             limit,
-                            &input.typ().column_types,
+                            &input_col_types,
                             &input_knowledge[..],
                             knowledge_stack,
                         )?;
@@ -762,10 +765,13 @@ impl DatumKnowledge {
 /// `knowledge_stack` is a pre-allocated vector but is expected not to contain any elements.
 fn optimize(
     expr: &mut MirScalarExpr,
-    column_types: &[SqlColumnType],
+    column_types: &[ReprColumnType],
     column_knowledge: &[DatumKnowledge],
     knowledge_stack: &mut Vec<DatumKnowledge>,
 ) -> Result<DatumKnowledge, TransformError> {
+    // `reduce()` still takes `&[SqlColumnType]`, so convert once up front.
+    let sql_column_types: Vec<SqlColumnType> =
+        column_types.iter().map(SqlColumnType::from_repr).collect();
     // Storage for `DatumKnowledge` being propagated up through the
     // `MirScalarExpr`. When a node is visited, pop off as many `DatumKnowledge`
     // as the number of children the node has, and then push the
@@ -800,7 +806,7 @@ fn optimize(
                 MirScalarExpr::CallUnary { func, expr: _ } => {
                     let knowledge = knowledge_stack.pop().unwrap();
                     if matches!(&knowledge, DatumKnowledge::Lit { .. }) {
-                        e.reduce(column_types, ReduceContext::Optimizer);
+                        e.reduce(&sql_column_types, ReduceContext::Optimizer);
                     } else if func == &UnaryFunc::IsNull(func::IsNull) && !knowledge.nullable() {
                         *e = MirScalarExpr::literal_false();
                     };
@@ -817,7 +823,7 @@ fn optimize(
                         matches!(knowledge1, DatumKnowledge::Lit { .. }),
                         matches!(knowledge2, DatumKnowledge::Lit { .. }),
                     ] {
-                        e.reduce(column_types, ReduceContext::Optimizer);
+                        e.reduce(&sql_column_types, ReduceContext::Optimizer);
                     }
                     DatumKnowledge::from(&*e)
                 }
@@ -828,7 +834,7 @@ fn optimize(
                         .drain(knowledge_stack.len() - exprs.len()..)
                         .any(|k| matches!(k, DatumKnowledge::Lit { .. }))
                     {
-                        e.reduce(column_types, ReduceContext::Optimizer);
+                        e.reduce(&sql_column_types, ReduceContext::Optimizer);
                     }
                     DatumKnowledge::from(&*e)
                 }

@@ -382,6 +382,65 @@ impl MirRelationExpr {
         type_stack.pop().unwrap()
     }
 
+    /// Reports the repr schema of the relation.
+    ///
+    /// This is the repr-type parallel of [`Self::typ`]. It determines the type
+    /// through recursive traversal, returning a [`ReprRelationType`] instead of
+    /// a [`SqlRelationType`].
+    pub fn repr_typ(&self) -> ReprRelationType {
+        let mut type_stack = Vec::new();
+        #[allow(deprecated)]
+        self.visit_pre_post_nolimit(
+            &mut |e: &MirRelationExpr| -> Option<Vec<&MirRelationExpr>> {
+                match &e {
+                    MirRelationExpr::Let { body, .. } => {
+                        Some(vec![&*body])
+                    }
+                    MirRelationExpr::LetRec { body, .. } => {
+                        Some(vec![&*body])
+                    }
+                    _ => None,
+                }
+            },
+            &mut |e: &MirRelationExpr| {
+                match e {
+                    MirRelationExpr::Let { .. } => {
+                        let body_typ = type_stack.pop().unwrap();
+                        type_stack.push(ReprRelationType::empty());
+                        type_stack.push(body_typ);
+                    }
+                    MirRelationExpr::LetRec { values, .. } => {
+                        let body_typ = type_stack.pop().unwrap();
+                        type_stack
+                            .extend(std::iter::repeat(ReprRelationType::empty()).take(values.len()));
+                        type_stack.push(body_typ);
+                    }
+                    _ => {}
+                }
+                let num_inputs = e.num_inputs();
+                let relation_type =
+                    e.repr_typ_with_input_types(&type_stack[type_stack.len() - num_inputs..]);
+                type_stack.truncate(type_stack.len() - num_inputs);
+                type_stack.push(relation_type);
+            },
+        );
+        assert_eq!(type_stack.len(), 1);
+        type_stack.pop().unwrap()
+    }
+
+    /// Reports the repr schema of the relation given the repr schema of the input relations.
+    ///
+    /// This is the repr-type parallel of [`Self::typ_with_input_types`].
+    pub fn repr_typ_with_input_types(&self, input_types: &[ReprRelationType]) -> ReprRelationType {
+        let column_types =
+            self.repr_col_with_input_repr_cols(input_types.iter().map(|i| &i.column_types));
+        let unique_keys = self.keys_with_input_keys(
+            input_types.iter().map(|i| i.arity()),
+            input_types.iter().map(|i| &i.keys),
+        );
+        ReprRelationType::new(column_types).with_keys(unique_keys)
+    }
+
     /// Reports the schema of the relation given the schema of the input relations.
     ///
     /// `input_types` is required to contain the schemas for the input relations of

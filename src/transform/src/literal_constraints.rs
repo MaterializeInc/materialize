@@ -30,7 +30,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::vec::swap_remove_multiple;
-use mz_repr::{Diff, GlobalId, Row, SqlRelationType};
+use mz_repr::{Diff, GlobalId, ReprRelationType, Row, SqlColumnType, SqlRelationType};
 
 use crate::TransformCtx;
 use crate::canonicalize_mfp::CanonicalizeMfp;
@@ -90,7 +90,7 @@ impl LiteralConstraints {
                 mfp: &mut MapFilterProject,
                 orig_mfp: &MapFilterProject,
                 relation: &MirRelationExpr,
-                relation_type: SqlRelationType,
+                relation_type: ReprRelationType,
             ) {
                 // undo list_of_predicates_to_and_of_predicates, distribute_and_over_or, unary_and
                 // (It undoes the latter 2 through `MirScalarExp::reduce`.)
@@ -113,7 +113,7 @@ impl LiteralConstraints {
             // todo: We might want to also call `canonicalize_equivalences`,
             // see near the end of literal_constraints.slt.
 
-            let inp_typ = typ.clone();
+            let inp_typ = ReprRelationType::from(typ);
 
             let key_val = Self::detect_literal_constraints(&mfp, id, transform_ctx);
 
@@ -155,7 +155,7 @@ impl LiteralConstraints {
                             column_types: key
                                 .iter()
                                 .map(|e| {
-                                    e.typ(&inp_typ.column_types)
+                                    SqlColumnType::from_repr(&e.repr_typ(&inp_typ.column_types))
                                         // We make sure to not include a null in `expr_eq_literal`.
                                         .nullable(false)
                                 })
@@ -172,7 +172,7 @@ impl LiteralConstraints {
                     if possible_vals.is_empty() {
                         // Even better than what we were hoping for: Found contradicting
                         // literal constraints, so the whole relation is empty.
-                        relation.take_safely(Some(inp_typ));
+                        relation.take_safely(Some(SqlRelationType::from_repr(&inp_typ)));
                     } else {
                         // The common case: We need to build the join which is the main point of
                         // this transform.
@@ -615,16 +615,14 @@ impl LiteralConstraints {
     fn canonicalize_predicates(
         mfp: &mut MapFilterProject,
         relation: &MirRelationExpr,
-        relation_type: SqlRelationType,
+        relation_type: ReprRelationType,
     ) {
         let (map, mut predicates, project) = mfp.as_map_filter_project();
         let typ_after_map = relation
             .clone()
             .map(map.clone())
-            .typ_with_input_types(&[relation_type]);
-        let repr_col_types: Vec<mz_repr::ReprColumnType> =
-            typ_after_map.column_types.iter().map(mz_repr::ReprColumnType::from).collect();
-        canonicalize_predicates(&mut predicates, &repr_col_types);
+            .repr_typ_with_input_types(&[relation_type]);
+        canonicalize_predicates(&mut predicates, &typ_after_map.column_types);
         // Rebuild the MFP with the new predicates.
         *mfp = MapFilterProject::new(mfp.input_arity)
             .map(map)

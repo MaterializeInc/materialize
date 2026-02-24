@@ -223,9 +223,9 @@ impl NonNullRequirements {
                     equivalences,
                     ..
                 } => {
-                    let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
+                    let input_types = inputs.iter().map(|i| i.repr_typ()).collect::<Vec<_>>();
 
-                    let input_mapper = JoinInputMapper::new_from_input_types(&input_types);
+                    let input_mapper = JoinInputMapper::new_from_input_repr_types(&input_types);
 
                     let mut new_columns = input_mapper.split_column_set_by_input(columns.iter());
 
