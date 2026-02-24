@@ -154,16 +154,16 @@ impl OneshotSource for AwsS3Source {
         }
 
         let objects = objects_request
+            .into_paginator()
             .send()
+            .try_collect()
             .await
             .map_err(StorageErrorXKind::generic)
             .context("list_objects_v2")?;
 
-        // TODO(cf1): Pagination.
-
         let objects: Vec<_> = objects
-            .contents()
             .iter()
+            .flat_map(aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Output::contents)
             .map(|o| {
                 let key = o
                     .key()
