@@ -192,7 +192,7 @@ case "$cmd" in
         detach_container=false
         interactive=false
         tty=false
-        no_secrets=false
+        secrets=true
         container_name_param=""
 
         while [[ $# -gt 0 ]]; do
@@ -215,7 +215,7 @@ case "$cmd" in
                     shift # past argument
                     ;;
                 --no-secrets)
-                    no_secrets=true
+                    secrets=false
                     shift # past argument
                     ;;
                 *)
@@ -227,10 +227,8 @@ case "$cmd" in
 
         claude_dir=$HOME/.claude
         codex_dir=$HOME/.codex
-        if [ -d "$HOME/.codex" ] && [ ! -e "$codex_dir" ]; then
-            cp -a "$HOME/.codex" "$codex_dir"
-        fi
-        mkdir -p "$(pwd)/target-xcompile" ~/.kube "$claude_dir" "$codex_dir"
+        npm_dir=$HOME/.npm-builder
+        mkdir -p "$(pwd)/target-xcompile" ~/.kube "$claude_dir" "$codex_dir" "$npm_dir"
 
         args=(
             --cidfile "$cid_file"
@@ -240,6 +238,7 @@ case "$cmd" in
             --volume "$claude_dir:/tmp/.claude"
             --volume "$HOME/.claude.json:/tmp/.claude.json"
             --volume "$codex_dir:/tmp/.codex"
+            --volume "$npm_dir:/tmp/.npm"
             --volume "$workdir:$workdir"
             --workdir "$workdir"
             --env XDG_CACHE_HOME=/mnt/build/cache
@@ -253,7 +252,7 @@ case "$cmd" in
             --env BUILDKITE_PULL_REQUEST
         )
 
-        if [[ $no_secrets == "false" ]]; then
+        if [[ $secrets == "true" ]]; then
             args+=(
                 --env AWS_ACCESS_KEY_ID
                 --env AWS_DEFAULT_REGION
@@ -358,13 +357,16 @@ case "$cmd" in
             )
         fi
         if [[ "$(uname -s)" = Linux ]]; then
-            if [[ $no_secrets == "false" ]]; then
+            args+=(
+                --user "$(id -u):$(stat -c %g /var/run/docker.sock)"
+            )
+
+            if [[ $secrets == "true" ]]; then
                 # Allow Docker-in-Docker by mounting the Docker socket in the
                 # container. Host networking allows us to see ports created by
                 # containers that we launch.
                 args+=(
                     --volume "/var/run/docker.sock:/var/run/docker.sock"
-                    --user "$(id -u):$(stat -c %g /var/run/docker.sock)"
                     --network host
                     --env "DOCKER_TLS_VERIFY=${DOCKER_TLS_VERIFY-}"
                     --env "DOCKER_HOST=${DOCKER_HOST-}"
