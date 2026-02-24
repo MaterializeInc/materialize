@@ -37,6 +37,8 @@ pub async fn client(host: &str, port: u16) -> Result<Client> {
 
 /// Try running PostgresSQL's `query` function, checking for a common
 /// Materialize error in `check_error`.
+// This helper intentionally executes caller-provided test SQL.
+#[allow(clippy::disallowed_methods)]
 pub async fn try_query(mz_client: &Client, query: &str, delay: Duration) -> Result<Vec<Row>> {
     loop {
         let timer = std::time::Instant::now();
@@ -50,6 +52,8 @@ pub async fn try_query(mz_client: &Client, query: &str, delay: Duration) -> Resu
 
 /// Try running PostgreSQL's `query_one` function, checking for a common
 /// Materialize error in `check_error`.
+// This helper intentionally executes caller-provided test SQL.
+#[allow(clippy::disallowed_methods)]
 pub async fn try_query_one(mz_client: &Client, query: &str, delay: Duration) -> Result<Row> {
     loop {
         let timer = std::time::Instant::now();
@@ -89,6 +93,8 @@ async fn delay_for(elapsed: Duration, delay: Duration) {
 }
 
 /// Run Materialize's `SHOW SOURCES` command
+// Test utility uses direct driver query for a fixed introspection statement.
+#[allow(clippy::disallowed_methods)]
 pub async fn show_sources(mz_client: &Client) -> Result<Vec<String>> {
     let mut res = Vec::new();
     for row in mz_client.query("SHOW SOURCES", &[]).await? {
@@ -99,6 +105,8 @@ pub async fn show_sources(mz_client: &Client) -> Result<Vec<String>> {
 }
 
 /// Delete a source and all dependent views, if the source exists
+// Name is supplied by test code and this utility intentionally forwards SQL.
+#[allow(clippy::disallowed_methods)]
 pub async fn drop_source(mz_client: &Client, name: &str) -> Result<()> {
     let q = format!("DROP SOURCE IF EXISTS {} CASCADE", name);
     debug!("deleting source=> {}", q);
@@ -107,6 +115,8 @@ pub async fn drop_source(mz_client: &Client, name: &str) -> Result<()> {
 }
 
 /// Delete a table and all dependent views, if the table exists
+// Name is supplied by test code and this utility intentionally forwards SQL.
+#[allow(clippy::disallowed_methods)]
 pub async fn drop_table(mz_client: &Client, name: &str) -> Result<()> {
     let q = format!("DROP TABLE IF EXISTS {} CASCADE", name);
     debug!("deleting table=> {}", q);
@@ -115,6 +125,8 @@ pub async fn drop_table(mz_client: &Client, name: &str) -> Result<()> {
 }
 
 /// Delete an index
+// Name is supplied by test code and this utility intentionally forwards SQL.
+#[allow(clippy::disallowed_methods)]
 pub async fn drop_index(mz_client: &Client, name: &str) -> Result<()> {
     let q = format!("DROP INDEX {}", name);
     debug!("deleting index=> {}", q);
@@ -123,6 +135,8 @@ pub async fn drop_index(mz_client: &Client, name: &str) -> Result<()> {
 }
 
 /// Run PostgreSQL's `execute` function
+// This helper intentionally executes caller-provided test SQL.
+#[allow(clippy::disallowed_methods)]
 pub async fn execute(mz_client: &Client, query: &str) -> Result<u64> {
     debug!("exec=> {}", query);
     Ok(mz_client.execute(query, &[]).await?)

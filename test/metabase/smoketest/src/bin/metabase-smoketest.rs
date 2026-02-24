@@ -107,6 +107,9 @@ async fn main() -> Result<(), anyhow::Error> {
     mz_ore::test::init_logging();
 
     let pgclient = connect_materialized().await?;
+    // Test fixture bootstrap query with fixed SQL text; this smoketest talks
+    // directly to the driver.
+    #[allow(clippy::disallowed_methods)]
     pgclient
         .batch_execute(
             "CREATE OR REPLACE MATERIALIZED VIEW orders (id, date, quantity, total) AS

@@ -37,6 +37,7 @@ use mz_ore::assert_none;
 use mz_pgrepr::Interval;
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
 async fn test_pg_timezone_abbrevs() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()

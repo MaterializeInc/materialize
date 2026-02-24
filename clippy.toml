@@ -53,6 +53,20 @@ disallowed-methods = [
     { path = "aws_config::from_env", reason = "use the `mz_aws_config::defaults` function instead" },
     { path = "aws_config::load_from_env", reason = "use the `mz_aws_config::defaults` function instead" },
     { path = "aws_sdk_s3::Client::new", reason = "use the `mz_aws_util::s3::new_client` function instead" },
+    { path = "tokio_postgres::Client::simple_query", reason = "use `mz_postgres_util::simple_query` with `Sql` instead" },
+    { path = "tokio_postgres::Client::batch_execute", reason = "use `mz_postgres_util::batch_execute` with `Sql` instead" },
+    { path = "tokio_postgres::Client::query", reason = "use `mz_postgres_util::query`/`query_prepared` wrappers instead" },
+    { path = "tokio_postgres::Client::query_one", reason = "use `mz_postgres_util::query_one`/`query_one_prepared` wrappers instead" },
+    { path = "tokio_postgres::Client::query_opt", reason = "use `mz_postgres_util::query_opt`/`query_opt_prepared` wrappers instead" },
+    { path = "tokio_postgres::Client::execute", reason = "use `mz_postgres_util::execute`/`execute_prepared` wrappers instead" },
+    { path = "tokio_postgres::Transaction::simple_query", reason = "use `Sql` wrappers from `mz_postgres_util` instead" },
+    { path = "tokio_postgres::Transaction::batch_execute", reason = "use `Sql` wrappers from `mz_postgres_util` instead" },
+    { path = "tokio_postgres::Transaction::query", reason = "use `mz_postgres_util::query`/`query_prepared` wrappers instead" },
+    { path = "tokio_postgres::Transaction::query_one", reason = "use `mz_postgres_util::query_one`/`query_one_prepared` wrappers instead" },
+    { path = "tokio_postgres::Transaction::query_opt", reason = "use `mz_postgres_util::query_opt`/`query_opt_prepared` wrappers instead" },
+    { path = "tokio_postgres::Transaction::execute", reason = "use `mz_postgres_util::execute`/`execute_prepared` wrappers instead" },
+    { path = "postgres::Client::simple_query", reason = "avoid direct string SQL; use `Sql` composition and wrappers where possible" },
+    { path = "postgres::Client::batch_execute", reason = "avoid direct string SQL; use `Sql` composition and wrappers where possible" },
 
     # Prevent access to Differential APIs that want to use the default trace or use a default name, or where we offer
     # our own wrapper

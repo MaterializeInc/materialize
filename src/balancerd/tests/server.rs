@@ -47,6 +47,7 @@ use uuid::Uuid;
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_balancer() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
