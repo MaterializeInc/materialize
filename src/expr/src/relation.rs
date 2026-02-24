@@ -2761,7 +2761,9 @@ impl AggregateExpr {
     /// Returns an expression that computes `self` on a group that has exactly one row.
     /// Instead of performing a `Reduce` with `self`, one can perform a `Map` with the expression
     /// returned by `on_unique`, which is cheaper. (See `ReduceElision`.)
-    pub fn on_unique(&self, input_type: &[SqlColumnType]) -> MirScalarExpr {
+    pub fn on_unique(&self, input_type: &[ReprColumnType]) -> MirScalarExpr {
+        let sql_input_type: Vec<SqlColumnType> =
+            input_type.iter().map(SqlColumnType::from_repr).collect();
         match &self.func {
             // Count is one if non-null, and zero if null.
             AggregateFunc::Count => self
@@ -2885,7 +2887,7 @@ impl AggregateExpr {
 
                 // Get the overall return type
                 let return_type_with_orig_row = self
-                    .typ(input_type)
+                    .typ(&sql_input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
@@ -2926,7 +2928,7 @@ impl AggregateExpr {
 
                 // Get the overall return type
                 let return_type_with_orig_row = self
-                    .typ(input_type)
+                    .typ(&sql_input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
@@ -2969,7 +2971,7 @@ impl AggregateExpr {
 
                 // Get the overall return type
                 let return_type_with_orig_row = self
-                    .typ(input_type)
+                    .typ(&sql_input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
@@ -3019,7 +3021,7 @@ impl AggregateExpr {
 
                 // Get the overall return type
                 let return_type = self
-                    .typ(input_type)
+                    .typ(&sql_input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
@@ -3075,7 +3077,7 @@ impl AggregateExpr {
                 let all_args = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
 
                 let return_type_with_orig_row = self
-                    .typ(input_type)
+                    .typ(&sql_input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
@@ -3146,7 +3148,7 @@ impl AggregateExpr {
                     tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
 
                 let return_type_with_orig_row = self
-                    .typ(input_type)
+                    .typ(&sql_input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
@@ -3269,9 +3271,11 @@ impl AggregateExpr {
     /// `on_unique` for ROW_NUMBER, RANK, DENSE_RANK
     fn on_unique_ranking_window_funcs(
         &self,
-        input_type: &[SqlColumnType],
+        input_type: &[ReprColumnType],
         col_name: &str,
     ) -> MirScalarExpr {
+        let sql_input_type: Vec<SqlColumnType> =
+            input_type.iter().map(SqlColumnType::from_repr).collect();
         let list = self
             .expr
             .clone()
@@ -3290,7 +3294,7 @@ impl AggregateExpr {
         MirScalarExpr::call_variadic(
             ListCreate {
                 elem_type: self
-                    .typ(input_type)
+                    .typ(&sql_input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone(),
@@ -3362,7 +3366,7 @@ impl AggregateExpr {
     fn on_unique_window_agg(
         window_frame: &WindowFrame,
         arg_expr: MirScalarExpr,
-        input_type: &[SqlColumnType],
+        input_type: &[ReprColumnType],
         return_type: SqlScalarType,
         wrapped_aggr: &AggregateFunc,
     ) -> (MirScalarExpr, ColumnName) {

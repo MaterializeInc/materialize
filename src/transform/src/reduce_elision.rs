@@ -16,7 +16,7 @@
 use itertools::Itertools;
 use mz_expr::MirRelationExpr;
 
-use mz_repr::SqlColumnType;
+use mz_repr::ReprColumnType;
 
 use crate::TransformCtx;
 use crate::analysis::{DerivedBuilder, DerivedView};
@@ -69,15 +69,13 @@ impl ReduceElision {
                 expected_group_size: _,
             } = expr
             {
-                let input_type: Vec<SqlColumnType> = view
+                let input_type: Vec<ReprColumnType> = view
                     .last_child()
                     .value::<ReprRelationType>()
                     .expect("ReprRelationType required")
                     .as_ref()
                     .expect("Expression not well-typed")
-                    .iter()
-                    .map(SqlColumnType::from_repr)
-                    .collect();
+                    .clone();
                 let input_keys = view
                     .last_child()
                     .value::<UniqueKeys>()
