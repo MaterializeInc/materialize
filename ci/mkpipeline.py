@@ -739,11 +739,14 @@ def trim_tests_pipeline(
         if name not in compositions:
             compositions[name] = Composition(repo, name, munge_services=False)
         comp = compositions[name]
-        image_names = []
+        image_deps = []
         for _svc_name, config in comp.compose.get("services", {}).items():
             if "mzbuild" in config:
-                image_names.append(config["mzbuild"])
-        return [deps[img_name] for img_name in image_names if img_name in deps]
+                try:
+                    image_deps.append(deps[config["mzbuild"]])
+                except KeyError:
+                    pass
+        return image_deps
 
     def to_step(config: dict[str, Any]) -> PipelineStep | None:
         if "wait" in config or "group" in config:
