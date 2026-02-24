@@ -115,6 +115,9 @@ pub enum StatementEndedExecutionReason {
     Errored {
         error: String,
     },
+    /// Should only be emitted by `impl Drop for ExecuteContextGuard`.
+    /// Code paths that explicitly complete execution should use
+    /// `retire_execute` with `Success`, `Canceled`, or `Errored`.
     Aborted,
 }
 

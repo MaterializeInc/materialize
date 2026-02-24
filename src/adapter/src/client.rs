@@ -30,12 +30,11 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{IdAllocator, IdAllocatorInnerBitSet, MAX_ORG_ID, org_id_conn_bits};
 use mz_ore::instrument;
 use mz_ore::now::{EpochMillis, NowFn, to_datetime};
-use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::user::InternalUserMetadata;
-use mz_repr::{CatalogItemId, ColumnIndex, Row, SqlScalarType};
+use mz_repr::{CatalogItemId, ColumnIndex, SqlScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
@@ -59,8 +58,6 @@ use crate::command::{
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
-use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
-use crate::optimize::{self, Optimize};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
 };
@@ -919,57 +916,6 @@ impl SessionClient {
                 rows: TableData::Batches(batches.into()),
             }]))?;
         Ok(())
-    }
-
-    /// Inserts a set of rows into the given table.
-    ///
-    /// The rows only contain the columns positions in `columns`, so they
-    /// must be re-encoded for adding the default values for the remaining
-    /// ones.
-    pub async fn insert_rows(
-        &mut self,
-        target_id: CatalogItemId,
-        target_name: String,
-        columns: Vec<ColumnIndex>,
-        rows: Vec<Row>,
-        ctx_extra: ExecuteContextGuard,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        // TODO: Remove this clone once we always have the session. It's currently needed because
-        // self.session returns a mut ref, so we can't call it twice.
-        let pcx = self.session().pcx().clone();
-
-        let session_meta = self.session().meta();
-
-        let catalog = self.catalog_snapshot("insert_rows").await;
-        let conn_catalog = catalog.for_session(self.session());
-        let catalog_state = conn_catalog.state();
-
-        // Collect optimizer parameters.
-        let optimizer_config = optimize::OptimizerConfig::from(conn_catalog.system_vars());
-        let prep = ExprPrepOneShot {
-            logical_time: EvalTime::NotAvailable,
-            session: &session_meta,
-            catalog_state,
-        };
-        let mut optimizer =
-            optimize::view::Optimizer::new_with_prep_no_limit(optimizer_config.clone(), None, prep);
-
-        let result: Result<_, AdapterError> = mz_sql::plan::plan_copy_from(
-            &pcx,
-            &conn_catalog,
-            target_id,
-            target_name,
-            columns,
-            rows,
-        )
-        .err_into()
-        .and_then(|values| optimizer.optimize(values).err_into())
-        .and_then(|values| {
-            // Copied rows must always be constants.
-            Coordinator::insert_constant(&catalog, self.session(), target_id, values.into_inner())
-        });
-        self.retire_execute(ctx_extra, (&result).into());
-        result
     }
 
     /// Gets the current value of all system variables.

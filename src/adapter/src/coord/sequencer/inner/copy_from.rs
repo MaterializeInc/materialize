@@ -16,7 +16,7 @@ use mz_persist_client::Diagnostics;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_pgcopy::CopyFormatParams;
-use mz_repr::{CatalogItemId, ColumnIndex, Datum, NotNullViolation, RelationDesc, RowArena, Rows};
+use mz_repr::{CatalogItemId, ColumnIndex, Datum, NotNullViolation, RelationDesc, Row, RowArena};
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{self, CopyFromFilter, CopyFromSource, HirScalarExpr};
 use mz_sql::session::metadata::SessionMetadata;

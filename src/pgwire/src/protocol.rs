@@ -2640,6 +2640,16 @@ where
             )
             .await;
         match &res {
+            Ok(State::Ready) => {
+                self.adapter_client.retire_execute(
+                    ctx_extra,
+                    StatementEndedExecutionReason::Success {
+                        result_size: None,
+                        rows_returned: None,
+                        execution_strategy: None,
+                    },
+                );
+            }
             Ok(State::Done) => {
                 // The connection closed gracefully without sending us a `CopyDone`,
                 // causing us to just drop the copy request.
@@ -2655,10 +2665,12 @@ where
                     },
                 );
             }
+            Ok(state) if matches!(state, State::Drain) => {}
             other => {
-                tracing::warn!(?other, "aborting COPY FROM");
-                self.adapter_client
-                    .retire_execute(ctx_extra, StatementEndedExecutionReason::Aborted);
+                mz_ore::soft_panic_or_log!(
+                    "unexpected COPY FROM state in copy_from: {other:?}; \
+                     relying on ExecuteContextGuard::drop to retire as Aborted"
+                );
             }
         }
         res
@@ -2731,6 +2743,7 @@ where
         let mut data = Vec::new();
         let num_workers = writer.batch_txs.len();
         let mut next_worker: usize = 0;
+        let mut saw_copy_done = false;
 
         // Receive loop: accumulate CopyData, split at row boundaries,
         // round-robin raw chunks to parallel batch builder workers.
@@ -2769,6 +2782,7 @@ where
                         // Ignore send failure — completion_rx will have the error.
                         let _ = writer.batch_txs[next_worker].send(chunk).await;
                     }
+                    saw_copy_done = true;
                     break;
                 }
                 Some(FrontendMessage::CopyFail(err)) => {
@@ -2805,6 +2819,40 @@ where
                     drop(writer);
                     self.conn.set_copy_mode(false);
                     return Ok(State::Done);
+                }
+            }
+        }
+
+        // If we exited the receive loop before seeing `CopyDone` (e.g. because
+        // a worker failed and dropped its channel), keep draining COPY input to
+        // avoid desynchronizing the protocol state machine.
+        if !saw_copy_done {
+            loop {
+                match self.conn.recv().await? {
+                    Some(FrontendMessage::CopyData(_)) => {}
+                    Some(FrontendMessage::CopyDone) | Some(FrontendMessage::CopyFail(_)) => {
+                        break;
+                    }
+                    Some(FrontendMessage::Flush) | Some(FrontendMessage::Sync) => {}
+                    Some(_) => {
+                        let msg = "unexpected message type during COPY from stdin";
+                        self.adapter_client.retire_execute(
+                            std::mem::take(ctx_extra),
+                            StatementEndedExecutionReason::Errored {
+                                error: msg.to_string(),
+                            },
+                        );
+                        drop(writer);
+                        self.conn.set_copy_mode(false);
+                        return self
+                            .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, msg))
+                            .await;
+                    }
+                    None => {
+                        drop(writer);
+                        self.conn.set_copy_mode(false);
+                        return Ok(State::Done);
+                    }
                 }
             }
         }

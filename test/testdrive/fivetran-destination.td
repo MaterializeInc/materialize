@@ -13,6 +13,10 @@ SELECT true
 
 # Exercise the Fivetran Destination.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
+ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
+
 > SELECT 1;
 1
 
@@ -226,6 +230,20 @@ $ fivetran-destination action=write_batch
 
 > SELECT COUNT(*) FROM foo.large;
 2000000
+
+> SELECT count(*) >= 5
+  FROM mz_internal.mz_recent_activity_log
+  WHERE application_name = 'materialize_fivetran_destination'
+    AND sql LIKE 'COPY % FROM STDIN WITH (FORMAT CSV, HEADER false, NULL %)'
+    AND finished_status = 'success';
+true
+
+> SELECT count(*)
+  FROM mz_internal.mz_recent_activity_log
+  WHERE application_name = 'materialize_fivetran_destination'
+    AND sql LIKE 'COPY % FROM STDIN WITH (FORMAT CSV, HEADER false, NULL %)'
+    AND finished_status = 'aborted';
+0
 
 # Cleanup.
 > DROP SCHEMA foo CASCADE;

@@ -501,7 +501,7 @@ pub const USE_CRITICAL_SINCE_SNAPSHOT: Config<bool> = Config::new(
 /// calls on previous ones finishing.
 pub const BATCH_BUILDER_MAX_OUTSTANDING_PARTS: Config<usize> = Config::new(
     "persist_batch_builder_max_outstanding_parts",
-    32,
+    2,
     "The number of writes a batch builder can have outstanding before we slow down the writer.",
 );
 
