@@ -12,6 +12,7 @@ use std::time::Duration;
 use std::{cmp, str};
 
 use anyhow::{Context, bail, ensure};
+use mz_postgres_util::{Sql, query_one, sql};
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::error::KafkaError;
 use rdkafka::message::{Headers, Message};
@@ -76,27 +77,25 @@ struct Record<A> {
 }
 
 async fn get_topic(sink: &str, topic_field: &str, state: &State) -> Result<String, anyhow::Error> {
-    let query = format!(
+    let query = sql!(
         "SELECT {} FROM mz_sinks JOIN mz_kafka_sinks \
-        ON mz_sinks.id = mz_kafka_sinks.id \
-        JOIN mz_schemas s ON s.id = mz_sinks.schema_id \
-        LEFT JOIN mz_databases d ON d.id = s.database_id \
-        WHERE d.name = $1 \
-        AND s.name = $2 \
-        AND mz_sinks.name = $3",
-        topic_field
+         ON mz_sinks.id = mz_kafka_sinks.id \
+         JOIN mz_schemas s ON s.id = mz_sinks.schema_id \
+         LEFT JOIN mz_databases d ON d.id = s.database_id \
+         WHERE d.name = $1 \
+         AND s.name = $2 \
+         AND mz_sinks.name = $3",
+        Sql::ident(topic_field)
     );
     let sink_fields: Vec<&str> = sink.split('.').collect();
-    let result = state
-        .materialize
-        .pgclient
-        .query_one(
-            query.as_str(),
-            &[&sink_fields[0], &sink_fields[1], &sink_fields[2]],
-        )
-        .await
-        .context("retrieving topic name")?
-        .get(topic_field);
+    let result = query_one(
+        &state.materialize.pgclient,
+        query,
+        &[&sink_fields[0], &sink_fields[1], &sink_fields[2]],
+    )
+    .await
+    .context("retrieving topic name")?
+    .get(topic_field);
     Ok(result)
 }
 
