@@ -109,22 +109,26 @@ case "$arch_gcc" in
     *) die "unknown host architecture \"$arch\"" ;;
 esac
 
+docker_build_args="\
+--build-arg ARCH_GCC=$arch_gcc \
+--build-arg ARCH_GO=$arch_go \
+--build-arg RUST_VERSION=$rust_version \
+--build-arg RUST_DATE=$rust_date \
+--build-arg RUST_COMPONENTS=$rust_components \
+--build-arg RUST_CPU_TARGET=$rust_cpu_target \
+--build-arg RUST_TARGET_FEATURES=$rust_target_features"
+
 uid=$(id -u)
 gid=$(id -g)
 [[ "$uid" -lt 500 ]] && uid=501
 [[ "$gid" -lt 500 ]] && gid=$uid
 
 build() {
+    # shellcheck disable=SC2086 # intentional splitting of build args string
     docker buildx build --pull \
         --cache-from=materialize/ci-builder:"$cache_tag" \
         --cache-to=type=inline,mode=max \
-        --build-arg "ARCH_GCC=$arch_gcc" \
-        --build-arg "ARCH_GO=$arch_go" \
-        --build-arg "RUST_VERSION=$rust_version" \
-        --build-arg "RUST_DATE=$rust_date" \
-        --build-arg "RUST_COMPONENTS=$rust_components" \
-        --build-arg "RUST_CPU_TARGET=$rust_cpu_target" \
-        --build-arg "RUST_TARGET_FEATURES=$rust_target_features" \
+        $docker_build_args \
         --tag materialize/ci-builder:"$tag" \
         --tag ghcr.io/materializeinc/materialize/ci-builder:"$tag" \
         --tag materialize/ci-builder:"$cache_tag" \
@@ -145,18 +149,14 @@ fi
 # a chicken-and-egg problem: mzbuild depends on the Python packages that are
 # *inside* this image. See materialize.git.expand_globs in the Python code for
 # details on this computation.
-files=$(cat \
+tag=$({
+    cat \
         <(git diff --name-only -z 4b825dc642cb6eb9a060e54bf8d69288fbee4904 ci/builder bin/ci-builder) \
         <(git ls-files --others --exclude-standard -z ci/builder) \
-    | LC_ALL=C sort -z \
-    | xargs -0 "$shasum")
-files+="
-rust-version:$rust_version
-rust-date:$rust_date
-arch:$arch_gcc
-flavor:$flavor
-"
-tag=$(echo "$files" | python3 -c '
+        | LC_ALL=C sort -z \
+        | xargs -0 "$shasum"
+    printf '%s\n' "flavor:$flavor" "build-args:$docker_build_args"
+} | python3 -c '
 import base64
 import hashlib
 import sys
