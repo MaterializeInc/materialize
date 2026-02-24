@@ -33,6 +33,7 @@ use postgres_array::{Array, Dimension};
 use tokio::sync::mpsc;
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_bind_params() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -262,6 +263,7 @@ fn test_read_many_rows() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
 async fn test_conn_startup() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
@@ -432,6 +434,7 @@ async fn test_conn_startup() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_conn_user() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -466,6 +469,7 @@ fn test_conn_user() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_simple_query_no_hang() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -540,6 +544,7 @@ fn test_copy() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_arrays() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -593,6 +598,7 @@ fn test_arrays() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_record_types() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
