@@ -2145,7 +2145,9 @@ fn attempt_outer_equijoin(
     // However, in that case it's not clear that we won't see regressions if
     // `on` simplifies to a literal error.
     let mut on = vec![on];
-    mz_expr::canonicalize::canonicalize_predicates(&mut on, &output_type);
+    let repr_output_type: Vec<mz_repr::ReprColumnType> =
+        output_type.iter().map(mz_repr::ReprColumnType::from).collect();
+    mz_expr::canonicalize::canonicalize_predicates(&mut on, &repr_output_type);
 
     // Form the left and right types without the outer attributes.
     output_type.drain(0..oa);

@@ -91,7 +91,9 @@ impl Filter {
                 **input = inner.take_dangerous();
             }
 
-            mz_expr::canonicalize::canonicalize_predicates(predicates, &input.typ().column_types);
+            let repr_col_types: Vec<mz_repr::ReprColumnType> =
+                input.typ().column_types.iter().map(mz_repr::ReprColumnType::from).collect();
+            mz_expr::canonicalize::canonicalize_predicates(predicates, &repr_col_types);
 
             // remove the Filter stage if empty.
             if predicates.is_empty() {

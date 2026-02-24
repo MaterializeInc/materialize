@@ -164,6 +164,10 @@ impl JoinImplementation {
             }
 
             let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
+            let input_repr_col_types: Vec<Vec<mz_repr::ReprColumnType>> = input_types
+                .iter()
+                .map(|t| t.column_types.iter().map(mz_repr::ReprColumnType::from).collect())
+                .collect();
 
             // Canonicalize the equivalence classes
             if matches!(implementation, Unimplemented) {
@@ -177,7 +181,7 @@ impl JoinImplementation {
                 // the case.
                 mz_expr::canonicalize::canonicalize_equivalences(
                     equivalences,
-                    input_types.iter().map(|t| &t.column_types),
+                    input_repr_col_types.iter(),
                 );
             }
 

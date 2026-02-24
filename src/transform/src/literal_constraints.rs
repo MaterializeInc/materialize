@@ -622,7 +622,9 @@ impl LiteralConstraints {
             .clone()
             .map(map.clone())
             .typ_with_input_types(&[relation_type]);
-        canonicalize_predicates(&mut predicates, &typ_after_map.column_types);
+        let repr_col_types: Vec<mz_repr::ReprColumnType> =
+            typ_after_map.column_types.iter().map(mz_repr::ReprColumnType::from).collect();
+        canonicalize_predicates(&mut predicates, &repr_col_types);
         // Rebuild the MFP with the new predicates.
         *mfp = MapFilterProject::new(mfp.input_arity)
             .map(map)

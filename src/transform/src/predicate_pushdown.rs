@@ -276,9 +276,11 @@ impl PredicatePushdown {
                                 pred_not_translated.push(predicate)
                             }
 
+                            let input_repr_col_types: Vec<mz_repr::ReprColumnType> =
+                                input_type.column_types.iter().map(mz_repr::ReprColumnType::from).collect();
                             mz_expr::canonicalize::canonicalize_equivalences(
                                 equivalences,
-                                std::iter::once(&input_type.column_types),
+                                std::iter::once(&input_repr_col_types),
                             );
 
                             let (retain, push_downs) = Self::push_filters_through_join(
@@ -576,9 +578,13 @@ impl PredicatePushdown {
                     //   2) equivalences of the form `expr1 = expr2`, where both
                     //      expressions come from the same single input.
                     let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
+                    let input_repr_col_types: Vec<Vec<mz_repr::ReprColumnType>> = input_types
+                        .iter()
+                        .map(|t| t.column_types.iter().map(mz_repr::ReprColumnType::from).collect())
+                        .collect();
                     mz_expr::canonicalize::canonicalize_equivalences(
                         equivalences,
-                        input_types.iter().map(|t| &t.column_types),
+                        input_repr_col_types.iter(),
                     );
 
                     let input_mapper = mz_expr::JoinInputMapper::new_from_input_types(&input_types);
@@ -771,9 +777,13 @@ impl PredicatePushdown {
                         };
                     }
 
+                    let input_repr_col_types2: Vec<Vec<mz_repr::ReprColumnType>> = input_types
+                        .iter()
+                        .map(|t| t.column_types.iter().map(mz_repr::ReprColumnType::from).collect())
+                        .collect();
                     mz_expr::canonicalize::canonicalize_equivalences(
                         equivalences,
-                        input_types.iter().map(|t| &t.column_types),
+                        input_repr_col_types2.iter(),
                     );
 
                     Self::update_join_inputs_with_push_downs(inputs, push_downs);
@@ -838,9 +848,11 @@ impl PredicatePushdown {
                 // Apply the predicates in `list` to value. Canonicalize
                 // `list` so that plans are always deterministic.
                 let mut list = list.into_iter().collect::<Vec<_>>();
+                let repr_col_types: Vec<mz_repr::ReprColumnType> =
+                    value.typ().column_types.iter().map(mz_repr::ReprColumnType::from).collect();
                 mz_expr::canonicalize::canonicalize_predicates(
                     &mut list,
-                    &value.typ().column_types,
+                    &repr_col_types,
                 );
                 *value = value.take_dangerous().filter(list);
             }

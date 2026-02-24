@@ -248,9 +248,13 @@ impl RedundantJoin {
                             }
                         }
 
+                        let input_repr_col_types: Vec<Vec<mz_repr::ReprColumnType>> = input_types
+                            .iter()
+                            .map(|t| t.column_types.iter().map(mz_repr::ReprColumnType::from).collect())
+                            .collect();
                         mz_expr::canonicalize::canonicalize_equivalences(
                             equivalences,
-                            input_types.iter().map(|t| &t.column_types),
+                            input_repr_col_types.iter(),
                         );
 
                         // Build a projection that leaves the binding expressions in the same
