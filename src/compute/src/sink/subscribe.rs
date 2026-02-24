@@ -222,7 +222,7 @@ impl SubscribeProtocol {
         rows.sort_by(|(t0, r0, _), (t1, r1, _)| {
             // NB: sort in reverse, so it's cheaper to peek off the tail.
             t0.cmp(t1)
-                .then({
+                .then_with(|| {
                     let dv0 = left_datum_vec.borrow_with(r0.as_row_ref());
                     let dv1 = right_datum_vec.borrow_with(r1.as_row_ref());
                     compare_columns(order, &dv0, &dv1, || r0.cmp(r1))

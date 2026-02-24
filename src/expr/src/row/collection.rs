@@ -13,7 +13,9 @@ use std::cell::RefCell;
 use std::num::NonZeroUsize;
 
 use itertools::Itertools;
-use mz_repr::{DatumVec, IntoRowIterator, Row, RowIterator, RowRef, Rows, SharedSlice};
+use mz_repr::{
+    DatumVec, IntoRowIterator, Row, RowIterator, RowRef, Rows, RowsBuilder, SharedSlice,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::ColumnOrder;
@@ -30,7 +32,37 @@ pub struct RowCollection {
     diffs: SharedSlice<NonZeroUsize>,
 }
 
+#[derive(Debug)]
+pub struct RowCollectionBuilder {
+    rows: RowsBuilder,
+    diffs: Vec<NonZeroUsize>,
+}
+
+impl RowCollectionBuilder {
+    pub fn push(&mut self, row: &RowRef, diff: NonZeroUsize) {
+        self.rows.push(row);
+        self.diffs.push(diff);
+    }
+
+    pub fn build(self) -> RowCollection {
+        RowCollection {
+            rows: self.rows.build(),
+            diffs: self.diffs.into(),
+        }
+    }
+}
+
 impl RowCollection {
+    /// Create a new [`RowCollection`] from a collection of [`Row`]s.
+    ///
+    /// The order in which elements are pushed will be preserved.
+    pub fn builder(byte_len_hint: usize, len_hint: usize) -> RowCollectionBuilder {
+        RowCollectionBuilder {
+            rows: Rows::builder(byte_len_hint, len_hint),
+            diffs: Vec::with_capacity(len_hint),
+        }
+    }
+
     /// Create a new [`RowCollection`] from a collection of [`Row`]s. Sorts data by `order_by`.
     ///
     /// Note that all row collections to be merged must be constructed with the same `order_by`
@@ -57,18 +89,11 @@ impl RowCollection {
         // is faster, so feel free to change this if you'd like.
         let encoded_size = rows.iter().map(|(row, _diff)| row.data_len()).sum();
 
-        let mut row_data = Rows::builder(encoded_size, rows.len());
-        let mut diffs = Vec::with_capacity(rows.len());
-
+        let mut builder = Self::builder(encoded_size, rows.len());
         for (row, diff) in rows {
-            row_data.push(row.as_row_ref());
-            diffs.push(diff);
+            builder.push(row.as_row_ref(), diff);
         }
-
-        RowCollection {
-            rows: row_data.build(),
-            diffs: diffs.into(),
-        }
+        builder.build()
     }
 
     fn iter(&self) -> impl Iterator<Item = (&RowRef, NonZeroUsize)> {
@@ -86,14 +111,11 @@ impl RowCollection {
         // TODO(parkmycar): Using SegmentedBytes here would be nice.
         let byte_len = self.rows.byte_len() + other.rows.byte_len();
         let len = self.rows.len() + other.rows.len();
-        let mut new_rows = Rows::builder(byte_len, len);
-        let mut new_diffs = Vec::with_capacity(len);
+        let mut builder = Self::builder(byte_len, len);
         for (row, diff) in self.iter().chain(other.iter()) {
-            new_rows.push(row);
-            new_diffs.push(diff);
+            builder.push(row, diff);
         }
-        self.rows = new_rows.build();
-        self.diffs = new_diffs.into();
+        *self = builder.build();
     }
 
     /// Adjust a row count for the provided offset and limit.
@@ -171,22 +193,16 @@ impl RowCollection {
             encoded_len += collection.rows.byte_len();
         }
 
-        let mut rows = Rows::builder(encoded_len, metadata_len);
-        let mut diffs = Vec::with_capacity(metadata_len);
+        let mut builder = Self::builder(encoded_len, metadata_len);
 
         for (row, diff) in
             mz_ore::iter::merge_iters_by(runs.iter().map(|r| r.iter()), |(r0, _), (r1, _)| {
                 cmp(r0, r1)
             })
         {
-            rows.push(row);
-            diffs.push(diff);
+            builder.push(row, diff);
         }
-
-        RowCollection {
-            rows: rows.build(),
-            diffs: diffs.into(),
-        }
+        builder.build()
     }
 }
 
