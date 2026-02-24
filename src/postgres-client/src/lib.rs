@@ -139,9 +139,15 @@ impl PostgresClient {
                 connections_created.inc();
                 Box::pin(async move {
                     debug!("opened new consensus postgres connection");
-                    client.batch_execute(
+                    // This hook must return `tokio_postgres::Error`; using
+                    // `mz_postgres_util` wrappers would change the error type.
+                    #[allow(clippy::disallowed_methods)]
+                    client
+                        .batch_execute(
                         "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE",
-                    ).await.map_err(|e| HookError::Abort(HookErrorCause::Backend(e)))
+                    )
+                        .await
+                        .map_err(|e| HookError::Abort(HookErrorCause::Backend(e)))
                 })
             }))
             .pre_recycle(Hook::sync_fn(move |_client, conn_metrics| {

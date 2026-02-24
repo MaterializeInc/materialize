@@ -73,8 +73,8 @@ use tungstenite::{Error, Message, Utf8Bytes};
 use uuid::Uuid;
 
 // Allow the use of banned rdkafka methods, because we are just in tests.
-#[allow(clippy::disallowed_methods)]
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_persistence() {
     let data_dir = tempfile::tempdir().unwrap();
     let harness = test_util::TestHarness::default()
@@ -197,6 +197,7 @@ impl TestServerWithStatementLoggingChecks {
 
 /// Helper to get statement logging record counts from the metrics registry.
 /// Returns (sampled_true_count, sampled_false_count).
+#[allow(clippy::disallowed_methods)]
 fn get_statement_logging_record_counts(
     server: &TestServerWithStatementLoggingChecks,
 ) -> (u64, u64) {
@@ -230,6 +231,7 @@ fn get_statement_logging_record_counts(
 }
 
 impl Drop for TestServerWithStatementLoggingChecks {
+    #[allow(clippy::disallowed_methods)]
     fn drop(&mut self) {
         // Don't run checks if we're already panicking, as this could mask the original error.
         if std::thread::panicking() {
@@ -325,6 +327,7 @@ fn setup_statement_logging(
 
 // Test that we log various kinds of statement whose execution terminates in the coordinator.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_statement_logging_immediate() {
     let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
 
@@ -469,6 +472,7 @@ fn test_statement_logging_immediate() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_statement_logging_basic() {
     let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
     client.execute("SELECT 1", &[]).unwrap();
@@ -667,6 +671,7 @@ ORDER BY mseh.began_at",
     );
 }
 
+#[allow(clippy::disallowed_methods)]
 fn run_throttling_test(use_prepared_statement: bool) {
     // The `target_data_rate` should be
     // - high enough so that the `SELECT 1` queries get throttled (even with high CPU load due to
@@ -743,6 +748,7 @@ fn test_statement_logging_prepared_statement_throttling() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_statement_logging_subscribes() {
     let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
     let cancel_token = client.cancel_token();
@@ -835,6 +841,7 @@ fn test_statement_logging_subscribes() {
 /// Relies on two assumptions:
 /// (1) that the effective sampling rate for the session is 50%,
 /// (2) that we are using the deterministic testing RNG.
+#[allow(clippy::disallowed_methods)]
 fn test_statement_logging_sampling_inner(
     server: TestServerWithStatementLoggingChecks,
     mut client: postgres::Client,
@@ -914,6 +921,7 @@ fn test_statement_logging_sampling_constrained() {
 /// We set `sample_rate=0.0` so no statements are actually sampled/logged, but the
 /// unsampled_bytes metric still gets incremented for every executed statement.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_statement_logging_unsampled_metrics() {
     // Use sample_rate=0.0 so statements are not sampled, but unsampled_bytes metric is still tracked.
     let (server, mut client) = setup_statement_logging(1.0, 0.0, "");
@@ -986,6 +994,7 @@ fn test_statement_logging_unsampled_metrics() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_enable_internal_statement_logging() {
     let (server, mut client) = setup_statement_logging_core(
         1.0,
@@ -1028,6 +1037,7 @@ WHERE authenticated_user='mz_system'",
 
 // Test the POST and WS server endpoints.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_http_sql() {
     // Datadriven directives for WebSocket are "ws-text" and "ws-binary" to send
     // text or binary websocket messages that are the input. Output is
@@ -1178,6 +1188,7 @@ fn test_http_sql() {
 
 // Test that the server properly handles cancellation requests.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_cancel_long_running_query() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -1219,6 +1230,7 @@ fn test_cancel_long_running_query() {
         .expect("simple query succeeds after cancellation");
 }
 
+#[allow(clippy::disallowed_methods)]
 fn test_cancellation_cancels_dataflows(query: &str) {
     // Query that returns how many dataflows are currently installed.
     // Ignores introspection subscribe dataflows.
@@ -1300,6 +1312,7 @@ fn test_cancel_insert_select() {
     );
 }
 
+#[allow(clippy::disallowed_methods)]
 fn test_closing_connection_cancels_dataflows(query: String) {
     // Query that returns how many dataflows are currently installed.
     // Ignores introspection subscribe dataflows.
@@ -1395,6 +1408,7 @@ fn test_closing_connection_for_insert_select() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_storage_usage_collection_interval() {
     /// Waits for the next storage collection to occur, then returns the
     /// timestamp at which the collection occurred. The timestamp of the last
@@ -1536,6 +1550,7 @@ fn test_storage_usage_collection_interval() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_storage_usage_updates_between_restarts() {
     let data_dir = tempfile::tempdir().unwrap();
     let storage_usage_collection_interval = Duration::from_secs(3);
@@ -1586,6 +1601,7 @@ fn test_storage_usage_updates_between_restarts() {
 
 // Test that all rows for a single collection use the same timestamp.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_storage_usage_collection_interval_timestamps() {
     let storage_interval_s = 2;
     let server = test_util::TestHarness::default()
@@ -1643,6 +1659,7 @@ fn test_storage_usage_collection_interval_timestamps() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_old_storage_usage_records_are_reaped_on_restart() {
     let now = Arc::new(Mutex::new(0));
     let now_fn = {
@@ -1743,6 +1760,7 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_storage_usage_records_are_not_cleared_on_restart() {
     let data_dir = tempfile::tempdir().unwrap();
     let collection_interval = Duration::from_secs(1);
@@ -1828,6 +1846,7 @@ fn test_storage_usage_records_are_not_cleared_on_restart() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_default_cluster_sizes() {
     let server = test_util::TestHarness::default()
         .with_builtin_system_cluster_replica_size("scale=1,workers=1".to_string())
@@ -1861,6 +1880,7 @@ fn test_default_cluster_sizes() {
 
 #[mz_ore::test]
 #[ignore] // TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/6931 is fixed
+#[allow(clippy::disallowed_methods)]
 fn test_max_request_size() {
     let statement = "SELECT $1::text";
     let statement_size = statement.bytes().count();
@@ -1911,6 +1931,7 @@ fn test_max_request_size() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 fn test_max_statement_batch_size() {
     let statement = "SELECT 1;";
     let statement_size = statement.bytes().count();
@@ -1997,6 +2018,7 @@ fn test_max_statement_batch_size() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_console_config_endpoint() {
     let server = test_util::TestHarness::default().start_blocking();
     let http_url = Url::parse(&format!(
@@ -2036,6 +2058,7 @@ fn test_console_config_endpoint() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_mz_system_user_admin() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server
@@ -2254,6 +2277,7 @@ fn test_http_options_param() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 fn test_max_connections_on_all_interfaces() {
     let query = "SELECT 1";
     let server = test_util::TestHarness::default()
@@ -2400,6 +2424,7 @@ fn test_max_connections_on_all_interfaces() {
 
 // Test max_connections and superuser_reserved_connections.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
 async fn test_max_connections_limits() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2610,6 +2635,7 @@ async fn test_max_connections_limits() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_concurrent_id_reuse() {
     let server = test_util::TestHarness::default().start().await;
 
@@ -2856,6 +2882,7 @@ fn test_internal_ws_auth() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 fn test_leader_promotion_always_using_deploy_generation() {
     let tmpdir = TempDir::new().unwrap();
     let harness = test_util::TestHarness::default()
@@ -2901,6 +2928,7 @@ fn test_leader_promotion_always_using_deploy_generation() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_leader_promotion_mixed_code_version() {
     let tmpdir = TempDir::new().unwrap();
     let this_version = mz_environmentd::BUILD_INFO.semver_version();
@@ -2962,6 +2990,7 @@ async fn test_leader_promotion_mixed_code_version() {
 // Test that websockets observe cancellation.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 fn test_cancel_ws() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -3006,6 +3035,7 @@ fn test_cancel_ws() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn smoketest_webhook_source() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
@@ -3125,6 +3155,7 @@ async fn smoketest_webhook_source() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 fn test_invalid_webhook_body() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -3208,6 +3239,7 @@ fn test_invalid_webhook_body() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 fn test_webhook_duplicate_headers() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -3248,6 +3280,7 @@ fn test_webhook_duplicate_headers() {
 // Test that websockets observe cancellation and leave the transaction in an idle state.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 fn test_github_20262() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -3315,6 +3348,7 @@ fn test_github_20262() {
 // See database-issues#6134.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 fn test_cancel_read_then_write() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -3462,6 +3496,7 @@ async fn test_http_metrics() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn webhook_concurrent_actions() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
@@ -3616,6 +3651,7 @@ async fn webhook_concurrent_actions() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 fn webhook_concurrency_limit() {
     let concurrency_limit = 15;
     let server = test_util::TestHarness::default()
@@ -3706,6 +3742,7 @@ fn webhook_concurrency_limit() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 fn webhook_too_large_request() {
     let metrics_registry = MetricsRegistry::new();
     let server = test_util::TestHarness::default()
@@ -3777,6 +3814,7 @@ fn webhook_too_large_request() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 fn test_webhook_url_notice() {
     let server = test_util::TestHarness::default().start_blocking();
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
@@ -3837,6 +3875,7 @@ fn test_webhook_url_notice() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn webhook_concurrent_swap() {
     let server = test_util::TestHarness::default().start().await;
     let mut client = server.connect().await.unwrap();
@@ -4006,6 +4045,7 @@ async fn webhook_concurrent_swap() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 fn copy_from() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -4031,6 +4071,7 @@ fn copy_from() {
 // Test that a cluster dropped mid transaction results in an error.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 fn concurrent_cluster_drop() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut txn_client = server.connect(postgres::NoTls).unwrap();
@@ -4067,6 +4108,7 @@ fn concurrent_cluster_drop() {
 // Test connection ID properties.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_connection_id() {
     let harness = test_util::TestHarness::default();
     let envid = harness.environment_id.organization_id().as_u128();
@@ -4088,6 +4130,7 @@ async fn test_connection_id() {
 // Test connection ID properties.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_github_25388() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -4189,6 +4232,7 @@ async fn test_github_25388() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_webhook_source_batch_interval() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
@@ -4342,6 +4386,7 @@ async fn test_startup_cluster_notice_with_http_options() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_startup_cluster_notice() {
     let server = test_util::TestHarness::default().start().await;
 
@@ -4458,6 +4503,7 @@ async fn test_startup_cluster_notice() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 fn test_durable_oids() {
     let data_dir = tempfile::tempdir().unwrap();
     let harness = test_util::TestHarness::default().data_directory(data_dir.path());
@@ -4497,6 +4543,7 @@ fn test_durable_oids() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_double_encoded_json() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.expect("success");
@@ -4606,6 +4653,7 @@ async fn test_double_encoded_json() {
 // Tests cert reloading of environmentd.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_cert_reloading() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -4811,6 +4859,7 @@ async fn test_cert_reloading() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 fn test_builtin_connection_alterations_are_preserved_across_restarts() {
     let data_dir = tempfile::tempdir().unwrap();
     let harness = test_util::TestHarness::default()
@@ -4910,6 +4959,7 @@ fn test_builtin_connection_alterations_are_preserved_across_restarts() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 fn test_webhook_request_compression() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
