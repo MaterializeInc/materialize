@@ -42,8 +42,8 @@ pub fn create_certificate(
     cert_name: String,
     secret_name: String,
     additional_dns_names: Option<Vec<String>>,
-    algorithm: CertificatePrivateKeyAlgorithm,
-    size: Option<i64>,
+    algorithm_hint: CertificatePrivateKeyAlgorithm,
+    size_hint: Option<i64>,
 ) -> Option<Certificate> {
     let default_spec = default_spec.unwrap_or_else(MaterializeCertSpec::default);
     let mz_cert_spec = mz_cert_spec.unwrap_or_else(MaterializeCertSpec::default);
@@ -69,6 +69,33 @@ pub fn create_certificate(
     if let Some(names) = additional_dns_names {
         dns_names.extend(names);
     }
+    let private_key_algorithm = mz_cert_spec
+        .private_key_algorithm
+        .or(default_spec.private_key_algorithm)
+        .unwrap_or(algorithm_hint);
+    let private_key_size = match private_key_algorithm {
+        CertificatePrivateKeyAlgorithm::Rsa => {
+            let size = mz_cert_spec
+                .private_key_size
+                .or(default_spec.private_key_size)
+                .unwrap_or_else(|| size_hint.unwrap_or(4096));
+            if size < 2048 {
+                panic!("RSA key size must be at least 2048 bits");
+            }
+            Some(size)
+        }
+        CertificatePrivateKeyAlgorithm::Ecdsa => {
+            let size = mz_cert_spec
+                .private_key_size
+                .or(default_spec.private_key_size)
+                .unwrap_or_else(|| size_hint.unwrap_or(256));
+            if ![256, 384, 521].contains(&size) {
+                panic!("ECDSA key size must be one of 256, 384, or 521 bits");
+            }
+            Some(size)
+        }
+        CertificatePrivateKeyAlgorithm::Ed25519 => None,
+    };
     Some(Certificate {
         metadata: resource.managed_resource_meta(cert_name),
         spec: CertificateSpec {
@@ -76,10 +103,10 @@ pub fn create_certificate(
             duration: mz_cert_spec.duration.or(default_spec.duration),
             issuer_ref,
             private_key: Some(CertificatePrivateKey {
-                algorithm: Some(algorithm),
+                algorithm: Some(private_key_algorithm),
                 encoding: Some(CertificatePrivateKeyEncoding::Pkcs8),
                 rotation_policy: Some(CertificatePrivateKeyRotationPolicy::Always),
-                size,
+                size: private_key_size,
             }),
             renew_before: mz_cert_spec.renew_before.or(default_spec.renew_before),
             secret_name,

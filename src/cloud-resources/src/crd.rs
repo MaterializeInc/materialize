@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::crd::generated::cert_manager::certificates::{
-    CertificateIssuerRef, CertificateSecretTemplate,
+    CertificateIssuerRef, CertificatePrivateKeyAlgorithm, CertificateSecretTemplate,
 };
 use mz_ore::retry::Retry;
 
@@ -58,6 +58,10 @@ pub struct MaterializeCertSpec {
     pub issuer_ref: Option<CertificateIssuerRef>,
     /// Additional annotations and labels to include in the Certificate object.
     pub secret_template: Option<CertificateSecretTemplate>,
+    /// Optional algorithm to use for the private key. If not specified, a recommended default will be chosen.
+    pub private_key_algorithm: Option<CertificatePrivateKeyAlgorithm>,
+    /// Optional size for the private key.
+    pub private_key_size: Option<i64>,
 }
 
 pub trait ManagedResource: Resource<DynamicType = ()> + Sized {
