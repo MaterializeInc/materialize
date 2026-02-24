@@ -90,10 +90,8 @@ use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::{Client, PostgresError, simple_query_opt};
+use mz_postgres_util::{Client, PostgresError, Sql, query_opt, simple_query_opt, sql};
 use mz_repr::{Datum, Diff, GlobalId, Row};
-use mz_sql_parser::ast::Ident;
-use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
 use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::{
@@ -387,14 +385,16 @@ impl From<DefiniteError> for DataflowError {
 }
 
 async fn ensure_replication_slot(client: &Client, slot: &str) -> Result<(), TransientError> {
-    // Note: Using unchecked here is okay because we're using it in a SQL query.
-    let slot = Ident::new_unchecked(slot).to_ast_string_simple();
-    let query = format!("CREATE_REPLICATION_SLOT {slot} LOGICAL \"pgoutput\" NOEXPORT_SNAPSHOT");
-    match simple_query_opt(client, &query).await {
+    let slot = Sql::ident(slot);
+    let query = sql!(
+        "CREATE_REPLICATION_SLOT {} LOGICAL \"pgoutput\" NOEXPORT_SNAPSHOT",
+        slot.clone()
+    );
+    match simple_query_opt(client, query).await {
         Ok(_) => Ok(()),
         // If the slot already exists that's still ok
         Err(PostgresError::Postgres(err)) if err.code() == Some(&SqlState::DUPLICATE_OBJECT) => {
-            tracing::trace!("replication slot {slot} already existed");
+            tracing::trace!(slot = %slot, "replication slot already existed");
             Ok(())
         }
         Err(err) => Err(TransientError::PostgresError(err)),
@@ -418,9 +418,16 @@ async fn fetch_slot_metadata(
     interval: Duration,
 ) -> Result<SlotMetadata, TransientError> {
     loop {
-        let query = "SELECT active_pid, confirmed_flush_lsn
-                FROM pg_replication_slots WHERE slot_name = $1";
-        let Some(row) = client.query_opt(query, &[&slot]).await? else {
+        let Some(row) = query_opt(
+            &**client,
+            sql!(
+                "SELECT active_pid, confirmed_flush_lsn \
+                 FROM pg_replication_slots WHERE slot_name = $1"
+            ),
+            &[&slot],
+        )
+        .await?
+        else {
             return Err(TransientError::MissingReplicationSlot);
         };
 
@@ -444,8 +451,7 @@ async fn fetch_slot_metadata(
 
 /// Fetch the `pg_current_wal_lsn`, used to report metrics.
 async fn fetch_max_lsn(client: &Client) -> Result<MzOffset, TransientError> {
-    let query = "SELECT pg_current_wal_lsn()";
-    let row = simple_query_opt(client, query).await?;
+    let row = simple_query_opt(client, sql!("SELECT pg_current_wal_lsn()")).await?;
 
     match row.and_then(|row| {
         row.get("pg_current_wal_lsn")

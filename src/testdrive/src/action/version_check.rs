@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::{Context, bail};
+use mz_postgres_util::query_one_prepared;
 use tokio_postgres::types::Type;
 
 use crate::action::State;
@@ -30,10 +31,7 @@ pub async fn run_version_check(
             *stmt.columns()[0].type_()
         );
     }
-    let actual_version: i32 = state
-        .materialize
-        .pgclient
-        .query_one(&stmt, &[])
+    let actual_version: i32 = query_one_prepared(&state.materialize.pgclient, &stmt, &[])
         .await
         .context("executing version-check query failed")?
         .get(0);

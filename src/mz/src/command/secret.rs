@@ -19,10 +19,7 @@
 
 use std::io::{self, Write};
 
-use mz_sql_parser::ast::{
-    Ident,
-    display::{AstDisplay, escaped_string_literal},
-};
+use mz_postgres_util::{Sql, sql};
 
 use crate::{context::RegionContext, error::Error};
 
@@ -72,19 +69,19 @@ pub async fn create(
     let mut client = cx.sql_client().shell(&region_info, user, None);
 
     // Build the queries to create the secret.
-    let mut commands: Vec<String> = vec![];
+    let mut commands: Vec<Sql> = vec![];
+    let name = Sql::ident(name);
 
     if let Some(database) = database {
         client.args(vec!["-d", database]);
     }
 
     if let Some(schema) = schema {
-        let schema = Ident::new_unchecked(schema).to_ast_string_simple();
-        commands.push(format!("SET search_path TO {schema};"));
+        commands.push(sql!("SET search_path TO {}", Sql::ident(schema)));
     }
 
-    let buffer = escaped_string_literal(&buffer).to_string();
-    let name = Ident::new_unchecked(name).to_ast_string_simple();
+    // Treat stdin as a literal value to avoid command injection through `psql -c`.
+    let value = Sql::literal(&buffer);
 
     if force {
         // Rather than checking if the SECRET exists, do an upsert.
@@ -93,18 +90,19 @@ pub async fn create(
         // The alternative is passing two `-c` commands to psql.
 
         // Otherwise if the SECRET exists `psql` will display a NOTICE message.
-        commands.push("SET client_min_messages TO WARNING;".to_string());
-        commands.push(format!(
+        commands.push(sql!("SET client_min_messages TO WARNING;"));
+        commands.push(sql!(
             "CREATE SECRET IF NOT EXISTS {} AS {};",
-            name, buffer
+            name.clone(),
+            value.clone()
         ));
-        commands.push(format!("ALTER SECRET {} AS {};", name, buffer));
+        commands.push(sql!("ALTER SECRET {} AS {};", name.clone(), value.clone()));
     } else {
-        commands.push(format!("CREATE SECRET {} AS {};", name, buffer));
+        commands.push(sql!("CREATE SECRET {} AS {};", name, value));
     }
 
     commands.iter().for_each(|c| {
-        client.args(vec!["-c", c]);
+        client.args(vec!["-c", c.as_str()]);
     });
 
     let output = client

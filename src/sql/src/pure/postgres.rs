@@ -689,15 +689,16 @@ pub(crate) fn generate_column_casts(
 }
 
 mod privileges {
-    use mz_postgres_util::PostgresError;
+    use mz_postgres_util::{PostgresError, query, sql};
 
     use super::*;
     use crate::plan::PlanError;
     use crate::pure::PgSourcePurificationError;
 
     async fn check_schema_privileges(client: &Client, table_oids: &[Oid]) -> Result<(), PlanError> {
-        let invalid_schema_privileges_rows = client
-            .query(
+        let invalid_schema_privileges_rows = query(
+            client,
+            sql!(
                 "
                 WITH distinct_namespace AS (
                     SELECT
@@ -709,11 +710,11 @@ mod privileges {
                 SELECT d.schema_name
                 FROM distinct_namespace AS d
                 WHERE
-                    NOT has_schema_privilege(CURRENT_USER::TEXT, d.oid, 'usage')",
-                &[&table_oids],
-            )
-            .await
-            .map_err(PostgresError::from)?;
+                    NOT has_schema_privilege(CURRENT_USER::TEXT, d.oid, 'usage')"
+            ),
+            &[&table_oids],
+        )
+        .await?;
 
         let mut invalid_schema_privileges = invalid_schema_privileges_rows
             .into_iter()
@@ -746,8 +747,9 @@ mod privileges {
     ) -> Result<(), PlanError> {
         check_schema_privileges(client, table_oids).await?;
 
-        let invalid_table_privileges_rows = client
-            .query(
+        let invalid_table_privileges_rows = query(
+            client,
+            sql!(
                 "
             SELECT
                 format('%I.%I', n.nspname, c.relname) AS schema_qualified_table_name
@@ -756,11 +758,11 @@ mod privileges {
                  pg_class c ON c.oid = oids.oid
              JOIN
                  pg_namespace n ON c.relnamespace = n.oid
-             WHERE NOT has_table_privilege(CURRENT_USER::text, c.oid, 'select')",
-                &[&table_oids],
-            )
-            .await
-            .map_err(PostgresError::from)?;
+             WHERE NOT has_table_privilege(CURRENT_USER::text, c.oid, 'select')"
+            ),
+            &[&table_oids],
+        )
+        .await?;
 
         let mut invalid_table_privileges = invalid_table_privileges_rows
             .into_iter()
@@ -801,7 +803,7 @@ mod privileges {
 }
 
 mod replica_identity {
-    use mz_postgres_util::PostgresError;
+    use mz_postgres_util::{query, sql};
 
     use super::*;
     use crate::plan::PlanError;
@@ -812,8 +814,9 @@ mod replica_identity {
         client: &Client,
         table_oids: &[Oid],
     ) -> Result<(), PlanError> {
-        let invalid_replica_identity_rows = client
-            .query(
+        let invalid_replica_identity_rows = query(
+            client,
+            sql!(
                 "
             SELECT
                 format('%I.%I', n.nspname, c.relname) AS schema_qualified_table_name
@@ -822,11 +825,11 @@ mod replica_identity {
                  pg_class c ON c.oid = oids.oid
              JOIN
                  pg_namespace n ON c.relnamespace = n.oid
-             WHERE relreplident != 'f' OR relreplident IS NULL;",
-                &[&table_oids],
-            )
-            .await
-            .map_err(PostgresError::from)?;
+             WHERE relreplident != 'f' OR relreplident IS NULL;"
+            ),
+            &[&table_oids],
+        )
+        .await?;
 
         let mut invalid_replica_identity = invalid_replica_identity_rows
             .into_iter()

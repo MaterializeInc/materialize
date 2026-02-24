@@ -168,17 +168,12 @@ use std::time::Duration;
 use anyhow::bail;
 use differential_dataflow::AsCollection;
 use futures::{StreamExt as _, TryStreamExt};
-use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::schemas::get_pg_major_version;
-use mz_postgres_util::{Client, Config, PostgresError, simple_query_opt};
+use mz_postgres_util::{Client, Config, PostgresError, Sql, simple_query, simple_query_opt, sql};
 use mz_repr::{Datum, DatumVec, Diff, Row};
-use mz_sql_parser::ast::{
-    Ident,
-    display::{AstDisplay, escaped_string_literal},
-};
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::parameters::PgSourceSnapshotConfig;
@@ -309,13 +304,9 @@ async fn estimate_table_block_counts(
         return Ok(BTreeMap::new());
     }
 
-    // Query relpages for all tables at once
-    let oid_list = table_oids
-        .iter()
-        .map(|oid| oid.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
-    let query = format!(
+    // Query relpages for all tables at once.
+    let oid_list = Sql::join(table_oids.iter().copied().map(Sql::from), ",");
+    let query = sql!(
         "SELECT oid, relpages FROM pg_class WHERE oid IN ({})",
         oid_list
     );
@@ -327,7 +318,7 @@ async fn estimate_table_block_counts(
     }
 
     // Execute the query and collect results
-    let rows = client.simple_query(&query).await?;
+    let rows = simple_query(client, query).await?;
     for msg in rows {
         if let tokio_postgres::SimpleQueryMessage::Row(row) = msg {
             let oid: u32 = row.get("oid").unwrap().parse().unwrap();
@@ -664,32 +655,30 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                         ctid_range
                     );
 
-                    // To handle quoted/keyword names, we can use `Ident`'s AST printing, which
-                    // emulate's PG's rules for name formatting.
-                    let namespace = Ident::new_unchecked(&info.desc.namespace)
-                        .to_ast_string_stable();
-                    let table = Ident::new_unchecked(&info.desc.name)
-                        .to_ast_string_stable();
-                    let column_list = info
-                        .desc
-                        .columns
-                        .iter()
-                        .map(|c| Ident::new_unchecked(&c.name).to_ast_string_stable())
-                        .join(",");
-
+                    let namespace = Sql::ident(&info.desc.namespace);
+                    let table = Sql::ident(&info.desc.name);
+                    let column_list =
+                        Sql::join(info.desc.columns.iter().map(|c| Sql::ident(&c.name)), ",");
 
                     let ctid_filter = match ctid_range.end_block {
-                        Some(end) => format!(
+                        Some(end) => sql!(
                             "WHERE ctid >= '({},0)'::tid AND ctid < '({},0)'::tid",
-                            ctid_range.start_block, end
+                            ctid_range.start_block,
+                            end
                         ),
-                        None => format!("WHERE ctid >= '({},0)'::tid", ctid_range.start_block),
+                        None => sql!(
+                            "WHERE ctid >= '({},0)'::tid",
+                            ctid_range.start_block
+                        ),
                     };
-                    let query = format!(
-                        "COPY (SELECT {column_list} FROM {namespace}.{table} {ctid_filter}) \
-                         TO STDOUT (FORMAT TEXT, DELIMITER '\t')"
+                    let query = sql!(
+                        "COPY (SELECT {} FROM {}.{} {}) TO STDOUT (FORMAT TEXT, DELIMITER '\t')",
+                        column_list,
+                        namespace,
+                        table,
+                        ctid_filter
                     );
-                    let mut stream = pin!(client.copy_out_simple(&query).await?);
+                    let mut stream = pin!(client.copy_out_simple(query.as_str()).await?);
 
                     let mut snapshot_staged = 0;
                     let mut update =
@@ -746,10 +735,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 *snapshot_cap_set = CapabilitySet::new();
                 while snapshot_input.next().await.is_some() {}
                 trace!(%id, "timely-{worker_id} (leader) comitting COPY transaction");
-                client.simple_query("COMMIT").await?;
+                simple_query(&client, sql!("COMMIT")).await?;
             } else {
                 trace!(%id, "timely-{worker_id} comitting COPY transaction");
-                client.simple_query("COMMIT").await?;
+                simple_query(&client, sql!("COMMIT")).await?;
                 *snapshot_cap_set = CapabilitySet::new();
             }
             drop(client);
@@ -818,7 +807,7 @@ async fn export_snapshot(
         Ok(ok) => Ok(ok),
         Err(err) => {
             // We don't want to leave the client inside a failed tx
-            client.simple_query("ROLLBACK;").await?;
+            simple_query(client, sql!("ROLLBACK;")).await?;
             Err(err)
         }
     }
@@ -829,16 +818,24 @@ async fn export_snapshot_inner(
     slot: &str,
     temporary: bool,
 ) -> Result<(String, MzOffset), TransientError> {
-    client
-        .simple_query("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ;")
-        .await?;
+    simple_query(
+        client,
+        sql!("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ;"),
+    )
+    .await?;
 
-    // Note: Using unchecked here is okay because we're using it in a SQL query.
-    let slot = Ident::new_unchecked(slot).to_ast_string_simple();
-    let temporary_str = if temporary { " TEMPORARY" } else { "" };
-    let query =
-        format!("CREATE_REPLICATION_SLOT {slot}{temporary_str} LOGICAL \"pgoutput\" USE_SNAPSHOT");
-    let row = match simple_query_opt(client, &query).await {
+    let query = if temporary {
+        sql!(
+            "CREATE_REPLICATION_SLOT {} TEMPORARY LOGICAL \"pgoutput\" USE_SNAPSHOT",
+            Sql::ident(slot)
+        )
+    } else {
+        sql!(
+            "CREATE_REPLICATION_SLOT {} LOGICAL \"pgoutput\" USE_SNAPSHOT",
+            Sql::ident(slot)
+        )
+    };
+    let row = match simple_query_opt(client, query).await {
         Ok(row) => Ok(row.unwrap()),
         Err(PostgresError::Postgres(err)) if err.code() == Some(&SqlState::DUPLICATE_OBJECT) => {
             return Err(TransientError::ReplicationSlotAlreadyExists);
@@ -856,7 +853,7 @@ async fn export_snapshot_inner(
         .checked_sub(1)
         .expect("consistent point is always non-zero");
 
-    let row = simple_query_opt(client, "SELECT pg_export_snapshot();")
+    let row = simple_query_opt(client, sql!("SELECT pg_export_snapshot();"))
         .await?
         .unwrap();
     let snapshot = row.get("pg_export_snapshot").unwrap().to_owned();
@@ -867,23 +864,24 @@ async fn export_snapshot_inner(
 /// Starts a read-only transaction on the SQL session of `client` at a the consistent LSN point of
 /// `snapshot`.
 async fn use_snapshot(client: &Client, snapshot: &str) -> Result<(), TransientError> {
-    client
-        .simple_query("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ;")
-        .await?;
-    let query = format!(
-        "SET TRANSACTION SNAPSHOT {};",
-        escaped_string_literal(snapshot)
-    );
-    client.simple_query(&query).await?;
+    simple_query(
+        client,
+        sql!("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ;"),
+    )
+    .await?;
+    let query = sql!("SET TRANSACTION SNAPSHOT {};", Sql::literal(snapshot));
+    simple_query(client, query).await?;
     Ok(())
 }
 
 async fn set_statement_timeout(client: &Client, timeout: Duration) -> Result<(), TransientError> {
     // Value is known to accept milliseconds w/o units.
     // https://www.postgresql.org/docs/current/runtime-config-client.html
-    client
-        .simple_query(&format!("SET statement_timeout = {}", timeout.as_millis()))
-        .await?;
+    let query = sql!(
+        "SET statement_timeout = {}",
+        Sql::literal(&timeout.as_millis().to_string())
+    );
+    simple_query(client, query).await?;
     Ok(())
 }
 
@@ -920,11 +918,12 @@ async fn report_snapshot_size(
         let Some((_, info)) = outputs.first_key_value() else {
             continue;
         };
-        let table = format!(
+        let table = sql!(
             "{}.{}",
-            Ident::new_unchecked(info.desc.namespace.clone()).to_ast_string_simple(),
-            Ident::new_unchecked(info.desc.name.clone()).to_ast_string_simple()
-        );
+            Sql::ident(&info.desc.namespace),
+            Sql::ident(&info.desc.name)
+        )
+        .into_string();
         let stats = collect_table_statistics(
             client,
             snapshot_config,
@@ -951,28 +950,24 @@ struct TableStatistics {
 async fn collect_table_statistics(
     client: &Client,
     config: PgSourceSnapshotConfig,
-    namespace: &str,
-    table_name: &str,
+    schema: &str,
+    table: &str,
     oid: u32,
 ) -> Result<TableStatistics, anyhow::Error> {
     use mz_ore::metrics::MetricsFutureExt;
     let mut stats = TableStatistics::default();
-    let table = format!(
-        "{}.{}",
-        Ident::new_unchecked(namespace).to_ast_string_simple(),
-        Ident::new_unchecked(table_name).to_ast_string_simple()
-    );
 
-    let estimate_row = simple_query_opt(
-        client,
-        &format!("SELECT reltuples::bigint AS estimate_count FROM pg_class WHERE oid = '{oid}'"),
-    )
-    .wall_time()
-    .set_at(&mut stats.count_latency)
-    .await?;
+    let estimate_query = sql!(
+        "SELECT reltuples::bigint AS estimate_count FROM pg_class WHERE oid = {}",
+        Sql::literal(&oid.to_string())
+    );
+    let estimate_row = simple_query_opt(client, estimate_query)
+        .wall_time()
+        .set_at(&mut stats.count_latency)
+        .await?;
     stats.count = match estimate_row {
         Some(row) => row.get("estimate_count").unwrap().parse().unwrap_or(0),
-        None => bail!("failed to get estimate count for {table}"),
+        None => bail!("failed to get estimate count for {schema}.{table}"),
     };
 
     // If the estimate is low enough we can attempt to get an exact count. Note that not yet
@@ -980,13 +975,18 @@ async fn collect_table_statistics(
     // large. We accept this risk and we offer the feature flag as an escape hatch if it becomes
     // problematic.
     if config.collect_strict_count && stats.count < 1_000_000 {
-        let count_row = simple_query_opt(client, &format!("SELECT count(*) as count from {table}"))
+        let count_query = sql!(
+            "SELECT count(*) as count from {}.{}",
+            Sql::ident(schema),
+            Sql::ident(table)
+        );
+        let count_row = simple_query_opt(client, count_query)
             .wall_time()
             .set_at(&mut stats.count_latency)
             .await?;
         stats.count = match count_row {
             Some(row) => row.get("count").unwrap().parse().unwrap(),
-            None => bail!("failed to get count for {table}"),
+            None => bail!("failed to get count for {schema}.{table}"),
         }
     }
 

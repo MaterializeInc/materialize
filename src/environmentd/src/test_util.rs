@@ -51,6 +51,9 @@ use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::{CONSENSUS_CONNECTION_POOL_MAX_SIZE, PersistConfig};
 use mz_persist_client::rpc::PersistGrpcPubSubServer;
+use mz_postgres_util::{
+    Sql, batch_execute as pg_batch_execute, execute as pg_execute, query_one as pg_query_one, sql,
+};
 use mz_secrets::SecretsController;
 use mz_server_core::listeners::{
     AllowedRoles, AuthenticatorKind, BaseListenerConfig, HttpRoutesEnabled,
@@ -668,12 +671,18 @@ impl Listeners {
                     panic!("connection error: {}", err);
                 };
             });
-            client
-                .batch_execute(&format!(
-                    "CREATE SCHEMA IF NOT EXISTS consensus_{seed};
-                    CREATE SCHEMA IF NOT EXISTS tsoracle_{seed};"
-                ))
-                .await?;
+            let consensus_schema = sql!("consensus_{}", seed);
+            let tsoracle_schema = sql!("tsoracle_{}", seed);
+            pg_batch_execute(
+                &client,
+                sql!(
+                    "CREATE SCHEMA IF NOT EXISTS {};
+                     CREATE SCHEMA IF NOT EXISTS {};",
+                    consensus_schema,
+                    tsoracle_schema,
+                ),
+            )
+            .await?;
             (
                 format!("{cockroach_url}?options=--search_path=consensus_{seed}")
                     .parse()
@@ -888,10 +897,8 @@ impl TestServer {
         let internal_client = self.connect().internal().await.unwrap();
 
         for flag in flags {
-            internal_client
-                .batch_execute(&format!("ALTER SYSTEM SET {} = true;", flag))
-                .await
-                .unwrap();
+            let query = sql!("ALTER SYSTEM SET {} = true;", Sql::ident(flag));
+            pg_batch_execute(&internal_client, query).await.unwrap();
         }
     }
 
@@ -899,10 +906,8 @@ impl TestServer {
         let internal_client = self.connect().internal().await.unwrap();
 
         for flag in flags {
-            internal_client
-                .batch_execute(&format!("ALTER SYSTEM SET {} = false;", flag))
-                .await
-                .unwrap();
+            let query = sql!("ALTER SYSTEM SET {} = false;", Sql::ident(flag));
+            pg_batch_execute(&internal_client, query).await.unwrap();
         }
     }
 
@@ -1231,9 +1236,11 @@ impl TestServerWithRuntime {
         let mut internal_client = self.connect_internal(postgres::NoTls).unwrap();
 
         for flag in flags {
-            internal_client
-                .batch_execute(&format!("ALTER SYSTEM SET {} = true;", flag))
-                .unwrap();
+            let query = sql!("ALTER SYSTEM SET {} = true;", Sql::ident(flag));
+            // This uses the synchronous `postgres::Client`; wrappers are async
+            // and currently only defined for tokio-postgres clients.
+            #[allow(clippy::disallowed_methods)]
+            internal_client.batch_execute(query.as_str()).unwrap();
         }
     }
 
@@ -1242,9 +1249,11 @@ impl TestServerWithRuntime {
         let mut internal_client = self.connect_internal(postgres::NoTls).unwrap();
 
         for flag in flags {
-            internal_client
-                .batch_execute(&format!("ALTER SYSTEM SET {} = false;", flag))
-                .unwrap();
+            let query = sql!("ALTER SYSTEM SET {} = false;", Sql::ident(flag));
+            // This uses the synchronous `postgres::Client`; wrappers are async
+            // and currently only defined for tokio-postgres clients.
+            #[allow(clippy::disallowed_methods)]
+            internal_client.batch_execute(query.as_str()).unwrap();
         }
     }
 
@@ -1357,8 +1366,11 @@ pub async fn insert_with_deterministic_timestamps(
 
     let mut current_ts = get_explain_timestamp(table, &client_read).await;
 
-    let insert_query = format!("INSERT INTO {table} VALUES {values}");
+    let insert_query = format!("INSERT INTO {} VALUES {values}", Sql::ident(table));
 
+    // The `values` fragment is raw SQL text in test code and cannot currently
+    // be represented as a composable `Sql` fragment.
+    #[allow(clippy::disallowed_methods)]
     let write_future = client_write.execute(&insert_query, &[]);
     let timestamp_interval = tokio::time::interval(Duration::from_millis(1));
 
@@ -1397,6 +1409,9 @@ pub async fn get_explain_timestamp_determination(
     from_suffix: &str,
     client: &Client,
 ) -> Result<TimestampExplanation<mz_repr::Timestamp>, anyhow::Error> {
+    // `from_suffix` is a raw SQL suffix used by this test helper and cannot
+    // currently be represented as a composable `Sql` fragment.
+    #[allow(clippy::disallowed_methods)]
     let row = client
         .query_one(
             &format!("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM {from_suffix}"),
@@ -1459,66 +1474,97 @@ pub async fn create_postgres_source_with_table<'a>(
     });
 
     // Create table in Postgres with publication.
-    let _ = pg_client
-        .execute(&format!("DROP TABLE IF EXISTS {table_name};"), &[])
-        .await
-        .unwrap();
-    let _ = pg_client
-        .execute(&format!("DROP PUBLICATION IF EXISTS {source_name};"), &[])
-        .await
-        .unwrap();
-    let _ = pg_client
-        .execute(&format!("CREATE TABLE {table_name} {table_schema};"), &[])
-        .await
-        .unwrap();
+    let _ = pg_execute(
+        &pg_client,
+        sql!("DROP TABLE IF EXISTS {};", Sql::ident(table_name)),
+        &[],
+    )
+    .await
+    .unwrap();
+    let _ = pg_execute(
+        &pg_client,
+        sql!("DROP PUBLICATION IF EXISTS {};", Sql::ident(source_name)),
+        &[],
+    )
+    .await
+    .unwrap();
+    // `table_schema` is a raw schema fragment in this test helper and cannot
+    // currently be represented as a composable `Sql` fragment.
+    #[allow(clippy::disallowed_methods)]
     let _ = pg_client
         .execute(
-            &format!("ALTER TABLE {table_name} REPLICA IDENTITY FULL;"),
+            format!("CREATE TABLE {} {table_schema};", Sql::ident(table_name)).as_str(),
             &[],
         )
         .await
         .unwrap();
-    let _ = pg_client
-        .execute(
-            &format!("CREATE PUBLICATION {source_name} FOR TABLE {table_name};"),
-            &[],
-        )
-        .await
-        .unwrap();
+    let _ = pg_execute(
+        &pg_client,
+        sql!(
+            "ALTER TABLE {} REPLICA IDENTITY FULL;",
+            Sql::ident(table_name)
+        ),
+        &[],
+    )
+    .await
+    .unwrap();
+    let _ = pg_execute(
+        &pg_client,
+        sql!(
+            "CREATE PUBLICATION {} FOR TABLE {};",
+            Sql::ident(source_name),
+            Sql::ident(table_name)
+        ),
+        &[],
+    )
+    .await
+    .unwrap();
 
     // Create postgres source in Materialize.
     let mut connection_str = format!("HOST '{host}', PORT {port}, USER {user}, DATABASE {db_name}");
     if let Some(password) = password {
         let password = std::str::from_utf8(password).unwrap();
-        mz_client
-            .batch_execute(&format!("CREATE SECRET s AS '{password}'"))
-            .await
-            .unwrap();
+        pg_batch_execute(
+            mz_client,
+            sql!("CREATE SECRET s AS {}", Sql::literal(password)),
+        )
+        .await
+        .unwrap();
         connection_str = format!("{connection_str}, PASSWORD SECRET s");
     }
+    // `connection_str` is a raw connection-option fragment generated for tests
+    // and cannot currently be represented as a composable `Sql` fragment.
+    #[allow(clippy::disallowed_methods)]
     mz_client
-        .batch_execute(&format!(
-            "CREATE CONNECTION pgconn TO POSTGRES ({connection_str})"
-        ))
+        .batch_execute(format!("CREATE CONNECTION pgconn TO POSTGRES ({connection_str})").as_str())
         .await
         .unwrap();
-    mz_client
-        .batch_execute(&format!(
-            "CREATE SOURCE {source_name}
-            FROM POSTGRES
-            CONNECTION pgconn
-            (PUBLICATION '{source_name}')"
-        ))
-        .await
-        .unwrap();
-    mz_client
-        .batch_execute(&format!(
-            "CREATE TABLE {table_name}
-            FROM SOURCE {source_name}
-            (REFERENCE {table_name});"
-        ))
-        .await
-        .unwrap();
+    pg_batch_execute(
+        mz_client,
+        sql!(
+            "CREATE SOURCE {} \
+             FROM POSTGRES \
+             CONNECTION pgconn \
+             (PUBLICATION {})",
+            Sql::ident(source_name),
+            Sql::literal(source_name),
+        ),
+    )
+    .await
+    .unwrap();
+    pg_batch_execute(
+        mz_client,
+        sql!(
+            "CREATE TABLE {} \
+             FROM SOURCE {} \
+             (REFERENCE {});",
+            Sql::ident(table_name),
+            Sql::ident(source_name),
+            Sql::ident(table_name),
+        ),
+    )
+    .await
+    .unwrap();
 
     let table_name = table_name.to_string();
     let source_name = source_name.to_string();
@@ -1526,23 +1572,30 @@ pub async fn create_postgres_source_with_table<'a>(
         pg_client,
         move |mz_client: &'a Client, pg_client: &'a Client| {
             let f: Pin<Box<dyn Future<Output = ()> + 'a>> = Box::pin(async move {
-                mz_client
-                    .batch_execute(&format!("DROP SOURCE {source_name} CASCADE;"))
-                    .await
-                    .unwrap();
-                mz_client
-                    .batch_execute("DROP CONNECTION pgconn;")
+                pg_batch_execute(
+                    mz_client,
+                    sql!("DROP SOURCE {} CASCADE;", Sql::ident(&source_name)),
+                )
+                .await
+                .unwrap();
+                pg_batch_execute(mz_client, sql!("DROP CONNECTION pgconn;"))
                     .await
                     .unwrap();
 
-                let _ = pg_client
-                    .execute(&format!("DROP PUBLICATION {source_name};"), &[])
-                    .await
-                    .unwrap();
-                let _ = pg_client
-                    .execute(&format!("DROP TABLE {table_name};"), &[])
-                    .await
-                    .unwrap();
+                let _ = pg_execute(
+                    pg_client,
+                    sql!("DROP PUBLICATION {};", Sql::ident(&source_name)),
+                    &[],
+                )
+                .await
+                .unwrap();
+                let _ = pg_execute(
+                    pg_client,
+                    sql!("DROP TABLE {};", Sql::ident(&table_name)),
+                    &[],
+                )
+                .await
+                .unwrap();
             });
             f
         },
@@ -1550,22 +1603,23 @@ pub async fn create_postgres_source_with_table<'a>(
 }
 
 pub async fn wait_for_pg_table_population(mz_client: &Client, view_name: &str, source_rows: i64) {
-    let current_isolation = mz_client
-        .query_one("SHOW transaction_isolation", &[])
+    let current_isolation = pg_query_one(mz_client, sql!("SHOW transaction_isolation"), &[])
         .await
         .unwrap()
         .get::<_, String>(0);
-    mz_client
-        .batch_execute("SET transaction_isolation = SERIALIZABLE")
+    pg_batch_execute(mz_client, sql!("SET transaction_isolation = SERIALIZABLE"))
         .await
         .unwrap();
     Retry::default()
         .retry_async(|_| async move {
-            let rows = mz_client
-                .query_one(&format!("SELECT COUNT(*) FROM {view_name};"), &[])
-                .await
-                .unwrap()
-                .get::<_, i64>(0);
+            let rows = pg_query_one(
+                mz_client,
+                sql!("SELECT COUNT(*) FROM {};", Sql::ident(view_name)),
+                &[],
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0);
             if rows == source_rows {
                 Ok(())
             } else {
@@ -1576,12 +1630,15 @@ pub async fn wait_for_pg_table_population(mz_client: &Client, view_name: &str, s
         })
         .await
         .unwrap();
-    mz_client
-        .batch_execute(&format!(
-            "SET transaction_isolation = '{current_isolation}'"
-        ))
-        .await
-        .unwrap();
+    pg_batch_execute(
+        mz_client,
+        sql!(
+            "SET transaction_isolation = {}",
+            Sql::literal(&current_isolation),
+        ),
+    )
+    .await
+    .unwrap();
 }
 
 // Initializes a websocket connection. Returns the init messages before the initial ReadyForQuery.

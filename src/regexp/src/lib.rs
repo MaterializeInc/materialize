@@ -77,6 +77,8 @@ mod tests {
         for input in inputs {
             for re in &regexps {
                 let regex = build_regex(re, "").unwrap();
+                // This test cross-checks against the sync `postgres` crate,
+                // while `mz_postgres_util` wrappers target async tokio-postgres.
                 let pg: Vec<String> = client
                     .query_one("select regexp_split_to_array($1, $2)", &[&input, re])
                     .unwrap()

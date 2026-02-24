@@ -48,6 +48,7 @@ mz-ore = { path = "../ore", features = ["async"] }
 mz-persist-types = { path = "../persist-types" }
 mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }
+mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }

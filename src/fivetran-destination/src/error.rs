@@ -159,6 +159,17 @@ impl OpErrorKind {
     }
 }
 
+impl From<mz_postgres_util::PostgresError> for OpErrorKind {
+    fn from(err: mz_postgres_util::PostgresError) -> Self {
+        match err {
+            mz_postgres_util::PostgresError::Postgres(err) => OpErrorKind::TemporaryResource(err),
+            mz_postgres_util::PostgresError::Io(err) => OpErrorKind::Filesystem(err),
+            mz_postgres_util::PostgresError::PostgresSsl(err) => OpErrorKind::Crypto(err),
+            other => OpErrorKind::InvariantViolated(other.to_string()),
+        }
+    }
+}
+
 pub trait Context {
     type TransformType;
 

@@ -85,10 +85,8 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_postgres_util::PostgresError;
-use mz_postgres_util::{Client, simple_query_opt};
+use mz_postgres_util::{Client, Sql, execute, query_opt, simple_query_opt, sql};
 use mz_repr::{Datum, DatumVec, Diff, Row};
-use mz_sql_parser::ast::Ident;
-use mz_sql_parser::ast::display::{AstDisplay, escaped_string_literal};
 use mz_storage_types::dyncfgs::PG_SCHEMA_VALIDATION_INTERVAL;
 use mz_storage_types::dyncfgs::PG_SOURCE_VALIDATE_TIMELINE;
 use mz_storage_types::errors::DataflowError;
@@ -252,9 +250,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     "replication slot already in use; will attempt to kill existing connection",
                 );
 
-                match metadata_client
-                    .execute("SELECT pg_terminate_backend($1)", &[&active_pid])
-                    .await
+                match execute(
+                    &**metadata_client,
+                    sql!("SELECT pg_terminate_backend($1)"),
+                    &[&active_pid],
+                )
+                .await
                 {
                     Ok(_) => {
                         tracing::info!(
@@ -652,7 +653,7 @@ async fn raw_stream<'a>(
     // Note: We must use the metadata client here which is NOT in replication mode. Some Aurora
     // Postgres versions disallow SHOW commands from within replication connection.
     // See: https://github.com/readysettech/readyset/discussions/28#discussioncomment-4405671
-    let row = simple_query_opt(&*metadata_client, "SHOW wal_sender_timeout;")
+    let row = simple_query_opt(&*metadata_client, sql!("SHOW wal_sender_timeout;"))
         .await?
         .unwrap();
     let wal_sender_timeout = match row.get("wal_sender_timeout") {
@@ -684,13 +685,13 @@ async fn raw_stream<'a>(
     // Postgres will return all transactions that commit *at or after* after the provided LSN,
     // following the timely upper semantics.
     let lsn = PgLsn::from(resume_lsn.offset);
-    let query = format!(
-        r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '1', "publication_names" {})"#,
-        Ident::new_unchecked(slot).to_ast_string_simple(),
+    let query = sql!(
+        "START_REPLICATION SLOT {} LOGICAL {} (\"proto_version\" '1', \"publication_names\" {})",
+        Sql::ident(slot),
         lsn,
-        escaped_string_literal(publication),
+        Sql::literal(publication)
     );
-    let copy_stream = match replication_client.copy_both_simple(&query).await {
+    let copy_stream = match replication_client.copy_both_simple(query.as_str()).await {
         Ok(copy_stream) => copy_stream,
         Err(err) if err.code() == Some(&SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE) => {
             return Ok(Err(DefiniteError::InvalidReplicationSlot));
@@ -1043,12 +1044,12 @@ async fn ensure_publication_exists(
     publication: &str,
 ) -> Result<Result<(), DefiniteError>, TransientError> {
     // Figure out the last written LSN and then add one to convert it into an upper.
-    let result = client
-        .query_opt(
-            "SELECT 1 FROM pg_publication WHERE pubname = $1;",
-            &[&publication],
-        )
-        .await?;
+    let result = query_opt(
+        &**client,
+        sql!("SELECT 1 FROM pg_publication WHERE pubname = $1;"),
+        &[&publication],
+    )
+    .await?;
     match result {
         Some(_) => Ok(Ok(())),
         None => Ok(Err(DefiniteError::PublicationDropped(

@@ -21,7 +21,7 @@
 use anyhow::{Context as _, Result};
 use csv_async::AsyncSerializer;
 use futures::TryStreamExt;
-use mz_sql_parser::ast::display::escaped_string_literal;
+use mz_postgres_util::{Sql, execute, query, sql};
 use mz_tls_util::make_tls;
 use std::fmt;
 use std::path::PathBuf;
@@ -40,6 +40,23 @@ use mz_ore::retry::{self};
 use mz_ore::task::{self, JoinHandle};
 use postgres_openssl::{MakeTlsConnector, TlsStream};
 use tracing::{info, warn};
+
+async fn execute_sql(
+    transaction: &Transaction<'_>,
+    query: Sql,
+) -> Result<u64, mz_postgres_util::PostgresError> {
+    execute(transaction, query, &[]).await
+}
+
+async fn simple_query_sql(
+    transaction: &Transaction<'_>,
+    query: Sql,
+) -> Result<Vec<SimpleQueryMessage>, tokio_postgres::Error> {
+    // `simple_query` is only available on concrete driver types and is required
+    // here to avoid statement preparation for cursor `FETCH` in subscribe flows.
+    #[allow(clippy::disallowed_methods)]
+    transaction.simple_query(query.as_str()).await
+}
 
 #[derive(Debug, Clone)]
 pub enum RelationCategory {
@@ -551,9 +568,6 @@ static PG_QUERY_TIMEOUT: Duration = Duration::from_secs(20);
 /// If a cluster replica has more than this many errors, we skip it.
 static MAX_CLUSTER_REPLICA_ERROR_COUNT: usize = 3;
 
-static SET_SEARCH_PATH_QUERY: &str = "SET search_path = mz_internal, mz_catalog, mz_introspection";
-static SELECT_CLUSTER_REPLICAS_QUERY: &str = "SELECT c.name as cluster_name, cr.name as replica_name FROM mz_clusters AS c JOIN mz_cluster_replicas AS cr ON c.id = cr.cluster_id;";
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ClusterReplica {
     pub cluster_name: String,
@@ -631,12 +645,12 @@ pub async fn create_postgres_connection(
 
 pub async fn write_copy_stream(
     transaction: &Transaction<'_>,
-    copy_query: &str,
+    copy_query: &Sql,
     file: &mut tokio::fs::File,
     relation_name: &str,
 ) -> Result<(), anyhow::Error> {
     let copy_stream = transaction
-        .copy_out(copy_query)
+        .copy_out(copy_query.as_str())
         .await
         .context(format!("Failed to COPY TO for {}", relation_name))?
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
@@ -662,23 +676,25 @@ pub async fn copy_relation_to_csv(
             let mut writer = AsyncSerializer::from_writer(file);
             writer.serialize(column_names).await?;
 
-            transaction
-                .execute(
-                    &format!("DECLARE c CURSOR FOR SUBSCRIBE TO {}", relation.name),
-                    &[],
-                )
+            let declare_query = sql!(
+                "DECLARE c CURSOR FOR SUBSCRIBE TO {}",
+                Sql::ident(relation.name)
+            );
+            execute_sql(transaction, declare_query)
                 .await
                 .context("Failed to declare cursor")?;
 
             // We need to use simple_query, otherwise tokio-postgres will run an introspection SELECT query to figure out the types since it'll
             // try to prepare the query. This causes an error since SUBSCRIBEs and SELECT queries are not allowed to be executed in the same transaction.
             // Thus we use simple_query to avoid the introspection query.
-            let rows = transaction
+            let rows = simple_query_sql(
+                transaction,
                 // We use a timeout of '1' to receive the snapshot of the current state. A timeout of '0' will return no results.
                 // We also don't care if we get more than just the snapshot.
-                .simple_query("FETCH ALL FROM c WITH (TIMEOUT '1')")
-                .await
-                .context("Failed to fetch all from cursor")?;
+                sql!("FETCH ALL FROM c WITH (TIMEOUT '1')"),
+            )
+            .await
+            .context("Failed to fetch all from cursor")?;
 
             for row in rows {
                 if let SimpleQueryMessage::Row(row) = row {
@@ -693,9 +709,9 @@ pub async fn copy_relation_to_csv(
             // TODO (SangJunBak): Use `WITH (HEADER TRUE)` once database-issues#2846 is implemented.
             file.write_all((column_names.join(",") + "\n").as_bytes())
                 .await?;
-            let copy_query = format!(
+            let copy_query = sql!(
                 "COPY (SELECT * FROM {}) TO STDOUT WITH (FORMAT CSV)",
-                relation.name
+                Sql::ident(relation.name)
             );
             write_copy_stream(transaction, &copy_query, &mut file, relation.name).await?;
         }
@@ -711,8 +727,8 @@ pub async fn query_column_names(
 ) -> Result<Vec<String>, anyhow::Error> {
     let relation_name = relation.name;
     // We query the column names to write the header row of the CSV file.
-    let mut column_names = pg_client
-        .query(&format!("SHOW COLUMNS FROM {}", &relation_name), &[])
+    let show_columns_query = sql!("SHOW COLUMNS FROM {}", Sql::ident(relation_name));
+    let mut column_names = query(pg_client, show_columns_query, &[])
         .await
         .context(format!("Failed to get column names for {}", relation_name))?
         .into_iter()
@@ -745,27 +761,21 @@ pub async fn query_relation(
 
     // Some queries (i.e. mz_introspection relations) require the cluster and replica to be set.
     if let Some(cluster_replica) = &cluster_replica {
-        transaction
-            .execute(
-                &format!(
-                    "SET LOCAL CLUSTER = {}",
-                    escaped_string_literal(&cluster_replica.cluster_name)
-                ),
-                &[],
-            )
+        let cluster_query = sql!(
+            "SET LOCAL CLUSTER = {}",
+            Sql::literal(&cluster_replica.cluster_name)
+        );
+        execute_sql(transaction, cluster_query)
             .await
             .context(format!(
                 "Failed to set cluster to {}",
                 cluster_replica.cluster_name
             ))?;
-        transaction
-            .execute(
-                &format!(
-                    "SET LOCAL CLUSTER_REPLICA = {}",
-                    escaped_string_literal(&cluster_replica.replica_name)
-                ),
-                &[],
-            )
+        let replica_query = sql!(
+            "SET LOCAL CLUSTER_REPLICA = {}",
+            Sql::literal(&cluster_replica.replica_name)
+        );
+        execute_sql(transaction, replica_query)
             .await
             .context(format!(
                 "Failed to set cluster replica to {}",
@@ -810,13 +820,26 @@ impl SystemCatalogDumper {
         let handle = task::spawn(|| "postgres-connection", pg_conn);
 
         // Set search path to system catalog tables
-        pg_client
-            .execute(SET_SEARCH_PATH_QUERY, &[])
-            .await
-            .context("Failed to set search path")?;
+        execute(
+            &pg_client,
+            sql!("SET search_path = mz_internal, mz_catalog, mz_introspection"),
+            &[],
+        )
+        .await
+        .context("Failed to set search path")?;
 
         // We need to get all cluster replicas to dump introspection relations.
-        let cluster_replicas = match pg_client.query(SELECT_CLUSTER_REPLICAS_QUERY, &[]).await {
+        let cluster_replicas = match query(
+            &pg_client,
+            sql!(
+                "SELECT c.name as cluster_name, cr.name as replica_name \
+                 FROM mz_clusters AS c \
+                 JOIN mz_cluster_replicas AS cr ON c.id = cr.cluster_id;"
+            ),
+            &[],
+        )
+        .await
+        {
             Ok(rows) => rows
                 .into_iter()
                 .map(|row| {
@@ -871,21 +894,22 @@ impl SystemCatalogDumper {
 
         // For custom queries, create a temporary view so the retry loop
         // can treat them identically to basic relations.
-        if let RelationCategory::Custom { sql } = &relation.category {
+        if let RelationCategory::Custom { sql: custom_sql } = &relation.category {
             let pg_client_lock = pg_client.lock().await;
-            pg_client_lock
-                .execute(
-                    &format!(
-                        "CREATE OR REPLACE TEMPORARY VIEW {} AS {}",
-                        relation.name, sql
-                    ),
-                    &[],
-                )
-                .await
-                .context(format!(
-                    "Failed to create temporary view for {}",
-                    relation.name
-                ))?;
+            execute(
+                &*pg_client_lock,
+                sql!(
+                    "CREATE OR REPLACE TEMPORARY VIEW {} AS {}",
+                    Sql::ident(relation.name),
+                    Sql::new(*custom_sql)
+                ),
+                &[],
+            )
+            .await
+            .context(format!(
+                "Failed to create temporary view for {}",
+                relation.name
+            ))?;
         }
 
         if let Err(err) = retry::Retry::default()

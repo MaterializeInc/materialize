@@ -18,6 +18,7 @@ futures = "0.3.31"
 itertools = "0.14.0"
 mz-ore = { path = "../ore", features = ["cli", "id_gen"], default-features = false }
 mz-pgrepr = { path = "../pgrepr", default-features = false }
+mz-postgres-util = { path = "../postgres-util" }
 mz-sql-parser = { path = "../sql-parser", default-features = false }
 openssl = { version = "0.10.75", features = ["vendored"] }
 postgres-openssl = "0.5.2"

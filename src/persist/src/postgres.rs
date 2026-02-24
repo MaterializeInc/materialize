@@ -30,6 +30,7 @@ use mz_postgres_client::metrics::PostgresClientMetrics;
 use mz_postgres_client::{PostgresClient, PostgresClientConfig, PostgresClientKnobs};
 use postgres_protocol::escape::escape_identifier;
 use tokio_postgres::error::SqlState;
+use tokio_postgres::{Row, Statement};
 use tracing::{info, warn};
 
 use crate::error::Error;
@@ -67,6 +68,40 @@ const CRDB_SCHEMA_OPTIONS: &str = "WITH (sql_stats_automatic_collection_enabled 
 // See: https://github.com/MaterializeInc/database-issues/issues/4001
 // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
 const CRDB_CONFIGURE_ZONE: &str = "ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600";
+
+/// NOTE: `mz-persist` intentionally does not depend on `mz-postgres-util`.
+/// These helpers are the only direct driver-call boundary in this module.
+async fn pg_batch_execute(client: &Object, query: &str) -> Result<(), tokio_postgres::Error> {
+    #[allow(clippy::disallowed_methods)]
+    client.batch_execute(query).await
+}
+
+async fn pg_query_prepared(
+    client: &Object,
+    statement: &Statement,
+    params: &[&(dyn ToSql + Sync)],
+) -> Result<Vec<Row>, tokio_postgres::Error> {
+    #[allow(clippy::disallowed_methods)]
+    client.query(statement, params).await
+}
+
+async fn pg_query_opt_prepared(
+    client: &Object,
+    statement: &Statement,
+    params: &[&(dyn ToSql + Sync)],
+) -> Result<Option<Row>, tokio_postgres::Error> {
+    #[allow(clippy::disallowed_methods)]
+    client.query_opt(statement, params).await
+}
+
+async fn pg_execute_prepared(
+    client: &Object,
+    statement: &Statement,
+    params: &[&(dyn ToSql + Sync)],
+) -> Result<u64, tokio_postgres::Error> {
+    #[allow(clippy::disallowed_methods)]
+    client.execute(statement, params).await
+}
 
 impl ToSql for SeqNo {
     fn to_sql(
@@ -249,12 +284,14 @@ impl PostgresConsensus {
 
         let client = postgres_client.get_connection().await?;
 
-        let mode = match client
-            .batch_execute(&format!(
+        let mode = match pg_batch_execute(
+            &client,
+            &format!(
                 "{}; {}{}; {};",
                 create_schema, SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
-            ))
-            .await
+            ),
+        )
+        .await
         {
             Ok(()) => PostgresMode::CockroachDB,
             Err(e) if e.code() == Some(&SqlState::INSUFFICIENT_PRIVILEGE) => {
@@ -279,9 +316,7 @@ impl PostgresConsensus {
         };
 
         if mode != PostgresMode::CockroachDB {
-            client
-                .batch_execute(&format!("{}; {};", create_schema, SCHEMA))
-                .await?;
+            pg_batch_execute(&client, &format!("{}; {};", create_schema, SCHEMA)).await?;
         }
 
         Ok(PostgresConsensus {
@@ -297,13 +332,12 @@ impl PostgresConsensus {
     pub async fn drop_and_recreate(&self) -> Result<(), ExternalError> {
         // this could be a TRUNCATE if we're confident the db won't reuse any state
         let client = self.get_connection().await?;
-        client.execute("DROP TABLE consensus", &[]).await?;
-        let crdb_mode = match client
-            .batch_execute(&format!(
-                "{}{}; {}",
-                SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
-            ))
-            .await
+        pg_batch_execute(&client, "DROP TABLE consensus").await?;
+        let crdb_mode = match pg_batch_execute(
+            &client,
+            &format!("{}{}; {}", SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,),
+        )
+        .await
         {
             Ok(()) => true,
             Err(e) if e.code() == Some(&SqlState::INSUFFICIENT_PRIVILEGE) => {
@@ -326,7 +360,7 @@ impl PostgresConsensus {
         };
 
         if !crdb_mode {
-            client.execute(SCHEMA, &[]).await?;
+            pg_batch_execute(&client, SCHEMA).await?;
         }
         Ok(())
     }
@@ -361,7 +395,7 @@ impl Consensus for PostgresConsensus {
         let row = {
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
-            client.query_opt(&statement, &[&key]).await?
+            pg_query_opt_prepared(&client, &statement, &[&key]).await?
         };
         let row = match row {
             None => return Ok(None),
@@ -433,12 +467,12 @@ impl Consensus for PostgresConsensus {
             };
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
-            client
-                .execute(
-                    &statement,
-                    &[&key, &new.seqno, &new.data.as_ref(), &expected],
-                )
-                .await?
+            pg_execute_prepared(
+                &client,
+                &statement,
+                &[&key, &new.seqno, &new.data.as_ref(), &expected],
+            )
+            .await?
         } else {
             // Insert the new row as long as no other row exists for the same shard.
             let q = "INSERT INTO consensus SELECT $1, $2, $3 WHERE
@@ -448,8 +482,7 @@ impl Consensus for PostgresConsensus {
                      ON CONFLICT DO NOTHING";
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
-            client
-                .execute(&statement, &[&key, &new.seqno, &new.data.as_ref()])
+            pg_execute_prepared(&client, &statement, &[&key, &new.seqno, &new.data.as_ref()])
                 .await?
         };
 
@@ -478,7 +511,7 @@ impl Consensus for PostgresConsensus {
         let rows = {
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
-            client.query(&statement, &[&key, &from, &limit]).await?
+            pg_query_prepared(&client, &statement, &[&key, &from, &limit]).await?
         };
         let mut results = Vec::with_capacity(rows.len());
 
@@ -545,7 +578,7 @@ impl Consensus for PostgresConsensus {
         let result = {
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
-            client.execute(&statement, &[&key, &seqno]).await?
+            pg_execute_prepared(&client, &statement, &[&key, &seqno]).await?
         };
         if result == 0 {
             // We weren't able to successfully truncate any rows inspect head to

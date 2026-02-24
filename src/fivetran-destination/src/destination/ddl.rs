@@ -7,10 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use itertools::Itertools;
 use mz_pgrepr::Type;
-use mz_sql_parser::ast::{Ident, UnresolvedItemName};
-use postgres_protocol::escape;
+use mz_postgres_util::{Sql, batch_execute, execute, query, sql};
 use tokio_postgres::Client;
 
 use crate::destination::{ColumnMetadata, FIVETRAN_SYSTEM_COLUMN_DELETE, config};
@@ -37,18 +35,20 @@ pub async fn describe_table(
     table: &str,
 ) -> Result<Option<Table>, OpError> {
     let table_id = {
-        let rows = client
-            .query(
+        let rows = query(
+            client,
+            sql!(
                 r#"SELECT t.id
                    FROM mz_tables t
                    JOIN mz_schemas s ON s.id = t.schema_id
                    JOIN mz_databases d ON d.id = s.database_id
                    WHERE d.name = $1 AND s.name = $2 AND t.name = $3
-                "#,
-                &[&database, &schema, &table],
-            )
-            .await
-            .context("fetching table ID")?;
+                "#
+            ),
+            &[&database, &schema, &table],
+        )
+        .await
+        .context("fetching table ID")?;
 
         match &*rows {
             [] => return Ok(None),
@@ -63,7 +63,10 @@ pub async fn describe_table(
     };
 
     let columns = {
-        let stmt = r#"SELECT
+        let rows = query(
+            client,
+            sql!(
+                r#"SELECT
                    name,
                    type_oid,
                    type_mod,
@@ -72,12 +75,12 @@ pub async fn describe_table(
                LEFT JOIN mz_internal.mz_comments AS coms
                ON cols.id = coms.id AND cols.position = coms.object_sub_id
                WHERE cols.id = $2
-               ORDER BY cols.position ASC"#;
-
-        let rows = client
-            .query(stmt, &[&PRIMARY_KEY_MAGIC_STRING, &table_id])
-            .await
-            .context("fetching table columns")?;
+               ORDER BY cols.position ASC"#
+            ),
+            &[&PRIMARY_KEY_MAGIC_STRING, &table_id],
+        )
+        .await
+        .context("fetching table columns")?;
 
         let mut columns = vec![];
         for row in rows {
@@ -108,10 +111,8 @@ pub async fn describe_table(
 
 pub async fn handle_create_table(request: CreateTableRequest) -> Result<(), OpError> {
     let table = request.table.ok_or(OpErrorKind::FieldMissing("table"))?;
-
-    let schema = Ident::new(&request.schema_name)?;
-    let qualified_table_name =
-        UnresolvedItemName::qualified(&[schema.clone(), Ident::new(&table.name)?]);
+    let schema_name = Sql::ident(&request.schema_name);
+    let qualified_table_name = sql!("{}.{}", schema_name.clone(), Sql::ident(&table.name));
 
     let mut total_columns = table.columns;
     // We want to make sure the deleted system column is always provided.
@@ -138,14 +139,17 @@ pub async fn handle_create_table(request: CreateTableRequest) -> Result<(), OpEr
         .map(ColumnMetadata::try_from)
         .collect::<Result<Vec<_>, OpError>>()?;
 
-    let defs = columns.iter().map(|col| col.to_column_def()).join(",");
-    let sql = format!(
-        r#"BEGIN; CREATE SCHEMA IF NOT EXISTS {schema}; COMMIT;
-        BEGIN; CREATE TABLE {qualified_table_name} ({defs}); COMMIT;"#,
+    let defs = Sql::join(columns.iter().map(|col| col.to_column_def()), ",");
+    let create_table_sql = sql!(
+        "BEGIN; CREATE SCHEMA IF NOT EXISTS {}; COMMIT; \
+         BEGIN; CREATE TABLE {} ({}); COMMIT;",
+        schema_name,
+        qualified_table_name.clone(),
+        defs
     );
 
     let (_dbname, client) = config::connect(request.configuration).await?;
-    client.batch_execute(&sql).await?;
+    batch_execute(&client, create_table_sql).await?;
 
     // TODO(parkmycar): This is an ugly hack!
     //
@@ -153,13 +157,13 @@ pub async fn handle_create_table(request: CreateTableRequest) -> Result<(), OpEr
     // those columns as primary keys. But Materialize doesn't support primary keys, so we need to
     // store this metadata somewhere else. For now we do it in a COMMENT.
     for column in columns.iter().filter(|col| col.is_primary) {
-        let stmt = format!(
-            "COMMENT ON COLUMN {qualified_table_name}.{column_name} IS {magic_comment}",
-            column_name = column.escaped_name,
-            magic_comment = escape::escape_literal(PRIMARY_KEY_MAGIC_STRING),
+        let stmt = sql!(
+            "COMMENT ON COLUMN {}.{} IS {}",
+            qualified_table_name.clone(),
+            column.ident.clone(),
+            Sql::literal(PRIMARY_KEY_MAGIC_STRING),
         );
-        client
-            .execute(&stmt, &[])
+        execute(&client, stmt, &[])
             .await
             .context("setting magic primary key comment")?;
     }
