@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.101"
+anyhow = "1.0.102"
 async-trait = "0.1.89"
 axum = "0.8.8"
 bytes = "1.11.1"
@@ -18,7 +18,7 @@ bytesize = "2.1.0"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive", "env"] }
 domain = { version = "0.11.1", default-features = false, features = ["resolv"] }
-futures = "0.3.31"
+futures = "0.3.32"
 humantime = "2.3.0"
 hyper = { version = "1.4.1", features = ["http1", "server"] }
 hyper-openssl = "0.10.2"
