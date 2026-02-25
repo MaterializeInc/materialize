@@ -10,7 +10,7 @@
 use itertools::Itertools;
 use mz_expr::{MirRelationExpr, MirScalarExpr, func};
 use mz_ore::soft_assert_eq_or_log;
-use mz_repr::{Diff, ReprRelationType, ReprScalarType};
+use mz_repr::Diff;
 
 use crate::plan::PlanError;
 use crate::plan::hir::{HirRelationExpr, HirScalarExpr};
@@ -78,7 +78,7 @@ pub(crate) fn attempt_left_join_magic(
     let left = left
         .clone()
         .applied_to(id_gen, get_outer.clone(), col_map, cte_map, context)?;
-    let full_left_typ = left.sql_typ();
+    let full_left_typ = left.typ();
     let lt = full_left_typ
         .column_types
         .iter()
@@ -91,7 +91,7 @@ pub(crate) fn attempt_left_join_magic(
     // We may use these relations multiple times to extract augmenting values.
     let id = LocalId::new(id_gen.allocate_id());
     // The join body that we will iteratively develop.
-    let mut body = MirRelationExpr::local_get(id, ReprRelationType::from(&full_left_typ));
+    let mut body = MirRelationExpr::local_get(id, full_left_typ.clone());
     bindings.push((id, body.clone(), left));
     bound_to.extend((0..la).map(|_| 1));
     arities.push(la);
@@ -119,7 +119,7 @@ pub(crate) fn attempt_left_join_magic(
             .clone()
             .map(vec![HirScalarExpr::literal_true()]) // add a bit to mark "real" rows.
             .applied_to(id_gen, get_outer.clone(), &right_col_map, cte_map, context)?;
-        let full_right_typ = right.sql_typ();
+        let full_right_typ = right.typ();
         let rt = full_right_typ
             .column_types
             .iter()
@@ -131,7 +131,7 @@ pub(crate) fn attempt_left_join_magic(
         let mut right_type = full_right_typ;
         // Create a binding for `right`, unadulterated.
         let id = LocalId::new(id_gen.allocate_id());
-        let get_right = MirRelationExpr::local_get(id, ReprRelationType::from(&right_type));
+        let get_right = MirRelationExpr::local_get(id, right_type.clone());
         // Create a binding for the augmented right, which we will form here but use before we do.
         // We want the join to be based off of the augmented relation, but we don't yet know how
         // to augment it until we decorrelate `on`. So, we use a `Get` binding that we backfill.
@@ -140,7 +140,7 @@ pub(crate) fn attempt_left_join_magic(
         }
         right_type.keys.clear();
         let aug_id = LocalId::new(id_gen.allocate_id());
-        let aug_right = MirRelationExpr::local_get(aug_id, ReprRelationType::from(&right_type));
+        let aug_right = MirRelationExpr::local_get(aug_id, right_type.clone());
 
         bindings.push((id, get_right.clone(), right));
         bound_to.extend((0..ra).map(|_| 2 + index));
@@ -223,7 +223,7 @@ pub(crate) fn attempt_left_join_magic(
             // threshold to find those present in left but missing in right.
             let get_left = &bindings[bound - 1].1;
             // Set up a type for the all-nulls row we need to introduce.
-            let mut left_typ = get_left.sql_typ();
+            let mut left_typ = get_left.typ();
             for col in left_typ.column_types.iter_mut() {
                 col.nullable = true;
             }
@@ -242,7 +242,7 @@ pub(crate) fn attempt_left_join_magic(
                         ),
                         Diff::ONE,
                     )]),
-                    typ: ReprRelationType::from(&left_typ),
+                    typ: left_typ.clone(),
                 },
             )
             .project(
@@ -283,7 +283,7 @@ pub(crate) fn attempt_left_join_magic(
                     // extra column at the end that is used to differentiate between
                     // augmented and original columns in the aug_value.
                     rt.iter()
-                        .map(|t| MirScalarExpr::literal_null(ReprScalarType::from(&t.scalar_type)))
+                        .map(|t| MirScalarExpr::literal_null(t.scalar_type.clone()))
                         .collect::<Vec<_>>(),
                 )
                 .project({
@@ -343,9 +343,9 @@ pub(crate) fn attempt_left_join_magic(
                     (oa + ba..oa + ba + ra)
                         .map(|col| MirScalarExpr::If {
                             cond: Box::new(MirScalarExpr::column(oa + ba + ra).call_is_null()),
-                            then: Box::new(MirScalarExpr::literal_null(ReprScalarType::from(
-                                &rt[col - (oa + ba)].scalar_type,
-                            ))),
+                            then: Box::new(MirScalarExpr::literal_null(
+                                rt[col - (oa + ba)].scalar_type.clone(),
+                            )),
                             els: Box::new(MirScalarExpr::column(col)),
                         })
                         .collect(),

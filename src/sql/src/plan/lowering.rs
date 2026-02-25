@@ -128,7 +128,7 @@ struct CteDesc {
     new_id: mz_expr::LocalId,
     /// The relation type of the CTE including the columns from the outer
     /// context at the beginning.
-    relation_type: SqlRelationType,
+    relation_type: ReprRelationType,
     /// The outer relation the CTE was applied to.
     outer_relation: MirRelationExpr,
 }
@@ -271,7 +271,7 @@ impl HirRelationExpr {
                         let cte_desc = cte_map.get(&local_id).unwrap();
                         let get_cte = SR::Get {
                             id: mz_expr::Id::Local(cte_desc.new_id.clone()),
-                            typ: ReprRelationType::from(&cte_desc.relation_type),
+                            typ: cte_desc.relation_type.clone(),
                             access_strategy: AccessStrategy::UnknownOrLocal,
                         };
                         if get_outer == cte_desc.outer_relation {
@@ -357,7 +357,7 @@ impl HirRelationExpr {
                             id.clone(),
                             CteDesc {
                                 new_id,
-                                relation_type: SqlRelationType::from_repr(&typ),
+                                relation_type: typ,
                                 outer_relation: get_outer.clone(),
                             },
                         );
@@ -378,7 +378,7 @@ impl HirRelationExpr {
                     let num_bindings = bindings.len();
 
                     // We use the outer type with the HIR types to form MIR CTE types.
-                    let outer_column_types = get_outer.sql_typ().column_types;
+                    let outer_column_types = get_outer.typ().column_types;
 
                     // Rename and introduce all bindings.
                     let mut shadowed_bindings = Vec::with_capacity(num_bindings);
@@ -390,11 +390,11 @@ impl HirRelationExpr {
                             id.clone(),
                             CteDesc {
                                 new_id: mir_id,
-                                relation_type: SqlRelationType::new(
+                                relation_type: ReprRelationType::new(
                                     outer_column_types
                                         .iter()
                                         .cloned()
-                                        .chain(typ.column_types.iter().cloned())
+                                        .chain(typ.column_types.iter().map(ReprColumnType::from))
                                         .collect::<Vec<_>>(),
                                 ),
                                 outer_relation: get_outer.clone(),
@@ -611,7 +611,7 @@ impl HirRelationExpr {
                         // are missing, with nulls filled in for the right columns.
                         if let JoinKind::LeftOuter { .. } = kind {
                             let default = join
-                                .sql_typ()
+                                .typ()
                                 .column_types
                                 .into_iter()
                                 .skip(get_left.arity())
@@ -676,12 +676,7 @@ impl HirRelationExpr {
                     let oa = get_outer.arity();
                     let left =
                         left.applied_to(id_gen, get_outer.clone(), col_map, cte_map, context)?;
-                    let lt = left
-                        .sql_typ()
-                        .column_types
-                        .into_iter()
-                        .skip(oa)
-                        .collect_vec();
+                    let lt = left.typ().column_types.into_iter().skip(oa).collect_vec();
                     let la = lt.len();
                     left.let_in(id_gen, |id_gen, get_left| {
                         let right_col_map = col_map.enter_scope(0);
@@ -692,12 +687,7 @@ impl HirRelationExpr {
                             cte_map,
                             context,
                         )?;
-                        let rt = right
-                            .sql_typ()
-                            .column_types
-                            .into_iter()
-                            .skip(oa)
-                            .collect_vec();
+                        let rt = right.typ().column_types.into_iter().skip(oa).collect_vec();
                         let ra = rt.len();
                         right.let_in(id_gen, |id_gen, get_right| {
                             let mut product = SR::join(
@@ -725,7 +715,7 @@ impl HirRelationExpr {
                             // appended to `product` in the `on.applied_to(...)`
                             // call above.
                             let on_subquery_types = product
-                                .sql_typ()
+                                .typ()
                                 .column_types
                                 .drain(oa + la + ra..)
                                 .collect_vec();
@@ -854,13 +844,13 @@ impl HirRelationExpr {
                             aggregate.applied_to(id_gen, col_map, cte_map, &mut input, context)
                         })
                         .collect::<Result<Vec<_>, _>>()?;
-                    let input_type = input.sql_typ();
+                    let input_type = input.typ();
                     let default = applied_aggregates
                         .iter()
                         .map(|agg| {
                             (
                                 agg.func.default(),
-                                agg.sql_typ(&input_type.column_types).scalar_type,
+                                agg.typ(&input_type.column_types).scalar_type,
                             )
                         })
                         .collect();
@@ -2037,7 +2027,7 @@ fn apply_scalar_subquery(
                 Ok::<_, PlanError>(get_select.union(errors))
             })?;
             // append Null to anything that didn't return any rows
-            let default = vec![(Datum::Null, col_type.scalar_type)];
+            let default = vec![(Datum::Null, ReprScalarType::from(&col_type.scalar_type))];
             get_inner.lookup(id_gen, guarded, default)
         },
     )
@@ -2070,7 +2060,7 @@ fn apply_existential_subquery(
                 .map(vec![MirScalarExpr::literal_true()]);
 
             // append False to anything that didn't return any rows
-            get_inner.lookup(id_gen, exists, vec![(Datum::False, SqlScalarType::Bool)])
+            get_inner.lookup(id_gen, exists, vec![(Datum::False, ReprScalarType::Bool)])
         },
     )
 }
@@ -2114,7 +2104,7 @@ fn attempt_outer_equijoin(
     left: MirRelationExpr,
     right: MirRelationExpr,
     on: MirScalarExpr,
-    on_subquery_types: Vec<SqlColumnType>,
+    on_subquery_types: Vec<ReprColumnType>,
     kind: JoinKind,
     oa: usize,
     id_gen: &mut mz_ore::id_gen::IdGen,
@@ -2136,8 +2126,8 @@ fn attempt_outer_equijoin(
     // Steps (1 + 2) require further investigation because we might change the
     // error semantics in case the `on` predicate contains a literal error..
 
-    let l_type = left.sql_typ();
-    let r_type = right.sql_typ();
+    let l_type = left.typ();
+    let r_type = right.typ();
     let la = l_type.column_types.len() - oa;
     let ra = r_type.column_types.len() - oa;
     let sa = on_subquery_types.len();
@@ -2155,9 +2145,7 @@ fn attempt_outer_equijoin(
     // However, in that case it's not clear that we won't see regressions if
     // `on` simplifies to a literal error.
     let mut on = vec![on];
-    let repr_output_type: Vec<ReprColumnType> =
-        output_type.iter().map(ReprColumnType::from).collect();
-    mz_expr::canonicalize::canonicalize_predicates(&mut on, &repr_output_type);
+    mz_expr::canonicalize::canonicalize_predicates(&mut on, &output_type);
 
     // Form the left and right types without the outer attributes.
     output_type.drain(0..oa);
@@ -2231,7 +2219,7 @@ fn attempt_outer_equijoin(
                         let right_fill = rt
                             .into_iter()
                             .map(|typ| {
-                                MirScalarExpr::literal_null(ReprScalarType::from(&typ.scalar_type))
+                                MirScalarExpr::literal_null(typ.scalar_type)
                             })
                             .collect();
                         // Add to `result` absent elements, filled with typed nulls.
@@ -2266,7 +2254,7 @@ fn attempt_outer_equijoin(
                         let left_fill = lt
                             .into_iter()
                             .map(|typ| {
-                                MirScalarExpr::literal_null(ReprScalarType::from(&typ.scalar_type))
+                                MirScalarExpr::literal_null(typ.scalar_type)
                             })
                             .collect();
 
