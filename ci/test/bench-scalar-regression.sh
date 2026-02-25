@@ -2,26 +2,42 @@
 
 # Scalar function benchmark regression test.
 #
-# Runs criterion benchmarks on upstream/main and the current branch,
+# Runs criterion benchmarks on a base ref and the current branch,
 # then compares results. Criterion reports per-benchmark changes with
 # statistical confidence; exit code is always 0 (regressions are
 # informational, not gating) unless a build fails.
 #
 # Usage:
-#   ci/test/bench-scalar-regression.sh [--bench-filter FILTER]
+#   ci/test/bench-scalar-regression.sh [--base-ref REF] [--bench-filter FILTER]
+#                                      [--offline]
 #
 # Options:
+#   --base-ref REF          Git ref to compare against. Default: latest
+#                           release tag (excluding release candidates).
 #   --bench-filter FILTER   Only run benchmarks matching FILTER (passed to
 #                           criterion via `-- FILTER`). Default: run all.
-#
-# The script expects `upstream/main` to be a valid ref (fetch it first
-# with `git fetch upstream`).
+#   --offline               Skip `git fetch --tags` when resolving the
+#                           default base ref. Useful for local runs.
 
 set -euo pipefail
 
+latest_release_tag() {
+    git tag --sort=-version:refname | grep -v '\-rc' | head -1
+}
+
 BENCH_FILTER=""
+BASE_REF=""
+OFFLINE=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --offline)
+            OFFLINE=true
+            shift
+            ;;
+        --base-ref)
+            BASE_REF="$2"
+            shift 2
+            ;;
         --bench-filter)
             BENCH_FILTER="$2"
             shift 2
@@ -32,6 +48,17 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [[ -z "$BASE_REF" ]]; then
+    if ! $OFFLINE; then
+        git fetch --tags
+    fi
+    BASE_REF=$(latest_release_tag)
+    if [[ -z "$BASE_REF" ]]; then
+        echo "No release tag found; pass --base-ref explicitly." >&2
+        exit 1
+    fi
+fi
 
 BENCH_TARGETS=(
     --bench bench_unary
@@ -46,11 +73,10 @@ if [[ -n "$BENCH_FILTER" ]]; then
 fi
 
 PR_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-MAIN_REF="upstream/main"
 
 echo "--- Benchmark regression test"
 echo "PR branch:  $PR_BRANCH"
-echo "Base ref:   $MAIN_REF"
+echo "Base ref:   $BASE_REF"
 
 # Stash any uncommitted changes so checkout is clean.
 STASHED=false
@@ -70,8 +96,8 @@ trap cleanup EXIT
 
 # ---- Phase 1: baseline on main ----
 
-echo "--- Building and benchmarking on $MAIN_REF"
-git checkout "$MAIN_REF"
+echo "--- Building and benchmarking on $BASE_REF"
+git checkout "$BASE_REF"
 
 cargo bench -p mz-expr "${BENCH_TARGETS[@]}" -- --save-baseline main "${CRITERION_ARGS[@]}"
 

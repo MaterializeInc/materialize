@@ -279,6 +279,14 @@ steps:
         agents:
           queue: hetzner-x86-64-dedi-16cpu-64gb
 
+      - id: scalar-benchmark
+        label: "Scalar function benchmark regression"
+        depends_on: []
+        timeout_in_minutes: 120
+        command: bin/ci-builder run stable ci/test/bench-scalar-regression.sh
+        agents:
+          queue: hetzner-x86-64-dedi-8cpu-32gb
+
   - group: Kafka
     key: kafka
     steps:
