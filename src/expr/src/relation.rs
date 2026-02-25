@@ -325,6 +325,16 @@ impl Eq for MirRelationExpr {}
 impl MirRelationExpr {
     /// Reports the schema of the relation.
     ///
+    /// This is the SQL-type parallel of [`Self::repr_typ`]; it is merely
+    /// a wrapper around it, returning a [`SqlRelationType`] instead of
+    /// a [`ReprRelationType`].
+    pub fn typ(&self) -> SqlRelationType {
+        let repr_typ = self.repr_typ();
+        SqlRelationType::from_repr(&repr_typ)
+    }
+
+    /// Reports the repr schema of the relation.
+    ///
     /// This method determines the type through recursive traversal of the
     /// relation expression, drawing from the types of base collections.
     /// As such, this is not an especially cheap method, and should be used
@@ -333,60 +343,6 @@ impl MirRelationExpr {
     /// The relation type is computed incrementally with a recursive post-order
     /// traversal, that accumulates the input types for the relations yet to be
     /// visited in `type_stack`.
-    pub fn typ(&self) -> SqlRelationType {
-        let mut type_stack = Vec::new();
-        #[allow(deprecated)]
-        self.visit_pre_post_nolimit(
-            &mut |e: &MirRelationExpr| -> Option<Vec<&MirRelationExpr>> {
-                match &e {
-                    MirRelationExpr::Let { body, .. } => {
-                        // Do not traverse the value sub-graph, since it's not relevant for
-                        // determining the relation type of Let operators.
-                        Some(vec![&*body])
-                    }
-                    MirRelationExpr::LetRec { body, .. } => {
-                        // Do not traverse the value sub-graph, since it's not relevant for
-                        // determining the relation type of Let operators.
-                        Some(vec![&*body])
-                    }
-                    _ => None,
-                }
-            },
-            &mut |e: &MirRelationExpr| {
-                match e {
-                    MirRelationExpr::Let { .. } => {
-                        let body_typ = type_stack.pop().unwrap();
-                        // Insert a dummy relation type for the value, since `typ_with_input_types`
-                        // won't look at it, but expects the relation type of the body to be second.
-                        type_stack.push(SqlRelationType::empty());
-                        type_stack.push(body_typ);
-                    }
-                    MirRelationExpr::LetRec { values, .. } => {
-                        let body_typ = type_stack.pop().unwrap();
-                        // Insert dummy relation types for the values, since `typ_with_input_types`
-                        // won't look at them, but expects the relation type of the body to be last.
-                        type_stack
-                            .extend(std::iter::repeat(SqlRelationType::empty()).take(values.len()));
-                        type_stack.push(body_typ);
-                    }
-                    _ => {}
-                }
-                let num_inputs = e.num_inputs();
-                let relation_type =
-                    e.typ_with_input_types(&type_stack[type_stack.len() - num_inputs..]);
-                type_stack.truncate(type_stack.len() - num_inputs);
-                type_stack.push(relation_type);
-            },
-        );
-        assert_eq!(type_stack.len(), 1);
-        type_stack.pop().unwrap()
-    }
-
-    /// Reports the repr schema of the relation.
-    ///
-    /// This is the repr-type parallel of [`Self::typ`]. It determines the type
-    /// through recursive traversal, returning a [`ReprRelationType`] instead of
-    /// a [`SqlRelationType`].
     pub fn repr_typ(&self) -> ReprRelationType {
         let mut type_stack = Vec::new();
         #[allow(deprecated)]
@@ -439,181 +395,6 @@ impl MirRelationExpr {
             input_types.iter().map(|i| &i.keys),
         );
         ReprRelationType::new(column_types).with_keys(unique_keys)
-    }
-
-    /// Reports the schema of the relation given the schema of the input relations.
-    ///
-    /// `input_types` is required to contain the schemas for the input relations of
-    /// the current relation in the same order as they are visited by `try_visit_children`
-    /// method, even though not all may be used for computing the schema of the
-    /// current relation. For example, `Let` expects two input types, one for the
-    /// value relation and one for the body, in that order, but only the one for the
-    /// body is used to determine the type of the `Let` relation.
-    ///
-    /// It is meant to be used during post-order traversals to compute relation
-    /// schemas incrementally.
-    pub fn typ_with_input_types(&self, input_types: &[SqlRelationType]) -> SqlRelationType {
-        let repr_types = input_types.iter().map(ReprRelationType::from).collect_vec();
-
-        let column_types =
-            self.repr_col_with_input_repr_cols(repr_types.iter().map(|i| &i.column_types));
-        let unique_keys = self.keys_with_input_keys(
-            input_types.iter().map(|i| i.arity()),
-            input_types.iter().map(|i| &i.keys),
-        );
-        SqlRelationType::new(column_types.iter().map(SqlColumnType::from_repr).collect())
-            .with_keys(unique_keys)
-    }
-
-    /// Reports the column types of the relation given the column types of the
-    /// input relations.
-    ///
-    /// This method delegates to `try_col_with_input_cols`, panicking if an `Err`
-    /// variant is returned.
-    pub fn col_with_input_cols<'a, I>(&self, input_types: I) -> Vec<SqlColumnType>
-    where
-        I: Iterator<Item = &'a Vec<SqlColumnType>>,
-    {
-        match self.try_col_with_input_cols(input_types) {
-            Ok(col_types) => col_types,
-            Err(err) => panic!("{err}"),
-        }
-    }
-
-    /// Reports the column types of the relation given the column types of the input relations.
-    ///
-    /// `input_types` is required to contain the column types for the input relations of
-    /// the current relation in the same order as they are visited by `try_visit_children`
-    /// method, even though not all may be used for computing the schema of the
-    /// current relation. For example, `Let` expects two input types, one for the
-    /// value relation and one for the body, in that order, but only the one for the
-    /// body is used to determine the type of the `Let` relation.
-    ///
-    /// It is meant to be used during post-order traversals to compute column types
-    /// incrementally.
-    pub fn try_col_with_input_cols<'a, I>(
-        &self,
-        mut input_types: I,
-    ) -> Result<Vec<SqlColumnType>, String>
-    where
-        I: Iterator<Item = &'a Vec<SqlColumnType>>,
-    {
-        use MirRelationExpr::*;
-
-        let col_types = match self {
-            Constant { rows, typ } => {
-                let mut col_types: Vec<SqlColumnType> = typ.column_types.iter().map(SqlColumnType::from_repr).collect();
-                let mut seen_null = vec![false; typ.arity()];
-                if let Ok(rows) = rows {
-                    for (row, _diff) in rows {
-                        for (datum, i) in row.iter().zip_eq(0..typ.arity()) {
-                            if datum.is_null() {
-                                seen_null[i] = true;
-                            }
-                        }
-                    }
-                }
-                for (&seen_null, i) in seen_null.iter().zip_eq(0..typ.arity()) {
-                    if !seen_null {
-                        col_types[i].nullable = false;
-                    } else {
-                        assert!(col_types[i].nullable);
-                    }
-                }
-                col_types
-            }
-            Get { typ, .. } => typ.column_types.iter().map(SqlColumnType::from_repr).collect(),
-            Project { outputs, .. } => {
-                let input = input_types.next().unwrap();
-                outputs.iter().map(|&i| input[i].clone()).collect()
-            }
-            Map { scalars, .. } => {
-                let mut result = input_types.next().unwrap().clone();
-                for scalar in scalars.iter() {
-                    result.push(scalar.typ(&result))
-                }
-                result
-            }
-            FlatMap { func, .. } => {
-                let mut result = input_types.next().unwrap().clone();
-                let mut output_col_types = func.output_type().column_types;
-                for ct in output_col_types.iter_mut() {
-                    ct.repr_canonicalize();
-                }
-                result.extend(output_col_types);
-                result
-            }
-            Filter { predicates, .. } => {
-                let mut result = input_types.next().unwrap().clone();
-
-                // Set as nonnull any columns where null values would cause
-                // any predicate to evaluate to null.
-                for column in non_nullable_columns(predicates) {
-                    result[column].nullable = false;
-                }
-                result
-            }
-            Join { equivalences, .. } => {
-                // Concatenate input column types
-                let mut types = input_types.flat_map(|cols| cols.to_owned()).collect_vec();
-                // In an equivalence class, if any column is non-null, then make all non-null
-                for equivalence in equivalences {
-                    let col_inds = equivalence
-                        .iter()
-                        .filter_map(|expr| match expr {
-                            MirScalarExpr::Column(col, _name) => Some(*col),
-                            _ => None,
-                        })
-                        .collect_vec();
-                    if col_inds.iter().any(|i| !types.get(*i).unwrap().nullable) {
-                        for i in col_inds {
-                            types.get_mut(i).unwrap().nullable = false;
-                        }
-                    }
-                }
-                types
-            }
-            Reduce {
-                group_key,
-                aggregates,
-                ..
-            } => {
-                let input = input_types.next().unwrap();
-                group_key
-                    .iter()
-                    .map(|e| e.typ(input))
-                    .chain(aggregates.iter().map(|agg| {
-                        let mut t = agg.typ(input);
-                        t.repr_canonicalize();
-                        t
-                    }))
-                    .collect()
-            }
-            TopK { .. } | Negate { .. } | Threshold { .. } | ArrangeBy { .. } => {
-                input_types.next().unwrap().clone()
-            }
-            Let { .. } => {
-                // skip over the input types for `value`.
-                input_types.nth(1).unwrap().clone()
-            }
-            LetRec { values, .. } => {
-                // skip over the input types for `values`.
-                input_types.nth(values.len()).unwrap().clone()
-            }
-            Union { .. } => {
-                let mut result = input_types.next().unwrap().clone();
-                for input_col_types in input_types {
-                    for (base_col, col) in result.iter_mut().zip_eq(input_col_types) {
-                        *base_col = base_col
-                            .try_union(col)
-                            .map_err(|e| format!("{e}\nin plan:\n{}", self.pretty()))?;
-                    }
-                }
-                result
-            }
-        };
-
-        Ok(col_types)
     }
 
     /// Reports the column types of the relation given the column types of the

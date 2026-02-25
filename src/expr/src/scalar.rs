@@ -1993,25 +1993,8 @@ impl MirScalarExpr {
     }
 
     pub fn typ(&self, column_types: &[SqlColumnType]) -> SqlColumnType {
-        let mut typ = match self {
-            MirScalarExpr::Column(i, _name) => column_types[*i].clone(),
-            MirScalarExpr::Literal(_, typ) => SqlColumnType::from_repr(typ),
-            MirScalarExpr::CallUnmaterializable(func) => func.output_type(),
-            MirScalarExpr::CallUnary { expr, func } => func.output_type(expr.typ(column_types)),
-            MirScalarExpr::CallBinary { expr1, expr2, func } => {
-                func.output_type(&[expr1.typ(column_types), expr2.typ(column_types)])
-            }
-            MirScalarExpr::CallVariadic { exprs, func } => {
-                func.output_type(exprs.iter().map(|e| e.typ(column_types)).collect())
-            }
-            MirScalarExpr::If { cond: _, then, els } => {
-                let then_type = then.typ(column_types);
-                let else_type = els.typ(column_types);
-                then_type.union(&else_type)
-            }
-        };
-        typ.repr_canonicalize();
-        typ
+        let repr_column_types = column_types.iter().map(ReprColumnType::from).collect_vec();
+        SqlColumnType::from_repr(&self.repr_typ(&repr_column_types))
     }
 
     pub fn repr_typ(&self, column_types: &[ReprColumnType]) -> ReprColumnType {

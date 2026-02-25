@@ -663,7 +663,7 @@ pub struct Analyses {
     pub non_negative: Option<bool>,
     pub subtree_size: Option<usize>,
     pub arity: Option<usize>,
-    pub types: Option<Option<Vec<SqlColumnType>>>,
+    pub types: Option<Option<Vec<ReprColumnType>>>,
     pub keys: Option<Vec<Vec<usize>>>,
     pub cardinality: Option<String>,
     pub column_names: Option<Vec<String>>,
@@ -715,7 +715,7 @@ impl<'a> Display for HumanizedAnalyses<'a> {
                 Some(types) => {
                     let types = types
                         .into_iter()
-                        .map(|c| self.humanizer.humanize_column_type(c, false))
+                        .map(|c| self.humanizer.humanize_column_type_repr(c, false))
                         .collect::<Vec<_>>();
 
                     bracketed("(", ")", separated(", ", types)).to_string()

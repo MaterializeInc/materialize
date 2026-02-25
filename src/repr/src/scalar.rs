@@ -3736,11 +3736,6 @@ impl SqlScalarType {
         self.eq_inner(other, false)
     }
 
-    /// Canonicalizes this scalar type, by round-tripping through repr types.
-    pub fn repr_canonicalize(&mut self) {
-        *self = SqlScalarType::from_repr(&ReprScalarType::from(&*self));
-    }
-
     // Determines equality among scalar types that ignores any custom OIDs or
     // embedded values.
     pub fn structural_eq(&self, other: &SqlScalarType) -> bool {
