@@ -115,13 +115,13 @@ name="postgres-source-prereq" %}}
 
 ### Create a source {#create-source-example}
 
-{{% include-example file="examples/create_source/example_postgres_source"
+{{% include-example file="examples/create_source_postgres"
  example="example-prereq" %}}
 
-{{% include-example file="examples/create_source/example_postgres_source"
+{{% include-example file="examples/create_source_postgres"
  example="create-source" %}}
 
-{{% include-example file="examples/create_source/example_postgres_source"
+{{% include-example file="examples/create_source_postgres"
  example="create-table" %}}
 
 ## Related pages
