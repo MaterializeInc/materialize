@@ -63,12 +63,13 @@ pub fn json_to_spec(rel_json: &str, catalog: &TestCatalog) -> (String, Vec<Strin
     );
     let mut source_defs = ctx
         .list_scope_references()
-        .map(|(name, typ)| {
+        .map(|(name, repr_typ)| {
+            let sql_typ = SqlRelationType::from_repr(repr_typ);
             format!(
                 "(defsource {} {})",
                 name,
                 serialize_generic::<SqlRelationType>(
-                    &serde_json::to_value(typ).unwrap(),
+                    &serde_json::to_value(&sql_typ).unwrap(),
                     "SqlRelationType",
                 )
             )
@@ -415,7 +416,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
         }
     }
 
-    pub fn list_scope_references(&self) -> impl Iterator<Item = (&String, &SqlRelationType)> {
+    pub fn list_scope_references(&self) -> impl Iterator<Item = (&String, &ReprRelationType)> {
         self.scope.iter()
     }
 
@@ -473,7 +474,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
                 match self.scope.get(&name) {
                     Some((id, typ)) => Ok(MirRelationExpr::Get {
                         id,
-                        typ: ReprRelationType::from(&typ),
+                        typ,
                         access_strategy: AccessStrategy::UnknownOrLocal,
                     }),
                     None => match self.catalog.get(&name) {
@@ -507,7 +508,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
 
         let value: MirRelationExpr = deserialize(stream_iter, "MirRelationExpr", self)?;
 
-        let (id, prev) = self.scope.insert(&name, value.typ());
+        let (id, prev) = self.scope.insert(&name, value.repr_typ());
 
         let body: MirRelationExpr = deserialize(stream_iter, "MirRelationExpr", self)?;
 
@@ -654,9 +655,7 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                                                         inner_map["typ"].clone(),
                                                     )
                                                     .unwrap();
-                                                let typ =
-                                                    SqlRelationType::from_repr(&repr_typ);
-                                                self.scope.insert(&id.to_string(), typ);
+                                                self.scope.insert(&id.to_string(), repr_typ);
                                                 format!("(get {})", id)
                                             }
                                         }
@@ -739,7 +738,7 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
 /// in the body of the `let`.
 #[derive(Debug, Default)]
 struct Scope {
-    objects: BTreeMap<String, (Id, SqlRelationType)>,
+    objects: BTreeMap<String, (Id, ReprRelationType)>,
     names: BTreeMap<Id, String>,
 }
 
@@ -747,15 +746,15 @@ impl Scope {
     fn insert(
         &mut self,
         name: &str,
-        typ: SqlRelationType,
-    ) -> (LocalId, Option<(Id, SqlRelationType)>) {
+        typ: ReprRelationType,
+    ) -> (LocalId, Option<(Id, ReprRelationType)>) {
         let old_val = self.get(name);
         let id = LocalId::new(u64::cast_from(self.objects.len()));
         self.set(name, Id::Local(id), typ);
         (id, old_val)
     }
 
-    fn set(&mut self, name: &str, id: Id, typ: SqlRelationType) {
+    fn set(&mut self, name: &str, id: Id, typ: ReprRelationType) {
         self.objects.insert(name.to_string(), (id, typ));
         self.names.insert(id, name.to_string());
     }
@@ -764,11 +763,11 @@ impl Scope {
         self.objects.remove(name);
     }
 
-    fn get(&self, name: &str) -> Option<(Id, SqlRelationType)> {
+    fn get(&self, name: &str) -> Option<(Id, ReprRelationType)> {
         self.objects.get(name).cloned()
     }
 
-    fn iter(&self) -> impl Iterator<Item = (&String, &SqlRelationType)> {
+    fn iter(&self) -> impl Iterator<Item = (&String, &ReprRelationType)> {
         self.objects.iter().map(|(s, (_, typ))| (s, typ))
     }
 }

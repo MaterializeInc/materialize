@@ -29,22 +29,28 @@
 //! ```rust
 //! use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr, func};
 //! use mz_ore::id_gen::IdGen;
-//! use mz_repr::{SqlColumnType, Datum, SqlRelationType, SqlScalarType};
+//! use mz_repr::{ReprColumnType, ReprRelationType, ReprScalarType};
 //! use mz_repr::optimize::OptimizerFeatures;
 //! use mz_transform::{reprtypecheck, Transform, TransformCtx};
 //! use mz_transform::dataflow::DataflowMetainfo;
 //!
 //! use mz_transform::predicate_pushdown::PredicatePushdown;
 //!
-//! let input1 = MirRelationExpr::constant(vec![], SqlRelationType::new(vec![
-//!     SqlScalarType::Bool.nullable(false),
-//! ]));
-//! let input2 = MirRelationExpr::constant(vec![], SqlRelationType::new(vec![
-//!     SqlScalarType::Bool.nullable(false),
-//! ]));
-//! let input3 = MirRelationExpr::constant(vec![], SqlRelationType::new(vec![
-//!     SqlScalarType::Bool.nullable(false),
-//! ]));
+//! let bool_typ = ReprRelationType::new(vec![
+//!     ReprColumnType { scalar_type: ReprScalarType::Bool, nullable: false },
+//! ]);
+//! let input1 = MirRelationExpr::Constant {
+//!     rows: Ok(vec![]),
+//!     typ: bool_typ.clone(),
+//! };
+//! let input2 = MirRelationExpr::Constant {
+//!     rows: Ok(vec![]),
+//!     typ: bool_typ.clone(),
+//! };
+//! let input3 = MirRelationExpr::Constant {
+//!     rows: Ok(vec![]),
+//!     typ: bool_typ,
+//! };
 //! let join = MirRelationExpr::join(
 //!     vec![input1.clone(), input2.clone(), input3.clone()],
 //!     vec![vec![(0, 0), (2, 0)].into_iter().collect()],
