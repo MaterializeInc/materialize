@@ -1652,12 +1652,17 @@ impl MirRelationExpr {
     /// Pretty-print this [MirRelationExpr] to a string.
     pub fn pretty(&self) -> String {
         let config = ExplainConfig::default();
-        self.explain(&config, None)
+        self.debug_explain(&config, None)
     }
 
     /// Pretty-print this [MirRelationExpr] to a string using a custom
     /// [ExplainConfig] and an optionally provided [ExprHumanizer].
-    pub fn explain(&self, config: &ExplainConfig, humanizer: Option<&dyn ExprHumanizer>) -> String {
+    /// This is intended for debugging and tests, not users.
+    pub fn debug_explain(
+        &self,
+        config: &ExplainConfig,
+        humanizer: Option<&dyn ExprHumanizer>,
+    ) -> String {
         text_string_at(self, || PlanRenderingContext {
             indent: Indent::default(),
             humanizer: humanizer.unwrap_or(&DummyHumanizer),

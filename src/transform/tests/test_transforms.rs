@@ -283,7 +283,7 @@ fn apply_transform<T: mz_transform::Transform>(
         .map_err(|e| format!("{}\n", e.to_string().trim()))?;
 
     // Serialize and return the transformed relation.
-    Ok(relation.explain(&ExplainConfig::default(), Some(catalog)))
+    Ok(relation.debug_explain(&ExplainConfig::default(), Some(catalog)))
 }
 
 fn parse_explain_config(mut flags: BTreeSet<String>) -> Result<ExplainConfig, String> {
