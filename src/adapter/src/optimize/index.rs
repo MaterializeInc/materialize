@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 
 use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, ReprRelationType};
 use mz_repr::explain::trace_plan;
 use mz_sql::names::QualifiedItemName;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
@@ -163,7 +163,11 @@ impl Optimize<Index> for Optimizer {
             on_id: index.on,
             key: index.keys.clone(),
         };
-        df_desc.export_index(self.exported_index_id, index_desc, on_desc.typ().clone());
+        df_desc.export_index(
+            self.exported_index_id,
+            index_desc,
+            ReprRelationType::from(on_desc.typ()),
+        );
 
         // Prepare expressions in the assembled dataflow.
         let style = ExprPrepMaintained;

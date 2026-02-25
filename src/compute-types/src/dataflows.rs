@@ -40,7 +40,7 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     pub objects_to_build: Vec<BuildDesc<P>>,
     /// Indexes to be made available to be shared with other dataflows
     /// (id of new index, description of index, relationtype of base source/view/table)
-    pub index_exports: BTreeMap<GlobalId, (IndexDesc, SqlRelationType)>,
+    pub index_exports: BTreeMap<GlobalId, (IndexDesc, ReprRelationType)>,
     /// sinks to be created
     /// (id of new sink, description of sink)
     pub sink_exports: BTreeMap<GlobalId, ComputeSinkDesc<S, T>>,
@@ -133,12 +133,9 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
         &mut self,
         id: GlobalId,
         desc: IndexDesc,
-        typ: SqlRelationType,
+        typ: ReprRelationType,
         monotonic: bool,
     ) {
-        for key in desc.key.iter() {
-            key.assert_repr_canonicalized();
-        }
         self.index_imports.insert(
             id,
             IndexImport {
@@ -182,15 +179,9 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     pub fn export_index(
         &mut self,
         id: GlobalId,
-        mut description: IndexDesc,
-        mut on_type: SqlRelationType,
+        description: IndexDesc,
+        on_type: ReprRelationType,
     ) {
-        // Ensure the index keys and type are repr-canonicalized so that
-        // they match the canonicalized ArrangeBy plan after optimization.
-        for key in description.key.iter_mut() {
-            key.repr_canonicalize();
-        }
-        on_type.repr_canonicalize();
         // We first create a "view" named `id` that ensures that the
         // data are correctly arranged and available for export.
         self.insert_plan(
@@ -198,7 +189,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
             OptimizedMirRelationExpr::declare_optimized(MirRelationExpr::ArrangeBy {
                 input: Box::new(MirRelationExpr::global_get(
                     description.on_id,
-                    ReprRelationType::from(&on_type),
+                    on_type.clone(),
                 )),
                 keys: vec![description.key.clone()],
             }),
@@ -611,7 +602,7 @@ pub struct IndexImport {
     /// Description of index.
     pub desc: IndexDesc,
     /// Schema and keys of the object the index is on.
-    pub typ: SqlRelationType,
+    pub typ: ReprRelationType,
     /// Whether the index will supply monotonic data.
     pub monotonic: bool,
     /// Whether this import must include the snapshot data.

@@ -95,9 +95,6 @@ pub trait LazyUnaryFunc {
     /// This property describes the behaviour of the function over ranges where the function is defined:
     /// ie. the argument and the result are non-error datums.
     fn is_monotone(&self) -> bool;
-
-    /// Canonicalizes the function's type parameters (if any) by round-tripping through repr types.
-    fn repr_canonicalize(&mut self);
 }
 
 /// A description of an SQL unary function that operates on eagerly evaluated expressions
@@ -138,10 +135,6 @@ pub trait EagerUnaryFunc {
 
     fn is_monotone(&self) -> bool {
         false
-    }
-
-    fn repr_canonicalize(&mut self) {
-        // No type parameters to canonicalize
     }
 }
 
@@ -190,10 +183,6 @@ impl<T: EagerUnaryFunc> LazyUnaryFunc for T {
 
     fn is_monotone(&self) -> bool {
         self.is_monotone()
-    }
-
-    fn repr_canonicalize(&mut self) {
-        self.repr_canonicalize()
     }
 }
 

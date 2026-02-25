@@ -453,7 +453,7 @@ mod tests {
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_persist_client::PersistClient;
     use mz_persist_types::ShardId;
-    use mz_repr::{Datum, GlobalId, SqlRelationType, SqlScalarType};
+    use mz_repr::{Datum, GlobalId, ReprRelationType, SqlRelationType, SqlScalarType};
     use semver::Version;
 
     use super::*;
@@ -808,7 +808,7 @@ mod tests {
                     on_id: GlobalId::User(1),
                     key: Default::default(),
                 },
-                typ: SqlRelationType::empty(),
+                typ: ReprRelationType::empty(),
                 monotonic: false,
                 with_snapshot: true,
             },

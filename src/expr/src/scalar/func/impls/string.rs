@@ -403,11 +403,6 @@ impl LazyUnaryFunc for CastStringToArray {
     fn is_monotone(&self) -> bool {
         false
     }
-
-    fn repr_canonicalize(&mut self) {
-        self.return_ty.repr_canonicalize();
-        self.cast_expr.repr_canonicalize();
-    }
 }
 
 impl fmt::Display for CastStringToArray {
@@ -497,11 +492,6 @@ impl LazyUnaryFunc for CastStringToList {
 
     fn is_monotone(&self) -> bool {
         false
-    }
-
-    fn repr_canonicalize(&mut self) {
-        self.return_ty.repr_canonicalize();
-        self.cast_expr.repr_canonicalize();
     }
 }
 
@@ -598,11 +588,6 @@ impl LazyUnaryFunc for CastStringToMap {
 
     fn is_monotone(&self) -> bool {
         false
-    }
-
-    fn repr_canonicalize(&mut self) {
-        self.return_ty.repr_canonicalize();
-        self.cast_expr.repr_canonicalize();
     }
 }
 
@@ -757,11 +742,6 @@ impl LazyUnaryFunc for CastStringToRange {
     fn is_monotone(&self) -> bool {
         false
     }
-
-    fn repr_canonicalize(&mut self) {
-        self.return_ty.repr_canonicalize();
-        self.cast_expr.repr_canonicalize();
-    }
 }
 
 impl fmt::Display for CastStringToRange {
@@ -909,10 +889,6 @@ impl LazyUnaryFunc for CastStringToInt2Vector {
 
     fn is_monotone(&self) -> bool {
         false
-    }
-
-    fn repr_canonicalize(&mut self) {
-        // No type parameters to canonicalize
     }
 }
 
@@ -1145,10 +1121,6 @@ impl LazyUnaryFunc for RegexpMatch {
     fn is_monotone(&self) -> bool {
         false
     }
-
-    fn repr_canonicalize(&mut self) {
-        // No type parameters to canonicalize
-    }
 }
 
 impl fmt::Display for RegexpMatch {
@@ -1216,10 +1188,6 @@ impl LazyUnaryFunc for RegexpSplitToArray {
 
     fn is_monotone(&self) -> bool {
         false
-    }
-
-    fn repr_canonicalize(&mut self) {
-        // No type parameters to canonicalize
     }
 }
 

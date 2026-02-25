@@ -73,10 +73,6 @@ impl LazyUnaryFunc for CastRecordToString {
     fn is_monotone(&self) -> bool {
         false
     }
-
-    fn repr_canonicalize(&mut self) {
-        self.ty.repr_canonicalize();
-    }
 }
 
 impl fmt::Display for CastRecordToString {
@@ -151,13 +147,6 @@ impl LazyUnaryFunc for CastRecord1ToRecord2 {
         // track enough information to make that call, though!
         false
     }
-
-    fn repr_canonicalize(&mut self) {
-        self.return_ty.repr_canonicalize();
-        self.cast_exprs
-            .iter_mut()
-            .for_each(|expr| expr.repr_canonicalize());
-    }
 }
 
 impl fmt::Display for CastRecord1ToRecord2 {
@@ -228,10 +217,6 @@ impl LazyUnaryFunc for RecordGet {
 
     fn is_monotone(&self) -> bool {
         false
-    }
-
-    fn repr_canonicalize(&mut self) {
-        // No type parameters to canonicalize
     }
 }
 

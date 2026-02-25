@@ -19,7 +19,7 @@ use mz_compute_types::plan::Plan;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::soft_assert_or_log;
 use mz_repr::explain::trace_plan;
-use mz_repr::{GlobalId, SqlRelationType, Timestamp};
+use mz_repr::{GlobalId, ReprRelationType, SqlRelationType, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
@@ -294,7 +294,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                     on_id: self.select_id,
                     key,
                 },
-                typ.clone(),
+                ReprRelationType::from(&typ),
             );
         }
 

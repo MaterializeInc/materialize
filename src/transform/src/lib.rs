@@ -55,7 +55,6 @@ use crate::reduce_elision::ReduceElision;
 use crate::reduce_reduction::ReduceReduction;
 use crate::reduction_pushdown::ReductionPushdown;
 use crate::redundant_join::RedundantJoin;
-use crate::reprize::ReprizeSqlTypes;
 use crate::reprtypecheck::{SharedContext as ReprSharedContext, Typecheck as ReprTypecheck};
 use crate::semijoin_idempotence::SemijoinIdempotence;
 use crate::threshold_elision::ThresholdElision;
@@ -91,7 +90,6 @@ pub mod reduce_elision;
 pub mod reduce_reduction;
 pub mod reduction_pushdown;
 pub mod redundant_join;
-pub mod reprize;
 pub mod reprtypecheck;
 pub mod semijoin_idempotence;
 pub mod threshold_elision;
@@ -740,8 +738,6 @@ impl Optimizer {
             // 0. `Transform`s that don't actually change the plan.
             Box::new(ReprTypecheck::new(ctx.repr_typecheck()).strict_join_equivalences()),
             Box::new(CollectNotices),
-            // 0.5. Canonicalize types in MRE by converting them to repr types and back.
-            Box::new(ReprizeSqlTypes),
             // 1. Structure-agnostic cleanup
             Box::new(normalize()),
             Box::new(NonNullRequirements::default()),
@@ -948,7 +944,6 @@ impl Optimizer {
     /// Builds a tiny optimizer, which is only suitable for optimizing fast-path queries.
     pub fn fast_path_optimizer(_ctx: &mut TransformCtx) -> Self {
         let transforms: Vec<Box<dyn Transform>> = vec![
-            Box::new(ReprizeSqlTypes),
             Box::new(canonicalization::ReduceScalars),
             Box::new(LiteralConstraints),
             Box::new(CanonicalizeMfp),
@@ -976,7 +971,6 @@ impl Optimizer {
         Self {
             name: "fast_path_optimizer",
             transforms: vec![
-                Box::new(ReprizeSqlTypes),
                 Box::new(fold_constants_fixpoint(limit)),
             ],
         }

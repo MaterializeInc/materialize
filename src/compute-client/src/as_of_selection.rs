@@ -861,7 +861,7 @@ mod tests {
     use mz_compute_types::sources::SourceInstanceDesc;
     use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
     use mz_persist_types::{Codec64, ShardId};
-    use mz_repr::Timestamp;
+    use mz_repr::{ReprRelationType, Timestamp};
     use mz_repr::{RelationDesc, RelationVersion, Row, SqlRelationType};
     use mz_storage_client::client::TimestamplessUpdateBuilder;
     use mz_storage_client::controller::{CollectionDescription, StorageMetadata, StorageTxn};
@@ -1124,7 +1124,7 @@ mod tests {
                         on_id: GlobalId::Transient(0),
                         key: Default::default(),
                     },
-                    typ: SqlRelationType::empty(),
+                    typ: ReprRelationType::empty(),
                     monotonic: Default::default(),
                     with_snapshot: true,
                 };
@@ -1139,7 +1139,7 @@ mod tests {
                     on_id: GlobalId::Transient(0),
                     key: Default::default(),
                 };
-                let typ = SqlRelationType::empty();
+                let typ = ReprRelationType::empty();
                 (id, (desc, typ))
             })
             .collect();

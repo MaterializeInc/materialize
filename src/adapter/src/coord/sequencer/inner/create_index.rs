@@ -446,14 +446,7 @@ impl Coordinator {
             item: CatalogItem::Index(Index {
                 create_sql,
                 global_id,
-                keys: keys
-                    .into_iter()
-                    .map(|mut k| {
-                        k.repr_canonicalize();
-                        k
-                    })
-                    .collect::<Vec<_>>()
-                    .into(),
+                keys: keys.into_iter().collect(),
                 on,
                 conn_id: None,
                 resolved_ids,

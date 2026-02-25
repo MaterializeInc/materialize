@@ -58,9 +58,6 @@ pub(crate) trait LazyBinaryFunc {
 
     /// Yep, I guess this returns true for infix operators.
     fn is_infix_op(&self) -> bool;
-
-    /// Canonicalizes the function's type parameters (if any) by round-tripping through repr types.
-    fn repr_canonicalize(&mut self);
 }
 
 pub(crate) trait EagerBinaryFunc {
@@ -100,10 +97,6 @@ pub(crate) trait EagerBinaryFunc {
 
     fn is_infix_op(&self) -> bool {
         false
-    }
-
-    fn repr_canonicalize(&mut self) {
-        // No type parameters to canonicalize
     }
 }
 
@@ -161,10 +154,6 @@ impl<T: EagerBinaryFunc> LazyBinaryFunc for T {
 
     fn is_infix_op(&self) -> bool {
         self.is_infix_op()
-    }
-
-    fn repr_canonicalize(&mut self) {
-        self.repr_canonicalize()
     }
 }
 

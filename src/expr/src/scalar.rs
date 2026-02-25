@@ -682,34 +682,6 @@ impl MirScalarExpr {
         }
     }
 
-    /// Asserts that this expression has already been repr-canonicalized.
-    ///
-    /// TODO: This function will no longer be needed when we later switch over the MIR structs
-    /// to have only repr types.
-    pub fn assert_repr_canonicalized(&self) {
-        let mut canonicalized = self.clone();
-        canonicalized.repr_canonicalize();
-        mz_ore::soft_assert_eq_or_log!(
-            *self,
-            canonicalized,
-            "MirScalarExpr was not repr-canonicalized"
-        );
-    }
-
-    /// Canonicalizes any types in the scalar expression by round-tripping through repr types.
-    pub fn repr_canonicalize(&mut self) {
-        self.visit_pre_mut(|e| {
-            use MirScalarExpr::*;
-            match e {
-                Column(..) | CallUnmaterializable(_) | If { .. } => (),
-                Literal(_, _typ) => (), // Already a ReprColumnType
-                CallUnary { func, .. } => func.repr_canonicalize(),
-                CallBinary { func, .. } => func.repr_canonicalize(),
-                CallVariadic { func, .. } => func.repr_canonicalize(),
-            }
-        })
-    }
-
     /// Reduces a complex expression where possible.
     ///
     /// This function uses nullability information present in `column_types`,
