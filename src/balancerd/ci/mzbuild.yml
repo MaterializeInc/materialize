@@ -12,4 +12,4 @@ description: Ingress balancer.
 pre-image:
   - type: cargo-build
     bin: balancerd
-    split_debuginfo: true
+    strip: true

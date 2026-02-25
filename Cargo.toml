@@ -299,11 +299,14 @@ lto = "thin"
 # and ship it separately to an s3 bucket before building their
 # docker containers.
 debug = 2
+# Emit split debuginfo during compilation to reduce intermediate object sizes.
+split-debuginfo = "unpacked"
 
 [profile.optimized]
 inherits = "release"
 lto = "off"
 debug = 1
+split-debuginfo = "unpacked"
 incremental = true
 
 [profile.ci]

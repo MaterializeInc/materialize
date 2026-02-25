@@ -107,13 +107,30 @@ def upload_debuginfo(
         bin_path = get_bin_path(repo, bin)
 
         dbg_path = bin_path.with_suffix(bin_path.suffix + ".debug")
+        # Keep debuginfo in a sidecar file and strip it from the runtime binary.
+        # This shrinks artifacts while preserving symbolization via GNU debuglink.
         spawn.runv(
             [
                 *repo.rd.tool("objcopy"),
+                "--only-keep-debug",
                 bin_path,
                 dbg_path,
-                "--only-keep-debug",
             ],
+        )
+        spawn.runv(
+            [
+                *repo.rd.tool("strip"),
+                "--strip-debug",
+                bin_path,
+            ],
+        )
+        spawn.runv(
+            [
+                *repo.rd.tool("objcopy"),
+                f"--add-gnu-debuglink={dbg_path.name}",
+                bin_path.name,
+            ],
+            cwd=bin_path.parent,
         )
 
         # Upload binary and debuginfo to S3 bucket, regardless of whether this
