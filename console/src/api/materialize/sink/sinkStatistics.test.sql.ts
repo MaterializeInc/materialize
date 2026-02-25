@@ -21,7 +21,7 @@ describe("buildSinkStatisticsQuery", () => {
     async () => {
       await testdrive(`
       $ postgres-execute connection=postgres://mz_system:materialize@\${testdrive.materialize-internal-sql-addr}
-      ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 100
+      ALTER SYSTEM SET default_timestamp_interval = 100
       ALTER SYSTEM SET storage_statistics_collection_interval = 100
       ALTER SYSTEM SET storage_statistics_interval = 200
 
@@ -71,7 +71,7 @@ describe("buildSinkStatisticsQuery", () => {
       await testdrive(
         `
         $ postgres-execute connection=postgres://mz_system:materialize@\${testdrive.materialize-internal-sql-addr}
-        ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 100
+        ALTER SYSTEM SET default_timestamp_interval = 100
         ALTER SYSTEM SET storage_statistics_collection_interval = 100
         ALTER SYSTEM SET storage_statistics_interval = 200
 
