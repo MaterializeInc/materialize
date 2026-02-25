@@ -1443,8 +1443,8 @@ pub static ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: VarDefinition = VarDefinition:
     true,
 );
 
-pub static TIMESTAMP_INTERVAL: VarDefinition = VarDefinition::new(
-    "timestamp_interval",
+pub static DEFAULT_TIMESTAMP_INTERVAL: VarDefinition = VarDefinition::new(
+    "default_timestamp_interval",
     value!(Duration; Duration::from_millis(1000)),
     "The interval at which timestamps are assigned to data from sources and tables.",
     false,

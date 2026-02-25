@@ -1684,7 +1684,7 @@ class FlipFlagsAction(Action):
             "sql_server_snapshot_progress_report_interval",
             "sql_server_cdc_cleanup_change_table",
             "sql_server_cdc_cleanup_change_table_max_deletes",
-            "timestamp_interval",
+            "default_timestamp_interval",
             "allow_user_sessions",
             "enable_0dt_deployment",
             "with_0dt_deployment_max_wait",

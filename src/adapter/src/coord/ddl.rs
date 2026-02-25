@@ -40,7 +40,7 @@ use mz_sql::session::vars::{
     MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS,
     MAX_MYSQL_CONNECTIONS, MAX_NETWORK_POLICIES, MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS,
     MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
-    MAX_SOURCES, MAX_SQL_SERVER_CONNECTIONS, MAX_TABLES, SystemVars, TIMESTAMP_INTERVAL, Var,
+    MAX_SOURCES, MAX_SQL_SERVER_CONNECTIONS, MAX_TABLES, SystemVars, DEFAULT_TIMESTAMP_INTERVAL, Var,
 };
 use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::inline::IntoInlineConnection;
@@ -370,7 +370,7 @@ impl Coordinator {
                     update_secrets_caching_config |= vars::is_secrets_caching_var(name);
                     update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
                     update_http_config |= vars::is_http_config_var(name);
-                    update_advance_timelines_interval |= name == TIMESTAMP_INTERVAL.name();
+                    update_advance_timelines_interval |= name == DEFAULT_TIMESTAMP_INTERVAL.name();
                 }
                 catalog::Op::ResetAllSystemConfiguration => {
                     // Assume they all need to be updated.
@@ -537,7 +537,7 @@ impl Coordinator {
                 self.update_http_config();
             }
             if update_advance_timelines_interval {
-                let new_interval = self.catalog().system_config().timestamp_interval();
+                let new_interval = self.catalog().system_config().default_timestamp_interval();
                 if new_interval != self.advance_timelines_interval.period() {
                     self.advance_timelines_interval = tokio::time::interval(new_interval);
                 }

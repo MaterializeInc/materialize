@@ -910,7 +910,7 @@ pub fn plan_create_source(
             }
             duration
         }
-        None => scx.catalog.system_vars().timestamp_interval(),
+        None => scx.catalog.system_vars().default_timestamp_interval(),
     };
 
     let (desc, data_source) = match progress_subsource {
@@ -7017,7 +7017,7 @@ fn alter_source_timestamp_interval(
                     ))
                 }
                 None => {
-                    let interval = scx.catalog.system_vars().timestamp_interval();
+                    let interval = scx.catalog.system_vars().default_timestamp_interval();
                     Ok(Plan::AlterSourceTimestampInterval(
                         AlterSourceTimestampIntervalPlan {
                             id: entry.id(),

@@ -4315,7 +4315,7 @@ pub fn serve(
         let segment_client_clone = segment_client.clone();
         let coord_now = now.clone();
         let advance_timelines_interval =
-            tokio::time::interval(catalog.system_config().timestamp_interval());
+            tokio::time::interval(catalog.system_config().default_timestamp_interval());
         let mut check_scheduling_policies_interval = tokio::time::interval(
             catalog
                 .system_config()

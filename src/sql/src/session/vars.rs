@@ -1164,7 +1164,7 @@ impl SystemVars {
             &ENABLE_STORAGE_SHARD_FINALIZATION,
             &ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE,
             &ENABLE_DEFAULT_CONNECTION_VALIDATION,
-            &TIMESTAMP_INTERVAL,
+            &DEFAULT_TIMESTAMP_INTERVAL,
             &MIN_TIMESTAMP_INTERVAL,
             &MAX_TIMESTAMP_INTERVAL,
             &LOGGING_FILTER,
@@ -2015,9 +2015,9 @@ impl SystemVars {
         *self.expect_value(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
     }
 
-    /// Returns the `timestamp_interval` configuration parameter.
-    pub fn timestamp_interval(&self) -> Duration {
-        *self.expect_value(&TIMESTAMP_INTERVAL)
+    /// Returns the `default_timestamp_interval` configuration parameter.
+    pub fn default_timestamp_interval(&self) -> Duration {
+        *self.expect_value(&DEFAULT_TIMESTAMP_INTERVAL)
     }
 
     /// Returns the `min_timestamp_interval` configuration parameter.

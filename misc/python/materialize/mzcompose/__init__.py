@@ -201,7 +201,7 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
-            "timestamp_interval",
+            "default_timestamp_interval",
             "1s",
             ["100ms", "1s"],
         ),
