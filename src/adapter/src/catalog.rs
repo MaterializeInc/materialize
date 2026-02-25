@@ -2289,8 +2289,8 @@ mod tests {
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
     use mz_repr::role_id::RoleId;
     use mz_repr::{
-        CatalogItemId, Datum, GlobalId, RelationVersionSelector, RowArena, SqlRelationType,
-        SqlScalarType, Timestamp,
+        CatalogItemId, Datum, GlobalId, RelationVersionSelector, ReprScalarType, RowArena,
+        SqlRelationType, SqlScalarType, Timestamp,
     };
     use mz_sql::catalog::{BuiltinsConfig, CatalogSchema, CatalogType, SessionCatalog};
     use mz_sql::func::{Func, FuncImpl, OP_IMPLS, Operation};
@@ -3421,8 +3421,7 @@ mod tests {
                         // as the real evaluation.
                         let mut reduced = mir.clone();
                         reduced.reduce(&[]);
-                        let mir_repr_scalar_type =
-                            mz_repr::ReprScalarType::from(&mir_typ.scalar_type);
+                        let mir_repr_scalar_type = ReprScalarType::from(&mir_typ.scalar_type);
                         match reduced {
                             MirScalarExpr::Literal(reduce_result, ctyp) => {
                                 match reduce_result {

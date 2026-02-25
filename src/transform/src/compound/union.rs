@@ -16,6 +16,7 @@ use std::iter;
 
 use mz_expr::MirRelationExpr;
 use mz_expr::visit::Visit;
+use mz_repr::ReprRelationType;
 
 use crate::TransformCtx;
 
@@ -87,8 +88,7 @@ impl UnionNegateFusion {
                 // A valid relation type is only needed for empty unions, but an existing union
                 // is guaranteed to be non-empty given that it always has at least a base branch.
                 assert!(!new_inputs.is_empty());
-                *relation =
-                    MirRelationExpr::union_many(new_inputs, mz_repr::ReprRelationType::empty());
+                *relation = MirRelationExpr::union_many(new_inputs, ReprRelationType::empty());
             }
         }
     }

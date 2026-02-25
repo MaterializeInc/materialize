@@ -198,6 +198,7 @@ mod support {
     use itertools::Itertools;
 
     use mz_expr::{Id, LetRecLimit, LocalId, MirRelationExpr};
+    use mz_repr::ReprRelationType;
     use mz_repr::optimize::OptimizerFeatures;
 
     pub(super) fn replace_bindings_from_map(
@@ -256,9 +257,11 @@ mod support {
         features: &OptimizerFeatures,
     ) -> Result<(), crate::TransformError> {
         // Assemble type information once for the whole expression.
-        use crate::analysis::{DerivedBuilder, ReprRelationType, UniqueKeys};
+        use crate::analysis::{
+            DerivedBuilder, ReprRelationType as ReprRelationTypeAnalysis, UniqueKeys,
+        };
         let mut builder = DerivedBuilder::new(features);
-        builder.require(ReprRelationType);
+        builder.require(ReprRelationTypeAnalysis);
         builder.require(UniqueKeys);
         let derived = builder.visit(expr);
         let derived_view = derived.as_view();
@@ -276,7 +279,7 @@ mod support {
                 // The `skip(1)` skips the `body` child, and is followed by binding children.
                 for (id, view) in ids.iter().rev().zip_eq(view.children_rev().skip(1)) {
                     let repr_cols = view
-                        .value::<ReprRelationType>()
+                        .value::<ReprRelationTypeAnalysis>()
                         .expect("ReprRelationType required")
                         .clone()
                         .expect("Expression not well typed");
@@ -284,10 +287,7 @@ mod support {
                         .value::<UniqueKeys>()
                         .expect("UniqueKeys required")
                         .clone();
-                    types.insert(
-                        *id,
-                        mz_repr::ReprRelationType::new(repr_cols).with_keys(keys),
-                    );
+                    types.insert(*id, ReprRelationType::new(repr_cols).with_keys(keys));
                 }
             }
             todo.extend(expr.children().rev().zip_eq(view.children_rev()));

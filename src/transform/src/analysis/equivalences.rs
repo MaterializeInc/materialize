@@ -23,7 +23,7 @@ use mz_expr::canonicalize::{UnionFind, canonicalize_equivalence_classes};
 use mz_expr::explain::{HumanizedExplain, HumanizerMode};
 use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
 use mz_ore::str::{bracketed, separated};
-use mz_repr::{Datum, ReprColumnType};
+use mz_repr::{Datum, ReprColumnType, ReprScalarType};
 
 use crate::analysis::{Analysis, Lattice};
 use crate::analysis::{Arity, ReprRelationType};
@@ -164,10 +164,7 @@ impl Analysis for Equivalences {
                 let mut equivalences = results.get(index - 1).unwrap().clone();
                 if let Some(equivalences) = &mut equivalences {
                     let mut class = predicates.clone();
-                    class.push(MirScalarExpr::literal_ok(
-                        Datum::True,
-                        mz_repr::ReprScalarType::Bool,
-                    ));
+                    class.push(MirScalarExpr::literal_ok(Datum::True, ReprScalarType::Bool));
                     equivalences.classes.push(class);
                 }
                 equivalences

@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 
 use itertools::Itertools;
 use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
-use mz_repr::Datum;
+use mz_repr::{Datum, ReprScalarType};
 use tracing::debug;
 
 use crate::analysis::equivalences::{
@@ -386,10 +386,7 @@ impl EquivalencePropagation {
                     }
                     // Incorporate `predicates` into `outer_equivalences`.
                     let mut class = predicates.clone();
-                    class.push(MirScalarExpr::literal_ok(
-                        Datum::True,
-                        mz_repr::ReprScalarType::Bool,
-                    ));
+                    class.push(MirScalarExpr::literal_ok(Datum::True, ReprScalarType::Bool));
                     outer_equivalences.classes.push(class);
                     outer_equivalences.minimize(Some(input_types));
                     self.apply(

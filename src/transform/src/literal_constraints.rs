@@ -30,7 +30,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::vec::swap_remove_multiple;
-use mz_repr::{Diff, GlobalId, ReprRelationType, Row};
+use mz_repr::{Diff, GlobalId, ReprColumnType, ReprRelationType, Row};
 
 use crate::TransformCtx;
 use crate::canonicalize_mfp::CanonicalizeMfp;
@@ -151,11 +151,11 @@ impl LiteralConstraints {
                             .iter()
                             .map(|val| (val.clone(), Diff::ONE))
                             .collect()),
-                        typ: mz_repr::ReprRelationType {
+                        typ: ReprRelationType {
                             column_types: key
                                 .iter()
                                 .map(|e| {
-                                    mz_repr::ReprColumnType {
+                                    ReprColumnType {
                                         // We make sure to not include a null in `expr_eq_literal`.
                                         nullable: false,
                                         ..e.typ(&inp_typ.column_types)

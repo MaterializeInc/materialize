@@ -67,8 +67,9 @@ use mz_repr::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, NumericMaxScale};
 use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{
-    CatalogItemId, ColumnIndex, ColumnName, Datum, RelationDesc, RelationVersionSelector, Row,
-    RowArena, SqlColumnType, SqlRelationType, SqlScalarType, UNKNOWN_COLUMN_NAME, strconv,
+    CatalogItemId, ColumnIndex, ColumnName, Datum, RelationDesc, RelationVersionSelector,
+    ReprColumnType, Row, RowArena, SqlColumnType, SqlRelationType, SqlScalarType,
+    UNKNOWN_COLUMN_NAME, strconv,
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
@@ -1405,11 +1406,11 @@ pub fn plan_index_exprs<'a>(
         transform_ast::transform(scx, &mut expr)?;
         let expr = plan_expr_or_col_index(ecx, &expr)?;
         let mut expr = expr.lower_uncorrelated(scx.catalog.system_vars())?;
-        let repr_col_types: Vec<mz_repr::ReprColumnType> = on_desc
+        let repr_col_types: Vec<ReprColumnType> = on_desc
             .typ()
             .column_types
             .iter()
-            .map(mz_repr::ReprColumnType::from)
+            .map(ReprColumnType::from)
             .collect();
         expr.reduce(&repr_col_types);
         out.push(expr);

@@ -99,7 +99,7 @@ use mz_expr::{
 };
 use mz_ore::soft_assert_eq_no_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
-use mz_repr::{Datum, ReprColumnType};
+use mz_repr::{Datum, ReprColumnType, ReprScalarType};
 
 use crate::{TransformCtx, TransformError};
 
@@ -336,7 +336,7 @@ impl PredicatePushdown {
                                             push_down.push(aggregates[0].expr.clone());
                                             aggregates[0].expr = MirScalarExpr::literal_ok(
                                                 Datum::True,
-                                                mz_repr::ReprScalarType::Bool,
+                                                ReprScalarType::Bool,
                                             );
                                         } else {
                                             retain.push(predicate);

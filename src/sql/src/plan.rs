@@ -49,8 +49,8 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, ColumnIndex, ColumnName, Diff, GlobalId, RelationDesc, Row, SqlColumnType,
-    SqlRelationType, SqlScalarType, Timestamp, VersionedRelationDesc,
+    CatalogItemId, ColumnIndex, ColumnName, Diff, GlobalId, RelationDesc, ReprColumnType, Row,
+    SqlColumnType, SqlRelationType, SqlScalarType, Timestamp, VersionedRelationDesc,
 };
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, QualifiedReplica,
@@ -1592,11 +1592,11 @@ impl WebhookValidation {
         let reduce_task = mz_ore::task::spawn_blocking(
             || "webhook-validation-reduce",
             move || {
-                let repr_col_types: Vec<mz_repr::ReprColumnType> = desc_
+                let repr_col_types: Vec<ReprColumnType> = desc_
                     .typ()
                     .column_types
                     .iter()
-                    .map(mz_repr::ReprColumnType::from)
+                    .map(ReprColumnType::from)
                     .collect();
                 expression_.reduce(&repr_col_types);
                 expression_

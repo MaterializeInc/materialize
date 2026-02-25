@@ -325,7 +325,7 @@ impl Eq for MirRelationExpr {}
 impl MirRelationExpr {
     /// Reports the schema of the relation.
     ///
-    /// This is the SQL-type parallel of [`Self::repr_typ`]; it is merely
+    /// This is the SQL-type parallel of [`Self::typ`]; it is merely
     /// a wrapper around it, returning a [`SqlRelationType`] instead of
     /// a [`ReprRelationType`].
     pub fn sql_typ(&self) -> SqlRelationType {

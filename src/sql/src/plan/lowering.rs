@@ -2024,16 +2024,13 @@ fn apply_scalar_subquery(
                 } else {
                     counts
                         .filter(vec![MirScalarExpr::column(inner_arity).call_binary(
-                            MirScalarExpr::literal_ok(
-                                Datum::Int64(1),
-                                mz_repr::ReprScalarType::Int64,
-                            ),
+                            MirScalarExpr::literal_ok(Datum::Int64(1), ReprScalarType::Int64),
                             func::Gt,
                         )])
                         .project((0..inner_arity).collect::<Vec<_>>())
                         .map_one(MirScalarExpr::literal(
                             Err(mz_expr::EvalError::MultipleRowsFromSubquery),
-                            mz_repr::ReprScalarType::from(&col_type.scalar_type),
+                            ReprScalarType::from(&col_type.scalar_type),
                         ))
                 };
                 // Return `get_select` and any errors added in.
@@ -2158,10 +2155,8 @@ fn attempt_outer_equijoin(
     // However, in that case it's not clear that we won't see regressions if
     // `on` simplifies to a literal error.
     let mut on = vec![on];
-    let repr_output_type: Vec<mz_repr::ReprColumnType> = output_type
-        .iter()
-        .map(mz_repr::ReprColumnType::from)
-        .collect();
+    let repr_output_type: Vec<ReprColumnType> =
+        output_type.iter().map(ReprColumnType::from).collect();
     mz_expr::canonicalize::canonicalize_predicates(&mut on, &repr_output_type);
 
     // Form the left and right types without the outer attributes.
@@ -2236,9 +2231,7 @@ fn attempt_outer_equijoin(
                         let right_fill = rt
                             .into_iter()
                             .map(|typ| {
-                                MirScalarExpr::literal_null(mz_repr::ReprScalarType::from(
-                                    &typ.scalar_type,
-                                ))
+                                MirScalarExpr::literal_null(ReprScalarType::from(&typ.scalar_type))
                             })
                             .collect();
                         // Add to `result` absent elements, filled with typed nulls.
@@ -2273,9 +2266,7 @@ fn attempt_outer_equijoin(
                         let left_fill = lt
                             .into_iter()
                             .map(|typ| {
-                                MirScalarExpr::literal_null(mz_repr::ReprScalarType::from(
-                                    &typ.scalar_type,
-                                ))
+                                MirScalarExpr::literal_null(ReprScalarType::from(&typ.scalar_type))
                             })
                             .collect();
 
