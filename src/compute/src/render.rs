@@ -131,7 +131,7 @@ use mz_compute_types::plan::render_plan::{
 use mz_expr::{EvalError, Id, LocalId, permutation_for_arrangement};
 use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
 use mz_repr::explain::DummyHumanizer;
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, ReprRelationType, Row, SharedRow, SqlRelationType};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, ReprRelationType, Row, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;

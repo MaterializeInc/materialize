@@ -447,7 +447,7 @@ impl JoinInputMapper {
 
 #[cfg(test)]
 mod tests {
-    use mz_repr::{Datum, ReprScalarType, SqlScalarType};
+    use mz_repr::{Datum, ReprScalarType};
 
     use crate::scalar::func;
     use crate::{BinaryFunc, MirScalarExpr, UnaryFunc};

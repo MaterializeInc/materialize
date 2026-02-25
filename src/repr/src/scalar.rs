@@ -24,7 +24,6 @@ use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::Overflowing;
 use mz_ore::cast::CastFrom;
-use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use ordered_float::OrderedFloat;
@@ -4697,7 +4696,7 @@ impl Arbitrary for ReprScalarType {
 ///
 /// It is important that any new variants for this enum be added to the `Arbitrary` instance
 /// and the `union` method.
-#[derive(Clone, Debug, EnumKind, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Clone, Debug, EnumKind, Serialize, Deserialize, MzReflect)]
 #[enum_kind(ReprScalarBaseType, derive(PartialOrd, Ord, Hash))]
 pub enum ReprScalarType {
     Bool,
@@ -4742,7 +4741,7 @@ impl PartialEq for ReprScalarType {
             (ReprScalarType::Record { fields: a }, ReprScalarType::Record { fields: b }) => {
                 a.len() == b.len()
                     && a.iter()
-                        .zip(b.iter())
+                        .zip_eq(b.iter())
                         .all(|(af, bf)| af.scalar_type.eq(&bf.scalar_type))
             }
             (ReprScalarType::Map { value_type: a }, ReprScalarType::Map { value_type: b }) => {
@@ -4757,6 +4756,23 @@ impl PartialEq for ReprScalarType {
     }
 }
 impl Eq for ReprScalarType {}
+
+impl Hash for ReprScalarType {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            ReprScalarType::Array(a) => a.hash(state),
+            ReprScalarType::List { element_type: a } => a.hash(state),
+            ReprScalarType::Record { fields: a } => {
+                for field in a {
+                    field.scalar_type.hash(state);
+                }
+            }
+            ReprScalarType::Map { value_type: a } => a.hash(state),
+            ReprScalarType::Range { element_type: a } => a.hash(state),
+            _ => ReprScalarBaseType::from(self).hash(state),
+        }
+    }
+}
 
 impl PartialOrd for ReprScalarType {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {

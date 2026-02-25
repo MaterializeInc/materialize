@@ -821,7 +821,10 @@ impl<'a> ColumnSpecs<'a> {
     /// [Self::set_literal] is called on the resulting expression to give it a meaningful value
     /// before evaluating.
     fn placeholder(col_type: SqlColumnType) -> MirScalarExpr {
-        MirScalarExpr::Literal(Err(EvalError::Internal("".into())), ReprColumnType::from(&col_type))
+        MirScalarExpr::Literal(
+            Err(EvalError::Internal("".into())),
+            ReprColumnType::from(&col_type),
+        )
     }
 }
 
@@ -1299,7 +1302,10 @@ mod tests {
                     .prop_map(move |datum| Ok(Row::pack_slice(&[datum])))
                     .boxed();
                 error_gen.prop_union(value_gen).prop_map(move |result| {
-                    (MirScalarExpr::Literal(result, ReprColumnType::from(&ct)), ct.clone())
+                    (
+                        MirScalarExpr::Literal(result, ReprColumnType::from(&ct)),
+                        ct.clone(),
+                    )
                 })
             })
             .boxed();

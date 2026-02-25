@@ -453,9 +453,7 @@ mod tests {
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_persist_client::PersistClient;
     use mz_persist_types::ShardId;
-    use mz_repr::{
-        Datum, GlobalId, ReprRelationType, ReprScalarType, SqlRelationType, SqlScalarType,
-    };
+    use mz_repr::{Datum, GlobalId, ReprRelationType, ReprScalarType};
     use semver::Version;
 
     use super::*;

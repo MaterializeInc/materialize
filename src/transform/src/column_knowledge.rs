@@ -20,7 +20,7 @@ use mz_expr::{
 use mz_ore::cast::CastFrom;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::{assert_none, soft_panic_or_log};
-use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, SqlColumnType, SqlScalarType};
+use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, SqlColumnType};
 
 use crate::{TransformCtx, TransformError};
 
@@ -220,8 +220,7 @@ impl ColumnKnowledge {
                 }
                 MirRelationExpr::Map { input, scalars } => {
                     let mut input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
-                    let mut column_types: Vec<ReprColumnType> =
-                        input.repr_typ().column_types;
+                    let mut column_types: Vec<ReprColumnType> = input.repr_typ().column_types;
                     for scalar in scalars.iter_mut() {
                         input_knowledge.push(optimize(
                             scalar,
@@ -235,8 +234,7 @@ impl ColumnKnowledge {
                 }
                 MirRelationExpr::FlatMap { input, func, exprs } => {
                     let mut input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
-                    let input_col_types: Vec<ReprColumnType> =
-                        input.repr_typ().column_types;
+                    let input_col_types: Vec<ReprColumnType> = input.repr_typ().column_types;
                     for expr in exprs {
                         optimize(
                             expr,
@@ -251,8 +249,7 @@ impl ColumnKnowledge {
                 }
                 MirRelationExpr::Filter { input, predicates } => {
                     let mut input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
-                    let input_col_types: Vec<ReprColumnType> =
-                        input.repr_typ().column_types;
+                    let input_col_types: Vec<ReprColumnType> = input.repr_typ().column_types;
                     for predicate in predicates.iter_mut() {
                         optimize(
                             predicate,
@@ -338,10 +335,10 @@ impl ColumnKnowledge {
                     // keys of the inputs. It is unnecessary to aggregate the keys
                     // of the inputs since input keys are unnecessary for reducing
                     // `MirScalarExpr`s.
-                    let folded_input_col_types: Vec<ReprColumnType> =
-                        inputs.iter().flat_map(|input| {
-                            input.repr_typ().column_types
-                        }).collect();
+                    let folded_input_col_types: Vec<ReprColumnType> = inputs
+                        .iter()
+                        .flat_map(|input| input.repr_typ().column_types)
+                        .collect();
 
                     for equivalence in equivalences.iter_mut() {
                         let mut knowledge = DatumKnowledge::top();
@@ -380,17 +377,11 @@ impl ColumnKnowledge {
                     expected_group_size: _,
                 } => {
                     let input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
-                    let input_col_types: Vec<ReprColumnType> =
-                        input.repr_typ().column_types;
+                    let input_col_types: Vec<ReprColumnType> = input.repr_typ().column_types;
                     let mut output = group_key
                         .iter_mut()
                         .map(|k| {
-                            optimize(
-                                k,
-                                &input_col_types,
-                                &input_knowledge[..],
-                                knowledge_stack,
-                            )
+                            optimize(k, &input_col_types, &input_knowledge[..], knowledge_stack)
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     for aggregate in aggregates.iter_mut() {
@@ -453,8 +444,7 @@ impl ColumnKnowledge {
                 MirRelationExpr::TopK { input, limit, .. } => {
                     let input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
                     if let Some(limit) = limit.as_mut() {
-                        let input_col_types: Vec<ReprColumnType> =
-                            input.repr_typ().column_types;
+                        let input_col_types: Vec<ReprColumnType> = input.repr_typ().column_types;
                         optimize(
                             limit,
                             &input_col_types,
@@ -803,7 +793,10 @@ fn optimize(
                     let index = *index;
                     if let DatumKnowledge::Lit { value, typ } = &column_knowledge[index] {
                         let nullable = column_knowledge[index].nullable();
-                        let canonical_typ = ReprColumnType { scalar_type: typ.clone(), nullable };
+                        let canonical_typ = ReprColumnType {
+                            scalar_type: typ.clone(),
+                            nullable,
+                        };
                         *e = MirScalarExpr::Literal(value.clone(), canonical_typ);
                     }
                     column_knowledge[index].clone()

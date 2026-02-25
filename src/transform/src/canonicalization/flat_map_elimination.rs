@@ -90,7 +90,12 @@ impl FlatMapElimination {
                         let map_exprs = first_row
                             .into_iter()
                             .zip_eq(types)
-                            .map(|(d, typ)| MirScalarExpr::literal_ok(d, mz_repr::ReprScalarType::from(&typ.scalar_type)))
+                            .map(|(d, typ)| {
+                                MirScalarExpr::literal_ok(
+                                    d,
+                                    mz_repr::ReprScalarType::from(&typ.scalar_type),
+                                )
+                            })
                             .collect();
                         *relation = input.take_dangerous().map(map_exprs);
                     }

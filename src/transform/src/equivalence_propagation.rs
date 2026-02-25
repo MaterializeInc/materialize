@@ -310,7 +310,7 @@ impl EquivalencePropagation {
                             input_equivalences_cloned
                                 .as_mut()
                                 .expect("always filled if feature flag is not set")
-                                .minimize(Some(&input_types));
+                                .minimize(Some(input_types));
                         }
                     }
                     let input_arity = *derived
@@ -391,7 +391,7 @@ impl EquivalencePropagation {
                         mz_repr::ReprScalarType::Bool,
                     ));
                     outer_equivalences.classes.push(class);
-                    outer_equivalences.minimize(Some(&input_types));
+                    outer_equivalences.minimize(Some(input_types));
                     self.apply(
                         input,
                         derived.last_child(),

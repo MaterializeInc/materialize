@@ -99,7 +99,7 @@ use mz_expr::{
 };
 use mz_ore::soft_assert_eq_no_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
-use mz_repr::{Datum, ReprColumnType, SqlScalarType};
+use mz_repr::{Datum, ReprColumnType};
 
 use crate::{TransformCtx, TransformError};
 
@@ -254,7 +254,8 @@ impl PredicatePushdown {
                                                     .call_unary(UnaryFunc::IsNull(func::IsNull))
                                                     .call_unary(UnaryFunc::Not(func::Not)),
                                             );
-                                        } else if expr2.repr_typ(&input_type.column_types).nullable {
+                                        } else if expr2.repr_typ(&input_type.column_types).nullable
+                                        {
                                             pred_not_translated.push(
                                                 expr2
                                                     .clone()
@@ -586,7 +587,8 @@ impl PredicatePushdown {
                         input_types.iter().map(|t| &t.column_types),
                     );
 
-                    let input_mapper = mz_expr::JoinInputMapper::new_from_input_repr_types(&input_types);
+                    let input_mapper =
+                        mz_expr::JoinInputMapper::new_from_input_repr_types(&input_types);
                     // Predicates to push at each input, and to lift out the join.
                     let mut push_downs = vec![Vec::new(); inputs.len()];
 
@@ -602,7 +604,9 @@ impl PredicatePushdown {
                             .count()
                             > 1
                         {
-                            relation.take_safely_repr(Some(relation.repr_typ_with_input_types(&input_types)));
+                            relation.take_safely_repr(Some(
+                                relation.repr_typ_with_input_types(&input_types),
+                            ));
                             return Ok(());
                         }
 

@@ -134,7 +134,10 @@ mod relation {
         };
         if input.eat3(syn::Token![<], kw::empty, syn::Token![>]) {
             let typ = parse_typ(input)?;
-            Ok(MirRelationExpr::Constant { rows: Ok(vec![]), typ })
+            Ok(MirRelationExpr::Constant {
+                rows: Ok(vec![]),
+                typ,
+            })
         } else {
             let typ = parse_typ(input)?;
             let parse_children = ParseChildren::new(input, constant.span().start());
@@ -722,7 +725,9 @@ mod scalar {
     use mz_expr::{
         BinaryFunc, ColumnOrder, MirScalarExpr, UnaryFunc, UnmaterializableFunc, VariadicFunc, func,
     };
-    use mz_repr::{AsColumnType, Datum, ReprColumnType, ReprScalarType, Row, RowArena, SqlScalarType};
+    use mz_repr::{
+        AsColumnType, Datum, ReprColumnType, ReprScalarType, Row, RowArena, SqlScalarType,
+    };
 
     use super::*;
 

@@ -680,8 +680,7 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                                         }
                                     }
                                     let repr_typ: ReprRelationType =
-                                        serde_json::from_value(inner_map["typ"].clone())
-                                            .unwrap();
+                                        serde_json::from_value(inner_map["typ"].clone()).unwrap();
                                     let sql_typ = SqlRelationType::from_repr(&repr_typ);
                                     let sql_typ_json = serde_json::to_value(&sql_typ).unwrap();
                                     return Some(format!(
@@ -695,8 +694,7 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                                     ));
                                 } else if let Some(inner_data) = inner_map["rows"].get("Err") {
                                     let repr_typ: ReprRelationType =
-                                        serde_json::from_value(inner_map["typ"].clone())
-                                            .unwrap();
+                                        serde_json::from_value(inner_map["typ"].clone()).unwrap();
                                     let sql_typ = SqlRelationType::from_repr(&repr_typ);
                                     let sql_typ_json = serde_json::to_value(&sql_typ).unwrap();
                                     return Some(format!(

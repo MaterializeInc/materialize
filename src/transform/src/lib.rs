@@ -970,9 +970,7 @@ impl Optimizer {
     pub fn constant_optimizer(_ctx: &mut TransformCtx, limit: bool) -> Self {
         Self {
             name: "fast_path_optimizer",
-            transforms: vec![
-                Box::new(fold_constants_fixpoint(limit)),
-            ],
+            transforms: vec![Box::new(fold_constants_fixpoint(limit))],
         }
     }
 

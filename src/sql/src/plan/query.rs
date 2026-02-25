@@ -52,8 +52,8 @@ use mz_expr::func::variadic::{
 };
 use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{
-    Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, RowSetFinishing,
-    TableFunc, func as expr_func,
+    Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, RowSetFinishing, TableFunc,
+    func as expr_func,
 };
 use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;

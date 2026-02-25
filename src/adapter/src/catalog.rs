@@ -3421,7 +3421,8 @@ mod tests {
                         // as the real evaluation.
                         let mut reduced = mir.clone();
                         reduced.reduce(&[]);
-                        let mir_repr_scalar_type = mz_repr::ReprScalarType::from(&mir_typ.scalar_type);
+                        let mir_repr_scalar_type =
+                            mz_repr::ReprScalarType::from(&mir_typ.scalar_type);
                         match reduced {
                             MirScalarExpr::Literal(reduce_result, ctyp) => {
                                 match reduce_result {

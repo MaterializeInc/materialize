@@ -423,7 +423,7 @@ mod tests {
             let phys_optimizer = Optimizer::physical_optimizer(&mut transform_ctx);
             dataflow = dataflow
                 .into_iter()
-                .map(|(id, mut rel)| {
+                .map(|(id, rel)| {
                     transform_ctx.set_global_id(id);
                     let local_mir_plan = log_optimizer
                         .optimize(rel, &mut transform_ctx)

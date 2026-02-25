@@ -10,7 +10,7 @@
 use itertools::Itertools;
 use mz_expr::{MirRelationExpr, MirScalarExpr, func};
 use mz_ore::soft_assert_eq_or_log;
-use mz_repr::{Diff, ReprColumnType, ReprRelationType, ReprScalarType};
+use mz_repr::{Diff, ReprRelationType, ReprScalarType};
 
 use crate::plan::PlanError;
 use crate::plan::hir::{HirRelationExpr, HirScalarExpr};
@@ -343,9 +343,9 @@ pub(crate) fn attempt_left_join_magic(
                     (oa + ba..oa + ba + ra)
                         .map(|col| MirScalarExpr::If {
                             cond: Box::new(MirScalarExpr::column(oa + ba + ra).call_is_null()),
-                            then: Box::new(MirScalarExpr::literal_null(
-                                ReprScalarType::from(&rt[col - (oa + ba)].scalar_type),
-                            )),
+                            then: Box::new(MirScalarExpr::literal_null(ReprScalarType::from(
+                                &rt[col - (oa + ba)].scalar_type,
+                            ))),
                             els: Box::new(MirScalarExpr::column(col)),
                         })
                         .collect(),

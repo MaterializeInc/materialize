@@ -1381,11 +1381,7 @@ impl Typecheck {
 
                     let id = Id::Local(id.clone());
                     if let Some(ctx_typ) = ctx.get_mut(&id) {
-                        let typ = typ
-                            .column_types
-                            .iter()
-                            .cloned()
-                            .collect_vec();
+                        let typ = typ.column_types.iter().cloned().collect_vec();
 
                         if ctx_typ.len() != typ.len() {
                             let diffs = relation_subtype_difference(&typ, ctx_typ);
@@ -1415,13 +1411,7 @@ impl Typecheck {
                             }
                         }
                     } else {
-                        ctx.insert(
-                            id,
-                            typ.column_types
-                                .iter()
-                                .cloned()
-                                .collect_vec(),
-                        );
+                        ctx.insert(id, typ.column_types.iter().cloned().collect_vec());
                     }
                 }
                 Get {

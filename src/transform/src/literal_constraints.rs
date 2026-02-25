@@ -30,7 +30,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::vec::swap_remove_multiple;
-use mz_repr::{Diff, GlobalId, ReprRelationType, Row, SqlColumnType};
+use mz_repr::{Diff, GlobalId, ReprRelationType, Row};
 
 use crate::TransformCtx;
 use crate::canonicalize_mfp::CanonicalizeMfp;

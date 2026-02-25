@@ -14,7 +14,7 @@ use std::fmt::Formatter;
 use std::time::Duration;
 
 use mz_ore::str::{Indent, IndentLike, separated};
-use mz_repr::{GlobalId, ReprRelationType};
+use mz_repr::GlobalId;
 use mz_repr::explain::ExplainError::LinearChainsPlusRecursive;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{

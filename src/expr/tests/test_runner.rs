@@ -24,7 +24,8 @@ mod test {
         let mut scalar: MirScalarExpr = deserialize(&mut input_stream, "MirScalarExpr", &mut ctx)?;
         let typ: Vec<SqlColumnType> =
             deserialize(&mut input_stream, "Vec<SqlColumnType> ", &mut ctx)?;
-        let repr_typ: Vec<mz_repr::ReprColumnType> = typ.iter().map(mz_repr::ReprColumnType::from).collect();
+        let repr_typ: Vec<mz_repr::ReprColumnType> =
+            typ.iter().map(mz_repr::ReprColumnType::from).collect();
         let before = scalar.typ(&typ);
         scalar.reduce(&repr_typ);
         let after = scalar.typ(&typ);
@@ -45,8 +46,7 @@ mod test {
             deserialize(&mut input_stream, "Vec<MirScalarExpr>", &mut ctx)?;
         let typ: Vec<SqlColumnType> =
             deserialize(&mut input_stream, "Vec<SqlColumnType>", &mut ctx)?;
-        let repr_typ: Vec<ReprColumnType> =
-            typ.iter().map(ReprColumnType::from).collect();
+        let repr_typ: Vec<ReprColumnType> = typ.iter().map(ReprColumnType::from).collect();
         // predicate canonicalization is meant to produce the same output regardless of the
         // order of the input predicates.
         let mut predicates1 = input_predicates.clone();

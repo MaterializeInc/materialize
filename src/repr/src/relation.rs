@@ -15,8 +15,8 @@ use anyhow::bail;
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
-use mz_ore::str::StrExt;
 use mz_ore::soft_panic_or_log;
+use mz_ore::str::StrExt;
 use mz_ore::{assert_none, assert_ok};
 use mz_persist_types::schema::SchemaId;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -364,7 +364,11 @@ impl SqlRelationType {
     /// inverse of `ReprRelationType::from(&SqlRelationType)`.
     pub fn from_repr(repr: &ReprRelationType) -> Self {
         SqlRelationType {
-            column_types: repr.column_types.iter().map(SqlColumnType::from_repr).collect(),
+            column_types: repr
+                .column_types
+                .iter()
+                .map(SqlColumnType::from_repr)
+                .collect(),
             keys: repr.keys.clone(),
         }
     }

@@ -23,9 +23,9 @@ use itertools::Itertools;
 pub use projection_extraction::ProjectionExtraction;
 pub use topk_elision::TopKElision;
 
-use mz_expr::MirRelationExpr;
 use crate::TransformCtx;
 use crate::analysis::{DerivedBuilder, ReprRelationType};
+use mz_expr::MirRelationExpr;
 use mz_repr::ReprColumnType;
 
 /// A transform that visits each AST node and reduces scalar expressions.
