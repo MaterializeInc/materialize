@@ -773,8 +773,8 @@ steps:
     key: console-tests
     steps:
       - id: console-lint
-        label: ":npm: Console lint and typecheck"
-        command: bin/ci-builder run stable ci/test/console/console-lint.sh
+        label: "Console lint and typecheck"
+        command: bin/ci-builder run stable ci/test/console/lint.sh
         inputs:
           - console/**
           - ci/test/console/**
@@ -786,8 +786,8 @@ steps:
         sanitizer: skip
 
       - id: console-test
-        label: ":npm: Console unit tests"
-        command: bin/ci-builder run stable ci/test/console/console-test.sh
+        label: "Console unit tests"
+        command: bin/ci-builder run stable ci/test/console/test.sh
         inputs:
           - console/**
           - ci/test/console/**
@@ -795,12 +795,12 @@ steps:
         timeout_in_minutes: 15
         artifact_paths: console/log/**/*
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
         coverage: skip
         sanitizer: skip
 
       - id: console-sql-test
-        label: ":npm: Console SQL tests"
+        label: "Console SQL tests"
         depends_on: build-x86_64
         timeout_in_minutes: 30
         inputs:
@@ -817,38 +817,57 @@ steps:
         sanitizer: skip
 
       - id: console-e2e-test
-        label: ":playwright: Console e2e tests"
-        command: ci/test/console/console-e2e.sh
+        label: "Console E2E against staging"
+        command: bin/ci-builder run console ci/test/console/e2e.sh
         inputs:
           - console/**
           - ci/test/console/**
         depends_on: []
         timeout_in_minutes: 60
-        artifact_paths: console/test-results/**/*
+        concurrency: 1
+        concurrency_group: "console-e2e-staging"
+        artifact_paths: console/run.log
         agents:
-          queue: linux-x86_64-large
+          queue: linux-x86_64
         env:
           CI: "true"
         coverage: skip
         sanitizer: skip
-        skip: "Get secrets from console repo"
+        ci_glue_exempt: true
 
-      - id: console-e2e-prod-test
-        label: ":playwright: Console e2e tests (production)"
-        command: ci/test/console/console-e2e-prod.sh
+      - id: console-e2e-test-prod
+        label: "Console E2E against production"
+        command: bin/ci-builder run console ci/test/console/e2e-prod.sh
         inputs:
           - console/**
           - ci/test/console/**
         depends_on: []
         timeout_in_minutes: 60
-        artifact_paths: console/test-results/**/*
+        concurrency: 1
+        concurrency_group: "console-e2e-prod"
+        artifact_paths: console/run.log
         agents:
-          queue: linux-x86_64-large
+          queue: linux-x86_64
         env:
           CI: "true"
         coverage: skip
         sanitizer: skip
-        skip: "Requires Vercel secrets (VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID) to be configured in Buildkite"
+        ci_glue_exempt: true
+
+      - id: console-vercel-preview
+        label: ":vercel: Console Vercel preview"
+        command: bin/ci-builder run stable ci/test/console/vercel-preview.sh
+        inputs:
+          - console/**
+        depends_on: []
+        timeout_in_minutes: 15
+        if: "build.pull_request.id != null"
+
+        agents:
+          queue: linux-x86_64
+        coverage: skip
+        sanitizer: skip
+        ci_glue_exempt: true
 
   - id: deploy-website
     label: Deploy website

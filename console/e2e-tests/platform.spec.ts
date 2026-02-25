@@ -75,6 +75,8 @@ async function reactSelectOption(page: Page, elementId: string, value: string) {
 
 const TEST_TIMEOUT = 30 * 60 * 1000;
 const ENABLE_REGION_TIMEOUT = 60 * 1000;
+// Region provisioning can take several minutes on production (e.g. aws/eu-west-1).
+const REGION_READY_TIMEOUT = 10 * 60 * 1000;
 
 for (const region of REGIONS) {
   test(`use region ${region.id}`, async ({ page, request, testContext }) => {
@@ -202,8 +204,9 @@ for (const region of REGIONS) {
       .getByRole("link", { name: /integrate with your data stack →/i })
       .click();
     await page.getByRole("link", { name: /open console →/i }).click({
-      // This button will be disabled until the region is ready, which can take some time
-      timeout: ENABLE_REGION_TIMEOUT,
+      // This button will be disabled until the region is fully provisioned,
+      // which can take several minutes in production.
+      timeout: REGION_READY_TIMEOUT,
     });
     await expect(page.getByTestId("shell")).toBeVisible();
 

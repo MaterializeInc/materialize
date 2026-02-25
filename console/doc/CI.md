@@ -1,6 +1,6 @@
 # CI / CD pipelines
 
-Our CI / CD uses Github Actions.
+Our CI / CD uses Buildkite as part of the main materialize pipeline.
 
 ## PR CI
 

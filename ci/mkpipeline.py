@@ -175,6 +175,10 @@ so it is executed.""",
                 args.sanitizer,
                 lto,
             )
+            # Steps marked ci_glue_exempt should still be trimmed based on
+            # their own inputs, even when CI glue code has changed, since
+            # they don't depend on CI infrastructure (e.g. console e2e tests).
+            trim_ci_glue_exempt_steps(pipeline)
         else:
             print("Trimming unchanged steps from pipeline")
             trim_tests_pipeline(
@@ -1036,6 +1040,19 @@ def have_paths_changed(globs: Iterable[str]) -> bool:
             raise RuntimeError("unreachable")
 
 
+def trim_ci_glue_exempt_steps(pipeline: Any) -> None:
+    """Trim steps marked with ci_glue_exempt based on their own inputs, even
+    when CI glue code has changed. These steps (e.g. console e2e tests) don't
+    depend on CI infrastructure and should only run when their declared inputs
+    have actually changed."""
+    for step in steps(pipeline):
+        if not step.get("ci_glue_exempt"):
+            continue
+        inputs = step.get("inputs", [])
+        if inputs and not have_paths_changed(inputs):
+            step["skip"] = "No changes in inputs"
+
+
 def remove_mz_specific_keys(pipeline: Any) -> None:
     """Remove the Materialize-specific keys from the configuration that are only used to inform how to trim the pipeline and for coverage runs."""
     for step in steps(pipeline):
@@ -1045,6 +1062,8 @@ def remove_mz_specific_keys(pipeline: Any) -> None:
             del step["coverage"]
         if "sanitizer" in step:
             del step["sanitizer"]
+        if "ci_glue_exempt" in step:
+            del step["ci_glue_exempt"]
         if (
             "timeout_in_minutes" not in step
             and "prompt" not in step

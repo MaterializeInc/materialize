@@ -4,7 +4,7 @@ This document describes how to build and run the Materialize Console Docker imag
 
 ## Building the Docker Image Locally
 
-To build the Docker image locally, run the following command from the root of the repository:
+To build the Docker image locally, run the following command from the `console/` directory:
 
 ```bash
 docker build -f misc/docker/Dockerfile -t console-dev:latest -t console-dev:1.0.0 .
@@ -55,42 +55,6 @@ CONSOLE_DEPLOYMENT_MODE='flexible-deployment' DEV_SERVER_PROXY_PORT=8080 yarn st
 ### TLS
 
 If the Materialize instance uses TLS, you'll need to run `CONSOLE_DEPLOYMENT_MODE='flexible-deployment' DEV_SERVER_WITH_TLS_PROXY='true' yarn start`.
-
-## Deploying the Docker Image to Docker Hub
-
-### GitHub Actions Workflow
-
-The GitHub Actions workflow is set up to automatically build and push Docker images to Docker Hub when a new tag is pushed.
-
-- The workflow file is located at `.github/workflows/dockerhub.yaml`.
-- It uses multi-platform builds for `linux/amd64` and `linux/arm64`.
-
-### Cutting a New Release
-
-To create a new release, follow these steps:
-
-1. Tag the main branch:
-
-   ```bash
-   git tag -a vX.Y.Z -m "vX.Y.Z"
-   git push origin vX.Y.Z
-   ```
-
-2. This will trigger the GitHub Actions workflow to build and push a new Docker image to Docker Hub with the new version tag.
-
-## Docker Hub Example Usage
-
-To pull the latest published image from Docker Hub:
-
-```bash
-docker pull materialize/console:latest
-```
-
-You can also specify a version:
-
-```bash
-docker pull materialize/console:v0.1.0
-```
 
 ## Nginx Configuration
 

@@ -44,7 +44,6 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     gdb \
     git \
     gnupg2 \
-    libxml2-16 \
     pigz \
     python3 \
     python3.13-venv \
@@ -146,6 +145,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     libclang-dev \
     libclang-rt-18-dev \
     libpq-dev \
+    libxml2-16 \
     lld \
     llvm \
     make \
@@ -172,7 +172,7 @@ COPY nodesource.asc .
 
 RUN gpg --dearmor < nodesource.asc > /etc/apt/keyrings/nodesource.gpg \
     && rm nodesource.asc \
-    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_25.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends nodejs \
     && apt-get clean \
@@ -399,3 +399,158 @@ ENV HELM_PLUGINS=/usr/local/share/helm/plugins
 ENV CARGO_HOME=/cargo
 RUN mkdir /cargo && chmod 777 /cargo
 VOLUME /cargo
+
+# Stage 3: Build a lightweight CI Builder image for console/playwright jobs.
+FROM ubuntu:noble-20250529 AS ci-builder-console
+
+ARG ARCH_GCC
+ARG ARCH_GO
+
+WORKDIR /workdir
+
+ENV RUST_BACKTRACE=1
+ENV PYTHONUNBUFFERED=1
+ENV MZ_DEV_CI_BUILDER=1
+ENV DOCKER_BUILDKIT=1
+
+ARG XZ_OPT=-T0
+
+RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    dnsmasq \
+    docker.io \
+    eatmydata \
+    gettext-base \
+    git \
+    gnupg2 \
+    jq \
+    libatomic1 \
+    openssh-client \
+    perl \
+    python3 \
+    python3-venv \
+    python-is-python3 \
+    sudo \
+    libasound2t64 \
+    libatk1.0-0t64 \
+    libatk-bridge2.0-0t64 \
+    libatspi2.0-0t64 \
+    libcairo2 \
+    libcups2t64 \
+    libdbus-1-3 \
+    libdrm2 \
+    libgbm1 \
+    libnspr4 \
+    libnss3 \
+    libpango-1.0-0 \
+    libx11-6 \
+    libxcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxkbcommon0 \
+    libxrandr2 \
+    gstreamer1.0-libav \
+    libcairo-gobject2 \
+    libenchant-2-2 \
+    libepoxy0 \
+    libevent-2.1-7t64 \
+    libflite1 \
+    libgdk-pixbuf-2.0-0 \
+    libgles2 \
+    libgstreamer1.0-0 \
+    libgstreamer-gl1.0-0 \
+    libgstreamer-plugins-bad1.0-0 \
+    libgstreamer-plugins-base1.0-0 \
+    libgtk-3-0t64 \
+    libharfbuzz-icu0 \
+    libhyphen0 \
+    libicu74 \
+    libjpeg-turbo8 \
+    liblcms2-2 \
+    libmanette-0.2-0 \
+    libopus0 \
+    libpangocairo-1.0-0 \
+    libsecret-1-0 \
+    libvpx9 \
+    libwebp7 \
+    libwebpdemux2 \
+    libwoff1 \
+    libxml2 \
+    libxslt1.1 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/* \
+    && sed -i 's/^UID_MIN.*/UID_MIN\t500/' /etc/login.defs
+
+RUN curl -fsSL https://github.com/MaterializeInc/autouseradd/releases/download/1.3.0/autouseradd-1.3.0-$ARCH_GO.tar.gz \
+    | tar xz -C / --strip-components 1
+
+RUN mkdir -p /usr/local/lib/docker/cli-plugins \
+    && curl -fsSL https://github.com/docker/compose/releases/download/v5.0.1/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
+    && curl -fsSL https://github.com/docker/buildx/releases/download/v0.30.1/buildx-v0.30.1.linux-$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-buildx \
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
+
+COPY nodesource.asc .
+
+RUN gpg --dearmor < nodesource.asc > /etc/apt/keyrings/nodesource.gpg \
+    && rm nodesource.asc \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/share/doc/nodejs \
+    && npm install -g corepack \
+    && corepack enable
+
+# TODO(def-) Upgrading kind/kubectl seems to cause Cloudtest failures
+RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
+    && chmod +x /usr/local/bin/kind \
+    && if [ $ARCH_GO = amd64 ]; then echo 'c72eda46430f065fb45c5f70e7c957cc9209402ef309294821978677c8fb3284 /usr/local/bin/kind' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo '03d45095dbd9cc1689f179a3e5e5da24b77c2d1b257d7645abf1b4174bebcf2a /usr/local/bin/kind' | sha256sum --check; fi
+
+RUN curl -fsSL https://dl.k8s.io/release/v1.24.3/bin/linux/$ARCH_GO/kubectl > /usr/local/bin/kubectl \
+    && chmod +x /usr/local/bin/kubectl \
+    && if [ $ARCH_GO = amd64 ]; then echo '8a45348bdaf81d46caf1706c8bf95b3f431150554f47d444ffde89e8cdd712c1 /usr/local/bin/kubectl' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo 'bdad4d3063ddb7bfa5ecf17fb8b029d5d81d7d4ea1650e4369aafa13ed97149a /usr/local/bin/kubectl' | sha256sum --check; fi
+
+# Use Helm 3 (not 4) because the cloud repo's bin/kind-create uses relative
+# file paths for vendored charts, which Helm 4 rejects as invalid URLs.
+RUN curl -fsSL https://get.helm.sh/helm-v3.16.2-linux-$ARCH_GO.tar.gz > helm.tar.gz \
+    && if [ $ARCH_GO = amd64 ]; then echo '9318379b847e333460d33d291d4c088156299a26cd93d570a7f5d0c36e50b5bb helm.tar.gz' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo '1888301aeb7d08a03b6d9f4d2b73dcd09b89c41577e80e3455c113629fc657a4 helm.tar.gz' | sha256sum --check; fi \
+    && tar -xf helm.tar.gz -C /usr/local/bin --strip-components=1 linux-$ARCH_GO/helm \
+    && rm helm.tar.gz
+
+# Install just cargo (no rustc) — cloud scripts use it to read crate metadata.
+COPY rust.asc .
+
+ARG RUST_DATE
+ARG RUST_VERSION
+
+RUN gpg --import rust.asc \
+    && rm rust.asc \
+    && echo "trusted-key 85AB96E6FA1BE5FE" >> ~/.gnupg/gpg.conf \
+    && mkdir rust \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-$RUST_VERSION-$ARCH_GCC-unknown-linux-gnu.tar.gz > rust.tar.gz \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-$RUST_VERSION-$ARCH_GCC-unknown-linux-gnu.tar.gz.asc > rust.asc \
+    && gpg --verify rust.asc rust.tar.gz \
+    && tar -xzf rust.tar.gz -C rust --strip-components=1 \
+    && rust/install.sh --components=cargo \
+    && rm -rf rust.asc rust.tar.gz rust
+
+COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
+
+# Remove Ubuntu user causing UID collisions.
+# https://bugs.launchpad.net/cloud-images/+bug/2005129
+RUN userdel -r ubuntu
+
+# Allow passwordless sudo for the CI user (created at runtime by autouseradd).
+RUN echo "ALL ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ci \
+    && chmod 0440 /etc/sudoers.d/ci
+
+ENTRYPOINT ["autouseradd", "--user", "materialize"]

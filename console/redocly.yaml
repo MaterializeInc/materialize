@@ -9,14 +9,14 @@
 
 apis:
   global:
-    root: ../cloud/doc/api/global-api.yml
+    root: ../../cloud/doc/api/global-api.yml
     x-openapi-ts:
       output: ./src/api/schemas/global-api.ts
   internal:
-    root: ../cloud/doc/api/internal-api.yml
+    root: ../../cloud/doc/api/internal-api.yml
     x-openapi-ts:
       output: ./src/api/schemas/internal-api.ts
   region:
-    root: ../cloud/doc/api/region-api.yml
+    root: ../../cloud/doc/api/region-api.yml
     x-openapi-ts:
       output: ./src/api/schemas/region-api.ts

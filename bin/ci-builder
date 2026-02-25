@@ -25,7 +25,7 @@ cd "$(dirname "$0")/.."
 
 if [[ $# -lt 2 ]]
 then
-    echo "usage: $0 <command> <stable|nightly|min> [<args>...]
+    echo "usage: $0 <command> <stable|nightly|min|console> [<args>...]
 
 Manages the ci-builder Docker image, which contains the dependencies required
 to build, test, and deploy the code in this repository.
@@ -58,6 +58,10 @@ case "$flavor" in
         docker_target=ci-builder-full
         rust_version=nightly
         rust_date=/$NIGHTLY_RUST_DATE
+        ;;
+    console)
+        docker_target=ci-builder-console
+        rust_version=$(sed -n 's/rust-version = "\(.*\)"/\1/p' Cargo.toml)
         ;;
     *)
         printf "unknown CI builder flavor %q\n" "$flavor"
@@ -310,6 +314,16 @@ case "$cmd" in
                 --env DOCKERHUB_ACCESS_TOKEN
                 # For configuring the metadata store
                 --env EXTERNAL_METADATA_STORE
+                # For console
+                --env CONSOLE_E2E_TEST_STAGING_PASSWORD
+                --env CONSOLE_E2E_TEST_PRODUCTION_PASSWORD
+                --env E2E_TEST_STAGING_FRONTEGG_CLIENT_ID
+                --env E2E_TEST_STAGING_ORB_API_KEY
+                --env E2E_TEST_LICENSE_KEY
+                --env CLOUD_DEPLOY_KEY
+                --env VERCEL_TOKEN
+                --env VERCEL_ORG_ID
+                --env VERCEL_PROJECT_ID
             )
             for env in $(printenv | grep -E '^(BUILDKITE|MZCOMPOSE|CI)' | sed 's/=.*//'); do
                 args+=(--env "$env")

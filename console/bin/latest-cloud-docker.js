@@ -22,7 +22,9 @@ async function getCommitShas() {
 }
 
 async function checkDockerTag(tag) {
-  const encodedToken = Buffer.from(process.env.GITHUB_TOKEN).toString("base64");
+  const encodedToken = Buffer.from(process.env.GITHUB_GHCR_TOKEN).toString(
+    "base64",
+  );
   const response = await fetch(
     `https://ghcr.io/v2/materializeinc/cloud/manifests/${tag}`,
     {

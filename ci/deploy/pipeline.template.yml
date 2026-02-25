@@ -47,3 +47,13 @@ steps:
       queue: linux-x86_64-small
     concurrency: 1
     concurrency_group: deploy/npm
+
+  - id: deploy-console
+    label: ":rocket: :vercel: Console"
+    command: bin/ci-builder run stable ci/deploy/console.sh
+    branches: main
+    timeout_in_minutes: 15
+    agents:
+      queue: linux-x86_64-small
+    concurrency: 1
+    concurrency_group: deploy/console
