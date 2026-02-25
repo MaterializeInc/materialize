@@ -110,7 +110,7 @@ impl Demand {
             // the relation in the corresponding branch of the match statement, since
             // it is already borrowed mutably.
             let relation_type = if matches!(relation, MirRelationExpr::Map { .. }) {
-                Some(relation.typ())
+                Some(relation.repr_typ())
             } else {
                 None
             };
@@ -200,7 +200,7 @@ impl Demand {
                                 let typ = relation_type.column_types[arity + index].clone();
                                 *scalar = MirScalarExpr::Literal(
                                     Ok(Row::pack_slice(&[Datum::Dummy])),
-                                    mz_repr::ReprColumnType::from(&typ),
+                                    typ,
                                 );
                             }
                         }
@@ -305,13 +305,13 @@ impl Demand {
                     }
 
                     // Replace un-demanded aggregations with dummies.
-                    let input_type = input.typ();
+                    let input_type = input.repr_typ();
                     for index in (0..aggregates.len()).rev() {
                         if !columns.contains(&(group_key.len() + index)) {
-                            let typ = aggregates[index].typ(&input_type.column_types);
+                            let typ = aggregates[index].repr_typ(&input_type.column_types);
                             aggregates[index] = AggregateExpr {
                                 func: AggregateFunc::Dummy,
-                                expr: MirScalarExpr::literal_ok(Datum::Dummy, mz_repr::ReprScalarType::from(&typ.scalar_type)),
+                                expr: MirScalarExpr::literal_ok(Datum::Dummy, typ.scalar_type),
                                 distinct: false,
                             };
                         }

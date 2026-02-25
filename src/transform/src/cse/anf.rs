@@ -288,7 +288,7 @@ impl Bindings {
             };
 
             // This should be fast, as it depends directly on only `Get` expressions.
-            let typ = relation.typ();
+            let typ = relation.repr_typ();
             // We want to maintain the invariant that `relation` ends up as a local `Get`.
             if let MirRelationExpr::Get {
                 id: Id::Local(_), ..
@@ -303,7 +303,7 @@ impl Bindings {
                     .or_insert_with(|| id_gen.allocate_id());
                 *relation = MirRelationExpr::Get {
                     id: Id::Local(LocalId::new(*id)),
-                    typ: mz_repr::ReprRelationType::from(&typ),
+                    typ,
                     access_strategy: AccessStrategy::UnknownOrLocal,
                 }
             }

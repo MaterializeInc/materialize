@@ -149,7 +149,7 @@ impl ProjectionPushdown {
                     let desired_value_projection =
                         desired_value_projection.into_iter().collect::<Vec<_>>();
                     self.action(value, &desired_value_projection, gets)?;
-                    let new_type = value.typ();
+                    let new_type = value.repr_typ();
                     self.update_projection_around_get(
                         body,
                         &BTreeMap::from_iter(std::iter::once((
@@ -198,7 +198,7 @@ impl ProjectionPushdown {
                         // If this is a non-recursive ID, add an entry to the
                         // updates map for subsequent values and the body.
                         if !rec_ids.contains(id) {
-                            let new_type = value.typ();
+                            let new_type = value.repr_typ();
                             let new_proj = {
                                 let columns = gets.remove(&Id::Local(*id)).unwrap();
                                 columns.iter().cloned().collect::<Vec<_>>()
@@ -485,7 +485,7 @@ impl ProjectionPushdown {
     pub fn update_projection_around_get(
         &self,
         relation: &mut MirRelationExpr,
-        applied_projections: &BTreeMap<Id, (Vec<usize>, mz_repr::SqlRelationType)>,
+        applied_projections: &BTreeMap<Id, (Vec<usize>, mz_repr::ReprRelationType)>,
     ) {
         relation.visit_pre_mut(|e| {
             if let MirRelationExpr::Project { input, outputs } = e {
@@ -496,7 +496,7 @@ impl ProjectionPushdown {
                 } = &mut **input
                 {
                     if let Some((new_projection, new_type)) = applied_projections.get(inner_id) {
-                        *typ = mz_repr::ReprRelationType::from(new_type);
+                        *typ = new_type.clone();
                         reverse_permute_columns(outputs.iter_mut(), new_projection.iter());
                         if outputs.len() == new_projection.len()
                             && outputs.iter().enumerate().all(|(i, o)| i == *o)

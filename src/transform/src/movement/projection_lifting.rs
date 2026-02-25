@@ -67,7 +67,7 @@ impl ProjectionLifting {
         &self,
         relation: &mut MirRelationExpr,
         // Map from names to new get type and projection required at use.
-        gets: &mut BTreeMap<Id, (mz_repr::SqlRelationType, Vec<usize>)>,
+        gets: &mut BTreeMap<Id, (mz_repr::ReprRelationType, Vec<usize>)>,
     ) -> Result<(), crate::TransformError> {
         self.checked_recur(|_| {
             match relation {
@@ -80,7 +80,7 @@ impl ProjectionLifting {
                     if let Some((typ, columns)) = gets.get(id) {
                         *relation = MirRelationExpr::Get {
                             id: *id,
-                            typ: mz_repr::ReprRelationType::from(typ),
+                            typ: typ.clone(),
                             access_strategy: AccessStrategy::UnknownOrLocal, // (we are not copying it over)
                         }
                         .project(columns.clone());
@@ -91,7 +91,7 @@ impl ProjectionLifting {
                     self.action(value, gets)?;
                     let id = Id::Local(*id);
                     if let MirRelationExpr::Project { input, outputs } = &mut **value {
-                        let typ = input.typ();
+                        let typ = input.repr_typ();
                         let prior = gets.insert(id, (typ, outputs.clone()));
                         assert!(!prior.is_some());
                         **value = input.take_dangerous();
@@ -114,7 +114,7 @@ impl ProjectionLifting {
                         if !recursive_ids.contains(local_id) {
                             if let MirRelationExpr::Project { input, outputs } = value {
                                 let id = Id::Local(*local_id);
-                                let typ = input.typ();
+                                let typ = input.repr_typ();
                                 let prior = gets.insert(id, (typ, outputs.clone()));
                                 assert!(!prior.is_some());
                                 *value = input.take_dangerous();
@@ -344,13 +344,13 @@ impl ProjectionLifting {
                         outputs: base_outputs,
                     } = &mut **base
                     {
-                        let base_typ = base_input.typ();
+                        let base_typ = base_input.repr_typ();
 
                         let mut can_lift = true;
                         for input in &mut *inputs {
                             match input {
                                 MirRelationExpr::Project { input, outputs }
-                                    if input.typ() == base_typ && outputs == base_outputs => {}
+                                    if input.repr_typ() == base_typ && outputs == base_outputs => {}
                                 _ => {
                                     can_lift = false;
                                     break;
