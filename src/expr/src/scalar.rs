@@ -2012,21 +2012,14 @@ impl MirScalarExpr {
         match self {
             MirScalarExpr::Column(i, _name) => column_types[*i].clone(),
             MirScalarExpr::Literal(_, typ) => typ.clone(),
-            MirScalarExpr::CallUnmaterializable(func) => {
-                ReprColumnType::from(&func.output_sql_type())
-            }
+            MirScalarExpr::CallUnmaterializable(func) => func.output_type(),
             MirScalarExpr::CallUnary { expr, func } => func.output_type(expr.typ(column_types)),
             MirScalarExpr::CallBinary { expr1, expr2, func } => {
                 func.output_type(&[expr1.typ(column_types), expr2.typ(column_types)])
             }
-            MirScalarExpr::CallVariadic { exprs, func } => ReprColumnType::from(
-                &func.output_sql_type(
-                    exprs
-                        .iter()
-                        .map(|e| SqlColumnType::from_repr(&e.typ(column_types)))
-                        .collect(),
-                ),
-            ),
+            MirScalarExpr::CallVariadic { exprs, func } => {
+                func.output_type(exprs.iter().map(|e| e.typ(column_types)).collect())
+            }
             MirScalarExpr::If { cond: _, then, els } => {
                 let then_type = then.typ(column_types);
                 let else_type = els.typ(column_types);

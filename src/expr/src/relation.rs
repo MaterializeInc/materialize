@@ -1519,16 +1519,16 @@ impl MirRelationExpr {
     /// the correct type.
     pub fn take_safely(&mut self, typ: Option<ReprRelationType>) -> MirRelationExpr {
         if let Some(typ) = &typ {
-            let self_typ = self.sql_typ();
+            let self_typ = self.typ();
             soft_assert_no_log!(
                 self_typ
                     .column_types
                     .iter()
                     .zip_eq(typ.column_types.iter())
-                    .all(|(t1, t2)| ReprScalarType::from(&t1.scalar_type) == t2.scalar_type)
+                    .all(|(t1, t2)| t1.scalar_type == t2.scalar_type)
             );
         }
-        let mut typ = typ.unwrap_or_else(|| ReprRelationType::from(&self.sql_typ()));
+        let mut typ = typ.unwrap_or_else(|| self.typ());
         typ.keys = vec![vec![]];
         for ct in typ.column_types.iter_mut() {
             ct.nullable = false;
