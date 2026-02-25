@@ -104,7 +104,7 @@ impl UnionBranchCancellation {
             // Compare branches if there is at least a negated branch
             if std::iter::once(&base_sign).chain(&input_signs).any(|x| *x) {
                 if let Some(j) = matching_negation(&*base, base_sign, inputs, &input_signs, 0) {
-                    let relation_typ = base.repr_typ();
+                    let relation_typ = base.typ();
                     **base = MirRelationExpr::Constant {
                         rows: Ok(vec![]),
                         typ: relation_typ.clone(),
@@ -119,7 +119,7 @@ impl UnionBranchCancellation {
                     if let Some(j) =
                         matching_negation(&inputs[i], input_signs[i], inputs, &input_signs, i + 1)
                     {
-                        let relation_typ = inputs[i].repr_typ();
+                        let relation_typ = inputs[i].typ();
                         inputs[i] = MirRelationExpr::Constant {
                             rows: Ok(vec![]),
                             typ: relation_typ.clone(),

@@ -32,10 +32,10 @@ use mz_repr::{
 ///
 /// We use a `RefCell` to ensure that contexts are shared by multiple typechecker passes.
 /// Shared contexts help catch consistency issues.
-pub type SharedContext = Arc<Mutex<Context>>;
+pub type SharedTypecheckingContext = Arc<Mutex<Context>>;
 
 /// Generates an empty context
-pub fn empty_context() -> SharedContext {
+pub fn empty_typechecking_context() -> SharedTypecheckingContext {
     Arc::new(Mutex::new(BTreeMap::new()))
 }
 
@@ -820,7 +820,7 @@ fn row_difference_with_column_types<'a>(
 #[derive(Debug)]
 pub struct Typecheck {
     /// The known types of the queries so far
-    ctx: SharedContext,
+    ctx: SharedTypecheckingContext,
     /// Whether or not this is the first run of the transform
     disallow_new_globals: bool,
     /// Whether or not to be strict about join equivalences having the same nullability
@@ -839,7 +839,7 @@ impl CheckedRecursion for Typecheck {
 
 impl Typecheck {
     /// Creates a typechecking consistency checking pass using a given shared context
-    pub fn new(ctx: SharedContext) -> Self {
+    pub fn new(ctx: SharedTypecheckingContext) -> Self {
         Self {
             ctx,
             disallow_new_globals: false,
@@ -1708,7 +1708,7 @@ where
 
     let mut it = cols.iter().peekable();
     while let Some(col) = it.next() {
-        s.push_str(&humanizer.humanize_column_type_repr(col, false));
+        s.push_str(&humanizer.humanize_column_type(col, false));
 
         if it.peek().is_some() {
             s.push_str(", ");
@@ -1762,14 +1762,14 @@ impl ReprColumnTypeDifference {
 
         match self {
             NotSubtype { sub, sup } => {
-                let sub = h.humanize_scalar_type_repr(sub, false);
-                let sup = h.humanize_scalar_type_repr(sup, false);
+                let sub = h.humanize_scalar_type(sub, false);
+                let sup = h.humanize_scalar_type(sup, false);
 
                 writeln!(f, "{sub} is a not a subtype of {sup}")
             }
             Nullability { sub, sup } => {
-                let sub = h.humanize_column_type_repr(sub, false);
-                let sup = h.humanize_column_type_repr(sup, false);
+                let sub = h.humanize_column_type(sub, false);
+                let sup = h.humanize_column_type(sup, false);
 
                 writeln!(f, "{sub} is nullable but {sup} is not")
             }
@@ -1814,7 +1814,7 @@ impl DatumTypeDifference {
 
         match self {
             DatumTypeDifference::Null { expected } => {
-                let expected = h.humanize_scalar_type_repr(expected, false);
+                let expected = h.humanize_scalar_type(expected, false);
                 writeln!(
                     f,
                     "unexpected null, expected representation type {expected}"
@@ -1824,7 +1824,7 @@ impl DatumTypeDifference {
                 got_debug,
                 expected,
             } => {
-                let expected = h.humanize_scalar_type_repr(expected, false);
+                let expected = h.humanize_scalar_type(expected, false);
                 // NB `got_debug` will be redacted as appropriate
                 writeln!(
                     f,
@@ -1938,8 +1938,8 @@ impl<'a> TypeError<'a> {
                 diffs,
                 message,
             } => {
-                let got = humanizer.humanize_column_type_repr(got, false);
-                let expected = humanizer.humanize_column_type_repr(expected, false);
+                let got = humanizer.humanize_column_type(got, false);
+                let expected = humanizer.humanize_column_type(expected, false);
                 writeln!(
                     f,
                     "mismatched column types: {message}\n      got {got}\nexpected {expected}"

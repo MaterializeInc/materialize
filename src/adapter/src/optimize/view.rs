@@ -26,9 +26,7 @@ use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_transform::TransformCtx;
 use mz_transform::dataflow::DataflowMetainfo;
-use mz_transform::reprtypecheck::{
-    SharedContext as ReprTypecheckContext, empty_context as empty_repr_context,
-};
+use mz_transform::typecheck::{SharedTypecheckingContext, empty_typechecking_context};
 
 use crate::optimize::dataflows::{ExprPrep, ExprPrepNoop};
 use crate::optimize::{
@@ -38,7 +36,7 @@ use crate::optimize::{
 
 pub struct Optimizer<S> {
     /// A representation typechecking context to use throughout the optimizer pipeline.
-    repr_typecheck_ctx: ReprTypecheckContext,
+    typecheck_ctx: SharedTypecheckingContext,
     /// Optimizer config.
     config: OptimizerConfig,
     /// Optimizer metrics.
@@ -58,7 +56,7 @@ impl Optimizer<ExprPrepNoop> {
     /// preparation. Additionally, this instance calls constant folding with a size limit.
     pub fn new(config: OptimizerConfig, metrics: Option<OptimizerMetrics>) -> Self {
         Self {
-            repr_typecheck_ctx: empty_repr_context(),
+            typecheck_ctx: empty_typechecking_context(),
             config,
             metrics,
             expr_prep_style: ExprPrepNoop,
@@ -77,7 +75,7 @@ impl<S> Optimizer<S> {
         expr_prep_style: S,
     ) -> Optimizer<S> {
         Self {
-            repr_typecheck_ctx: empty_repr_context(),
+            typecheck_ctx: empty_typechecking_context(),
             config,
             metrics,
             expr_prep_style,
@@ -101,7 +99,7 @@ impl<S: ExprPrep> Optimize<HirRelationExpr> for Optimizer<S> {
         let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx = TransformCtx::local(
             &self.config.features,
-            &self.repr_typecheck_ctx,
+            &self.typecheck_ctx,
             &mut df_meta,
             self.metrics.as_mut(),
             None,

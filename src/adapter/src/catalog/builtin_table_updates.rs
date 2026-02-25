@@ -1750,7 +1750,7 @@ impl CatalogState {
             let on_desc = on_entry
                 .relation_desc()
                 .expect("can only create indexes on items with a valid description");
-            let nullable = key.typ(&on_desc.typ().column_types).nullable;
+            let nullable = key.sql_typ(&on_desc.typ().column_types).nullable;
             let seq_in_index = u64::cast_from(i + 1);
             let key_sql = key_sqls
                 .get(i)

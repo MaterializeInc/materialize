@@ -38,9 +38,9 @@
 //!     .filter(vec![predicate2.clone()]);
 //!
 //! let features = OptimizerFeatures::default();
-//! let repr_typecheck_ctx = reprtypecheck::empty_context();
+//! let typecheck_ctx = reprtypecheck::empty_context();
 //! let mut df_meta = DataflowMetainfo::default();
-//! let mut transform_ctx = TransformCtx::local(&features, &repr_typecheck_ctx, &mut df_meta, None, None);
+//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None, None);
 //!
 //! // Filter.transform() will deduplicate any predicates
 //! Filter.transform(&mut expr, &mut transform_ctx);
@@ -93,10 +93,7 @@ impl Filter {
                 **input = inner.take_dangerous();
             }
 
-            mz_expr::canonicalize::canonicalize_predicates(
-                predicates,
-                &input.repr_typ().column_types,
-            );
+            mz_expr::canonicalize::canonicalize_predicates(predicates, &input.typ().column_types);
 
             // remove the Filter stage if empty.
             if predicates.is_empty() {

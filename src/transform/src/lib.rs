@@ -55,9 +55,9 @@ use crate::reduce_elision::ReduceElision;
 use crate::reduce_reduction::ReduceReduction;
 use crate::reduction_pushdown::ReductionPushdown;
 use crate::redundant_join::RedundantJoin;
-use crate::reprtypecheck::{SharedContext as ReprSharedContext, Typecheck as ReprTypecheck};
 use crate::semijoin_idempotence::SemijoinIdempotence;
 use crate::threshold_elision::ThresholdElision;
+use crate::typecheck::{SharedTypecheckingContext, Typecheck};
 use crate::union_cancel::UnionBranchCancellation;
 use crate::will_distinct::WillDistinct;
 
@@ -90,9 +90,9 @@ pub mod reduce_elision;
 pub mod reduce_reduction;
 pub mod reduction_pushdown;
 pub mod redundant_join;
-pub mod reprtypecheck;
 pub mod semijoin_idempotence;
 pub mod threshold_elision;
+pub mod typecheck;
 pub mod union_cancel;
 pub mod will_distinct;
 
@@ -123,7 +123,7 @@ pub struct TransformCtx<'a> {
     /// Features passed to the enclosing `Optimizer`.
     pub features: &'a OptimizerFeatures,
     /// Representation typechecking context.
-    pub repr_typecheck_ctx: &'a ReprSharedContext,
+    pub typechecking_ctx: &'a SharedTypecheckingContext,
     /// Transforms can use this field to communicate information outside the result plans.
     pub df_meta: &'a mut DataflowMetainfo,
     /// Metrics for the optimizer.
@@ -143,7 +143,7 @@ impl<'a> TransformCtx<'a> {
     /// [`MirRelationExpr`].
     pub fn local(
         features: &'a OptimizerFeatures,
-        repr_typecheck_ctx: &'a ReprSharedContext,
+        typecheck_ctx: &'a SharedTypecheckingContext,
         df_meta: &'a mut DataflowMetainfo,
         metrics: Option<&'a mut OptimizerMetrics>,
         global_id: Option<GlobalId>,
@@ -153,7 +153,7 @@ impl<'a> TransformCtx<'a> {
             stats: &EmptyStatisticsOracle,
             global_id,
             features,
-            repr_typecheck_ctx,
+            typechecking_ctx: typecheck_ctx,
             df_meta,
             metrics,
             last_hash: Default::default(),
@@ -168,7 +168,7 @@ impl<'a> TransformCtx<'a> {
         indexes: &'a dyn IndexOracle,
         stats: &'a dyn StatisticsOracle,
         features: &'a OptimizerFeatures,
-        repr_typecheck_ctx: &'a ReprSharedContext,
+        typecheck_ctx: &'a SharedTypecheckingContext,
         df_meta: &'a mut DataflowMetainfo,
         metrics: Option<&'a mut OptimizerMetrics>,
     ) -> Self {
@@ -178,14 +178,14 @@ impl<'a> TransformCtx<'a> {
             global_id: None,
             features,
             df_meta,
-            repr_typecheck_ctx,
+            typechecking_ctx: typecheck_ctx,
             metrics,
             last_hash: Default::default(),
         }
     }
 
-    fn repr_typecheck(&self) -> ReprSharedContext {
-        Arc::clone(self.repr_typecheck_ctx)
+    fn typechecking_context(&self) -> SharedTypecheckingContext {
+        Arc::clone(self.typechecking_ctx)
     }
 
     /// Lets self know the id of the object that is being optimized.
@@ -736,7 +736,7 @@ impl Optimizer {
     pub fn logical_optimizer(ctx: &mut TransformCtx) -> Self {
         let transforms: Vec<Box<dyn Transform>> = transforms![
             // 0. `Transform`s that don't actually change the plan.
-            Box::new(ReprTypecheck::new(ctx.repr_typecheck()).strict_join_equivalences()),
+            Box::new(Typecheck::new(ctx.typechecking_context()).strict_join_equivalences()),
             Box::new(CollectNotices),
             // 1. Structure-agnostic cleanup
             Box::new(normalize()),
@@ -786,7 +786,7 @@ impl Optimizer {
                 ],
             }),
             Box::new(
-                ReprTypecheck::new(ctx.repr_typecheck())
+                Typecheck::new(ctx.typechecking_context())
                     .disallow_new_globals()
                     .strict_join_equivalences()
             ),
@@ -807,7 +807,7 @@ impl Optimizer {
         // Implementation transformations
         let transforms: Vec<Box<dyn Transform>> = transforms![
             Box::new(
-                ReprTypecheck::new(ctx.repr_typecheck())
+                Typecheck::new(ctx.typechecking_context())
                     .disallow_new_globals()
                     .strict_join_equivalences(),
             ),
@@ -876,7 +876,7 @@ impl Optimizer {
             //   https://github.com/MaterializeInc/database-issues/issues/6371
             Box::new(fold_constants_fixpoint(true)),
             Box::new(
-                ReprTypecheck::new(ctx.repr_typecheck())
+                Typecheck::new(ctx.typechecking_context())
                     .disallow_new_globals()
                     .disallow_dummy()
                     .strict_join_equivalences(),
@@ -896,7 +896,7 @@ impl Optimizer {
     /// allow new globals (or it will crash when it encounters them).
     pub fn logical_cleanup_pass(ctx: &mut TransformCtx, allow_new_globals: bool) -> Self {
         let mut repr_typechecker =
-            ReprTypecheck::new(ctx.repr_typecheck()).strict_join_equivalences();
+            Typecheck::new(ctx.typechecking_context()).strict_join_equivalences();
         if !allow_new_globals {
             repr_typechecker = repr_typechecker.disallow_new_globals();
         }
@@ -930,7 +930,7 @@ impl Optimizer {
                 ],
             }),
             Box::new(
-                ReprTypecheck::new(ctx.repr_typecheck())
+                Typecheck::new(ctx.typechecking_context())
                     .disallow_new_globals()
                     .strict_join_equivalences()
             ),

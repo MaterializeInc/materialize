@@ -78,7 +78,7 @@ pub(crate) fn attempt_left_join_magic(
     let left = left
         .clone()
         .applied_to(id_gen, get_outer.clone(), col_map, cte_map, context)?;
-    let full_left_typ = left.typ();
+    let full_left_typ = left.sql_typ();
     let lt = full_left_typ
         .column_types
         .iter()
@@ -119,7 +119,7 @@ pub(crate) fn attempt_left_join_magic(
             .clone()
             .map(vec![HirScalarExpr::literal_true()]) // add a bit to mark "real" rows.
             .applied_to(id_gen, get_outer.clone(), &right_col_map, cte_map, context)?;
-        let full_right_typ = right.typ();
+        let full_right_typ = right.sql_typ();
         let rt = full_right_typ
             .column_types
             .iter()
@@ -223,7 +223,7 @@ pub(crate) fn attempt_left_join_magic(
             // threshold to find those present in left but missing in right.
             let get_left = &bindings[bound - 1].1;
             // Set up a type for the all-nulls row we need to introduce.
-            let mut left_typ = get_left.typ();
+            let mut left_typ = get_left.sql_typ();
             for col in left_typ.column_types.iter_mut() {
                 col.nullable = true;
             }

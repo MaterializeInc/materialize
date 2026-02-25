@@ -328,8 +328,8 @@ impl MirRelationExpr {
     /// This is the SQL-type parallel of [`Self::repr_typ`]; it is merely
     /// a wrapper around it, returning a [`SqlRelationType`] instead of
     /// a [`ReprRelationType`].
-    pub fn typ(&self) -> SqlRelationType {
-        let repr_typ = self.repr_typ();
+    pub fn sql_typ(&self) -> SqlRelationType {
+        let repr_typ = self.typ();
         SqlRelationType::from_repr(&repr_typ)
     }
 
@@ -343,7 +343,7 @@ impl MirRelationExpr {
     /// The relation type is computed incrementally with a recursive post-order
     /// traversal, that accumulates the input types for the relations yet to be
     /// visited in `type_stack`.
-    pub fn repr_typ(&self) -> ReprRelationType {
+    pub fn typ(&self) -> ReprRelationType {
         let mut type_stack = Vec::new();
         #[allow(deprecated)]
         self.visit_pre_post_nolimit(
@@ -372,7 +372,7 @@ impl MirRelationExpr {
                 }
                 let num_inputs = e.num_inputs();
                 let relation_type =
-                    e.repr_typ_with_input_types(&type_stack[type_stack.len() - num_inputs..]);
+                    e.typ_with_input_types(&type_stack[type_stack.len() - num_inputs..]);
                 type_stack.truncate(type_stack.len() - num_inputs);
                 type_stack.push(relation_type);
             },
@@ -382,11 +382,8 @@ impl MirRelationExpr {
     }
 
     /// Reports the repr schema of the relation given the repr schema of the input relations.
-    ///
-    /// This is the repr-type parallel of [`Self::typ_with_input_types`].
-    pub fn repr_typ_with_input_types(&self, input_types: &[ReprRelationType]) -> ReprRelationType {
-        let column_types =
-            self.repr_col_with_input_repr_cols(input_types.iter().map(|i| &i.column_types));
+    pub fn typ_with_input_types(&self, input_types: &[ReprRelationType]) -> ReprRelationType {
+        let column_types = self.col_with_input_cols(input_types.iter().map(|i| &i.column_types));
         let unique_keys = self.keys_with_input_keys(
             input_types.iter().map(|i| i.arity()),
             input_types.iter().map(|i| &i.keys),
@@ -397,13 +394,13 @@ impl MirRelationExpr {
     /// Reports the column types of the relation given the column types of the
     /// input relations.
     ///
-    /// This method delegates to `try_repr_col_with_input_repr_cols`, panicking if an `Err`
+    /// This method delegates to `try_col_with_input_cols`, panicking if an `Err`
     /// variant is returned.
-    pub fn repr_col_with_input_repr_cols<'a, I>(&self, input_types: I) -> Vec<ReprColumnType>
+    pub fn col_with_input_cols<'a, I>(&self, input_types: I) -> Vec<ReprColumnType>
     where
         I: Iterator<Item = &'a Vec<ReprColumnType>>,
     {
-        match self.try_repr_col_with_input_repr_cols(input_types) {
+        match self.try_col_with_input_cols(input_types) {
             Ok(col_types) => col_types,
             Err(err) => panic!("{err}"),
         }
@@ -420,7 +417,7 @@ impl MirRelationExpr {
     ///
     /// It is meant to be used during post-order traversals to compute column types
     /// incrementally.
-    pub fn try_repr_col_with_input_repr_cols<'a, I>(
+    pub fn try_col_with_input_cols<'a, I>(
         &self,
         mut input_types: I,
     ) -> Result<Vec<ReprColumnType>, String>
@@ -459,7 +456,7 @@ impl MirRelationExpr {
             Map { scalars, .. } => {
                 let mut result = input_types.next().unwrap().clone();
                 for scalar in scalars.iter() {
-                    result.push(scalar.repr_typ(&result))
+                    result.push(scalar.typ(&result))
                 }
                 result
             }
@@ -511,8 +508,8 @@ impl MirRelationExpr {
                 let input = input_types.next().unwrap();
                 group_key
                     .iter()
-                    .map(|e| e.repr_typ(input))
-                    .chain(aggregates.iter().map(|agg| agg.repr_typ(input)))
+                    .map(|e| e.typ(input))
+                    .chain(aggregates.iter().map(|agg| agg.typ(input)))
                     .collect()
             }
             TopK { .. } | Negate { .. } | Threshold { .. } | ArrangeBy { .. } => {
@@ -1513,7 +1510,7 @@ impl MirRelationExpr {
     /// the correct type.
     pub fn take_safely(&mut self, typ: Option<ReprRelationType>) -> MirRelationExpr {
         if let Some(typ) = &typ {
-            let self_typ = self.typ();
+            let self_typ = self.sql_typ();
             soft_assert_no_log!(
                 self_typ
                     .column_types
@@ -1522,7 +1519,7 @@ impl MirRelationExpr {
                     .all(|(t1, t2)| ReprScalarType::from(&t1.scalar_type) == t2.scalar_type)
             );
         }
-        let mut typ = typ.unwrap_or_else(|| ReprRelationType::from(&self.typ()));
+        let mut typ = typ.unwrap_or_else(|| ReprRelationType::from(&self.sql_typ()));
         typ.keys = vec![vec![]];
         for ct in typ.column_types.iter_mut() {
             ct.nullable = false;
@@ -1539,17 +1536,8 @@ impl MirRelationExpr {
     /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with the given scalar
     /// types. Nullability is ignored in the given `SqlColumnType`s, and instead we set the best
     /// possible nullability, since we are making an empty collection.
-    pub fn take_safely_with_col_types(&mut self, typ: Vec<SqlColumnType>) -> MirRelationExpr {
+    pub fn take_safely_with_sql_col_types(&mut self, typ: Vec<SqlColumnType>) -> MirRelationExpr {
         self.take_safely(Some(ReprRelationType::from(&SqlRelationType::new(typ))))
-    }
-
-    /// Like [`Self::take_safely`], but accepts a [`ReprRelationType`].
-    ///
-    /// This is the preferred entry point for optimizer transforms, where repr
-    /// types are the native currency. Internally converts to [`SqlRelationType`]
-    /// and delegates to [`Self::take_safely`].
-    pub fn take_safely_repr(&mut self, typ: Option<ReprRelationType>) -> MirRelationExpr {
-        self.take_safely(typ)
     }
 
     /// Like [`Self::take_safely_with_col_types`], but accepts `Vec<ReprColumnType>`.
@@ -1557,8 +1545,8 @@ impl MirRelationExpr {
     /// This is the preferred entry point for optimizer transforms, where repr
     /// types are the native currency. Internally converts to [`SqlColumnType`]
     /// and delegates to [`Self::take_safely_with_col_types`].
-    pub fn take_safely_with_repr_col_types(&mut self, typ: Vec<ReprColumnType>) -> MirRelationExpr {
-        self.take_safely_with_col_types(typ.iter().map(SqlColumnType::from_repr).collect())
+    pub fn take_safely_with_col_types(&mut self, typ: Vec<ReprColumnType>) -> MirRelationExpr {
+        self.take_safely(Some(ReprRelationType::new(typ)))
     }
 
     /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with an **incorrect** type.
@@ -1597,7 +1585,7 @@ impl MirRelationExpr {
             let id = LocalId::new(id_gen.allocate_id());
             let get = MirRelationExpr::Get {
                 id: Id::Local(id),
-                typ: self.repr_typ(),
+                typ: self.typ(),
                 access_strategy: AccessStrategy::UnknownOrLocal,
             };
             let body = (body)(id_gen, get)?;
@@ -2472,16 +2460,16 @@ pub struct AggregateExpr {
 
 impl AggregateExpr {
     /// Computes the type of this `AggregateExpr`.
-    pub fn typ(&self, column_types: &[SqlColumnType]) -> SqlColumnType {
-        self.func.output_type(self.expr.typ(column_types))
+    pub fn sql_typ(&self, column_types: &[SqlColumnType]) -> SqlColumnType {
+        self.func.output_type(self.expr.sql_typ(column_types))
     }
 
     /// Computes the type of this `AggregateExpr`.
-    pub fn repr_typ(&self, column_types: &[ReprColumnType]) -> ReprColumnType {
+    pub fn typ(&self, column_types: &[ReprColumnType]) -> ReprColumnType {
         ReprColumnType::from(
             &self
                 .func
-                .output_type(SqlColumnType::from_repr(&self.expr.repr_typ(column_types))),
+                .output_type(SqlColumnType::from_repr(&self.expr.typ(column_types))),
         )
     }
 
@@ -2653,7 +2641,7 @@ impl AggregateExpr {
 
                 // Get the overall return type
                 let return_type_with_orig_row = self
-                    .typ(&sql_input_type)
+                    .sql_typ(&sql_input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
@@ -2698,7 +2686,7 @@ impl AggregateExpr {
 
                 // Get the overall return type
                 let return_type_with_orig_row = self
-                    .typ(&sql_input_type)
+                    .sql_typ(&sql_input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
@@ -2745,7 +2733,7 @@ impl AggregateExpr {
 
                 // Get the overall return type
                 let return_type_with_orig_row = self
-                    .typ(&sql_input_type)
+                    .sql_typ(&sql_input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
@@ -2799,7 +2787,7 @@ impl AggregateExpr {
 
                 // Get the overall return type
                 let return_type = self
-                    .typ(&sql_input_type)
+                    .sql_typ(&sql_input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
@@ -2858,7 +2846,7 @@ impl AggregateExpr {
                 let all_args = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
 
                 let return_type_with_orig_row = self
-                    .typ(&sql_input_type)
+                    .sql_typ(&sql_input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
@@ -2933,7 +2921,7 @@ impl AggregateExpr {
                     tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
 
                 let return_type_with_orig_row = self
-                    .typ(&sql_input_type)
+                    .sql_typ(&sql_input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
@@ -3083,7 +3071,7 @@ impl AggregateExpr {
         MirScalarExpr::call_variadic(
             ListCreate {
                 elem_type: self
-                    .typ(&sql_input_type)
+                    .sql_typ(&sql_input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone(),

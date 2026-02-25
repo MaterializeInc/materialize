@@ -248,7 +248,7 @@ pub fn enforce_linear_chains(expr: &mut MirRelationExpr) -> Result<(), ExplainEr
                     value: Box::new(value),
                     body: Box::new(Get {
                         id: Id::Local(id.clone()),
-                        typ: input.repr_typ(),
+                        typ: input.typ(),
                         access_strategy: AccessStrategy::UnknownOrLocal,
                     }),
                 };

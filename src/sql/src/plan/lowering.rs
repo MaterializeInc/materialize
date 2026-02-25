@@ -378,7 +378,7 @@ impl HirRelationExpr {
                     let num_bindings = bindings.len();
 
                     // We use the outer type with the HIR types to form MIR CTE types.
-                    let outer_column_types = get_outer.typ().column_types;
+                    let outer_column_types = get_outer.sql_typ().column_types;
 
                     // Rename and introduce all bindings.
                     let mut shadowed_bindings = Vec::with_capacity(num_bindings);
@@ -611,7 +611,7 @@ impl HirRelationExpr {
                         // are missing, with nulls filled in for the right columns.
                         if let JoinKind::LeftOuter { .. } = kind {
                             let default = join
-                                .typ()
+                                .sql_typ()
                                 .column_types
                                 .into_iter()
                                 .skip(get_left.arity())
@@ -676,7 +676,12 @@ impl HirRelationExpr {
                     let oa = get_outer.arity();
                     let left =
                         left.applied_to(id_gen, get_outer.clone(), col_map, cte_map, context)?;
-                    let lt = left.typ().column_types.into_iter().skip(oa).collect_vec();
+                    let lt = left
+                        .sql_typ()
+                        .column_types
+                        .into_iter()
+                        .skip(oa)
+                        .collect_vec();
                     let la = lt.len();
                     left.let_in(id_gen, |id_gen, get_left| {
                         let right_col_map = col_map.enter_scope(0);
@@ -687,7 +692,12 @@ impl HirRelationExpr {
                             cte_map,
                             context,
                         )?;
-                        let rt = right.typ().column_types.into_iter().skip(oa).collect_vec();
+                        let rt = right
+                            .sql_typ()
+                            .column_types
+                            .into_iter()
+                            .skip(oa)
+                            .collect_vec();
                         let ra = rt.len();
                         right.let_in(id_gen, |id_gen, get_right| {
                             let mut product = SR::join(
@@ -715,7 +725,7 @@ impl HirRelationExpr {
                             // appended to `product` in the `on.applied_to(...)`
                             // call above.
                             let on_subquery_types = product
-                                .typ()
+                                .sql_typ()
                                 .column_types
                                 .drain(oa + la + ra..)
                                 .collect_vec();
@@ -844,13 +854,13 @@ impl HirRelationExpr {
                             aggregate.applied_to(id_gen, col_map, cte_map, &mut input, context)
                         })
                         .collect::<Result<Vec<_>, _>>()?;
-                    let input_type = input.typ();
+                    let input_type = input.sql_typ();
                     let default = applied_aggregates
                         .iter()
                         .map(|agg| {
                             (
                                 agg.func.default(),
-                                agg.typ(&input_type.column_types).scalar_type,
+                                agg.sql_typ(&input_type.column_types).scalar_type,
                             )
                         })
                         .collect();
@@ -1254,7 +1264,7 @@ impl HirScalarExpr {
                                 context,
                             )?;
                             let mir_encoded_args_type = mir_encoded_args
-                                .typ(&get_inner.typ().column_types)
+                                .sql_typ(&get_inner.sql_typ().column_types)
                                 .scalar_type;
 
                             // Build a new record that has two fields:
@@ -1458,7 +1468,7 @@ impl HirScalarExpr {
 
                 // Record input arity here so that any group_keys that need to mutate get_inner
                 // don't add those columns to the aggregate input.
-                let input_type = get_inner.typ();
+                let input_type = get_inner.sql_typ();
                 let input_arity = input_type.arity();
                 // The reduction that computes the window function must be keyed on the columns
                 // from the outer context, plus the expressions in the partition key. The current
@@ -1978,7 +1988,7 @@ fn apply_scalar_subquery(
         |id_gen, expr, get_inner, col_map, cte_map, context| {
             // compute for every row in get_inner
             let select = expr.applied_to(id_gen, get_inner.clone(), col_map, cte_map, context)?;
-            let col_type = select.typ().column_types.into_last();
+            let col_type = select.sql_typ().column_types.into_last();
 
             let inner_arity = get_inner.arity();
             // We must determine a count for each `get_inner` prefix,
@@ -2129,8 +2139,8 @@ fn attempt_outer_equijoin(
     // Steps (1 + 2) require further investigation because we might change the
     // error semantics in case the `on` predicate contains a literal error..
 
-    let l_type = left.typ();
-    let r_type = right.typ();
+    let l_type = left.sql_typ();
+    let r_type = right.sql_typ();
     let la = l_type.column_types.len() - oa;
     let ra = r_type.column_types.len() - oa;
     let sa = on_subquery_types.len();

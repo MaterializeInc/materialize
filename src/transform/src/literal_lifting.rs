@@ -603,7 +603,7 @@ impl LiteralLifting {
                             // This type information should be available in the `a.expr` literal,
                             // but extracting it with pattern matching seems awkward.
                             mz_repr::ReprScalarType::from(
-                                &aggr.func.output_type(aggr.expr.typ(&[])).scalar_type,
+                                &aggr.func.output_type(aggr.expr.sql_typ(&[])).scalar_type,
                             ),
                         )
                     };

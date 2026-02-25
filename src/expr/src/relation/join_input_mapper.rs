@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 
 use itertools::Itertools;
-use mz_repr::{ReprRelationType, SqlRelationType};
+use mz_repr::ReprRelationType;
 
 use crate::scalar::func::variadic::{And, Or};
 use crate::visit::Visit;
@@ -49,15 +49,8 @@ impl JoinInputMapper {
 
     /// Creates a new `JoinInputMapper` and calculates the mapping of global context
     /// columns to local context columns. Using this method is more
-    /// efficient if input SQL types have been pre-calculated
-    pub fn new_from_input_types(types: &[SqlRelationType]) -> Self {
-        Self::new_from_input_arities(types.iter().map(|t| t.arity()))
-    }
-
-    /// Creates a new `JoinInputMapper` and calculates the mapping of global context
-    /// columns to local context columns. Using this method is more
     /// efficient if input repr types have been pre-calculated.
-    pub fn new_from_input_repr_types(types: &[ReprRelationType]) -> Self {
+    pub fn new_from_input_types(types: &[ReprRelationType]) -> Self {
         Self::new_from_input_arities(types.iter().map(|t| t.arity()))
     }
 

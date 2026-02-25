@@ -52,7 +52,7 @@ impl crate::Transform for FoldConstants {
         let result = relation.try_visit_mut_post(&mut |e| -> Result<(), TransformError> {
             let num_inputs = e.num_inputs();
             let input_types = &type_stack[type_stack.len() - num_inputs..];
-            let mut relation_type = e.repr_typ_with_input_types(input_types);
+            let mut relation_type = e.typ_with_input_types(input_types);
             self.action(e, &mut relation_type)?;
             type_stack.truncate(type_stack.len() - num_inputs);
             type_stack.push(relation_type);

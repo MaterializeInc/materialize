@@ -288,7 +288,7 @@ impl Bindings {
             };
 
             // This should be fast, as it depends directly on only `Get` expressions.
-            let typ = relation.repr_typ();
+            let typ = relation.typ();
             // We want to maintain the invariant that `relation` ends up as a local `Get`.
             if let MirRelationExpr::Get {
                 id: Id::Local(_), ..

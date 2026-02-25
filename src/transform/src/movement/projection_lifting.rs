@@ -91,7 +91,7 @@ impl ProjectionLifting {
                     self.action(value, gets)?;
                     let id = Id::Local(*id);
                     if let MirRelationExpr::Project { input, outputs } = &mut **value {
-                        let typ = input.repr_typ();
+                        let typ = input.typ();
                         let prior = gets.insert(id, (typ, outputs.clone()));
                         assert!(!prior.is_some());
                         **value = input.take_dangerous();
@@ -114,7 +114,7 @@ impl ProjectionLifting {
                         if !recursive_ids.contains(local_id) {
                             if let MirRelationExpr::Project { input, outputs } = value {
                                 let id = Id::Local(*local_id);
-                                let typ = input.repr_typ();
+                                let typ = input.typ();
                                 let prior = gets.insert(id, (typ, outputs.clone()));
                                 assert!(!prior.is_some());
                                 *value = input.take_dangerous();
@@ -344,13 +344,13 @@ impl ProjectionLifting {
                         outputs: base_outputs,
                     } = &mut **base
                     {
-                        let base_typ = base_input.repr_typ();
+                        let base_typ = base_input.typ();
 
                         let mut can_lift = true;
                         for input in &mut *inputs {
                             match input {
                                 MirRelationExpr::Project { input, outputs }
-                                    if input.repr_typ() == base_typ && outputs == base_outputs => {}
+                                    if input.typ() == base_typ && outputs == base_outputs => {}
                                 _ => {
                                     can_lift = false;
                                     break;

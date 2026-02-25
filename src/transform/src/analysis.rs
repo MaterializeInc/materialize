@@ -626,7 +626,7 @@ mod repr_types {
                             .expect("ReprRelationType analysis discovered type-less expression")
                     });
 
-                    let repr_typ = expr.try_repr_col_with_input_repr_cols(input_cols).unwrap();
+                    let repr_typ = expr.try_col_with_input_cols(input_cols).unwrap();
                     Some(repr_typ)
                 }
             }

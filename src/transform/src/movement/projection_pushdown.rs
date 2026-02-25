@@ -149,7 +149,7 @@ impl ProjectionPushdown {
                     let desired_value_projection =
                         desired_value_projection.into_iter().collect::<Vec<_>>();
                     self.action(value, &desired_value_projection, gets)?;
-                    let new_type = value.repr_typ();
+                    let new_type = value.typ();
                     self.update_projection_around_get(
                         body,
                         &BTreeMap::from_iter(std::iter::once((
@@ -198,7 +198,7 @@ impl ProjectionPushdown {
                         // If this is a non-recursive ID, add an entry to the
                         // updates map for subsequent values and the body.
                         if !rec_ids.contains(id) {
-                            let new_type = value.repr_typ();
+                            let new_type = value.typ();
                             let new_proj = {
                                 let columns = gets.remove(&Id::Local(*id)).unwrap();
                                 columns.iter().cloned().collect::<Vec<_>>()

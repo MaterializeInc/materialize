@@ -712,7 +712,7 @@ mod relation {
                     fix_types(input, ctx)?;
                 }
                 let input_types = ctx.typ.split_off(ctx.typ.len() - expr.num_inputs());
-                ctx.typ.push(expr.repr_typ_with_input_types(&input_types));
+                ctx.typ.push(expr.typ_with_input_types(&input_types));
             }
         };
 

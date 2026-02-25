@@ -158,7 +158,7 @@ impl LiteralConstraints {
                                     mz_repr::ReprColumnType {
                                         // We make sure to not include a null in `expr_eq_literal`.
                                         nullable: false,
-                                        ..e.repr_typ(&inp_typ.column_types)
+                                        ..e.typ(&inp_typ.column_types)
                                     }
                                 })
                                 .collect(),
@@ -174,7 +174,7 @@ impl LiteralConstraints {
                     if possible_vals.is_empty() {
                         // Even better than what we were hoping for: Found contradicting
                         // literal constraints, so the whole relation is empty.
-                        relation.take_safely_repr(Some(inp_typ.clone()));
+                        relation.take_safely(Some(inp_typ.clone()));
                     } else {
                         // The common case: We need to build the join which is the main point of
                         // this transform.
@@ -623,7 +623,7 @@ impl LiteralConstraints {
         let typ_after_map = relation
             .clone()
             .map(map.clone())
-            .repr_typ_with_input_types(&[relation_type]);
+            .typ_with_input_types(&[relation_type]);
         canonicalize_predicates(&mut predicates, &typ_after_map.column_types);
         // Rebuild the MFP with the new predicates.
         *mfp = MapFilterProject::new(mfp.input_arity)

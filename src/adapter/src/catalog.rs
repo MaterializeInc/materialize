@@ -1583,11 +1583,11 @@ impl ExprHumanizer for ConnCatalog<'_> {
         Some(self.resolve_full_name(entry.name()).into_parts())
     }
 
-    fn humanize_scalar_type(&self, typ: &SqlScalarType, postgres_compat: bool) -> String {
+    fn humanize_sql_scalar_type(&self, typ: &SqlScalarType, postgres_compat: bool) -> String {
         use SqlScalarType::*;
 
         match typ {
-            Array(t) => format!("{}[]", self.humanize_scalar_type(t, postgres_compat)),
+            Array(t) => format!("{}[]", self.humanize_sql_scalar_type(t, postgres_compat)),
             List {
                 custom_id: Some(item_id),
                 ..
@@ -1602,13 +1602,13 @@ impl ExprHumanizer for ConnCatalog<'_> {
             List { element_type, .. } => {
                 format!(
                     "{} list",
-                    self.humanize_scalar_type(element_type, postgres_compat)
+                    self.humanize_sql_scalar_type(element_type, postgres_compat)
                 )
             }
             Map { value_type, .. } => format!(
                 "map[{}=>{}]",
-                self.humanize_scalar_type(&SqlScalarType::String, postgres_compat),
-                self.humanize_scalar_type(value_type, postgres_compat)
+                self.humanize_sql_scalar_type(&SqlScalarType::String, postgres_compat),
+                self.humanize_sql_scalar_type(value_type, postgres_compat)
             ),
             Record {
                 custom_id: Some(item_id),
@@ -1624,7 +1624,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     .map(|f| format!(
                         "{}: {}",
                         f.0,
-                        self.humanize_column_type(&f.1, postgres_compat)
+                        self.humanize_sql_column_type(&f.1, postgres_compat)
                     ))
                     .join(",")
             ),
@@ -3370,7 +3370,7 @@ mod tests {
 
                 if let Ok(eval_result_datum) = mir.eval(&[], &arena) {
                     if let Some(return_styp) = return_styp {
-                        let mir_typ = mir.typ(&[]);
+                        let mir_typ = mir.sql_typ(&[]);
                         // MIR type inference should be consistent with the type
                         // we get from the catalog.
                         soft_assert_eq_or_log!(

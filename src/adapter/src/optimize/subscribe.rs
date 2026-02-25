@@ -25,9 +25,7 @@ use mz_sql::plan::SubscribeFrom;
 use mz_transform::TransformCtx;
 use mz_transform::dataflow::{DataflowMetainfo, optimize_dataflow_snapshot};
 use mz_transform::normalize_lets::normalize_lets;
-use mz_transform::reprtypecheck::{
-    SharedContext as ReprTypecheckContext, empty_context as empty_repr_context,
-};
+use mz_transform::typecheck::{SharedTypecheckingContext, empty_typechecking_context};
 use timely::progress::Antichain;
 
 use crate::CollectionIdBundle;
@@ -42,7 +40,7 @@ use crate::optimize::{
 
 pub struct Optimizer {
     /// A representation typechecking context to use throughout the optimizer pipeline.
-    repr_typecheck_ctx: ReprTypecheckContext,
+    typecheck_ctx: SharedTypecheckingContext,
     /// A snapshot of the catalog state.
     catalog: Arc<dyn OptimizerCatalog>,
     /// A snapshot of the cluster that will run the dataflows.
@@ -92,7 +90,7 @@ impl Optimizer {
         metrics: OptimizerMetrics,
     ) -> Self {
         Self {
-            repr_typecheck_ctx: empty_repr_context(),
+            typecheck_ctx: empty_typechecking_context(),
             catalog,
             compute_instance,
             view_id,
@@ -235,7 +233,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 // MIR ⇒ MIR optimization (local)
                 let mut transform_ctx = TransformCtx::local(
                     &self.config.features,
-                    &self.repr_typecheck_ctx,
+                    &self.typecheck_ctx,
                     &mut df_meta,
                     Some(&mut self.metrics),
                     Some(self.view_id),
@@ -279,7 +277,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
             &df_builder,
             &mz_transform::EmptyStatisticsOracle, // TODO: wire proper stats
             &self.config.features,
-            &self.repr_typecheck_ctx,
+            &self.typecheck_ctx,
             &mut df_meta,
             Some(&mut self.metrics),
         );

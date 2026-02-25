@@ -70,9 +70,9 @@
 //!    ]);
 //!
 //! let features = OptimizerFeatures::default();
-//! let repr_typecheck_ctx = reprtypecheck::empty_context();
+//! let typecheck_ctx = reprtypecheck::empty_context();
 //! let mut df_meta = DataflowMetainfo::default();
-//! let mut transform_ctx = TransformCtx::local(&features, &repr_typecheck_ctx, &mut df_meta, None, None);
+//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None, None);
 //!
 //! PredicatePushdown::default().transform(&mut expr, &mut transform_ctx);
 //!
@@ -168,7 +168,7 @@ impl PredicatePushdown {
                 MirRelationExpr::Filter { input, predicates } => {
                     // Reduce the predicates to determine as best as possible
                     // whether they are literal errors before working with them.
-                    let input_type = input.repr_typ();
+                    let input_type = input.typ();
                     for predicate in predicates.iter_mut() {
                         predicate.reduce(&input_type.column_types);
                     }
@@ -247,15 +247,14 @@ impl PredicatePushdown {
                                         // `MirScalarExpr` to a join constraint, we
                                         // need to retain the `!isnull(col1)`
                                         // information.
-                                        if expr1.repr_typ(&input_type.column_types).nullable {
+                                        if expr1.typ(&input_type.column_types).nullable {
                                             pred_not_translated.push(
                                                 expr1
                                                     .clone()
                                                     .call_unary(UnaryFunc::IsNull(func::IsNull))
                                                     .call_unary(UnaryFunc::Not(func::Not)),
                                             );
-                                        } else if expr2.repr_typ(&input_type.column_types).nullable
-                                        {
+                                        } else if expr2.typ(&input_type.column_types).nullable {
                                             pred_not_translated.push(
                                                 expr2
                                                     .clone()
@@ -581,14 +580,13 @@ impl PredicatePushdown {
                     //      comes from a single input.
                     //   2) equivalences of the form `expr1 = expr2`, where both
                     //      expressions come from the same single input.
-                    let input_types = inputs.iter().map(|i| i.repr_typ()).collect::<Vec<_>>();
+                    let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
                     mz_expr::canonicalize::canonicalize_equivalences(
                         equivalences,
                         input_types.iter().map(|t| &t.column_types),
                     );
 
-                    let input_mapper =
-                        mz_expr::JoinInputMapper::new_from_input_repr_types(&input_types);
+                    let input_mapper = mz_expr::JoinInputMapper::new_from_input_types(&input_types);
                     // Predicates to push at each input, and to lift out the join.
                     let mut push_downs = vec![Vec::new(); inputs.len()];
 
@@ -604,9 +602,7 @@ impl PredicatePushdown {
                             .count()
                             > 1
                         {
-                            relation.take_safely_repr(Some(
-                                relation.repr_typ_with_input_types(&input_types),
-                            ));
+                            relation.take_safely(Some(relation.typ_with_input_types(&input_types)));
                             return Ok(());
                         }
 
@@ -849,7 +845,7 @@ impl PredicatePushdown {
                 let mut list = list.into_iter().collect::<Vec<_>>();
                 mz_expr::canonicalize::canonicalize_predicates(
                     &mut list,
-                    &value.repr_typ().column_types,
+                    &value.typ().column_types,
                 );
                 *value = value.take_dangerous().filter(list);
             }

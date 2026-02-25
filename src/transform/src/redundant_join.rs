@@ -187,8 +187,8 @@ impl RedundantJoin {
                     }
 
                     // Determine useful information about the structure of the inputs.
-                    let mut input_types = inputs.iter().map(|i| i.repr_typ()).collect::<Vec<_>>();
-                    let old_input_mapper = JoinInputMapper::new_from_input_repr_types(&input_types);
+                    let mut input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
+                    let old_input_mapper = JoinInputMapper::new_from_input_types(&input_types);
 
                     // If we find an input that can be removed, we should do so!
                     // We only do this once per invocation to keep our sanity, but we could
@@ -255,8 +255,7 @@ impl RedundantJoin {
 
                         // Build a projection that leaves the binding expressions in the same
                         // position as the columns of the removed join input they are replacing.
-                        let new_input_mapper =
-                            JoinInputMapper::new_from_input_repr_types(&input_types);
+                        let new_input_mapper = JoinInputMapper::new_from_input_types(&input_types);
                         let mut projection = Vec::new();
                         let new_join_arity = new_input_mapper.total_columns();
                         for i in 0..old_input_mapper.total_inputs() {

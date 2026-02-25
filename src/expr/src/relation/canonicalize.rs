@@ -224,7 +224,7 @@ pub fn canonicalize_predicates(
     soft_assert_or_log!(
         predicates
             .iter()
-            .all(|p| p.repr_typ(repr_column_types).scalar_type == ReprScalarType::Bool),
+            .all(|p| p.typ(repr_column_types).scalar_type == ReprScalarType::Bool),
         "cannot canonicalize predicates that are not of type bool"
     );
 
@@ -376,7 +376,7 @@ pub fn canonicalize_predicates(
         (p.is_literal_false() || p.is_literal_null()) &&
         // This extra check is only needed if we determine that the soft-assert
         // at the top of this function would ever fail for a good reason.
-        p.repr_typ(repr_column_types).scalar_type == ReprScalarType::Bool
+        p.typ(repr_column_types).scalar_type == ReprScalarType::Bool
     }) {
         // all rows get filtered away if any predicate is null or false.
         *predicates = vec![MirScalarExpr::literal_false()]

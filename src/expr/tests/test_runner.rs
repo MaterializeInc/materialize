@@ -26,9 +26,9 @@ mod test {
             deserialize(&mut input_stream, "Vec<SqlColumnType> ", &mut ctx)?;
         let repr_typ: Vec<mz_repr::ReprColumnType> =
             typ.iter().map(mz_repr::ReprColumnType::from).collect();
-        let before = scalar.typ(&typ);
+        let before = scalar.sql_typ(&typ);
         scalar.reduce(&repr_typ);
-        let after = scalar.typ(&typ);
+        let after = scalar.sql_typ(&typ);
         // Verify that `reduce` did not change the type of the scalar.
         if before.scalar_type != after.scalar_type {
             return Err(format!(

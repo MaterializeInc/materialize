@@ -187,8 +187,8 @@ impl ExprHumanizer for TestCatalog {
         self.humanize_id_unqualified(id).map(|name| vec![name])
     }
 
-    fn humanize_scalar_type(&self, ty: &SqlScalarType, postgres_compat: bool) -> String {
-        DummyHumanizer.humanize_scalar_type(ty, postgres_compat)
+    fn humanize_sql_scalar_type(&self, ty: &SqlScalarType, postgres_compat: bool) -> String {
+        DummyHumanizer.humanize_sql_scalar_type(ty, postgres_compat)
     }
 
     fn column_names_for_id(&self, _id: GlobalId) -> Option<Vec<String>> {
@@ -508,7 +508,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
 
         let value: MirRelationExpr = deserialize(stream_iter, "MirRelationExpr", self)?;
 
-        let (id, prev) = self.scope.insert(&name, value.repr_typ());
+        let (id, prev) = self.scope.insert(&name, value.typ());
 
         let body: MirRelationExpr = deserialize(stream_iter, "MirRelationExpr", self)?;
 

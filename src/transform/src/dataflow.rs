@@ -326,7 +326,7 @@ where
             // Push down the projection consisting of the entries of `columns`
             // in increasing order.
             projection_pushdown.action(view, &projection_pushed_down, demand)?;
-            let new_type = view.repr_typ();
+            let new_type = view.typ();
             applied_projection.insert(id, (projection_pushed_down, new_type));
         }
         view_refs.push(view);
