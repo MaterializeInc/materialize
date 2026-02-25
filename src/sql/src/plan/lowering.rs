@@ -205,7 +205,7 @@ impl HirRelationExpr {
                 transform_hir::split_subquery_predicates(&mut other)?;
                 transform_hir::try_simplify_quantified_comparisons(&mut other)?;
                 transform_hir::fuse_window_functions(&mut other, &context)?;
-                MirRelationExpr::constant(vec![vec![]], SqlRelationType::new(vec![])).let_in(
+                MirRelationExpr::constant(vec![vec![]], ReprRelationType::new(vec![])).let_in(
                     &mut id_gen,
                     |id_gen, get_outer| {
                         other.applied_to(
@@ -1929,7 +1929,7 @@ where
             // rows, whereas if it had been correlated it would not (and *could*
             // not) have been computed if outer had no rows, but the callers of
             // this function don't mind these somewhat-weird semantics.
-            MirRelationExpr::constant(vec![vec![]], SqlRelationType::new(vec![]))
+            MirRelationExpr::constant(vec![vec![]], ReprRelationType::new(vec![]))
         } else {
             get_outer.clone().distinct_by(key.clone())
         };
@@ -2014,7 +2014,10 @@ fn apply_scalar_subquery(
                 } else {
                     counts
                         .filter(vec![MirScalarExpr::column(inner_arity).call_binary(
-                            MirScalarExpr::literal_ok(Datum::Int64(1), mz_repr::ReprScalarType::Int64),
+                            MirScalarExpr::literal_ok(
+                                Datum::Int64(1),
+                                mz_repr::ReprScalarType::Int64,
+                            ),
                             func::Gt,
                         )])
                         .project((0..inner_arity).collect::<Vec<_>>())
@@ -2145,8 +2148,10 @@ fn attempt_outer_equijoin(
     // However, in that case it's not clear that we won't see regressions if
     // `on` simplifies to a literal error.
     let mut on = vec![on];
-    let repr_output_type: Vec<mz_repr::ReprColumnType> =
-        output_type.iter().map(mz_repr::ReprColumnType::from).collect();
+    let repr_output_type: Vec<mz_repr::ReprColumnType> = output_type
+        .iter()
+        .map(mz_repr::ReprColumnType::from)
+        .collect();
     mz_expr::canonicalize::canonicalize_predicates(&mut on, &repr_output_type);
 
     // Form the left and right types without the outer attributes.
@@ -2220,7 +2225,11 @@ fn attempt_outer_equijoin(
                         // Determine the types of nulls to use as filler.
                         let right_fill = rt
                             .into_iter()
-                            .map(|typ| MirScalarExpr::literal_null(mz_repr::ReprScalarType::from(&typ.scalar_type)))
+                            .map(|typ| {
+                                MirScalarExpr::literal_null(mz_repr::ReprScalarType::from(
+                                    &typ.scalar_type,
+                                ))
+                            })
                             .collect();
                         // Add to `result` absent elements, filled with typed nulls.
                         result = left_present
@@ -2253,7 +2262,11 @@ fn attempt_outer_equijoin(
                         // Determine the types of nulls to use as filler.
                         let left_fill = lt
                             .into_iter()
-                            .map(|typ| MirScalarExpr::literal_null(mz_repr::ReprScalarType::from(&typ.scalar_type)))
+                            .map(|typ| {
+                                MirScalarExpr::literal_null(mz_repr::ReprScalarType::from(
+                                    &typ.scalar_type,
+                                ))
+                            })
                             .collect();
 
                         // Add to `result` absent elements, prepended with typed nulls.

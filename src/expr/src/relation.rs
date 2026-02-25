@@ -349,12 +349,8 @@ impl MirRelationExpr {
         self.visit_pre_post_nolimit(
             &mut |e: &MirRelationExpr| -> Option<Vec<&MirRelationExpr>> {
                 match &e {
-                    MirRelationExpr::Let { body, .. } => {
-                        Some(vec![&*body])
-                    }
-                    MirRelationExpr::LetRec { body, .. } => {
-                        Some(vec![&*body])
-                    }
+                    MirRelationExpr::Let { body, .. } => Some(vec![&*body]),
+                    MirRelationExpr::LetRec { body, .. } => Some(vec![&*body]),
                     _ => None,
                 }
             },
@@ -367,8 +363,9 @@ impl MirRelationExpr {
                     }
                     MirRelationExpr::LetRec { values, .. } => {
                         let body_typ = type_stack.pop().unwrap();
-                        type_stack
-                            .extend(std::iter::repeat(ReprRelationType::empty()).take(values.len()));
+                        type_stack.extend(
+                            std::iter::repeat(ReprRelationType::empty()).take(values.len()),
+                        );
                         type_stack.push(body_typ);
                     }
                     _ => {}
@@ -1068,18 +1065,18 @@ impl MirRelationExpr {
 
     /// Constructs a constant collection from specific rows and schema, where
     /// each row will have a multiplicity of one.
-    pub fn constant(rows: Vec<Vec<Datum>>, typ: SqlRelationType) -> Self {
+    pub fn constant(rows: Vec<Vec<Datum>>, typ: ReprRelationType) -> Self {
         let rows = rows.into_iter().map(|row| (row, Diff::ONE)).collect();
         MirRelationExpr::constant_diff(rows, typ)
     }
 
     /// Constructs a constant collection from specific rows and schema, where
     /// each row can have an arbitrary multiplicity.
-    pub fn constant_diff(rows: Vec<(Vec<Datum>, Diff)>, typ: SqlRelationType) -> Self {
+    pub fn constant_diff(rows: Vec<(Vec<Datum>, Diff)>, typ: ReprRelationType) -> Self {
         for (row, _diff) in &rows {
             for (datum, column_typ) in row.iter().zip_eq(typ.column_types.iter()) {
                 assert!(
-                    datum.is_instance_of_sql(column_typ),
+                    datum.is_instance_of(column_typ),
                     "Expected datum of type {:?}, got value {:?}",
                     column_typ,
                     datum
@@ -1090,7 +1087,6 @@ impl MirRelationExpr {
             .into_iter()
             .map(move |(row, diff)| (Row::pack_slice(&row), diff))
             .collect());
-        let typ = ReprRelationType::from(&typ);
         MirRelationExpr::Constant { rows, typ }
     }
 
@@ -1561,10 +1557,7 @@ impl MirRelationExpr {
     /// This is the preferred entry point for optimizer transforms, where repr
     /// types are the native currency. Internally converts to [`SqlColumnType`]
     /// and delegates to [`Self::take_safely_with_col_types`].
-    pub fn take_safely_with_repr_col_types(
-        &mut self,
-        typ: Vec<ReprColumnType>,
-    ) -> MirRelationExpr {
+    pub fn take_safely_with_repr_col_types(&mut self, typ: Vec<ReprColumnType>) -> MirRelationExpr {
         self.take_safely_with_col_types(typ.iter().map(SqlColumnType::from_repr).collect())
     }
 
@@ -1651,7 +1644,7 @@ impl MirRelationExpr {
             // optimizer.
             .product(MirRelationExpr::constant(
                 vec![data],
-                SqlRelationType::new(column_types),
+                ReprRelationType::new(column_types.iter().map(ReprColumnType::from).collect()),
             )))
         })
     }
@@ -2665,7 +2658,9 @@ impl AggregateExpr {
                     .unwrap_list_element_type()
                     .clone();
                 let lag_lead_return_type = ReprColumnType {
-                    scalar_type: ReprScalarType::from(return_type_with_orig_row.unwrap_record_element_type()[0]),
+                    scalar_type: ReprScalarType::from(
+                        return_type_with_orig_row.unwrap_record_element_type()[0],
+                    ),
                     nullable: true,
                 };
 
@@ -2708,7 +2703,9 @@ impl AggregateExpr {
                     .unwrap_list_element_type()
                     .clone();
                 let first_value_return_type = ReprColumnType {
-                    scalar_type: ReprScalarType::from(return_type_with_orig_row.unwrap_record_element_type()[0]),
+                    scalar_type: ReprScalarType::from(
+                        return_type_with_orig_row.unwrap_record_element_type()[0],
+                    ),
                     nullable: true,
                 };
 
@@ -2753,7 +2750,9 @@ impl AggregateExpr {
                     .unwrap_list_element_type()
                     .clone();
                 let last_value_return_type = ReprColumnType {
-                    scalar_type: ReprScalarType::from(return_type_with_orig_row.unwrap_record_element_type()[0]),
+                    scalar_type: ReprScalarType::from(
+                        return_type_with_orig_row.unwrap_record_element_type()[0],
+                    ),
                     nullable: true,
                 };
 
@@ -2804,7 +2803,10 @@ impl AggregateExpr {
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
-                let window_agg_return_type = ReprColumnType { scalar_type: ReprScalarType::from(return_type.unwrap_record_element_type()[0]), nullable: true };
+                let window_agg_return_type = ReprColumnType {
+                    scalar_type: ReprScalarType::from(return_type.unwrap_record_element_type()[0]),
+                    nullable: true,
+                };
 
                 // Extract the original row
                 let original_row = tuple
@@ -2870,7 +2872,9 @@ impl AggregateExpr {
                         .clone()
                         .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(idx)));
                     let return_type = ReprColumnType {
-                        scalar_type: ReprScalarType::from(all_func_return_types.unwrap_record_element_type()[idx]),
+                        scalar_type: ReprScalarType::from(
+                            all_func_return_types.unwrap_record_element_type()[idx],
+                        ),
                         nullable: true,
                     };
                     let (result, column_name) = Self::on_unique_window_agg(
@@ -2943,7 +2947,9 @@ impl AggregateExpr {
                         .clone()
                         .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(idx)));
                     let return_type_for_func = ReprColumnType {
-                        scalar_type: ReprScalarType::from(all_func_return_types.unwrap_record_element_type()[idx]),
+                        scalar_type: ReprScalarType::from(
+                            all_func_return_types.unwrap_record_element_type()[idx],
+                        ),
                         nullable: true,
                     };
                     let (result, column_name) = match func {

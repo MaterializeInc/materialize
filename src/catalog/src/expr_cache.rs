@@ -453,7 +453,9 @@ mod tests {
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_persist_client::PersistClient;
     use mz_persist_types::ShardId;
-    use mz_repr::{Datum, GlobalId, ReprRelationType, SqlRelationType, SqlScalarType};
+    use mz_repr::{
+        Datum, GlobalId, ReprRelationType, ReprScalarType, SqlRelationType, SqlScalarType,
+    };
     use semver::Version;
 
     use super::*;
@@ -783,7 +785,7 @@ mod tests {
         LocalExpressions {
             local_mir: OptimizedMirRelationExpr(MirRelationExpr::constant(
                 vec![vec![datum]],
-                SqlRelationType::new(vec![SqlScalarType::UInt64.nullable(false)]),
+                ReprRelationType::new(vec![ReprScalarType::UInt64.nullable(false)]),
             )),
             optimizer_features: Default::default(),
         }

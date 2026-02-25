@@ -4801,6 +4801,14 @@ impl Ord for ReprScalarType {
 }
 
 impl ReprScalarType {
+    /// Returns a [`ReprColumnType`] with the given nullability.
+    pub fn nullable(self, nullable: bool) -> ReprColumnType {
+        ReprColumnType {
+            scalar_type: self,
+            nullable,
+        }
+    }
+
     /// Returns the union of two `ReprScalarType` or an error.
     ///
     /// Errors can only occur if the two types are built somewhere using different constructors.
