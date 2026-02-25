@@ -5,13 +5,14 @@ description: "How to add a column, or drop a column, from your source SQL Server
 menu:
   main:
     parent: "sql-server"
+    identifier: "sqlserver-source-versioning"
     weight: 85
 
 ---
 
 {{< private-preview />}}
 {{< note >}}
-- Changing column types is currently unsupported.
+Changing column types is currently unsupported.
 {{< /note >}}
 
 Materialize allows you to handle certain types of upstream
@@ -40,7 +41,12 @@ CREATE TABLE T (
 
 INSERT INTO T (A) VALUES
     (10);
+GO -- The GO terminator may be unsupported or unnecessary for your client.
 ```
+
+### Configure your SQL Server Database
+
+Configure your SQL Server database using the [configuration instructions for self hosted SQL Server](/ingest-data/sql-server/self-hosted/#a-configure-sql-server)
 
 ### Connect your source database to Materialize
 
@@ -49,12 +55,11 @@ Create a connection to your SQL Server database using the [`CREATE CONNECTION` s
 ## Create a source using the new syntax
 
 In Materialize, create a source using the [`CREATE SOURCE`
-syntax](/sql/create-source/sql-server/).
+syntax](/sql/create-source/sql-server-v2/).
 
 ```mzsql
 CREATE SOURCE my_source
   FROM SQL SERVER CONNECTION sqlserver_connection
-  FOR TABLES (mydb.T);
 ```
 
 ## Create a table from the source
@@ -65,7 +70,7 @@ table in Materialize. We'll add it into the v1 schema in Materialize.
 CREATE SCHEMA v1;
 
 CREATE TABLE v1.T
-    FROM SOURCE my_source(REFERENCE public.T);
+    FROM SOURCE my_source(REFERENCE dbo.T);
 ```
 
 Once you've created a table from source, the [initial
@@ -98,10 +103,10 @@ In your upstream SQL Server database, add a new column `B` to the table `T`:
 
 ```sql
 ALTER TABLE T
-    ADD COLUMN B BOOLEAN DEFAULT false;
+    ADD B BIT 0;
 
 INSERT INTO T (A, B) VALUES
-    (20, true);
+    (20, 0);
 ```
 
 This operation will have no immediate effect in Materialize. In Materialize,
@@ -117,7 +122,7 @@ recreate the table in the new schema:
 CREATE SCHEMA v2;
 
 CREATE TABLE v2.T
-    FROM SOURCE my_source(REFERENCE public.T);
+    FROM SOURCE my_source(REFERENCE dbo.T);
 ```
 
 The [snapshotting](/ingest-data/#snapshotting) of table `v2.T` will begin.
@@ -155,7 +160,7 @@ example, we'll drop the column B.
 ```sql
 CREATE SCHEMA v3;
 CREATE TABLE v3.T
-    FROM SOURCE my_source(REFERENCE public.T) WITH (EXCLUDE COLUMNS (B));
+    FROM SOURCE my_source(REFERENCE dbo.T) WITH (EXCLUDE COLUMNS (B));
 ```
 
 {{< note >}}

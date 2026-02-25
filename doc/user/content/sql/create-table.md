@@ -133,7 +133,7 @@ guidelines](/sql/identifiers/#naming-restrictions).
 
 {{< /tab >}}
 {{< tab "SQL Server" >}}
-#### SqlServer types
+#### SQL Server types
 
 {{< include-md file="shared-content/sql-server-supported-types.md" >}}
 

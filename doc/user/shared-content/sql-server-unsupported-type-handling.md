@@ -11,3 +11,5 @@ following types:
 Columns with the specified types need to be excluded because [SQL Server does not provide
 the "before"](https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-capture-instance-ct-transact-sql?view=sql-server-2017#large-object-data-types)
 value when said column is updated.
+
+`text` and `ntext` type columns can be supported indirectly by specifying them in the `TEXT COLUMNS` option when creating the table from the source, and using the `varchar` and `nvarchar` types in their place.

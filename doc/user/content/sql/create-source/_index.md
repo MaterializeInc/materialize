@@ -37,12 +37,21 @@ For details, see [CREATE SOURCE: PostgreSQL (Legacy)](/sql/create-source/postgre
 For details, see [CREATE SOURCE: MySQL](/sql/create-source/mysql/).
 {{< /tab >}}
 
-{{< tab "SQL Server" >}}
+{{< tab "SQL Server (New)" >}}
 
 {{% include-example file="examples/create_source_sql_server" example="syntax"
 %}}
 
-For details, see [CREATE SOURCE: SQL Server](/sql/create-source/sql-server/).
+For details, see [CREATE SOURCE: SQL Server (New Syntax)](/sql/create-source/sql-server-v2/).
+
+{{< /tab >}}
+
+{{< tab "SQL Server (Legacy)" >}}
+
+{{% include-example file="examples/create_source_sql_server_legacy" example="syntax"
+%}}
+
+For details, see [CREATE SOURCE: SQL Server(Legacy)](/sql/create-source/sql-server/).
 
 {{< /tab >}}
 
