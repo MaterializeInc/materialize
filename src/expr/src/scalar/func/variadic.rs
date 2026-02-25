@@ -547,7 +547,7 @@ impl LazyVariadicFunc for Coalesce {
     }
 
     fn introduces_nulls(&self) -> bool {
-        true
+        false
     }
 
     fn could_error(&self) -> bool {
@@ -862,7 +862,7 @@ impl LazyVariadicFunc for Greatest {
     }
 
     fn introduces_nulls(&self) -> bool {
-        true
+        false
     }
 
     fn could_error(&self) -> bool {
@@ -1098,7 +1098,7 @@ impl LazyVariadicFunc for Least {
     }
 
     fn introduces_nulls(&self) -> bool {
-        true
+        false
     }
 
     fn could_error(&self) -> bool {
@@ -2551,7 +2551,6 @@ impl VariadicFunc {
                 | VariadicFunc::RecordCreate(..)
                 | VariadicFunc::ArrayCreate(..)
                 | VariadicFunc::ArrayToString(..)
-                | VariadicFunc::ErrorIfNull(_)
                 | VariadicFunc::RangeCreate(..)
                 | VariadicFunc::ArrayPosition(_)
                 | VariadicFunc::ArrayFill(..)
@@ -2595,8 +2594,8 @@ impl VariadicFunc {
             | Self::DateDiffTimestampTz(_)
             | Self::DateDiffDate(_)
             | Self::DateDiffTime(_)
-            | Self::RangeCreate(..) => false,
-            Self::MakeAclItem(_)
+            | Self::RangeCreate(..)
+            | Self::MakeAclItem(_)
             | Self::MakeMzAclItem(_)
             | Self::ArrayPosition(_)
             | Self::ArrayFill(..)
@@ -2622,7 +2621,7 @@ impl VariadicFunc {
     pub fn is_infix_op(&self) -> bool {
         match self {
             VariadicFunc::And(s) => s.is_infix_op(),
-            VariadicFunc::Or(_) => true,
+            VariadicFunc::Or(s) => s.is_infix_op(),
             _ => false,
         }
     }
