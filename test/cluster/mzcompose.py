@@ -1494,6 +1494,53 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
         )
 
 
+def workflow_test_timestamp_interval_catalog_persistence(c: Composition) -> None:
+    """Test that a source with a timestamp interval that falls outside the
+    current system bounds can still be loaded from the catalog on restart."""
+
+    with c.override(
+        Testdrive(),
+        Materialized(),
+    ):
+        c.up("materialized", Service("testdrive", idle=True))
+        c.testdrive(
+            input=dedent(
+                """
+        $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+        ALTER SYSTEM SET min_timestamp_interval = '500ms';
+        ALTER SYSTEM SET max_timestamp_interval = '2s';
+
+        > CREATE SOURCE counter_750ms
+          IN CLUSTER quickstart
+          FROM LOAD GENERATOR COUNTER WITH (TIMESTAMP INTERVAL '750ms')
+
+        > SELECT name FROM mz_sources WHERE name = 'counter_750ms'
+        counter_750ms
+
+        $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+        ALTER SYSTEM SET min_timestamp_interval = '1s';
+    """
+            )
+        )
+        c.kill("materialized")
+
+    # Restart materialized. The source has a 750ms timestamp interval but the
+    # minimum is now 1s. Materialize should still boot successfully.
+    with c.override(
+        Testdrive(no_reset=True),
+        Materialized(),
+    ):
+        c.up("materialized", Service("testdrive", idle=True))
+        c.testdrive(
+            input=dedent(
+                """
+        > SELECT name FROM mz_sources WHERE name = 'counter_750ms'
+        counter_750ms
+    """
+            )
+        )
+
+
 def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
     """
     Test that a replica-targeted SUBSCRIBE is aborted when the target

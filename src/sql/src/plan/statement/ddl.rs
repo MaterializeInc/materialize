@@ -894,14 +894,19 @@ pub fn plan_create_source(
 
     let timestamp_interval = match timestamp_interval {
         Some(duration) => {
-            let min = scx.catalog.system_vars().min_timestamp_interval();
-            let max = scx.catalog.system_vars().max_timestamp_interval();
-            if duration < min || duration > max {
-                return Err(PlanError::InvalidTimestampInterval {
-                    min,
-                    max,
-                    requested: duration,
-                });
+            // Only validate bounds for new statements (pcx is Some), not during
+            // catalog deserialization (pcx is None). Previously persisted sources
+            // may have intervals that no longer fall within the current bounds.
+            if scx.pcx.is_some() {
+                let min = scx.catalog.system_vars().min_timestamp_interval();
+                let max = scx.catalog.system_vars().max_timestamp_interval();
+                if duration < min || duration > max {
+                    return Err(PlanError::InvalidTimestampInterval {
+                        min,
+                        max,
+                        requested: duration,
+                    });
+                }
             }
             duration
         }
