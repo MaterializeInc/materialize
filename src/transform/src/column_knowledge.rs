@@ -20,7 +20,7 @@ use mz_expr::{
 use mz_ore::cast::CastFrom;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::{assert_none, soft_panic_or_log};
-use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, SqlColumnType};
+use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row};
 
 use crate::{TransformCtx, TransformError};
 
@@ -243,7 +243,7 @@ impl ColumnKnowledge {
                             knowledge_stack,
                         )?;
                     }
-                    let func_typ = func.output_sql_type();
+                    let func_typ = func.output_type();
                     input_knowledge.extend(func_typ.column_types.iter().map(DatumKnowledge::from));
                     Ok(input_knowledge)
                 }
@@ -519,24 +519,11 @@ impl From<&MirScalarExpr> for DatumKnowledge {
     }
 }
 
-impl From<(Datum<'_>, &SqlColumnType)> for DatumKnowledge {
-    fn from((d, t): (Datum<'_>, &SqlColumnType)) -> Self {
-        let value = Ok(Row::pack_slice(std::slice::from_ref(&d)));
-        let typ = ReprScalarType::from(&t.scalar_type);
-        Self::Lit { value, typ }
-    }
-}
 impl From<(Datum<'_>, &ReprColumnType)> for DatumKnowledge {
     fn from((d, t): (Datum<'_>, &ReprColumnType)) -> Self {
         let value = Ok(Row::pack_slice(std::slice::from_ref(&d)));
         let typ = t.scalar_type.clone();
         Self::Lit { value, typ }
-    }
-}
-impl From<&SqlColumnType> for DatumKnowledge {
-    fn from(typ: &SqlColumnType) -> Self {
-        let nullable = typ.nullable;
-        Self::Any { nullable }
     }
 }
 impl From<&ReprColumnType> for DatumKnowledge {
