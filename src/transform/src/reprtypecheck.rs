@@ -898,7 +898,7 @@ impl Typecheck {
                         let col_types = typ
                             .column_types
                             .iter()
-                            .map(ReprColumnType::from)
+                            .cloned()
                             .collect_vec();
                         row_difference_with_column_types(
                             expr, &datums, &col_types,
@@ -914,23 +914,23 @@ impl Typecheck {
                     }
                 }
 
-                Ok(typ.column_types.iter().map(ReprColumnType::from).collect_vec())
+                Ok(typ.column_types.iter().cloned().collect_vec())
             }
             Get { typ, id, .. } => {
                 if let Id::Global(_global_id) = id {
                     if !ctx.contains_key(id) {
                         // TODO(mgree) pass QueryContext through to check these types
-                        return Ok(typ.column_types.iter().map(ReprColumnType::from).collect_vec());
+                        return Ok(typ.column_types.iter().cloned().collect_vec());
                     }
                 }
 
                 let ctx_typ = ctx.get(id).ok_or_else(|| TypeError::Unbound {
                     source: expr,
                     id: id.clone(),
-                    typ: ReprRelationType::from(typ),
+                    typ: typ.clone(),
                 })?;
 
-                let column_types = typ.column_types.iter().map(ReprColumnType::from).collect_vec();
+                let column_types = typ.column_types.iter().cloned().collect_vec();
 
                 // covariant: the ascribed type must be a subtype of the actual type in the context
                 let diffs = relation_subtype_difference(&column_types, ctx_typ)
@@ -995,7 +995,7 @@ impl Typecheck {
                 }
                 // TODO(mgree) check t_exprs agrees with `func`'s input type
 
-                let t_out = func
+                let t_out: Vec<ReprColumnType> = func
                     .output_type()
                     .column_types
                     .iter()
@@ -1384,7 +1384,7 @@ impl Typecheck {
                         let typ = typ
                             .column_types
                             .iter()
-                            .map(ReprColumnType::from)
+                            .cloned()
                             .collect_vec();
 
                         if ctx_typ.len() != typ.len() {
@@ -1419,7 +1419,7 @@ impl Typecheck {
                             id,
                             typ.column_types
                                 .iter()
-                                .map(ReprColumnType::from)
+                                .cloned()
                                 .collect_vec(),
                         );
                     }
@@ -1509,7 +1509,7 @@ impl Typecheck {
                 }),
             },
             Literal(row, typ) => {
-                let typ = ReprColumnType::from(typ);
+                let typ = typ.clone();
                 if let Ok(row) = row {
                     let datums = row.unpack();
 

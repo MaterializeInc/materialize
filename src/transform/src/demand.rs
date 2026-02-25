@@ -200,7 +200,7 @@ impl Demand {
                                 let typ = relation_type.column_types[arity + index].clone();
                                 *scalar = MirScalarExpr::Literal(
                                     Ok(Row::pack_slice(&[Datum::Dummy])),
-                                    typ,
+                                    mz_repr::ReprColumnType::from(&typ),
                                 );
                             }
                         }
@@ -311,7 +311,7 @@ impl Demand {
                             let typ = aggregates[index].typ(&input_type.column_types);
                             aggregates[index] = AggregateExpr {
                                 func: AggregateFunc::Dummy,
-                                expr: MirScalarExpr::literal_ok(Datum::Dummy, typ.scalar_type),
+                                expr: MirScalarExpr::literal_ok(Datum::Dummy, mz_repr::ReprScalarType::from(&typ.scalar_type)),
                                 distinct: false,
                             };
                         }

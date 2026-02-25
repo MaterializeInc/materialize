@@ -3631,7 +3631,7 @@ impl HirScalarExpr {
         // Using MIR evaluation with repr types is fine here: the
         // result is an untyped Row, so any intermediate type
         // canonicalization is discarded.
-        expr.reduce_repr(&[]);
+        expr.reduce(&[]);
         match expr {
             mz_expr::MirScalarExpr::Literal(Ok(row), _) => Some(row),
             _ => None,
@@ -3659,7 +3659,7 @@ impl HirScalarExpr {
         // Using MIR evaluation with repr types is fine here: the
         // result is an untyped Row, so any intermediate type
         // canonicalization is discarded.
-        expr.reduce_repr(&[]);
+        expr.reduce(&[]);
         match expr {
             mz_expr::MirScalarExpr::Literal(Ok(row), _) => Ok(row),
             mz_expr::MirScalarExpr::Literal(Err(err), _) => Err(

@@ -88,7 +88,7 @@ pub fn canonicalize_equivalences<'a, I>(
                 // Using Optimizer context is fine here: this is called from optimizer
                 // transforms and from rendering, both of which operate on MIR with
                 // repr-canonicalized types.
-                popped_expr.reduce_repr(&repr_column_types);
+                popped_expr.reduce(&repr_column_types);
                 new_equivalence.push((rank_complexity(&popped_expr), popped_expr));
             }
             new_equivalence.sort();
@@ -233,7 +233,7 @@ pub fn canonicalize_predicates(
     // transforms and from lowering (which creates MIR), so repr types are appropriate.
     predicates
         .iter_mut()
-        .for_each(|p| p.reduce_repr(repr_column_types));
+        .for_each(|p| p.reduce(repr_column_types));
 
     // 2) Split "A and B" into two predicates: "A" and "B"
     // Relies on the `reduce` above having flattened nested ANDs.
@@ -441,7 +441,7 @@ fn replace_subexpr_and_reduce(
         },
     );
     if changed {
-        predicate.reduce_repr(repr_column_types);
+        predicate.reduce(repr_column_types);
     }
     changed
 }

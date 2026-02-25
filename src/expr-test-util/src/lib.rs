@@ -16,7 +16,10 @@ use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_ore::str::separated;
 use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
-use mz_repr::{Diff, GlobalId, Row, SqlColumnType, SqlRelationType, SqlScalarType};
+use mz_repr::{
+    Diff, GlobalId, ReprColumnType, ReprRelationType, Row, SqlColumnType, SqlRelationType,
+    SqlScalarType,
+};
 use mz_repr_test_util::*;
 use proc_macro2::TokenTree;
 use serde::{Deserialize, Serialize};
@@ -258,7 +261,7 @@ impl MirScalarExprDeserializeContext {
                     deserialize_optional_generic(rest_of_stream, "SqlScalarType")?;
                 Ok(Some(MirScalarExpr::literal(
                     Err(error),
-                    typ.unwrap_or(SqlScalarType::Bool),
+                    ReprScalarType::from(&typ.unwrap_or(SqlScalarType::Bool)),
                 )))
             }
             _ => self.build_literal_ok_if_able(first_arg, rest_of_stream),
@@ -278,7 +281,7 @@ impl MirScalarExprDeserializeContext {
                 let littyp = get_scalar_type_or_default(&litval[..], rest_of_stream)?;
                 Ok(Some(MirScalarExpr::Literal(
                     Ok(test_spec_to_row(std::iter::once((&litval[..], &littyp)))?),
-                    littyp.nullable(matches!(&litval[..], "null")),
+                    ReprColumnType::from(&littyp.nullable(matches!(&litval[..], "null"))),
                 )))
             }
             None => Ok(None),
@@ -446,7 +449,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
         };
         Ok(MirRelationExpr::Constant {
             rows: Ok(rows),
-            typ,
+            typ: ReprRelationType::from(&typ),
         })
     }
 
@@ -459,7 +462,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
 
         Ok(MirRelationExpr::Constant {
             rows: Err(error),
-            typ,
+            typ: ReprRelationType::from(&typ),
         })
     }
 
@@ -470,14 +473,14 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
                 match self.scope.get(&name) {
                     Some((id, typ)) => Ok(MirRelationExpr::Get {
                         id,
-                        typ,
+                        typ: ReprRelationType::from(&typ),
                         access_strategy: AccessStrategy::UnknownOrLocal,
                     }),
                     None => match self.catalog.get(&name) {
                         None => Err(format!("no catalog object named {}", name)),
                         Some((id, typ)) => Ok(MirRelationExpr::Get {
                             id: Id::Global(*id),
-                            typ: typ.clone(),
+                            typ: ReprRelationType::from(typ),
                             access_strategy: AccessStrategy::UnknownOrLocal,
                         }),
                     },

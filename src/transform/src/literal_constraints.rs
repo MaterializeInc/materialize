@@ -113,7 +113,7 @@ impl LiteralConstraints {
             // todo: We might want to also call `canonicalize_equivalences`,
             // see near the end of literal_constraints.slt.
 
-            let inp_typ = ReprRelationType::from(typ);
+            let inp_typ = typ.clone();
 
             let key_val = Self::detect_literal_constraints(&mfp, id, transform_ctx);
 
@@ -151,13 +151,15 @@ impl LiteralConstraints {
                             .iter()
                             .map(|val| (val.clone(), Diff::ONE))
                             .collect()),
-                        typ: mz_repr::SqlRelationType {
+                        typ: mz_repr::ReprRelationType {
                             column_types: key
                                 .iter()
                                 .map(|e| {
-                                    SqlColumnType::from_repr(&e.repr_typ(&inp_typ.column_types))
+                                    mz_repr::ReprColumnType {
                                         // We make sure to not include a null in `expr_eq_literal`.
-                                        .nullable(false)
+                                        nullable: false,
+                                        ..e.repr_typ(&inp_typ.column_types)
+                                    }
                                 })
                                 .collect(),
                             // (Note that the key inference for `MirRelationExpr::Constant` inspects

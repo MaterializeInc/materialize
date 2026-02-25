@@ -31,7 +31,7 @@
 //! use mz_ore::id_gen::IdGen;
 //! use mz_repr::{SqlColumnType, Datum, SqlRelationType, SqlScalarType};
 //! use mz_repr::optimize::OptimizerFeatures;
-//! use mz_transform::{reprtypecheck, typecheck,Transform, TransformCtx};
+//! use mz_transform::{reprtypecheck, Transform, TransformCtx};
 //! use mz_transform::dataflow::DataflowMetainfo;
 //!
 //! use mz_transform::predicate_pushdown::PredicatePushdown;
@@ -64,10 +64,9 @@
 //!    ]);
 //!
 //! let features = OptimizerFeatures::default();
-//! let typecheck_ctx = typecheck::empty_context();
 //! let repr_typecheck_ctx = reprtypecheck::empty_context();
 //! let mut df_meta = DataflowMetainfo::default();
-//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &repr_typecheck_ctx, &mut df_meta, None, None);
+//! let mut transform_ctx = TransformCtx::local(&features, &repr_typecheck_ctx, &mut df_meta, None, None);
 //!
 //! PredicatePushdown::default().transform(&mut expr, &mut transform_ctx);
 //!
@@ -165,7 +164,7 @@ impl PredicatePushdown {
                     // whether they are literal errors before working with them.
                     let input_type = input.repr_typ();
                     for predicate in predicates.iter_mut() {
-                        predicate.reduce_repr(&input_type.column_types);
+                        predicate.reduce(&input_type.column_types);
                     }
 
                     // It can be helpful to know if there are any non-literal errors,
@@ -331,7 +330,7 @@ impl PredicatePushdown {
                                             push_down.push(aggregates[0].expr.clone());
                                             aggregates[0].expr = MirScalarExpr::literal_ok(
                                                 Datum::True,
-                                                SqlScalarType::Bool,
+                                                mz_repr::ReprScalarType::Bool,
                                             );
                                         } else {
                                             retain.push(predicate);
@@ -1200,7 +1199,7 @@ impl PredicatePushdown {
         mut s: MirScalarExpr,
         column_types: &[ReprColumnType],
     ) -> Vec<MirScalarExpr> {
-        s.reduce_repr(column_types);
+        s.reduce(column_types);
 
         if let MirScalarExpr::CallVariadic {
             func: VariadicFunc::And(_),

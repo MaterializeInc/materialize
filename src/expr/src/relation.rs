@@ -35,8 +35,8 @@ use mz_repr::explain::{
     DummyHumanizer, ExplainConfig, ExprHumanizer, IndexUsageType, PlanRenderingContext,
 };
 use mz_repr::{
-    ColumnName, Datum, Diff, GlobalId, IntoRowIterator, ReprColumnType, ReprRelationType, Row,
-    RowIterator, SqlColumnType, SqlRelationType, SqlScalarType,
+    ColumnName, Datum, Diff, GlobalId, IntoRowIterator, ReprColumnType, ReprRelationType,
+    ReprScalarType, Row, RowIterator, SqlColumnType, SqlRelationType, SqlScalarType,
 };
 use serde::{Deserialize, Serialize};
 
@@ -107,7 +107,7 @@ pub enum MirRelationExpr {
         /// Rows of the constant collection and their multiplicities.
         rows: Result<Vec<(Row, Diff)>, EvalError>,
         /// Schema of the collection.
-        typ: SqlRelationType,
+        typ: ReprRelationType,
     },
     /// Get an existing dataflow.
     ///
@@ -117,7 +117,7 @@ pub enum MirRelationExpr {
         #[mzreflect(ignore)]
         id: Id,
         /// Schema of the collection.
-        typ: SqlRelationType,
+        typ: ReprRelationType,
         /// If this is a global Get, this will indicate whether we are going to read from Persist or
         /// from an index, or from a different object in `objects_to_build`. If it's an index, then
         /// how downstream dataflow operations will use this index is also recorded. This is filled
@@ -502,7 +502,7 @@ impl MirRelationExpr {
 
         let col_types = match self {
             Constant { rows, typ } => {
-                let mut col_types = typ.column_types.clone();
+                let mut col_types: Vec<SqlColumnType> = typ.column_types.iter().map(SqlColumnType::from_repr).collect();
                 let mut seen_null = vec![false; typ.arity()];
                 if let Ok(rows) = rows {
                     for (row, _diff) in rows {
@@ -522,7 +522,7 @@ impl MirRelationExpr {
                 }
                 col_types
             }
-            Get { typ, .. } => typ.column_types.clone(),
+            Get { typ, .. } => typ.column_types.iter().map(SqlColumnType::from_repr).collect(),
             Project { outputs, .. } => {
                 let input = input_types.next().unwrap();
                 outputs.iter().map(|&i| input[i].clone()).collect()
@@ -653,11 +653,7 @@ impl MirRelationExpr {
 
         let col_types = match self {
             Constant { rows, typ } => {
-                let mut col_types = typ
-                    .column_types
-                    .iter()
-                    .map(ReprColumnType::from)
-                    .collect_vec();
+                let mut col_types = typ.column_types.clone();
                 let mut seen_null = vec![false; typ.arity()];
                 if let Ok(rows) = rows {
                     for (row, _diff) in rows {
@@ -677,11 +673,7 @@ impl MirRelationExpr {
                 }
                 col_types
             }
-            Get { typ, .. } => typ
-                .column_types
-                .iter()
-                .map(ReprColumnType::from)
-                .collect_vec(),
+            Get { typ, .. } => typ.column_types.clone(),
             Project { outputs, .. } => {
                 let input = input_types.next().unwrap();
                 outputs.iter().map(|&i| input[i].clone()).collect()
@@ -1317,12 +1309,13 @@ impl MirRelationExpr {
             .into_iter()
             .map(move |(row, diff)| (Row::pack_slice(&row), diff))
             .collect());
+        let typ = ReprRelationType::from(&typ);
         MirRelationExpr::Constant { rows, typ }
     }
 
     /// If self is a constant, return the value and the type, otherwise `None`.
     /// Looks behind `ArrangeBy`s.
-    pub fn as_const(&self) -> Option<(&Result<Vec<(Row, Diff)>, EvalError>, &SqlRelationType)> {
+    pub fn as_const(&self) -> Option<(&Result<Vec<(Row, Diff)>, EvalError>, &ReprRelationType)> {
         match self {
             MirRelationExpr::Constant { rows, typ } => Some((rows, typ)),
             MirRelationExpr::ArrangeBy { input, .. } => input.as_const(),
@@ -1336,7 +1329,7 @@ impl MirRelationExpr {
         &mut self,
     ) -> Option<(
         &mut Result<Vec<(Row, Diff)>, EvalError>,
-        &mut SqlRelationType,
+        &mut ReprRelationType,
     )> {
         match self {
             MirRelationExpr::Constant { rows, typ } => Some((rows, typ)),
@@ -1365,7 +1358,7 @@ impl MirRelationExpr {
     }
 
     /// Constructs the expression for getting a local collection.
-    pub fn local_get(id: LocalId, typ: SqlRelationType) -> Self {
+    pub fn local_get(id: LocalId, typ: ReprRelationType) -> Self {
         MirRelationExpr::Get {
             id: Id::Local(id),
             typ,
@@ -1374,7 +1367,7 @@ impl MirRelationExpr {
     }
 
     /// Constructs the expression for getting a global collection
-    pub fn global_get(id: GlobalId, typ: SqlRelationType) -> Self {
+    pub fn global_get(id: GlobalId, typ: ReprRelationType) -> Self {
         MirRelationExpr::Get {
             id: Id::Global(id),
             typ,
@@ -1631,7 +1624,7 @@ impl MirRelationExpr {
     ///
     /// If `inputs` is empty, then an empty relation of type `typ` is
     /// constructed.
-    pub fn union_many(mut inputs: Vec<Self>, typ: SqlRelationType) -> Self {
+    pub fn union_many(mut inputs: Vec<Self>, typ: ReprRelationType) -> Self {
         // Deconstruct `inputs` as `Union`s and reconstitute.
         let mut flat_inputs = Vec::with_capacity(inputs.len());
         for input in inputs {
@@ -1741,19 +1734,18 @@ impl MirRelationExpr {
     ///
     /// If `typ` is not given, then this calls `.typ()` (which is possibly expensive) to determine
     /// the correct type.
-    pub fn take_safely(&mut self, typ: Option<SqlRelationType>) -> MirRelationExpr {
+    pub fn take_safely(&mut self, typ: Option<ReprRelationType>) -> MirRelationExpr {
         if let Some(typ) = &typ {
+            let self_typ = self.typ();
             soft_assert_no_log!(
-                self.typ()
+                self_typ
                     .column_types
                     .iter()
                     .zip_eq(typ.column_types.iter())
-                    .all(|(t1, t2)| t1
-                        .scalar_type
-                        .base_eq_or_repr_eq_for_assertion(&t2.scalar_type))
+                    .all(|(t1, t2)| ReprScalarType::from(&t1.scalar_type) == t2.scalar_type)
             );
         }
-        let mut typ = typ.unwrap_or_else(|| self.typ());
+        let mut typ = typ.unwrap_or_else(|| ReprRelationType::from(&self.typ()));
         typ.keys = vec![vec![]];
         for ct in typ.column_types.iter_mut() {
             ct.nullable = false;
@@ -1771,7 +1763,7 @@ impl MirRelationExpr {
     /// types. Nullability is ignored in the given `SqlColumnType`s, and instead we set the best
     /// possible nullability, since we are making an empty collection.
     pub fn take_safely_with_col_types(&mut self, typ: Vec<SqlColumnType>) -> MirRelationExpr {
-        self.take_safely(Some(SqlRelationType::new(typ)))
+        self.take_safely(Some(ReprRelationType::from(&SqlRelationType::new(typ))))
     }
 
     /// Like [`Self::take_safely`], but accepts a [`ReprRelationType`].
@@ -1780,7 +1772,7 @@ impl MirRelationExpr {
     /// types are the native currency. Internally converts to [`SqlRelationType`]
     /// and delegates to [`Self::take_safely`].
     pub fn take_safely_repr(&mut self, typ: Option<ReprRelationType>) -> MirRelationExpr {
-        self.take_safely(typ.map(|t| SqlRelationType::from_repr(&t)))
+        self.take_safely(typ)
     }
 
     /// Like [`Self::take_safely_with_col_types`], but accepts `Vec<ReprColumnType>`.
@@ -1801,7 +1793,7 @@ impl MirRelationExpr {
     pub fn take_dangerous(&mut self) -> MirRelationExpr {
         let empty = MirRelationExpr::Constant {
             rows: Ok(vec![]),
-            typ: SqlRelationType::new(Vec::new()),
+            typ: ReprRelationType::new(Vec::new()),
         };
         std::mem::replace(self, empty)
     }
@@ -1813,7 +1805,7 @@ impl MirRelationExpr {
     {
         let empty = MirRelationExpr::Constant {
             rows: Ok(vec![]),
-            typ: SqlRelationType::new(Vec::new()),
+            typ: ReprRelationType::new(Vec::new()),
         };
         let expr = std::mem::replace(self, empty);
         *self = logic(expr);
@@ -1831,7 +1823,7 @@ impl MirRelationExpr {
             let id = LocalId::new(id_gen.allocate_id());
             let get = MirRelationExpr::Get {
                 id: Id::Local(id),
-                typ: self.typ(),
+                typ: self.repr_typ(),
                 access_strategy: AccessStrategy::UnknownOrLocal,
             };
             let body = (body)(id_gen, get)?;
@@ -2771,8 +2763,8 @@ impl AggregateExpr {
                 .clone()
                 .call_unary(UnaryFunc::IsNull(crate::func::IsNull))
                 .if_then_else(
-                    MirScalarExpr::literal_ok(Datum::Int64(0), SqlScalarType::Int64),
-                    MirScalarExpr::literal_ok(Datum::Int64(1), SqlScalarType::Int64),
+                    MirScalarExpr::literal_ok(Datum::Int64(0), ReprScalarType::Int64),
+                    MirScalarExpr::literal_ok(Datum::Int64(1), ReprScalarType::Int64),
                 ),
 
             // SumInt16 takes Int16s as input, but outputs Int64s.
@@ -2891,8 +2883,10 @@ impl AggregateExpr {
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
-                let lag_lead_return_type =
-                    return_type_with_orig_row.unwrap_record_element_type()[0].clone();
+                let lag_lead_return_type = ReprColumnType {
+                    scalar_type: ReprScalarType::from(return_type_with_orig_row.unwrap_record_element_type()[0]),
+                    nullable: true,
+                };
 
                 // Extract the original row
                 let original_row = tuple
@@ -2932,8 +2926,10 @@ impl AggregateExpr {
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
-                let first_value_return_type =
-                    return_type_with_orig_row.unwrap_record_element_type()[0].clone();
+                let first_value_return_type = ReprColumnType {
+                    scalar_type: ReprScalarType::from(return_type_with_orig_row.unwrap_record_element_type()[0]),
+                    nullable: true,
+                };
 
                 // Extract the original row
                 let original_row = tuple
@@ -2975,8 +2971,10 @@ impl AggregateExpr {
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
-                let last_value_return_type =
-                    return_type_with_orig_row.unwrap_record_element_type()[0].clone();
+                let last_value_return_type = ReprColumnType {
+                    scalar_type: ReprScalarType::from(return_type_with_orig_row.unwrap_record_element_type()[0]),
+                    nullable: true,
+                };
 
                 // Extract the original row
                 let original_row = tuple
@@ -3025,7 +3023,7 @@ impl AggregateExpr {
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
-                let window_agg_return_type = return_type.unwrap_record_element_type()[0].clone();
+                let window_agg_return_type = ReprColumnType { scalar_type: ReprScalarType::from(return_type.unwrap_record_element_type()[0]), nullable: true };
 
                 // Extract the original row
                 let original_row = tuple
@@ -3090,8 +3088,10 @@ impl AggregateExpr {
                     let arg = all_args
                         .clone()
                         .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(idx)));
-                    let return_type =
-                        all_func_return_types.unwrap_record_element_type()[idx].clone();
+                    let return_type = ReprColumnType {
+                        scalar_type: ReprScalarType::from(all_func_return_types.unwrap_record_element_type()[idx]),
+                        nullable: true,
+                    };
                     let (result, column_name) = Self::on_unique_window_agg(
                         window_frame,
                         arg,
@@ -3161,8 +3161,10 @@ impl AggregateExpr {
                     let args_for_func = all_encoded_args
                         .clone()
                         .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(idx)));
-                    let return_type_for_func =
-                        all_func_return_types.unwrap_record_element_type()[idx].clone();
+                    let return_type_for_func = ReprColumnType {
+                        scalar_type: ReprScalarType::from(all_func_return_types.unwrap_record_element_type()[idx]),
+                        nullable: true,
+                    };
                     let (result, column_name) = match func {
                         AggregateFunc::LagLead {
                             lag_lead,
@@ -3287,7 +3289,7 @@ impl AggregateExpr {
             ListIndex,
             vec![
                 list,
-                MirScalarExpr::literal_ok(Datum::Int64(1), SqlScalarType::Int64),
+                MirScalarExpr::literal_ok(Datum::Int64(1), ReprScalarType::Int64),
             ],
         );
 
@@ -3304,7 +3306,7 @@ impl AggregateExpr {
                     field_names: vec![ColumnName::from(col_name), ColumnName::from("?record?")],
                 },
                 vec![
-                    MirScalarExpr::literal_ok(Datum::Int64(1), SqlScalarType::Int64),
+                    MirScalarExpr::literal_ok(Datum::Int64(1), ReprScalarType::Int64),
                     record,
                 ],
             )],
@@ -3315,7 +3317,7 @@ impl AggregateExpr {
     fn on_unique_lag_lead(
         lag_lead: &LagLeadType,
         encoded_args: MirScalarExpr,
-        return_type: SqlScalarType,
+        return_type: ReprColumnType,
     ) -> (MirScalarExpr, ColumnName) {
         let expr = encoded_args
             .clone()
@@ -3331,13 +3333,13 @@ impl AggregateExpr {
         let value = offset
             .clone()
             .call_binary(
-                MirScalarExpr::literal_ok(Datum::Int32(0), SqlScalarType::Int32),
+                MirScalarExpr::literal_ok(Datum::Int32(0), ReprScalarType::Int32),
                 crate::func::Eq,
             )
             .if_then_else(expr, default_value);
         let result_expr = offset
             .call_unary(UnaryFunc::IsNull(crate::func::IsNull))
-            .if_then_else(MirScalarExpr::literal_null(return_type), value);
+            .if_then_else(MirScalarExpr::literal_null(return_type.scalar_type), value);
 
         let column_name = ColumnName::from(match lag_lead {
             LagLeadType::Lag => "?lag?",
@@ -3351,13 +3353,13 @@ impl AggregateExpr {
     fn on_unique_first_value_last_value(
         window_frame: &WindowFrame,
         arg: MirScalarExpr,
-        return_type: SqlScalarType,
+        return_type: ReprColumnType,
     ) -> (MirScalarExpr, ColumnName) {
         // If the window frame includes the current (single) row, return its value, null otherwise
         let result_expr = if window_frame.includes_current_row() {
             arg
         } else {
-            MirScalarExpr::literal_null(return_type)
+            MirScalarExpr::literal_null(return_type.scalar_type)
         };
         (result_expr, ColumnName::from("?first_value?"))
     }
@@ -3367,7 +3369,7 @@ impl AggregateExpr {
         window_frame: &WindowFrame,
         arg_expr: MirScalarExpr,
         input_type: &[ReprColumnType],
-        return_type: SqlScalarType,
+        return_type: ReprColumnType,
         wrapped_aggr: &AggregateFunc,
     ) -> (MirScalarExpr, ColumnName) {
         // If the window frame includes the current (single) row, evaluate the wrapped aggregate on
@@ -3380,7 +3382,7 @@ impl AggregateExpr {
             }
             .on_unique(input_type)
         } else {
-            MirScalarExpr::literal_ok(wrapped_aggr.default(), return_type)
+            MirScalarExpr::literal_ok(wrapped_aggr.default(), return_type.scalar_type)
         };
         (result_expr, ColumnName::from("?window_agg?"))
     }

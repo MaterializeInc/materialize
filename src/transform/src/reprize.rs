@@ -57,8 +57,8 @@ impl ReprizeSqlTypes {
             | Threshold { .. }
             | Union { .. } => (),
             // stored types
-            Constant { typ, .. } | Get { typ, .. } => {
-                typ.repr_canonicalize();
+            Constant { .. } | Get { .. } => {
+                // Types are already ReprRelationType, no canonicalization needed.
             }
             // a single vector of scalar expressions
             Map {

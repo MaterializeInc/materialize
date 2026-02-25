@@ -166,7 +166,7 @@ impl Analysis for Equivalences {
                     let mut class = predicates.clone();
                     class.push(MirScalarExpr::literal_ok(
                         Datum::True,
-                        mz_repr::SqlScalarType::Bool,
+                        mz_repr::ReprScalarType::Bool,
                     ));
                     equivalences.classes.push(class);
                 }
@@ -849,7 +849,7 @@ impl EquivalenceClasses {
                 self.remap.reduce_child(expr);
                 if let Some(columns) = columns {
                     let orig_expr = expr.clone();
-                    expr.reduce_repr(columns);
+                    expr.reduce(columns);
                     if expr.contains_err() {
                         // Rollback to the original expression if it contains an error.
                         *expr = orig_expr;

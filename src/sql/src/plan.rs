@@ -1599,7 +1599,7 @@ impl WebhookValidation {
                     .iter()
                     .map(mz_repr::ReprColumnType::from)
                     .collect();
-                expression_.reduce_repr(&repr_col_types);
+                expression_.reduce(&repr_col_types);
                 expression_
             },
         );

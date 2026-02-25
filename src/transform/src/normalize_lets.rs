@@ -308,13 +308,15 @@ mod support {
                         )))?;
                     }
                     // Assert that the column types have not changed.
+                    // We use `base_eq` here because Record inner field
+                    // nullability can legitimately differ between the stored
+                    // type and the analysis-recomputed type.
                     if !new_type
                         .column_types
                         .iter()
                         .zip_eq(typ.column_types.iter())
                         .all(|(t1, t2)| {
-                            mz_repr::SqlScalarType::from_repr(&t1.scalar_type)
-                                .base_eq_or_repr_eq_for_assertion(&t2.scalar_type)
+                            t1.scalar_type.base_eq(&t2.scalar_type)
                         })
                     {
                         Err(crate::TransformError::Internal(format!(
@@ -323,7 +325,7 @@ mod support {
                         )))?;
                     }
 
-                    *typ = mz_repr::SqlRelationType::from_repr(new_type);
+                    *typ = new_type.clone();
                 } else {
                     panic!("Type not found for: {:?}", i);
                 }

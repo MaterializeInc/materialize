@@ -4770,6 +4770,40 @@ pub enum ReprScalarType {
 }
 
 impl ReprScalarType {
+    /// Compares two `ReprScalarType` values for structural equality,
+    /// ignoring the nullability of `Record` inner fields.
+    ///
+    /// This is useful for checks where inner field nullability is
+    /// expected to differ (e.g., one side was refined by an analysis)
+    /// but the base scalar type structure should still match.
+    pub fn base_eq(&self, other: &ReprScalarType) -> bool {
+        match (self, other) {
+            (ReprScalarType::Array(a), ReprScalarType::Array(b)) => a.base_eq(b),
+            (
+                ReprScalarType::List { element_type: a },
+                ReprScalarType::List { element_type: b },
+            ) => a.base_eq(b),
+            (
+                ReprScalarType::Record { fields: a },
+                ReprScalarType::Record { fields: b },
+            ) => {
+                a.len() == b.len()
+                    && a.iter()
+                        .zip(b.iter())
+                        .all(|(af, bf)| af.scalar_type.base_eq(&bf.scalar_type))
+            }
+            (
+                ReprScalarType::Map { value_type: a },
+                ReprScalarType::Map { value_type: b },
+            ) => a.base_eq(b),
+            (
+                ReprScalarType::Range { element_type: a },
+                ReprScalarType::Range { element_type: b },
+            ) => a.base_eq(b),
+            _ => self == other,
+        }
+    }
+
     /// Returns the union of two `ReprScalarType` or an error.
     ///
     /// Errors can only occur if the two types are built somewhere using different constructors.
@@ -4896,7 +4930,10 @@ impl From<&SqlScalarType> for ReprScalarType {
                 fields,
                 custom_id: _,
             } => ReprScalarType::Record {
-                fields: fields.into_iter().map(|(_, typ)| typ.into()).collect(),
+                fields: fields
+                    .into_iter()
+                    .map(|(_, typ)| typ.into())
+                    .collect(),
             },
             SqlScalarType::Oid => ReprScalarType::UInt32,
             SqlScalarType::Map {

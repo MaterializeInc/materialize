@@ -521,7 +521,7 @@ impl From<&MirScalarExpr> for DatumKnowledge {
     fn from(expr: &MirScalarExpr) -> Self {
         if let MirScalarExpr::Literal(l, t) = expr {
             let value = l.clone();
-            let typ = ReprScalarType::from(&t.scalar_type);
+            let typ = t.scalar_type.clone();
             Self::Lit { value, typ }
         } else {
             Self::top()
@@ -536,9 +536,21 @@ impl From<(Datum<'_>, &SqlColumnType)> for DatumKnowledge {
         Self::Lit { value, typ }
     }
 }
-
+impl From<(Datum<'_>, &ReprColumnType)> for DatumKnowledge {
+    fn from((d, t): (Datum<'_>, &ReprColumnType)) -> Self {
+        let value = Ok(Row::pack_slice(std::slice::from_ref(&d)));
+        let typ = t.scalar_type.clone();
+        Self::Lit { value, typ }
+    }
+}
 impl From<&SqlColumnType> for DatumKnowledge {
     fn from(typ: &SqlColumnType) -> Self {
+        let nullable = typ.nullable;
+        Self::Any { nullable }
+    }
+}
+impl From<&ReprColumnType> for DatumKnowledge {
+    fn from(typ: &ReprColumnType) -> Self {
         let nullable = typ.nullable;
         Self::Any { nullable }
     }
@@ -791,7 +803,7 @@ fn optimize(
                     let index = *index;
                     if let DatumKnowledge::Lit { value, typ } = &column_knowledge[index] {
                         let nullable = column_knowledge[index].nullable();
-                        let canonical_typ = SqlScalarType::from_repr(typ).nullable(nullable);
+                        let canonical_typ = ReprColumnType { scalar_type: typ.clone(), nullable };
                         *e = MirScalarExpr::Literal(value.clone(), canonical_typ);
                     }
                     column_knowledge[index].clone()
@@ -802,7 +814,7 @@ fn optimize(
                 MirScalarExpr::CallUnary { func, expr: _ } => {
                     let knowledge = knowledge_stack.pop().unwrap();
                     if matches!(&knowledge, DatumKnowledge::Lit { .. }) {
-                        e.reduce_repr(column_types);
+                        e.reduce(column_types);
                     } else if func == &UnaryFunc::IsNull(func::IsNull) && !knowledge.nullable() {
                         *e = MirScalarExpr::literal_false();
                     };
@@ -819,7 +831,7 @@ fn optimize(
                         matches!(knowledge1, DatumKnowledge::Lit { .. }),
                         matches!(knowledge2, DatumKnowledge::Lit { .. }),
                     ] {
-                        e.reduce_repr(column_types);
+                        e.reduce(column_types);
                     }
                     DatumKnowledge::from(&*e)
                 }
@@ -830,7 +842,7 @@ fn optimize(
                         .drain(knowledge_stack.len() - exprs.len()..)
                         .any(|k| matches!(k, DatumKnowledge::Lit { .. }))
                     {
-                        e.reduce_repr(column_types);
+                        e.reduce(column_types);
                     }
                     DatumKnowledge::from(&*e)
                 }

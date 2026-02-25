@@ -1411,7 +1411,7 @@ pub fn plan_index_exprs<'a>(
             .iter()
             .map(mz_repr::ReprColumnType::from)
             .collect();
-        expr.reduce_repr(&repr_col_types);
+        expr.reduce(&repr_col_types);
         out.push(expr);
     }
     Ok(out)

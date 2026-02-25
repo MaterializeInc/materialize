@@ -291,12 +291,12 @@ where
 
                 if let Some(new_limit) = new_limit {
                     limit =
-                        MirScalarExpr::literal_ok(Datum::Int64(new_limit), SqlScalarType::Int64);
+                        MirScalarExpr::literal_ok(Datum::Int64(new_limit), mz_repr::ReprScalarType::Int64);
                 } else {
                     limit = limit.call_binary(
                         MirScalarExpr::literal_ok(
                             Datum::UInt64(u64::cast_from(offset)),
-                            SqlScalarType::UInt64,
+                            mz_repr::ReprScalarType::UInt64,
                         )
                         .call_unary(UnaryFunc::CastUint64ToInt64(CastUint64ToInt64)),
                         BinaryFunc::AddInt64(func::AddInt64),

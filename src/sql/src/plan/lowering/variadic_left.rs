@@ -10,7 +10,7 @@
 use itertools::Itertools;
 use mz_expr::{MirRelationExpr, MirScalarExpr, func};
 use mz_ore::soft_assert_eq_or_log;
-use mz_repr::Diff;
+use mz_repr::{Diff, ReprColumnType, ReprRelationType, ReprScalarType};
 
 use crate::plan::PlanError;
 use crate::plan::hir::{HirRelationExpr, HirScalarExpr};
@@ -91,7 +91,7 @@ pub(crate) fn attempt_left_join_magic(
     // We may use these relations multiple times to extract augmenting values.
     let id = LocalId::new(id_gen.allocate_id());
     // The join body that we will iteratively develop.
-    let mut body = MirRelationExpr::local_get(id, full_left_typ);
+    let mut body = MirRelationExpr::local_get(id, ReprRelationType::from(&full_left_typ));
     bindings.push((id, body.clone(), left));
     bound_to.extend((0..la).map(|_| 1));
     arities.push(la);
@@ -131,7 +131,7 @@ pub(crate) fn attempt_left_join_magic(
         let mut right_type = full_right_typ;
         // Create a binding for `right`, unadulterated.
         let id = LocalId::new(id_gen.allocate_id());
-        let get_right = MirRelationExpr::local_get(id, right_type.clone());
+        let get_right = MirRelationExpr::local_get(id, ReprRelationType::from(&right_type));
         // Create a binding for the augmented right, which we will form here but use before we do.
         // We want the join to be based off of the augmented relation, but we don't yet know how
         // to augment it until we decorrelate `on`. So, we use a `Get` binding that we backfill.
@@ -140,7 +140,7 @@ pub(crate) fn attempt_left_join_magic(
         }
         right_type.keys.clear();
         let aug_id = LocalId::new(id_gen.allocate_id());
-        let aug_right = MirRelationExpr::local_get(aug_id, right_type);
+        let aug_right = MirRelationExpr::local_get(aug_id, ReprRelationType::from(&right_type));
 
         bindings.push((id, get_right.clone(), right));
         bound_to.extend((0..ra).map(|_| 2 + index));
@@ -242,7 +242,7 @@ pub(crate) fn attempt_left_join_magic(
                         ),
                         Diff::ONE,
                     )]),
-                    typ: left_typ,
+                    typ: ReprRelationType::from(&left_typ),
                 },
             )
             .project(
@@ -283,7 +283,7 @@ pub(crate) fn attempt_left_join_magic(
                     // extra column at the end that is used to differentiate between
                     // augmented and original columns in the aug_value.
                     rt.iter()
-                        .map(|t| MirScalarExpr::literal_null(t.scalar_type.clone()))
+                        .map(|t| MirScalarExpr::literal_null(ReprScalarType::from(&t.scalar_type)))
                         .collect::<Vec<_>>(),
                 )
                 .project({
@@ -344,7 +344,7 @@ pub(crate) fn attempt_left_join_magic(
                         .map(|col| MirScalarExpr::If {
                             cond: Box::new(MirScalarExpr::column(oa + ba + ra).call_is_null()),
                             then: Box::new(MirScalarExpr::literal_null(
-                                rt[col - (oa + ba)].scalar_type.clone(),
+                                ReprScalarType::from(&rt[col - (oa + ba)].scalar_type),
                             )),
                             els: Box::new(MirScalarExpr::column(col)),
                         })

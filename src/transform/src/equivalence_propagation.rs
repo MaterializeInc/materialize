@@ -288,7 +288,7 @@ impl EquivalencePropagation {
                         };
                         let changed = reducer.reduce_expr(expr);
                         if changed || !ctx.features.enable_less_reduce_in_eqprop {
-                            expr.reduce_repr(&input_types[..(input_arity + index)]);
+                            expr.reduce(&input_types[..(input_arity + index)]);
                         }
                         if !ctx.features.enable_dequadratic_eqprop_map {
                             // Unfortunately, we had to stop doing the following, because it
@@ -345,7 +345,7 @@ impl EquivalencePropagation {
                     for expr in exprs.iter_mut() {
                         let changed = reducer.reduce_expr(expr);
                         if changed || !ctx.features.enable_less_reduce_in_eqprop {
-                            expr.reduce_repr(input_types);
+                            expr.reduce(input_types);
                         }
                     }
                     let input_arity = *derived
@@ -381,14 +381,14 @@ impl EquivalencePropagation {
                     for expr in predicates.iter_mut() {
                         let changed = reducer.reduce_expr(expr);
                         if changed || !ctx.features.enable_less_reduce_in_eqprop {
-                            expr.reduce_repr(input_types);
+                            expr.reduce(input_types);
                         }
                     }
                     // Incorporate `predicates` into `outer_equivalences`.
                     let mut class = predicates.clone();
                     class.push(MirScalarExpr::literal_ok(
                         Datum::True,
-                        mz_repr::SqlScalarType::Bool,
+                        mz_repr::ReprScalarType::Bool,
                     ));
                     outer_equivalences.classes.push(class);
                     outer_equivalences.minimize(Some(&input_types));
@@ -489,7 +489,7 @@ impl EquivalencePropagation {
                             let changed = reducer.reduce_expr(expr);
                             let acceptable_sub = literal_domination(&old, expr);
                             if changed || !ctx.features.enable_less_reduce_in_eqprop {
-                                expr.reduce_repr(input_types.as_ref().unwrap());
+                                expr.reduce(input_types.as_ref().unwrap());
                             }
                             if !acceptable_sub && !literal_domination(&old, expr)
                                 || expr.contains_err()
@@ -577,7 +577,7 @@ impl EquivalencePropagation {
                         let changed = reducer.reduce_expr(key);
                         let acceptable_sub = literal_domination(&old_key, key);
                         if changed || !ctx.features.enable_less_reduce_in_eqprop {
-                            key.reduce_repr(input_type);
+                            key.reduce(input_type);
                         }
                         if !acceptable_sub && !literal_domination(&old_key, key) {
                             key.clone_from(&old_key);
@@ -586,7 +586,7 @@ impl EquivalencePropagation {
                     for aggr in aggregates.iter_mut() {
                         let changed = reducer.reduce_expr(&mut aggr.expr);
                         if changed || !ctx.features.enable_less_reduce_in_eqprop {
-                            aggr.expr.reduce_repr(input_type);
+                            aggr.expr.reduce(input_type);
                         }
                         // A count expression over a non-null expression can discard the expression.
                         if aggr.func == mz_expr::AggregateFunc::Count && !aggr.distinct {
@@ -652,7 +652,7 @@ impl EquivalencePropagation {
                         let changed = reducer.reduce_expr(expr);
                         let acceptable_sub = literal_domination(&old_expr, expr);
                         if changed || !ctx.features.enable_less_reduce_in_eqprop {
-                            expr.reduce_repr(input_types);
+                            expr.reduce(input_types);
                         }
                         if !acceptable_sub && !literal_domination(&old_expr, expr) {
                             expr.clone_from(&old_expr);

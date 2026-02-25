@@ -303,7 +303,7 @@ impl Bindings {
                     .or_insert_with(|| id_gen.allocate_id());
                 *relation = MirRelationExpr::Get {
                     id: Id::Local(LocalId::new(*id)),
-                    typ,
+                    typ: mz_repr::ReprRelationType::from(&typ),
                     access_strategy: AccessStrategy::UnknownOrLocal,
                 }
             }

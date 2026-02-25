@@ -420,7 +420,8 @@ impl RustType<ProtoKey> for Vec<usize> {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash
+    Hash,
+    MzReflect
 )]
 pub struct ReprRelationType {
     /// The type for each column, in order.

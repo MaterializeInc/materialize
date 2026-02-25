@@ -3421,6 +3421,7 @@ mod tests {
                         // as the real evaluation.
                         let mut reduced = mir.clone();
                         reduced.reduce(&[]);
+                        let mir_repr_scalar_type = mz_repr::ReprScalarType::from(&mir_typ.scalar_type);
                         match reduced {
                             MirScalarExpr::Literal(reduce_result, ctyp) => {
                                 match reduce_result {
@@ -3434,7 +3435,7 @@ mod tests {
                                             args,
                                             mir,
                                             eval_result_datum,
-                                            mir_typ.scalar_type,
+                                            mir_repr_scalar_type,
                                             reduce_result_datum,
                                             ctyp.scalar_type
                                         );
@@ -3445,13 +3446,13 @@ mod tests {
                                         // evaluating a function than before.)
                                         assert_eq!(
                                             ctyp.scalar_type,
-                                            mir_typ.scalar_type,
+                                            mir_repr_scalar_type,
                                             "eval/reduce type mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`",
                                             name,
                                             args,
                                             mir,
                                             eval_result_datum,
-                                            mir_typ.scalar_type,
+                                            mir_repr_scalar_type,
                                             reduce_result_datum,
                                             ctyp.scalar_type
                                         );

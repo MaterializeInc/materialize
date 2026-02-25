@@ -18,7 +18,7 @@ use mz_expr::visit::Visit;
 use mz_expr::{
     AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, TableFunc, UnaryFunc,
 };
-use mz_repr::{Datum, Diff, Row, RowArena, SqlRelationType};
+use mz_repr::{Datum, Diff, ReprRelationType, Row, RowArena, SqlRelationType};
 
 use crate::{TransformCtx, TransformError, any};
 
@@ -113,7 +113,7 @@ impl FoldConstants {
                     };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation_type.clone(),
+                        typ: ReprRelationType::from(&*relation_type),
                     };
                 }
             }
@@ -207,7 +207,7 @@ impl FoldConstants {
                     };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation_type.clone(),
+                        typ: ReprRelationType::from(&*relation_type),
                     };
                 }
             }
@@ -227,13 +227,13 @@ impl FoldConstants {
                         Ok(Some(rows)) => {
                             *relation = MirRelationExpr::Constant {
                                 rows: Ok(rows),
-                                typ: relation_type.clone(),
+                                typ: ReprRelationType::from(&*relation_type),
                             };
                         }
                         Err(err) => {
                             *relation = MirRelationExpr::Constant {
                                 rows: Err(err),
-                                typ: relation_type.clone(),
+                                typ: ReprRelationType::from(&*relation_type),
                             };
                         }
                     };
@@ -251,7 +251,7 @@ impl FoldConstants {
                     .iter()
                     .any(|p| p.is_literal_false() || p.is_literal_null())
                 {
-                    relation.take_safely(Some(relation_type.clone()));
+                    relation.take_safely(Some(ReprRelationType::from(&*relation_type)));
                 } else if let Some((rows, ..)) = (**input).as_const() {
                     // Evaluate errors last, to reduce risk of spurious errors.
                     predicates.sort_by_key(|p| p.is_literal_err());
@@ -261,7 +261,7 @@ impl FoldConstants {
                     };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation_type.clone(),
+                        typ: ReprRelationType::from(&*relation_type),
                     };
                 }
             }
@@ -282,7 +282,7 @@ impl FoldConstants {
                     };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation_type.clone(),
+                        typ: ReprRelationType::from(&*relation_type),
                     };
                 }
             }
@@ -292,11 +292,11 @@ impl FoldConstants {
                 ..
             } => {
                 if inputs.iter().any(|e| e.is_empty()) {
-                    relation.take_safely(Some(relation_type.clone()));
+                    relation.take_safely(Some(ReprRelationType::from(&*relation_type)));
                 } else if let Some(e) = inputs.iter().find_map(|i| i.as_const_err()) {
                     *relation = MirRelationExpr::Constant {
                         rows: Err(e.clone()),
-                        typ: relation_type.clone(),
+                        typ: ReprRelationType::from(&*relation_type),
                     };
                 } else if inputs
                     .iter()
@@ -355,7 +355,7 @@ impl FoldConstants {
 
                     *relation = MirRelationExpr::Constant {
                         rows: Ok(old_rows),
-                        typ: relation_type.clone(),
+                        typ: ReprRelationType::from(&*relation_type),
                     };
                 }
                 // TODO: General constant folding for all constant inputs.
@@ -367,7 +367,7 @@ impl FoldConstants {
                 {
                     *relation = MirRelationExpr::Constant {
                         rows: Err(e.clone()),
-                        typ: relation_type.clone(),
+                        typ: ReprRelationType::from(&*relation_type),
                     };
                 } else {
                     let mut rows = vec![];
@@ -383,11 +383,11 @@ impl FoldConstants {
                     if !rows.is_empty() {
                         new_inputs.push(MirRelationExpr::Constant {
                             rows: Ok(rows),
-                            typ: relation_type.clone(),
+                            typ: ReprRelationType::from(&*relation_type),
                         });
                     }
 
-                    *relation = MirRelationExpr::union_many(new_inputs, relation_type.clone());
+                    *relation = MirRelationExpr::union_many(new_inputs, ReprRelationType::from(&*relation_type));
                 }
             }
             MirRelationExpr::ArrangeBy { .. } => {
@@ -415,7 +415,7 @@ impl FoldConstants {
                     }
                 }
             }
-            *relation_type = typ.clone();
+            *relation_type = SqlRelationType::from_repr(typ);
         }
 
         Ok(())

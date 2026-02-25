@@ -197,7 +197,7 @@ impl HirRelationExpr {
                 let rows: Vec<_> = rows.into_iter().map(|row| (row, Diff::ONE)).collect();
                 MirRelationExpr::Constant {
                     rows: Ok(rows),
-                    typ,
+                    typ: ReprRelationType::from(&typ),
                 }
             }
             mut other => {
@@ -263,7 +263,7 @@ impl HirRelationExpr {
                     // Constant expressions are not correlated with `get_outer`, and should be cross-products.
                     get_outer.product(SR::Constant {
                         rows: Ok(rows.into_iter().map(|row| (row, Diff::ONE)).collect()),
-                        typ,
+                        typ: ReprRelationType::from(&typ),
                     })
                 }
                 Get { id, typ } => match id {
@@ -271,7 +271,7 @@ impl HirRelationExpr {
                         let cte_desc = cte_map.get(&local_id).unwrap();
                         let get_cte = SR::Get {
                             id: mz_expr::Id::Local(cte_desc.new_id.clone()),
-                            typ: cte_desc.relation_type.clone(),
+                            typ: ReprRelationType::from(&cte_desc.relation_type),
                             access_strategy: AccessStrategy::UnknownOrLocal,
                         };
                         if get_outer == cte_desc.outer_relation {
@@ -324,7 +324,7 @@ impl HirRelationExpr {
                         // Get statements are only to external sources, and are not correlated with `get_outer`.
                         get_outer.product(SR::Get {
                             id,
-                            typ,
+                            typ: ReprRelationType::from(&typ),
                             access_strategy: AccessStrategy::UnknownOrLocal,
                         })
                     }
@@ -357,7 +357,7 @@ impl HirRelationExpr {
                             id.clone(),
                             CteDesc {
                                 new_id,
-                                relation_type: typ,
+                                relation_type: SqlRelationType::from_repr(&typ),
                                 outer_relation: get_outer.clone(),
                             },
                         );
@@ -978,7 +978,7 @@ impl HirScalarExpr {
 
             Ok::<MirScalarExpr, PlanError>(match self {
                 Column(col_ref, name) => SS::Column(col_map.get(&col_ref), name),
-                Literal(row, typ, _name) => SS::Literal(Ok(row), typ),
+                Literal(row, typ, _name) => SS::Literal(Ok(row), ReprColumnType::from(&typ)),
                 Parameter(_, _name) => {
                     panic!("cannot decorrelate expression with unbound parameters")
                 }
@@ -1691,7 +1691,7 @@ impl HirScalarExpr {
 
         Ok(match self {
             Column(ColumnRef { level: 0, column }, name) => SS::Column(column, name),
-            Literal(datum, typ, _name) => SS::Literal(Ok(datum), typ),
+            Literal(datum, typ, _name) => SS::Literal(Ok(datum), ReprColumnType::from(&typ)),
             CallUnmaterializable(func, _name) => SS::CallUnmaterializable(func),
             CallUnary {
                 func: func::UnaryFunc::CastVarCharToString(_),
@@ -2014,13 +2014,13 @@ fn apply_scalar_subquery(
                 } else {
                     counts
                         .filter(vec![MirScalarExpr::column(inner_arity).call_binary(
-                            MirScalarExpr::literal_ok(Datum::Int64(1), SqlScalarType::Int64),
+                            MirScalarExpr::literal_ok(Datum::Int64(1), mz_repr::ReprScalarType::Int64),
                             func::Gt,
                         )])
                         .project((0..inner_arity).collect::<Vec<_>>())
                         .map_one(MirScalarExpr::literal(
                             Err(mz_expr::EvalError::MultipleRowsFromSubquery),
-                            col_type.clone().scalar_type,
+                            mz_repr::ReprScalarType::from(&col_type.scalar_type),
                         ))
                 };
                 // Return `get_select` and any errors added in.
@@ -2220,9 +2220,8 @@ fn attempt_outer_equijoin(
                         // Determine the types of nulls to use as filler.
                         let right_fill = rt
                             .into_iter()
-                            .map(|typ| MirScalarExpr::literal_null(typ.scalar_type))
+                            .map(|typ| MirScalarExpr::literal_null(mz_repr::ReprScalarType::from(&typ.scalar_type)))
                             .collect();
-
                         // Add to `result` absent elements, filled with typed nulls.
                         result = left_present
                             .negate()
@@ -2254,7 +2253,7 @@ fn attempt_outer_equijoin(
                         // Determine the types of nulls to use as filler.
                         let left_fill = lt
                             .into_iter()
-                            .map(|typ| MirScalarExpr::literal_null(typ.scalar_type))
+                            .map(|typ| MirScalarExpr::literal_null(mz_repr::ReprScalarType::from(&typ.scalar_type)))
                             .collect();
 
                         // Add to `result` absent elements, prepended with typed nulls.

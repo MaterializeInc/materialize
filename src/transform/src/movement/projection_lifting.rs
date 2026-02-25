@@ -80,7 +80,7 @@ impl ProjectionLifting {
                     if let Some((typ, columns)) = gets.get(id) {
                         *relation = MirRelationExpr::Get {
                             id: *id,
-                            typ: typ.clone(),
+                            typ: mz_repr::ReprRelationType::from(typ),
                             access_strategy: AccessStrategy::UnknownOrLocal, // (we are not copying it over)
                         }
                         .project(columns.clone());
