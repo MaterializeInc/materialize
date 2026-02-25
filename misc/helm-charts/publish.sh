@@ -57,7 +57,8 @@ run_if_not_dry() {
 
 echo "--- Publishing Helm Chart $BUILDKITE_TAG"
 rm -rf gh-pages
-git clone --branch "$GITHUB_PAGES_BRANCH" --depth 1 https://github.com/MaterializeInc/materialize.git gh-pages
+# No --depth=1 because we need history for the `created` dates
+git clone --branch "$GITHUB_PAGES_BRANCH" https://github.com/MaterializeInc/materialize.git gh-pages
 
 mkdir -p $RELEASE_DIR
 CHANGES_MADE=0
