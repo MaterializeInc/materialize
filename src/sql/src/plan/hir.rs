@@ -3628,7 +3628,10 @@ impl HirScalarExpr {
         let mut expr = self
             .lower_uncorrelated(crate::plan::lowering::Config::default())
             .ok()?;
-        expr.reduce(&[]);
+        // Using MIR evaluation with repr types is fine here: the
+        // result is an untyped Row, so any intermediate type
+        // canonicalization is discarded.
+        expr.reduce_repr(&[]);
         match expr {
             mz_expr::MirScalarExpr::Literal(Ok(row), _) => Some(row),
             _ => None,
@@ -3653,7 +3656,10 @@ impl HirScalarExpr {
             .map_err(|err| {
                 PlanError::ConstantExpressionSimplificationFailed(err.to_string_with_causes())
             })?;
-        expr.reduce(&[]);
+        // Using MIR evaluation with repr types is fine here: the
+        // result is an untyped Row, so any intermediate type
+        // canonicalization is discarded.
+        expr.reduce_repr(&[]);
         match expr {
             mz_expr::MirScalarExpr::Literal(Ok(row), _) => Ok(row),
             mz_expr::MirScalarExpr::Literal(Err(err), _) => Err(

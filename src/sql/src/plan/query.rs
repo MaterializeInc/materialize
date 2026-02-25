@@ -1405,7 +1405,13 @@ pub fn plan_index_exprs<'a>(
         transform_ast::transform(scx, &mut expr)?;
         let expr = plan_expr_or_col_index(ecx, &expr)?;
         let mut expr = expr.lower_uncorrelated(scx.catalog.system_vars())?;
-        expr.reduce(&on_desc.typ().column_types);
+        let repr_col_types: Vec<mz_repr::ReprColumnType> = on_desc
+            .typ()
+            .column_types
+            .iter()
+            .map(mz_repr::ReprColumnType::from)
+            .collect();
+        expr.reduce_repr(&repr_col_types);
         out.push(expr);
     }
     Ok(out)

@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use itertools::Itertools;
 use mz_ore::soft_assert_or_log;
-use mz_repr::{ReprColumnType, ReprScalarType, SqlColumnType};
+use mz_repr::{ReprColumnType, ReprScalarType};
 
 use crate::visit::Visit;
 use crate::{MirScalarExpr, UnaryFunc, VariadicFunc, func};
@@ -45,10 +45,6 @@ pub fn canonicalize_equivalences<'a, I>(
     let repr_column_types = input_column_types
         .flat_map(|f| f.clone())
         .collect::<Vec<_>>();
-    let column_types: Vec<SqlColumnType> = repr_column_types
-        .iter()
-        .map(SqlColumnType::from_repr)
-        .collect();
     // Calculate the number of non-leaves for each expression.
     let mut to_reduce = equivalences
         .drain(..)
@@ -92,7 +88,7 @@ pub fn canonicalize_equivalences<'a, I>(
                 // Using Optimizer context is fine here: this is called from optimizer
                 // transforms and from rendering, both of which operate on MIR with
                 // repr-canonicalized types.
-                popped_expr.reduce(&column_types);
+                popped_expr.reduce_repr(&repr_column_types);
                 new_equivalence.push((rank_complexity(&popped_expr), popped_expr));
             }
             new_equivalence.sort();
@@ -225,10 +221,6 @@ pub fn canonicalize_predicates(
     predicates: &mut Vec<MirScalarExpr>,
     repr_column_types: &[ReprColumnType],
 ) {
-    let column_types: Vec<SqlColumnType> = repr_column_types
-        .iter()
-        .map(SqlColumnType::from_repr)
-        .collect();
     soft_assert_or_log!(
         predicates
             .iter()
@@ -239,7 +231,9 @@ pub fn canonicalize_predicates(
     // 1) Reduce each individual predicate.
     // Using Optimizer context is fine here: this is called from optimizer
     // transforms and from lowering (which creates MIR), so repr types are appropriate.
-    predicates.iter_mut().for_each(|p| p.reduce(&column_types));
+    predicates
+        .iter_mut()
+        .for_each(|p| p.reduce_repr(repr_column_types));
 
     // 2) Split "A and B" into two predicates: "A" and "B"
     // Relies on the `reduce` above having flattened nested ANDs.
@@ -405,10 +399,6 @@ fn replace_subexpr_and_reduce(
     replace_with: &MirScalarExpr,
     repr_column_types: &[ReprColumnType],
 ) -> bool {
-    let column_types: Vec<SqlColumnType> = repr_column_types
-        .iter()
-        .map(SqlColumnType::from_repr)
-        .collect();
     let mut changed = false;
     #[allow(deprecated)]
     predicate.visit_mut_pre_post_nolimit(
@@ -451,7 +441,7 @@ fn replace_subexpr_and_reduce(
         },
     );
     if changed {
-        predicate.reduce(&column_types);
+        predicate.reduce_repr(repr_column_types);
     }
     changed
 }
