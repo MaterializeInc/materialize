@@ -187,6 +187,11 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "enable_adapter_frontend_occ_read_then_write",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_cast_elimination",
             "true",
             ["true", "false"],
