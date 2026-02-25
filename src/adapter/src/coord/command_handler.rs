@@ -436,16 +436,16 @@ impl Coordinator {
                     .await;
                 }
 
-                Command::ExecuteSideEffectingFunc {
-                    plan,
-                    conn_id,
-                    current_role,
-                    tx,
-                } => {
-                    let result = self
-                        .execute_side_effecting_func(plan, conn_id, current_role)
-                        .await;
+                Command::ExecuteSideEffectingFunc { plan, conn_id, tx } => {
+                    let result = self.execute_side_effecting_func(plan, conn_id).await;
                     let _ = tx.send(result);
+                }
+                Command::GetConnectionAuthenticatedRole { connection_id, tx } => {
+                    let role = self
+                        .active_conns
+                        .get_key_value(&connection_id)
+                        .map(|(_, meta)| *meta.authenticated_role_id());
+                    let _ = tx.send(role);
                 }
                 Command::RegisterFrontendPeek {
                     uuid,
