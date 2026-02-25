@@ -1,6 +1,7 @@
 hakari-package = "workspace-hack"
 dep-format-version = "4"
 resolver = "2"
+unify-target-host = "unify-if-both"
 platforms = [
     "x86_64-unknown-linux-gnu",
     "x86_64-apple-darwin",
