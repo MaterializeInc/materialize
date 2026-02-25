@@ -24,7 +24,6 @@ use mz_compute_types::plan::AvailableCollections;
 use mz_dyncfg::ConfigSet;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
 use mz_ore::soft_assert_or_log;
-use mz_ore::soft_panic_or_log;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
@@ -679,21 +678,7 @@ where
     /// The result may be `None` if no such arrangement exists, or it may be one of many
     /// "arrangement flavors" that represent the types of arranged data we might have.
     pub fn arrangement(&self, key: &[MirScalarExpr]) -> Option<ArrangementFlavor<S, T>> {
-        let res = self.arranged.get(key).map(|x| x.clone());
-        if res.is_some() {
-            return res;
-        }
-
-        soft_panic_or_log!("fell back to repr types keys on {key:?}");
-        let repr_keys = key
-            .iter()
-            .map(|expr| {
-                let mut expr = expr.clone();
-                expr.repr_canonicalize();
-                expr
-            })
-            .collect::<Vec<_>>();
-        self.arranged.get(&repr_keys).map(|x| x.clone())
+        self.arranged.get(key).map(|x| x.clone())
     }
 }
 
