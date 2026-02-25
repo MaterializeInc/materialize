@@ -1256,13 +1256,13 @@ impl MirRelationExpr {
     /// # Example
     ///
     /// ```rust
-    /// use mz_repr::{Datum, SqlColumnType, SqlRelationType, SqlScalarType};
+    /// use mz_repr::{Datum, SqlColumnType, ReprRelationType, ReprScalarType};
     /// use mz_expr::MirRelationExpr;
     ///
     /// // A common schema for each input.
-    /// let schema = SqlRelationType::new(vec![
-    ///     SqlScalarType::Int32.nullable(false),
-    ///     SqlScalarType::Int32.nullable(false),
+    /// let schema = ReprRelationType::new(vec![
+    ///     ReprScalarType::Int32.nullable(false),
+    ///     ReprScalarType::Int32.nullable(false),
     /// ]);
     ///
     /// // the specific data are not important here.

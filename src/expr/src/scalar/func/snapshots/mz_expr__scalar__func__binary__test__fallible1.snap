@@ -26,7 +26,7 @@ impl crate::func::binary::EagerBinaryFunc for Fallible1 {
     ) -> Self::Output<'a> {
         fallible1(a, b)
     }
-    fn output_type(
+    fn output_sql_type(
         &self,
         input_types: &[mz_repr::SqlColumnType],
     ) -> mz_repr::SqlColumnType {

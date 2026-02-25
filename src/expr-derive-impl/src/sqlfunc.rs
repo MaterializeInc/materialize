@@ -340,7 +340,10 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
                 #fn_name(a)
             }
 
-            fn output_sql_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {
+            fn output_sql_type(
+                &self,
+                input_type: mz_repr::SqlColumnType
+            ) -> mz_repr::SqlColumnType {
                 use mz_repr::AsColumnType;
                 let output = #output_type;
                 let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
