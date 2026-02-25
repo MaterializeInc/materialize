@@ -10,7 +10,6 @@
 //! Code to render the ingestion dataflow of a [`SqlServerSourceConnection`].
 
 use std::collections::{BTreeMap, BTreeSet};
-
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;

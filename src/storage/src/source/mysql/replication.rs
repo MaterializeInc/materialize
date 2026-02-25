@@ -40,7 +40,6 @@
 //! (at the minimum timestamp) and send it again at the correct GTID.
 
 use std::collections::BTreeMap;
-
 use std::num::NonZeroU64;
 use std::pin::pin;
 use std::sync::Arc;
