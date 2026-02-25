@@ -593,7 +593,11 @@ mod types {
                     typ,
                     ..
                 } => {
-                    let mut result: Vec<SqlColumnType> = typ.column_types.iter().map(SqlColumnType::from_repr).collect();
+                    let mut result: Vec<SqlColumnType> = typ
+                        .column_types
+                        .iter()
+                        .map(SqlColumnType::from_repr)
+                        .collect();
                     if let Some(o) = depends.bindings().get(i) {
                         if let Some(t) = results.get(*o) {
                             if let Some(rec_typ) = t {
@@ -714,11 +718,7 @@ mod repr_types {
                     typ,
                     ..
                 } => {
-                    let mut result = typ
-                        .column_types
-                        .iter()
-                        .cloned()
-                        .collect_vec();
+                    let mut result = typ.column_types.iter().cloned().collect_vec();
                     if let Some(o) = depends.bindings().get(i) {
                         if let Some(t) = results.get(*o) {
                             if let Some(rec_typ) = t {
@@ -780,7 +780,7 @@ mod repr_types {
                     let mut changed = false;
                     assert_eq!(a.len(), b.len());
                     for (at, bt) in a.iter_mut().zip_eq(b.iter()) {
-                        assert!(at.scalar_type.base_eq(&bt.scalar_type));
+                        assert_eq!(at.scalar_type, bt.scalar_type);
                         if !at.nullable && bt.nullable {
                             at.nullable = true;
                             changed = true;

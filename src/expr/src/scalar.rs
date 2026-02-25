@@ -31,9 +31,7 @@ use mz_repr::adt::range::InvalidRangeError;
 use mz_repr::adt::regex::{Regex, RegexCompilationError};
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::strconv::{ParseError, ParseHexError};
-use mz_repr::{
-    Datum, ReprColumnType, ReprScalarType, Row, RowArena, SqlColumnType, SqlScalarType,
-};
+use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, RowArena, SqlColumnType, SqlScalarType};
 
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
@@ -717,7 +715,10 @@ impl MirScalarExpr {
     pub fn reduce(&mut self, column_types: &[ReprColumnType]) {
         let temp_storage = &RowArena::new();
         let eval = |e: &MirScalarExpr| {
-            MirScalarExpr::literal(e.eval(&[], temp_storage), e.repr_typ(column_types).scalar_type)
+            MirScalarExpr::literal(
+                e.eval(&[], temp_storage),
+                e.repr_typ(column_types).scalar_type,
+            )
         };
 
         // Simplifications run in a loop until `self` no longer changes.
@@ -1174,7 +1175,9 @@ impl MirScalarExpr {
                             // be done before `exprs.retain...` because `e.typ` requires
                             // > 0 `exprs` remain.
                             if exprs.iter().all(|expr| expr.is_literal_null()) {
-                                *e = MirScalarExpr::literal_null(e.repr_typ(column_types).scalar_type);
+                                *e = MirScalarExpr::literal_null(
+                                    e.repr_typ(column_types).scalar_type,
+                                );
                                 return;
                             }
 
@@ -1325,7 +1328,9 @@ impl MirScalarExpr {
                                 Err(err) => {
                                     *e = MirScalarExpr::Literal(
                                         Err(err.clone()),
-                                        then.repr_typ(column_types).union(&els.repr_typ(column_types)).unwrap(),
+                                        then.repr_typ(column_types)
+                                            .union(&els.repr_typ(column_types))
+                                            .unwrap(),
                                     )
                                 }
                                 _ => unreachable!(),
@@ -1397,10 +1402,7 @@ impl MirScalarExpr {
                                     MirScalarExpr::CallUnary { func: f1, expr: e1 },
                                     MirScalarExpr::CallUnary { func: f2, expr: e2 },
                                 ) if f1 == f2
-                                    && e1
-                                        .repr_typ(column_types)
-                                        .union(&e2.repr_typ(column_types))
-                                        .is_ok() =>
+                                    && e1.repr_typ(column_types) == e2.repr_typ(column_types) =>
                                 {
                                     *e = cond
                                         .take()
@@ -1420,10 +1422,7 @@ impl MirScalarExpr {
                                     },
                                 ) if f1 == f2
                                     && e1a == e1b
-                                    && e2a
-                                        .repr_typ(column_types)
-                                        .union(&e2b.repr_typ(column_types))
-                                        .is_ok() =>
+                                    && e2a.repr_typ(column_types) == e2b.repr_typ(column_types) =>
                                 {
                                     *e = e1a.take().call_binary(
                                         cond.take().if_then_else(e2a.take(), e2b.take()),
@@ -1443,10 +1442,7 @@ impl MirScalarExpr {
                                     },
                                 ) if f1 == f2
                                     && e2a == e2b
-                                    && e1a
-                                        .repr_typ(column_types)
-                                        .union(&e1b.repr_typ(column_types))
-                                        .is_ok() =>
+                                    && e1a.repr_typ(column_types) == e1b.repr_typ(column_types) =>
                                 {
                                     *e = cond
                                         .take()
@@ -1610,8 +1606,6 @@ impl MirScalarExpr {
 
         /* #endregion */
     }
-
-
 
     /// Decompose an IsNull expression into a disjunction of
     /// simpler expressions.
@@ -3355,7 +3349,10 @@ mod tests {
             SqlScalarType::Int64.nullable(true),
             SqlScalarType::Int64.nullable(true),
             SqlScalarType::Int64.nullable(false),
-        ].into_iter().map(|t| ReprColumnType::from(&t)).collect();
+        ]
+        .into_iter()
+        .map(|t| ReprColumnType::from(&t))
+        .collect();
         let col = MirScalarExpr::column;
         let int64_typ = ReprScalarType::Int64;
         let err = |e| MirScalarExpr::literal(Err(e), int64_typ.clone());

@@ -446,7 +446,7 @@ impl Coordinator {
             item: CatalogItem::Index(Index {
                 create_sql,
                 global_id,
-                keys: keys.into_iter().collect(),
+                keys: keys.into(),
                 on,
                 conn_id: None,
                 resolved_ids,

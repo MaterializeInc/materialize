@@ -30,8 +30,8 @@ use std::time::{Duration, Instant};
 
 use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
-use mz_repr::{GlobalId, ReprRelationType};
 use mz_repr::explain::trace_plan;
+use mz_repr::{GlobalId, ReprRelationType};
 use mz_sql::names::QualifiedItemName;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_transform::TransformCtx;

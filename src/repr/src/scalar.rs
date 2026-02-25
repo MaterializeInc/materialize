@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
@@ -3735,28 +3736,6 @@ impl SqlScalarType {
         self.eq_inner(other, false)
     }
 
-    /// Determines equality among scalar types that acknowledges custom OIDs,
-    /// falling back to representation type equality (which ignores OIDs and
-    /// other inessential, SQL-level difference) when that fails.
-    ///
-    /// This function should only be called in assertion-like contexts, where
-    /// we really expect `true` as the result---it calls `soft_panic_or_log!`
-    /// when `base_eq` returns `false`.
-    pub fn base_eq_or_repr_eq_for_assertion(&self, other: &SqlScalarType) -> bool {
-        if self.base_eq(other) {
-            return true;
-        }
-
-        soft_panic_or_log!("repr type error: base_eq failed for {self:?} and {other:?}");
-        // SqlScalarType::base_eq does not consider nullability at all, but `ReprScalarType::eq` does
-        // To reconcile these differences, we check "compatibility", i.e., if we can union the types wthout error.
-        // Since ReprScalarType::union is a glorified nullability compositor, a successful union means the types
-        // are equal (modulo nullability)
-        ReprScalarType::from(self)
-            .union(&ReprScalarType::from(other))
-            .is_ok()
-    }
-
     /// Canonicalizes this scalar type, by round-tripping through repr types.
     pub fn repr_canonicalize(&mut self) {
         *self = SqlScalarType::from_repr(&ReprScalarType::from(&*self));
@@ -4723,19 +4702,7 @@ impl Arbitrary for ReprScalarType {
 ///
 /// It is important that any new variants for this enum be added to the `Arbitrary` instance
 /// and the `union` method.
-#[derive(
-    Clone,
-    Debug,
-    EnumKind,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    Ord,
-    PartialOrd,
-    Hash,
-    MzReflect
-)]
+#[derive(Clone, Debug, EnumKind, Serialize, Deserialize, Hash, MzReflect)]
 #[enum_kind(ReprScalarBaseType, derive(PartialOrd, Ord, Hash))]
 pub enum ReprScalarType {
     Bool,
@@ -4769,41 +4736,76 @@ pub enum ReprScalarType {
     AclItem,
 }
 
-impl ReprScalarType {
-    /// Compares two `ReprScalarType` values for structural equality,
-    /// ignoring the nullability of `Record` inner fields.
-    ///
-    /// This is useful for checks where inner field nullability is
-    /// expected to differ (e.g., one side was refined by an analysis)
-    /// but the base scalar type structure should still match.
-    pub fn base_eq(&self, other: &ReprScalarType) -> bool {
+impl PartialEq for ReprScalarType {
+    fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (ReprScalarType::Array(a), ReprScalarType::Array(b)) => a.base_eq(b),
+            (ReprScalarType::Array(a), ReprScalarType::Array(b)) => a.eq(b),
             (
                 ReprScalarType::List { element_type: a },
                 ReprScalarType::List { element_type: b },
-            ) => a.base_eq(b),
-            (
-                ReprScalarType::Record { fields: a },
-                ReprScalarType::Record { fields: b },
-            ) => {
+            ) => a.eq(b),
+            (ReprScalarType::Record { fields: a }, ReprScalarType::Record { fields: b }) => {
                 a.len() == b.len()
                     && a.iter()
                         .zip(b.iter())
-                        .all(|(af, bf)| af.scalar_type.base_eq(&bf.scalar_type))
+                        .all(|(af, bf)| af.scalar_type.eq(&bf.scalar_type))
             }
-            (
-                ReprScalarType::Map { value_type: a },
-                ReprScalarType::Map { value_type: b },
-            ) => a.base_eq(b),
+            (ReprScalarType::Map { value_type: a }, ReprScalarType::Map { value_type: b }) => {
+                a.eq(b)
+            }
             (
                 ReprScalarType::Range { element_type: a },
                 ReprScalarType::Range { element_type: b },
-            ) => a.base_eq(b),
-            _ => self == other,
+            ) => a.eq(b),
+            _ => ReprScalarBaseType::from(self) == ReprScalarBaseType::from(other),
         }
     }
+}
+impl Eq for ReprScalarType {}
 
+impl PartialOrd for ReprScalarType {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ReprScalarType {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (ReprScalarType::Array(a), ReprScalarType::Array(b)) => a.cmp(b),
+            (
+                ReprScalarType::List { element_type: a },
+                ReprScalarType::List { element_type: b },
+            ) => a.cmp(b),
+            (ReprScalarType::Record { fields: a }, ReprScalarType::Record { fields: b }) => {
+                let len_ordering = a.len().cmp(&b.len());
+                if len_ordering != Ordering::Equal {
+                    return len_ordering;
+                }
+
+                // NB ignoring nullability
+                for (af, bf) in a.iter().zip_eq(b.iter()) {
+                    let scalar_type_ordering = af.scalar_type.cmp(&bf.scalar_type);
+                    if scalar_type_ordering != Ordering::Equal {
+                        return scalar_type_ordering;
+                    }
+                }
+
+                Ordering::Equal
+            }
+            (ReprScalarType::Map { value_type: a }, ReprScalarType::Map { value_type: b }) => {
+                a.cmp(b)
+            }
+            (
+                ReprScalarType::Range { element_type: a },
+                ReprScalarType::Range { element_type: b },
+            ) => a.cmp(b),
+            _ => ReprScalarBaseType::from(self).cmp(&ReprScalarBaseType::from(other)),
+        }
+    }
+}
+
+impl ReprScalarType {
     /// Returns the union of two `ReprScalarType` or an error.
     ///
     /// Errors can only occur if the two types are built somewhere using different constructors.
@@ -4930,10 +4932,7 @@ impl From<&SqlScalarType> for ReprScalarType {
                 fields,
                 custom_id: _,
             } => ReprScalarType::Record {
-                fields: fields
-                    .into_iter()
-                    .map(|(_, typ)| typ.into())
-                    .collect(),
+                fields: fields.into_iter().map(|(_, typ)| typ.into()).collect(),
             },
             SqlScalarType::Oid => ReprScalarType::UInt32,
             SqlScalarType::Map {

@@ -284,7 +284,10 @@ mod support {
                         .value::<UniqueKeys>()
                         .expect("UniqueKeys required")
                         .clone();
-                    types.insert(*id, mz_repr::ReprRelationType::new(repr_cols).with_keys(keys));
+                    types.insert(
+                        *id,
+                        mz_repr::ReprRelationType::new(repr_cols).with_keys(keys),
+                    );
                 }
             }
             todo.extend(expr.children().rev().zip_eq(view.children_rev()));
@@ -308,16 +311,14 @@ mod support {
                         )))?;
                     }
                     // Assert that the column types have not changed.
-                    // We use `base_eq` here because Record inner field
-                    // nullability can legitimately differ between the stored
+                    // NB the ReprScalarType::eq ignorres nullability (correctly!)
+                    // since record field nullability can legitimately differ between the stored
                     // type and the analysis-recomputed type.
                     if !new_type
                         .column_types
                         .iter()
                         .zip_eq(typ.column_types.iter())
-                        .all(|(t1, t2)| {
-                            t1.scalar_type.base_eq(&t2.scalar_type)
-                        })
+                        .all(|(t1, t2)| t1.scalar_type == t2.scalar_type)
                     {
                         Err(crate::TransformError::Internal(format!(
                             "scalar types do not match: {:?} v {:?}",
