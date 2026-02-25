@@ -358,7 +358,7 @@ impl k8s_controller::Context for Context {
 
         self.check_environment_id_conflicts(mz)?;
 
-        global::Resources::new(&self.config, mz)
+        global::Resources::new(&self.config, mz)?
             .apply(&client, &mz.namespace())
             .await?;
 

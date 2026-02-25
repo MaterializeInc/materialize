@@ -46,21 +46,21 @@ pub struct Resources {
 }
 
 impl Resources {
-    pub fn new(config: &super::Config, mz: &Materialize) -> Self {
+    pub fn new(config: &super::Config, mz: &Materialize) -> Result<Self, Error> {
         let environmentd_network_policies = create_environmentd_network_policies(config, mz);
 
         let service_account = Box::new(create_service_account_object(config, mz));
         let role = Box::new(create_role_object(mz));
         let role_binding = Box::new(create_role_binding_object(mz));
-        let environmentd_certificate = Box::new(create_environmentd_certificate(config, mz));
+        let environmentd_certificate = Box::new(create_environmentd_certificate(config, mz)?);
 
-        Self {
+        Ok(Self {
             environmentd_network_policies,
             service_account,
             role,
             role_binding,
             environmentd_certificate,
-        }
+        })
     }
 
     #[instrument]
@@ -422,7 +422,7 @@ fn create_role_binding_object(mz: &Materialize) -> RoleBinding {
 fn create_environmentd_certificate(
     config: &super::Config,
     mz: &Materialize,
-) -> Option<Certificate> {
+) -> anyhow::Result<Option<Certificate>> {
     create_certificate(
         config.default_certificate_specs.internal.clone(),
         mz,

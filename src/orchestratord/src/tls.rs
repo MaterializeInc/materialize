@@ -9,6 +9,7 @@
 
 use std::str::FromStr;
 
+use anyhow::bail;
 use serde::Deserialize;
 
 use mz_cloud_resources::crd::{
@@ -44,11 +45,11 @@ pub fn create_certificate(
     additional_dns_names: Option<Vec<String>>,
     algorithm_hint: CertificatePrivateKeyAlgorithm,
     size_hint: Option<i64>,
-) -> Option<Certificate> {
+) -> anyhow::Result<Option<Certificate>> {
     let default_spec = default_spec.unwrap_or_else(MaterializeCertSpec::default);
     let mz_cert_spec = mz_cert_spec.unwrap_or_else(MaterializeCertSpec::default);
     let Some(issuer_ref) = mz_cert_spec.issuer_ref.or(default_spec.issuer_ref) else {
-        return None;
+        return Ok(None);
     };
     let mut secret_template = mz_cert_spec
         .secret_template
@@ -80,7 +81,7 @@ pub fn create_certificate(
                 .or(default_spec.private_key_size)
                 .unwrap_or_else(|| size_hint.unwrap_or(4096));
             if size < 2048 {
-                panic!("RSA key size must be at least 2048 bits");
+                bail!("RSA key size must be at least 2048 bits");
             }
             Some(size)
         }
@@ -90,13 +91,13 @@ pub fn create_certificate(
                 .or(default_spec.private_key_size)
                 .unwrap_or_else(|| size_hint.unwrap_or(256));
             if ![256, 384, 521].contains(&size) {
-                panic!("ECDSA key size must be one of 256, 384, or 521 bits");
+                bail!("ECDSA key size must be one of 256, 384, or 521 bits");
             }
             Some(size)
         }
         CertificatePrivateKeyAlgorithm::Ed25519 => None,
     };
-    Some(Certificate {
+    Ok(Some(Certificate {
         metadata: resource.managed_resource_meta(cert_name),
         spec: CertificateSpec {
             dns_names: Some(dns_names),
@@ -114,7 +115,7 @@ pub fn create_certificate(
             ..Default::default()
         },
         status: None,
-    })
+    }))
 }
 
 pub fn issuer_ref_defined(

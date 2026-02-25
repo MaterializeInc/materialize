@@ -213,7 +213,10 @@ impl Context {
         network_policies
     }
 
-    fn create_console_external_certificate(&self, console: &Console) -> Option<Certificate> {
+    fn create_console_external_certificate(
+        &self,
+        console: &Console,
+    ) -> anyhow::Result<Option<Certificate>> {
         create_certificate(
             self.config
                 .default_certificate_specs
@@ -637,7 +640,7 @@ impl k8s_controller::Context for Context {
         let console_service = self.create_console_service_object(console);
         apply_resource(&service_api, &console_service).await?;
 
-        let console_external_certificate = self.create_console_external_certificate(console);
+        let console_external_certificate = self.create_console_external_certificate(console)?;
         if let Some(certificate) = &console_external_certificate {
             trace!("creating new console external certificate");
             apply_resource(&certificate_api, certificate).await?;
