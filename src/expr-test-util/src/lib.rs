@@ -17,7 +17,7 @@ use mz_ore::result::ResultExt;
 use mz_ore::str::separated;
 use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{
-    Diff, GlobalId, ReprColumnType, ReprRelationType, Row, SqlColumnType, SqlRelationType,
+    Diff, GlobalId, ReprColumnType, ReprRelationType, ReprScalarType, Row, SqlRelationType,
     SqlScalarType,
 };
 use mz_repr_test_util::*;
@@ -332,7 +332,7 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
                         ));
                     }
                     "Literal" => {
-                        let column_type: SqlColumnType =
+                        let column_type: ReprColumnType =
                             serde_json::from_value(data.as_array().unwrap()[1].clone()).unwrap();
                         let obj = data.as_array().unwrap()[0].as_object().unwrap();
                         if let Some(inner_data) = obj.get("Ok") {
@@ -340,9 +340,9 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
                             let result = format!(
                                 "({} {})",
                                 datum_to_test_spec(row.unpack_first()),
-                                serialize::<SqlScalarType, _>(
+                                serialize::<ReprScalarType, _>(
                                     &serde_json::to_value(&column_type.scalar_type).unwrap(),
-                                    "SqlScalarType",
+                                    "ReprScalarType",
                                     self
                                 )
                             );
@@ -351,9 +351,9 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
                             let result = format!(
                                 "(err {} {})",
                                 serialize::<EvalError, _>(inner_data, "EvalError", self),
-                                serialize::<SqlScalarType, _>(
+                                serialize::<ReprScalarType, _>(
                                     &serde_json::to_value(&column_type.scalar_type).unwrap(),
-                                    "SqlScalarType",
+                                    "ReprScalarType",
                                     self
                                 ),
                             );
@@ -649,10 +649,13 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                                             Some(source) => format!("(get {})", source),
                                             // Treat the GlobalId
                                             None => {
-                                                let typ: SqlRelationType = serde_json::from_value(
-                                                    inner_map["typ"].clone(),
-                                                )
-                                                .unwrap();
+                                                let repr_typ: ReprRelationType =
+                                                    serde_json::from_value(
+                                                        inner_map["typ"].clone(),
+                                                    )
+                                                    .unwrap();
+                                                let typ =
+                                                    SqlRelationType::from_repr(&repr_typ);
                                                 self.scope.insert(&id.to_string(), typ);
                                                 format!("(get {})", id)
                                             }
@@ -677,21 +680,31 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                                             ))
                                         }
                                     }
+                                    let repr_typ: ReprRelationType =
+                                        serde_json::from_value(inner_map["typ"].clone())
+                                            .unwrap();
+                                    let sql_typ = SqlRelationType::from_repr(&repr_typ);
+                                    let sql_typ_json = serde_json::to_value(&sql_typ).unwrap();
                                     return Some(format!(
                                         "(constant [{}] {})",
                                         separated(" ", rows),
                                         serialize::<SqlRelationType, _>(
-                                            &inner_map["typ"],
+                                            &sql_typ_json,
                                             "SqlRelationType",
                                             self
                                         )
                                     ));
                                 } else if let Some(inner_data) = inner_map["rows"].get("Err") {
+                                    let repr_typ: ReprRelationType =
+                                        serde_json::from_value(inner_map["typ"].clone())
+                                            .unwrap();
+                                    let sql_typ = SqlRelationType::from_repr(&repr_typ);
+                                    let sql_typ_json = serde_json::to_value(&sql_typ).unwrap();
                                     return Some(format!(
                                         "(constant_err {} {})",
                                         serialize::<EvalError, _>(inner_data, "EvalError", self),
                                         serialize::<SqlRelationType, _>(
-                                            &inner_map["typ"],
+                                            &sql_typ_json,
                                             "SqlRelationType",
                                             self
                                         )
