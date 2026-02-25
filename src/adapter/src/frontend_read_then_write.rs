@@ -128,26 +128,14 @@ impl PeekClient {
 
         // Set up statement logging. If this execution happens as part of an outer statement
         // (e.g. EXECUTE/FETCH), reuse and retire that existing context.
-        let statement_logging_id = if outer_ctx_extra.is_none() {
-            let result = self.statement_logging_frontend.begin_statement_execution(
-                session,
-                params,
-                logging,
-                catalog.system_config(),
-                lifecycle_timestamps,
-            );
-
-            if let Some((logging_id, began_execution, mseh_update, prepared_statement)) = result {
-                self.log_began_execution(began_execution, mseh_update, prepared_statement);
-                Some(logging_id)
-            } else {
-                None
-            }
-        } else {
-            outer_ctx_extra
-                .take()
-                .and_then(|guard| guard.defuse().retire())
-        };
+        let statement_logging_id = self.begin_statement_logging(
+            session,
+            params,
+            logging,
+            &catalog,
+            lifecycle_timestamps,
+            outer_ctx_extra,
+        );
 
         // Reject mutations in read-only mode (e.g. during 0dt upgrades).
         if self.read_only {
@@ -178,13 +166,7 @@ impl PeekClient {
 
         // Log the end of execution
         if let Some(logging_id) = statement_logging_id {
-            let reason = match &result {
-                Ok(resp) => resp.into(),
-                Err(e) => StatementEndedExecutionReason::Errored {
-                    error: e.to_string(),
-                },
-            };
-            self.log_ended_execution(logging_id, reason);
+            self.end_statement_logging(logging_id, &result);
         }
 
         result
@@ -301,6 +283,14 @@ impl PeekClient {
         let max_occ_retries = usize::cast_from(catalog.system_config().max_occ_retries());
         let statement_timeout = *session.vars().statement_timeout();
 
+        // Linearize the read: wait for the oracle to advance past `as_of`
+        // before creating the subscribe or attempting any writes. This
+        // mirrors the old coordinator path's `strict_serializable_reads_tx`
+        // step and prevents writes at far-future timestamps (e.g. from a
+        // REFRESH MV with a far-future since) from bumping the oracle into
+        // the future.
+        self.ensure_read_linearized(&timeline, as_of).await?;
+
         // Acquire OCC semaphore permit to limit concurrent write operations
         let _permit = Arc::clone(&self.occ_write_semaphore)
             .acquire_owned()
@@ -323,7 +313,7 @@ impl PeekClient {
             )
             .await?;
 
-        let (retry_count, write_submitted, result) = self
+        let (retry_count, result) = self
             .run_occ_loop(
                 subscribe_handle,
                 target_id,
@@ -342,16 +332,6 @@ impl PeekClient {
             .observe(f64::from(u32::try_from(retry_count).unwrap_or(u32::MAX)));
 
         let result = result?;
-
-        // Ensure read linearization only when no write was submitted (no
-        // matching rows). When a write WAS submitted, the group commit already
-        // bumped the oracle past `as_of`, so linearization is guaranteed and we
-        // can skip the costly oracle read_ts call. When no write was submitted,
-        // we must wait for the oracle to advance past our read timestamp to
-        // prevent subsequent reads from seeing an earlier state.
-        if !write_submitted {
-            self.ensure_read_linearized(&timeline, as_of).await?;
-        }
 
         Ok(result)
     }
@@ -614,8 +594,7 @@ impl PeekClient {
     /// oracle read timestamp to the timestamp of the write so at that time it
     /// will be true that `chosen_ts <= oracle_ts`. Returns `(retry_count,
     /// write_submitted, result)` so the caller can record OCC retry metrics
-    /// regardless of whether the operation succeeded or failed, and skip
-    /// read linearization when a write was submitted.
+    /// regardless of whether the operation succeeded or failed.
     async fn run_occ_loop(
         &self,
         mut subscribe_handle: SubscribeHandle,
@@ -626,7 +605,7 @@ impl PeekClient {
         max_occ_retries: usize,
         table_desc: RelationDesc,
         statement_timeout: Duration,
-    ) -> (usize, bool, Result<ExecuteResponse, AdapterError>) {
+    ) -> (usize, Result<ExecuteResponse, AdapterError>) {
         // Timeout of 0 is equivalent to "off", meaning we will wait "forever."
         let effective_timeout = if statement_timeout == Duration::ZERO {
             Duration::MAX
@@ -642,7 +621,6 @@ impl PeekClient {
             initial_progress_seen: bool,
             retry_count: usize,
             byte_size: u64,
-            write_submitted: bool,
         }
 
         impl OccState {
@@ -653,7 +631,6 @@ impl PeekClient {
                     initial_progress_seen: false,
                     retry_count: 0,
                     byte_size: 0,
-                    write_submitted: false,
                 }
             }
 
@@ -831,11 +808,12 @@ impl PeekClient {
             let msg = match tokio::time::timeout(remaining, subscribe_handle.recv()).await {
                 Ok(Some(msg)) => msg,
                 Ok(None) => {
-                    // Channel closed
+                    // Channel closed — the subscribe was dropped, most likely
+                    // because the connection was canceled.
                     if state.initial_progress_seen && state.all_diffs.is_empty() {
                         break build_no_rows_response(&kind, &returning);
                     }
-                    break Err(AdapterError::Internal("subscribe channel closed".into()));
+                    break Err(AdapterError::Canceled);
                 }
                 Err(_) => {
                     // Timed out
@@ -907,7 +885,6 @@ impl PeekClient {
                         WriteResult::Success { .. } => {
                             // N.B. subscribe_handle is dropped here, which
                             // fires off the cleanup message.
-                            state.write_submitted = true;
                             break self.build_success_response(kind, returning, &state.all_diffs);
                         }
                         WriteResult::TimestampPassed {
@@ -984,7 +961,7 @@ impl PeekClient {
             }
         };
 
-        (state.retry_count, state.write_submitted, result)
+        (state.retry_count, result)
     }
 
     /// Build the success response after a successful write.

@@ -33,15 +33,18 @@ use tokio::sync::{Semaphore, oneshot};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
-use crate::command::{CatalogSnapshot, Command};
-use crate::coord::Coordinator;
+use crate::command::{CatalogSnapshot, Command, ExecuteResponse};
 use crate::coord::peek::FastPathPlan;
-use crate::statement_logging::WatchSetCreation;
+use crate::coord::{Coordinator, ExecuteContextGuard};
+use crate::session::{LifecycleTimestamps, Session};
 use crate::statement_logging::{
-    FrontendStatementLoggingEvent, PreparedStatementEvent, StatementLoggingFrontend,
-    StatementLoggingId,
+    FrontendStatementLoggingEvent, PreparedStatementEvent, PreparedStatementLoggingInfo,
+    StatementLoggingFrontend, StatementLoggingId, WatchSetCreation,
 };
 use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds, statement_logging};
+
+use mz_sql::plan::Params;
+use qcell::QCell;
 
 /// Storage collections trait alias we need to consult for since/frontiers.
 pub type StorageCollectionsHandle = Arc<
@@ -437,7 +440,59 @@ impl PeekClient {
         })
     }
 
-    // Statement logging helper methods
+    /// Set up statement logging for a frontend-sequenced operation.
+    ///
+    /// If `outer_ctx_extra` is `None`, begins a new statement execution log
+    /// entry. If `outer_ctx_extra` is `Some` (e.g. EXECUTE/FETCH), reuses and
+    /// retires the existing logging context.
+    ///
+    /// Returns the logging ID if this statement is being logged, or `None` if
+    /// it was not sampled.
+    pub(crate) fn begin_statement_logging(
+        &self,
+        session: &mut Session,
+        params: &Params,
+        logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
+        catalog: &Catalog,
+        lifecycle_timestamps: Option<LifecycleTimestamps>,
+        outer_ctx_extra: &mut Option<ExecuteContextGuard>,
+    ) -> Option<StatementLoggingId> {
+        if outer_ctx_extra.is_none() {
+            let result = self.statement_logging_frontend.begin_statement_execution(
+                session,
+                params,
+                logging,
+                catalog.system_config(),
+                lifecycle_timestamps,
+            );
+
+            if let Some((logging_id, began_execution, mseh_update, prepared_statement)) = result {
+                self.log_began_execution(began_execution, mseh_update, prepared_statement);
+                Some(logging_id)
+            } else {
+                None
+            }
+        } else {
+            outer_ctx_extra
+                .take()
+                .and_then(|guard| guard.defuse().retire())
+        }
+    }
+
+    /// Log the end of a frontend-sequenced statement execution.
+    pub(crate) fn end_statement_logging(
+        &self,
+        logging_id: StatementLoggingId,
+        result: &Result<ExecuteResponse, AdapterError>,
+    ) {
+        let reason = match result {
+            Ok(resp) => resp.into(),
+            Err(e) => statement_logging::StatementEndedExecutionReason::Errored {
+                error: e.to_string(),
+            },
+        };
+        self.log_ended_execution(logging_id, reason);
+    }
 
     /// Log the beginning of statement execution.
     pub(crate) fn log_began_execution(

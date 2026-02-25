@@ -1330,7 +1330,7 @@ impl SessionClient {
         let stmt_string = stmt.to_string();
 
         // Plan the statement
-        let (plan, target_cluster) = {
+        let (plan, target_cluster, resolved_ids) = {
             let session = self.session.as_mut().expect("SessionClient invariant");
             let conn_catalog = catalog.for_session(session);
             let (stmt, resolved_ids) = mz_sql::names::resolve(&conn_catalog, (*stmt).clone())?;
@@ -1346,8 +1346,28 @@ impl SessionClient {
                 ),
             };
 
-            (plan, target_cluster)
+            (plan, target_cluster, resolved_ids)
         };
+
+        // Check RBAC permissions, mirroring the coordinator's check in sequencer.rs.
+        {
+            let session = self.session.as_ref().expect("SessionClient invariant");
+            let conn_catalog = catalog.for_session(session);
+            let target_cluster_id = catalog
+                .resolve_target_cluster(target_cluster.clone(), session)
+                .ok()
+                .map(|cluster| cluster.id);
+            if let Err(e) = mz_sql::rbac::check_plan(
+                &conn_catalog,
+                None::<fn(u32) -> Option<mz_repr::role_id::RoleId>>,
+                session,
+                &plan,
+                target_cluster_id,
+                &resolved_ids,
+            ) {
+                return Err(e.into());
+            }
+        }
 
         // Handle ReadThenWrite plans or Insert plans.
         let rtw_plan = match plan {
@@ -1378,12 +1398,24 @@ impl SessionClient {
                 let inner_mir = optimized_mir.into_inner();
                 if inner_mir.as_const().is_some() && insert_plan.returning.is_empty() {
                     let session = self.session.as_mut().expect("SessionClient invariant");
-                    return Ok(Some(Coordinator::insert_constant(
-                        &catalog,
+
+                    let statement_logging_id = self.peek_client.begin_statement_logging(
                         session,
-                        insert_plan.id,
-                        inner_mir,
-                    )?));
+                        &params,
+                        &logging,
+                        &catalog,
+                        lifecycle_timestamps,
+                        outer_ctx_extra,
+                    );
+
+                    let result =
+                        Coordinator::insert_constant(&catalog, session, insert_plan.id, inner_mir);
+
+                    if let Some(logging_id) = statement_logging_id {
+                        self.peek_client.end_statement_logging(logging_id, &result);
+                    }
+
+                    return Ok(Some(result?));
                 }
 
                 // Get table descriptor arity for the finishing projection
