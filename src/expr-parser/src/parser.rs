@@ -1043,7 +1043,7 @@ mod scalar {
         } else {
             Err(Error::new(msg.span(), "expected `internal error: $msg`"))
         }?;
-        Ok(MirScalarExpr::Literal(Err(err), ReprColumnType::from(&bool::as_column_type()))) // FIXME
+        Ok(MirScalarExpr::literal(Err(err), ReprScalarType::Bool))
     }
 
     fn parse_literal_array(input: ParseStream) -> Result {

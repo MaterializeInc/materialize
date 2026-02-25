@@ -279,9 +279,9 @@ impl MirScalarExprDeserializeContext {
         match extract_literal_string(&first_arg, rest_of_stream)? {
             Some(litval) => {
                 let littyp = get_scalar_type_or_default(&litval[..], rest_of_stream)?;
-                Ok(Some(MirScalarExpr::Literal(
-                    Ok(test_spec_to_row(std::iter::once((&litval[..], &littyp)))?),
-                    ReprColumnType::from(&littyp.nullable(matches!(&litval[..], "null"))),
+                Ok(Some(MirScalarExpr::literal_from_row(
+                    test_spec_to_row(std::iter::once((&litval[..], &littyp)))?,
+                    ReprScalarType::from(&littyp),
                 )))
             }
             None => Ok(None),

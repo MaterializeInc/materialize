@@ -15,6 +15,7 @@ use std::{fmt, mem};
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
+use mz_ore::soft_assert_or_log;
 use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
@@ -157,6 +158,23 @@ impl MirScalarExpr {
 
     pub fn literal_ok(datum: Datum, typ: ReprScalarType) -> Self {
         MirScalarExpr::literal(Ok(datum), typ)
+    }
+
+    /// Constructs a `MirScalarExpr::Literal` from a pre-packed `Row`
+    /// containing a single datum and a `ReprScalarType`. Nullability is
+    /// derived by inspecting the first datum in the row.
+    pub fn literal_from_row(row: Row, typ: ReprScalarType) -> Self {
+        soft_assert_or_log!(
+            row.iter().count() == 1,
+            "literal_from_row called with a Row containing {} datums",
+            row.iter().count()
+        );
+        let nullable = row.unpack_first() == Datum::Null;
+        let typ = ReprColumnType {
+            scalar_type: typ,
+            nullable,
+        };
+        MirScalarExpr::Literal(Ok(row), typ)
     }
 
     pub fn literal_null(typ: ReprScalarType) -> Self {

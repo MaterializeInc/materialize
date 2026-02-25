@@ -1472,9 +1472,9 @@ mod tests {
                     CallBinary {
                         func: Eq.into(),
                         expr1: Box::new(MirScalarExpr::column(0)),
-                        expr2: Box::new(Literal(
-                            Ok(Row::pack_slice(&[Datum::Int32(1727694505)])),
-                            ReprColumnType::from(&SqlScalarType::Int32.nullable(false)),
+                        expr2: Box::new(MirScalarExpr::literal_ok(
+                            Datum::Int32(1727694505),
+                            ReprScalarType::Int32,
                         )),
                     },
                 ),
@@ -1512,10 +1512,7 @@ mod tests {
     #[mz_ore::test]
     fn test_eval_range() {
         // Example inspired by the tumbling windows temporal filter in the docs
-        let period_ms = MirScalarExpr::Literal(
-            Ok(Row::pack_slice(&[Datum::Int64(10)])),
-            ReprColumnType::from(&SqlScalarType::Int64.nullable(false)),
-        );
+        let period_ms = MirScalarExpr::literal_ok(Datum::Int64(10), ReprScalarType::Int64);
         let expr = MirScalarExpr::CallBinary {
             func: Gte.into(),
             expr1: Box::new(MirScalarExpr::CallUnmaterializable(
@@ -1584,10 +1581,7 @@ mod tests {
 
         let expr = MirScalarExpr::column(0)
             .call_binary(
-                MirScalarExpr::Literal(
-                    Ok(Row::pack_slice(&["ts".into()])),
-                    ReprColumnType::from(&SqlScalarType::String.nullable(false)),
-                ),
+                MirScalarExpr::literal_ok(Datum::from("ts"), ReprScalarType::String),
                 JsonbGetString,
             )
             .call_unary(CastJsonbToNumeric(None));

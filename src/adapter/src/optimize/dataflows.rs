@@ -36,7 +36,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::explain::trace_plan;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, GlobalId, ReprColumnType, ReprRelationType, ReprScalarType, Row};
+use mz_repr::{Datum, GlobalId, ReprRelationType, ReprScalarType, Row};
 use mz_sql::catalog::CatalogRole;
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -589,9 +589,9 @@ fn eval_unmaterializable_func(
                 datums,
             )
             .expect("known to be a valid array");
-        Ok(MirScalarExpr::Literal(
-            Ok(row),
-            ReprColumnType::from(&f.output_type()),
+        Ok(MirScalarExpr::literal_from_row(
+            row,
+            ReprScalarType::from(&f.output_type().scalar_type),
         ))
     };
     let pack_dict = |mut datums: Vec<(String, String)>| {
@@ -602,9 +602,9 @@ fn eval_unmaterializable_func(
                 .iter()
                 .map(|(key, value)| (key.as_str(), Datum::from(value.as_str()))),
         );
-        Ok(MirScalarExpr::Literal(
-            Ok(row),
-            ReprColumnType::from(&f.output_type()),
+        Ok(MirScalarExpr::literal_from_row(
+            row,
+            ReprScalarType::from(&f.output_type().scalar_type),
         ))
     };
     let pack = |datum| {
@@ -706,9 +706,9 @@ fn eval_unmaterializable_func(
                     ).expect("role_membership is 1 dimensional, and its length is used for the array length");
                 }
             });
-            Ok(MirScalarExpr::Literal(
-                Ok(row),
-                ReprColumnType::from(&f.output_type()),
+            Ok(MirScalarExpr::literal_from_row(
+                row,
+                ReprScalarType::from(&f.output_type().scalar_type),
             ))
         }
         UnmaterializableFunc::MzSessionId => pack(Datum::from(state.config().session_id)),
