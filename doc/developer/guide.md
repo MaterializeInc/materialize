@@ -51,10 +51,10 @@ For details on how we upgrade Rust see [here](/doc/developer/upgrade-rust.md).
 
 ### Docker
 
-Materialize's tests mostly require Docker and Docker Compose to be installed. On macOS it is part of Docker Desktop:
+Materialize's tests mostly require Docker and Docker Compose to be installed. On macOS it is part of Docker Desktop or Orbstack:
 
 ```shell
-brew install docker
+brew install --cask orbstack
 ```
 
 On Debian-based Linux both Docker and the Docker Compose plugin have to be installed:
@@ -145,7 +145,9 @@ recent Ubuntu LTS release](https://wiki.ubuntu.com/Releases). As of October 2023
 this is Python 3.10, provided in Ubuntu "Jammy Jellyfish". Earlier versions may
 work but are not supported. Our recommended installation methods are:
 
-- macOS: [Homebrew](https://brew.sh)
+- macOS: [Homebrew](https://brew.sh) + [uv](https://docs.astral.sh/uv/)
+  1. `brew install uv`
+  2. `uv python install 3.13`
 - Linux: System package manager if possible, or [community package repositories](https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa) if necessary
 - Windows: [Microsoft App Store](https://apps.microsoft.com/detail/python-3-11/9NRWMJP3717K?hl=en-US&gl=US)
 
@@ -189,7 +191,7 @@ documentation. Then please update this guide with the new instructions!
 You will need JDK 8 or 11. The easiest way to install this is via Homebrew:
 
 ```shell
-brew install --cask homebrew/cask-versions/temurin11
+brew install openjdk@11
 ```
 
 Then, download and extract the Confluent Platform tarball (when using bash, replace `~/.zshrc` with `~/.bashrc`):
@@ -432,6 +434,9 @@ See the [style guide](style.md) for additional recommendations on code style.
 Linting requires the following tools and Cargo packages to be installed:
 * buf ([installation guide](https://buf.build/docs/installation))
 * shellcheck ([installation guide](https://hackage.haskell.org/package/ShellCheck#installing))
+* npx (`brew install node`)
+* helm-docs (`brew install norwoodj/tap/helm-docs`)
+* trufflehog (`brew install trufflehog`)
 * cargo-about (`cargo install cargo-about`)
 * cargo-hakari (`cargo install cargo-hakari`)
 * cargo-deplint (`cargo install cargo-deplint`)
