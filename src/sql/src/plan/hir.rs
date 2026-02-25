@@ -552,7 +552,7 @@ impl ScalarWindowExpr {
         _inner: &SqlRelationType,
         _params: &BTreeMap<usize, SqlScalarType>,
     ) -> SqlColumnType {
-        self.func.output_type()
+        self.func.output_sql_type()
     }
 
     pub fn into_expr(self) -> mz_expr::AggregateFunc {
@@ -599,7 +599,7 @@ impl Display for ScalarWindowFunc {
 }
 
 impl ScalarWindowFunc {
-    pub fn output_type(&self) -> SqlColumnType {
+    pub fn output_sql_type(&self) -> SqlColumnType {
         match self {
             ScalarWindowFunc::RowNumber => SqlScalarType::Int64.nullable(false),
             ScalarWindowFunc::Rank => SqlScalarType::Int64.nullable(false),
@@ -668,7 +668,8 @@ impl ValueWindowExpr {
         inner: &SqlRelationType,
         params: &BTreeMap<usize, SqlScalarType>,
     ) -> SqlColumnType {
-        self.func.output_type(self.args.typ(outers, inner, params))
+        self.func
+            .output_sql_type(self.args.typ(outers, inner, params))
     }
 
     /// Converts into `mz_expr::AggregateFunc`.
@@ -734,7 +735,7 @@ pub enum ValueWindowFunc {
 }
 
 impl ValueWindowFunc {
-    pub fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    pub fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         match self {
             ValueWindowFunc::Lag | ValueWindowFunc::Lead => {
                 // The input is a (value, offset, default) record, so extract the type of the first arg
@@ -751,7 +752,7 @@ impl ValueWindowFunc {
                     fields: funcs
                         .iter()
                         .zip_eq(input_types)
-                        .map(|(f, t)| (ColumnName::from(""), f.output_type(t.clone())))
+                        .map(|(f, t)| (ColumnName::from(""), f.output_sql_type(t.clone())))
                         .collect(),
                     custom_id: None,
                 }
@@ -841,7 +842,7 @@ impl AggregateWindowExpr {
     ) -> SqlColumnType {
         self.aggregate_expr
             .func
-            .output_type(self.aggregate_expr.expr.typ(outers, inner, params))
+            .output_sql_type(self.aggregate_expr.expr.typ(outers, inner, params))
     }
 
     pub fn into_expr(self) -> (Box<HirScalarExpr>, mz_expr::AggregateFunc) {
@@ -1499,7 +1500,7 @@ impl AggregateFunc {
     /// The output column type also contains nullability information, which
     /// is (without further information) true for aggregations that are not
     /// counts.
-    pub fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    pub fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         let scalar_type = match self {
             AggregateFunc::Count => SqlScalarType::Int64,
             AggregateFunc::Any => SqlScalarType::Bool,
@@ -1570,7 +1571,7 @@ impl AggregateFunc {
                     fields: funcs
                         .iter()
                         .zip_eq(input_types)
-                        .map(|(f, t)| (ColumnName::from(""), f.output_type(t.clone())))
+                        .map(|(f, t)| (ColumnName::from(""), f.output_sql_type(t.clone())))
                         .collect(),
                     custom_id: None,
                 }
@@ -1631,7 +1632,7 @@ impl HirRelationExpr {
                 }
                 typ
             }
-            HirRelationExpr::CallTable { func, exprs: _ } => func.output_type(),
+            HirRelationExpr::CallTable { func, exprs: _ } => func.output_sql_type(),
             HirRelationExpr::Filter { input, .. } | HirRelationExpr::TopK { input, .. } => {
                 input.typ(outers, params)
             }
@@ -3938,18 +3939,18 @@ impl AbstractExpr for HirScalarExpr {
             }
             HirScalarExpr::Parameter(n, _name) => params[n].clone().nullable(true),
             HirScalarExpr::Literal(_, typ, _name) => typ.clone(),
-            HirScalarExpr::CallUnmaterializable(func, _name) => func.output_type(),
+            HirScalarExpr::CallUnmaterializable(func, _name) => func.output_sql_type(),
             HirScalarExpr::CallUnary {
                 expr,
                 func,
                 name: _,
-            } => func.output_type(expr.typ(outers, inner, params)),
+            } => func.output_sql_type(expr.typ(outers, inner, params)),
             HirScalarExpr::CallBinary {
                 expr1,
                 expr2,
                 func,
                 name: _,
-            } => func.output_type(&[
+            } => func.output_sql_type(&[
                 expr1.typ(outers, inner, params),
                 expr2.typ(outers, inner, params),
             ]),
@@ -3957,7 +3958,7 @@ impl AbstractExpr for HirScalarExpr {
                 exprs,
                 func,
                 name: _,
-            } => func.output_type(exprs.iter().map(|e| e.typ(outers, inner, params)).collect()),
+            } => func.output_sql_type(exprs.iter().map(|e| e.typ(outers, inner, params)).collect()),
             HirScalarExpr::If {
                 cond: _,
                 then,
@@ -3989,7 +3990,8 @@ impl AggregateExpr {
         inner: &SqlRelationType,
         params: &BTreeMap<usize, SqlScalarType>,
     ) -> SqlColumnType {
-        self.func.output_type(self.expr.typ(outers, inner, params))
+        self.func
+            .output_sql_type(self.expr.typ(outers, inner, params))
     }
 
     /// Returns whether the expression is COUNT(*) or not.  Note that

@@ -86,7 +86,7 @@ impl FlatMapElimination {
                     }
                     // The table function evaluated to a collection with exactly 1 row.
                     (Some((first_row, Diff::ONE)), None) => {
-                        let types = func.output_type().column_types;
+                        let types = func.output_sql_type().column_types;
                         let map_exprs = first_row
                             .into_iter()
                             .zip_eq(types)

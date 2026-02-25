@@ -44,7 +44,7 @@ impl EagerUnaryFunc for PadChar {
         Char(format_str_pad(a, self.length))
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Char {
             length: self.length,
         }

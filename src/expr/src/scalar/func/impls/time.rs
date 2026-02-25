@@ -109,7 +109,7 @@ impl EagerUnaryFunc for ExtractTime {
         date_part_time_inner(self.0, a)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Numeric { max_scale: None }.nullable(input.nullable)
     }
 }
@@ -142,7 +142,7 @@ impl EagerUnaryFunc for DatePartTime {
         date_part_time_inner(self.0, a)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Float64.nullable(input.nullable)
     }
 }
@@ -188,7 +188,7 @@ impl EagerUnaryFunc for TimezoneTime {
         timezone_time(self.tz, a, &self.wall_time)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Time.nullable(input.nullable)
     }
 }

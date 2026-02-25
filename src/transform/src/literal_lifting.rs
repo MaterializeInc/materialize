@@ -27,7 +27,7 @@ use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::visit::Visit;
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
-use mz_repr::{ReprScalarType, Row, RowPacker};
+use mz_repr::{Row, RowPacker};
 
 use crate::TransformCtx;
 
@@ -602,9 +602,7 @@ impl LiteralLifting {
                             eval,
                             // This type information should be available in the `a.expr` literal,
                             // but extracting it with pattern matching seems awkward.
-                            ReprScalarType::from(
-                                &aggr.func.output_type(aggr.expr.sql_typ(&[])).scalar_type,
-                            ),
+                            aggr.func.output_type(aggr.expr.typ(&[])).scalar_type,
                         )
                     };
 

@@ -467,7 +467,7 @@ impl MirRelationExpr {
             FlatMap { func, .. } => {
                 let mut result = input_types.next().unwrap().clone();
                 result.extend(
-                    func.output_type()
+                    func.output_sql_type()
                         .column_types
                         .iter()
                         .map(ReprColumnType::from),
@@ -2478,16 +2478,12 @@ pub struct AggregateExpr {
 impl AggregateExpr {
     /// Computes the type of this `AggregateExpr`.
     pub fn sql_typ(&self, column_types: &[SqlColumnType]) -> SqlColumnType {
-        self.func.output_type(self.expr.sql_typ(column_types))
+        self.func.output_sql_type(self.expr.sql_typ(column_types))
     }
 
     /// Computes the type of this `AggregateExpr`.
     pub fn typ(&self, column_types: &[ReprColumnType]) -> ReprColumnType {
-        ReprColumnType::from(
-            &self
-                .func
-                .output_type(SqlColumnType::from_repr(&self.expr.typ(column_types))),
-        )
+        self.func.output_type(self.expr.typ(column_types))
     }
 
     /// Returns whether the expression has a constant result.

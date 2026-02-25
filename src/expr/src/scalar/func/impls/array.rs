@@ -74,7 +74,7 @@ impl LazyUnaryFunc for CastArrayToString {
         Ok(Datum::String(temp_storage.push_string(buf)))
     }
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         SqlScalarType::String.nullable(input_type.nullable)
     }
 
@@ -177,7 +177,7 @@ impl LazyUnaryFunc for CastArrayToJsonb {
         Ok(temp_storage.push_unary_row(row))
     }
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Jsonb.nullable(input_type.nullable)
     }
 
@@ -254,7 +254,7 @@ impl LazyUnaryFunc for CastArrayToArray {
         Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, casted_datums))?)
     }
 
-    fn output_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
         self.return_ty.clone().nullable(true)
     }
 

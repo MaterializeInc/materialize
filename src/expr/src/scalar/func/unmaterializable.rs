@@ -19,7 +19,7 @@
 use std::fmt;
 
 use mz_lowertest::MzReflect;
-use mz_repr::{SqlColumnType, SqlScalarType};
+use mz_repr::{ReprColumnType, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
 #[derive(
@@ -58,7 +58,7 @@ pub enum UnmaterializableFunc {
 }
 
 impl UnmaterializableFunc {
-    pub fn output_type(&self) -> SqlColumnType {
+    pub fn output_sql_type(&self) -> SqlColumnType {
         match self {
             UnmaterializableFunc::CurrentDatabase => SqlScalarType::String.nullable(false),
             // TODO: The `CurrentSchema` function should return `name`. This is
@@ -104,6 +104,13 @@ impl UnmaterializableFunc {
             }
             .nullable(false),
         }
+    }
+
+    /// Computes the representation type of this unmaterializable function.
+    ///
+    /// This is a wrapper around [`Self::output_sql_type`] that converts the result to a representation type.
+    pub fn output_type(&self) -> ReprColumnType {
+        ReprColumnType::from(&self.output_sql_type())
     }
 }
 

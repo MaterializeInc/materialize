@@ -50,7 +50,7 @@ impl LazyUnaryFunc for CastRangeToString {
         Ok(Datum::String(temp_storage.push_string(buf)))
     }
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         SqlScalarType::String.nullable(input_type.nullable)
     }
 

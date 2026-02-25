@@ -243,7 +243,7 @@ impl ColumnKnowledge {
                             knowledge_stack,
                         )?;
                     }
-                    let func_typ = func.output_type();
+                    let func_typ = func.output_sql_type();
                     input_knowledge.extend(func_typ.column_types.iter().map(DatumKnowledge::from));
                     Ok(input_knowledge)
                 }

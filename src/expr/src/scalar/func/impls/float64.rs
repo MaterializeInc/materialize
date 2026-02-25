@@ -233,7 +233,7 @@ impl EagerUnaryFunc for CastFloat64ToNumeric {
         }
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
     }
 

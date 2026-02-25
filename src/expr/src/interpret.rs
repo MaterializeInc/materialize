@@ -764,7 +764,7 @@ impl<'a> ColumnSpecs<'a> {
         let range = self
             .unmaterializables
             .entry(func.clone())
-            .or_insert_with(|| ResultSpec::has_type(&func.output_type(), true));
+            .or_insert_with(|| ResultSpec::has_type(&func.output_sql_type(), true));
         *range = range.clone().intersect(update);
     }
 
@@ -847,12 +847,12 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     }
 
     fn unmaterializable(&self, func: &UnmaterializableFunc) -> Self::Summary {
-        let col_type = func.output_type();
+        let col_type = func.output_sql_type();
         let range = self
             .unmaterializables
             .get(func)
             .cloned()
-            .unwrap_or_else(|| ResultSpec::has_type(&func.output_type(), true));
+            .unwrap_or_else(|| ResultSpec::has_type(&func.output_sql_type(), true));
         ColumnSpec { col_type, range }
     }
 
@@ -872,7 +872,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
             })
         };
 
-        let col_type = func.output_type(summary.col_type);
+        let col_type = func.output_sql_type(summary.col_type);
 
         let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, fallible));
         ColumnSpec { col_type, range }
@@ -904,7 +904,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
             })
         };
 
-        let col_type = func.output_type(&[left.col_type, right.col_type]);
+        let col_type = func.output_sql_type(&[left.col_type, right.col_type]);
 
         let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, fallible));
         ColumnSpec { col_type, range }
@@ -954,7 +954,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         };
 
         let col_types = args.into_iter().map(|spec| spec.col_type).collect();
-        let col_type = func.output_type(col_types);
+        let col_type = func.output_sql_type(col_types);
 
         let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, fallible));
 
@@ -1318,7 +1318,7 @@ mod tests {
                         if !unary_typecheck(&func, &type_in) {
                             return None;
                         }
-                        let type_out = func.output_type(type_in);
+                        let type_out = func.output_sql_type(type_in);
                         let expr_out = MirScalarExpr::CallUnary {
                             func,
                             expr: Box::new(expr_in),
@@ -1337,7 +1337,7 @@ mod tests {
                             if !binary_typecheck(&func, &type_left, &type_right) {
                                 return None;
                             }
-                            let type_out = func.output_type(&[type_left, type_right]);
+                            let type_out = func.output_sql_type(&[type_left, type_right]);
                             let expr_out = MirScalarExpr::CallBinary {
                                 func,
                                 expr1: Box::new(expr_left),
@@ -1356,7 +1356,7 @@ mod tests {
                         if !variadic_typecheck(&func, &type_in) {
                             return None;
                         }
-                        let type_out = func.output_type(type_in);
+                        let type_out = func.output_sql_type(type_in);
                         let expr_out = MirScalarExpr::CallVariadic {
                             func,
                             exprs: exprs_in,

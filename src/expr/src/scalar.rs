@@ -2012,18 +2012,15 @@ impl MirScalarExpr {
         match self {
             MirScalarExpr::Column(i, _name) => column_types[*i].clone(),
             MirScalarExpr::Literal(_, typ) => typ.clone(),
-            MirScalarExpr::CallUnmaterializable(func) => ReprColumnType::from(&func.output_type()),
-            MirScalarExpr::CallUnary { expr, func } => ReprColumnType::from(
-                &func.output_type(SqlColumnType::from_repr(&expr.typ(column_types))),
-            ),
+            MirScalarExpr::CallUnmaterializable(func) => {
+                ReprColumnType::from(&func.output_sql_type())
+            }
+            MirScalarExpr::CallUnary { expr, func } => func.output_type(expr.typ(column_types)),
             MirScalarExpr::CallBinary { expr1, expr2, func } => {
-                ReprColumnType::from(&func.output_type(&[
-                    SqlColumnType::from_repr(&expr1.typ(column_types)),
-                    SqlColumnType::from_repr(&expr2.typ(column_types)),
-                ]))
+                func.output_type(&[expr1.typ(column_types), expr2.typ(column_types)])
             }
             MirScalarExpr::CallVariadic { exprs, func } => ReprColumnType::from(
-                &func.output_type(
+                &func.output_sql_type(
                     exprs
                         .iter()
                         .map(|e| SqlColumnType::from_repr(&e.typ(column_types)))

@@ -25,7 +25,6 @@ use mz_repr::adt::range::Range;
 use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{
     ColumnName, Datum, ReprColumnType, ReprRelationType, ReprScalarBaseType, ReprScalarType,
-    SqlColumnType,
 };
 
 /// Typechecking contexts as shared by various typechecking passes.
@@ -996,11 +995,7 @@ impl Typecheck {
                 // TODO(mgree) check t_exprs agrees with `func`'s input type
 
                 let t_out: Vec<ReprColumnType> = func
-                    .output_type()
-                    .column_types
-                    .iter()
-                    .map(ReprColumnType::from)
-                    .collect_vec();
+                    .output_type().column_types;
 
                 // FlatMap extends the existing columns
                 t_in.extend(t_out);
@@ -1508,31 +1503,23 @@ impl Typecheck {
 
                 Ok(typ)
             }
-            CallUnmaterializable(func) => Ok(ReprColumnType::from(&func.output_type())),
+            CallUnmaterializable(func) => Ok(func.output_type()),
             CallUnary { expr, func } => {
                 let typ_in = tc.typecheck_scalar(expr, source, column_types)?;
-                let typ_out = func.output_type(SqlColumnType::from_repr(&typ_in));
-                Ok(ReprColumnType::from(&typ_out))
+                let typ_out = func.output_type(typ_in);
+                Ok(typ_out)
             }
             CallBinary { expr1, expr2, func } => {
                 let typ_in1 = tc.typecheck_scalar(expr1, source, column_types)?;
                 let typ_in2 = tc.typecheck_scalar(expr2, source, column_types)?;
-                let typ_out = func.output_type(&[
-                    SqlColumnType::from_repr(&typ_in1),
-                    SqlColumnType::from_repr(&typ_in2),
-                ]);
-                Ok(ReprColumnType::from(&typ_out))
+                let typ_out = func.output_type(&[typ_in1, typ_in2]);
+                Ok(typ_out)
             }
-            CallVariadic { exprs, func } => Ok(ReprColumnType::from(
-                &func.output_type(
-                    exprs
-                        .iter()
-                        .map(|e| {
-                            tc.typecheck_scalar(e, source, column_types)
-                                .map(|typ| SqlColumnType::from_repr(&typ))
-                        })
-                        .collect::<Result<Vec<_>, TypeError>>()?,
-                ),
+            CallVariadic { exprs, func } => Ok(func.output_type(
+                exprs
+                    .iter()
+                    .map(|e| tc.typecheck_scalar(e, source, column_types))
+                    .collect::<Result<Vec<_>, TypeError>>()?,
             )),
             If { cond, then, els } => {
                 let cond_type = tc.typecheck_scalar(cond, source, column_types)?;
@@ -1589,9 +1576,7 @@ impl Typecheck {
 
             // TODO check that t_in is actually acceptable for `func`
 
-            Ok(ReprColumnType::from(
-                &expr.func.output_type(SqlColumnType::from_repr(&t_in)),
-            ))
+            Ok(expr.func.output_type(t_in))
         })
     }
 }
@@ -2069,7 +2054,7 @@ impl<'a> TypeError<'a> {
 #[cfg(test)]
 mod tests {
     use mz_ore::{assert_err, assert_ok};
-    use mz_repr::{arb_datum, arb_datum_for_column};
+    use mz_repr::{SqlColumnType, arb_datum, arb_datum_for_column};
     use proptest::prelude::*;
 
     use super::*;

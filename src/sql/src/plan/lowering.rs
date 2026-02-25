@@ -1534,7 +1534,7 @@ impl HirScalarExpr {
                             mz_expr::TableFunc::UnnestList {
                                 el_typ: aggregate
                                     .func
-                                    .output_type(agg_input_type)
+                                    .output_sql_type(agg_input_type)
                                     .scalar_type
                                     .unwrap_list_element_type()
                                     .clone(),

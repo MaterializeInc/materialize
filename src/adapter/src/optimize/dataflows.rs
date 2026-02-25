@@ -255,7 +255,7 @@ impl ExprPrep for ExprPrepWebhookValidation {
                 let now: Datum = now.try_into()?;
                 let const_expr = MirScalarExpr::literal_ok(
                     now,
-                    ReprScalarType::from(&f.output_type().scalar_type),
+                    ReprScalarType::from(&f.output_sql_type().scalar_type),
                 );
                 *e = const_expr;
             }
@@ -591,7 +591,7 @@ fn eval_unmaterializable_func(
             .expect("known to be a valid array");
         Ok(MirScalarExpr::literal_from_single_element_row(
             row,
-            ReprScalarType::from(&f.output_type().scalar_type),
+            ReprScalarType::from(&f.output_sql_type().scalar_type),
         ))
     };
     let pack_dict = |mut datums: Vec<(String, String)>| {
@@ -604,13 +604,13 @@ fn eval_unmaterializable_func(
         );
         Ok(MirScalarExpr::literal_from_single_element_row(
             row,
-            ReprScalarType::from(&f.output_type().scalar_type),
+            ReprScalarType::from(&f.output_sql_type().scalar_type),
         ))
     };
     let pack = |datum| {
         Ok(MirScalarExpr::literal_ok(
             datum,
-            ReprScalarType::from(&f.output_type().scalar_type),
+            ReprScalarType::from(&f.output_sql_type().scalar_type),
         ))
     };
 
@@ -708,7 +708,7 @@ fn eval_unmaterializable_func(
             });
             Ok(MirScalarExpr::literal_from_single_element_row(
                 row,
-                ReprScalarType::from(&f.output_type().scalar_type),
+                ReprScalarType::from(&f.output_sql_type().scalar_type),
             ))
         }
         UnmaterializableFunc::MzSessionId => pack(Datum::from(state.config().session_id)),
