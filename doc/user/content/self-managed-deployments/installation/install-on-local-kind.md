@@ -130,11 +130,12 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
    name: materialize-backend
    namespace: materialize-environment
    stringData:
-   metadata_backend_url: "postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432/materialize_db?sslmode=disable"
-   persist_backend_url: "s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
-   license_key: "<enter your license key here>"
+     metadata_backend_url: "postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432/materialize_db?sslmode=disable"
+     persist_backend_url: "s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
+     license_key: "<enter your license key here>"
    ---
    ```
+
 
 1. Install the Materialize Helm chart.
 
@@ -272,6 +273,12 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 
     1. Verify the installation and check the status:
 
+       {{< note >}}
+       It may take approximately 1-2 minutes for all resources to appear in the
+       namespace. Allow up to 90 seconds before verifying resource creation with
+       `kubectl get` commands.
+       {{< /note >}}
+
        ```shell
        kubectl get all -n materialize-environment
        ```
@@ -323,9 +330,13 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 
       {{< /tip >}}
 
+
 ## Next steps
 
 {{% self-managed/next-steps %}}
+
+- To enable authentication and authorization, see
+  [Security](/security/self-managed/).
 
 ## Clean up
 

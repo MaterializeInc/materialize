@@ -116,6 +116,15 @@ A Google account with permission to:
 
 {{< /warning >}}
 
+{{< tip >}}
+
+The simple example used in this tutorial enables [Password
+authentication](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/main/gcp/examples/simple/main.tf#L332).To
+use SASL/SCRAM-SHA-256, set
+[`authenticator_kind`](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/main/kubernetes/modules/materialize-instance/README.md#input_authenticator_kind)
+to `"Sasl"`.
+{{< /tip >}}
+
 ### Step 1: Set Up the Environment
 
 1. Open a terminal window.
@@ -360,6 +369,8 @@ guide](/self-managed-deployments/deployment-guidelines/gcp-deployment-guidelines
 {{< /note >}}
 
 See also:
+- [Configuring System
+  Parameters](/self-managed-deployments/configuration-system-parameters/)
 - [Materialize Operator
   Configuration](/self-managed-deployments/operator-configuration/)
 - [Materialize CRD Field
@@ -371,5 +382,5 @@ See also:
 
 ## See Also
 
-- [Materialize Operator Configuration](/installation/configuration/)
-- [Troubleshooting](/installation/troubleshooting/)
+- [Troubleshooting](/self-managed-deployments/troubleshooting/)
+- [Security](/security/self-managed/)

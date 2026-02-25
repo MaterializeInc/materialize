@@ -7,6 +7,26 @@ rows:
     "Description": |
       Disables authentication. All users are trusted based on their claimed
       identity **without** any verification. **Default**
+  - "authenticatorKind Value": "**SASL/SCRAM**"
+    "Description": |
+      Enables:
+
+      - [SASL/SCRAM-SHA-256
+      authentication](#configuring-saslscram-authentication) for **PostgreSQL
+      wire protocol connections**. SASL/SCRAM-SHA-256 is a challenge-response
+      authentication mechanism that provides enhanced security compared to
+      simple password authentication.
+
+      - Standard password authentication for HTTP/Web Console connections.
+
+      When enabled, users must authenticate with their password. Passwords are
+      automatically stored in SCRAM-SHA-256 format in the database.
+
+      {{< tip >}}
+      When enabled, you must also set the `mz_system` user password in
+      `external_login_password_mz_system`. See [Configuring SASL/SCRAM
+      authentication](#configuring-saslscram-authentication) for details.
+      {{</ tip >}}
   - "authenticatorKind Value": "**Password**"
     "Description": |
       Enables [password authentication](#configuring-password-authentication) for
@@ -16,15 +36,4 @@ rows:
       When enabled, you must also set the `mz_system` user password in
       `external_login_password_mz_system`. See [Configuring password
       authentication](#configuring-password-authentication) for details.
-      {{</ tip >}}
-  - "authenticatorKind Value": "**Sasl**"
-    "Description": |
-      Enables [SASL/SCRAM-SHA-256 authentication](#configuring-saslscram-authentication) for
-      **PostgreSQL wire protocol connections**. This is a challenge-response authentication
-      mechanism that provides enhanced security compared to simple password authentication.
-
-      {{< tip >}}
-      When enabled, you must also set the `mz_system` user password in
-      `external_login_password_mz_system`. See [Configuring SASL/SCRAM
-      authentication](#configuring-saslscram-authentication) for details.
       {{</ tip >}}
