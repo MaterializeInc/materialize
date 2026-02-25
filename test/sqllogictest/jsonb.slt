@@ -659,6 +659,63 @@ SELECT '{"a":1}'::JSONB ? 'a','{"a":1}'::JSONB ? 'b'
 ----
 true false
 
+# PostgreSQL: any jsonb operation on NULL returns NULL.
+query B
+SELECT NULL::jsonb ? 'key'
+----
+NULL
+
+query B
+SELECT NOT (NULL::jsonb ? 'key');
+----
+NULL
+
+# Operators that propagate nulls return NULL.
+query B
+SELECT NULL::jsonb @> '{"a":1}'
+----
+NULL
+
+query B
+SELECT NULL::jsonb <@ '{}'
+----
+NULL
+
+query T
+SELECT NULL::jsonb || '{}'::jsonb
+----
+NULL
+
+query T
+SELECT NULL::jsonb -> 'key'
+----
+NULL
+
+query T
+SELECT NULL::jsonb ->> 'key'
+----
+NULL
+
+query T
+SELECT NULL::jsonb #> '{a}'
+----
+NULL
+
+query T
+SELECT NULL::jsonb #>> '{a}'
+----
+NULL
+
+query T
+SELECT NULL::jsonb - 1
+----
+NULL
+
+query T
+SELECT NULL::jsonb - 'key'
+----
+NULL
+
 query BB
 SELECT '{"a":1,"b":1}'::JSONB ? 'a','{"a":1,"b":1}'::JSONB ? 'b'
 ----

@@ -1726,10 +1726,13 @@ fn jsonb_get_path_stringify<'a>(
     jsonb_stringify(json.into_datum(), temp_storage)
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "?", propagates_nulls = true)]
-fn jsonb_contains_string<'a>(a: Datum<'a>, k: &str) -> bool {
+#[sqlfunc(is_infix_op = true, sqlname = "?")]
+fn jsonb_contains_string<'a>(a: JsonbRef<'a>, k: &str) -> bool {
     // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
-    match a {
+    // When the left operand is SQL NULL (NULL::jsonb), JsonbRef::try_from_result rejects it,
+    // so the binary evaluator never calls this function and returns NULL (see binary.rs).
+    // So, this function only runs for non-null jsonb; a.into_datum() never sees Datum::Null.
+    match a.into_datum() {
         Datum::List(list) => list.iter().any(|k2| Datum::from(k) == k2),
         Datum::Map(dict) => dict.iter().any(|(k2, _v)| k == k2),
         Datum::String(string) => string == k,
