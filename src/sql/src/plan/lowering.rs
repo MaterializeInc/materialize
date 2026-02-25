@@ -2218,9 +2218,7 @@ fn attempt_outer_equijoin(
                         // Determine the types of nulls to use as filler.
                         let right_fill = rt
                             .into_iter()
-                            .map(|typ| {
-                                MirScalarExpr::literal_null(typ.scalar_type)
-                            })
+                            .map(|typ| MirScalarExpr::literal_null(typ.scalar_type))
                             .collect();
                         // Add to `result` absent elements, filled with typed nulls.
                         result = left_present
@@ -2253,9 +2251,7 @@ fn attempt_outer_equijoin(
                         // Determine the types of nulls to use as filler.
                         let left_fill = lt
                             .into_iter()
-                            .map(|typ| {
-                                MirScalarExpr::literal_null(typ.scalar_type)
-                            })
+                            .map(|typ| MirScalarExpr::literal_null(typ.scalar_type))
                             .collect();
 
                         // Add to `result` absent elements, prepended with typed nulls.
