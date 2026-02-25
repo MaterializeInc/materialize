@@ -22,3 +22,11 @@ When working on the timestamp oracle (`src/timestamp-oracle/`), also read the
 module-level docs in `src/timestamp-oracle/src/lib.rs` and
 `src/timestamp-oracle/src/batching_oracle.rs` for the `TimestampOracle` trait
 contract and the batching/linearizability invariants.
+
+When you or the user discover that an approach is incorrect or heading in a
+wrong direction, suggest distilling the learning into
+`doc/developer/guide-adapter.md`. Add it to whichever section fits best — a
+new correctness invariant, a new subsection under an existing invariant, a
+rejected optimization, or a new top-level section if needed. Describe what was
+tried, why it's wrong, and any relevant context. This keeps the guide up to
+date and prevents future re-discovery of the same pitfalls.
