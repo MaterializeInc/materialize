@@ -21,6 +21,7 @@ use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::PersistClient;
+use mz_persist_types::ShardId;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, SqlScalarType};
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use uuid::Uuid;
@@ -382,6 +383,8 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
             .into_element();
         Ok(ClusterId::user(id).ok_or(SqlCatalogError::IdExhaustion)?)
     }
+
+    fn shard_id(&self) -> ShardId;
 }
 
 trait AuditLogIteratorTrait: Iterator<Item = (AuditLog, Timestamp)> + Send + Sync + Debug {}

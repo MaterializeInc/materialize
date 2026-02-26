@@ -24,7 +24,7 @@ use mz_auth::hash::scram256_hash;
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BUILTIN_CLUSTER_REPLICAS, BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES, BUILTINS, Builtin,
-    Fingerprint, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+    Fingerprint, MZ_CATALOG_RAW, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
 use mz_catalog::config::StateConfig;
 use mz_catalog::durable::objects::{
@@ -55,7 +55,7 @@ use mz_sql::names::CommentObjectId;
 use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
-use mz_storage_client::controller::StorageMetadata;
+use mz_storage_client::controller::{StorageMetadata, StorageTxn};
 use mz_storage_client::storage_collections::StorageCollections;
 use tracing::{Instrument, info, warn};
 use uuid::Uuid;
@@ -648,7 +648,20 @@ impl Catalog {
         let mut state = self.state.clone();
 
         let mut storage = self.storage().await;
+        let shard_id = storage.shard_id();
         let mut txn = storage.transaction().await?;
+
+        // Ensure the storage controller knows about the catalog shard and associates it with the
+        // `MZ_CATALOG_RAW` builtin source.
+        let item_id = self.resolve_builtin_storage_collection(&MZ_CATALOG_RAW);
+        let global_id = self.get_entry(&item_id).latest_global_id();
+        match txn.get_collection_metadata().get(&global_id) {
+            None => {
+                txn.insert_collection_metadata([(global_id, shard_id)].into())
+                    .map_err(mz_catalog::durable::DurableCatalogError::from)?;
+            }
+            Some(id) => assert_eq!(*id, shard_id),
+        }
 
         storage_collections
             .initialize_state(&mut txn, collections)
