@@ -5,6 +5,8 @@ menu:
   main:
     parent: 'system-catalog'
     weight: 4
+aliases:
+  - /reference/system-catalog/mz_internal/
 ---
 
 The following sections describe the available objects in the `mz_internal`
@@ -27,7 +29,7 @@ The `mz_object_global_ids` table maps Materialize catalog item IDs to global IDs
 <!-- RELATION_SPEC mz_internal.mz_object_global_ids -->
 | Field        | Type     | Meaning                                                                                             |
 |--------------|----------|-----------------------------------------------------------------------------------------------------|
-| `id`         | [`text`] | The ID of the object. Corresponds to [`mz_objects.id`](/sql/system-catalog/mz_catalog/#mz_objects). |
+| `id`         | [`text`] | The ID of the object. Corresponds to [`mz_objects.id`](/reference/system-catalog/mz_catalog/#mz_objects). |
 | `global_id`  | [`text`] | The global ID of the object.                                                                        |
 
 ## `mz_recent_activity_log`
@@ -63,7 +65,7 @@ granted the [`mz_monitor` role](/security/appendix/appendix-built-in-roles/#syst
 |----------------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `execution_id`             | [`uuid`]                     | An ID that is unique for each executed statement.
 | `sample_rate`              | [`double precision`]         | The actual rate at which the statement was sampled.                                                                                                                                                                                                                           |
-| `cluster_id`               | [`text`]                     | The ID of the cluster the statement execution was directed to. Corresponds to [mz_clusters.id](/sql/system-catalog/mz_catalog/#mz_clusters).                                                                                                      |
+| `cluster_id`               | [`text`]                     | The ID of the cluster the statement execution was directed to. Corresponds to [mz_clusters.id](/reference/system-catalog/mz_catalog/#mz_clusters).                                                                                                      |
 | `application_name`         | [`text`]                     | The value of the `application_name` configuration parameter at execution time.                                                                                                                                                                                                |
 | `cluster_name`             | [`text`]                     | The name of the cluster with ID `cluster_id` at execution time.                                                                                                                                                                                                               |
 | `database_name`            | [`text`]                     | The value of the `database` configuration parameter at execution time.                                                                                                                                                                                                        |
@@ -474,10 +476,10 @@ deploying the changes to production.
 <!-- RELATION_SPEC mz_internal.mz_index_advice -->
 | Field                    | Type        | Meaning  |
 | ------------------------ | ----------- | -------- |
-| `object_id`              | [`text`]    | The ID of the object. Corresponds to [mz_objects.id](/sql/system-catalog/mz_catalog/#mz_objects). |
+| `object_id`              | [`text`]    | The ID of the object. Corresponds to [mz_objects.id](/reference/system-catalog/mz_catalog/#mz_objects). |
 | `hint`                   | [`text`]    | A suggestion to either change the object (e.g. create an index, turn a materialized view into an indexed view) or keep the object unchanged. |
 | `details`                | [`text`]    | Additional details on why the `hint` was proposed based on the dependencies of the object. |
-| `referenced_object_ids`  | [`list`]    | The IDs of objects referenced by `details`. Corresponds to [mz_objects.id](/sql/system-catalog/mz_catalog/#mz_objects). |
+| `referenced_object_ids`  | [`list`]    | The IDs of objects referenced by `details`. Corresponds to [mz_objects.id](/reference/system-catalog/mz_catalog/#mz_objects). |
 
 ## `mz_materialization_dependencies`
 
@@ -565,7 +567,7 @@ all database objects in the system.
 
 ## `mz_object_fully_qualified_names`
 
-The `mz_object_fully_qualified_names` view enriches the [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects) view with namespace information.
+The `mz_object_fully_qualified_names` view enriches the [`mz_catalog.mz_objects`](/reference/system-catalog/mz_catalog/#mz_objects) view with namespace information.
 
 <!-- RELATION_SPEC mz_internal.mz_object_fully_qualified_names -->
 | Field           | Type         | Meaning                                                                                                                                                                                         |
@@ -573,15 +575,15 @@ The `mz_object_fully_qualified_names` view enriches the [`mz_catalog.mz_objects`
 | `id`            | [`text`]     | Materialize's unique ID for the object.                                                                                                                                                         |
 | `name`          | [`text`]     | The name of the object.                                                                                                                                                                         |
 | `object_type`   | [`text`]     | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.                                                  |
-| `schema_id`     | [`text`]     | The ID of the schema to which the object belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).                                                                 |
-| `schema_name`   | [`text`]     | The name of the schema to which the object belongs. Corresponds to [`mz_schemas.name`](/sql/system-catalog/mz_catalog/#mz_schemas).                                                             |
-| `database_id`   | [`text`]     | The ID of the database to which the object belongs. Corresponds to [`mz_databases.id`](/sql/system-catalog/mz_catalog/#mz_schemas).                                                             |
-| `database_name` | [`text`]     | The name of the database to which the object belongs. Corresponds to [`mz_databases.name`](/sql/system-catalog/mz_catalog/#mz_databases).                                                       |
-| `cluster_id`    | [`text`]     | The ID of the cluster maintaining the source, materialized view, index, or sink. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters). `NULL` for other object types. |
+| `schema_id`     | [`text`]     | The ID of the schema to which the object belongs. Corresponds to [`mz_schemas.id`](/reference/system-catalog/mz_catalog/#mz_schemas).                                                                 |
+| `schema_name`   | [`text`]     | The name of the schema to which the object belongs. Corresponds to [`mz_schemas.name`](/reference/system-catalog/mz_catalog/#mz_schemas).                                                             |
+| `database_id`   | [`text`]     | The ID of the database to which the object belongs. Corresponds to [`mz_databases.id`](/reference/system-catalog/mz_catalog/#mz_schemas).                                                             |
+| `database_name` | [`text`]     | The name of the database to which the object belongs. Corresponds to [`mz_databases.name`](/reference/system-catalog/mz_catalog/#mz_databases).                                                       |
+| `cluster_id`    | [`text`]     | The ID of the cluster maintaining the source, materialized view, index, or sink. Corresponds to [`mz_clusters.id`](/reference/system-catalog/mz_catalog/#mz_clusters). `NULL` for other object types. |
 
 ## `mz_object_lifetimes`
 
-The `mz_object_lifetimes` view enriches the [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects) view with information about the last lifetime event that occurred for each object in the system.
+The `mz_object_lifetimes` view enriches the [`mz_catalog.mz_objects`](/reference/system-catalog/mz_catalog/#mz_objects) view with information about the last lifetime event that occurred for each object in the system.
 
 <!-- RELATION_SPEC mz_internal.mz_object_lifetimes -->
 | Field           | Type                           | Meaning                                                                                                                                        |
@@ -594,7 +596,7 @@ The `mz_object_lifetimes` view enriches the [`mz_catalog.mz_objects`](/sql/syste
 
 ## `mz_object_history`
 
-The `mz_object_history` view enriches the [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects) view with historical information about each object in the system.
+The `mz_object_history` view enriches the [`mz_catalog.mz_objects`](/reference/system-catalog/mz_catalog/#mz_objects) view with historical information about each object in the system.
 
 <!-- RELATION_SPEC mz_internal.mz_object_history -->
 | Field           | Type                           | Meaning                                                                                                                                        |
@@ -939,7 +941,7 @@ in the system on to user roles.
 ## `mz_show_all_my_privileges`
 
 The `mz_show_all_my_privileges` view is the same as
-[`mz_show_all_privileges`](/sql/system-catalog/mz_internal/#mz_show_all_privileges), but
+[`mz_show_all_privileges`](/reference/system-catalog/mz_internal/#mz_show_all_privileges), but
 only includes rows where the current role is a direct or indirect member of `grantee`.
 
 <!-- RELATION_SPEC mz_internal.mz_show_all_my_privileges -->
@@ -956,7 +958,7 @@ only includes rows where the current role is a direct or indirect member of `gra
 ## `mz_show_my_cluster_privileges`
 
 The `mz_show_my_cluster_privileges` view is the same as
-[`mz_show_cluster_privileges`](/sql/system-catalog/mz_internal/#mz_show_cluster_privileges), but
+[`mz_show_cluster_privileges`](/reference/system-catalog/mz_internal/#mz_show_cluster_privileges), but
 only includes rows where the current role is a direct or indirect member of `grantee`.
 
 <!-- RELATION_SPEC mz_internal.mz_show_my_cluster_privileges -->
@@ -970,7 +972,7 @@ only includes rows where the current role is a direct or indirect member of `gra
 ## `mz_show_my_database_privileges`
 
 The `mz_show_my_database_privileges` view is the same as
-[`mz_show_database_privileges`](/sql/system-catalog/mz_internal/#mz_show_database_privileges), but
+[`mz_show_database_privileges`](/reference/system-catalog/mz_internal/#mz_show_database_privileges), but
 only includes rows where the current role is a direct or indirect member of `grantee`.
 
 <!-- RELATION_SPEC mz_internal.mz_show_my_database_privileges -->
@@ -984,7 +986,7 @@ only includes rows where the current role is a direct or indirect member of `gra
 ## `mz_show_my_default_privileges`
 
 The `mz_show_my_default_privileges` view is the same as
-[`mz_show_default_privileges`](/sql/system-catalog/mz_internal/#mz_show_default_privileges), but
+[`mz_show_default_privileges`](/reference/system-catalog/mz_internal/#mz_show_default_privileges), but
 only includes rows where the current role is a direct or indirect member of `grantee`.
 
 <!-- RELATION_SPEC mz_internal.mz_show_my_default_privileges -->
@@ -1000,7 +1002,7 @@ only includes rows where the current role is a direct or indirect member of `gra
 ## `mz_show_my_object_privileges`
 
 The `mz_show_my_object_privileges` view is the same as
-[`mz_show_object_privileges`](/sql/system-catalog/mz_internal/#mz_show_object_privileges), but
+[`mz_show_object_privileges`](/reference/system-catalog/mz_internal/#mz_show_object_privileges), but
 only includes rows where the current role is a direct or indirect member of `grantee`.
 
 <!-- RELATION_SPEC mz_internal.mz_show_my_object_privileges -->
@@ -1017,7 +1019,7 @@ only includes rows where the current role is a direct or indirect member of `gra
 ## `mz_show_my_role_members`
 
 The `mz_show_my_role_members` view is the same as
-[`mz_show_role_members`](/sql/system-catalog/mz_internal/#mz_show_role_members), but
+[`mz_show_role_members`](/reference/system-catalog/mz_internal/#mz_show_role_members), but
 only includes rows where the current role is a direct or indirect member of `member`.
 
 <!-- RELATION_SPEC mz_internal.mz_show_my_role_members -->
@@ -1030,7 +1032,7 @@ only includes rows where the current role is a direct or indirect member of `mem
 ## `mz_show_my_schema_privileges`
 
 The `mz_show_my_schema_privileges` view is the same as
-[`mz_show_schema_privileges`](/sql/system-catalog/mz_internal/#mz_show_schema_privileges), but
+[`mz_show_schema_privileges`](/reference/system-catalog/mz_internal/#mz_show_schema_privileges), but
 only includes rows where the current role is a direct or indirect member of `grantee`.
 
 <!-- RELATION_SPEC mz_internal.mz_show_my_schema_privileges -->
@@ -1045,7 +1047,7 @@ only includes rows where the current role is a direct or indirect member of `gra
 ## `mz_show_my_system_privileges`
 
 The `mz_show_my_system_privileges` view is the same as
-[`mz_show_system_privileges`](/sql/system-catalog/mz_internal/#mz_show_system_privileges), but
+[`mz_show_system_privileges`](/reference/system-catalog/mz_internal/#mz_show_system_privileges), but
 only includes rows where the current role is a direct or indirect member of `grantee`.
 
 <!-- RELATION_SPEC mz_internal.mz_show_my_system_privileges -->

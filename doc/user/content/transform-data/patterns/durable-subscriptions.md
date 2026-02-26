@@ -123,7 +123,7 @@ views](/sql/create-materialized-view/), you can either:
 
 To see what history retention period has been configured for an object, look up
 the object in the
-[`mz_internal.mz_history_retention_strategies`](/sql/system-catalog/mz_internal/#mz_history_retention_strategies)
+[`mz_internal.mz_history_retention_strategies`](/reference/system-catalog/mz_internal/#mz_history_retention_strategies)
 catalog table. For example:
 
 ```mzsql

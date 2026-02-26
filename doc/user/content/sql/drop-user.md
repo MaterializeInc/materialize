@@ -18,7 +18,7 @@ DROP USER [IF EXISTS] <role_name>;
 Syntax element | Description
 ---------------|------------
 **IF EXISTS** | Optional. If specified, do not return an error if the specified role does not exist.
-`<role_name>` | The role you want to drop. For available roles, see [`mz_roles`](/sql/system-catalog/mz_catalog#mz_roles).
+`<role_name>` | The role you want to drop. For available roles, see [`mz_roles`](/reference/system-catalog/mz_catalog#mz_roles).
 
 ## Privileges
 

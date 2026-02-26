@@ -456,6 +456,6 @@ Check out the blog post [Delta Joins and Late Materialization](https://materiali
 [`MIN`]: /sql/functions/#min
 [`MAX`]: /sql/functions/#max
 [Top K]: /transform-data/patterns/top-k
-[`mz_introspection.mz_expected_group_size_advice`]: /sql/system-catalog/mz_introspection/#mz_expected_group_size_advice
+[`mz_introspection.mz_expected_group_size_advice`]: /reference/system-catalog/mz_introspection/#mz_expected_group_size_advice
 [dataflows]: /get-started/arrangements/#dataflows
 [`SELECT` syntax]: /sql/select/#syntax

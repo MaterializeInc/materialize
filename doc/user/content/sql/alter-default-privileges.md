@@ -105,8 +105,8 @@ The privileges required to execute this statement are:
 
 ## Useful views
 
-- [`mz_internal.mz_show_default_privileges`](/sql/system-catalog/mz_internal/#mz_show_default_privileges)
-- [`mz_internal.mz_show_my_default_privileges`](/sql/system-catalog/mz_internal/#mz_show_my_default_privileges)
+- [`mz_internal.mz_show_default_privileges`](/reference/system-catalog/mz_internal/#mz_show_default_privileges)
+- [`mz_internal.mz_show_my_default_privileges`](/reference/system-catalog/mz_internal/#mz_show_my_default_privileges)
 
 ## Related pages
 

@@ -4,7 +4,7 @@ description: "Learn more about the SQL functions and operators supported in Mate
 menu:
   main:
     identifier: sql-functions
-    parent: reference
+    parent: sql
     weight: 100
 disable_list: true
 ---

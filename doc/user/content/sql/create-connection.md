@@ -80,7 +80,7 @@ connection:
 
 You can retrieve the external ID for the connection, as well as an example trust
 policy, by querying the
-[`mz_internal.mz_aws_connections`](/sql/system-catalog/mz_internal/#mz_aws_connections)
+[`mz_internal.mz_aws_connections`](/reference/system-catalog/mz_internal/#mz_aws_connections)
 table:
 
 ```mzsql
@@ -830,7 +830,7 @@ arn:aws:iam::664411391173:role/mz_<REGION-ID>_<CONNECTION-ID>
 After creating the connection, you must configure the AWS PrivateLink service
 to accept connections from the AWS principal Materialize will connect as. The
 principals for AWS PrivateLink connections in your region are stored in
-the [`mz_aws_privatelink_connections`](/sql/system-catalog/mz_catalog/#mz_aws_privatelink_connections)
+the [`mz_aws_privatelink_connections`](/reference/system-catalog/mz_catalog/#mz_aws_privatelink_connections)
 system table.
 
 ```mzsql
@@ -979,9 +979,9 @@ The privileges required to execute this statement are:
 [`ALTER CONNECTION`]: /sql/alter-connection
 [`CREATE SOURCE`]: /sql/create-source
 [`CREATE SINK`]: /sql/create-sink
-[`mz_aws_privatelink_connections`]: /sql/system-catalog/mz_catalog/#mz_aws_privatelink_connections
-[`mz_connections`]: /sql/system-catalog/mz_catalog/#mz_connections
-[`mz_ssh_tunnel_connections`]: /sql/system-catalog/mz_catalog/#mz_ssh_tunnel_connections
+[`mz_aws_privatelink_connections`]: /reference/system-catalog/mz_catalog/#mz_aws_privatelink_connections
+[`mz_connections`]: /reference/system-catalog/mz_catalog/#mz_connections
+[`mz_ssh_tunnel_connections`]: /reference/system-catalog/mz_catalog/#mz_ssh_tunnel_connections
 [Ed25519 algorithm]: https://ed25519.cr.yp.to
 [latacora-crypto]: https://latacora.micro.blog/2018/04/03/cryptographic-right-answers.html
 [trust policy]: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_terms-and-concepts.html#term_trust-policy

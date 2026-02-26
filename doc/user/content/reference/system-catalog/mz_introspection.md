@@ -5,6 +5,8 @@ menu:
   main:
     parent: 'system-catalog'
     weight: 4
+aliases:
+  - /reference/system-catalog/mz_introspection/
 ---
 
 The following sections describe the available objects in the `mz_introspection`

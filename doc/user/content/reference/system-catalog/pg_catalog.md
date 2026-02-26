@@ -5,6 +5,8 @@ menu:
   main:
     parent: 'system-catalog'
     weight: 2
+aliases:
+  - /reference/system-catalog/pg_catalog/
 ---
 
 Materialize has compatibility shims for the following relations from [PostgreSQL's
