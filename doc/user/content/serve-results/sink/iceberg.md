@@ -238,15 +238,17 @@ engines. This setting involves tradeoffs:
 | Lower throughput efficiency | Higher throughput efficiency |
 
 **Recommendations:**
-- For real-time dashboards or alerting, use shorter intervals (`10s` to `1m`)
+- For production, use intervals of `60s` or longer
 - For batch analytics, use longer intervals (`5m` to `15m`)
 - If you notice query performance degradation from small files, increase the
   interval and consider running Iceberg compaction jobs
 
 {{< note >}}
 Outside of development environments, commit intervals should be at least `60s`.
-Short commit intervals increase catalog overhead and produce many small files
-that degrade query performance over time.
+Short commit intervals increase catalog overhead and produce many small files.
+Small files will result in degraded query performance. It also increases load on
+the Iceberg metadata, which can result in a degraded catalog, and non-responsive
+queries.
 {{< /note >}}
 
 ### Exactly-once delivery

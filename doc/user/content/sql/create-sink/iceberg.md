@@ -73,15 +73,17 @@ The `COMMIT INTERVAL` setting involves tradeoffs between latency and efficiency:
 | Higher S3 write costs (more PUT requests) | Lower S3 write costs |
 
 **Recommendations:**
-- For real-time use cases: `10s` to `1m`
+- For production: `60s` to `5m`
 - For batch analytics: `5m` to `15m`
 - If query performance degrades due to small files, increase the interval and
   run Iceberg compaction
 
 {{< note >}}
 Outside of development environments, commit intervals should be at least `60s`.
-Short commit intervals increase catalog overhead and produce many small files
-that degrade query performance over time.
+Short commit intervals increase catalog overhead and produce many small files.
+Small files will result in degraded query performance. It also increases load on
+the Iceberg metadata, which can result in a degraded catalog, and non-responsive
+queries.
 {{< /note >}}
 
 ### Unique keys
