@@ -28,7 +28,7 @@ use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_ore::soft_assert_or_log;
 use mz_pgtz::timezone::TimezoneSpec;
 use mz_repr::ReprColumnType;
-use mz_repr::adt::array::{ArrayDimension, ArrayDimensions, InvalidArrayError};
+use mz_repr::adt::array::{Array, ArrayDimension, ArrayDimensions, InvalidArrayError};
 use mz_repr::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
 use mz_repr::adt::range::{InvalidRangeError, Range, RangeBound, parse_range_bound_flags};
 use mz_repr::adt::system::Oid;
@@ -394,55 +394,33 @@ fn array_index<'a>(datums: &[Datum<'a>], offset: i64) -> Datum<'a> {
         .unwrap_or(Datum::Null)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct ArrayPosition;
-
-impl fmt::Display for ArrayPosition {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("array_position")
-    }
-}
-
-fn array_position<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
-    let array = match datums[0] {
-        Datum::Null => return Ok(Datum::Null),
-        o => o.unwrap_array(),
-    };
-
+#[sqlfunc]
+fn array_position<'a>(
+    array: Array<'a>,
+    search: Datum<'a>,
+    initial_pos: OptionalArg<Option<i32>>,
+) -> Result<Option<i32>, EvalError> {
     if array.dims().len() > 1 {
         return Err(EvalError::MultiDimensionalArraySearch);
     }
 
-    let search = datums[1];
     if search == Datum::Null {
-        return Ok(Datum::Null);
+        return Ok(None);
     }
 
-    let skip: usize = match datums.get(2) {
-        Some(Datum::Null) => return Err(EvalError::MustNotBeNull("initial position".into())),
+    let skip = match initial_pos.0 {
         None => 0,
-        Some(o) => usize::try_from(o.unwrap_int32())
-            .unwrap_or(0)
-            .saturating_sub(1),
+        Some(None) => return Err(EvalError::MustNotBeNull("initial position".into())),
+        Some(Some(o)) => usize::try_from(o).unwrap_or(0).saturating_sub(1),
     };
 
-    let r = array.elements().iter().skip(skip).position(|d| d == search);
+    let Some(r) = array.elements().iter().skip(skip).position(|d| d == search) else {
+        return Ok(None);
+    };
 
-    Ok(Datum::from(r.map(|p| {
-        // Adjust count for the amount we skipped, plus 1 for adjustng to PG indexing scheme.
-        i32::try_from(p + skip + 1).expect("fewer than i32::MAX elements in array")
-    })))
+    // Adjust count for the amount we skipped, plus 1 for adjusting to PG indexing scheme.
+    let p = i32::try_from(r + skip + 1).expect("fewer than i32::MAX elements in array");
+    Ok(Some(p))
 }
 
 #[derive(
@@ -1914,6 +1892,7 @@ impl VariadicFunc {
             VariadicFunc::RegexpReplace(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::JsonbBuildObject(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::JsonbBuildArray(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::ArrayPosition(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -1956,6 +1935,7 @@ impl VariadicFunc {
             | VariadicFunc::RegexpReplace(_)
             | VariadicFunc::JsonbBuildObject(_)
             | VariadicFunc::JsonbBuildArray(_)
+            | VariadicFunc::ArrayPosition(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::MapBuild(..) => Ok(map_build(&ds, temp_storage)),
             VariadicFunc::ArrayCreate(ArrayCreate {
@@ -1973,7 +1953,6 @@ impl VariadicFunc {
             VariadicFunc::ListSliceLinear(_) => Ok(list_slice_linear(&ds, temp_storage)),
             VariadicFunc::RegexpMatch(_) => regexp_match_dynamic(&ds, temp_storage),
             VariadicFunc::RangeCreate(..) => create_range(&ds, temp_storage),
-            VariadicFunc::ArrayPosition(_) => array_position(&ds),
             VariadicFunc::ArrayFill(..) => array_fill(&ds, temp_storage),
             VariadicFunc::RegexpSplitToArray(_) => {
                 let flags = if ds.len() == 2 {
