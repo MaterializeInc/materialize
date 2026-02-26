@@ -242,6 +242,19 @@ steps:
         coverage: skip
         sanitizer: skip
 
+      - id: console-lint
+        label: "Console lint and typecheck"
+        command: bin/ci-builder run stable ci/test/console/lint.sh
+        inputs:
+          - console/**
+          - ci/test/console/**
+        depends_on: []
+        timeout_in_minutes: 15
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        coverage: skip
+        sanitizer: skip
+
 
   - id: cargo-test
     label: ":rust: Cargo test"
@@ -282,19 +295,8 @@ steps:
     agents:
       queue: hetzner-aarch64-8cpu-16gb
 
-  - id: fdb
-    label: "FoundationDB"
-    depends_on: build-aarch64
-    timeout_in_minutes: 40
-    inputs: [test/foundationdb]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: foundationdb
-    agents:
-      queue: hetzner-aarch64-4cpu-8gb
-
   - id: cluster-tests
-    label: "Cluster tests"
+    label: Cluster
     depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/cluster]
@@ -306,7 +308,7 @@ steps:
       queue: hetzner-aarch64-16cpu-32gb
 
   - id: sqllogictest-fast
-    label: "Fast SQL logic tests"
+    label: SLT
     depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/sqllogictest]
@@ -320,7 +322,7 @@ steps:
       queue: hetzner-aarch64-16cpu-32gb
 
   - id: restarts
-    label: "Restart test"
+    label: Restart
     depends_on: build-aarch64
     timeout_in_minutes: 30
     parallelism: 4
@@ -330,11 +332,11 @@ steps:
     agents:
       queue: hetzner-aarch64-8cpu-16gb
 
-  - group: "MySQL tests"
+  - group: "MySQL"
     key: mysql-tests
     steps:
       - id: mysql-cdc
-        label: "MySQL CDC tests"
+        label: MySQL CDC
         parallelism: 8
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -346,7 +348,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: mysql-rtr
-        label: "MySQL RTR tests"
+        label: MySQL RTR
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/mysql-rtr]
@@ -356,11 +358,11 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
-  - group: "Postgres tests"
+  - group: Postgres
     key: postgres-tests
     steps:
       - id: pg-cdc
-        label: "Postgres CDC tests"
+        label: Postgres CDC
         parallelism: 8
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -373,7 +375,7 @@ steps:
         # the mzbuild postgres version will be used, which depends on the Dockerfile specification
 
       - id: pg-rtr
-        label: "Postgres RTR tests"
+        label: Postgres RTR
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-rtr]
@@ -384,7 +386,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
   - id: sql-server-cdc
-    label: "SQL Server CDC tests"
+    label: SQL Server
     depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/sql-server-cdc]
@@ -398,11 +400,11 @@ steps:
       # See: <https://github.com/microsoft/mssql-docker/issues/864>
       queue: hetzner-x86-64-8cpu-16gb
 
-  - group: "Connection tests"
+  - group: Connection
     key: connection-tests
     steps:
       - id: ssh-connection
-        label: SSH connection tests
+        label: SSH connection
         depends_on: build-x86_64
         timeout_in_minutes: 40
         inputs: [test/ssh-connection]
@@ -414,7 +416,7 @@ steps:
           queue: hetzner-x86-64-8cpu-16gb
 
       - id: fivetran-destination-tests
-        label: Fivetran Destination tests
+        label: Fivetran Destination
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/fivetran-destination]
@@ -424,11 +426,11 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
-  - group: "Kafka tests"
+  - group: Kafka
     key: kafka-tests
     steps:
       - id: kafka-auth
-        label: Kafka auth test
+        label: Kafka auth
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/kafka-auth]
@@ -440,7 +442,7 @@ steps:
           queue: hetzner-aarch64-8cpu-16gb
 
       - id: kafka-exactly-once
-        label: Kafka exactly-once tests
+        label: Kafka exactly-once
         depends_on: build-aarch64
         timeout_in_minutes: 30
         plugins:
@@ -450,7 +452,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: kafka-rtr
-        label: "Kafka RTR tests"
+        label: Kafka RTR
         depends_on: build-aarch64
         timeout_in_minutes: 30
         artifact_paths: junit_*.xml
@@ -473,11 +475,11 @@ steps:
           args: [--scenario=KafkaSources, --actions=80]
 
   - id: checks-no-restart-no-upgrade
-    label: "Checks parallel without restart or upgrade"
+    label: Checks parallel
     depends_on: build-x86_64
     inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 45
-    parallelism: 16
+    parallelism: 8
     agents:
       # Uses SQL Server, which is not yet available for ARM
       queue: hetzner-x86-64-8cpu-16gb
@@ -494,7 +496,7 @@ steps:
           ]
 
   - id: source-sink-errors
-    label: "Source/Sink Error Reporting"
+    label: "S&S error reporting"
     depends_on: build-aarch64
     parallelism: 3
     timeout_in_minutes: 30
@@ -507,7 +509,7 @@ steps:
   # Fast tests closer to the end, doesn't matter as much if they have to wait
   # for an agent
   - id: persistence
-    label: Persistence tests
+    label: Persistence
     depends_on: build-aarch64
     timeout_in_minutes: 30
     plugins:
@@ -517,7 +519,7 @@ steps:
       queue: hetzner-aarch64-8cpu-16gb
 
   - id: cluster-isolation
-    label: Cluster isolation test
+    label: Cluster isolation
     depends_on: build-aarch64
     timeout_in_minutes: 20
     inputs: [test/cluster-isolation]
@@ -528,7 +530,7 @@ steps:
       queue: hetzner-aarch64-4cpu-8gb
 
   - id: dbt-materialize
-    label: dbt-materialize tests
+    label: dbt-materialize
     depends_on: build-aarch64
     timeout_in_minutes: 30
     parallelism: 2
@@ -538,23 +540,11 @@ steps:
     agents:
       queue: hetzner-aarch64-8cpu-16gb
 
-  - id: dataflow-visualizer
-    label: "Dataflow Visualizer E2E tests"
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [test/dataflow-visualizer]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: dataflow-visualizer
-    agents:
-      # Playwright Docker image is x86_64 only
-      queue: hetzner-x86-64-4cpu-8gb
-
-  - group: "Debezium tests"
+  - group: Debezium
     key: debezium-tests
     steps:
       - id: debezium-postgres
-        label: "Debezium Postgres tests"
+        label: Debezium Postgres
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/debezium]
@@ -566,7 +556,7 @@ steps:
           queue: hetzner-aarch64-8cpu-16gb
 
       - id: debezium-sql-server
-        label: "Debezium SQL Server tests"
+        label: Debezium SQL Server
         depends_on: build-x86_64
         timeout_in_minutes: 30
         inputs: [test/debezium]
@@ -579,7 +569,7 @@ steps:
           queue: hetzner-x86-64-4cpu-8gb
 
       - id: debezium-mysql
-        label: "Debezium MySQL tests"
+        label: Debezium MySQL
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/debezium]
@@ -591,7 +581,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
   - id: storage-usage
-    label: "Storage Usage Table Test"
+    label: Storage usage table
     depends_on: build-aarch64
     timeout_in_minutes: 30
     agents:
@@ -601,7 +591,7 @@ steps:
           composition: storage-usage
 
   - id: tracing
-    label: "Tracing Fast Path"
+    label: Tracing fast path
     depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/tracing]
@@ -680,7 +670,7 @@ steps:
       queue: hetzner-aarch64-4cpu-8gb
 
   - id: mcp-materialize
-    label: mcp-materialize tests
+    label: mcp-materialize
     depends_on: build-aarch64
     timeout_in_minutes: 30
     plugins:
@@ -690,7 +680,7 @@ steps:
       queue: hetzner-aarch64-4cpu-8gb
 
   - id: chbench-demo
-    label: chbench smoke test
+    label: chbench smoke
     depends_on: build-aarch64
     plugins:
       - ./ci/plugins/mzcompose:
@@ -702,7 +692,7 @@ steps:
       queue: hetzner-aarch64-4cpu-8gb
 
   - id: metabase-demo
-    label: Metabase smoke test
+    label: Metabase
     depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
@@ -712,9 +702,19 @@ steps:
       # too slow to run emulated on aarch64, Metabase'ss docker image is not yet available for aarch64 natively yet: https://github.com/metabase/metabase/issues/13119
       queue: hetzner-x86-64-4cpu-8gb
 
-  - group: Docs tests
+  - id: fdb
+    label: "FoundationDB"
+    depends_on: build-aarch64
+    timeout_in_minutes: 40
+    inputs: [test/foundationdb]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: foundationdb
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+  - group: Docs
     key: docs-tests
-    label: ":rust: Docs tests"
     steps:
       - id: lint-docs
         label: Lint docs
@@ -769,22 +769,9 @@ steps:
           # SQL Server doesn't support ARM: https://github.com/microsoft/mssql-docker/issues/944
           queue: hetzner-x86-64-4cpu-8gb
 
-  - group: Console tests
+  - group: Console
     key: console-tests
     steps:
-      - id: console-lint
-        label: "Console lint and typecheck"
-        command: bin/ci-builder run stable ci/test/console/lint.sh
-        inputs:
-          - console/**
-          - ci/test/console/**
-        depends_on: []
-        timeout_in_minutes: 15
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-        coverage: skip
-        sanitizer: skip
-
       - id: console-test
         label: "Console unit tests"
         command: bin/ci-builder run stable ci/test/console/test.sh
@@ -800,7 +787,7 @@ steps:
         sanitizer: skip
 
       - id: console-sql-test
-        label: "Console SQL tests"
+        label: "Console SQL"
         depends_on: build-x86_64
         timeout_in_minutes: 30
         inputs:
@@ -817,7 +804,7 @@ steps:
         sanitizer: skip
 
       - id: console-e2e-test
-        label: "Console E2E against staging"
+        label: "Console E2E/staging"
         command: bin/ci-builder run console ci/test/console/e2e.sh
         inputs:
           - console/**
@@ -836,7 +823,7 @@ steps:
         ci_glue_exempt: true
 
       - id: console-e2e-test-prod
-        label: "Console E2E against production"
+        label: "Console E2E/prod"
         command: bin/ci-builder run console ci/test/console/e2e-prod.sh
         inputs:
           - console/**
@@ -868,6 +855,18 @@ steps:
         coverage: skip
         sanitizer: skip
         ci_glue_exempt: true
+
+      - id: dataflow-visualizer
+        label: Dataflow visualizer
+        depends_on: build-x86_64
+        timeout_in_minutes: 30
+        inputs: [test/dataflow-visualizer]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: dataflow-visualizer
+        agents:
+          # Playwright Docker image is x86_64 only
+          queue: hetzner-x86-64-4cpu-8gb
 
   - id: deploy-website
     label: Deploy website

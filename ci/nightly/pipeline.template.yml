@@ -283,7 +283,7 @@ steps:
     key: kafka
     steps:
       - id: kafka-matrix
-        label: Kafka smoke test against previous Kafka versions
+        label: Previous Kafka versions
         depends_on: build-aarch64
         timeout_in_minutes: 120
         parallelism: 2
@@ -295,7 +295,7 @@ steps:
         skip: "https://github.com/MaterializeInc/database-issues/issues/9510"
 
       - id: kafka-multi-broker
-        label: Kafka multi-broker test
+        label: Kafka multi-broker
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
@@ -305,7 +305,7 @@ steps:
               composition: kafka-multi-broker
 
       - id: redpanda-resumption
-        label: ":panda_face: resumption tests"
+        label: ":panda_face: resumption"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         plugins:
@@ -535,7 +535,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
   - id: ssh-connection-extended
-    label: Extended SSH connection tests
+    label: Extended SSH connection
     depends_on: build-aarch64
     timeout_in_minutes: 45
     plugins:
@@ -685,11 +685,11 @@ steps:
               composition: zippy
               args: [--scenario=AlterConnectionWithKafkaSources, --actions=10000, --max-execution-time=30m]
 
-  - group: Source Resumption tests
+  - group: Source Resumption
     key: source-resumption-tests
     steps:
       - id: kafka-resumption
-        label: Kafka resumption tests
+        label: Kafka resumption
         depends_on: build-aarch64
         timeout_in_minutes: 30
         plugins:
@@ -699,7 +699,7 @@ steps:
           queue: hetzner-aarch64-8cpu-16gb
 
       - id: mysql-cdc-resumption
-        label: "MySQL CDC resumption tests"
+        label: MySQL CDC resumption
         parallelism: 2
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -711,7 +711,7 @@ steps:
           queue: hetzner-aarch64-8cpu-16gb
 
       - id: pg-cdc-resumption
-        label: "Postgres CDC resumption tests"
+        label: Postgres CDC resumption
         parallelism: 2
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -723,7 +723,7 @@ steps:
           queue: hetzner-aarch64-8cpu-16gb
 
       - id: sql-server-resumption-old-syntax
-        label: "SQL Server CDC resumption old syntax tests"
+        label: SQL Server CDC resumption old syntax
         depends_on: build-x86_64
         timeout_in_minutes: 60
         inputs: [test/sql-server-resumption-old-syntax]
@@ -740,7 +740,7 @@ steps:
     key: cdc-old-source-syntax
     steps:
       - id: mysql-cdc-old-syntax
-        label: MySQL CDC tests (before source versioning)
+        label: MySQL CDC (before source versioning)
         depends_on: build-aarch64
         timeout_in_minutes: 60
         plugins:
@@ -750,7 +750,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: mysql-cdc-migration
-        label: MySQL CDC source-versioning migration tests
+        label: MySQL CDC source-versioning migration
         depends_on: build-aarch64
         timeout_in_minutes: 360
         plugins:
@@ -761,7 +761,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: mysql-cdc-resumption-old-syntax
-        label: MySQL CDC resumption tests (before source versioning)
+        label: MySQL CDC resumption (before source versioning)
         depends_on: build-aarch64
         timeout_in_minutes: 60
         plugins:
@@ -771,7 +771,7 @@ steps:
           queue: hetzner-aarch64-8cpu-16gb
 
       - id: mysql-rtr-old-syntax
-        label: MySQL RTR tests (before source versioning)
+        label: MySQL RTR (before source versioning)
         depends_on: build-aarch64
         timeout_in_minutes: 30
         plugins:
@@ -781,7 +781,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: pg-cdc-old-syntax
-        label: Postgres CDC tests (before source versioning)
+        label: Postgres CDC (before source versioning)
         depends_on: build-aarch64
         timeout_in_minutes: 60
         plugins:
@@ -792,7 +792,7 @@ steps:
         # the mzbuild postgres version will be used, which depends on the Dockerfile specification
 
       - id: pg-cdc-migration
-        label: Postgres CDC source-versioning migration tests
+        label: Postgres CDC source-versioning migration
         depends_on: build-aarch64
         timeout_in_minutes: 360
         plugins:
@@ -803,7 +803,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: pg-cdc-resumption-old-syntax
-        label: Postgres CDC resumption tests (before source versioning)
+        label: Postgres CDC resumption (before source versioning)
         depends_on: build-aarch64
         timeout_in_minutes: 60
         plugins:
@@ -813,7 +813,7 @@ steps:
           queue: hetzner-aarch64-8cpu-16gb
 
       - id: pg-cdc-old-syntax-multi-version-upgrade-random
-        label: Postgres CDC tests (before source versioning, multi-version upgrade, random upgrade path)
+        label: Postgres CDC (before source versioning, multi-version upgrade, random upgrade path)
         depends_on: build-aarch64
         timeout_in_minutes: 120
         plugins:
@@ -825,7 +825,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: pg-cdc-old-syntax-multi-version-upgrade-earliest-to-current
-        label: Postgres CDC tests (before source versioning, multi-version upgrade, earliest to current direct upgrade)
+        label: Postgres CDC (before source versioning, multi-version upgrade, earliest to current direct upgrade)
         depends_on: build-aarch64
         timeout_in_minutes: 120
         plugins:
@@ -837,7 +837,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: pg-rtr-old-syntax
-        label: Postgres RTR tests (before source versioning)
+        label: Postgres RTR (before source versioning)
         depends_on: build-aarch64
         timeout_in_minutes: 30
         plugins:
@@ -858,7 +858,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: testdrive-kafka-migration
-        label: "Testdrive (before Kafka source versioning) migration tests"
+        label: "Testdrive (before Kafka source versioning) migration"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         plugins:
@@ -870,7 +870,7 @@ steps:
         parallelism: 2
 
       - id: sql-server-cdc-old-syntax
-        label: "SQL Server CDC old syntax tests"
+        label: SQL Server CDC old syntax
         depends_on: build-x86_64
         timeout_in_minutes: 120
         inputs: [test/sql-server-cdc-old-syntax]
@@ -2073,7 +2073,7 @@ steps:
               args: [--runtime=1500, --scenario=0dt-deploy, --threads=8]
 
   - id: slow-cluster
-    label: "Slow Cluster tests"
+    label: Cluster (slow)
     depends_on: build-aarch64
     timeout_in_minutes: 30
     agents:
@@ -2093,11 +2093,11 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: balancerd
 
-  - group: Legacy upgrade tests
+  - group: Legacy upgrade
     key: legacy-upgrade
     steps:
       - id: legacy-upgrade-git
-        label: Legacy upgrade tests (last version from git)
+        label: Legacy upgrade (last version from git)
         depends_on: build-aarch64
         timeout_in_minutes: 60
         plugins:
@@ -2108,7 +2108,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: legacy-upgrade-docs
-        label: "Legacy upgrade tests (last version from docs)"
+        label: Legacy upgrade (last version from docs)
         depends_on: build-aarch64
         timeout_in_minutes: 60
         plugins:
@@ -2118,7 +2118,7 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
-  - group: Cloud tests
+  - group: Cloud
     key: cloudtests
     steps:
       - id: cloudtest
@@ -2255,7 +2255,7 @@ steps:
       queue: hetzner-aarch64-4cpu-8gb
 
   - id: sqllogictest
-    label: ":bulb: SQL logic tests (2 replicas)"
+    label: ":bulb: SLT (2 replicas)"
     depends_on: build-aarch64
     timeout_in_minutes: 480
     parallelism: 8
@@ -2268,7 +2268,7 @@ steps:
           args: [--replicas=2, --parallelism=8]
 
   - id: iceberg
-    label: "Iceberg tests"
+    label: Iceberg
     depends_on: build-aarch64
     timeout_in_minutes: 30
     plugins:
@@ -2341,11 +2341,11 @@ steps:
                args: [--runtime=2800, --scenario=concurrent]
          skip: "Not stable yet, not clear if this is a product issue"
 
-  - group: "Language tests"
+  - group: Language
     key: language-tests
     steps:
       - id: lang-csharp
-        label: ":csharp: tests"
+        label: ":csharp:"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         plugins:
@@ -2355,7 +2355,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: lang-js
-        label: ":js: tests"
+        label: ":js:"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         plugins:
@@ -2365,7 +2365,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: lang-java
-        label: ":java: tests"
+        label: ":java:"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         plugins:
@@ -2375,7 +2375,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: lang-python
-        label: ":python: tests"
+        label: ":python:"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         plugins:
@@ -2385,7 +2385,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: lang-ruby
-        label: ":ruby: tests"
+        label: ":ruby:"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         plugins:
@@ -2394,7 +2394,7 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
-  - group: "Orchestratord tests"
+  - group: Orchestratord
     key: orchestratord-test
     steps:
       - id: orchestratord-defaults
@@ -2517,7 +2517,7 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-balancer
-        label: "Orchestratord balancer CRD tests"
+        label: Orchestratord balancer CRD
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
@@ -2530,7 +2530,7 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-upgrade-operator
-        label: "Orchestratord operator upgrade tests"
+        label: Orchestratord operator upgrade
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120

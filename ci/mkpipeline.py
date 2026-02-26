@@ -175,9 +175,6 @@ so it is executed.""",
                 args.sanitizer,
                 lto,
             )
-            # Steps marked ci_glue_exempt should still be trimmed based on
-            # their own inputs, even when CI glue code has changed, since
-            # they don't depend on CI infrastructure (e.g. console e2e tests).
             trim_ci_glue_exempt_steps(pipeline)
         else:
             print("Trimming unchanged steps from pipeline")
@@ -505,8 +502,8 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
                 step["agents"]["queue"] = "linux-aarch64-medium"
 
         elif agent == "hetzner-aarch64-16cpu-32gb":
-            if "hetzner-x86-64-16cpu-32gb" not in stuck:
-                step["agents"]["queue"] = "hetzner-x86-64-16cpu-32gb"
+            if "hetzner-x86-64-12cpu-24gb" not in stuck:
+                step["agents"]["queue"] = "hetzner-x86-64-12cpu-24gb"
                 if step.get("depends_on") == "build-aarch64":
                     step["depends_on"] = "build-x86_64"
             else:
@@ -1041,10 +1038,6 @@ def have_paths_changed(globs: Iterable[str]) -> bool:
 
 
 def trim_ci_glue_exempt_steps(pipeline: Any) -> None:
-    """Trim steps marked with ci_glue_exempt based on their own inputs, even
-    when CI glue code has changed. These steps (e.g. console e2e tests) don't
-    depend on CI infrastructure and should only run when their declared inputs
-    have actually changed."""
     for step in steps(pipeline):
         if not step.get("ci_glue_exempt"):
             continue

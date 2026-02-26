@@ -117,7 +117,7 @@ docker pull "ghcr.io/materializeinc/cloud:$cloud_ref"
 
 # --- Kind cluster ---
 
-ci_collapsed_heading "Setting up cloud kind cluster"
+ci_collapsed_heading "Setting up cloud kind cluster (~10 min)"
 
 # Extract Frontegg JWK from cloud config
 frontegg_jwk=$(node -e "
