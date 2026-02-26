@@ -492,6 +492,63 @@ impl Catalog {
         })
     }
 
+    /// Performs an incremental dry-run catalog transaction: processes only the
+    /// NEW ops against an accumulated `CatalogState` from previous dry runs.
+    /// This avoids the O(N^2) replay cost of `catalog_transact_with_ddl_transaction`.
+    ///
+    /// Returns the new accumulated state and the OID allocator position.
+    pub async fn transact_incremental_dry_run(
+        &self,
+        base_state: &CatalogState,
+        ops: Vec<Op>,
+        session: Option<&ConnMeta>,
+        prev_next_oid: Option<u64>,
+        oracle_write_ts: mz_repr::Timestamp,
+    ) -> Result<(CatalogState, u64), AdapterError> {
+        // For DDL transactions, items are not temporary (CREATE TABLE FROM SOURCE, etc.)
+        // but we still need to check for collisions.
+        let temporary_ids = self.temporary_ids(&ops, BTreeSet::new())?;
+
+        let mut builtin_table_updates = vec![];
+        let mut catalog_updates = vec![];
+        let mut audit_events = vec![];
+        let mut storage = self.storage().await;
+        let mut tx = storage
+            .transaction()
+            .await
+            .unwrap_or_terminate("starting catalog transaction");
+
+        // Advance OID counter past previously-allocated OIDs from earlier dry runs.
+        if let Some(next_oid) = prev_next_oid {
+            tx.set_next_oid(next_oid)?;
+        }
+
+        // Process only the new ops against the accumulated state.
+        // Pass `None` for storage_collections to skip `prepare_state`.
+        let new_state = Self::transact_inner(
+            None, // skip prepare_state
+            oracle_write_ts,
+            session,
+            ops,
+            temporary_ids,
+            &mut builtin_table_updates,
+            &mut catalog_updates,
+            &mut audit_events,
+            &mut tx,
+            base_state,
+        )
+        .await?;
+
+        let new_next_oid = tx.get_next_oid();
+
+        // Transaction is NOT committed — drop it.
+        drop(storage);
+
+        // transact_inner returns Some(state) when ops produced changes.
+        let state = new_state.unwrap_or_else(|| base_state.clone());
+        Ok((state, new_next_oid))
+    }
+
     /// Extracts optimized expressions from `Op::CreateItem` operations for views
     /// and materialized views. These can be used to populate a `LocalExpressionCache`
     /// to avoid re-optimization during `apply_updates`.

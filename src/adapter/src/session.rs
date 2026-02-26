@@ -1397,12 +1397,14 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                         revision: og_revision,
                         state: og_state,
                         side_effects,
+                        next_oid: og_next_oid,
                     } => match add_ops {
                         TransactionOps::DDL {
                             ops: new_ops,
                             revision: new_revision,
                             side_effects: mut net_new_side_effects,
                             state: new_state,
+                            next_oid: new_next_oid,
                         } => {
                             if *og_revision != new_revision {
                                 return Err(AdapterError::DDLTransactionRace);
@@ -1411,6 +1413,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                             if !new_ops.is_empty() {
                                 *og_ops = new_ops;
                                 *og_state = new_state;
+                                *og_next_oid = new_next_oid;
                             }
                             side_effects.append(&mut net_new_side_effects);
                         }
@@ -1601,6 +1604,10 @@ pub enum TransactionOps<T> {
         >,
         /// Transient revision of the `Catalog` when this transaction started.
         revision: u64,
+        /// Tracks the OID allocator position after the last dry run, so that
+        /// incremental dry runs can advance past previously-allocated OIDs.
+        /// `None` for the first statement in the transaction (before any dry run).
+        next_oid: Option<u64>,
     },
 }
 

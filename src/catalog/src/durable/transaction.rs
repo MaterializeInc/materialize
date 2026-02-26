@@ -1022,6 +1022,33 @@ impl<'a> Transaction<'a> {
             .map(|oids| oids.into_element())
     }
 
+    /// Returns the current next-OID value from the id allocator.
+    pub fn get_next_oid(&self) -> u64 {
+        self.id_allocator
+            .items()
+            .get(&IdAllocKey {
+                name: OID_ALLOC_KEY.to_string(),
+            })
+            .unwrap_or_else(|| panic!("{OID_ALLOC_KEY} id allocator missing"))
+            .next_id
+    }
+
+    /// Advances the OID allocator to `next_oid`. Used for incremental DDL
+    /// transaction dry runs where a fresh Transaction needs to skip past OIDs
+    /// already allocated in previous dry runs.
+    pub fn set_next_oid(&mut self, next_oid: u64) -> Result<(), CatalogError> {
+        self.id_allocator.set(
+            IdAllocKey {
+                name: OID_ALLOC_KEY.to_string(),
+            },
+            Some(IdAllocValue {
+                next_id: next_oid,
+            }),
+            self.op_id,
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn insert_id_allocator(
         &mut self,
         name: String,
