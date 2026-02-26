@@ -1255,38 +1255,19 @@ fn pad_leading(string: &str, raw_len: i32, pad: OptionalArg<&str>) -> Result<Str
     Ok(buf)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
+#[sqlfunc(
+    output_type_expr = "SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true)",
+    introduces_nulls = true
 )]
-pub struct RegexpMatch;
-
-impl fmt::Display for RegexpMatch {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("regexp_match")
-    }
-}
-
-fn regexp_match_dynamic<'a>(
-    datums: &[Datum<'a>],
+fn regexp_match<'a>(
+    haystack: &'a str,
+    needle: &str,
+    flags: OptionalArg<&str>,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    let haystack = datums[0];
-    let needle = datums[1].unwrap_str();
-    let flags = match datums.get(2) {
-        Some(d) => d.unwrap_str(),
-        None => "",
-    };
+    let flags = flags.unwrap_or("");
     let needle = build_regex(needle, flags)?;
-    regexp_match_static(haystack, temp_storage, &needle)
+    regexp_match_static(Datum::String(haystack), temp_storage, &needle)
 }
 
 #[derive(
@@ -1893,6 +1874,7 @@ impl VariadicFunc {
             VariadicFunc::JsonbBuildObject(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::JsonbBuildArray(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::ArrayPosition(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::RegexpMatch(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -1936,6 +1918,7 @@ impl VariadicFunc {
             | VariadicFunc::JsonbBuildObject(_)
             | VariadicFunc::JsonbBuildArray(_)
             | VariadicFunc::ArrayPosition(_)
+            | VariadicFunc::RegexpMatch(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::MapBuild(..) => Ok(map_build(&ds, temp_storage)),
             VariadicFunc::ArrayCreate(ArrayCreate {
@@ -1951,7 +1934,6 @@ impl VariadicFunc {
             }
             VariadicFunc::ListIndex(_) => Ok(list_index(&ds)),
             VariadicFunc::ListSliceLinear(_) => Ok(list_slice_linear(&ds, temp_storage)),
-            VariadicFunc::RegexpMatch(_) => regexp_match_dynamic(&ds, temp_storage),
             VariadicFunc::RangeCreate(..) => create_range(&ds, temp_storage),
             VariadicFunc::ArrayFill(..) => array_fill(&ds, temp_storage),
             VariadicFunc::RegexpSplitToArray(_) => {
