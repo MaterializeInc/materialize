@@ -2289,8 +2289,8 @@ mod tests {
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
     use mz_repr::role_id::RoleId;
     use mz_repr::{
-        CatalogItemId, Datum, GlobalId, RelationVersionSelector, ReprScalarType, RowArena,
-        SqlRelationType, SqlScalarType, Timestamp,
+        CatalogItemId, Datum, GlobalId, RelationVersionSelector, RowArena, SqlRelationType,
+        SqlScalarType, Timestamp,
     };
     use mz_sql::catalog::{BuiltinsConfig, CatalogSchema, CatalogType, SessionCatalog};
     use mz_sql::func::{Func, FuncImpl, OP_IMPLS, Operation};
@@ -3370,18 +3370,18 @@ mod tests {
 
                 if let Ok(eval_result_datum) = mir.eval(&[], &arena) {
                     if let Some(return_styp) = return_styp {
-                        let mir_typ = mir.sql_typ(&[]);
+                        let mir_typ = mir.typ(&[]);
                         // MIR type inference should be consistent with the type
                         // we get from the catalog.
                         soft_assert_eq_or_log!(
                             mir_typ.scalar_type,
-                            return_styp,
+                            (&return_styp).into(),
                             "MIR type did not match the catalog type (cast elimination/repr type error)"
                         );
                         // The following will check not just that the scalar type
                         // is ok, but also catches if the function returned a null
                         // but the MIR type inference said "non-nullable".
-                        if !eval_result_datum.is_instance_of_sql(&mir_typ) {
+                        if !eval_result_datum.is_instance_of(&mir_typ) {
                             panic!(
                                 "{call_name}: expected return type of {return_styp:?}, got {eval_result_datum}"
                             );
@@ -3421,7 +3421,6 @@ mod tests {
                         // as the real evaluation.
                         let mut reduced = mir.clone();
                         reduced.reduce(&[]);
-                        let mir_repr_scalar_type = ReprScalarType::from(&mir_typ.scalar_type);
                         match reduced {
                             MirScalarExpr::Literal(reduce_result, ctyp) => {
                                 match reduce_result {
@@ -3435,7 +3434,7 @@ mod tests {
                                             args,
                                             mir,
                                             eval_result_datum,
-                                            mir_repr_scalar_type,
+                                            mir_typ.scalar_type,
                                             reduce_result_datum,
                                             ctyp.scalar_type
                                         );
@@ -3446,13 +3445,13 @@ mod tests {
                                         // evaluating a function than before.)
                                         assert_eq!(
                                             ctyp.scalar_type,
-                                            mir_repr_scalar_type,
+                                            mir_typ.scalar_type,
                                             "eval/reduce type mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`",
                                             name,
                                             args,
                                             mir,
                                             eval_result_datum,
-                                            mir_repr_scalar_type,
+                                            mir_typ.scalar_type,
                                             reduce_result_datum,
                                             ctyp.scalar_type
                                         );
