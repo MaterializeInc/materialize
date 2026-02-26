@@ -346,34 +346,36 @@ fn array_fill<'a>(
 pub struct ArrayIndex {
     pub offset: i64,
 }
-impl fmt::Display for ArrayIndex {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("array_index")
-    }
-}
+#[sqlfunc(
+    ArrayIndex,
+    sqlname = "array_index",
+    output_type_expr = "input_types[0].scalar_type.unwrap_array_element_type().clone().nullable(true)",
+    introduces_nulls = true
+)]
+fn array_index<'a>(&self, array: Array<'a>, indices: Variadic<i64>) -> Option<Datum<'a>> {
+    mz_ore::soft_assert_no_log!(
+        self.offset == 0 || self.offset == 1,
+        "offset must be either 0 or 1"
+    );
 
-fn array_index<'a>(datums: &[Datum<'a>], offset: i64) -> Datum<'a> {
-    mz_ore::soft_assert_no_log!(offset == 0 || offset == 1, "offset must be either 0 or 1");
-
-    let array = datums[0].unwrap_array();
     let dims = array.dims();
-    if dims.len() != datums.len() - 1 {
+    if dims.len() != indices.len() {
         // You missed the datums "layer"
-        return Datum::Null;
+        return None;
     }
 
     let mut final_idx = 0;
 
-    for (d, idx) in dims.into_iter().zip_eq(datums[1..].iter()) {
+    for (d, idx) in dims.into_iter().zip_eq(indices.iter()) {
         // Lower bound is written in terms of 1-based indexing, which offset accounts for.
-        let idx = isize::cast_from(idx.unwrap_int64() + offset);
+        let idx = isize::cast_from(*idx + self.offset);
 
         let (lower, upper) = d.dimension_bounds();
 
         // This index missed all of the data at this layer. The dimension bounds are inclusive,
         // while range checks are exclusive, so adjust.
         if !(lower..upper + 1).contains(&idx) {
-            return Datum::Null;
+            return None;
         }
 
         // We discover how many indices our last index represents physically.
@@ -383,14 +385,10 @@ fn array_index<'a>(datums: &[Datum<'a>], offset: i64) -> Datum<'a> {
         // difference moves us back into 0-based indexing. Similarly, if the lower bound is
         // negative, subtracting a negative value >= to itself ensures its non-negativity.
         final_idx += usize::try_from(idx - d.lower_bound)
-            .expect("previous bounds check ensures phsical index is at least 0");
+            .expect("previous bounds check ensures physical index is at least 0");
     }
 
-    array
-        .elements()
-        .iter()
-        .nth(final_idx)
-        .unwrap_or(Datum::Null)
+    array.elements().iter().nth(final_idx)
 }
 
 #[sqlfunc]
@@ -1795,6 +1793,7 @@ impl VariadicFunc {
             VariadicFunc::ListIndex(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::ListSliceLinear(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::ArrayFill(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::ArrayIndex(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -1844,6 +1843,7 @@ impl VariadicFunc {
             | VariadicFunc::ListIndex(_)
             | VariadicFunc::ListSliceLinear(_)
             | VariadicFunc::ArrayFill(_)
+            | VariadicFunc::ArrayIndex(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::MapBuild(..) => Ok(map_build(&ds, temp_storage)),
             VariadicFunc::ArrayCreate(ArrayCreate {
@@ -1853,7 +1853,6 @@ impl VariadicFunc {
             VariadicFunc::ArrayToString(ArrayToString { elem_type }) => {
                 array_to_string(&ds, elem_type, temp_storage)
             }
-            VariadicFunc::ArrayIndex(ArrayIndex { offset }) => Ok(array_index(&ds, *offset)),
             VariadicFunc::ListCreate(..) | VariadicFunc::RecordCreate(..) => {
                 Ok(list_create(&ds, temp_storage))
             }
