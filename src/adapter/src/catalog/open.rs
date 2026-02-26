@@ -284,6 +284,7 @@ impl Catalog {
                     })
                 }
                 BootstrapStateUpdateKind::IntrospectionSourceIndex(_)
+                | BootstrapStateUpdateKind::PersistedIntrospectionSource(_)
                 | BootstrapStateUpdateKind::SystemObjectMapping(_) => {
                     system_item_updates.push(StateUpdate {
                         kind: kind.into(),
@@ -981,6 +982,7 @@ fn add_new_remove_old_builtin_clusters_migration(
                         logging: default_logging_config(),
                         optimizer_feature_overrides: Default::default(),
                         schedule: Default::default(),
+                        persist_introspection: false,
                     }),
                     workload_class: None,
                 },

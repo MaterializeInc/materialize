@@ -1,6 +1,5 @@
 ---
 source: src/catalog/tests/open.rs
-assertion_line: 518
 expression: test_snapshot
 ---
 Snapshot {
@@ -598,6 +597,7 @@ Snapshot {
                         },
                         optimizer_feature_overrides: [],
                         schedule: Manual,
+                        persist_introspection: false,
                     },
                 ),
             },
@@ -673,6 +673,7 @@ Snapshot {
         },
     },
     introspection_sources: {},
+    persisted_introspection_sources: {},
     id_allocator: {
         IdAllocKey {
             name: "auditlog",

@@ -55,6 +55,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::PersistLocation;
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_storage_client::controller::StorageController;
+use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
@@ -332,6 +333,11 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         if let Some(rx) = self.introspection_rx.take() {
             spawn_introspection_sink(rx, storage_controller);
         }
+    }
+
+    /// Returns the persist location used by this compute controller.
+    pub fn persist_location(&self) -> &PersistLocation {
+        &self.peek_stash_persist_location
     }
 
     /// TODO(database-issues#7533): Add documentation.
@@ -691,6 +697,7 @@ where
         replica_id: ReplicaId,
         location: ClusterReplicaLocation,
         config: ComputeReplicaConfig,
+        sink_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
     ) -> Result<(), ReplicaCreationError> {
         use ReplicaCreationError::*;
 
@@ -715,6 +722,7 @@ where
                 enable_logging,
                 log_logging: config.logging.log_logging,
                 index_logs: Default::default(),
+                sink_logs,
             },
             grpc_client: self.config.grpc_client.clone(),
             expiration_offset: (!expiration_offset.is_zero()).then_some(expiration_offset),
@@ -732,6 +740,10 @@ where
     }
 
     /// Removes a replica from an instance, including its service in the orchestrator.
+    ///
+    /// Shard cleanup for persist-backed introspection is handled by the catalog
+    /// transaction (`Op::DropObjects` → `storage_collections_to_drop` →
+    /// `unfinalized_shards`), not by the caller.
     pub fn drop_replica(
         &mut self,
         instance_id: ComputeInstanceId,
@@ -748,7 +760,9 @@ where
 
         instance.replicas.remove(&replica_id);
 
-        instance.call(move |i| i.remove_replica(replica_id).expect("validated"));
+        instance.call(move |i| {
+            let _ = i.remove_replica(replica_id).expect("validated");
+        });
 
         Ok(())
     }

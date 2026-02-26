@@ -275,6 +275,11 @@ pub struct InstanceConfig {
     pub expiration_offset: Option<Duration>,
     /// The persist location where we can stash large peek results.
     pub peek_stash_persist_location: PersistLocation,
+    /// Whether this instance is in read-only mode.
+    ///
+    /// When read-only, logging persist sinks do not write to persist shards.
+    /// The instance transitions to writable on the first `AllowWrites` command.
+    pub read_only: bool,
 }
 
 impl InstanceConfig {
@@ -291,11 +296,14 @@ impl InstanceConfig {
             logging: self_logging,
             expiration_offset: self_offset,
             peek_stash_persist_location: self_peek_stash_persist_location,
+            // read_only transitions are handled via AllowWrites, no compatibility check needed.
+            read_only: _,
         } = self;
         let InstanceConfig {
             logging: other_logging,
             expiration_offset: other_offset,
             peek_stash_persist_location: other_peek_stash_persist_location,
+            read_only: _,
         } = other;
 
         // Logging is compatible if exactly the same.

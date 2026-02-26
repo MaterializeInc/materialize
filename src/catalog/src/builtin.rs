@@ -14237,6 +14237,9 @@ pub mod BUILTINS {
 
 pub static BUILTIN_LOG_LOOKUP: LazyLock<HashMap<&'static str, &'static BuiltinLog>> =
     LazyLock::new(|| BUILTINS::logs().map(|log| (log.name, log)).collect());
+/// Reverse lookup: LogVariant → BuiltinLog.
+pub static BUILTIN_LOG_BY_VARIANT: LazyLock<HashMap<LogVariant, &'static BuiltinLog>> =
+    LazyLock::new(|| BUILTINS::logs().map(|log| (log.variant, log)).collect());
 /// Keys are builtin object description, values are the builtin index when sorted by dependency and
 /// the builtin itself.
 pub static BUILTIN_LOOKUP: LazyLock<

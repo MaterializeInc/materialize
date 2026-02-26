@@ -5,6 +5,7 @@
 
 //! Initialization of logging dataflows.
 
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -32,6 +33,7 @@ use timely::progress::reachability::logging::{TrackerEvent, TrackerEventBuilder}
 use timely::worker::AsWorker;
 
 use crate::arrangement::manager::TraceBundle;
+use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
 use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
@@ -44,6 +46,7 @@ use crate::typedefs::{ErrBatcher, ErrBuilder};
 pub fn initialize<A: Allocate + 'static>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
+    compute_state: &mut ComputeState,
 ) -> LoggingTraces {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
@@ -58,6 +61,7 @@ pub fn initialize<A: Allocate + 'static>(
     let mut context = LoggingContext {
         worker,
         config,
+        compute_state,
         interval_ms,
         now,
         start_offset,
@@ -71,13 +75,13 @@ pub fn initialize<A: Allocate + 'static>(
     // Depending on whether we should log the creation of the logging dataflows, we register the
     // loggers with timely either before or after creating them.
     let dataflow_index = context.worker.next_dataflow_index();
-    let traces = if config.log_logging {
+    let (traces, persist_tokens) = if config.log_logging {
         context.register_loggers();
         context.construct_dataflow()
     } else {
-        let traces = context.construct_dataflow();
+        let result = context.construct_dataflow();
         context.register_loggers();
-        traces
+        result
     };
 
     let compute_logger = worker.logger_for("materialize/compute").unwrap();
@@ -85,6 +89,7 @@ pub fn initialize<A: Allocate + 'static>(
         traces,
         dataflow_index,
         compute_logger,
+        persist_tokens,
     }
 }
 
@@ -93,6 +98,7 @@ pub(super) type ReachabilityEvent = (usize, Vec<(usize, usize, bool, Timestamp, 
 struct LoggingContext<'a, A: Allocate> {
     worker: &'a mut timely::worker::Worker<A>,
     config: &'a LoggingConfig,
+    compute_state: &'a mut ComputeState,
     interval_ms: u128,
     now: Instant,
     start_offset: Duration,
@@ -110,54 +116,71 @@ pub(crate) struct LoggingTraces {
     pub dataflow_index: usize,
     /// The compute logger.
     pub compute_logger: super::compute::Logger,
+    /// Tokens keeping persist sinks alive.
+    pub persist_tokens: Vec<Rc<dyn Any>>,
 }
 
 impl<A: Allocate + 'static> LoggingContext<'_, A> {
-    fn construct_dataflow(&mut self) -> BTreeMap<LogVariant, TraceBundle> {
+    fn construct_dataflow(&mut self) -> (BTreeMap<LogVariant, TraceBundle>, Vec<Rc<dyn Any>>) {
+        let compute_state = &mut *self.compute_state;
+
         self.worker.dataflow_named("Dataflow: logging", |scope| {
             let scope = &mut scope.with_label();
 
             let mut collections = BTreeMap::new();
+            let mut persist_tokens: Vec<Rc<dyn Any>> = Vec::new();
 
             let super::timely::Return {
                 collections: timely_collections,
+                persist_tokens: timely_persist_tokens,
             } = super::timely::construct(
                 scope.clone(),
                 self.config,
                 self.t_event_queue.clone(),
                 Rc::clone(&self.shared_state),
+                compute_state,
             );
             collections.extend(timely_collections);
+            persist_tokens.extend(timely_persist_tokens);
 
             let super::reachability::Return {
                 collections: reachability_collections,
+                persist_tokens: reachability_persist_tokens,
             } = super::reachability::construct(
                 scope.clone(),
                 self.config,
                 self.r_event_queue.clone(),
+                compute_state,
             );
             collections.extend(reachability_collections);
+            persist_tokens.extend(reachability_persist_tokens);
 
             let super::differential::Return {
                 collections: differential_collections,
+                persist_tokens: differential_persist_tokens,
             } = super::differential::construct(
                 scope.clone(),
                 self.config,
                 self.d_event_queue.clone(),
                 Rc::clone(&self.shared_state),
+                compute_state,
             );
             collections.extend(differential_collections);
+            persist_tokens.extend(differential_persist_tokens);
 
             let super::compute::Return {
                 collections: compute_collections,
+                persist_tokens: compute_persist_tokens,
             } = super::compute::construct(
                 scope.clone(),
                 scope.parent().clone(),
                 self.config,
                 self.c_event_queue.clone(),
                 Rc::clone(&self.shared_state),
+                compute_state,
             );
             collections.extend(compute_collections);
+            persist_tokens.extend(compute_persist_tokens);
 
             let errs = scope.scoped("logging errors", |scope| {
                 let collection: KeyCollection<_, DataflowError, Diff> =
@@ -175,7 +198,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                     (log, bundle)
                 })
                 .collect();
-            traces
+            (traces, persist_tokens)
         })
     }
 

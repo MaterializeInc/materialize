@@ -10,7 +10,7 @@
 mod copy_to_s3_oneshot;
 mod correction;
 mod correction_v2;
-mod materialized_view;
+pub(crate) mod materialized_view;
 mod refresh;
 mod subscribe;
 

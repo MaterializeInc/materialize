@@ -589,6 +589,7 @@ pub struct CreateClusterManagedPlan {
     pub size: String,
     pub availability_zones: Vec<String>,
     pub compute: ComputeReplicaConfig,
+    pub persist_introspection: bool,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
     pub schedule: ClusterSchedule,
 }
@@ -2020,6 +2021,7 @@ pub struct PlanClusterOption {
     pub introspection_debugging: AlterOptionParameter<bool>,
     pub introspection_interval: AlterOptionParameter<OptionalDuration>,
     pub managed: AlterOptionParameter<bool>,
+    pub persist_introspection: AlterOptionParameter<bool>,
     pub replicas: AlterOptionParameter<Vec<(String, ReplicaConfig)>>,
     pub replication_factor: AlterOptionParameter<u32>,
     pub size: AlterOptionParameter,
@@ -2034,6 +2036,7 @@ impl Default for PlanClusterOption {
             introspection_debugging: AlterOptionParameter::Unchanged,
             introspection_interval: AlterOptionParameter::Unchanged,
             managed: AlterOptionParameter::Unchanged,
+            persist_introspection: AlterOptionParameter::Unchanged,
             replicas: AlterOptionParameter::Unchanged,
             replication_factor: AlterOptionParameter::Unchanged,
             size: AlterOptionParameter::Unchanged,

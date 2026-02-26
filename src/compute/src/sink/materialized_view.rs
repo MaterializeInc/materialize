@@ -230,7 +230,7 @@ type BatchesStream<S> = Stream<S, (BatchDescription, ProtoBatch)>;
 type SharedSinkFrontier = Rc<RefCell<Antichain<Timestamp>>>;
 
 /// Renders an MV sink writing the given desired collection into the `target` persist collection.
-pub(super) fn persist_sink<S>(
+pub(crate) fn persist_sink<S>(
     sink_id: GlobalId,
     target: &CollectionMetadata,
     ok_collection: VecCollection<S, Row, Diff>,

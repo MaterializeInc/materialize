@@ -500,3 +500,112 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlIdReplacer<'_> {
         }
     }
 }
+
+/// Rewrites references to the `mz_introspection` schema in `stmt` to point to
+/// `new_schema`. Handles both 2-component (`mz_introspection.item`) and
+/// 3-component (`materialize.mz_introspection.item`) names.
+///
+/// If `name_to_id` is provided, item-name references whose item component
+/// appears in the map are converted from `RawItemName::Name` to
+/// `RawItemName::Id` so that the catalog's topological-sort-based apply
+/// pipeline can detect inter-view dependencies.
+pub fn rewrite_introspection_schema_refs(
+    stmt: &mut Statement<Raw>,
+    new_schema: &str,
+    name_to_id: Option<&BTreeMap<String, CatalogItemId>>,
+) {
+    let mut visitor = IntrospectionSchemaRewriter {
+        new_schema,
+        name_to_id,
+    };
+    visitor.visit_statement_mut(stmt);
+}
+
+struct IntrospectionSchemaRewriter<'a> {
+    new_schema: &'a str,
+    name_to_id: Option<&'a BTreeMap<String, CatalogItemId>>,
+}
+
+impl<'a> IntrospectionSchemaRewriter<'a> {
+    /// Returns `true` and rewrites the schema component if `name` references
+    /// the `mz_introspection` schema (2- or 3-component form).
+    fn maybe_rewrite_idents(&self, name: &mut [Ident]) -> bool {
+        match name {
+            [schema, _item] if schema.as_str() == "mz_introspection" => {
+                *schema = Ident::new_unchecked(self.new_schema);
+                true
+            }
+            [database, schema, _item]
+                if database.as_str() == "materialize" && schema.as_str() == "mz_introspection" =>
+            {
+                *schema = Ident::new_unchecked(self.new_schema);
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+impl<'a, 'ast> VisitMut<'ast, Raw> for IntrospectionSchemaRewriter<'a> {
+    fn visit_expr_mut(&mut self, e: &'ast mut Expr<Raw>) {
+        match e {
+            Expr::Identifier(id) => {
+                // The last ID component is a column name that should not be
+                // considered in the rewrite.
+                let i = id.len() - 1;
+                self.maybe_rewrite_idents(&mut id[..i]);
+            }
+            Expr::QualifiedWildcard(id) => {
+                self.maybe_rewrite_idents(id);
+            }
+            _ => visit_mut::visit_expr_mut(self, e),
+        }
+    }
+
+    fn visit_unresolved_item_name_mut(
+        &mut self,
+        unresolved_item_name: &'ast mut UnresolvedItemName,
+    ) {
+        self.maybe_rewrite_idents(&mut unresolved_item_name.0);
+    }
+
+    fn visit_item_name_mut(
+        &mut self,
+        item_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ItemName,
+    ) {
+        match item_name {
+            RawItemName::Name(n) | RawItemName::Id(_, n, _) => {
+                self.maybe_rewrite_idents(&mut n.0);
+            }
+        }
+        // After schema rewrite, optionally convert Name refs to Id refs so
+        // that the topological sort in the apply pipeline sees the
+        // dependency.
+        if let Some(name_to_id) = self.name_to_id {
+            if let RawItemName::Name(n) = &*item_name {
+                let item_str = match &n.0[..] {
+                    [schema, item] if schema.as_str() == self.new_schema => Some(item.as_str()),
+                    [_db, schema, item] if schema.as_str() == self.new_schema => {
+                        Some(item.as_str())
+                    }
+                    _ => None,
+                };
+                if let Some(item_str) = item_str {
+                    if let Some(id) = name_to_id.get(item_str) {
+                        let id_str = id.to_string();
+                        // Take the UnresolvedItemName out and wrap in Id.
+                        let name = std::mem::replace(
+                            item_name,
+                            RawItemName::Name(UnresolvedItemName(vec![])),
+                        );
+                        let n = match name {
+                            RawItemName::Name(n) => n,
+                            _ => unreachable!(),
+                        };
+                        *item_name = RawItemName::Id(id_str, n, None);
+                    }
+                }
+            }
+        }
+    }
+}

@@ -44,6 +44,8 @@ pub enum GlobalId {
     System(u64),
     /// Introspection Source Index namespace.
     IntrospectionSourceIndex(u64),
+    /// Persisted introspection source namespace (per-replica persist shards).
+    PersistedIntrospectionSource(u64),
     /// User namespace.
     User(u64),
     /// Transient namespace.
@@ -61,7 +63,9 @@ impl GlobalId {
     pub fn is_system(&self) -> bool {
         matches!(
             self,
-            GlobalId::System(_) | GlobalId::IntrospectionSourceIndex(_)
+            GlobalId::System(_)
+                | GlobalId::IntrospectionSourceIndex(_)
+                | GlobalId::PersistedIntrospectionSource(_)
         )
     }
 
@@ -90,7 +94,10 @@ impl FromStr for GlobalId {
         s = &s[1..];
         let variant = match tag {
             's' => {
-                if Some('i') == s.chars().next() {
+                if s.starts_with("ip") {
+                    s = &s[2..];
+                    GlobalId::PersistedIntrospectionSource
+                } else if s.starts_with('i') {
                     s = &s[1..];
                     GlobalId::IntrospectionSourceIndex
                 } else {
@@ -111,6 +118,7 @@ impl fmt::Display for GlobalId {
         match self {
             GlobalId::System(id) => write!(f, "s{}", id),
             GlobalId::IntrospectionSourceIndex(id) => write!(f, "si{}", id),
+            GlobalId::PersistedIntrospectionSource(id) => write!(f, "sip{}", id),
             GlobalId::User(id) => write!(f, "u{}", id),
             GlobalId::Transient(id) => write!(f, "t{}", id),
             GlobalId::Explain => write!(f, "Explained Query"),

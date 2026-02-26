@@ -4567,6 +4567,7 @@ impl<'a> Parser<'a> {
             DISK,
             INTROSPECTION,
             MANAGED,
+            PERSIST,
             REPLICAS,
             REPLICATION,
             SIZE,
@@ -4585,6 +4586,10 @@ impl<'a> Parser<'a> {
                 _ => unreachable!(),
             },
             MANAGED => ClusterOptionName::Managed,
+            PERSIST => {
+                self.expect_keyword(INTROSPECTION)?;
+                ClusterOptionName::PersistIntrospection
+            }
             REPLICAS => ClusterOptionName::Replicas,
             REPLICATION => {
                 self.expect_keyword(FACTOR)?;

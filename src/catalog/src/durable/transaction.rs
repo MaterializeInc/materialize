@@ -54,9 +54,10 @@ use crate::durable::objects::{
     Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
     DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndex, Item, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
-    ReplicaConfig, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
-    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
+    PersistedIntrospectionSource, PersistedIntrospectionSourceKey,
+    PersistedIntrospectionSourceValue, ReplicaConfig, Role, RoleKey, RoleValue, Schema, SchemaKey,
+    SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue,
+    SourceReference, SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
     StorageCollectionMetadataValue, SystemObjectDescription, SystemObjectMapping,
     SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
 };
@@ -91,6 +92,8 @@ pub struct Transaction<'a> {
     cluster_replicas: TableTransaction<ClusterReplicaKey, ClusterReplicaValue>,
     introspection_sources:
         TableTransaction<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue>,
+    persisted_introspection_sources:
+        TableTransaction<PersistedIntrospectionSourceKey, PersistedIntrospectionSourceValue>,
     id_allocator: TableTransaction<IdAllocKey, IdAllocValue>,
     configs: TableTransaction<ConfigKey, ConfigValue>,
     settings: TableTransaction<SettingKey, SettingValue>,
@@ -127,6 +130,7 @@ impl<'a> Transaction<'a> {
             network_policies,
             cluster_replicas,
             introspection_sources,
+            persisted_introspection_sources,
             id_allocator,
             configs,
             settings,
@@ -177,6 +181,9 @@ impl<'a> Transaction<'a> {
                 |a: &ClusterReplicaValue, b| a.cluster_id == b.cluster_id && a.name == b.name,
             )?,
             introspection_sources: TableTransaction::new(introspection_sources)?,
+            persisted_introspection_sources: TableTransaction::new(
+                persisted_introspection_sources,
+            )?,
             id_allocator: TableTransaction::new(id_allocator)?,
             configs: TableTransaction::new(configs)?,
             settings: TableTransaction::new(settings)?,
@@ -832,7 +839,57 @@ impl<'a> Transaction<'a> {
             0,
             "invalid cluster ID: {cluster_id}"
         );
-        let log_variant: u8 = match log_variant {
+        let log_variant: u8 = Transaction::log_variant_to_u8(log_variant);
+
+        let mut id: u64 = u64::from(cluster_variant) << 56;
+        id |= cluster_id << 8;
+        id |= u64::from(log_variant);
+
+        (
+            CatalogItemId::IntrospectionSourceIndex(id),
+            GlobalId::IntrospectionSourceIndex(id),
+        )
+    }
+
+    /// Allocate a deterministic ID for a per-replica persisted introspection source.
+    ///
+    /// The ID encodes:
+    /// * Bits 56-63: Replica variant (3 = System, 4 = User)
+    /// * Bits 8-55: Replica ID (inner value)
+    /// * Bits 0-7: Log variant
+    ///
+    /// Replica variants 3/4 are distinct from cluster variants 1/2 used by
+    /// `allocate_introspection_source_index_id` to avoid ID collisions.
+    pub fn allocate_persisted_introspection_source_id(
+        replica_id: &ReplicaId,
+        log_variant: LogVariant,
+    ) -> (CatalogItemId, GlobalId) {
+        let replica_variant: u8 = match replica_id {
+            ReplicaId::System(_) => 3,
+            ReplicaId::User(_) => 4,
+        };
+        let replica_inner: u64 = replica_id.inner_id();
+        const REPLICA_ID_MASK: u64 = 0xFFFF << 48;
+        assert_eq!(
+            REPLICA_ID_MASK & replica_inner,
+            0,
+            "invalid replica ID: {replica_inner}"
+        );
+        let log_variant: u8 = Transaction::log_variant_to_u8(log_variant);
+
+        let mut id: u64 = u64::from(replica_variant) << 56;
+        id |= replica_inner << 8;
+        id |= u64::from(log_variant);
+
+        (
+            CatalogItemId::PersistedIntrospectionSource(id),
+            GlobalId::PersistedIntrospectionSource(id),
+        )
+    }
+
+    /// Map a `LogVariant` to a `u8` for encoding in IDs.
+    fn log_variant_to_u8(log_variant: LogVariant) -> u8 {
+        match log_variant {
             LogVariant::Timely(TimelyLog::Operates) => 1,
             LogVariant::Timely(TimelyLog::Channels) => 2,
             LogVariant::Timely(TimelyLog::Elapsed) => 3,
@@ -864,16 +921,57 @@ impl<'a> Transaction<'a> {
             LogVariant::Compute(ComputeLog::LirMapping) => 30,
             LogVariant::Compute(ComputeLog::DataflowGlobal) => 31,
             LogVariant::Compute(ComputeLog::OperatorHydrationStatus) => 32,
-        };
+        }
+    }
 
-        let mut id: u64 = u64::from(cluster_variant) << 56;
-        id |= cluster_id << 8;
-        id |= u64::from(log_variant);
+    /// Reverse of `log_variant_to_u8`.
+    pub fn u8_to_log_variant(v: u8) -> Option<LogVariant> {
+        match v {
+            1 => Some(LogVariant::Timely(TimelyLog::Operates)),
+            2 => Some(LogVariant::Timely(TimelyLog::Channels)),
+            3 => Some(LogVariant::Timely(TimelyLog::Elapsed)),
+            4 => Some(LogVariant::Timely(TimelyLog::Histogram)),
+            5 => Some(LogVariant::Timely(TimelyLog::Addresses)),
+            6 => Some(LogVariant::Timely(TimelyLog::Parks)),
+            7 => Some(LogVariant::Timely(TimelyLog::MessagesSent)),
+            8 => Some(LogVariant::Timely(TimelyLog::MessagesReceived)),
+            9 => Some(LogVariant::Timely(TimelyLog::Reachability)),
+            10 => Some(LogVariant::Timely(TimelyLog::BatchesSent)),
+            11 => Some(LogVariant::Timely(TimelyLog::BatchesReceived)),
+            12 => Some(LogVariant::Differential(
+                DifferentialLog::ArrangementBatches,
+            )),
+            13 => Some(LogVariant::Differential(
+                DifferentialLog::ArrangementRecords,
+            )),
+            14 => Some(LogVariant::Differential(DifferentialLog::Sharing)),
+            15 => Some(LogVariant::Differential(DifferentialLog::BatcherRecords)),
+            16 => Some(LogVariant::Differential(DifferentialLog::BatcherSize)),
+            17 => Some(LogVariant::Differential(DifferentialLog::BatcherCapacity)),
+            18 => Some(LogVariant::Differential(
+                DifferentialLog::BatcherAllocations,
+            )),
+            19 => Some(LogVariant::Compute(ComputeLog::DataflowCurrent)),
+            20 => Some(LogVariant::Compute(ComputeLog::FrontierCurrent)),
+            21 => Some(LogVariant::Compute(ComputeLog::PeekCurrent)),
+            22 => Some(LogVariant::Compute(ComputeLog::PeekDuration)),
+            23 => Some(LogVariant::Compute(ComputeLog::ImportFrontierCurrent)),
+            24 => Some(LogVariant::Compute(ComputeLog::ArrangementHeapSize)),
+            25 => Some(LogVariant::Compute(ComputeLog::ArrangementHeapCapacity)),
+            26 => Some(LogVariant::Compute(ComputeLog::ArrangementHeapAllocations)),
+            28 => Some(LogVariant::Compute(ComputeLog::ErrorCount)),
+            29 => Some(LogVariant::Compute(ComputeLog::HydrationTime)),
+            30 => Some(LogVariant::Compute(ComputeLog::LirMapping)),
+            31 => Some(LogVariant::Compute(ComputeLog::DataflowGlobal)),
+            32 => Some(LogVariant::Compute(ComputeLog::OperatorHydrationStatus)),
+            _ => None,
+        }
+    }
 
-        (
-            CatalogItemId::IntrospectionSourceIndex(id),
-            GlobalId::IntrospectionSourceIndex(id),
-        )
+    /// Extract the `LogVariant` from a persisted introspection source ID.
+    pub fn decode_persisted_introspection_id(encoded_id: u64) -> Option<LogVariant> {
+        let log_variant_u8 = u8::try_from(encoded_id & 0xFF).expect("mask guarantees fit in u8");
+        Self::u8_to_log_variant(log_variant_u8)
     }
 
     pub fn allocate_user_item_ids(
@@ -1434,6 +1532,45 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    pub fn remove_persisted_introspection_sources(
+        &mut self,
+        sources: BTreeSet<(ClusterId, ReplicaId, String)>,
+    ) -> Result<(), CatalogError> {
+        if sources.is_empty() {
+            return Ok(());
+        }
+
+        let ks: Vec<_> = sources
+            .clone()
+            .into_iter()
+            .map(
+                |(cluster_id, replica_id, name)| PersistedIntrospectionSourceKey {
+                    cluster_id,
+                    replica_id,
+                    name,
+                },
+            )
+            .collect();
+        let n = self
+            .persisted_introspection_sources
+            .delete_by_keys(ks, self.op_id)
+            .len();
+        if n == sources.len() {
+            Ok(())
+        } else {
+            let txn_sources = self
+                .persisted_introspection_sources
+                .items()
+                .keys()
+                .map(|k| (k.cluster_id, k.replica_id, k.name.clone()))
+                .collect();
+            let mut unknown = sources
+                .difference(&txn_sources)
+                .map(|(cluster_id, replica_id, name)| format!("{cluster_id} {replica_id} {name}"));
+            Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
+        }
+    }
+
     /// Updates item `id` in the transaction to `item_name` and `item`.
     ///
     /// Returns an error if `id` is not found.
@@ -1881,6 +2018,51 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    pub fn insert_persisted_introspection_sources(
+        &mut self,
+        sources: Vec<(
+            ClusterId,
+            ReplicaId,
+            String,
+            CatalogItemId,
+            GlobalId,
+            SchemaId,
+        )>,
+        temporary_oids: &HashSet<u32>,
+    ) -> Result<(), CatalogError> {
+        if sources.is_empty() {
+            return Ok(());
+        }
+
+        let amount = usize_to_u64(sources.len());
+        let oids = self.allocate_oids(amount, temporary_oids)?;
+        let sources: Vec<_> = sources
+            .into_iter()
+            .zip_eq(oids)
+            .map(
+                |((cluster_id, replica_id, name, item_id, global_id, schema_id), oid)| {
+                    PersistedIntrospectionSource {
+                        cluster_id,
+                        replica_id,
+                        name,
+                        item_id,
+                        global_id,
+                        schema_id,
+                        oid,
+                    }
+                },
+            )
+            .collect();
+
+        for source in sources {
+            let (key, value) = source.into_key_value();
+            self.persisted_introspection_sources
+                .insert(key, value, self.op_id)?;
+        }
+
+        Ok(())
+    }
+
     /// Set persisted system object mappings.
     pub fn set_system_object_mappings(
         &mut self,
@@ -2212,6 +2394,19 @@ impl<'a> Transaction<'a> {
             .collect()
     }
 
+    pub fn get_persisted_introspection_sources(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    ) -> BTreeMap<&str, (GlobalId, u32)> {
+        self.persisted_introspection_sources
+            .items()
+            .into_iter()
+            .filter(|(k, _v)| k.cluster_id == cluster_id && k.replica_id == replica_id)
+            .map(|(k, v)| (k.name.as_str(), (v.global_id.into(), v.oid)))
+            .collect()
+    }
+
     pub fn get_catalog_content_version(&self) -> Option<&str> {
         self.settings
             .get(&SettingKey {
@@ -2303,6 +2498,7 @@ impl<'a> Transaction<'a> {
             network_policies,
             cluster_replicas,
             introspection_sources,
+            persisted_introspection_sources,
             system_gid_mapping,
             system_configurations,
             default_privileges,
@@ -2371,9 +2567,16 @@ impl<'a> Transaction<'a> {
                 StateUpdateKind::IntrospectionSourceIndex,
                 self.op_id,
             ))
+            // Cluster replicas must be applied before persisted introspection
+            // sources, because the latter look up the replica during creation.
             .chain(get_collection_op_updates(
                 cluster_replicas,
                 StateUpdateKind::ClusterReplica,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
+                persisted_introspection_sources,
+                StateUpdateKind::PersistedIntrospectionSource,
                 self.op_id,
             ))
             .chain(get_collection_op_updates(
@@ -2455,6 +2658,7 @@ impl<'a> Transaction<'a> {
             cluster_replicas: self.cluster_replicas.pending(),
             network_policies: self.network_policies.pending(),
             introspection_sources: self.introspection_sources.pending(),
+            persisted_introspection_sources: self.persisted_introspection_sources.pending(),
             id_allocator: self.id_allocator.pending(),
             configs: self.configs.pending(),
             source_references: self.source_references.pending(),
@@ -2500,6 +2704,7 @@ impl<'a> Transaction<'a> {
             cluster_replicas,
             network_policies,
             introspection_sources,
+            persisted_introspection_sources,
             id_allocator,
             configs,
             source_references,
@@ -2526,6 +2731,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(cluster_replicas);
         differential_dataflow::consolidation::consolidate_updates(network_policies);
         differential_dataflow::consolidation::consolidate_updates(introspection_sources);
+        differential_dataflow::consolidation::consolidate_updates(persisted_introspection_sources);
         differential_dataflow::consolidation::consolidate_updates(id_allocator);
         differential_dataflow::consolidation::consolidate_updates(configs);
         differential_dataflow::consolidation::consolidate_updates(settings);
@@ -2723,6 +2929,11 @@ pub struct TransactionBatch {
         proto::ClusterIntrospectionSourceIndexValue,
         Diff,
     )>,
+    pub(crate) persisted_introspection_sources: Vec<(
+        proto::PersistedIntrospectionSourceKey,
+        proto::PersistedIntrospectionSourceValue,
+        Diff,
+    )>,
     pub(crate) id_allocator: Vec<(proto::IdAllocKey, proto::IdAllocValue, Diff)>,
     pub(crate) configs: Vec<(proto::ConfigKey, proto::ConfigValue, Diff)>,
     pub(crate) settings: Vec<(proto::SettingKey, proto::SettingValue, Diff)>,
@@ -2772,6 +2983,7 @@ impl TransactionBatch {
             cluster_replicas,
             network_policies,
             introspection_sources,
+            persisted_introspection_sources,
             id_allocator,
             configs,
             settings,
@@ -2796,6 +3008,7 @@ impl TransactionBatch {
             && cluster_replicas.is_empty()
             && network_policies.is_empty()
             && introspection_sources.is_empty()
+            && persisted_introspection_sources.is_empty()
             && id_allocator.is_empty()
             && configs.is_empty()
             && settings.is_empty()
@@ -2874,6 +3087,7 @@ mod unique_name {
         DefaultPrivilegesValue,
         GidMappingValue,
         IdAllocValue,
+        PersistedIntrospectionSourceValue,
         ServerConfigurationValue,
         SettingValue,
         SourceReferencesValue,

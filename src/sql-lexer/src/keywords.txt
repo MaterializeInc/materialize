@@ -343,6 +343,7 @@ Partitions
 Password
 Path
 Pattern
+Persist
 Physical
 Plan
 Plans

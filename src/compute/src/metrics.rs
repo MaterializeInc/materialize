@@ -474,7 +474,9 @@ impl CollectionMetrics {
     pub fn new(collection_id: GlobalId, metrics: WorkerMetrics) -> Self {
         let collection_type = match collection_id {
             GlobalId::System(_) => "system",
-            GlobalId::IntrospectionSourceIndex(_) => "log",
+            GlobalId::IntrospectionSourceIndex(_) | GlobalId::PersistedIntrospectionSource(_) => {
+                "log"
+            }
             GlobalId::User(_) => "user",
             GlobalId::Transient(_) => "transient",
             GlobalId::Explain => "explain",

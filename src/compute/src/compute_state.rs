@@ -163,6 +163,20 @@ pub struct ComputeState {
     /// replica can drop diffs associated with timestamps beyond the replica expiration.
     /// The replica will panic if such dataflows are not dropped before the replica has expired.
     pub replica_expiration: Antichain<Timestamp>,
+
+    /// Tokens keeping logging persist sinks alive.
+    /// Dropped when the replica is shut down.
+    pub logging_persist_tokens: Vec<Rc<dyn Any>>,
+
+    /// Replica-level read-only signal for logging persist sinks.
+    ///
+    /// Logging persist sinks are not tracked as compute collections by the controller,
+    /// so they cannot use the per-collection `AllowWrites` mechanism. Instead, they
+    /// share this replica-level signal that starts as read-only (`true`) and flips to
+    /// writable (`false`) on the first `AllowWrites` command from the controller.
+    read_only_tx: watch::Sender<bool>,
+    /// Receiver for the replica-level read-only signal. Cloned into each logging persist sink.
+    pub read_only_rx: watch::Receiver<bool>,
 }
 
 impl ComputeState {
@@ -176,6 +190,9 @@ impl ComputeState {
     ) -> Self {
         let traces = TraceManager::new(metrics.clone());
         let command_history = ComputeCommandHistory::new(metrics.for_history());
+
+        // Start read-only; flipped to writable on first AllowWrites command.
+        let (read_only_tx, read_only_rx) = watch::channel(true);
 
         Self {
             collections: Default::default(),
@@ -198,6 +215,9 @@ impl ComputeState {
             server_maintenance_interval: Duration::ZERO,
             init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
+            logging_persist_tokens: Vec::new(),
+            read_only_tx,
+            read_only_rx,
         }
     }
 
@@ -408,6 +428,12 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             self.compute_state.apply_expiration_offset(offset);
         }
 
+        // Set the replica-level read-only state from the controller before
+        // initializing logging, so logging persist sinks pick up the correct value.
+        self.compute_state
+            .read_only_tx
+            .send_replace(config.read_only);
+
         self.initialize_logging(config.logging);
 
         self.compute_state.peek_stash_persist_location = Some(config.peek_stash_persist_location);
@@ -614,6 +640,17 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // such as appending a batch or advancing the upper.
         self.compute_state.persist_clients.cfg().enable_compaction();
 
+        // On the first AllowWrites command, also flip the replica-level read-only
+        // signal so logging persist sinks can start writing.
+        self.compute_state.read_only_tx.send_if_modified(|val| {
+            if *val {
+                *val = false;
+                true
+            } else {
+                false
+            }
+        });
+
         if let Some(collection) = self.compute_state.collections.get_mut(&id) {
             collection.allow_writes();
         } else {
@@ -666,11 +703,28 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             panic!("dataflow server has already initialized logging");
         }
 
+        // Pre-create collection entries for persist sink IDs.
+        // The persist_sink function expects these to exist when it sets sink_write_frontier.
+        // We use a placeholder dataflow index (0) and update it after the dataflow is created.
+        for (_variant, (sink_id, _meta)) in config.sink_logs.iter() {
+            let is_subscribe_or_copy = false;
+            let as_of = Antichain::from_elem(Timestamp::MIN);
+            let metrics = self.compute_state.metrics.for_collection(*sink_id);
+            let collection = CollectionState::new(
+                Rc::new(0), // placeholder, updated below
+                is_subscribe_or_copy,
+                as_of,
+                metrics,
+            );
+            self.compute_state.collections.insert(*sink_id, collection);
+        }
+
         let LoggingTraces {
             traces,
             dataflow_index,
             compute_logger: logger,
-        } = logging::initialize(self.timely_worker, &config);
+            persist_tokens,
+        } = logging::initialize(self.timely_worker, &config, self.compute_state);
 
         let dataflow_index = Rc::new(dataflow_index);
         let mut log_index_ids = config.index_logs;
@@ -704,6 +758,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 );
             }
         }
+
+        // Hold persist tokens to keep the sinks alive.
+        self.compute_state.logging_persist_tokens = persist_tokens;
 
         // Sanity check.
         assert!(

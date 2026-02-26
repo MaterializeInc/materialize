@@ -669,6 +669,17 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
+  - id: persisted-introspection
+    label: "Persisted Introspection"
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs: [test/persisted-introspection]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: persisted-introspection
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
   - id: secrets-logging
     label: "Secrets Logging"
     depends_on: build-aarch64

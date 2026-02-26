@@ -347,6 +347,7 @@ pub struct ClusterVariantManaged {
     pub size: String,
     pub availability_zones: Vec<String>,
     pub logging: ReplicaLogging,
+    pub persist_introspection: bool,
     pub replication_factor: u32,
     pub optimizer_feature_overrides: BTreeMap<String, String>,
     pub schedule: ClusterSchedule,
@@ -398,6 +399,62 @@ impl DurableType for IntrospectionSourceIndex {
     fn key(&self) -> Self::Key {
         ClusterIntrospectionSourceIndexKey {
             cluster_id: self.cluster_id,
+            name: self.name.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Ord, PartialOrd, PartialEq, Eq)]
+pub struct PersistedIntrospectionSource {
+    pub cluster_id: ClusterId,
+    pub replica_id: ReplicaId,
+    pub name: String,
+    pub item_id: CatalogItemId,
+    pub global_id: GlobalId,
+    pub oid: u32,
+    pub schema_id: SchemaId,
+}
+
+impl DurableType for PersistedIntrospectionSource {
+    type Key = PersistedIntrospectionSourceKey;
+    type Value = PersistedIntrospectionSourceValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            PersistedIntrospectionSourceKey {
+                cluster_id: self.cluster_id,
+                replica_id: self.replica_id,
+                name: self.name,
+            },
+            PersistedIntrospectionSourceValue {
+                catalog_id: self.item_id.try_into().expect(
+                    "persisted introspection source must be a PersistedIntrospectionSource ID",
+                ),
+                global_id: self.global_id.try_into().expect(
+                    "persisted introspection source must be a PersistedIntrospectionSource ID",
+                ),
+                oid: self.oid,
+                schema_id: self.schema_id,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            cluster_id: key.cluster_id,
+            replica_id: key.replica_id,
+            name: key.name,
+            item_id: value.catalog_id.into(),
+            global_id: value.global_id.into(),
+            oid: value.oid,
+            schema_id: value.schema_id,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        PersistedIntrospectionSourceKey {
+            cluster_id: self.cluster_id,
+            replica_id: self.replica_id,
             name: self.name.clone(),
         }
     }
@@ -635,6 +692,7 @@ impl TryFrom<CatalogItemId> for SystemCatalogItemId {
         match val {
             CatalogItemId::System(x) => Ok(SystemCatalogItemId(x)),
             CatalogItemId::IntrospectionSourceIndex(_) => Err("introspection_source_index"),
+            CatalogItemId::PersistedIntrospectionSource(_) => Err("persisted_introspection_source"),
             CatalogItemId::User(_) => Err("user"),
             CatalogItemId::Transient(_) => Err("transient"),
         }
@@ -660,6 +718,7 @@ impl TryFrom<CatalogItemId> for IntrospectionSourceIndexCatalogItemId {
             CatalogItemId::IntrospectionSourceIndex(x) => {
                 Ok(IntrospectionSourceIndexCatalogItemId(x))
             }
+            CatalogItemId::PersistedIntrospectionSource(_) => Err("persisted_introspection_source"),
             CatalogItemId::User(_) => Err("user"),
             CatalogItemId::Transient(_) => Err("transient"),
         }
@@ -683,6 +742,7 @@ impl TryFrom<GlobalId> for SystemGlobalId {
         match val {
             GlobalId::System(x) => Ok(SystemGlobalId(x)),
             GlobalId::IntrospectionSourceIndex(_) => Err("introspection_source_index"),
+            GlobalId::PersistedIntrospectionSource(_) => Err("persisted_introspection_source"),
             GlobalId::User(_) => Err("user"),
             GlobalId::Transient(_) => Err("transient"),
             GlobalId::Explain => Err("explain"),
@@ -707,6 +767,7 @@ impl TryFrom<GlobalId> for IntrospectionSourceIndexGlobalId {
         match val {
             GlobalId::System(_) => Err("system"),
             GlobalId::IntrospectionSourceIndex(x) => Ok(IntrospectionSourceIndexGlobalId(x)),
+            GlobalId::PersistedIntrospectionSource(_) => Err("persisted_introspection_source"),
             GlobalId::User(_) => Err("user"),
             GlobalId::Transient(_) => Err("transient"),
             GlobalId::Explain => Err("explain"),
@@ -717,6 +778,59 @@ impl TryFrom<GlobalId> for IntrospectionSourceIndexGlobalId {
 impl From<IntrospectionSourceIndexGlobalId> for GlobalId {
     fn from(val: IntrospectionSourceIndexGlobalId) -> Self {
         GlobalId::IntrospectionSourceIndex(val.0)
+    }
+}
+
+/// A newtype wrapper for [`CatalogItemId`] that is only for the "persisted introspection source" namespace.
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct PersistedIntrospectionSourceCatalogItemId(u64);
+
+impl TryFrom<CatalogItemId> for PersistedIntrospectionSourceCatalogItemId {
+    type Error = &'static str;
+
+    fn try_from(val: CatalogItemId) -> Result<Self, Self::Error> {
+        match val {
+            CatalogItemId::System(_) => Err("system"),
+            CatalogItemId::IntrospectionSourceIndex(_) => Err("introspection_source_index"),
+            CatalogItemId::PersistedIntrospectionSource(x) => {
+                Ok(PersistedIntrospectionSourceCatalogItemId(x))
+            }
+            CatalogItemId::User(_) => Err("user"),
+            CatalogItemId::Transient(_) => Err("transient"),
+        }
+    }
+}
+
+impl From<PersistedIntrospectionSourceCatalogItemId> for CatalogItemId {
+    fn from(val: PersistedIntrospectionSourceCatalogItemId) -> Self {
+        CatalogItemId::PersistedIntrospectionSource(val.0)
+    }
+}
+
+/// A newtype wrapper for [`GlobalId`] that is only for the "persisted introspection source" namespace.
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct PersistedIntrospectionSourceGlobalId(u64);
+
+impl TryFrom<GlobalId> for PersistedIntrospectionSourceGlobalId {
+    type Error = &'static str;
+
+    fn try_from(val: GlobalId) -> Result<Self, Self::Error> {
+        match val {
+            GlobalId::System(_) => Err("system"),
+            GlobalId::IntrospectionSourceIndex(_) => Err("introspection_source_index"),
+            GlobalId::PersistedIntrospectionSource(x) => {
+                Ok(PersistedIntrospectionSourceGlobalId(x))
+            }
+            GlobalId::User(_) => Err("user"),
+            GlobalId::Transient(_) => Err("transient"),
+            GlobalId::Explain => Err("explain"),
+        }
+    }
+}
+
+impl From<PersistedIntrospectionSourceGlobalId> for GlobalId {
+    fn from(val: PersistedIntrospectionSourceGlobalId) -> Self {
+        GlobalId::PersistedIntrospectionSource(val.0)
     }
 }
 
@@ -1147,6 +1261,8 @@ pub struct Snapshot {
         proto::ClusterIntrospectionSourceIndexKey,
         proto::ClusterIntrospectionSourceIndexValue,
     >,
+    pub persisted_introspection_sources:
+        BTreeMap<proto::PersistedIntrospectionSourceKey, proto::PersistedIntrospectionSourceValue>,
     pub id_allocator: BTreeMap<proto::IdAllocKey, proto::IdAllocValue>,
     pub configs: BTreeMap<proto::ConfigKey, proto::ConfigValue>,
     pub settings: BTreeMap<proto::SettingKey, proto::SettingValue>,
@@ -1250,6 +1366,21 @@ pub struct ClusterIntrospectionSourceIndexValue {
     pub(crate) catalog_id: IntrospectionSourceIndexCatalogItemId,
     pub(crate) global_id: IntrospectionSourceIndexGlobalId,
     pub(crate) oid: u32,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct PersistedIntrospectionSourceKey {
+    pub(crate) cluster_id: ClusterId,
+    pub(crate) replica_id: ReplicaId,
+    pub(crate) name: String,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct PersistedIntrospectionSourceValue {
+    pub(crate) catalog_id: PersistedIntrospectionSourceCatalogItemId,
+    pub(crate) global_id: PersistedIntrospectionSourceGlobalId,
+    pub(crate) oid: u32,
+    pub(crate) schema_id: SchemaId,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]

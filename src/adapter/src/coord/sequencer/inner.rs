@@ -845,6 +845,7 @@ impl Coordinator {
             database_id: plan.database_spec,
             schema_name: plan.schema_name.clone(),
             owner_id: *session.current_role_id(),
+            system: false,
         };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema),

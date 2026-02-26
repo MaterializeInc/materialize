@@ -64,6 +64,7 @@ pub enum CollectionType {
     IdAlloc,
     Item,
     NetworkPolicy,
+    PersistedIntrospectionSource,
     Role,
     RoleAuth,
     Schema,
@@ -209,6 +210,14 @@ collection_impl!({
     update: StateUpdateKind::NetworkPolicy,
 });
 collection_impl!({
+    name: PersistedIntrospectionSourceCollection,
+    key: proto::PersistedIntrospectionSourceKey,
+    value: proto::PersistedIntrospectionSourceValue,
+    collection_type: CollectionType::PersistedIntrospectionSource,
+    trace_field: persisted_introspection_sources,
+    update: StateUpdateKind::PersistedIntrospectionSource,
+});
+collection_impl!({
     name: RoleCollection,
     key: proto::RoleKey,
     value: proto::RoleValue,
@@ -339,6 +348,7 @@ pub struct Trace {
     pub id_allocator: CollectionTrace<IdAllocatorCollection>,
     pub items: CollectionTrace<ItemCollection>,
     pub network_policies: CollectionTrace<NetworkPolicyCollection>,
+    pub persisted_introspection_sources: CollectionTrace<PersistedIntrospectionSourceCollection>,
     pub roles: CollectionTrace<RoleCollection>,
     pub role_auth: CollectionTrace<RoleAuthCollection>,
     pub schemas: CollectionTrace<SchemaCollection>,
@@ -366,6 +376,7 @@ impl Trace {
             id_allocator: CollectionTrace::new(),
             items: CollectionTrace::new(),
             network_policies: CollectionTrace::new(),
+            persisted_introspection_sources: CollectionTrace::new(),
             roles: CollectionTrace::new(),
             role_auth: CollectionTrace::new(),
             schemas: CollectionTrace::new(),
@@ -393,6 +404,7 @@ impl Trace {
             id_allocator,
             items,
             network_policies,
+            persisted_introspection_sources,
             roles,
             role_auth,
             schemas,
@@ -416,6 +428,7 @@ impl Trace {
         id_allocator.sort();
         items.sort();
         network_policies.sort();
+        persisted_introspection_sources.sort();
         roles.sort();
         role_auth.sort();
         schemas.sort();

@@ -14,6 +14,8 @@ use std::convert::TryInto;
 use std::rc::Rc;
 use std::time::Duration;
 
+use std::any::Any;
+
 use columnar::Index;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
@@ -36,6 +38,8 @@ use crate::typedefs::RowRowSpine;
 pub(super) struct Return {
     /// Collections to export.
     pub collections: BTreeMap<LogVariant, LogCollection>,
+    /// Tokens keeping persist sinks alive.
+    pub persist_tokens: Vec<Rc<dyn std::any::Any>>,
 }
 
 /// Constructs the logging dataflow fragment for reachability logs.
@@ -48,8 +52,9 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
     mut scope: G,
     config: &LoggingConfig,
     event_queue: EventQueue<Column<(Duration, ReachabilityEvent)>, 3>,
+    compute_state: &mut crate::compute_state::ComputeState,
 ) -> Return {
-    let collections = scope.scoped("timely reachability logging", move |scope| {
+    let (collections, persist_tokens) = scope.scoped("timely reachability logging", move |scope| {
         let enable_logging = config.enable_logging;
         let interval_ms = std::cmp::max(1, config.interval.as_millis());
         type UpdatesKey = (bool, usize, usize, usize, Timestamp);
@@ -117,6 +122,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             );
 
         let mut result = BTreeMap::new();
+        let mut persist_tokens: Vec<Rc<dyn Any>> = Vec::new();
         for variant in logs_active {
             if config.index_logs.contains_key(&variant) {
                 let exchange = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
@@ -136,9 +142,22 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                 };
                 result.insert(variant, collection);
             }
+            if let Some((sink_id, meta)) = config.sink_logs.get(&variant) {
+                let token = super::persist::render_arranged(
+                    &updates,
+                    variant,
+                    *sink_id,
+                    meta,
+                    compute_state,
+                );
+                persist_tokens.push(token);
+            }
         }
-        result
+        (result, persist_tokens)
     });
 
-    Return { collections }
+    Return {
+        collections,
+        persist_tokens,
+    }
 }

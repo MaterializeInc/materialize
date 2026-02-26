@@ -1282,6 +1282,7 @@ impl Coordinator {
             DataSourceDesc::Introspection(_) => {
                 unreachable!("cannot create sources with introspection data sources")
             }
+            DataSourceDesc::PersistedIntrospection(_) => DataSource::Other,
         };
 
         storage_collections_to_create.insert(

@@ -43,6 +43,8 @@ use crate::typedefs::{KeyBatcher, RowRowSpine};
 pub(super) struct Return {
     /// Collections to export.
     pub collections: BTreeMap<LogVariant, LogCollection>,
+    /// Tokens keeping persist sinks alive.
+    pub persist_tokens: Vec<Rc<dyn std::any::Any>>,
 }
 
 /// Constructs the logging dataflow fragment for differential logs.
@@ -57,6 +59,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
+    compute_state: &mut crate::compute_state::ComputeState,
 ) -> Return {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
 
@@ -170,8 +173,9 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             (BatcherAllocations, batcher_allocations),
         ];
 
-        // Build the output arrangements.
+        // Build the output arrangements and persist sinks.
         let mut collections = BTreeMap::new();
+        let mut persist_tokens: Vec<Rc<dyn std::any::Any>> = Vec::new();
         for (variant, collection) in logs {
             let variant = LogVariant::Differential(variant);
             if config.index_logs.contains_key(&variant) {
@@ -192,9 +196,22 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                 };
                 collections.insert(variant, collection);
             }
+            if let Some((sink_id, meta)) = config.sink_logs.get(&variant) {
+                let token = super::persist::render_arranged(
+                    &collection,
+                    variant,
+                    *sink_id,
+                    meta,
+                    compute_state,
+                );
+                persist_tokens.push(token);
+            }
         }
 
-        Return { collections }
+        Return {
+            collections,
+            persist_tokens,
+        }
     })
 }
 
