@@ -1900,39 +1900,12 @@ fn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError> {
     Ok(buf)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct ConcatWs;
-
-impl fmt::Display for ConcatWs {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("concat_ws")
-    }
-}
-
-fn text_concat_ws<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let ws = match datums[0] {
-        Datum::Null => return Ok(Datum::Null),
-        d => d.unwrap_str(),
-    };
-
+#[sqlfunc]
+fn concat_ws(ws: &str, rest: Variadic<Option<&str>>) -> Result<String, EvalError> {
     let mut total_size = 0;
-    for d in &datums[1..] {
-        if !d.is_null() {
-            total_size += d.unwrap_str().len();
+    for s in &rest {
+        if let Some(s) = s {
+            total_size += s.len();
             total_size += ws.len();
             if total_size > MAX_STRING_FUNC_RESULT_BYTES {
                 return Err(EvalError::LengthTooLarge);
@@ -1940,15 +1913,9 @@ fn text_concat_ws<'a>(
         }
     }
 
-    let buf = Itertools::join(
-        &mut datums[1..].iter().filter_map(|d| match d {
-            Datum::Null => None,
-            d => Some(d.unwrap_str()),
-        }),
-        ws,
-    );
+    let buf = Itertools::join(&mut rest.into_iter().filter_map(|s| s), ws);
 
-    Ok(Datum::String(temp_storage.push_string(buf)))
+    Ok(buf)
 }
 
 #[sqlfunc]
@@ -2286,6 +2253,7 @@ impl VariadicFunc {
             VariadicFunc::Replace(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::Translate(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::Concat(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::ConcatWs(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -2309,8 +2277,8 @@ impl VariadicFunc {
             | VariadicFunc::Replace(_)
             | VariadicFunc::Translate(_)
             | VariadicFunc::Concat(_)
+            | VariadicFunc::ConcatWs(_)
             | VariadicFunc::Least(_) => unreachable!(),
-            VariadicFunc::ConcatWs(_) => text_concat_ws(&ds, temp_storage),
             VariadicFunc::MakeTimestamp(_) => make_timestamp(&ds),
             VariadicFunc::PadLeading(_) => pad_leading(&ds, temp_storage),
             VariadicFunc::Substr(_) => substr(&ds),
