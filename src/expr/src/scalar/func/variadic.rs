@@ -846,33 +846,15 @@ pub fn hmac_inner(to_digest: &[u8], key: &[u8], typ: &str) -> Result<Vec<u8>, Ev
     }
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct JsonbBuildArray;
-
-impl fmt::Display for JsonbBuildArray {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("jsonb_build_array")
-    }
-}
-
-fn jsonb_build_array<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    temp_storage.make_datum(|packer| {
+#[sqlfunc]
+fn jsonb_build_array<'a>(datums: Variadic<Datum<'a>>, temp_storage: &'a RowArena) -> JsonbRef<'a> {
+    let datum = temp_storage.make_datum(|packer| {
         packer.push_list(datums.into_iter().map(|d| match d {
             Datum::Null => Datum::JsonNull,
-            d => *d,
+            d => d,
         }))
-    })
+    });
+    JsonbRef::from_datum(datum)
 }
 
 #[sqlfunc]
@@ -1931,6 +1913,7 @@ impl VariadicFunc {
             VariadicFunc::MakeTimestamp(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::RegexpReplace(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::JsonbBuildObject(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::JsonbBuildArray(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -1972,8 +1955,8 @@ impl VariadicFunc {
             | VariadicFunc::MakeTimestamp(_)
             | VariadicFunc::RegexpReplace(_)
             | VariadicFunc::JsonbBuildObject(_)
+            | VariadicFunc::JsonbBuildArray(_)
             | VariadicFunc::Least(_) => unreachable!(),
-            VariadicFunc::JsonbBuildArray(_) => Ok(jsonb_build_array(&ds, temp_storage)),
             VariadicFunc::MapBuild(..) => Ok(map_build(&ds, temp_storage)),
             VariadicFunc::ArrayCreate(ArrayCreate {
                 elem_type: SqlScalarType::Array(_),
