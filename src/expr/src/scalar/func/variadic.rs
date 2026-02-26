@@ -17,7 +17,7 @@ use std::borrow::Cow;
 use std::cmp;
 use std::fmt;
 
-use chrono::{NaiveDate, NaiveTime};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
 use itertools::Itertools;
@@ -652,70 +652,32 @@ fn date_diff_time(unit_str: &str, a: NaiveTime, b: NaiveTime) -> Result<i64, Eva
     Ok(diff)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct DateDiffTimestamp;
-
-impl fmt::Display for DateDiffTimestamp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("datediff")
-    }
-}
-
-fn date_diff_timestamp<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
-    let unit = unit.unwrap_str();
+#[sqlfunc(sqlname = "datediff")]
+fn date_diff_timestamp(
+    unit: &str,
+    a: CheckedTimestamp<NaiveDateTime>,
+    b: CheckedTimestamp<NaiveDateTime>,
+) -> Result<i64, EvalError> {
     let unit = unit
         .parse()
         .map_err(|_| EvalError::InvalidDatePart(unit.into()))?;
 
-    let a = a.unwrap_timestamp();
-    let b = b.unwrap_timestamp();
     let diff = b.diff_as(&a, unit)?;
-
-    Ok(Datum::Int64(diff))
+    Ok(diff)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct DateDiffTimestampTz;
-
-impl fmt::Display for DateDiffTimestampTz {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("datediff")
-    }
-}
-
-fn date_diff_timestamptz<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
-    let unit = unit.unwrap_str();
+#[sqlfunc(sqlname = "datediff")]
+fn date_diff_timestamp_tz(
+    unit: &str,
+    a: CheckedTimestamp<DateTime<Utc>>,
+    b: CheckedTimestamp<DateTime<Utc>>,
+) -> Result<i64, EvalError> {
     let unit = unit
         .parse()
         .map_err(|_| EvalError::InvalidDatePart(unit.into()))?;
 
-    let a = a.unwrap_timestamptz();
-    let b = b.unwrap_timestamptz();
     let diff = b.diff_as(&a, unit)?;
-
-    Ok(Datum::Int64(diff))
+    Ok(diff)
 }
 
 #[derive(
@@ -2165,6 +2127,8 @@ impl VariadicFunc {
             VariadicFunc::Substr(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::DateDiffDate(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::DateDiffTime(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::DateDiffTimestamp(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::DateDiffTimestampTz(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -2193,6 +2157,8 @@ impl VariadicFunc {
             | VariadicFunc::Substr(_)
             | VariadicFunc::DateDiffDate(_)
             | VariadicFunc::DateDiffTime(_)
+            | VariadicFunc::DateDiffTimestamp(_)
+            | VariadicFunc::DateDiffTimestampTz(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::MakeTimestamp(_) => make_timestamp(&ds),
             VariadicFunc::PadLeading(_) => pad_leading(&ds, temp_storage),
@@ -2227,8 +2193,6 @@ impl VariadicFunc {
                 ds[2].unwrap_timestamptz(),
             )
             .into_result(temp_storage),
-            VariadicFunc::DateDiffTimestamp(_) => date_diff_timestamp(ds[0], ds[1], ds[2]),
-            VariadicFunc::DateDiffTimestampTz(_) => date_diff_timestamptz(ds[0], ds[1], ds[2]),
             VariadicFunc::RangeCreate(..) => create_range(&ds, temp_storage),
             VariadicFunc::MakeAclItem(_) => make_acl_item(&ds),
             VariadicFunc::MakeMzAclItem(_) => make_mz_acl_item(&ds),
