@@ -1754,6 +1754,18 @@ const MONITOR_REDACTED_SELECT: MzAclItem = MzAclItem {
     acl_mode: AclMode::SELECT,
 };
 
+pub static MZ_CATALOG_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
+    name: "mz_catalog_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_CATALOG_RAW_OID,
+    data_source: DataSourceDesc::Catalog,
+    desc: crate::durable::persist_desc(),
+    column_comments: BTreeMap::new(),
+    is_retained_metrics_object: false,
+    // The raw catalog contains unredacted SQL statements, so we limit access to the system user.
+    access: vec![],
+});
+
 pub static MZ_DATAFLOW_OPERATORS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
     name: "mz_dataflow_operators_per_worker",
     schema: MZ_INTROSPECTION_SCHEMA,
@@ -13910,6 +13922,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         }
     }
     builtins.append(&mut vec![
+        Builtin::Source(&MZ_CATALOG_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_SHARING_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_BATCHES_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_RECORDS_RAW),
