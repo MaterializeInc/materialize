@@ -145,12 +145,6 @@ pub struct ArrayCreate {
     pub elem_type: SqlScalarType,
 }
 
-impl fmt::Display for ArrayCreate {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("array_create")
-    }
-}
-
 /// Constructs a new multidimensional array out of an arbitrary number of
 /// lower-dimensional arrays.
 ///
@@ -166,6 +160,21 @@ impl fmt::Display for ArrayCreate {
 /// one and the length of the new dimension is equal to `datums.len()`.
 ///
 /// Null elements are allowed and considered to be zero-dimensional arrays.
+#[sqlfunc(
+    ArrayCreate,
+    output_type_expr = "match &self.elem_type { SqlScalarType::Array(_) => self.elem_type.clone().nullable(false), _ => SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false) }",
+    introduces_nulls = false
+)]
+fn array_create<'a>(
+    &self,
+    datums: Variadic<Datum<'a>>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    match &self.elem_type {
+        SqlScalarType::Array(_) => array_create_multidim(&datums, temp_storage),
+        _ => array_create_scalar(&datums, temp_storage),
+    }
+}
 fn array_create_multidim<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
@@ -1779,6 +1788,7 @@ impl VariadicFunc {
             VariadicFunc::MapBuild(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::ListCreate(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::RecordCreate(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::ArrayCreate(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -1833,11 +1843,8 @@ impl VariadicFunc {
             | VariadicFunc::MapBuild(_)
             | VariadicFunc::ListCreate(_)
             | VariadicFunc::RecordCreate(_)
+            | VariadicFunc::ArrayCreate(_)
             | VariadicFunc::Least(_) => unreachable!(),
-            VariadicFunc::ArrayCreate(ArrayCreate {
-                elem_type: SqlScalarType::Array(_),
-            }) => array_create_multidim(&ds, temp_storage),
-            VariadicFunc::ArrayCreate(..) => array_create_scalar(&ds, temp_storage),
             VariadicFunc::RangeCreate(..) => create_range(&ds, temp_storage),
         }
     }
