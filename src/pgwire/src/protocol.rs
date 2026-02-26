@@ -1423,14 +1423,20 @@ where
 
         // Binary encodings are disabled for list, map, and aclitem types, but this doesn't
         // apply to COPY TO statements.
-        if !stmt.stmt().map_or(false, |stmt| {
-            matches!(
-                stmt,
-                Statement::Copy(CopyStatement {
-                    direction: CopyDirection::To,
-                    ..
-                })
-            )
+        if !stmt.stmt().map_or(false, |stmt| match stmt {
+            Statement::Copy(CopyStatement {
+                direction: CopyDirection::To,
+                ..
+            }) => true,
+            Statement::Copy(CopyStatement {
+                direction: CopyDirection::From,
+                // To be conservative, we are restricting COPY FROM to only allow list/map/aclitem types if it is not
+                // copying from STDIN. It is likely that this works in theory, but is risky and likely to OOM anyways
+                // as all the data will be held in a buffer in memory before being processed.
+                target: CopyTarget::Expr(_),
+                ..
+            }) => true,
+            _ => false,
         }) {
             if let Some(desc) = stmt.desc().relation_desc.clone() {
                 for (format, ty) in result_formats.iter().zip_eq(desc.iter_types()) {

@@ -897,6 +897,7 @@ class Composition:
         mz_service: str | None = None,
         quiet: bool = False,
         persistent: bool = True,
+        environment: dict[str, str] = {},
     ) -> subprocess.CompletedProcess:
         if mz_service is not None:
             args = tuple(
@@ -906,7 +907,7 @@ class Composition:
                     f"--materialize-internal-url=postgres://mz_system@{mz_service}:6877",
                 ]
             )
-        environment = {"CLUSTER_REPLICA_SIZES": json.dumps(cluster_replica_size_map())}
+        environment["CLUSTER_REPLICA_SIZES"] = json.dumps(cluster_replica_size_map())
 
         if persistent:
             if not self.is_running(service):

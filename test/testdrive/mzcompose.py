@@ -182,6 +182,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         non_default_testdrive_vars = []
 
         generate_parquet_files()
+        non_default_testdrive_vars.append("--var=parquet-files-path=")
 
         if args.replicas > 1:
             c.sql("DROP CLUSTER quickstart CASCADE", user="mz_system", port=6877)
@@ -251,6 +252,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 *non_default_testdrive_vars,
                 *passthrough_args,
                 file,
+                environment={'testdrive-path': '.'},
             )
             # Uploading successful junit files wastes time and contains no useful information
             os.remove(MZ_ROOT / "test" / "testdrive" / junit_report)

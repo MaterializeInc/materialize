@@ -145,6 +145,7 @@ class TestdrivePod(K8sPod, TestdriveBase):
                 "AWS_SESSION_TOKEN",
             ]
         ]
+        env.append(V1EnvVar(name="testdrive-path", value="testdrive"))
 
         container = V1Container(
             name="testdrive",
