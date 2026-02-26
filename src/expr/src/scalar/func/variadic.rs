@@ -49,6 +49,7 @@ use crate::func::{
 };
 use crate::{EvalError, MirScalarExpr};
 use mz_repr::adt::date::Date;
+use mz_repr::adt::interval::Interval;
 
 #[derive(
     Ord,
@@ -1793,68 +1794,33 @@ fn list_slice_linear<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Da
     })
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct DateBinTimestamp;
-
-impl fmt::Display for DateBinTimestamp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("timestamp_bin")
-    }
+#[sqlfunc(sqlname = "timestamp_bin")]
+fn date_bin_timestamp(
+    stride: Interval,
+    source: CheckedTimestamp<NaiveDateTime>,
+    origin: CheckedTimestamp<NaiveDateTime>,
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    date_bin(stride, source, origin)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct DateBinTimestampTz;
-
-impl fmt::Display for DateBinTimestampTz {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("timestamptz_bin")
-    }
+#[sqlfunc(sqlname = "timestamptz_bin")]
+fn date_bin_timestamp_tz(
+    stride: Interval,
+    source: CheckedTimestamp<DateTime<Utc>>,
+    origin: CheckedTimestamp<DateTime<Utc>>,
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+    date_bin(stride, source, origin)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct TimezoneTime;
-
-impl fmt::Display for TimezoneTime {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("timezonet")
-    }
+#[sqlfunc(sqlname = "timezonet")]
+fn timezone_time_variadic(
+    tz_str: &str,
+    time: NaiveTime,
+    wall_time: CheckedTimestamp<DateTime<Utc>>,
+) -> Result<NaiveTime, EvalError> {
+    parse_timezone(tz_str, TimezoneSpec::Posix)
+        .map(|tz| timezone_time(tz, time, &wall_time.naive_utc()))
 }
-
-/// A description of an SQL variadic function that has the ability to lazy
-/// evaluate its arguments.
 pub(crate) trait LazyVariadicFunc: fmt::Display {
     fn eval<'a>(
         &'a self,
@@ -2017,7 +1983,7 @@ derive_variadic! {
     ArrayPosition(ArrayPosition),
     ArrayFill(ArrayFill),
     StringToArray(StringToArray),
-    TimezoneTime(TimezoneTime),
+    TimezoneTimeVariadic(TimezoneTimeVariadic),
     RegexpSplitToArray(RegexpSplitToArray),
     RegexpReplace(RegexpReplace),
 }
@@ -2050,6 +2016,9 @@ impl VariadicFunc {
             VariadicFunc::HmacString(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::HmacBytes(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::PadLeading(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::DateBinTimestamp(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::DateBinTimestampTz(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::TimezoneTimeVariadic(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -2083,6 +2052,9 @@ impl VariadicFunc {
             | VariadicFunc::HmacString(_)
             | VariadicFunc::HmacBytes(_)
             | VariadicFunc::PadLeading(_)
+            | VariadicFunc::DateBinTimestamp(_)
+            | VariadicFunc::DateBinTimestampTz(_)
+            | VariadicFunc::TimezoneTimeVariadic(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::MakeTimestamp(_) => make_timestamp(&ds),
             VariadicFunc::JsonbBuildArray(_) => Ok(jsonb_build_array(&ds, temp_storage)),
@@ -2102,33 +2074,11 @@ impl VariadicFunc {
             VariadicFunc::ListIndex(_) => Ok(list_index(&ds)),
             VariadicFunc::ListSliceLinear(_) => Ok(list_slice_linear(&ds, temp_storage)),
             VariadicFunc::RegexpMatch(_) => regexp_match_dynamic(&ds, temp_storage),
-            VariadicFunc::DateBinTimestamp(_) => date_bin(
-                ds[0].unwrap_interval(),
-                ds[1].unwrap_timestamp(),
-                ds[2].unwrap_timestamp(),
-            )
-            .into_result(temp_storage),
-            VariadicFunc::DateBinTimestampTz(_) => date_bin(
-                ds[0].unwrap_interval(),
-                ds[1].unwrap_timestamptz(),
-                ds[2].unwrap_timestamptz(),
-            )
-            .into_result(temp_storage),
             VariadicFunc::RangeCreate(..) => create_range(&ds, temp_storage),
             VariadicFunc::MakeAclItem(_) => make_acl_item(&ds),
             VariadicFunc::MakeMzAclItem(_) => make_mz_acl_item(&ds),
             VariadicFunc::ArrayPosition(_) => array_position(&ds),
             VariadicFunc::ArrayFill(..) => array_fill(&ds, temp_storage),
-            VariadicFunc::TimezoneTime(_) => {
-                parse_timezone(ds[0].unwrap_str(), TimezoneSpec::Posix).map(|tz| {
-                    timezone_time(
-                        tz,
-                        ds[1].unwrap_time(),
-                        &ds[2].unwrap_timestamptz().naive_utc(),
-                    )
-                    .into()
-                })
-            }
             VariadicFunc::RegexpSplitToArray(_) => {
                 let flags = if ds.len() == 2 {
                     Datum::String("")
@@ -2187,7 +2137,7 @@ impl VariadicFunc {
             | VariadicFunc::MakeMzAclItem(_)
             | VariadicFunc::ArrayPosition(_)
             | VariadicFunc::ArrayFill(..)
-            | VariadicFunc::TimezoneTime(_)
+            | VariadicFunc::TimezoneTimeVariadic(_)
             | VariadicFunc::RegexpSplitToArray(_)
             | VariadicFunc::StringToArray(_)
             | VariadicFunc::RegexpReplace(_) => false,
@@ -2294,7 +2244,7 @@ impl VariadicFunc {
             Self::ArrayFill(ArrayFill { elem_type }) => {
                 SqlScalarType::Array(Box::new(elem_type.clone())).nullable(false)
             }
-            Self::TimezoneTime(_) => SqlScalarType::Time.nullable(in_nullable),
+            Self::TimezoneTimeVariadic(_) => SqlScalarType::Time.nullable(in_nullable),
             Self::RegexpSplitToArray(_) => {
                 SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(in_nullable)
             }
@@ -2390,7 +2340,7 @@ impl VariadicFunc {
             | Self::MakeMzAclItem(_)
             | Self::ArrayPosition(_)
             | Self::ArrayFill(..)
-            | Self::TimezoneTime(_)
+            | Self::TimezoneTimeVariadic(_)
             | Self::RegexpSplitToArray(_)
             | Self::RegexpReplace(_) => false,
             Self::MakeTimestamp(_)
@@ -2507,7 +2457,7 @@ impl VariadicFunc {
             | VariadicFunc::DateDiffTimestampTz(_)
             | VariadicFunc::DateDiffDate(_)
             | VariadicFunc::DateDiffTime(_)
-            | VariadicFunc::TimezoneTime(_)
+            | VariadicFunc::TimezoneTimeVariadic(_)
             | VariadicFunc::RegexpSplitToArray(_)
             | VariadicFunc::StringToArray(_)
             | VariadicFunc::RegexpReplace(_) => false,

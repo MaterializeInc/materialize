@@ -1309,7 +1309,7 @@ impl MirScalarExpr {
                             // Note: It's important that we have called `flatten_associative` above.
                             e.undistribute_and_or();
                             e.reduce_and_canonicalize_and_or();
-                        } else if let VariadicFunc::TimezoneTime(_) = func {
+                        } else if let VariadicFunc::TimezoneTimeVariadic(_) = func {
                             if exprs[0].is_literal() && exprs[2].is_literal_ok() {
                                 let tz = exprs[0].as_literal_str().unwrap();
                                 *e = match parse_timezone(tz, TimezoneSpec::Posix) {
