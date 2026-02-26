@@ -130,11 +130,10 @@ build() {
         --cache-to=type=inline,mode=max \
         $docker_build_args \
         --tag materialize/ci-builder:"$tag" \
+        --tag ghcr.io/materializeinc/materialize/ci-builder:"$tag" \
         --tag materialize/ci-builder:"$cache_tag" \
         --target $docker_target \
         "$@" ci/builder
-        # TODO: Reenable when ghcr 503 error is fixed
-        # --tag ghcr.io/materializeinc/materialize/ci-builder:"$tag" \
 }
 
 shasum=sha1sum
@@ -169,10 +168,9 @@ print(hash.decode())
 cache_tag=cache-$flavor-$rust_version-$arch_go
 
 image_registry="materialize"
-# TODO: Reenable when ghcr 503 error is fixed
-# if is_truthy "${CI:-0}" || is_truthy "${MZ_GHCR:-0}"; then
-#     image_registry="ghcr.io/materializeinc/materialize"
-# fi
+if is_truthy "${CI:-0}" || is_truthy "${MZ_GHCR:-0}"; then
+    image_registry="ghcr.io/materializeinc/materialize"
+fi
 
 case "$cmd" in
     build)

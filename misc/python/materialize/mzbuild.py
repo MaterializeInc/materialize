@@ -950,9 +950,8 @@ class ResolvedImage:
                 *(f"--build-arg={k}={v}" for k, v in build_args.items()),
                 "-t",
                 f"docker.io/{self.spec()}",
-                # TODO: Reenable when ghcr 503 error is fixed
-                # "-t",
-                # f"ghcr.io/materializeinc/{self.spec()}",
+                "-t",
+                f"ghcr.io/materializeinc/{self.spec()}",
                 f"--platform=linux/{self.image.rd.arch.go_str()}",
                 str(self.image.path),
                 *(["--push"] if push else ["--load"]),
@@ -1034,10 +1033,8 @@ class ResolvedImage:
         spec = self.spec()
         if spec.startswith(GHCR_PREFIX):
             spec = spec.removeprefix(GHCR_PREFIX)
-        # TODO: Reenable when ghcr 503 error is fixed
-        # ghcr_spec = f"{GHCR_PREFIX}{spec}"
-        # if is_docker_image_pushed(spec) and is_ghcr_image_pushed(ghcr_spec):
-        if is_docker_image_pushed(spec):
+        ghcr_spec = f"{GHCR_PREFIX}{spec}"
+        if is_docker_image_pushed(spec) and is_ghcr_image_pushed(ghcr_spec):
             ui.say(f"{spec} already exists")
             return True
         return False
@@ -1624,21 +1621,20 @@ def publish_multiarch_images(
             )
             spawn.runv(["docker", "manifest", "push", name])
 
-        # TODO: Reenable when ghcr 503 error is fixed
-        # ghcr_name = f"{GHCR_PREFIX}{name}"
-        # if ghcr_token and (
-        #     tag in always_push_tags or not is_ghcr_image_pushed(ghcr_name)
-        # ):
-        #     spawn.runv(
-        #         [
-        #             "docker",
-        #             "manifest",
-        #             "create",
-        #             ghcr_name,
-        #             *(f"{GHCR_PREFIX}{image.spec()}" for image in images),
-        #         ]
-        #     )
-        #     spawn.runv(["docker", "manifest", "push", ghcr_name])
+        ghcr_name = f"{GHCR_PREFIX}{name}"
+        if ghcr_token and (
+            tag in always_push_tags or not is_ghcr_image_pushed(ghcr_name)
+        ):
+            spawn.runv(
+                [
+                    "docker",
+                    "manifest",
+                    "create",
+                    ghcr_name,
+                    *(f"{GHCR_PREFIX}{image.spec()}" for image in images),
+                ]
+            )
+            spawn.runv(["docker", "manifest", "push", ghcr_name])
     print(f"--- Nofifying for tag {tag}")
     markdown = f"""Pushed images with Docker tag `{tag}`"""
     spawn.runv(
