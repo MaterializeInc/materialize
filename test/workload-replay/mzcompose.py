@@ -140,9 +140,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--early-initial-data",
         action=argparse.BooleanOptionalAction,
-        # Seems faster in the existing workloads, the behavior afterwards is
-        # about the same since we wait for hydration before continuing
-        default=False,
+        default=True,
         help="Run the initial data creation before creating sources in Materialize (except for webhooks)",
     )
     parser.add_argument(
@@ -245,9 +243,7 @@ def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--early-initial-data",
         action=argparse.BooleanOptionalAction,
-        # Seems faster in the existing workloads, the behavior afterwards is
-        # about the same since we wait for hydration before continuing
-        default=False,
+        default=True,
         help="Run the initial data creation before creating sources in Materialize (except for webhooks)",
     )
     parser.add_argument(

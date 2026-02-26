@@ -210,7 +210,7 @@ steps:
                 - common-ancestor
                 - --skip-without-data-scale
         agents:
-          queue: hetzner-x86-64-dedi-16cpu-64gb
+          queue: hetzner-x86-64-dedi-32cpu-128gb
 
   - group: SQLsmith
     key: sqlsmith
