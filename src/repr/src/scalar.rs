@@ -1944,6 +1944,15 @@ pub trait InputDatumType<'a, E>: Sized {
     /// Whether this Rust type can represent NULL values
     fn nullable() -> bool;
 
+    /// Whether ALL components of this input accept NULL values.
+    ///
+    /// For single-element types this equals `nullable()`. For tuples, this is
+    /// the AND of all components' `nullable()` values. Used by `output_type` to
+    /// detect implicit null propagation from non-nullable parameter positions.
+    fn all_nullable() -> bool {
+        Self::nullable()
+    }
+
     /// Try to convert a Result whose Ok variant is a Datum into this native Rust type (Self). If
     /// it fails the error variant will contain the original result.
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>>;
@@ -2131,7 +2140,18 @@ macro_rules! impl_tuple_input_datum_type {
                 Ok(($($T,)+))
             }
             fn nullable() -> bool {
+                // OR: the tuple "accepts NULL" if any component does.
+                // Used by the default `propagates_nulls` (`!nullable()`): when
+                // every component rejects NULL, the function propagates nulls
+                // for ALL inputs — safe for the optimizer to replace with NULL.
                 $( <$T>::nullable() )||+
+            }
+            fn all_nullable() -> bool {
+                // AND: true only when every component accepts NULL. When false,
+                // at least one parameter position rejects NULL at runtime
+                // (via `try_from_iter`), making the output potentially nullable
+                // even if `propagates_nulls` is false.
+                $( <$T>::nullable() )&&+
             }
         }
     }

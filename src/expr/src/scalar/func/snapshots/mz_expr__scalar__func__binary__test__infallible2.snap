@@ -36,8 +36,10 @@ impl crate::func::binary::EagerBinaryFunc for Infallible2 {
             self,
         );
         let nullable = output.nullable;
+        let non_nullable_input_is_nullable = false;
         let inputs_nullable = input_types.iter().any(|it| it.nullable);
-        let is_null = nullable || (propagates_nulls && inputs_nullable);
+        let is_null = nullable || non_nullable_input_is_nullable
+            || (propagates_nulls && inputs_nullable);
         output.nullable(is_null)
     }
 }

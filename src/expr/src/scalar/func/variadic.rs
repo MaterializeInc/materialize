@@ -22,6 +22,7 @@ use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
 use itertools::Itertools;
 use md5::Md5;
+use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_ore::soft_assert_or_log;
@@ -34,7 +35,8 @@ use mz_repr::adt::system::Oid;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    ColumnName, Datum, OutputDatumType, ReprScalarType, Row, RowArena, SqlColumnType, SqlScalarType,
+    ColumnName, Datum, InputDatumType, OutputDatumType, ReprScalarType, Row, RowArena,
+    SqlColumnType, SqlScalarType,
 };
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
@@ -2206,6 +2208,90 @@ pub(crate) trait LazyVariadicFunc: fmt::Display {
     /// Returns true if the function is an infix operator.
     fn is_infix_op(&self) -> bool {
         false
+    }
+}
+
+pub(crate) trait EagerVariadicFunc: fmt::Display {
+    type Input<'a>: InputDatumType<'a, EvalError>;
+    type Output<'a>: OutputDatumType<'a, EvalError>;
+
+    fn call<'a>(&self, input: Self::Input<'a>, temp_storage: &'a RowArena) -> Self::Output<'a>;
+
+    fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType;
+
+    fn propagates_nulls(&self) -> bool {
+        !Self::Input::nullable()
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        Self::Output::nullable()
+    }
+
+    fn could_error(&self) -> bool {
+        Self::Output::fallible()
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
+
+    fn is_associative(&self) -> bool {
+        false
+    }
+
+    fn is_infix_op(&self) -> bool {
+        false
+    }
+}
+
+/// Blanket `LazyVariadicFunc` impl for each eager type, bridging
+/// expression evaluation and null propagation via `InputDatumType::try_from_iter`.
+impl<T: EagerVariadicFunc> LazyVariadicFunc for T {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        exprs: &'a [MirScalarExpr],
+    ) -> Result<Datum<'a>, EvalError> {
+        let mut datums = exprs.iter().map(|e| e.eval(datums, temp_storage));
+        match T::Input::try_from_iter(&mut datums) {
+            Ok(input) => self.call(input, temp_storage).into_result(temp_storage),
+            Err(Ok(None)) => Err(EvalError::Internal("missing parameter".into())),
+            Err(Ok(Some(datum))) if datum.is_null() => Ok(datum),
+            Err(Ok(Some(_datum))) => {
+                // datum is _not_ NULL
+                Err(EvalError::Internal("invalid input type".into()))
+            }
+            Err(Err(res)) => Err(res),
+        }
+    }
+
+    fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
+        self.output_type(input_types)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        self.propagates_nulls()
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        self.introduces_nulls()
+    }
+
+    fn could_error(&self) -> bool {
+        self.could_error()
+    }
+
+    fn is_monotone(&self) -> bool {
+        self.is_monotone()
+    }
+
+    fn is_associative(&self) -> bool {
+        self.is_associative()
+    }
+
+    fn is_infix_op(&self) -> bool {
+        self.is_infix_op()
     }
 }
 
