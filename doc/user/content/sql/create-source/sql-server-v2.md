@@ -22,7 +22,7 @@ Materialize supports SQL Server (2016+) as a real-time data source. To connect t
 SQL Server database, you first need to tweak its configuration to enable [Change Data
 Capture](https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/enable-and-disable-change-data-capture-sql-server)
 and [`SNAPSHOT` transaction isolation](https://learn.microsoft.com/en-us/dotnet/framework/data/adonet/sql/snapshot-isolation-in-sql-server)
-for the database that you would like to replicate. Then [create a connection](#creating-a-connection)
+for the database that you would like to replicate. Then [create a connection](#prerequisite-creating-a-connection-to-sql-server)
 in Materialize that specifies access and authentication parameters.
 {{% /create-source/intro %}}
 
@@ -160,7 +160,7 @@ CREATE SOURCE mz_source
     FROM SQL SERVER CONNECTION sqlserver_connection;
 ```
 
-After a source is created, you can create a table from the source, referencing specific table(s). 
+After a source is created, you can create a table from the source, referencing specific table(s).
 
 _Creates a table in Materialize from the upstream table dbo.items_
 ```mzsql

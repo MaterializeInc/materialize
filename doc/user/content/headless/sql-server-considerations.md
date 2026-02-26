@@ -1,13 +1,14 @@
 ---
 headless: true
 ---
-### Schema changes (Legacy Syntax)
+### Schema changes
+#### Legacy Syntax
 {{< note >}}
 This section refers to the legacy [`CREATE SOURCE ... FOR ...` syntax](/sql/create-source/sql-server/) that creates subsources as part of the `CREATE SOURCE` operation. see the [SQL Server source versioning guide](/ingest-data/sql-server/source-versioning/) for information on using the new syntax to handle upstream schema changes.
 {{< /note >}}
 {{% schema-changes %}}
 
-### Schema Changes (New Syntax)
+#### New Syntax
 
 Certain additional schema changes (such as dropping/altering existing columns) to SQL Server tables are supported when using the new [`CREATE SOURCE` syntax](/sql/create-source/sql-server-v2/) as detailed by the [source versioning guide](/ingest-data/sql-server/source-versioning/)
 
