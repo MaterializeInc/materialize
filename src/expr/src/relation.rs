@@ -358,6 +358,8 @@ impl MirRelationExpr {
                 match e {
                     MirRelationExpr::Let { .. } => {
                         let body_typ = type_stack.pop().unwrap();
+                        // Insert a dummy relation type for the value, since `typ_with_input_types`
+                        // won't look at it, but expects the relation type of the body to be second.
                         type_stack.push(ReprRelationType::empty());
                         type_stack.push(body_typ);
                     }
@@ -366,6 +368,8 @@ impl MirRelationExpr {
                         type_stack.extend(
                             std::iter::repeat(ReprRelationType::empty()).take(values.len()),
                         );
+                        // Insert dummy relation types for the values, since `typ_with_input_types`
+                        // won't look at them, but expects the relation type of the body to be last.
                         type_stack.push(body_typ);
                     }
                     _ => {}

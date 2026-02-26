@@ -85,9 +85,6 @@ pub fn canonicalize_equivalences<'a, I>(
                         expressions_rewritten = true;
                     }
                 });
-                // Using Optimizer context is fine here: this is called from optimizer
-                // transforms and from rendering, both of which operate on MIR with
-                // repr-canonicalized types.
                 popped_expr.reduce(&repr_column_types);
                 new_equivalence.push((rank_complexity(&popped_expr), popped_expr));
             }
@@ -229,8 +226,6 @@ pub fn canonicalize_predicates(
     );
 
     // 1) Reduce each individual predicate.
-    // Using Optimizer context is fine here: this is called from optimizer
-    // transforms and from lowering (which creates MIR), so repr types are appropriate.
     predicates
         .iter_mut()
         .for_each(|p| p.reduce(repr_column_types));
