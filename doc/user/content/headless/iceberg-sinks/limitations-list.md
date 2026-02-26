@@ -9,8 +9,4 @@ headless: true
   name="restrictions-limitations-partitioned-tables" >}}
 
 - {{< include-from-yaml data="examples/create_sink_iceberg"
-  name="restrictions-limitations-unsupported-types" >}}  See also [Type
-  mapping](#type-mapping).
-
-- {{< include-from-yaml data="examples/create_sink_iceberg"
   name="restrictions-limitations-schema-evolution" >}}

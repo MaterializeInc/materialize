@@ -20,5 +20,6 @@ Materialize converts SQL types to Iceberg/Parquet types:
 | `bytea` | `binary` |
 | `uuid` | `fixed(16)` |
 | `jsonb` | `string` |
+| `record` | `struct` |
 | `list` | `list` |
 | `map` | `map` |

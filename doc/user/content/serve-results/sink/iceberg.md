@@ -243,17 +243,18 @@ engines. This setting involves tradeoffs:
 - If you notice query performance degradation from small files, increase the
   interval and consider running Iceberg compaction jobs
 
+{{< note >}}
+Outside of development environments, commit intervals should be at least `60s`.
+Short commit intervals increase catalog overhead and produce many small files
+that degrade query performance over time.
+{{< /note >}}
+
 ### Exactly-once delivery
 
 {{< include-from-yaml data="examples/create_sink_iceberg"
 name="exactly-once-delivery" >}}
 
 ### Type mapping
-
-{{< note >}}
-{{< include-from-yaml data="examples/create_sink_iceberg"
-  name="restrictions-limitations-unsupported-types" >}}
-{{< /note >}}
 
 {{% include-headless
   "/headless/iceberg-sinks/type-mapping" %}}

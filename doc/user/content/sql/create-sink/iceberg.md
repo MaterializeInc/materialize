@@ -78,6 +78,12 @@ The `COMMIT INTERVAL` setting involves tradeoffs between latency and efficiency:
 - If query performance degrades due to small files, increase the interval and
   run Iceberg compaction
 
+{{< note >}}
+Outside of development environments, commit intervals should be at least `60s`.
+Short commit intervals increase catalog overhead and produce many small files
+that degrade query performance over time.
+{{< /note >}}
+
 ### Unique keys
 
 The Iceberg sink uses upsert semantics based on the `KEY`. The columns you
@@ -89,12 +95,6 @@ using `NOT ENFORCED`. However, if the key is not actually unique, downstream
 consumers may see incorrect results.
 
 ### Type mapping
-
-{{< note >}}
-
-{{< include-from-yaml data="examples/create_sink_iceberg"
-  name="restrictions-limitations-unsupported-types" >}}
-{{< /note >}}
 
 {{% include-headless
   "/headless/iceberg-sinks/type-mapping" %}}

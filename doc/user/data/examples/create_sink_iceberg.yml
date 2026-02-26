@@ -80,11 +80,6 @@
   content: |
     Partitioned tables are not supported.
 
-- name: "restrictions-limitations-unsupported-types"
-  content: |
-    Composite/record types are not supported. Use scalar types or flatten your
-    data structure.
-
 - name: "restrictions-limitations-schema-evolution"
   content: |
     Schema evolution of an Iceberg table is not supported. If the `SINK FROM` object's schema changes, you must drop and recreate the sink.
