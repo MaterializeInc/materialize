@@ -35,8 +35,8 @@ use mz_repr::adt::system::Oid;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    ColumnName, Datum, InputDatumType, OptionalArg, OutputDatumType, ReprScalarType, Row, RowArena,
-    SqlColumnType, SqlScalarType, Variadic,
+    ColumnName, Datum, DatumList, InputDatumType, OptionalArg, OutputDatumType, ReprScalarType,
+    Row, RowArena, SqlColumnType, SqlScalarType, Variadic,
 };
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
@@ -968,45 +968,26 @@ fn list_create<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a
     temp_storage.make_datum(|packer| packer.push_list(datums))
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
+#[sqlfunc(
+    output_type_expr = "input_types[0].scalar_type.unwrap_list_nth_layer_type(input_types.len() - 1).clone().nullable(true)",
+    introduces_nulls = true
 )]
-pub struct ListIndex;
-
-impl fmt::Display for ListIndex {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("list_index")
-    }
-}
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
-fn list_index<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
-    let mut buf = datums[0];
-
-    for i in datums[1..].iter() {
+fn list_index<'a>(buf: DatumList<'a>, indices: Variadic<i64>) -> Datum<'a> {
+    let mut buf = Datum::List(buf);
+    for i in indices {
         if buf.is_null() {
             break;
         }
-
-        let i = i.unwrap_int64();
         if i < 1 {
             return Datum::Null;
         }
 
-        buf = buf
-            .unwrap_list()
-            .iter()
-            .nth(i as usize - 1)
-            .unwrap_or(Datum::Null);
+        buf = match buf.unwrap_list().iter().nth(i as usize - 1) {
+            Some(datum) => datum,
+            None => return Datum::Null,
+        }
     }
     buf
 }
@@ -1840,6 +1821,7 @@ impl VariadicFunc {
             VariadicFunc::RegexpMatch(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::RegexpSplitToArray(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::StringToArray(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::ListIndex(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -1886,6 +1868,7 @@ impl VariadicFunc {
             | VariadicFunc::RegexpMatch(_)
             | VariadicFunc::RegexpSplitToArray(_)
             | VariadicFunc::StringToArray(_)
+            | VariadicFunc::ListIndex(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::MapBuild(..) => Ok(map_build(&ds, temp_storage)),
             VariadicFunc::ArrayCreate(ArrayCreate {
@@ -1899,7 +1882,6 @@ impl VariadicFunc {
             VariadicFunc::ListCreate(..) | VariadicFunc::RecordCreate(..) => {
                 Ok(list_create(&ds, temp_storage))
             }
-            VariadicFunc::ListIndex(_) => Ok(list_index(&ds)),
             VariadicFunc::ListSliceLinear(_) => Ok(list_slice_linear(&ds, temp_storage)),
             VariadicFunc::RangeCreate(..) => create_range(&ds, temp_storage),
             VariadicFunc::ArrayFill(..) => array_fill(&ds, temp_storage),
