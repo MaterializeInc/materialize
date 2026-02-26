@@ -13,8 +13,6 @@ import subprocess
 import sys
 from inspect import Traceback
 
-import boto3
-
 from kubernetes.client import V1Container, V1EnvVar, V1ObjectMeta, V1Pod, V1PodSpec
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
@@ -160,7 +158,7 @@ class TestdrivePod(K8sPod, TestdriveBase):
 
         pod_spec = V1PodSpec(containers=[container], node_selector=node_selector)
         self.pod = V1Pod(metadata=metadata, spec=pod_spec)
-        
+
         generate_parquet_files()
 
     def _run_internal(

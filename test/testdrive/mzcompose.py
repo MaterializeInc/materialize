@@ -16,8 +16,6 @@ retried until it produces the desired result.
 import glob
 import os
 
-import boto3
-
 from materialize import MZ_ROOT, buildkite, ci_util
 from materialize.mzcompose.composition import (
     Composition,
