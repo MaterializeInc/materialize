@@ -2205,6 +2205,8 @@ class StartupLoaded(Scenario):
     """Measure the time it takes to restart a populated Mz instance and have all the dataflows be ready to return something"""
 
     SCALE = 1  # 10 objects of each kind
+    # Can not scale to 100s of objects
+    MAX_SCALE = 1.5
 
     def shared(self) -> Action:
         return TdAction(

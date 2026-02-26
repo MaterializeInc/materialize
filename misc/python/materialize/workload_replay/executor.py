@@ -53,6 +53,35 @@ from materialize.workload_replay.stats import (
 from materialize.workload_replay.util import print_workload_stats, resolve_tag
 
 
+def wait_for_freshness(c: Composition) -> None:
+    print("Waiting for freshness")
+    time.sleep(10)
+    prev_lagging: set[str] = set()
+    while True:
+        lagging: set[str] = {
+            entry[0]
+            for entry in c.sql_query(
+                """
+            SELECT o.name
+            FROM mz_internal.mz_materialization_lag l
+            JOIN mz_objects o ON o.id = l.object_id
+            WHERE o.name NOT LIKE 'mz_%'
+              AND o.id NOT IN (SELECT id FROM mz_sinks)
+              AND (l.global_lag IS NULL OR l.global_lag > INTERVAL '10 seconds')
+            ORDER BY l.global_lag DESC NULLS FIRST
+            LIMIT 5;"""
+            )
+        }
+        if lagging:
+            if lagging != prev_lagging:
+                print(f"  Lagging: {', '.join(sorted(lagging))}")
+                prev_lagging = lagging
+            time.sleep(5)
+        else:
+            break
+    print("Freshness complete")
+
+
 def test(
     c: Composition,
     workload: dict[str, Any],
@@ -116,17 +145,17 @@ def test(
         if not early_initial_data:
             run_create_objects_part_2(c, services, workload, verbose)
         stats["object_creation"] = time.time() - start_time
-    created_data = False
-    if initial_data:
-        print("Creating initial data")
-        stats["initial_data"] = {"docker": [], "time": 0.0}
-        stats_thread = PropagatingThread(
-            target=docker_stats,
-            name="docker-stats",
-            args=(stats["initial_data"]["docker"], stop_event),
-        )
-        stats_thread.start()
-        try:
+    stats["initial_data"] = {"docker": [], "time": 0.0}
+    stats_thread = PropagatingThread(
+        target=docker_stats,
+        name="docker-stats",
+        args=(stats["initial_data"]["docker"], stop_event),
+    )
+    stats_thread.start()
+    try:
+        created_data = False
+        if initial_data:
+            print("Creating initial data")
             start_time = time.time()
             created_data = create_initial_data_external(
                 c,
@@ -137,6 +166,7 @@ def test(
             if early_initial_data:
                 obj_start = time.time()
                 run_create_objects_part_2(c, services, workload, verbose)
+                stats["initial_data"]["sources_created_at"] = time.time()
                 stats["object_creation"] += time.time() - obj_start
             created_data_requiring_mz = create_initial_data_requiring_mz(
                 c,
@@ -146,84 +176,60 @@ def test(
             )
             created_data = created_data or created_data_requiring_mz
             stats["initial_data"]["time"] = time.time() - start_time
-            if not created_data:
-                del stats["initial_data"]
-        finally:
-            stop_event.set()
-            stats_thread.join()
-            stop_event.clear()
-    elif early_initial_data:
-        start_time = time.time()
-        run_create_objects_part_2(c, services, workload, verbose)
-        stats["object_creation"] += time.time() - start_time
+        elif early_initial_data:
+            start_time = time.time()
+            run_create_objects_part_2(c, services, workload, verbose)
+            stats["object_creation"] += time.time() - start_time
 
-    # Wait for all user objects to hydrate before starting queries.
-    print("Waiting for hydration")
-    prev_not_hydrated: list[str] = []
-    while True:
-        not_hydrated: list[str] = [
-            entry[0]
-            for entry in c.sql_query(
-                """
-            SELECT DISTINCT name
-                FROM (
-                  SELECT o.name
-                  FROM mz_objects o
-                  JOIN mz_internal.mz_hydration_statuses h
-                    ON o.id = h.object_id
-                  WHERE NOT h.hydrated
-                    AND o.name NOT LIKE 'mz_%'
-                    AND o.id NOT IN (SELECT id FROM mz_sinks)
+        # Wait for all user objects to hydrate before starting queries.
+        print("Waiting for hydration")
+        prev_not_hydrated: list[str] = []
+        while True:
+            not_hydrated: list[str] = [
+                entry[0]
+                for entry in c.sql_query(
+                    """
+                SELECT DISTINCT name
+                    FROM (
+                      SELECT o.name
+                      FROM mz_objects o
+                      JOIN mz_internal.mz_hydration_statuses h
+                        ON o.id = h.object_id
+                      WHERE NOT h.hydrated
+                        AND o.name NOT LIKE 'mz_%'
+                        AND o.id NOT IN (SELECT id FROM mz_sinks)
 
-                  UNION ALL
+                      UNION ALL
 
-                  SELECT o.name
-                  FROM mz_objects o
-                  JOIN mz_internal.mz_compute_hydration_statuses h
-                    ON o.id = h.object_id
-                  WHERE NOT h.hydrated
-                    AND o.name NOT LIKE 'mz_%'
-                    AND o.id NOT IN (SELECT id FROM mz_sinks)
-                ) x
-                ORDER BY 1;"""
-            )
-        ]
-        if not_hydrated:
-            if not_hydrated != prev_not_hydrated:
-                print(f"  Not yet hydrated: {', '.join(not_hydrated)}")
-                prev_not_hydrated = not_hydrated
-            time.sleep(1)
-        else:
-            break
-    print("Hydration complete")
+                      SELECT o.name
+                      FROM mz_objects o
+                      JOIN mz_internal.mz_compute_hydration_statuses h
+                        ON o.id = h.object_id
+                      WHERE NOT h.hydrated
+                        AND o.name NOT LIKE 'mz_%'
+                        AND o.id NOT IN (SELECT id FROM mz_sinks)
+                    ) x
+                    ORDER BY 1;"""
+                )
+            ]
+            if not_hydrated:
+                if not_hydrated != prev_not_hydrated:
+                    print(f"  Not yet hydrated: {', '.join(not_hydrated)}")
+                    prev_not_hydrated = not_hydrated
+                time.sleep(1)
+            else:
+                break
+        print("Hydration complete")
 
-    # Wait for all user materializations to be caught up (fresh).
-    # Sleep first so the system has time to start processing imported data;
-    # otherwise frontiers haven't advanced yet and everything looks fresh.
-    print("Waiting for freshness")
-    time.sleep(10)
-    while True:
-        lagging: list[tuple[str, str]] = [
-            (entry[0], entry[1])
-            for entry in c.sql_query(
-                """
-            SELECT o.name, COALESCE(l.global_lag, INTERVAL '999 hours')::text
-            FROM mz_internal.mz_materialization_lag l
-            JOIN mz_objects o ON o.id = l.object_id
-            WHERE o.name NOT LIKE 'mz_%'
-              AND o.id NOT IN (SELECT id FROM mz_sinks)
-              AND (l.global_lag IS NULL OR l.global_lag > INTERVAL '10 seconds')
-            ORDER BY l.global_lag DESC NULLS FIRST
-            LIMIT 5;"""
-            )
-        ]
-        if lagging:
-            summary = ", ".join(f"{name} ({lag})" for name, lag in lagging)
-            print(f"  Lagging: {summary}")
-            time.sleep(5)
-        else:
-            break
-    print("Freshness complete")
+        wait_for_freshness(c)
+    finally:
+        stop_event.set()
+        stats_thread.join()
+        stop_event.clear()
+
+    if not created_data:
+        del stats["initial_data"]
+
     if run_ingestions:
         print("Starting continuous ingestions")
         threads.extend(

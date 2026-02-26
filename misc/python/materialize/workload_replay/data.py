@@ -14,8 +14,11 @@ Initial data creation functions for workload replay.
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 import threading
+import time
+from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from typing import Any
 
 import psycopg
@@ -25,7 +28,213 @@ from materialize.mzcompose.composition import Composition
 from materialize.util import PropagatingThread
 from materialize.workload_replay.column import Column
 from materialize.workload_replay.config import SEED_RANGE
-from materialize.workload_replay.ingest import ingest, ingest_webhook
+from materialize.workload_replay.ingest import (
+    delivery_report,
+    get_kafka_objects,
+    ingest,
+    ingest_webhook,
+)
+from materialize.workload_replay.util import (
+    get_kafka_topic,
+    get_mysql_reference_db_table,
+    get_postgres_reference_db_schema_table,
+)
+
+_NUM_WORKERS = min(os.cpu_count() or 4, 16)
+_CHUNK_ROWS = 100_000
+
+
+# Subprocess workers (run in forked children, must use only picklable args)
+def _copy_chunk(
+    conn_params: dict[str, Any],
+    table_fqn: list[str],
+    column_dicts: list[dict[str, Any]],
+    num_rows: int,
+    rng_seed: int,
+) -> int:
+    """Generate random data and COPY to Postgres or Materialize."""
+    rng = random.Random(rng_seed)
+    columns = [
+        Column(c["name"], c["type"], c["nullable"], c["default"], c.get("data_shape"))
+        for c in column_dicts
+    ]
+    col_names = [c.name for c in columns]
+
+    conn = psycopg.connect(**conn_params)
+    conn.autocommit = True
+
+    table_ident = SQL(".").join(map(Identifier, table_fqn))
+    copy_stmt = SQL("COPY {} ({}) FROM STDIN").format(
+        table_ident,
+        SQL(", ").join(map(Identifier, col_names)),
+    )
+
+    batch_size = 10000
+    with conn.cursor() as cur:
+        for start in range(0, num_rows, batch_size):
+            batch_rows = min(batch_size, num_rows - start)
+            with cur.copy(copy_stmt) as copy:
+                for _ in range(batch_rows):
+                    row = [c.value(rng, in_query=False) for c in columns]
+                    copy.write_row(row)
+
+    conn.close()
+    return num_rows
+
+
+def _kafka_chunk(
+    kafka_port: int,
+    sr_port: int,
+    topic: str,
+    debezium: bool,
+    column_dicts: list[dict[str, Any]],
+    num_rows: int,
+    rng_seed: int,
+) -> int:
+    """Generate random data and produce to Kafka."""
+    rng = random.Random(rng_seed)
+    columns = [
+        Column(c["name"], c["type"], c["nullable"], c["default"], c.get("data_shape"))
+        for c in column_dicts
+    ]
+
+    producer, serializer, key_serializer, sctx, ksctx, col_names = get_kafka_objects(
+        topic,
+        tuple(columns),
+        debezium,
+        sr_port,
+        kafka_port,
+    )
+
+    now_ms = int(time.time() * 1000)
+    source_struct: dict[str, Any] | None = None
+    if debezium:
+        source_struct = {
+            "version": "0",
+            "connector": "mysql",
+            "name": "materialize-generator",
+            "ts_ms": now_ms,
+            "snapshot": None,
+            "db": "db",
+            "sequence": None,
+            "table": topic.split(".")[-1],
+            "server_id": 0,
+            "gtid": None,
+            "file": "binlog.000001",
+            "pos": 0,
+            "row": 0,
+            "thread": None,
+            "query": None,
+        }
+
+    producer.poll(0)
+    for _ in range(num_rows):
+        row = [col.kafka_value(rng) for col in columns]
+        while True:
+            try:
+                if debezium:
+                    after_value = dict(zip(col_names, row))
+                    envelope_value = {
+                        "before": None,
+                        "after": after_value,
+                        "source": source_struct,
+                        "op": "c",
+                        "ts_ms": now_ms,
+                        "transaction": None,
+                    }
+                    producer.produce(
+                        topic=topic,
+                        key=key_serializer(after_value, ksctx),
+                        value=serializer(envelope_value, sctx),
+                        on_delivery=delivery_report,
+                    )
+                else:
+                    key_dict = {col_names[0]: row[0]}
+                    value_dict = dict(zip(col_names[1:], row[1:]))
+                    producer.produce(
+                        topic=topic,
+                        key=key_serializer(key_dict, ksctx),
+                        value=serializer(value_dict, sctx),
+                        on_delivery=delivery_report,
+                    )
+                break
+            except BufferError:
+                producer.poll(0.01)
+        producer.poll(0)
+
+    producer.flush()
+    return num_rows
+
+
+def _mysql_chunk(
+    conn_params: dict[str, Any],
+    table: str,
+    column_dicts: list[dict[str, Any]],
+    num_rows: int,
+    rng_seed: int,
+) -> int:
+    """Generate random data and INSERT into MySQL."""
+    import pymysql
+
+    rng = random.Random(rng_seed)
+    columns = [
+        Column(c["name"], c["type"], c["nullable"], c["default"], c.get("data_shape"))
+        for c in column_dicts
+    ]
+
+    conn = pymysql.connect(**conn_params)
+
+    batch_size = 10000
+    for start in range(0, num_rows, batch_size):
+        batch_rows = min(batch_size, num_rows - start)
+        rows_sql = []
+        for _ in range(batch_rows):
+            row = [col.value(rng) for col in columns]
+            rows_sql.append("(" + ", ".join(row) + ")")
+        stmt = f"INSERT INTO {table} VALUES " + ", ".join(rows_sql)
+        with conn.cursor() as cur:
+            cur.execute(stmt)
+
+    conn.close()
+    return num_rows
+
+
+def _submit_chunks(
+    pool: ProcessPoolExecutor,
+    worker_fn: Any,
+    args: tuple[Any, ...],
+    column_dicts: list[dict[str, Any]],
+    num_rows: int,
+    pretty_name: str,
+    rng: random.Random,
+    futures: dict[Future[int], str],
+    totals: dict[str, int],
+) -> None:
+    """Split *num_rows* into _CHUNK_ROWS-sized pieces and submit them."""
+    totals[pretty_name] = totals.get(pretty_name, 0) + num_rows
+    remaining = num_rows
+    while remaining > 0:
+        n = min(_CHUNK_ROWS, remaining)
+        seed = rng.randrange(SEED_RANGE)
+        f = pool.submit(worker_fn, *args, column_dicts, n, seed)
+        futures[f] = pretty_name
+        remaining -= n
+
+
+def _await_futures(
+    futures: dict[Future[int], str],
+    totals: dict[str, int],
+) -> None:
+    completed: dict[str, int] = {}
+    last_pct: dict[str, int] = {}
+    for future in as_completed(futures):
+        name = futures[future]
+        completed[name] = completed.get(name, 0) + future.result()
+        done, total = completed[name], totals[name]
+        bucket = int(done * 100 / total) // 5
+        if bucket > last_pct.get(name, -1):
+            last_pct[name] = bucket
+            print(f"  {name}: {done:,}/{total:,} ({done / total:.1%})")
 
 
 def create_initial_data_requiring_mz(
@@ -35,86 +244,56 @@ def create_initial_data_requiring_mz(
     rng: random.Random,
 ) -> bool:
     """Create initial data that requires Materialize to be running (tables, webhooks)."""
-    batch_size = 10000
-    created_data = False
+    mz_conn = {
+        "host": "127.0.0.1",
+        "port": c.port("materialized", 6877),
+        "user": "mz_system",
+        "password": "materialize",
+        "dbname": "materialize",
+    }
 
-    conn = psycopg.connect(
-        host="127.0.0.1",
-        port=c.port("materialized", 6877),
-        user="mz_system",
-        password="materialize",
-        dbname="materialize",
-    )
-    conn.autocommit = True
+    futures: dict[Future[int], str] = {}
+    totals: dict[str, int] = {}
+    webhook_items: list[tuple[str, str, str, dict[str, Any], int]] = []
 
-    for db, schemas in workload["databases"].items():
-        for schema, items in schemas.items():
-            for name, table in items["tables"].items():
-                num_rows = int(table["rows"] * factor_initial_data)
-                if not num_rows:
-                    continue
-
-                data_columns = [
-                    Column(
-                        col["name"],
-                        col["type"],
-                        col["nullable"],
-                        col["default"],
-                        col.get("data_shape"),
-                    )
-                    for col in table["columns"]
-                ]
-
-                print(f"Creating {num_rows} rows for {db}.{schema}.{name}:")
-
-                col_names = [col.name for col in data_columns]
-
-                with conn.cursor() as cur:
-                    for start in range(0, num_rows, batch_size):
-                        progress = min(start + batch_size, num_rows)
-                        print(
-                            f"{progress}/{num_rows} ({progress / num_rows:.1%})",
-                            end="\r",
-                            flush=True,
-                        )
-
-                        copy_stmt = SQL("COPY {}.{}.{} ({}) FROM STDIN").format(
-                            Identifier(db),
-                            Identifier(schema),
-                            Identifier(name),
-                            SQL(", ").join(map(Identifier, col_names)),
-                        )
-
-                        with cur.copy(copy_stmt) as copy:
-                            batch_rows = min(batch_size, num_rows - start)
-                            for _ in range(batch_rows):
-                                row = [
-                                    col.value(rng, in_query=False)
-                                    for col in data_columns
-                                ]
-                                copy.write_row(row)
-                created_data = True
-
-            for name, source in items["sources"].items():
-                if source["type"] == "webhook":
-                    num_rows = int(source["messages_total"] * factor_initial_data)
+    with ProcessPoolExecutor(max_workers=_NUM_WORKERS) as pool:
+        for db, schemas in workload["databases"].items():
+            for schema, items in schemas.items():
+                for name, table in items["tables"].items():
+                    num_rows = int(table["rows"] * factor_initial_data)
                     if not num_rows:
                         continue
-                    print(f"Creating {num_rows} rows for {db}.{schema}.{name}:")
-                    asyncio.run(
-                        ingest_webhook(
-                            c,
-                            db,
-                            schema,
-                            name,
-                            source,
-                            num_rows,
-                            print_progress=True,
-                        )
+                    _submit_chunks(
+                        pool,
+                        _copy_chunk,
+                        (mz_conn, [db, schema, name]),
+                        table["columns"],
+                        num_rows,
+                        f"{db}.{schema}.{name}",
+                        rng,
+                        futures,
+                        totals,
                     )
-                    created_data = True
-    conn.close()
-    return created_data
+                for name, source in items["sources"].items():
+                    if source["type"] == "webhook":
+                        num_rows = int(source["messages_total"] * factor_initial_data)
+                        if num_rows:
+                            webhook_items.append((db, schema, name, source, num_rows))
+
+        if not futures and not webhook_items:
+            return False
+
+        if futures:
+            print(f"Creating {sum(totals.values()):,} rows across {len(totals)} tables")
+            _await_futures(futures, totals)
+
+    for db, schema, name, source, num_rows in webhook_items:
+        print(f"Creating {num_rows} rows for {db}.{schema}.{name}:")
+        asyncio.run(
+            ingest_webhook(c, db, schema, name, source, num_rows, print_progress=True)
+        )
+
+    return True
 
 
 def create_initial_data_external(
@@ -125,78 +304,150 @@ def create_initial_data_external(
 ) -> bool:
     """Create initial data in external systems (Postgres, MySQL, Kafka, SQL Server)."""
     batch_size = 10000
-    created_data = False
-    for db, schemas in workload["databases"].items():
-        for schema, items in schemas.items():
-            for name, source in items["sources"].items():
-                if source["type"] != "webhook" and not source.get("children", {}):
-                    num_rows = int(source["messages_total"] * factor_initial_data)
-                    if not num_rows:
-                        continue
-                    data_columns = [
-                        Column(
-                            col["name"],
-                            col["type"],
-                            col["nullable"],
-                            col["default"],
-                            col.get("data_shape"),
+
+    futures: dict[Future[int], str] = {}
+    totals: dict[str, int] = {}
+    # SQL Server uses c.testdrive() which isn't picklable, so stays sequential.
+    sequential: list[
+        tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], int, str]
+    ] = []
+
+    # Lazily resolved ports — only looked up when a source of that type is seen.
+    _ports: dict[str, int] = {}
+
+    def port(service: str) -> int:
+        if service not in _ports:
+            _ports[service] = c.default_port(service)
+        return _ports[service]
+
+    with ProcessPoolExecutor(max_workers=_NUM_WORKERS) as pool:
+        for db, schemas in workload["databases"].items():
+            for schema, items in schemas.items():
+                for name, source in items["sources"].items():
+                    children: list[tuple[dict[str, Any], str]] = []
+                    if source["type"] != "webhook" and not source.get("children", {}):
+                        children.append((source, f"{db}.{schema}.{name}"))
+                    else:
+                        for cn, child in source.get("children", {}).items():
+                            children.append((child, f"{db}.{schema}.{name}->{cn}"))
+
+                    for child, pretty_name in children:
+                        num_rows = int(
+                            (child.get("messages_total", child.get("rows", 0)))
+                            * factor_initial_data
                         )
-                        for col in source["columns"]
-                    ]
-                    print(f"Creating {num_rows} rows for {db}.{schema}.{name}:")
-                    for start in range(0, num_rows, batch_size):
-                        progress = min(start + batch_size, num_rows)
-                        print(
-                            f"{progress}/{num_rows} ({progress / num_rows:.1%})",
-                            end="\r",
-                            flush=True,
-                        )
-                        ingest(
-                            c,
-                            source,
-                            source,
-                            data_columns,
-                            min(batch_size, num_rows - start),
-                            rng,
-                        )
-                    created_data = True
-                    print()
-                else:
-                    for child_name, child in source.get("children", {}).items():
-                        num_rows = int(child["messages_total"] * factor_initial_data)
                         if not num_rows:
                             continue
-                        data_columns = [
-                            Column(
-                                col["name"],
-                                col["type"],
-                                col["nullable"],
-                                col["default"],
-                                col.get("data_shape"),
+
+                        st = source["type"]
+                        if st == "postgres":
+                            ref_db, ref_s, ref_t = (
+                                get_postgres_reference_db_schema_table(child)
                             )
-                            for col in child["columns"]
-                        ]
-                        print(
-                            f"Creating {num_rows} rows for {db}.{schema}.{name}->{child_name}:"
-                        )
-                        for start in range(0, num_rows, batch_size):
-                            progress = min(start + batch_size, num_rows)
-                            print(
-                                f"{progress}/{num_rows} ({progress / num_rows:.1%})",
-                                end="\r",
-                                flush=True,
-                            )
-                            ingest(
-                                c,
-                                child,
-                                source,
-                                data_columns,
-                                min(batch_size, num_rows - start),
+                            conn = {
+                                "host": "127.0.0.1",
+                                "port": port("postgres"),
+                                "user": "postgres",
+                                "password": "postgres",
+                                "dbname": ref_db,
+                            }
+                            _submit_chunks(
+                                pool,
+                                _copy_chunk,
+                                (conn, [ref_s, ref_t]),
+                                child["columns"],
+                                num_rows,
+                                pretty_name,
                                 rng,
+                                futures,
+                                totals,
                             )
-                        created_data = True
-                        print()
-    return created_data
+                        elif st == "kafka":
+                            topic = get_kafka_topic(source)
+                            debezium = "ENVELOPE DEBEZIUM" in child["create_sql"]
+                            _submit_chunks(
+                                pool,
+                                _kafka_chunk,
+                                (
+                                    port("kafka"),
+                                    port("schema-registry"),
+                                    topic,
+                                    debezium,
+                                ),
+                                child["columns"],
+                                num_rows,
+                                pretty_name,
+                                rng,
+                                futures,
+                                totals,
+                            )
+                        elif st == "mysql":
+                            from materialize.mzcompose.services.mysql import MySql
+
+                            ref_database, ref_table = get_mysql_reference_db_table(
+                                child
+                            )
+                            conn = {
+                                "host": "127.0.0.1",
+                                "user": "root",
+                                "password": MySql.DEFAULT_ROOT_PASSWORD,
+                                "database": ref_database,
+                                "port": port("mysql"),
+                                "autocommit": False,
+                            }
+                            _submit_chunks(
+                                pool,
+                                _mysql_chunk,
+                                (conn, ref_table),
+                                child["columns"],
+                                num_rows,
+                                pretty_name,
+                                rng,
+                                futures,
+                                totals,
+                            )
+                        elif st == "load-generator":
+                            pass
+                        else:
+                            # sql-server etc. — sequential fallback
+                            sequential.append(
+                                (child, source, child["columns"], num_rows, pretty_name)
+                            )
+
+        if not futures and not sequential:
+            return False
+
+        if futures:
+            print(
+                f"Creating {sum(totals.values()):,} rows across {len(totals)} sources"
+            )
+            _await_futures(futures, totals)
+
+    for child, source, cols, num_rows, pretty_name in sequential:
+        data_columns = [
+            Column(
+                col["name"],
+                col["type"],
+                col["nullable"],
+                col["default"],
+                col.get("data_shape"),
+            )
+            for col in cols
+        ]
+        print(f"Creating {num_rows} rows for {pretty_name}:")
+        for start in range(0, num_rows, batch_size):
+            progress = min(start + batch_size, num_rows)
+            print(
+                f"{progress}/{num_rows} ({progress / num_rows:.1%})",
+                end="\r",
+                flush=True,
+            )
+            ingest(
+                c, child, source, data_columns, min(batch_size, num_rows - start), rng
+            )
+        print()
+
+    return True
 
 
 def create_ingestions(
@@ -337,14 +588,7 @@ def create_ingestions(
                                     )
 
                                 stats["total"] += 1
-                                ingest(
-                                    c,
-                                    source,
-                                    source,
-                                    data_columns,
-                                    batch_size,
-                                    rng,
-                                )
+                                ingest(c, source, source, data_columns, batch_size, rng)
 
                                 after = time.time()
                                 if after > next_time:
@@ -432,12 +676,7 @@ def create_ingestions(
 
                                     stats["total"] += 1
                                     ingest(
-                                        c,
-                                        child,
-                                        source,
-                                        data_columns,
-                                        batch_size,
-                                        rng,
+                                        c, child, source, data_columns, batch_size, rng
                                     )
 
                                     after = time.time()

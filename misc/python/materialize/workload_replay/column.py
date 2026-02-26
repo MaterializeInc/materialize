@@ -22,9 +22,9 @@ from typing import Any
 from pg8000.native import literal
 
 from materialize.workload_replay.util import (
-    long_tail_choice,
     long_tail_float,
     long_tail_int,
+    long_tail_rank,
     long_tail_text,
 )
 
@@ -41,8 +41,9 @@ class Column:
         self.default = default
         self.chars = string.ascii_letters + string.digits
         self.data_shape = data_shape
-        if data_shape:
-            assert typ in ("text", "bytea"), f"Can't create text shape for type {typ}"
+
+        self._years = list(range(2019, 2026))
+        self._seq_counter = 0
 
         self._hot_strings = [
             f"{name}_a",
@@ -55,6 +56,43 @@ class Column:
             "1",
             "NULL",
         ]
+
+    def _shaped_text(self, rng: random.Random) -> str | None:
+        """Generate text according to data_shape, or None if not applicable."""
+        if self.data_shape == "datetime":
+            return self._random_datetime(rng)
+        elif self.data_shape == "random":
+            length = rng.randrange(5, 40)
+            return "".join(rng.choice(self.chars) for _ in range(length))
+        elif self.data_shape == "uuid":
+            return str(uuid.UUID(int=rng.getrandbits(128), version=4))
+        elif self.data_shape == "sequential":
+            self._seq_counter += 1
+            return f"{self.name}_{self._seq_counter}"
+        elif self.data_shape == "zipfian":
+            rank = long_tail_rank(n=10000, a=1.3, rng=rng)
+            return f"{self.name}_{rank}"
+        elif self.data_shape is not None and self.data_shape != "duration":
+            raise ValueError(f"Unhandled data_shape {self.data_shape!r}")
+        return None
+
+    def _shaped_float(self, rng: random.Random) -> float | None:
+        """Generate a float according to data_shape, or None if not applicable."""
+        if self.data_shape == "duration":
+            return round(rng.uniform(10.0, 1800.0), 2)
+        return None
+
+    def _random_date(self, rng: random.Random) -> str:
+        """Generate a uniformly random date string."""
+        year = rng.choice(self._years)
+        return f"{year}-{rng.randrange(1, 13):02}-{rng.randrange(1, 29):02}"
+
+    def _random_datetime(self, rng: random.Random) -> str:
+        """Generate a uniformly random datetime string."""
+        return (
+            f"{self._random_date(rng)}"
+            f"T{rng.randrange(0, 24):02}:{rng.randrange(0, 60):02}:{rng.randrange(0, 60):02}Z"
+        )
 
     def avro_type(self) -> str | list[str]:
         """Return the Avro type for this column."""
@@ -96,21 +134,21 @@ class Column:
             return long_tail_int(0, 18446744073709551615, rng=rng)
 
         elif self.typ in ("float", "double precision", "numeric"):
+            shaped = self._shaped_float(rng)
+            if shaped is not None:
+                return shaped
             return long_tail_float(-1_000_000_000.0, 1_000_000_000.0, rng=rng)
 
         elif self.typ in ("text", "bytea"):
-            if self.data_shape == "datetime":
-                year = long_tail_choice(
-                    [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9, rng=rng
-                )
-                return literal(
-                    f"{year}-{rng.randrange(1, 13):02}-{rng.randrange(1, 29):02}T{rng.randrange(0, 23):02}:{rng.randrange(0, 59):02}:{rng.randrange(0, 59):02}Z"
-                )
-            elif self.data_shape:
-                raise ValueError(f"Unhandled text shape {self.data_shape}")
+            shaped = self._shaped_text(rng)
+            if shaped is not None:
+                return literal(shaped)
             return literal(long_tail_text(self.chars, 100, self._hot_strings, rng=rng))
 
         elif self.typ in ("character", "character varying"):
+            shaped = self._shaped_text(rng)
+            if shaped is not None:
+                return literal(shaped)
             return literal(long_tail_text(self.chars, 10, self._hot_strings, rng=rng))
 
         elif self.typ == "uuid":
@@ -123,23 +161,15 @@ class Column:
             return json.dumps(result)
 
         elif self.typ in ("timestamp with time zone", "timestamp without time zone"):
-            now = 1700000000000  # doesn't need to be exact
-            if rng.random() < 0.9:
-                return now + long_tail_int(-86_400_000, 86_400_000, rng=rng)
-            else:
-                return rng.randrange(0, 9223372036854775807)
+            # Epoch millis spread uniformly across 2019–2025
+            # 2019-01-01 = 1546300800000, 2026-01-01 = 1767225600000
+            return rng.randrange(1546300800000, 1767225600000)
 
         elif self.typ == "mz_timestamp":
-            year = long_tail_choice(
-                [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9, rng=rng
-            )
-            return literal(f"{year}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}")
+            return literal(self._random_date(rng))
 
         elif self.typ == "date":
-            year = long_tail_choice(
-                [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9, rng=rng
-            )
-            return literal(f"{year}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}")
+            return literal(self._random_date(rng))
 
         elif self.typ == "time":
             if rng.random() < 0.8:
@@ -150,19 +180,22 @@ class Column:
             )
 
         elif self.typ == "int2range":
-            a = str(long_tail_int(-32768, 32767, rng=rng))
-            b = str(long_tail_int(-32768, 32767, rng=rng))
-            return literal(f"[{a},{b})")
+            a = long_tail_int(-32768, 32767, rng=rng)
+            b = long_tail_int(-32768, 32767, rng=rng)
+            lo, hi = min(a, b), max(a, b)
+            return literal(f"[{lo},{hi})")
 
         elif self.typ == "int4range":
-            a = str(long_tail_int(-2147483648, 2147483647, rng=rng))
-            b = str(long_tail_int(-2147483648, 2147483647, rng=rng))
-            return literal(f"[{a},{b})")
+            a = long_tail_int(-2147483648, 2147483647, rng=rng)
+            b = long_tail_int(-2147483648, 2147483647, rng=rng)
+            lo, hi = min(a, b), max(a, b)
+            return literal(f"[{lo},{hi})")
 
         elif self.typ == "int8range":
-            a = str(long_tail_int(-9223372036854775808, 9223372036854775807, rng=rng))
-            b = str(long_tail_int(-9223372036854775808, 9223372036854775807, rng=rng))
-            return literal(f"[{a},{b})")
+            a = long_tail_int(-9223372036854775808, 9223372036854775807, rng=rng)
+            b = long_tail_int(-9223372036854775808, 9223372036854775807, rng=rng)
+            lo, hi = min(a, b), max(a, b)
+            return literal(f"[{lo},{hi})")
 
         elif self.typ == "map":
             return {
@@ -216,27 +249,23 @@ class Column:
             return str(val) if in_query else val
 
         elif self.typ in ("float", "double precision", "numeric"):
+            shaped = self._shaped_float(rng)
+            if shaped is not None:
+                return str(shaped) if in_query else shaped
             val = long_tail_float(-1_000_000_000.0, 1_000_000_000.0, rng=rng)
             return str(val) if in_query else val
 
         elif self.typ in ("text", "bytea"):
-            if self.data_shape == "datetime":
-                year = long_tail_choice(
-                    [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9, rng=rng
-                )
-                s = (
-                    f"{year}-{rng.randrange(1, 13):02}-{rng.randrange(1, 29):02}"
-                    f"T{rng.randrange(0, 23):02}:{rng.randrange(0, 59):02}:{rng.randrange(0, 59):02}Z"
-                )
-                return literal(s) if in_query else s
-
-            elif self.data_shape:
-                raise ValueError(f"Unhandled text shape {self.data_shape}")
-
+            shaped = self._shaped_text(rng)
+            if shaped is not None:
+                return literal(shaped) if in_query else shaped
             s = long_tail_text(self.chars, 100, self._hot_strings, rng=rng)
             return literal(s) if in_query else s
 
         elif self.typ in ("character", "character varying"):
+            shaped = self._shaped_text(rng)
+            if shaped is not None:
+                return literal(shaped) if in_query else shaped
             s = long_tail_text(self.chars, 10, self._hot_strings, rng=rng)
             return literal(s) if in_query else s
 
@@ -254,24 +283,15 @@ class Column:
                 return json.dumps(obj)
 
         elif self.typ in ("timestamp with time zone", "timestamp without time zone"):
-            year = long_tail_choice(
-                [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9, rng=rng
-            )
-            s = f"{year}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
+            s = self._random_date(rng)
             return literal(s) if in_query else s
 
         elif self.typ == "mz_timestamp":
-            year = long_tail_choice(
-                [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9, rng=rng
-            )
-            s = f"{year}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
+            s = self._random_date(rng)
             return literal(s) if in_query else s
 
         elif self.typ == "date":
-            year = long_tail_choice(
-                [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9, rng=rng
-            )
-            s = f"{year}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
+            s = self._random_date(rng)
             return literal(s) if in_query else s
 
         elif self.typ == "time":
@@ -288,21 +308,24 @@ class Column:
             return literal(s) if in_query else s
 
         elif self.typ == "int2range":
-            a = str(long_tail_int(-32768, 32767, rng=rng))
-            b = str(long_tail_int(-32768, 32767, rng=rng))
-            s = f"[{a},{b})"
+            a = long_tail_int(-32768, 32767, rng=rng)
+            b = long_tail_int(-32768, 32767, rng=rng)
+            lo, hi = min(a, b), max(a, b)
+            s = f"[{lo},{hi})"
             return literal(s) if in_query else s
 
         elif self.typ == "int4range":
-            a = str(long_tail_int(-2147483648, 2147483647, rng=rng))
-            b = str(long_tail_int(-2147483648, 2147483647, rng=rng))
-            s = f"[{a},{b})"
+            a = long_tail_int(-2147483648, 2147483647, rng=rng)
+            b = long_tail_int(-2147483648, 2147483647, rng=rng)
+            lo, hi = min(a, b), max(a, b)
+            s = f"[{lo},{hi})"
             return literal(s) if in_query else s
 
         elif self.typ == "int8range":
-            a = str(long_tail_int(-9223372036854775808, 9223372036854775807, rng=rng))
-            b = str(long_tail_int(-9223372036854775808, 9223372036854775807, rng=rng))
-            s = f"[{a},{b})"
+            a = long_tail_int(-9223372036854775808, 9223372036854775807, rng=rng)
+            b = long_tail_int(-9223372036854775808, 9223372036854775807, rng=rng)
+            lo, hi = min(a, b), max(a, b)
+            s = f"[{lo},{hi})"
             return literal(s) if in_query else s
 
         elif self.typ == "map":

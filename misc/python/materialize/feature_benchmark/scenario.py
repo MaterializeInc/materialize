@@ -21,6 +21,7 @@ BenchmarkingSequence = MeasurementSource | list[Action | MeasurementSource]
 class RootScenario:
     SCALE: float = 6
     FIXED_SCALE: bool = False  # Will --scale=N have effect on the scenario
+    MAX_SCALE: float | None = None  # Cap scale to this value when set
     RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
         MeasurementType.WALLCLOCK: 0.10,
         # Increased the other measurements since they are easy to regress now
