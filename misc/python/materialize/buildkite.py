@@ -158,16 +158,18 @@ def find_modified_lines() -> set[tuple[str, int]]:
 
 
 def upload_artifact(path: Path | str, cwd: Path | None = None, quiet: bool = False):
-    spawn.runv(
-        [
-            "buildkite-agent",
-            "artifact",
-            "upload",
-            "--log-level",
-            "fatal" if quiet else "notice",
-            path,
-        ],
-        cwd=cwd,
+    spawn.run_with_retries(
+        lambda: spawn.runv(
+            [
+                "buildkite-agent",
+                "artifact",
+                "upload",
+                "--log-level",
+                "fatal" if quiet else "notice",
+                path,
+            ],
+            cwd=cwd,
+        )
     )
 
 
