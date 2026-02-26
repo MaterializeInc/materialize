@@ -162,18 +162,6 @@ steps:
         coverage: skip
         sanitizer: skip
 
-      - id: lint-line-length
-        label: Line length lint
-        command: bin/ci-builder run nightly cargo fmt -- --check --config error_on_line_overflow=true
-        inputs:
-          - "**/*.rs"
-        depends_on: []
-        timeout_in_minutes: 20
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-        coverage: skip
-        sanitizer: skip
-
       - id: lint-clippy
         label: Clippy
         command: bin/ci-builder run stable ci/test/lint-clippy.sh

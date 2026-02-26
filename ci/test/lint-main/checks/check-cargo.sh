@@ -34,7 +34,7 @@ fi
 
 try bin/lint-cargo
 
-try cargo --locked fmt -- --check
+try cargo --locked fmt -- --check --config error_on_line_overflow=true
 try cargo --locked deny check licenses bans sources
 try cargo hakari generate --diff
 try cargo hakari manage-deps --dry-run
