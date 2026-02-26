@@ -1328,33 +1328,9 @@ impl LazyVariadicFunc for Or {
     }
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct PadLeading;
-
-impl fmt::Display for PadLeading {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("lpad")
-    }
-}
-
-fn pad_leading<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let string = datums[0].unwrap_str();
-
-    let len = match usize::try_from(datums[1].unwrap_int32()) {
+#[sqlfunc(sqlname = "lpad")]
+fn pad_leading(string: &str, raw_len: i32, pad: OptionalArg<&str>) -> Result<String, EvalError> {
+    let len = match usize::try_from(raw_len) {
         Ok(len) => len,
         Err(_) => {
             return Err(EvalError::InvalidParameterValue(
@@ -1366,11 +1342,7 @@ fn pad_leading<'a>(
         return Err(EvalError::LengthTooLarge);
     }
 
-    let pad_string = if datums.len() == 3 {
-        datums[2].unwrap_str()
-    } else {
-        " "
-    };
+    let pad_string = pad.unwrap_or(" ");
 
     let (end_char, end_char_byte_offset) = string
         .chars()
@@ -1385,7 +1357,7 @@ fn pad_leading<'a>(
         buf.push_str(string);
     }
 
-    Ok(Datum::String(temp_storage.push_string(buf)))
+    Ok(buf)
 }
 
 #[derive(
@@ -2077,6 +2049,7 @@ impl VariadicFunc {
             VariadicFunc::DateDiffTimestampTz(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::HmacString(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::HmacBytes(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::PadLeading(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -2109,9 +2082,9 @@ impl VariadicFunc {
             | VariadicFunc::DateDiffTimestampTz(_)
             | VariadicFunc::HmacString(_)
             | VariadicFunc::HmacBytes(_)
+            | VariadicFunc::PadLeading(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::MakeTimestamp(_) => make_timestamp(&ds),
-            VariadicFunc::PadLeading(_) => pad_leading(&ds, temp_storage),
             VariadicFunc::JsonbBuildArray(_) => Ok(jsonb_build_array(&ds, temp_storage)),
             VariadicFunc::JsonbBuildObject(_) => jsonb_build_object(&ds, temp_storage),
             VariadicFunc::MapBuild(..) => Ok(map_build(&ds, temp_storage)),
