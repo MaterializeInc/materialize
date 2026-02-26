@@ -234,6 +234,33 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     add_acl(c, user, "allow", "ALL", "group=lockdown", pattern_type="prefixed")
     add_acl(c, user, "allow", "ALL", "topic=testdrive-data", pattern_type="prefixed")
 
+    # Allow the `materialize_no_create_progress` user to read and write to the
+    # progress and data topics, but NOT to create them. This user is used to
+    # test that Materialize does not require the Create ACL on the progress
+    # topic when it has been pre-created by an admin.
+    user = "materialize_no_create_progress"
+    for op in ["Read", "Write", "Describe", "DescribeConfigs"]:
+        add_acl(
+            c,
+            user,
+            "allow",
+            op,
+            "topic=testdrive-no-create-progress",
+            pattern_type="prefixed",
+        )
+        add_acl(
+            c,
+            user,
+            "allow",
+            op,
+            "topic=testdrive-no-create-data",
+            pattern_type="prefixed",
+        )
+    add_acl(
+        c, user, "allow", "Write", "transactional-id=no-create", pattern_type="prefixed"
+    )
+    add_acl(c, user, "allow", "Read", "group=no-create", pattern_type="prefixed")
+
     # Now that the Kafka topic has been bootstrapped, it's safe to bring up all
     # the other schema registries in parallel.
     c.up(
