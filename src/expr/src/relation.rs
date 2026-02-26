@@ -36,7 +36,7 @@ use mz_repr::explain::{
 };
 use mz_repr::{
     ColumnName, Datum, Diff, GlobalId, IntoRowIterator, ReprColumnType, ReprRelationType,
-    ReprScalarType, Row, RowIterator, SqlColumnType, SqlRelationType,
+    ReprScalarType, Row, RowIterator, SqlColumnType, SqlRelationType, SqlScalarType,
 };
 use serde::{Deserialize, Serialize};
 
@@ -2528,8 +2528,6 @@ impl AggregateExpr {
     /// Instead of performing a `Reduce` with `self`, one can perform a `Map` with the expression
     /// returned by `on_unique`, which is cheaper. (See `ReduceElision`.)
     pub fn on_unique(&self, input_type: &[ReprColumnType]) -> MirScalarExpr {
-        let sql_input_type: Vec<SqlColumnType> =
-            input_type.iter().map(SqlColumnType::from_repr).collect();
         match &self.func {
             // Count is one if non-null, and zero if null.
             AggregateFunc::Count => self
@@ -2653,16 +2651,12 @@ impl AggregateExpr {
 
                 // Get the overall return type
                 let return_type_with_orig_row = self
-                    .sql_typ(&sql_input_type)
+                    .typ(&input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
-                let lag_lead_return_type = ReprColumnType {
-                    scalar_type: ReprScalarType::from(
-                        return_type_with_orig_row.unwrap_record_element_type()[0],
-                    ),
-                    nullable: true,
-                };
+                let lag_lead_return_type =
+                    return_type_with_orig_row.unwrap_record_element_type()[0].clone();
 
                 // Extract the original row
                 let original_row = tuple
@@ -2678,7 +2672,7 @@ impl AggregateExpr {
 
                 MirScalarExpr::call_variadic(
                     ListCreate {
-                        elem_type: return_type_with_orig_row,
+                        elem_type: SqlScalarType::from_repr(&return_type_with_orig_row),
                     },
                     vec![MirScalarExpr::call_variadic(
                         RecordCreate {
@@ -2698,16 +2692,12 @@ impl AggregateExpr {
 
                 // Get the overall return type
                 let return_type_with_orig_row = self
-                    .sql_typ(&sql_input_type)
+                    .typ(&input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
-                let first_value_return_type = ReprColumnType {
-                    scalar_type: ReprScalarType::from(
-                        return_type_with_orig_row.unwrap_record_element_type()[0],
-                    ),
-                    nullable: true,
-                };
+                let first_value_return_type =
+                    return_type_with_orig_row.unwrap_record_element_type()[0].clone();
 
                 // Extract the original row
                 let original_row = tuple
@@ -2725,7 +2715,7 @@ impl AggregateExpr {
 
                 MirScalarExpr::call_variadic(
                     ListCreate {
-                        elem_type: return_type_with_orig_row,
+                        elem_type: SqlScalarType::from_repr(&return_type_with_orig_row),
                     },
                     vec![MirScalarExpr::call_variadic(
                         RecordCreate {
@@ -2745,16 +2735,12 @@ impl AggregateExpr {
 
                 // Get the overall return type
                 let return_type_with_orig_row = self
-                    .sql_typ(&sql_input_type)
+                    .typ(&input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
-                let last_value_return_type = ReprColumnType {
-                    scalar_type: ReprScalarType::from(
-                        return_type_with_orig_row.unwrap_record_element_type()[0],
-                    ),
-                    nullable: true,
-                };
+                let last_value_return_type =
+                    return_type_with_orig_row.unwrap_record_element_type()[0].clone();
 
                 // Extract the original row
                 let original_row = tuple
@@ -2772,7 +2758,7 @@ impl AggregateExpr {
 
                 MirScalarExpr::call_variadic(
                     ListCreate {
-                        elem_type: return_type_with_orig_row,
+                        elem_type: SqlScalarType::from_repr(&return_type_with_orig_row),
                     },
                     vec![MirScalarExpr::call_variadic(
                         RecordCreate {
@@ -2799,14 +2785,11 @@ impl AggregateExpr {
 
                 // Get the overall return type
                 let return_type = self
-                    .sql_typ(&sql_input_type)
+                    .typ(&input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
-                let window_agg_return_type = ReprColumnType {
-                    scalar_type: ReprScalarType::from(return_type.unwrap_record_element_type()[0]),
-                    nullable: true,
-                };
+                let window_agg_return_type = return_type.unwrap_record_element_type()[0].clone();
 
                 // Extract the original row
                 let original_row = tuple
@@ -2826,7 +2809,7 @@ impl AggregateExpr {
 
                 MirScalarExpr::call_variadic(
                     ListCreate {
-                        elem_type: return_type,
+                        elem_type: SqlScalarType::from_repr(&return_type),
                     },
                     vec![MirScalarExpr::call_variadic(
                         RecordCreate {
@@ -2858,7 +2841,7 @@ impl AggregateExpr {
                 let all_args = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
 
                 let return_type_with_orig_row = self
-                    .sql_typ(&sql_input_type)
+                    .typ(&input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
@@ -2871,12 +2854,8 @@ impl AggregateExpr {
                     let arg = all_args
                         .clone()
                         .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(idx)));
-                    let return_type = ReprColumnType {
-                        scalar_type: ReprScalarType::from(
-                            all_func_return_types.unwrap_record_element_type()[idx],
-                        ),
-                        nullable: true,
-                    };
+                    let return_type =
+                        all_func_return_types.unwrap_record_element_type()[idx].clone();
                     let (result, column_name) = Self::on_unique_window_agg(
                         window_frame,
                         arg,
@@ -2890,7 +2869,7 @@ impl AggregateExpr {
 
                 MirScalarExpr::call_variadic(
                     ListCreate {
-                        elem_type: return_type_with_orig_row,
+                        elem_type: SqlScalarType::from_repr(&return_type_with_orig_row),
                     },
                     vec![MirScalarExpr::call_variadic(
                         RecordCreate {
@@ -2933,7 +2912,7 @@ impl AggregateExpr {
                     tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
 
                 let return_type_with_orig_row = self
-                    .sql_typ(&sql_input_type)
+                    .typ(&input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
@@ -2946,12 +2925,8 @@ impl AggregateExpr {
                     let args_for_func = all_encoded_args
                         .clone()
                         .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(idx)));
-                    let return_type_for_func = ReprColumnType {
-                        scalar_type: ReprScalarType::from(
-                            all_func_return_types.unwrap_record_element_type()[idx],
-                        ),
-                        nullable: true,
-                    };
+                    let return_type_for_func =
+                        all_func_return_types.unwrap_record_element_type()[idx].clone();
                     let (result, column_name) = match func {
                         AggregateFunc::LagLead {
                             lag_lead,
@@ -2991,7 +2966,7 @@ impl AggregateExpr {
 
                 MirScalarExpr::call_variadic(
                     ListCreate {
-                        elem_type: return_type_with_orig_row,
+                        elem_type: SqlScalarType::from_repr(&return_type_with_orig_row),
                     },
                     vec![MirScalarExpr::call_variadic(
                         RecordCreate {
@@ -3104,7 +3079,7 @@ impl AggregateExpr {
     fn on_unique_lag_lead(
         lag_lead: &LagLeadType,
         encoded_args: MirScalarExpr,
-        return_type: ReprColumnType,
+        return_type: ReprScalarType,
     ) -> (MirScalarExpr, ColumnName) {
         let expr = encoded_args
             .clone()
@@ -3126,7 +3101,7 @@ impl AggregateExpr {
             .if_then_else(expr, default_value);
         let result_expr = offset
             .call_unary(UnaryFunc::IsNull(crate::func::IsNull))
-            .if_then_else(MirScalarExpr::literal_null(return_type.scalar_type), value);
+            .if_then_else(MirScalarExpr::literal_null(return_type), value);
 
         let column_name = ColumnName::from(match lag_lead {
             LagLeadType::Lag => "?lag?",
@@ -3140,13 +3115,13 @@ impl AggregateExpr {
     fn on_unique_first_value_last_value(
         window_frame: &WindowFrame,
         arg: MirScalarExpr,
-        return_type: ReprColumnType,
+        return_type: ReprScalarType,
     ) -> (MirScalarExpr, ColumnName) {
         // If the window frame includes the current (single) row, return its value, null otherwise
         let result_expr = if window_frame.includes_current_row() {
             arg
         } else {
-            MirScalarExpr::literal_null(return_type.scalar_type)
+            MirScalarExpr::literal_null(return_type)
         };
         (result_expr, ColumnName::from("?first_value?"))
     }
@@ -3156,7 +3131,7 @@ impl AggregateExpr {
         window_frame: &WindowFrame,
         arg_expr: MirScalarExpr,
         input_type: &[ReprColumnType],
-        return_type: ReprColumnType,
+        return_type: ReprScalarType,
         wrapped_aggr: &AggregateFunc,
     ) -> (MirScalarExpr, ColumnName) {
         // If the window frame includes the current (single) row, evaluate the wrapped aggregate on
@@ -3169,7 +3144,7 @@ impl AggregateExpr {
             }
             .on_unique(input_type)
         } else {
-            MirScalarExpr::literal_ok(wrapped_aggr.default(), return_type.scalar_type)
+            MirScalarExpr::literal_ok(wrapped_aggr.default(), return_type)
         };
         (result_expr, ColumnName::from("?window_agg?"))
     }

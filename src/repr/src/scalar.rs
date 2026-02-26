@@ -3448,7 +3448,7 @@ impl SqlScalarType {
         }
     }
 
-    /// Returns vector of [`SqlScalarType`] elements in a [`SqlScalarType::Record`].
+    /// Returns a vector of [`SqlScalarType`] elements in a [`SqlScalarType::Record`].
     ///
     /// # Panics
     ///
@@ -4907,6 +4907,38 @@ impl ReprScalarType {
                 element_type: Box::new(element_type.union(other_element_type)?),
             }),
             (_, _) => bail!("Can't union scalar types: {:?} and {:?}", self, scalar_type),
+        }
+    }
+
+    /// Returns the [`ReprScalarType`] of elements in a [`ReprScalarType::List`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ReprScalarType::List`].
+    pub fn unwrap_list_element_type(&self) -> &ReprScalarType {
+        match self {
+            ReprScalarType::List { element_type, .. } => element_type,
+            _ => panic!(
+                "ReprScalarType::unwrap_list_element_type called on {:?}",
+                self
+            ),
+        }
+    }
+
+    /// Returns a vector of [`ReprScalarType`] elements in a [`ReprScalarType::Record`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ReprScalarType::Record`].
+    pub fn unwrap_record_element_type(&self) -> Vec<&ReprScalarType> {
+        match self {
+            ReprScalarType::Record { fields, .. } => {
+                fields.iter().map(|t| &t.scalar_type).collect_vec()
+            }
+            _ => panic!(
+                "SqlScalarType::unwrap_record_element_type called on {:?}",
+                self
+            ),
         }
     }
 }
