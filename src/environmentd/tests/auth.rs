@@ -1350,7 +1350,7 @@ async fn test_auth_base_require_tls_oidc() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(Some(oidc_server.issuer), None)
+        .with_oidc_auth(Some(oidc_server.issuer), Some("sub".to_string()), None)
         .start()
         .await;
 
@@ -1536,6 +1536,7 @@ async fn test_auth_oidc_audience_validation() {
         .with_tls(server_cert, server_key)
         .with_oidc_auth(
             Some(oidc_server.issuer),
+            Some("sub".to_string()),
             Some(expected_audience.to_string()),
         )
         .start()
@@ -1642,7 +1643,7 @@ async fn test_auth_oidc_audience_optional() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(Some(oidc_server.issuer), None)
+        .with_oidc_auth(Some(oidc_server.issuer), Some("sub".to_string()), None)
         .start()
         .await;
 
@@ -1703,7 +1704,7 @@ async fn test_auth_oidc_password_fallback() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(Some(oidc_server.issuer), None)
+        .with_oidc_auth(Some(oidc_server.issuer), Some("sub".to_string()), None)
         .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_password_auth(Password("mz_system_password".to_owned()))
         .start()
@@ -1794,7 +1795,7 @@ async fn test_auth_oidc_password_fallback() {
 /// runtime changes to the oidc_issuer and oidc_audience system parameters.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)]
-async fn test_auth_oidc_config_switch() {
+async fn test_auth_oidc_issuer_and_audience_switch() {
     let ca1 = Ca::new_root("test ca 1").unwrap();
     let (server_cert, server_key) = ca1
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
@@ -1849,6 +1850,7 @@ async fn test_auth_oidc_config_switch() {
         .with_tls(server_cert, server_key)
         .with_oidc_auth(
             Some(oidc_server1.issuer.clone()),
+            Some("sub".to_string()),
             Some(audience1.to_string()),
         )
         .start()
@@ -1939,10 +1941,101 @@ async fn test_auth_oidc_config_switch() {
     );
 }
 
+/// This test verifies that changing the OIDC authentication claim causes a new user
+/// to be created. With claim "sub", the sub value is used as the username. After
+/// switching to "email", the same token authenticates as the email value instead,
+/// creating a distinct new user.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+async fn test_auth_oidc_authentication_claim_switch() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        "key-1".to_string(),
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let sub_user = "sub-user-123";
+    let email_user = "user@example.com";
+
+    // Generate a token that carries both a "sub" claim and an "email" claim.
+    let token = oidc_server.generate_jwt(
+        sub_user,
+        GenerateJwtOptions {
+            unknown_claims: Some(BTreeMap::from([(
+                "email".to_string(),
+                email_user.to_string(),
+            )])),
+            ..Default::default()
+        },
+    );
+
+    // Start server using "sub" as the authentication claim.
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(
+            Some(oidc_server.issuer.clone()),
+            Some("sub".to_string()),
+            None,
+        )
+        .start()
+        .await;
+
+    let admin_client = server.connect().internal().await.unwrap();
+
+    // "sub" claim — user is created as sub_user.
+    run_tests(
+        "OIDC Authentication Claim Switch - sub claim",
+        &server,
+        &[TestCase::Pgwire {
+            user_to_auth_as: sub_user,
+            user_reported_by_system: sub_user,
+            password: Some(Cow::Borrowed(&token)),
+            ssl_mode: SslMode::Require,
+            options: Some("--oidc_auth_enabled=true"),
+            configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+            assert: Assert::Success,
+        }],
+    )
+    .await;
+
+    // Switch authentication claim to "email".
+    admin_client
+        .batch_execute("ALTER SYSTEM SET oidc_authentication_claim = 'email'")
+        .await
+        .unwrap();
+
+    // "email" claim — the same token now authenticates as email_user,
+    // which is a new, distinct user identity.
+    run_tests(
+        "OIDC Authentication Claim Switch - email claim",
+        &server,
+        &[TestCase::Pgwire {
+            user_to_auth_as: email_user,
+            user_reported_by_system: email_user,
+            password: Some(Cow::Borrowed(&token)),
+            ssl_mode: SslMode::Require,
+            options: Some("--oidc_auth_enabled=true"),
+            configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+            assert: Assert::Success,
+        }],
+    )
+    .await;
+}
+
 /// This test verifies that we return an error when the OIDC issuer is not set.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)]
-async fn test_auth_oidc_issuer_validation() {
+async fn test_auth_oidc_required_issuer() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
@@ -1972,7 +2065,7 @@ async fn test_auth_oidc_issuer_validation() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(None, None)
+        .with_oidc_auth(None, Some("sub".to_string()), None)
         .start()
         .await;
 
@@ -1989,11 +2082,150 @@ async fn test_auth_oidc_issuer_validation() {
                 options: Some("--oidc_auth_enabled=true"),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
-                    assert_eq!(err.message(), "missing OIDC issuer");
+                    assert_eq!(err.message(), "OIDC issuer is not configured");
                     assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
                     assert_eq!(
                         err.hint(),
                         Some("Configure the OIDC issuer using the oidc_issuer system variable.")
+                    );
+                })),
+            },
+        ],
+    )
+    .await;
+}
+
+/// This test verifies that we return an error when the OIDC authentication claim is not set.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+async fn test_auth_oidc_required_authentication_claim() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+
+    let token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            ..Default::default()
+        },
+    );
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(Some(oidc_server.issuer), None, None)
+        .start()
+        .await;
+
+    run_tests(
+        "OIDC required authentication claim validation",
+        &server,
+        &[
+            // JWT with no authentication claim configured should fail.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&token)),
+                ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "OIDC authentication claim is not configured");
+                    assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
+                    assert_eq!(
+                        err.hint(),
+                        Some("Configure which token claim to use as the username using the oidc_authentication_claim system variable.")
+                    );
+                })),
+            },
+        ],
+    )
+    .await;
+}
+
+/// This test verifies that we return an error when the OIDC authentication claim is not set.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+async fn test_auth_oidc_no_matching_authentication_claim() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+    let invalid_claim = "invalid_claim";
+    let token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            ..Default::default()
+        },
+    );
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(
+            Some(oidc_server.issuer),
+            Some(invalid_claim.to_string()),
+            None,
+        )
+        .start()
+        .await;
+
+    run_tests(
+        "OIDC Issuer Validation",
+        &server,
+        &[
+            // JWT with no claim 'invalid_claim' should fail.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&token)),
+                ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(
+                        err.message(),
+                        "no matching authentication claim found in the JWT"
+                    );
+                    assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
+                    assert_eq!(
+                        err.detail(),
+                        Some(
+                            format!(
+                                "Expected authentication claim \"{}\" in the JWT.",
+                                invalid_claim
+                            )
+                            .as_str()
+                        )
                     );
                 })),
             },
@@ -2042,7 +2274,7 @@ async fn test_auth_oidc_fetch_error() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(Some(issuer), None)
+        .with_oidc_auth(Some(issuer), Some("sub".to_string()), None)
         .start()
         .await;
 

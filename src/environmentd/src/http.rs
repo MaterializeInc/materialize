@@ -1149,7 +1149,7 @@ async fn auth(
                     .authenticate(&token, None)
                     .await
                     .map_err(|_| AuthError::InvalidCredentials)?;
-                let name = claims.username().to_string();
+                let name = claims.user;
                 (name, None, authenticated)
             }
             _ => {

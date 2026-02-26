@@ -135,6 +135,13 @@ pub const OIDC_AUDIENCE: Config<Option<&'static str>> = Config::new(
     "OIDC audience (client ID). When empty, audience validation is skipped.",
 );
 
+/// OIDC authentication claim to use as username
+pub const OIDC_AUTHENTICATION_CLAIM: Config<Option<&'static str>> = Config::new(
+    "oidc_authentication_claim",
+    None,
+    "OIDC authentication claim to use as username.",
+);
+
 pub const CONSTRAINT_BASED_TIMESTAMP_SELECTION: Config<&'static str> = Config::new(
     "constraint_based_timestamp_selection",
     ConstraintBasedTimestampSelection::const_default().as_str(),
@@ -175,6 +182,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_PASSWORD_AUTH)
         .add(&OIDC_ISSUER)
         .add(&OIDC_AUDIENCE)
+        .add(&OIDC_AUTHENTICATION_CLAIM)
         .add(&CONSTRAINT_BASED_TIMESTAMP_SELECTION)
         .add(&PERSIST_FAST_PATH_ORDER)
         .add(&ENABLE_S3_TABLES_REGION_CHECK)

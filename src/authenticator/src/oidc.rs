@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use jsonwebtoken::jwk::JwkSet;
 use mz_adapter::Client as AdapterClient;
-use mz_adapter_types::dyncfgs::{OIDC_AUDIENCE, OIDC_ISSUER};
+use mz_adapter_types::dyncfgs::{OIDC_AUDIENCE, OIDC_AUTHENTICATION_CLAIM, OIDC_ISSUER};
 use mz_auth::Authenticated;
 use mz_ore::soft_panic_or_log;
 use mz_pgwire_common::{ErrorResponse, Severity};
@@ -31,8 +31,8 @@ use url::Url;
 /// Errors that can occur during OIDC authentication.
 #[derive(Debug)]
 pub enum OidcError {
-    /// The issuer is missing.
     MissingIssuer,
+    MissingAuthenticationClaim,
     /// Failed to parse OIDC configuration URL.
     InvalidIssuerUrl(String),
     /// Failed to fetch from the identity provider.
@@ -46,6 +46,10 @@ pub enum OidcError {
     NoMatchingKey {
         /// Key ID that was found in the JWT header.
         key_id: String,
+    },
+    /// Configured authentication claim is not found in the JWT.
+    NoMatchingAuthenticationClaim {
+        authentication_claim: String,
     },
     /// JWT validation error
     Jwt,
@@ -62,13 +66,19 @@ pub enum OidcError {
 impl std::fmt::Display for OidcError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            OidcError::MissingIssuer => write!(f, "missing OIDC issuer"),
+            OidcError::MissingIssuer => write!(f, "OIDC issuer is not configured"),
+            OidcError::MissingAuthenticationClaim => {
+                write!(f, "OIDC authentication claim is not configured")
+            }
             OidcError::InvalidIssuerUrl(_) => write!(f, "invalid OIDC issuer URL"),
             OidcError::FetchFromProviderFailed { .. } => {
                 write!(f, "failed to fetch OIDC provider configuration")
             }
             OidcError::MissingKid => write!(f, "missing key ID in JWT header"),
-            OidcError::NoMatchingKey { .. } => write!(f, "no matching key found in JWKS"),
+            OidcError::NoMatchingKey { .. } => write!(f, "no matching key found in the JWKS"),
+            OidcError::NoMatchingAuthenticationClaim { .. } => {
+                write!(f, "no matching authentication claim found in the JWT")
+            }
             OidcError::Jwt => write!(f, "failed to validate JWT"),
             OidcError::WrongUser => write!(f, "wrong user"),
             OidcError::InvalidAudience { .. } => write!(f, "invalid audience"),
@@ -102,6 +112,11 @@ impl OidcError {
             OidcError::InvalidIssuer { expected_issuer } => {
                 Some(format!("Expected issuer \"{expected_issuer}\" in the JWT.",))
             }
+            OidcError::NoMatchingAuthenticationClaim {
+                authentication_claim,
+            } => Some(format!(
+                "Expected authentication claim \"{authentication_claim}\" in the JWT.",
+            )),
             _ => None,
         }
     }
@@ -110,6 +125,9 @@ impl OidcError {
         match self {
             OidcError::MissingIssuer => {
                 Some("Configure the OIDC issuer using the oidc_issuer system variable.".into())
+            }
+            OidcError::MissingAuthenticationClaim => {
+                Some("Configure which token claim to use as the username using the oidc_authentication_claim system variable.".into())
             }
             _ => None,
         }
@@ -155,22 +173,31 @@ pub struct OidcClaims {
     /// Issued at time (Unix timestamp).
     #[serde(default)]
     pub iat: Option<i64>,
-    /// Email claim (commonly used for username).
-    #[serde(default)]
-    pub email: Option<String>,
     /// Audience claim (can be single string or array in JWT).
     #[serde(default, deserialize_with = "deserialize_string_or_vec")]
     pub aud: Vec<String>,
+    /// Additional claims from the JWT, captured for flexible username extraction.
+    #[serde(flatten)]
+    pub unknown_claims: BTreeMap<String, serde_json::Value>,
 }
 
 impl OidcClaims {
-    /// Extract the username to use for the session.
-    ///
-    /// Priority: email > sub
-    // TODO (Oidc): Add a configuration variable to use a different username field.
-    pub fn username(&self) -> &str {
-        self.email.as_deref().unwrap_or(&self.sub)
+    /// Extract the username from the OIDC claims.
+    fn user(&self, authentication_claim: &str) -> Option<&str> {
+        match authentication_claim {
+            "sub" => Some(&self.sub),
+            _ => self
+                .unknown_claims
+                .get(authentication_claim)
+                .and_then(|value| value.as_str()),
+        }
     }
+}
+
+pub struct ValidatedClaims {
+    pub user: String,
+    // Prevent construction outside of `GenericOidcAuthenticator::validate_token`.
+    _private: (),
 }
 
 #[derive(Clone)]
@@ -364,11 +391,16 @@ impl GenericOidcAuthenticatorInner {
         &self,
         token: &str,
         expected_user: Option<&str>,
-    ) -> Result<OidcClaims, OidcError> {
+    ) -> Result<ValidatedClaims, OidcError> {
         // Fetch current OIDC configuration from system variables
         let system_vars = self.adapter_client.get_system_vars().await;
         let Some(issuer) = OIDC_ISSUER.get(system_vars.dyncfgs()) else {
             return Err(OidcError::MissingIssuer);
+        };
+
+        let Some(authentication_claim) = OIDC_AUTHENTICATION_CLAIM.get(system_vars.dyncfgs())
+        else {
+            return Err(OidcError::MissingAuthenticationClaim);
         };
 
         let audience = {
@@ -426,14 +458,23 @@ impl GenericOidcAuthenticatorInner {
                 _ => OidcError::Jwt,
             })?;
 
+        let user = token_data.claims.user(&authentication_claim).ok_or(
+            OidcError::NoMatchingAuthenticationClaim {
+                authentication_claim,
+            },
+        )?;
+
         // Optionally validate the expected user
         if let Some(expected) = expected_user {
-            if token_data.claims.username() != expected {
+            if user != expected {
                 return Err(OidcError::WrongUser);
             }
         }
 
-        Ok(token_data.claims)
+        Ok(ValidatedClaims {
+            user: user.to_string(),
+            _private: (),
+        })
     }
 }
 
@@ -442,12 +483,11 @@ impl GenericOidcAuthenticator {
         &self,
         token: &str,
         expected_user: Option<&str>,
-    ) -> Result<(OidcClaims, Authenticated), OidcError> {
-        let claims = self.inner.validate_token(token, expected_user).await?;
-        Ok((claims, Authenticated))
+    ) -> Result<(ValidatedClaims, Authenticated), OidcError> {
+        let validated_claims = self.inner.validate_token(token, expected_user).await?;
+        Ok((validated_claims, Authenticated))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,5 +504,14 @@ mod tests {
         let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":["app1","app2"]}"#;
         let claims: OidcClaims = serde_json::from_str(json).unwrap();
         assert_eq!(claims.aud, vec!["app1", "app2"]);
+    }
+
+    #[mz_ore::test]
+    fn test_user() {
+        let json = r#"{"sub":"user-123","iss":"issuer","exp":1234,"aud":["app"],"email":"alice@example.com"}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.user("sub"), Some("user-123"));
+        assert_eq!(claims.user("email"), Some("alice@example.com"));
+        assert_eq!(claims.user("missing"), None);
     }
 }

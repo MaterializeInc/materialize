@@ -370,7 +370,12 @@ impl TestHarness {
         self
     }
 
-    pub fn with_oidc_auth(mut self, issuer: Option<String>, audience: Option<String>) -> Self {
+    pub fn with_oidc_auth(
+        mut self,
+        issuer: Option<String>,
+        authentication_claim: Option<String>,
+        audience: Option<String>,
+    ) -> Self {
         let enable_tls = self.tls.is_some();
         self.listeners_config = ListenersConfig {
             sql: btreemap! {
@@ -428,6 +433,13 @@ impl TestHarness {
         if let Some(issuer) = issuer {
             self.system_parameter_defaults
                 .insert("oidc_issuer".to_string(), issuer);
+        }
+
+        if let Some(authentication_claim) = authentication_claim {
+            self.system_parameter_defaults.insert(
+                "oidc_authentication_claim".to_string(),
+                authentication_claim,
+            );
         }
 
         if let Some(audience) = audience {
