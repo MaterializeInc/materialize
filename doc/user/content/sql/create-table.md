@@ -96,7 +96,7 @@ Tables do not currently support:
 See also the known limitations for [`INSERT`](/sql/insert#known-limitations),
 [`UPDATE`](/sql/update#known-limitations), and [`DELETE`](/sql/delete#known-limitations).
 
-## PostgreSQL source tables
+## Source-populated tables
 
 {{< private-preview />}}
 

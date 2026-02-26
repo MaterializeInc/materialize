@@ -46,11 +46,11 @@ GO -- The GO terminator may be unsupported or unnecessary for your client.
 
 ### Configure your SQL Server Database
 
-Configure your SQL Server database using the [configuration instructions for self hosted SQL Server](/ingest-data/sql-server/self-hosted/#a-configure-sql-server)
+Configure your SQL Server database using the [configuration instructions for self hosted SQL Server.](/ingest-data/sql-server/self-hosted/#a-configure-sql-server)
 
 ### Connect your source database to Materialize
 
-Create a connection to your SQL Server database using the [`CREATE CONNECTION` syntax](/sql/create-connection/)
+Create a connection to your SQL Server database using the [`CREATE CONNECTION` syntax.](/sql/create-connection/)
 
 ## Create a source using the new syntax
 
@@ -59,7 +59,7 @@ syntax](/sql/create-source/sql-server-v2/).
 
 ```mzsql
 CREATE SOURCE my_source
-  FROM SQL SERVER CONNECTION sqlserver_connection
+  FROM SQL SERVER CONNECTION sqlserver_connection;
 ```
 
 ## Create a table from the source
@@ -103,7 +103,7 @@ In your upstream SQL Server database, add a new column `B` to the table `T`:
 
 ```sql
 ALTER TABLE T
-    ADD B BIT 0;
+    ADD B BIT NULL;
 
 INSERT INTO T (A, B) VALUES
     (20, 0);

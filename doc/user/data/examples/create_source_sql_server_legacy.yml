@@ -4,6 +4,7 @@
     [IN CLUSTER <cluster_name>]
     FROM SQL SERVER CONNECTION <connection_name>
       [ ( EXCLUDE COLUMNS (<col1> [, ...]) ) ]
+      [ ( TEXT COLUMNS (<col1> [, ...]) ) ]
     <FOR ALL TABLES | FOR TABLES ( <table1> [AS <subsrc_name>] [, ...] )>
     [WITH (RETAIN HISTORY FOR <retention_period>)]
   syntax_elements:

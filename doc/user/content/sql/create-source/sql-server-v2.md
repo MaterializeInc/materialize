@@ -10,6 +10,13 @@ menu:
     weight: 24
 ---
 
+{{< private-preview />}}
+
+{{< source-versioning-disambiguation is_new=true
+other_ref="[old reference page](/sql/create-source/sql-server/)" include_blurb=true >}}
+
+## Prerequisites
+
 {{% create-source/intro %}}
 Materialize supports SQL Server (2016+) as a real-time data source. To connect to a
 SQL Server database, you first need to tweak its configuration to enable [Change Data
@@ -79,16 +86,18 @@ The reported `lsn` should increase as Materialize consumes **new** CDC events
 from the upstream SQL Server database. For more details on monitoring source
 ingestion progress and debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
 
-## Examples
+## Example
 
 {{< important >}}
 Before creating a SQL Server source, you must enable Change Data Capture and
 `SNAPSHOT` transaction isolation in the upstream database.
 {{</ important >}}
 
-### Creating a connection
+### Creating a source {#create-source-example}
 
-A connection describes how to connect and authenticate to an external system you
+#### Prerequisite: Creating a connection to SQL Server
+
+First, you must create a connection to your SQL Server database. A connection describes how to connect and authenticate to an external system you
 want Materialize to read data from.
 
 Once created, a connection is **reusable** across multiple `CREATE SOURCE`
@@ -137,23 +146,26 @@ an SSH bastion server to accept connections from Materialize, check
 {{< /tab >}}
 {{< /tabs >}}
 
-### Creating a source {#create-source-example}
+#### Creating the source in Materialize
 
 You **must** enable Change Data Capture, see [Enable Change Data Capture SQL Server Instructions](/ingest-data/sql-server/self-hosted/#a-configure-sql-server).
 
 Once CDC is enabled for all of the tables you wish to create subsources for, you can create a `SOURCE` in
 Materialize to begin replicating data!
 
-_Create source 
+_Create source from the connection we just created_
 
 ```mzsql
 CREATE SOURCE mz_source
-    FROM SQL SERVER CONNECTION sqlserver_connection
+    FROM SQL SERVER CONNECTION sqlserver_connection;
 ```
 
-### Creating a table from a SQL Server Source
+After a source is created, you can create a table from the source, referencing specific table(s). 
 
-```CREATE TABLE items FROM SOURCE mz_source(REFERENCE dbo.items)```
+_Creates a table in Materialize from the upstream table dbo.items_
+```mzsql
+CREATE TABLE items FROM SOURCE mz_source(REFERENCE dbo.items);
+```
 
 ## Related pages
 
