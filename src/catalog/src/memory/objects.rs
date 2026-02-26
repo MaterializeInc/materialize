@@ -995,6 +995,12 @@ pub enum DataSourceDesc {
     },
 }
 
+impl From<IntrospectionType> for DataSourceDesc {
+    fn from(typ: IntrospectionType) -> Self {
+        Self::Introspection(typ)
+    }
+}
+
 impl DataSourceDesc {
     /// The key and value formats of the data source.
     pub fn formats(&self) -> (Option<&str>, Option<&str>) {

@@ -62,6 +62,7 @@ use mz_storage_client::statistics::{MZ_SINK_STATISTICS_RAW_DESC, MZ_SOURCE_STATI
 use serde::Serialize;
 
 use crate::durable::objects::SystemObjectDescription;
+use crate::memory::objects::DataSourceDesc;
 
 pub const BUILTIN_PREFIXES: &[&str] = &["mz_", "pg_", "external_"];
 const BUILTIN_CLUSTER_REPLICA_NAME: &str = "r1";
@@ -172,14 +173,14 @@ pub struct BuiltinTable {
     pub access: Vec<MzAclItem>,
 }
 
-#[derive(Clone, Debug, Hash, Serialize)]
+#[derive(Clone, Debug)]
 pub struct BuiltinSource {
     pub name: &'static str,
     pub schema: &'static str,
     pub oid: u32,
     pub desc: RelationDesc,
     pub column_comments: BTreeMap<&'static str, &'static str>,
-    pub data_source: IntrospectionType,
+    pub data_source: DataSourceDesc,
     /// Whether the source's retention policy is controlled by
     /// the system variable `METRICS_RETENTION`
     pub is_retained_metrics_object: bool,
@@ -2269,7 +2270,7 @@ pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| B
     name: "mz_compute_dependencies",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_COMPUTE_DEPENDENCIES_OID,
-    data_source: IntrospectionType::ComputeDependencies,
+    data_source: IntrospectionType::ComputeDependencies.into(),
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
         .with_column("dependency_id", SqlScalarType::String.nullable(false))
@@ -3560,7 +3561,7 @@ pub static MZ_CLUSTER_REPLICA_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock
         name: "mz_cluster_replica_status_history",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_CLUSTER_REPLICA_STATUS_HISTORY_OID,
-        data_source: IntrospectionType::ReplicaStatusHistory,
+        data_source: IntrospectionType::ReplicaStatusHistory.into(),
         desc: REPLICA_STATUS_HISTORY_DESC.clone(),
         column_comments: BTreeMap::from_iter([
             ("replica_id", "The ID of a cluster replica."),
@@ -3743,7 +3744,7 @@ pub static MZ_SOURCE_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| 
     name: "mz_source_status_history",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_SOURCE_STATUS_HISTORY_OID,
-    data_source: IntrospectionType::SourceStatusHistory,
+    data_source: IntrospectionType::SourceStatusHistory.into(),
     desc: MZ_SOURCE_STATUS_HISTORY_DESC.clone(),
     column_comments: BTreeMap::from_iter([
         (
@@ -3780,7 +3781,9 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY: LazyLock<BuiltinSource>
         name: "mz_aws_privatelink_connection_status_history",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_OID,
-        data_source: IntrospectionType::PrivatelinkConnectionStatusHistory,
+        data_source: DataSourceDesc::Introspection(
+            IntrospectionType::PrivatelinkConnectionStatusHistory,
+        ),
         desc: MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC.clone(),
         column_comments: BTreeMap::from_iter([
             ("occurred_at", "Wall-clock timestamp of the status change."),
@@ -3862,7 +3865,7 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY: LazyLock<BuiltinSource> =
         name: "mz_statement_execution_history",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_STATEMENT_EXECUTION_HISTORY_OID,
-        data_source: IntrospectionType::StatementExecutionHistory,
+        data_source: IntrospectionType::StatementExecutionHistory.into(),
         desc: MZ_STATEMENT_EXECUTION_HISTORY_DESC.clone(),
         column_comments: BTreeMap::new(),
         is_retained_metrics_object: false,
@@ -3912,7 +3915,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY: LazyLock<BuiltinSource> =
         name: "mz_prepared_statement_history",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_PREPARED_STATEMENT_HISTORY_OID,
-        data_source: IntrospectionType::PreparedStatementHistory,
+        data_source: IntrospectionType::PreparedStatementHistory.into(),
         desc: MZ_PREPARED_STATEMENT_HISTORY_DESC.clone(),
         column_comments: BTreeMap::new(),
         is_retained_metrics_object: false,
@@ -3929,7 +3932,7 @@ pub static MZ_SQL_TEXT: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_SQL_TEXT_OID,
     desc: MZ_SQL_TEXT_DESC.clone(),
-    data_source: IntrospectionType::SqlText,
+    data_source: IntrospectionType::SqlText.into(),
     column_comments: BTreeMap::new(),
     is_retained_metrics_object: false,
     access: vec![MONITOR_SELECT],
@@ -4004,7 +4007,7 @@ pub static MZ_SESSION_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| Builti
     name: "mz_session_history",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_SESSION_HISTORY_OID,
-    data_source: IntrospectionType::SessionHistory,
+    data_source: IntrospectionType::SessionHistory.into(),
     desc: MZ_SESSION_HISTORY_DESC.clone(),
     column_comments: BTreeMap::from_iter([
         (
@@ -4392,7 +4395,7 @@ pub static MZ_STATEMENT_LIFECYCLE_HISTORY: LazyLock<BuiltinSource> = LazyLock::n
                 SqlScalarType::TimestampTz { precision: None }.nullable(false),
             )
             .finish(),
-        data_source: IntrospectionType::StatementLifecycleHistory,
+        data_source: IntrospectionType::StatementLifecycleHistory.into(),
         column_comments: BTreeMap::from_iter([
             (
                 "statement_id",
@@ -4602,7 +4605,7 @@ pub static MZ_SINK_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| Bu
     name: "mz_sink_status_history",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_SINK_STATUS_HISTORY_OID,
-    data_source: IntrospectionType::SinkStatusHistory,
+    data_source: IntrospectionType::SinkStatusHistory.into(),
     desc: MZ_SINK_STATUS_HISTORY_DESC.clone(),
     column_comments: BTreeMap::from_iter([
         (
@@ -4890,7 +4893,7 @@ pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY: LazyLock<BuiltinSource> =
         name: "mz_cluster_replica_metrics_history",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_CLUSTER_REPLICA_METRICS_HISTORY_OID,
-        data_source: IntrospectionType::ReplicaMetricsHistory,
+        data_source: IntrospectionType::ReplicaMetricsHistory.into(),
         desc: REPLICA_METRICS_HISTORY_DESC.clone(),
         column_comments: BTreeMap::from_iter([
             ("replica_id", "The ID of a cluster replica."),
@@ -4983,7 +4986,7 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS: LazyLock<BuiltinSource> =
         name: "mz_cluster_replica_frontiers",
         schema: MZ_CATALOG_SCHEMA,
         oid: oid::SOURCE_MZ_CLUSTER_REPLICA_FRONTIERS_OID,
-        data_source: IntrospectionType::ReplicaFrontiers,
+        data_source: IntrospectionType::ReplicaFrontiers.into(),
         desc: RelationDesc::builder()
             .with_column("object_id", SqlScalarType::String.nullable(false))
             .with_column("replica_id", SqlScalarType::String.nullable(false))
@@ -5017,7 +5020,7 @@ pub static MZ_FRONTIERS: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSourc
     name: "mz_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_FRONTIERS_OID,
-    data_source: IntrospectionType::Frontiers,
+    data_source: IntrospectionType::Frontiers.into(),
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
         .with_column("read_frontier", SqlScalarType::MzTimestamp.nullable(true))
@@ -5063,7 +5066,7 @@ pub static MZ_WALLCLOCK_LAG_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| 
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_WALLCLOCK_LAG_HISTORY_OID,
     desc: WALLCLOCK_LAG_HISTORY_DESC.clone(),
-    data_source: IntrospectionType::WallclockLagHistory,
+    data_source: IntrospectionType::WallclockLagHistory.into(),
     column_comments: BTreeMap::from_iter([
         (
             "object_id",
@@ -5190,7 +5193,7 @@ pub static MZ_WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW: LazyLock<BuiltinSource> =
         oid: oid::SOURCE_MZ_WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_OID,
         desc: WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_DESC.clone(),
         column_comments: BTreeMap::new(),
-        data_source: IntrospectionType::WallclockLagHistogram,
+        data_source: IntrospectionType::WallclockLagHistogram.into(),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     });
@@ -5228,7 +5231,9 @@ pub static MZ_MATERIALIZED_VIEW_REFRESHES: LazyLock<BuiltinSource> = LazyLock::n
         name: "mz_materialized_view_refreshes",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_MATERIALIZED_VIEW_REFRESHES_OID,
-        data_source: IntrospectionType::ComputeMaterializedViewRefreshes,
+        data_source: DataSourceDesc::Introspection(
+            IntrospectionType::ComputeMaterializedViewRefreshes,
+        ),
         desc: RelationDesc::builder()
             .with_column(
                 "materialized_view_id",
@@ -5563,7 +5568,7 @@ pub static MZ_SOURCE_STATISTICS_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| 
     name: "mz_source_statistics_raw",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_SOURCE_STATISTICS_RAW_OID,
-    data_source: IntrospectionType::StorageSourceStatistics,
+    data_source: IntrospectionType::StorageSourceStatistics.into(),
     desc: MZ_SOURCE_STATISTICS_RAW_DESC.clone(),
     column_comments: BTreeMap::new(),
     is_retained_metrics_object: true,
@@ -5573,7 +5578,7 @@ pub static MZ_SINK_STATISTICS_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| Bu
     name: "mz_sink_statistics_raw",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_SINK_STATISTICS_RAW_OID,
-    data_source: IntrospectionType::StorageSinkStatistics,
+    data_source: IntrospectionType::StorageSinkStatistics.into(),
     desc: MZ_SINK_STATISTICS_RAW_DESC.clone(),
     column_comments: BTreeMap::new(),
     is_retained_metrics_object: true,
@@ -5584,7 +5589,7 @@ pub static MZ_STORAGE_SHARDS: LazyLock<BuiltinSource> = LazyLock::new(|| Builtin
     name: "mz_storage_shards",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_STORAGE_SHARDS_OID,
-    data_source: IntrospectionType::ShardMapping,
+    data_source: IntrospectionType::ShardMapping.into(),
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
         .with_column("shard_id", SqlScalarType::String.nullable(false))
@@ -8242,7 +8247,7 @@ pub static MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED: LazyLock<BuiltinSource> =
                 SqlScalarType::Numeric { max_scale: None }.nullable(false),
             )
             .finish(),
-        data_source: IntrospectionType::ComputeErrorCounts,
+        data_source: IntrospectionType::ComputeErrorCounts.into(),
         column_comments: BTreeMap::new(),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
@@ -8257,7 +8262,7 @@ pub static MZ_COMPUTE_HYDRATION_TIMES: LazyLock<BuiltinSource> = LazyLock::new(|
         .with_column("object_id", SqlScalarType::String.nullable(false))
         .with_column("time_ns", SqlScalarType::UInt64.nullable(true))
         .finish(),
-    data_source: IntrospectionType::ComputeHydrationTimes,
+    data_source: IntrospectionType::ComputeHydrationTimes.into(),
     column_comments: BTreeMap::new(),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
@@ -8356,7 +8361,7 @@ pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: LazyLock<BuiltinSource> = Laz
             .with_column("hydrated", SqlScalarType::Bool.nullable(false))
             .with_key(vec![0, 1, 2])
             .finish(),
-        data_source: IntrospectionType::ComputeOperatorHydrationStatus,
+        data_source: IntrospectionType::ComputeOperatorHydrationStatus.into(),
         column_comments: BTreeMap::from_iter([
             ("replica_id", "The ID of a cluster replica."),
             (
