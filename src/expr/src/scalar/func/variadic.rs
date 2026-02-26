@@ -919,10 +919,12 @@ pub struct ListCreate {
     pub elem_type: SqlScalarType,
 }
 
-impl fmt::Display for ListCreate {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("list_create")
-    }
+#[sqlfunc(
+    output_type_expr = "SqlScalarType::List { element_type: Box::new(self.elem_type.clone()), custom_id: None }.nullable(false)",
+    introduces_nulls = false
+)]
+fn list_create<'a>(&self, datums: Variadic<Datum<'a>>, temp_storage: &'a RowArena) -> Datum<'a> {
+    temp_storage.make_datum(|packer| packer.push_list(datums))
 }
 
 #[derive(
@@ -941,14 +943,12 @@ pub struct RecordCreate {
     pub field_names: Vec<ColumnName>,
 }
 
-impl fmt::Display for RecordCreate {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("record_create")
-    }
-}
-
-fn list_create<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    temp_storage.make_datum(|packer| packer.push_list(datums))
+#[sqlfunc(
+    output_type_expr = "SqlScalarType::Record { fields: self.field_names.clone().into_iter().zip_eq(input_types.iter().cloned()).collect(), custom_id: None }.nullable(false)",
+    introduces_nulls = false
+)]
+fn record_create<'a>(&self, datums: Variadic<Datum<'a>>, temp_storage: &'a RowArena) -> Datum<'a> {
+    temp_storage.make_datum(|packer| packer.push_list(datums.iter().copied()))
 }
 
 #[sqlfunc(
@@ -1777,6 +1777,8 @@ impl VariadicFunc {
             VariadicFunc::ArrayIndex(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::ArrayToString(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::MapBuild(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::ListCreate(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::RecordCreate(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -1829,14 +1831,13 @@ impl VariadicFunc {
             | VariadicFunc::ArrayIndex(_)
             | VariadicFunc::ArrayToString(_)
             | VariadicFunc::MapBuild(_)
+            | VariadicFunc::ListCreate(_)
+            | VariadicFunc::RecordCreate(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::ArrayCreate(ArrayCreate {
                 elem_type: SqlScalarType::Array(_),
             }) => array_create_multidim(&ds, temp_storage),
             VariadicFunc::ArrayCreate(..) => array_create_scalar(&ds, temp_storage),
-            VariadicFunc::ListCreate(..) | VariadicFunc::RecordCreate(..) => {
-                Ok(list_create(&ds, temp_storage))
-            }
             VariadicFunc::RangeCreate(..) => create_range(&ds, temp_storage),
         }
     }
