@@ -1070,33 +1070,17 @@ fn list_index<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     buf
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct MakeAclItem;
-
-impl fmt::Display for MakeAclItem {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("makeaclitem")
-    }
-}
-
-fn make_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
-    let grantee = Oid(datums[0].unwrap_uint32());
-    let grantor = Oid(datums[1].unwrap_uint32());
-    let privileges = datums[2].unwrap_str();
+#[sqlfunc(sqlname = "makeaclitem")]
+fn make_acl_item(
+    grantee_oid: u32,
+    grantor_oid: u32,
+    privileges: &str,
+    is_grantable: bool,
+) -> Result<AclItem, EvalError> {
+    let grantee = Oid(grantee_oid);
+    let grantor = Oid(grantor_oid);
     let acl_mode = AclMode::parse_multiple_privileges(privileges)
         .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string().into()))?;
-    let is_grantable = datums[3].unwrap_bool();
     if is_grantable {
         return Err(EvalError::Unsupported {
             feature: "GRANT OPTION".into(),
@@ -1104,11 +1088,11 @@ fn make_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
         });
     }
 
-    Ok(Datum::AclItem(AclItem {
+    Ok(AclItem {
         grantee,
         grantor,
         acl_mode,
-    }))
+    })
 }
 
 #[derive(
@@ -2019,6 +2003,7 @@ impl VariadicFunc {
             VariadicFunc::DateBinTimestamp(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::DateBinTimestampTz(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::TimezoneTimeVariadic(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::MakeAclItem(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -2055,6 +2040,7 @@ impl VariadicFunc {
             | VariadicFunc::DateBinTimestamp(_)
             | VariadicFunc::DateBinTimestampTz(_)
             | VariadicFunc::TimezoneTimeVariadic(_)
+            | VariadicFunc::MakeAclItem(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::MakeTimestamp(_) => make_timestamp(&ds),
             VariadicFunc::JsonbBuildArray(_) => Ok(jsonb_build_array(&ds, temp_storage)),
@@ -2075,7 +2061,6 @@ impl VariadicFunc {
             VariadicFunc::ListSliceLinear(_) => Ok(list_slice_linear(&ds, temp_storage)),
             VariadicFunc::RegexpMatch(_) => regexp_match_dynamic(&ds, temp_storage),
             VariadicFunc::RangeCreate(..) => create_range(&ds, temp_storage),
-            VariadicFunc::MakeAclItem(_) => make_acl_item(&ds),
             VariadicFunc::MakeMzAclItem(_) => make_mz_acl_item(&ds),
             VariadicFunc::ArrayPosition(_) => array_position(&ds),
             VariadicFunc::ArrayFill(..) => array_fill(&ds, temp_storage),
