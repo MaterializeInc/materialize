@@ -21,7 +21,7 @@ use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::PersistClient;
-use mz_repr::{CatalogItemId, Diff, GlobalId};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, SqlScalarType};
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use uuid::Uuid;
 
@@ -440,6 +440,14 @@ impl Iterator for AuditLogIterator {
     fn next(&mut self) -> Option<Self::Item> {
         self.audit_logs.next()
     }
+}
+
+/// Returns the schema of the `Row`s/`SourceData`s stored in the persist
+/// shard backing the catalog.
+pub fn persist_desc() -> RelationDesc {
+    RelationDesc::builder()
+        .with_column("data", SqlScalarType::Jsonb.nullable(false))
+        .finish()
 }
 
 /// A builder to help create an [`OpenableDurableCatalogState`] for tests.

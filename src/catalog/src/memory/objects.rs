@@ -993,6 +993,8 @@ pub enum DataSourceDesc {
         /// The cluster which this source is associated with.
         cluster_id: ClusterId,
     },
+    /// Receives data from the catalog shard.
+    Catalog,
 }
 
 impl From<IntrospectionType> for DataSourceDesc {
@@ -1024,7 +1026,8 @@ impl DataSourceDesc {
             },
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
-            | DataSourceDesc::Progress => (None, None),
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Catalog => (None, None),
         }
     }
 
@@ -1071,7 +1074,8 @@ impl DataSourceDesc {
             }
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
-            | DataSourceDesc::Progress => None,
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Catalog => None,
         }
     }
 }
@@ -1200,7 +1204,7 @@ impl Source {
             | DataSourceDesc::OldSyntaxIngestion { desc, .. } => desc.connection.name(),
             DataSourceDesc::Progress => "progress",
             DataSourceDesc::IngestionExport { .. } => "subsource",
-            DataSourceDesc::Introspection(_) => "source",
+            DataSourceDesc::Introspection(_) | DataSourceDesc::Catalog => "source",
             DataSourceDesc::Webhook { .. } => "webhook",
         }
     }
@@ -1213,7 +1217,8 @@ impl Source {
             DataSourceDesc::IngestionExport { .. }
             | DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
-            | DataSourceDesc::Progress => None,
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Catalog => None,
         }
     }
 
@@ -1257,9 +1262,11 @@ impl Source {
             //  use a data shard.
             DataSourceDesc::IngestionExport { .. } => 1,
             DataSourceDesc::Webhook { .. } => 1,
-            // Introspection and progress subsources are not under the user's control, so shouldn't
-            // count toward their quota.
-            DataSourceDesc::Introspection(_) | DataSourceDesc::Progress => 0,
+            // Introspection, catalog, and progress subsources are not under the user's control, so
+            // shouldn't count toward their quota.
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Catalog => 0,
         }
     }
 }
@@ -1830,7 +1837,8 @@ impl CatalogItem {
                 DataSourceDesc::IngestionExport { .. }
                 | DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Webhook { .. }
-                | DataSourceDesc::Progress => Ok(None),
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Catalog => Ok(None),
             },
             _ => Err(SqlCatalogError::UnexpectedType {
                 name: entry.name().item.to_string(),
@@ -2388,7 +2396,9 @@ impl CatalogItem {
                 // cross-referencing the items
                 DataSourceDesc::IngestionExport { .. } => None,
                 DataSourceDesc::Webhook { cluster_id, .. } => Some(*cluster_id),
-                DataSourceDesc::Introspection(_) | DataSourceDesc::Progress => None,
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Catalog => None,
             },
             CatalogItem::Sink(sink) => Some(sink.cluster_id),
             CatalogItem::ContinualTask(ct) => Some(ct.cluster_id),
@@ -2802,7 +2812,8 @@ impl CatalogEntry {
                 DataSourceDesc::IngestionExport { .. }
                 | DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress
-                | DataSourceDesc::Webhook { .. } => None,
+                | DataSourceDesc::Webhook { .. }
+                | DataSourceDesc::Catalog => None,
             },
             CatalogItem::Table(_)
             | CatalogItem::Log(_)

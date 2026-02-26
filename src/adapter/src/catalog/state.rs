@@ -2597,18 +2597,7 @@ impl CatalogState {
             match entry.item() {
                 CatalogItem::Source(source) => {
                     let source_cw = source.custom_logical_compaction_window.unwrap_or_default();
-                    match source.data_source {
-                        DataSourceDesc::Ingestion { .. }
-                        | DataSourceDesc::OldSyntaxIngestion { .. }
-                        | DataSourceDesc::IngestionExport { .. } => {
-                            cws.entry(source_cw).or_default().insert(item_id);
-                        }
-                        DataSourceDesc::Introspection(_)
-                        | DataSourceDesc::Progress
-                        | DataSourceDesc::Webhook { .. } => {
-                            cws.entry(source_cw).or_default().insert(item_id);
-                        }
-                    }
+                    cws.entry(source_cw).or_default().insert(item_id);
                 }
                 CatalogItem::Table(table) => {
                     let table_cw = table.custom_logical_compaction_window.unwrap_or_default();
