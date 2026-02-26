@@ -1270,36 +1270,18 @@ fn regexp_match<'a>(
     regexp_match_static(Datum::String(haystack), temp_storage, &needle)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
+#[sqlfunc(
+    output_type_expr = "SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)",
+    introduces_nulls = false
 )]
-pub struct RegexpSplitToArray;
-
-impl fmt::Display for RegexpSplitToArray {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("regexp_split_to_array")
-    }
-}
-
 fn regexp_split_to_array<'a>(
-    text: Datum<'a>,
-    regexp: Datum<'a>,
-    flags: Datum<'a>,
+    text: &str,
+    regexp_str: &str,
+    flags: OptionalArg<&str>,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    let text = text.unwrap_str();
-    let regexp = regexp.unwrap_str();
-    let flags = flags.unwrap_str();
-    let regexp = build_regex(regexp, flags)?;
+    let flags = flags.unwrap_or("");
+    let regexp = build_regex(regexp_str, flags)?;
     regexp_split_to_array_re(text, &regexp, temp_storage)
 }
 
@@ -1875,6 +1857,7 @@ impl VariadicFunc {
             VariadicFunc::JsonbBuildArray(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::ArrayPosition(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::RegexpMatch(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::RegexpSplitToArray(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -1919,6 +1902,7 @@ impl VariadicFunc {
             | VariadicFunc::JsonbBuildArray(_)
             | VariadicFunc::ArrayPosition(_)
             | VariadicFunc::RegexpMatch(_)
+            | VariadicFunc::RegexpSplitToArray(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::MapBuild(..) => Ok(map_build(&ds, temp_storage)),
             VariadicFunc::ArrayCreate(ArrayCreate {
@@ -1936,14 +1920,6 @@ impl VariadicFunc {
             VariadicFunc::ListSliceLinear(_) => Ok(list_slice_linear(&ds, temp_storage)),
             VariadicFunc::RangeCreate(..) => create_range(&ds, temp_storage),
             VariadicFunc::ArrayFill(..) => array_fill(&ds, temp_storage),
-            VariadicFunc::RegexpSplitToArray(_) => {
-                let flags = if ds.len() == 2 {
-                    Datum::String("")
-                } else {
-                    ds[2]
-                };
-                regexp_split_to_array(ds[0], ds[1], flags, temp_storage)
-            }
             VariadicFunc::StringToArray(_) => {
                 let null_string = if ds.len() == 2 { Datum::Null } else { ds[2] };
 
