@@ -40,7 +40,7 @@ they will not be retroactively captured.
 ### 1. Start the monitoring stack
 
 ```bash
-cd misc/monitoring && ./mzcompose run default
+bin/mzcompose --find monitoring run default
 ```
 
 Wait for Tempo to be ready:
