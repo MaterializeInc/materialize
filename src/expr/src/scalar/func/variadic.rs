@@ -1087,24 +1087,19 @@ pub struct MapBuild {
     pub value_type: SqlScalarType,
 }
 
-impl fmt::Display for MapBuild {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("map_build")
-    }
-}
-
-fn map_build<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
+#[sqlfunc(
+    output_type_expr = "SqlScalarType::Map { value_type: Box::new(self.value_type.clone()), custom_id: None }.nullable(false)",
+    introduces_nulls = false
+)]
+fn map_build<'a>(
+    &self,
+    datums: Variadic<(Option<&str>, Datum<'a>)>,
+    temp_storage: &'a RowArena,
+) -> Datum<'a> {
     // Collect into a `BTreeMap` to provide the same semantics as it.
     let map: std::collections::BTreeMap<&str, _> = datums
         .into_iter()
-        .tuples()
-        .filter_map(|(k, v)| {
-            if k.is_null() {
-                None
-            } else {
-                Some((k.unwrap_str(), v))
-            }
-        })
+        .filter_map(|(k, v)| k.map(|k| (k, v)))
         .collect();
 
     temp_storage.make_datum(|packer| packer.push_dict(map))
@@ -1781,6 +1776,7 @@ impl VariadicFunc {
             VariadicFunc::ArrayFill(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::ArrayIndex(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::ArrayToString(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::MapBuild(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -1832,8 +1828,8 @@ impl VariadicFunc {
             | VariadicFunc::ArrayFill(_)
             | VariadicFunc::ArrayIndex(_)
             | VariadicFunc::ArrayToString(_)
+            | VariadicFunc::MapBuild(_)
             | VariadicFunc::Least(_) => unreachable!(),
-            VariadicFunc::MapBuild(..) => Ok(map_build(&ds, temp_storage)),
             VariadicFunc::ArrayCreate(ArrayCreate {
                 elem_type: SqlScalarType::Array(_),
             }) => array_create_multidim(&ds, temp_storage),
