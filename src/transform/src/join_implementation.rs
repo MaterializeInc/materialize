@@ -207,8 +207,8 @@ impl JoinImplementation {
             // they might be larger than any user-created index.
 
             let unique_keys = input_types
-                .iter()
-                .map(|typ| typ.keys.clone())
+                .into_iter()
+                .map(|typ| typ.keys)
                 .collect::<Vec<_>>();
             let mut available_arrangements = vec![Vec::new(); inputs.len()];
             let mut filters = Vec::with_capacity(inputs.len());

@@ -16,8 +16,6 @@
 use itertools::Itertools;
 use mz_expr::MirRelationExpr;
 
-use mz_repr::ReprColumnType;
-
 use crate::TransformCtx;
 use crate::analysis::{DerivedBuilder, DerivedView};
 use crate::analysis::{ReprRelationType, UniqueKeys};
@@ -69,13 +67,12 @@ impl ReduceElision {
                 expected_group_size: _,
             } = expr
             {
-                let input_type: Vec<ReprColumnType> = view
+                let input_type = view
                     .last_child()
                     .value::<ReprRelationType>()
                     .expect("ReprRelationType required")
                     .as_ref()
-                    .expect("Expression not well-typed")
-                    .clone();
+                    .expect("Expression not well-typed");
                 let input_keys = view
                     .last_child()
                     .value::<UniqueKeys>()
@@ -87,7 +84,7 @@ impl ReduceElision {
                 }) {
                     let map_scalars = aggregates
                         .iter()
-                        .map(|a| a.on_unique(&input_type))
+                        .map(|a| a.on_unique(input_type))
                         .collect_vec();
 
                     let mut result = input.take_dangerous();

@@ -792,12 +792,10 @@ fn optimize(
                 MirScalarExpr::Column(index, _) => {
                     let index = *index;
                     if let DatumKnowledge::Lit { value, typ } = &column_knowledge[index] {
-                        let nullable = column_knowledge[index].nullable();
-                        let canonical_typ = ReprColumnType {
-                            scalar_type: typ.clone(),
-                            nullable,
-                        };
-                        *e = MirScalarExpr::Literal(value.clone(), canonical_typ);
+                        *e = MirScalarExpr::Literal(
+                            value.clone(),
+                            typ.clone().nullable(column_knowledge[index].nullable()),
+                        );
                     }
                     column_knowledge[index].clone()
                 }

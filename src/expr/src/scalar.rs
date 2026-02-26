@@ -163,7 +163,7 @@ impl MirScalarExpr {
     /// Constructs a `MirScalarExpr::Literal` from a pre-packed `Row`
     /// containing a single datum and a `ReprScalarType`. Nullability is
     /// derived by inspecting the first datum in the row.
-    pub fn literal_from_row(row: Row, typ: ReprScalarType) -> Self {
+    pub fn literal_from_single_element_row(row: Row, typ: ReprScalarType) -> Self {
         soft_assert_or_log!(
             row.iter().count() == 1,
             "literal_from_row called with a Row containing {} datums",
@@ -1476,7 +1476,7 @@ impl MirScalarExpr {
                 ..
             } = list_create
             {
-                (&*typ).into()
+                ReprScalarType::from(typ)
             } else {
                 unreachable!()
             }
@@ -3340,12 +3340,11 @@ mod tests {
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_reduce() {
         let relation_type: Vec<ReprColumnType> = vec![
-            SqlScalarType::Int64.nullable(true),
-            SqlScalarType::Int64.nullable(true),
-            SqlScalarType::Int64.nullable(false),
+            ReprScalarType::Int64.nullable(true),
+            ReprScalarType::Int64.nullable(true),
+            ReprScalarType::Int64.nullable(false),
         ]
         .into_iter()
-        .map(|t| ReprColumnType::from(&t))
         .collect();
         let col = MirScalarExpr::column;
         let int64_typ = ReprScalarType::Int64;

@@ -3830,7 +3830,7 @@ impl SqlScalarType {
                     .iter_mut()
                     .zip_eq(backport_fields)
                     .for_each(|(field, backport_field)| {
-                        field.1.backport_nullability(&backport_field);
+                        field.1.backport_nullability(backport_field);
                     });
             }
             (SqlScalarType::Array(a), ReprScalarType::Array(b)) => {

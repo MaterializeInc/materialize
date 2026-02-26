@@ -589,7 +589,7 @@ fn eval_unmaterializable_func(
                 datums,
             )
             .expect("known to be a valid array");
-        Ok(MirScalarExpr::literal_from_row(
+        Ok(MirScalarExpr::literal_from_single_element_row(
             row,
             ReprScalarType::from(&f.output_type().scalar_type),
         ))
@@ -602,7 +602,7 @@ fn eval_unmaterializable_func(
                 .iter()
                 .map(|(key, value)| (key.as_str(), Datum::from(value.as_str()))),
         );
-        Ok(MirScalarExpr::literal_from_row(
+        Ok(MirScalarExpr::literal_from_single_element_row(
             row,
             ReprScalarType::from(&f.output_type().scalar_type),
         ))
@@ -706,7 +706,7 @@ fn eval_unmaterializable_func(
                     ).expect("role_membership is 1 dimensional, and its length is used for the array length");
                 }
             });
-            Ok(MirScalarExpr::literal_from_row(
+            Ok(MirScalarExpr::literal_from_single_element_row(
                 row,
                 ReprScalarType::from(&f.output_type().scalar_type),
             ))

@@ -105,14 +105,8 @@ impl UnionBranchCancellation {
             if std::iter::once(&base_sign).chain(&input_signs).any(|x| *x) {
                 if let Some(j) = matching_negation(&*base, base_sign, inputs, &input_signs, 0) {
                     let relation_typ = base.typ();
-                    **base = MirRelationExpr::Constant {
-                        rows: Ok(vec![]),
-                        typ: relation_typ.clone(),
-                    };
-                    inputs[j] = MirRelationExpr::Constant {
-                        rows: Ok(vec![]),
-                        typ: relation_typ,
-                    };
+                    **base = MirRelationExpr::constant(vec![], relation_typ.clone());
+                    inputs[j] = MirRelationExpr::constant(vec![], relation_typ);
                 }
 
                 for i in 0..inputs.len() {
@@ -120,14 +114,8 @@ impl UnionBranchCancellation {
                         matching_negation(&inputs[i], input_signs[i], inputs, &input_signs, i + 1)
                     {
                         let relation_typ = inputs[i].typ();
-                        inputs[i] = MirRelationExpr::Constant {
-                            rows: Ok(vec![]),
-                            typ: relation_typ.clone(),
-                        };
-                        inputs[j] = MirRelationExpr::Constant {
-                            rows: Ok(vec![]),
-                            typ: relation_typ,
-                        };
+                        inputs[i] = MirRelationExpr::constant(vec![], relation_typ.clone());
+                        inputs[j] = MirRelationExpr::constant(vec![], relation_typ);
                     }
                 }
             }

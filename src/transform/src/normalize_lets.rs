@@ -311,9 +311,12 @@ mod support {
                         )))?;
                     }
                     // Assert that the column types have not changed.
-                    // NB the ReprScalarType::eq ignorres nullability (correctly!)
+                    // NB the ReprScalarType::eq ignores nullability (correctly!)
                     // since record field nullability can legitimately differ between the stored
                     // type and the analysis-recomputed type.
+                    // Note: We also want to ignore nullability changes at the top level, but
+                    // ReprColumnType has the derived Eq, so that wouldn't ignore nullability, hence
+                    // the `.zip_eq(...).all(...)` dance.
                     if !new_type
                         .column_types
                         .iter()
@@ -326,7 +329,7 @@ mod support {
                         )))?;
                     }
 
-                    *typ = new_type.clone();
+                    typ.clone_from(new_type);
                 } else {
                     panic!("Type not found for: {:?}", i);
                 }

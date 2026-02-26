@@ -2651,7 +2651,7 @@ impl AggregateExpr {
 
                 // Get the overall return type
                 let return_type_with_orig_row = self
-                    .typ(&input_type)
+                    .typ(input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
@@ -2692,7 +2692,7 @@ impl AggregateExpr {
 
                 // Get the overall return type
                 let return_type_with_orig_row = self
-                    .typ(&input_type)
+                    .typ(input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
@@ -2735,7 +2735,7 @@ impl AggregateExpr {
 
                 // Get the overall return type
                 let return_type_with_orig_row = self
-                    .typ(&input_type)
+                    .typ(input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
@@ -2785,7 +2785,7 @@ impl AggregateExpr {
 
                 // Get the overall return type
                 let return_type = self
-                    .typ(&input_type)
+                    .typ(input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
@@ -2841,7 +2841,7 @@ impl AggregateExpr {
                 let all_args = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
 
                 let return_type_with_orig_row = self
-                    .typ(&input_type)
+                    .typ(input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
@@ -2912,7 +2912,7 @@ impl AggregateExpr {
                     tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
 
                 let return_type_with_orig_row = self
-                    .typ(&input_type)
+                    .typ(input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();

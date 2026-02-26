@@ -30,7 +30,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::vec::swap_remove_multiple;
-use mz_repr::{Diff, GlobalId, ReprColumnType, ReprRelationType, Row};
+use mz_repr::{Diff, GlobalId, ReprRelationType, Row};
 
 use crate::TransformCtx;
 use crate::canonicalize_mfp::CanonicalizeMfp;
@@ -154,13 +154,7 @@ impl LiteralConstraints {
                         typ: ReprRelationType {
                             column_types: key
                                 .iter()
-                                .map(|e| {
-                                    ReprColumnType {
-                                        // We make sure to not include a null in `expr_eq_literal`.
-                                        nullable: false,
-                                        ..e.typ(&inp_typ.column_types)
-                                    }
-                                })
+                                .map(|e| e.typ(&inp_typ.column_types).scalar_type.nullable(false))
                                 .collect(),
                             // (Note that the key inference for `MirRelationExpr::Constant` inspects
                             // the constant values to detect keys not listed within the node, but it
@@ -174,13 +168,13 @@ impl LiteralConstraints {
                     if possible_vals.is_empty() {
                         // Even better than what we were hoping for: Found contradicting
                         // literal constraints, so the whole relation is empty.
-                        relation.take_safely(Some(inp_typ.clone()));
+                        relation.take_safely(Some(inp_typ));
                     } else {
                         // The common case: We need to build the join which is the main point of
                         // this transform.
                         *relation = MirRelationExpr::Join {
                             // It's important to keep the `filter_list` in the second position.
-                            // Both the lowering and EXPLAIN depends on this.
+                            // Both the lowering and EXPLAIN depend on this.
                             inputs: vec![
                                 relation.clone().arrange_by(std::slice::from_ref(&key)),
                                 filter_list,

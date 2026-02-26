@@ -497,7 +497,7 @@ impl ProjectionPushdown {
                 } = &mut **input
                 {
                     if let Some((new_projection, new_type)) = applied_projections.get(inner_id) {
-                        *typ = new_type.clone();
+                        typ.clone_from(new_type);
                         reverse_permute_columns(outputs.iter_mut(), new_projection.iter());
                         if outputs.len() == new_projection.len()
                             && outputs.iter().enumerate().all(|(i, o)| i == *o)
