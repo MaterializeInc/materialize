@@ -67,69 +67,85 @@ sudo apt install docker docker-compose-plugin
 ### Metadata store
 
 Running Materialize locally requires a running Postgres / CockroachDB server.
+For testing you can run PostgreSQL in Docker with durability disabled for fast performance:
 
-On macOS, when using Homebrew, CockroachDB can be installed and started via:
+```shell
+docker run --name=postgres-metadata -d --network=host \
+    -e POSTGRES_USER=root \
+    -e POSTGRES_HOST_AUTH_METHOD=trust \
+    -e POSTGRES_DB=materialize \
+    postgres:17 \
+    -c fsync=off \
+    -c synchronous_commit=off \
+    -c full_page_writes=off \
+    -c max_connections=200 \
+    -c listen_addresses=localhost \
+    -c port=26257
+```
+
+This listens on `localhost:26257`, matching the default `METADATA_BACKEND_URL`
+used by `bin/environmentd`. Only localhost connections are accepted.
+
+Verify the connection with:
+
+```shell
+psql postgres://root@localhost:26257/materialize
+```
+
+Alternatively, CockroachDB also works as a metadata store but is slower for DDL
+operations. On macOS:
 
 ```shell
 brew install materializeinc/cockroach/cockroach
 brew services start cockroach
 ```
 
-(We recommend use of our [forked Homebrew tap][forked-cockroach-tap] because it
-runs CockroachDB using an in-memory store, which avoids slow filesystem
-operations on macOS.)
+If you're using CockroachDB on macOS, we recommend use of our
+[forked Homebrew tap][forked-cockroach-tap] because it runs CockroachDB using
+an in-memory store, which avoids slow filesystem operations on macOS.
 
-On Linux, we recommend using Docker:
+On Linux:
 
 ```shell
 docker run --name=cockroach -d -p 127.0.0.1:26257:26257 -p 127.0.0.1:26258:8080 cockroachdb/cockroach:v23.1.11 start-single-node --insecure
 ```
 
-If you can successfully connect to CockroachDB with either
-`psql postgres://root@localhost:26257` or `cockroach sql --insecure`, you're
-all set.
-
 ### Eatmydata
 
-If you are just testing Materialize locally and don't care about data loss you can run environmentd with `eatmydata environmentd`, which will disable fsync calls.
+Disabling fsync in both Materialize and its metadata store gives a ~10x speedup
+for DDL operations during local development.
 
-Similarly postgres as the metadata store can be instructed to eat your data using `echo LD_PRELOAD=libeatmydata.so > /etc/postgresql/18/main/environment`, and then restarting it.
+The Docker command above already disables fsync in PostgreSQL. To also disable
+fsync in Materialize itself, install `eatmydata` and use it to wrap
+`environmentd`:
 
-On my Linux system without `eatmydata` for both Materialize and Postgres, running with `bin/environmentd --reset --optimized --no-default-features --postgres=postgres://deen@%2Fvar%2Frun%2Fpostgresql`:
-```
-DROP TABLE
-Time: 105.810 ms
-CREATE TABLE
-Time: 163.484 ms
-```
+```shell
+# Debian/Ubuntu
+sudo apt install eatmydata
 
-After enabling `eatmydata` in Materialize and Postgres:
-```
-DROP TABLE
-Time: 7.951 ms
-CREATE TABLE
-Time: 10.459 ms
+# macOS
+brew install libeatmydata
 ```
 
-Or in mzcompose:
+Then run:
+
+```shell
+eatmydata bin/environmentd --reset --optimized
+```
+
+Without `eatmydata`:
+```
+CREATE TABLE  Time: 163.484 ms
+```
+
+With `eatmydata` for Materialize and no durability for Postgres:
+```
+CREATE TABLE  Time: 10.459 ms
+```
+
+In Docker, you can set the `MZ_EAT_MY_DATA=1` environment variable instead:
 ```bash
-docker pull --no-cache materialize/materialized:latest
 docker run -it --env MZ_EAT_MY_DATA=1 -p 127.0.0.1:6875:6875 materialize/materialized:latest
-```
-
-Before:
-```
-DROP TABLE
-Time: 133.021 ms
-CREATE TABLE
-Time: 111.492 ms
-```
-After:
-```
-DROP TABLE
-Time: 6.504 ms
-CREATE TABLE
-Time: 8.773 ms
 ```
 
 ### Python
@@ -250,7 +266,7 @@ nix-shell misc/nix/shell.nix
 [nix-shell]$ rustup install stable # If not installed already
 ```
 
-Materialize can then be built inside this shell. Note that CockroachDB is not included in the above configuration
+Materialize can then be built inside this shell. Note that PostgreSQL/CockroachDB is not included in the above configuration
 and needs to be installed separately, as described above. Also, IDEs will not be able to access the installed
 dependencies unless they are started from within the `nix-shell` environment:
 
@@ -347,7 +363,7 @@ is up.
 
 ## Running and connecting to local Materialize
 
-Once things are built and CockroachDB is running, you can start Materialize:
+Once things are built and PostgreSQL/CockroachDB is running, you can start Materialize:
 
 ```shell
 bin/environmentd --reset -- --all-features --unsafe-mode
