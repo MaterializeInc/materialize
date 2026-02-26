@@ -1381,44 +1381,17 @@ fn regexp_split_to_array<'a>(
     regexp_split_to_array_re(text, &regexp, temp_storage)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct RegexpReplace;
-
-impl fmt::Display for RegexpReplace {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("regexp_replace")
-    }
-}
-
-fn regexp_replace_dynamic<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let source = datums[0];
-    let pattern = datums[1];
-    let replacement = datums[2];
-    let flags = match datums.get(3) {
-        Some(d) => d.unwrap_str(),
-        None => "",
-    };
+#[sqlfunc]
+fn regexp_replace<'a>(
+    source: &'a str,
+    pattern: &str,
+    replacement: &str,
+    flags_opt: OptionalArg<&str>,
+) -> Result<Cow<'a, str>, EvalError> {
+    let flags = flags_opt.0.unwrap_or("");
     let (limit, flags) = regexp_replace_parse_flags(flags);
-    let regexp = build_regex(pattern.unwrap_str(), &flags)?;
-    let replaced = match regexp.replacen(source.unwrap_str(), limit, replacement.unwrap_str()) {
-        Cow::Borrowed(s) => s,
-        Cow::Owned(s) => temp_storage.push_string(s),
-    };
-    Ok(Datum::String(replaced))
+    let regexp = build_regex(pattern, &flags)?;
+    Ok(regexp.replacen(source, limit, replacement))
 }
 
 #[sqlfunc]
@@ -1975,6 +1948,7 @@ impl VariadicFunc {
             VariadicFunc::MakeAclItem(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::MakeMzAclItem(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::MakeTimestamp(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::RegexpReplace(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -2014,6 +1988,7 @@ impl VariadicFunc {
             | VariadicFunc::MakeAclItem(_)
             | VariadicFunc::MakeMzAclItem(_)
             | VariadicFunc::MakeTimestamp(_)
+            | VariadicFunc::RegexpReplace(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::JsonbBuildArray(_) => Ok(jsonb_build_array(&ds, temp_storage)),
             VariadicFunc::JsonbBuildObject(_) => jsonb_build_object(&ds, temp_storage),
@@ -2043,7 +2018,6 @@ impl VariadicFunc {
                 };
                 regexp_split_to_array(ds[0], ds[1], flags, temp_storage)
             }
-            VariadicFunc::RegexpReplace(_) => regexp_replace_dynamic(&ds, temp_storage),
             VariadicFunc::StringToArray(_) => {
                 let null_string = if ds.len() == 2 { Datum::Null } else { ds[2] };
 
