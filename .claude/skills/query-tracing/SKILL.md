@@ -13,6 +13,10 @@ description: >
 Use distributed tracing (OpenTelemetry / Tempo) to understand where time is
 spent during SQL statement execution in a local Materialize instance.
 
+For background on Materialize's tracing infrastructure (span levels, filtering,
+`#[tracing::instrument]`, distributed context propagation), see
+`doc/developer/tracing.md`.
+
 ## Important: Use Optimized Builds
 
 **Always trace `--optimized` builds.** Debug builds introduce significant
@@ -181,6 +185,9 @@ python3 .claude/skills/query-tracing/trace_tree.py /tmp/claude-1000/trace.json "
   ranges are concurrent; non-overlapping are sequential.
 - **Code locations** in `[src/...]` brackets let you jump directly to the
   source code.
+- For spans not listed above, **read the source code** at the location shown
+  in the `[src/...]` bracket to understand what the span does and why it's
+  taking time.
 
 ## Tips
 

@@ -1,7 +1,17 @@
-#!/usr/bin/env python3
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
 """Analyze a Tempo trace JSON file and print a hierarchical span tree."""
 
-import json, sys, base64
+import base64
+import json
+import sys
 
 
 def decode_id(b64_id):
@@ -26,17 +36,25 @@ def parse_trace(filepath):
                 attrs = {}
                 for a in span.get("attributes", []):
                     v = a.get("value", {})
-                    val = (v.get("stringValue") or v.get("intValue")
-                           or v.get("boolValue") or v.get("doubleValue") or "")
+                    val = (
+                        v.get("stringValue")
+                        or v.get("intValue")
+                        or v.get("boolValue")
+                        or v.get("doubleValue")
+                        or ""
+                    )
                     attrs[a["key"]] = val
-                spans.append({
-                    "name": span["name"],
-                    "spanId": decode_id(span.get("spanId", "")),
-                    "parentSpanId": decode_id(span.get("parentSpanId", "")),
-                    "startNs": start, "endNs": end,
-                    "durationNs": end - start,
-                    "attributes": attrs,
-                })
+                spans.append(
+                    {
+                        "name": span["name"],
+                        "spanId": decode_id(span.get("spanId", "")),
+                        "parentSpanId": decode_id(span.get("parentSpanId", "")),
+                        "startNs": start,
+                        "endNs": end,
+                        "durationNs": end - start,
+                        "attributes": attrs,
+                    }
+                )
     return spans
 
 
@@ -55,10 +73,14 @@ def build_tree(spans):
 
 def fmt_dur(ns):
     ms = ns / 1e6
-    if ms >= 1000: return f"{ms/1000:.2f}s "
-    elif ms >= 1:  return f"{ms:.1f}ms"
-    elif ms >= 0.001: return f"{ns/1000:.0f}us"
-    else: return f"{ns}ns"
+    if ms >= 1000:
+        return f"{ms/1000:.2f}s "
+    elif ms >= 1:
+        return f"{ms:.1f}ms"
+    elif ms >= 0.001:
+        return f"{ns/1000:.0f}us"
+    else:
+        return f"{ns}ns"
 
 
 def self_time(node, children_map):
@@ -78,9 +100,12 @@ def print_tree(node, children_map, indent=0, min_ms=0.1):
         loc += "]"
     st = self_time(node, children_map)
     prefix = "  " * indent
-    print(f"{prefix}{fmt_dur(node['durationNs']):>10}  (self: {fmt_dur(st):>10})  {node['name']}{loc}")
-    for child in sorted(children_map.get(node["spanId"], []),
-                        key=lambda s: s["startNs"]):
+    print(
+        f"{prefix}{fmt_dur(node['durationNs']):>10}  (self: {fmt_dur(st):>10})  {node['name']}{loc}"
+    )
+    for child in sorted(
+        children_map.get(node["spanId"], []), key=lambda s: s["startNs"]
+    ):
         print_tree(child, children_map, indent + 1, min_ms)
 
 
@@ -93,9 +118,10 @@ def analyze(filepath, label=""):
     print(f"Root duration: {fmt_dur(sum(r['durationNs'] for r in roots))}")
 
     # Top by self-time
-    ranked = sorted([(s, self_time(s, children)) for s in spans],
-                    key=lambda x: x[1], reverse=True)
-    print(f"\nTop 15 spans by self-time (where actual work happens):")
+    ranked = sorted(
+        [(s, self_time(s, children)) for s in spans], key=lambda x: x[1], reverse=True
+    )
+    print("\nTop 15 spans by self-time (where actual work happens):")
     print(f"{'Self Time':>12}  {'Total':>12}  Name")
     print(f"{'-'*12}  {'-'*12}  {'-'*60}")
     for s, st in ranked[:15]:
