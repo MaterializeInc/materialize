@@ -29,7 +29,7 @@ Use a bash timeout of at least 600000ms (10 min) for test commands.
 Run sqllogictest files with:
 
 ```
-bin/sqllogictest -- PATH
+bin/sqllogictest --optimized -- PATH
 ```
 
 `PATH` is relative to the repo root, usually a file in `test/sqllogictest/`.
@@ -87,12 +87,13 @@ mzcompose builds optimized binaries by default, which are nearly as fast to run 
 
 ## Reproducing bugs
 
-Check the GitHub issue for reproduction instructions, or the Buildkite annotation under "Test details & reproducer".
+Reproducing bugs is a manual process.
+Ask the user for reproduction instructions, or point them to the GitHub issue or the Buildkite annotation under "Test details & reproducer".
 
 Many tests expect fresh state.
 Always run `bin/mzcompose --find NAME down` before attempting to reproduce.
 
-For flaky tests, run in a loop until failure:
+For flaky tests, the user can run in a loop until failure:
 
 ```
 while true; do

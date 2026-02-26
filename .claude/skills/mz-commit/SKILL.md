@@ -28,5 +28,5 @@ Rewrite datadriven test expectations with `REWRITE=1 cargo test ...`.
 * The base branch is always `upstream/main`.
 * Push branches to `origin`.
 * Pull requests use `upstream/main` as their base.
-* Do not include a test plan in the pull request description.
+* Mention which tests were added or modified in the pull request description, but do not list which tests were run.
 * Keep pull request descriptions short and precise.
