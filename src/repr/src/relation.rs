@@ -95,7 +95,7 @@ impl SqlColumnType {
     /// Backports nullability information from `backport_typ` into `self`,
     /// affecting the outer `.nullable` field but also record fields deeper
     /// into the type.
-    pub fn backport_nullability(&mut self, backport_typ: &SqlColumnType) {
+    pub fn backport_nullability(&mut self, backport_typ: &ReprColumnType) {
         self.scalar_type
             .backport_nullability(&backport_typ.scalar_type);
         self.nullable = backport_typ.nullable;
@@ -342,7 +342,7 @@ impl SqlRelationType {
     /// Adopts the nullability and keys from another `SqlRelationType`.
     ///
     /// Panics if the number of columns does not match.
-    pub fn backport_nullability_and_keys(&mut self, backport_typ: &SqlRelationType) {
+    pub fn backport_nullability_and_keys(&mut self, backport_typ: &ReprRelationType) {
         assert_eq!(
             backport_typ.column_types.len(),
             self.column_types.len(),

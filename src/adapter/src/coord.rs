@@ -4839,6 +4839,6 @@ pub(crate) fn infer_sql_type_for_catalog(
     mir_expr: &MirRelationExpr,
 ) -> SqlRelationType {
     let mut typ = hir_expr.top_level_typ();
-    typ.backport_nullability_and_keys(&mir_expr.sql_typ());
+    typ.backport_nullability_and_keys(&mir_expr.typ());
     typ
 }

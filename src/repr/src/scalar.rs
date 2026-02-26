@@ -3794,12 +3794,11 @@ impl SqlScalarType {
 
     /// Adopts the nullability from another [`SqlScalarType`].
     /// Traverses deeply into structured types.
-    pub fn backport_nullability(&mut self, backport_typ: &SqlScalarType) {
-        use SqlScalarType::*;
+    pub fn backport_nullability(&mut self, backport_typ: &ReprScalarType) {
         match (self, backport_typ) {
             (
-                List { element_type, .. },
-                List {
+                SqlScalarType::List { element_type, .. },
+                ReprScalarType::List {
                     element_type: backport_element_type,
                     ..
                 },
@@ -3807,8 +3806,8 @@ impl SqlScalarType {
                 element_type.backport_nullability(backport_element_type);
             }
             (
-                Map { value_type, .. },
-                Map {
+                SqlScalarType::Map { value_type, .. },
+                ReprScalarType::Map {
                     value_type: backport_value_type,
                     ..
                 },
@@ -3816,8 +3815,8 @@ impl SqlScalarType {
                 value_type.backport_nullability(backport_value_type);
             }
             (
-                Record { fields, .. },
-                Record {
+                SqlScalarType::Record { fields, .. },
+                ReprScalarType::Record {
                     fields: backport_fields,
                     ..
                 },
@@ -3831,15 +3830,15 @@ impl SqlScalarType {
                     .iter_mut()
                     .zip_eq(backport_fields)
                     .for_each(|(field, backport_field)| {
-                        field.1.backport_nullability(&backport_field.1);
+                        field.1.backport_nullability(&backport_field);
                     });
             }
-            (Array(a), Array(b)) => {
+            (SqlScalarType::Array(a), ReprScalarType::Array(b)) => {
                 a.backport_nullability(b);
             }
             (
-                Range { element_type },
-                Range {
+                SqlScalarType::Range { element_type },
+                ReprScalarType::Range {
                     element_type: backport_element_type,
                 },
             ) => {
