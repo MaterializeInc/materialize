@@ -59,8 +59,10 @@ pub struct MaterializeCertSpec {
     /// Additional annotations and labels to include in the Certificate object.
     pub secret_template: Option<CertificateSecretTemplate>,
     /// Optional algorithm to use for the private key. If not specified, a recommended default will be chosen.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub private_key_algorithm: Option<CertificatePrivateKeyAlgorithm>,
     /// Optional size for the private key.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub private_key_size: Option<i64>,
 }
 
