@@ -20,7 +20,7 @@
         default (equivalent to `ALTER ROLE ... RESET <name>`).
 
         To view the configuration parameter defaults for a role, see
-        [`mz_role_parameters`](/sql/system-catalog/mz_catalog#mz_role_parameters).
+        [`mz_role_parameters`](/reference/system-catalog/mz_catalog#mz_role_parameters).
 
         {{< note >}}
 
@@ -36,7 +36,7 @@
         role to the system's default.
 
         To view the configuration parameter defaults for a role, see
-        [`mz_role_parameters`](/sql/system-catalog/mz_catalog#mz_role_parameters).
+        [`mz_role_parameters`](/reference/system-catalog/mz_catalog#mz_role_parameters).
 
         {{< note >}}
 

@@ -22,7 +22,7 @@ Use `COMMENT ON` to:
 comment associated with it, so successive calls of `COMMENT ON` to a single object will overwrite
 the previous comment.
 
-To read the comment on an object you need to query the [mz_internal.mz_comments](/sql/system-catalog/mz_internal/#mz_comments)
+To read the comment on an object you need to query the [mz_internal.mz_comments](/reference/system-catalog/mz_internal/#mz_comments)
 catalog table.
 
 ## Privileges

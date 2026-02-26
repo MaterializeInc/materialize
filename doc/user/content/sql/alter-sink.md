@@ -63,7 +63,7 @@ make progress.
 
 To monitor the status of a sink after an `ALTER SINK` command, navigate to the
 respective object page in the [Materialize console](/console/),
-or query the [`mz_internal.mz_sink_statuses`](/sql/system-catalog/mz_internal/#mz_sink_statuses)
+or query the [`mz_internal.mz_sink_statuses`](/reference/system-catalog/mz_internal/#mz_sink_statuses)
 system catalog view.
 
 #### Cutover timestamp
@@ -140,7 +140,7 @@ keyspaces to avoid the scenario.
 
 ### Catalog objects
 
-A sink cannot be created directly on a [catalog object](/sql/system-catalog/).
+A sink cannot be created directly on a [catalog object](/reference/system-catalog/).
 As a workaround, you can create a materialized view on a catalog object and
 create a sink on the materialized view.
 

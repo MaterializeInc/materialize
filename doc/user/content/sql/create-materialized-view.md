@@ -269,8 +269,8 @@ SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '30 minutes'));
 
 To check details about the (non-default) refresh strategies associated with any materialized
 view in the system, you can query
-the [`mz_internal.mz_materialized_view_refresh_strategies`](../system-catalog/mz_internal/#mz_materialized_view_refresh_strategies)
-and [`mz_internal.mz_materialized_view_refreshes`](../system-catalog/mz_internal/#mz_materialized_view_refreshes)
+the [`mz_internal.mz_materialized_view_refresh_strategies`](/reference/system-catalog/mz_internal/#mz_materialized_view_refresh_strategies)
+and [`mz_internal.mz_materialized_view_refreshes`](/reference/system-catalog/mz_internal/#mz_materialized_view_refreshes)
 system catalog tables:
 
 ```mzsql

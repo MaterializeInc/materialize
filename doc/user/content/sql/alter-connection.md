@@ -115,4 +115,4 @@ The privileges required to execute this statement are:
 -   [`SHOW CONNECTIONS`](/sql/show-connections)
 
 [SSH tunnel connection]: /sql/create-connection/#ssh-tunnel
-[`mz_ssh_tunnel_connections`]: /sql/system-catalog/mz_catalog/#mz_ssh_tunnel_connections
+[`mz_ssh_tunnel_connections`]: /reference/system-catalog/mz_catalog/#mz_ssh_tunnel_connections

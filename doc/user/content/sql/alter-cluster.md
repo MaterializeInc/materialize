@@ -154,7 +154,7 @@ See also:
 #### Resource allocation
 
 To determine the specific resource allocation for a given cluster size, query
-the [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
+the [`mz_cluster_replica_sizes`](/reference/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
 system catalog table.
 
 {{< warning >}}

@@ -14,7 +14,7 @@ menu:
 
 <!-- Copied over from the old manage/troubleshooting guide -->
 ## Why isn't my sink exporting data?
-First, look for errors in [`mz_sink_statuses`](/sql/system-catalog/mz_internal/#mz_sink_statuses):
+First, look for errors in [`mz_sink_statuses`](/reference/system-catalog/mz_internal/#mz_sink_statuses):
 
 ```mzsql
 SELECT * FROM mz_internal.mz_sink_statuses
@@ -30,7 +30,7 @@ If your sink reports a status of `starting` for more than a few minutes,
 ## How do I monitor sink ingestion progress?
 
 Repeatedly query the
-[`mz_sink_statistics`](/sql/system-catalog/mz_internal/#mz_sink_statistics)
+[`mz_sink_statistics`](/reference/system-catalog/mz_internal/#mz_sink_statistics)
 table and look for ingestion statistics that advance over time:
 
 ```mzsql

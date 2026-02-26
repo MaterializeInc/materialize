@@ -4,7 +4,7 @@ description: "SQL namespaces let you create a taxonomy of objects in Materialize
 weight: 40
 menu:
   main:
-    parent: 'reference'
+    parent: 'sql'
     name: 'SQL namespaces'
     weight: 126
 ---

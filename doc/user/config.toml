@@ -65,9 +65,15 @@ weight = 12
 #
 
 [[menu.main]]
+identifier = "sql"
+name = "SQL Reference"
+weight = 75
+
+
+[[menu.main]]
 identifier = "reference"
 name = "Reference"
-weight = 80
+weight = 76
 
 #
 # Releases

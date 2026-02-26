@@ -102,7 +102,7 @@ The resource allocations are proportional to the number in the size name. For
 example, a cluster of size `600cc` has 2x as much CPU, memory, and disk as a
 cluster of size `300cc`, and 1.5x as much CPU, memory, and disk as a cluster of
 size `400cc`. To determine the specific resource allocations for a size,
-query the [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes) table.
+query the [`mz_cluster_replica_sizes`](/reference/system-catalog/mz_catalog/#mz_cluster_replica_sizes) table.
 
 {{< warning >}}
 The values in the `mz_cluster_replica_sizes` table may change at any
@@ -309,7 +309,7 @@ TIME ESTIMATE` clause.
 #### Scheduling strategy
 
 To check the scheduling strategy associated with a cluster, you can query the
-[`mz_internal.mz_cluster_schedules`](/sql/system-catalog/mz_internal/#mz_cluster_schedules)
+[`mz_internal.mz_cluster_schedules`](/reference/system-catalog/mz_internal/#mz_cluster_schedules)
 system catalog table:
 
 ```mzsql
@@ -323,7 +323,7 @@ WHERE c.name = 'my_refresh_cluster';
 ```
 
 To check if a scheduled cluster is turned on, you can query the
-[`mz_catalog.mz_cluster_replicas`](/sql/system-catalog/mz_catalog/#mz_cluster_replicas)
+[`mz_catalog.mz_cluster_replicas`](/reference/system-catalog/mz_catalog/#mz_cluster_replicas)
 system catalog table:
 
 ```mzsql
@@ -337,7 +337,7 @@ JOIN mz_clusters c ON cs.cluster_id = c.id AND cs.type = 'on-refresh'
 LEFT JOIN mz_cluster_replicas cr ON c.id = cr.cluster_id;
 ```
 
-You can also use the [audit log](../system-catalog/mz_catalog/#mz_audit_events)
+You can also use the [audit log](/reference/system-catalog/mz_catalog/#mz_audit_events)
 to observe the commands that are automatically run when a scheduled cluster is
 turned on and off for materialized view refreshes:
 
@@ -395,4 +395,4 @@ The privileges required to execute this statement are:
 [`DROP CLUSTER`]: /sql/drop-cluster/
 [`SELECT`]: /sql/select
 [`SUBSCRIBE`]: /sql/subscribe
-[`mz_cluster_replica_sizes`]: /sql/system-catalog/mz_catalog#mz_cluster_replica_sizes
+[`mz_cluster_replica_sizes`]: /reference/system-catalog/mz_catalog#mz_cluster_replica_sizes
