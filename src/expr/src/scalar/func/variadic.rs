@@ -50,6 +50,7 @@ use crate::func::{
 use crate::{EvalError, MirScalarExpr};
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
+use mz_repr::adt::jsonb::JsonbRef;
 
 #[derive(
     Ord,
@@ -874,41 +875,20 @@ fn jsonb_build_array<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Da
     })
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct JsonbBuildObject;
-
-impl fmt::Display for JsonbBuildObject {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("jsonb_build_object")
-    }
-}
-
+#[sqlfunc]
 fn jsonb_build_object<'a>(
-    datums: &[Datum<'a>],
+    mut kvs: Variadic<(Datum<'a>, Datum<'a>)>,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let mut kvs = datums.chunks(2).collect::<Vec<_>>();
-    kvs.sort_by(|kv1, kv2| kv1[0].cmp(&kv2[0]));
-    kvs.dedup_by(|kv1, kv2| kv1[0] == kv2[0]);
-    temp_storage.try_make_datum(|packer| {
+) -> Result<JsonbRef<'a>, EvalError> {
+    kvs.0.sort_by(|kv1, kv2| kv1.0.cmp(&kv2.0));
+    kvs.0.dedup_by(|kv1, kv2| kv1.0 == kv2.0);
+    let datum = temp_storage.try_make_datum(|packer| {
         packer.push_dict_with(|packer| {
-            for kv in kvs {
-                let k = kv[0];
+            for (k, v) in kvs {
                 if k.is_null() {
                     return Err(EvalError::KeyCannotBeNull);
-                };
-                let v = match kv[1] {
+                }
+                let v = match v {
                     Datum::Null => Datum::JsonNull,
                     d => d,
                 };
@@ -917,7 +897,8 @@ fn jsonb_build_object<'a>(
             }
             Ok(())
         })
-    })
+    })?;
+    Ok(JsonbRef::from_datum(datum))
 }
 
 #[derive(
@@ -1949,6 +1930,7 @@ impl VariadicFunc {
             VariadicFunc::MakeMzAclItem(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::MakeTimestamp(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::RegexpReplace(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::JsonbBuildObject(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -1989,9 +1971,9 @@ impl VariadicFunc {
             | VariadicFunc::MakeMzAclItem(_)
             | VariadicFunc::MakeTimestamp(_)
             | VariadicFunc::RegexpReplace(_)
+            | VariadicFunc::JsonbBuildObject(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::JsonbBuildArray(_) => Ok(jsonb_build_array(&ds, temp_storage)),
-            VariadicFunc::JsonbBuildObject(_) => jsonb_build_object(&ds, temp_storage),
             VariadicFunc::MapBuild(..) => Ok(map_build(&ds, temp_storage)),
             VariadicFunc::ArrayCreate(ArrayCreate {
                 elem_type: SqlScalarType::Array(_),
