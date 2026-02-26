@@ -17,7 +17,7 @@ use std::borrow::Cow;
 use std::cmp;
 use std::fmt;
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveTime};
 use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
 use itertools::Itertools;
@@ -637,34 +637,11 @@ fn date_diff_date(unit_str: &str, a: Date, b: Date) -> Result<i64, EvalError> {
     Ok(diff)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct DateDiffTime;
-
-impl fmt::Display for DateDiffTime {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("datediff")
-    }
-}
-
-fn date_diff_time<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
-    let unit = unit.unwrap_str();
-    let unit = unit
+#[sqlfunc(sqlname = "datediff")]
+fn date_diff_time(unit_str: &str, a: NaiveTime, b: NaiveTime) -> Result<i64, EvalError> {
+    let unit = unit_str
         .parse()
-        .map_err(|_| EvalError::InvalidDatePart(unit.into()))?;
-
-    let a = a.unwrap_time();
-    let b = b.unwrap_time();
+        .map_err(|_| EvalError::InvalidDatePart(unit_str.into()))?;
 
     // Convert the Time into a timestamp so we can calculate age.
     let a_ts =
@@ -672,8 +649,7 @@ fn date_diff_time<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, Eval
     let b_ts =
         CheckedTimestamp::try_from(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap().and_time(b))?;
     let diff = b_ts.diff_as(&a_ts, unit)?;
-
-    Ok(Datum::Int64(diff))
+    Ok(diff)
 }
 
 #[derive(
@@ -2188,6 +2164,7 @@ impl VariadicFunc {
             VariadicFunc::SplitPart(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::Substr(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::DateDiffDate(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::DateDiffTime(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -2215,6 +2192,7 @@ impl VariadicFunc {
             | VariadicFunc::SplitPart(_)
             | VariadicFunc::Substr(_)
             | VariadicFunc::DateDiffDate(_)
+            | VariadicFunc::DateDiffTime(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::MakeTimestamp(_) => make_timestamp(&ds),
             VariadicFunc::PadLeading(_) => pad_leading(&ds, temp_storage),
@@ -2251,7 +2229,6 @@ impl VariadicFunc {
             .into_result(temp_storage),
             VariadicFunc::DateDiffTimestamp(_) => date_diff_timestamp(ds[0], ds[1], ds[2]),
             VariadicFunc::DateDiffTimestampTz(_) => date_diff_timestamptz(ds[0], ds[1], ds[2]),
-            VariadicFunc::DateDiffTime(_) => date_diff_time(ds[0], ds[1], ds[2]),
             VariadicFunc::RangeCreate(..) => create_range(&ds, temp_storage),
             VariadicFunc::MakeAclItem(_) => make_acl_item(&ds),
             VariadicFunc::MakeMzAclItem(_) => make_mz_acl_item(&ds),
