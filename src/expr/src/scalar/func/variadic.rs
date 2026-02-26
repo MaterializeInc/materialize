@@ -1318,38 +1318,17 @@ fn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {
     Ok(text.replace(from, to))
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
+#[sqlfunc(
+    output_type_expr = "SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)",
+    introduces_nulls = false,
+    propagates_nulls = false
 )]
-pub struct StringToArray;
-
-impl fmt::Display for StringToArray {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("string_to_array")
-    }
-}
-
 fn string_to_array<'a>(
-    string_datum: Datum<'a>,
-    delimiter: Datum<'a>,
-    null_string: Datum<'a>,
+    string: &'a str,
+    delimiter: Option<&'a str>,
+    null_string: OptionalArg<Option<&'a str>>,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    if string_datum.is_null() {
-        return Ok(Datum::Null);
-    }
-
-    let string = string_datum.unwrap_str();
-
     if string.is_empty() {
         let mut row = Row::default();
         let mut packer = row.packer();
@@ -1358,12 +1337,15 @@ fn string_to_array<'a>(
         return Ok(temp_storage.push_unary_row(row));
     }
 
-    if delimiter.is_null() {
+    let Some(delimiter) = delimiter else {
         let split_all_chars_delimiter = "";
-        return string_to_array_impl(string, split_all_chars_delimiter, null_string, temp_storage);
-    }
-
-    let delimiter = delimiter.unwrap_str();
+        return string_to_array_impl(
+            string,
+            split_all_chars_delimiter,
+            null_string.flatten(),
+            temp_storage,
+        );
+    };
 
     if delimiter.is_empty() {
         let mut row = Row::default();
@@ -1378,14 +1360,14 @@ fn string_to_array<'a>(
 
         Ok(temp_storage.push_unary_row(row))
     } else {
-        string_to_array_impl(string, delimiter, null_string, temp_storage)
+        string_to_array_impl(string, delimiter, null_string.flatten(), temp_storage)
     }
 }
 
 fn string_to_array_impl<'a>(
     string: &str,
     delimiter: &str,
-    null_string: Datum<'a>,
+    null_string: Option<&'a str>,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
     let mut row = Row::default();
@@ -1402,10 +1384,7 @@ fn string_to_array_impl<'a>(
         length: found.len(),
     }];
 
-    if null_string.is_null() {
-        packer.try_push_array(&array_dimensions, found.into_iter().map(Datum::String))?;
-    } else {
-        let null_string = null_string.unwrap_str();
+    if let Some(null_string) = null_string {
         let found_datums = found.into_iter().map(|chunk| {
             if chunk.eq(null_string) {
                 Datum::Null
@@ -1415,6 +1394,8 @@ fn string_to_array_impl<'a>(
         });
 
         packer.try_push_array(&array_dimensions, found_datums)?;
+    } else {
+        packer.try_push_array(&array_dimensions, found.into_iter().map(Datum::String))?;
     }
 
     Ok(temp_storage.push_unary_row(row))
@@ -1858,6 +1839,7 @@ impl VariadicFunc {
             VariadicFunc::ArrayPosition(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::RegexpMatch(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::RegexpSplitToArray(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::StringToArray(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -1903,6 +1885,7 @@ impl VariadicFunc {
             | VariadicFunc::ArrayPosition(_)
             | VariadicFunc::RegexpMatch(_)
             | VariadicFunc::RegexpSplitToArray(_)
+            | VariadicFunc::StringToArray(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::MapBuild(..) => Ok(map_build(&ds, temp_storage)),
             VariadicFunc::ArrayCreate(ArrayCreate {
@@ -1920,11 +1903,6 @@ impl VariadicFunc {
             VariadicFunc::ListSliceLinear(_) => Ok(list_slice_linear(&ds, temp_storage)),
             VariadicFunc::RangeCreate(..) => create_range(&ds, temp_storage),
             VariadicFunc::ArrayFill(..) => array_fill(&ds, temp_storage),
-            VariadicFunc::StringToArray(_) => {
-                let null_string = if ds.len() == 2 { Datum::Null } else { ds[2] };
-
-                string_to_array(ds[0], ds[1], null_string, temp_storage)
-            }
         }
     }
 
