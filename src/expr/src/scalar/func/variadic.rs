@@ -36,7 +36,7 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     ColumnName, Datum, InputDatumType, OutputDatumType, ReprScalarType, Row, RowArena,
-    SqlColumnType, SqlScalarType,
+    SqlColumnType, SqlScalarType, Variadic,
 };
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
@@ -1880,46 +1880,24 @@ fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     ))
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct Concat;
-
-impl fmt::Display for Concat {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("concat")
-    }
-}
-
-fn text_concat_variadic<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+#[sqlfunc(is_associative = true)]
+fn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError> {
     let mut total_size = 0;
-    for d in datums {
-        if !d.is_null() {
-            total_size += d.unwrap_str().len();
+    for s in &strs {
+        if let Some(s) = s {
+            total_size += s.len();
             if total_size > MAX_STRING_FUNC_RESULT_BYTES {
                 return Err(EvalError::LengthTooLarge);
             }
         }
     }
-    let mut buf = String::new();
-    for d in datums {
-        if !d.is_null() {
-            buf.push_str(d.unwrap_str());
+    let mut buf = String::with_capacity(total_size);
+    for s in strs {
+        if let Some(s) = s {
+            buf.push_str(s);
         }
     }
-    Ok(Datum::String(temp_storage.push_string(buf)))
+    Ok(buf)
 }
 
 #[derive(
@@ -2307,6 +2285,7 @@ impl VariadicFunc {
             VariadicFunc::Least(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::Replace(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::Translate(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::Concat(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -2329,8 +2308,8 @@ impl VariadicFunc {
             | VariadicFunc::ErrorIfNull(_)
             | VariadicFunc::Replace(_)
             | VariadicFunc::Translate(_)
+            | VariadicFunc::Concat(_)
             | VariadicFunc::Least(_) => unreachable!(),
-            VariadicFunc::Concat(_) => text_concat_variadic(&ds, temp_storage),
             VariadicFunc::ConcatWs(_) => text_concat_ws(&ds, temp_storage),
             VariadicFunc::MakeTimestamp(_) => make_timestamp(&ds),
             VariadicFunc::PadLeading(_) => pad_leading(&ds, temp_storage),
