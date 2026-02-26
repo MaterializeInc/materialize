@@ -6469,6 +6469,56 @@ def workflow_github_10086(c: Composition) -> None:
     assert not upper_empty
 
 
+def workflow_test_github_10102(c: Composition) -> None:
+    """
+    Regression test for database-issues#10102:
+
+        Dropping a materialized view that has (a) a subscribe reading from it
+        and (b) has been replaced after the subscribe was started, causes envd
+        to panic with "missing relation name".
+    """
+
+    c.up("materialized")
+
+    c.sql(
+        """
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+        """
+    )
+
+    # Start a subscribe on the materialized view.
+    def subscribe():
+        cursor = c.sql_cursor()
+        cursor.execute("BEGIN")
+        cursor.execute("DECLARE c CURSOR FOR SUBSCRIBE mv")
+        try:
+            cursor.execute("FETCH ALL c WITH (timeout = '30s')")
+        except DatabaseError as exc:
+            assert (
+                exc.diag.message_primary
+                == 'subscribe has been terminated because underlying relation "materialize.public.mv" was dropped'
+            ), exc
+
+    subscribe_thread = Thread(target=subscribe)
+    subscribe_thread.start()
+
+    # Wait for the subscribe to start.
+    time.sleep(2)
+
+    # Replace and drop the materialized view. This should not panic.
+    c.sql(
+        """
+        CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT * FROM t;
+        ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp;
+        DROP MATERIALIZED VIEW mv;
+        """
+    )
+
+    subscribe_thread.join(timeout=10)
+    assert not subscribe_thread.is_alive(), "subscribe should have terminated"
+
+
 def workflow_test_optimizer_feature_override_after_restart(c: Composition) -> None:
     """
     Test that verifies that optimizer feature overrides survive envd restarts.
