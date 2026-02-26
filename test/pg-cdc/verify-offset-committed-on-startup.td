@@ -40,7 +40,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 CREATE TABLE t0 (f1 INTEGER, f2 TEXT);
 ALTER TABLE t0 REPLICA IDENTITY FULL;
 
-INSERT INTO t0 SELECT i, repeat(md5(i::text), 1000) FROM generate_series(1, 10000) AS i;
+INSERT INTO t0 SELECT i, repeat(md5(i::text), 3000) FROM generate_series(1, 10000) AS i;
 
 # Configure Materialize
 
@@ -58,40 +58,22 @@ ALTER SYSTEM SET storage_statistics_interval = 200
 > CREATE TABLE t0 FROM SOURCE mz_source (REFERENCE t0);
 > COMMIT
 
-# Wait for statistics to be populated, then find the active replica for the source.
-> SELECT COUNT(*)
-  FROM
-    mz_clusters c,
-    mz_cluster_replicas cr,
-    mz_internal.mz_source_statistics u,
-    mz_sources s
-  WHERE
-    c.id = cr.cluster_id AND cr.id = u.replica_id
-    AND s.name IN ('mz_source') AND u.id = s.id
-1
-
-$ set-from-sql var=replica_id
-SELECT cr.id
-  FROM
-    mz_clusters c,
-    mz_cluster_replicas cr,
-    mz_internal.mz_source_statistics u,
-    mz_sources s
-  WHERE
-    c.id = cr.cluster_id AND cr.id = u.replica_id
-    AND s.name IN ('mz_source') AND u.id = s.id
-  ORDER BY cr.id
-  LIMIT 1
-
 # Expect to see nonzero offset_committed before we finish processing the snapshot (i.e. while snapshot_committed=false).
-# We need retries because offset_committed is initialized to 0.
+# We need retries because statistics take time to appear and offset_committed is initialized to 0.
 # But limit retries so we don't wait forever--once snapshot_committed=true, it will never become false again.
-$ set-max-tries max-tries=100
+# NOTE: We combine the "wait for statistics" and "check condition" into a single retried query
+# to maximize our window for catching the transient state before the snapshot completes.
+$ set-max-tries max-tries=300
 > SELECT
     s.name,
     u.offset_committed > 0,
     u.snapshot_committed
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
-  WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
+  FROM
+    mz_clusters c,
+    mz_cluster_replicas cr,
+    mz_internal.mz_source_statistics u,
+    mz_sources s
+  WHERE
+    c.id = cr.cluster_id AND cr.id = u.replica_id
+    AND s.name IN ('mz_source') AND u.id = s.id
 mz_source true false
