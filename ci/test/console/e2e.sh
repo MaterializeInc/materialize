@@ -25,7 +25,7 @@ set -euo pipefail
 . misc/shlib/shlib.bash
 
 dev_server_pid=
-# shellcheck disable=SC2317 # invoked indirectly via trap
+# shellcheck disable=SC2317,SC2329 # invoked indirectly via trap
 k8s_diagnostics() {
     ci_collapsed_heading "K8s diagnostics"
     local kc="kubectl --context kind-mzcloud"
@@ -57,13 +57,15 @@ k8s_diagnostics() {
     done < <($kc get pods -A -o wide 2>/dev/null | grep -i environmentd | awk '{print $1, $2}')
 }
 
-# shellcheck disable=SC2317 # invoked indirectly via trap
+# shellcheck disable=SC2317,SC2329 # invoked indirectly via trap
 cleanup() {
     k8s_diagnostics
     ci_collapsed_heading "Cleaning up"
     if [[ -n "$dev_server_pid" ]]; then kill "$dev_server_pid" 2>/dev/null || true; fi
     kind delete cluster --name mzcloud 2>/dev/null || true
-    docker rm -f proxy-docker-hub 2>/dev/null || true
+    # Remove all proxy registry containers created by kind-create on the kind network.
+    docker ps -a --filter "network=kind" --filter "name=proxy-" --format '{{.Names}}' \
+        | xargs -r docker rm -f 2>/dev/null || true
     docker network rm kind 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -72,7 +74,8 @@ trap cleanup EXIT
 ci_collapsed_heading "Cleaning up stale resources"
 # Skip diagnostics during initial cleanup — there's no cluster to inspect yet.
 kind delete cluster --name mzcloud 2>/dev/null || true
-docker rm -f proxy-docker-hub 2>/dev/null || true
+docker ps -a --filter "network=kind" --filter "name=proxy-" --format '{{.Names}}' \
+    | xargs -r docker rm -f 2>/dev/null || true
 docker network rm kind 2>/dev/null || true
 
 export E2E_TEST_PASSWORD="$CONSOLE_E2E_TEST_STAGING_PASSWORD"

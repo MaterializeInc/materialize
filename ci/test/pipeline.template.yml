@@ -811,6 +811,7 @@ steps:
           - ci/test/console/**
         depends_on: []
         timeout_in_minutes: 60
+        if: "build.pull_request.id != null"
         concurrency: 1
         concurrency_group: "console-e2e-staging"
         artifact_paths: console/run.log
@@ -830,6 +831,7 @@ steps:
           - ci/test/console/**
         depends_on: []
         timeout_in_minutes: 60
+        if: "build.pull_request.id != null"
         concurrency: 1
         concurrency_group: "console-e2e-prod"
         artifact_paths: console/run.log
@@ -849,7 +851,6 @@ steps:
         depends_on: []
         timeout_in_minutes: 15
         if: "build.pull_request.id != null"
-
         agents:
           queue: linux-x86_64
         coverage: skip
