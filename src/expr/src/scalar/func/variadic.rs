@@ -1634,36 +1634,14 @@ fn regexp_replace_dynamic<'a>(
     Ok(Datum::String(replaced))
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct Replace;
-
-impl fmt::Display for Replace {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("replace")
-    }
-}
-
-fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {
+#[sqlfunc]
+fn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {
     // As a compromise to avoid always nearly duplicating the work of replace by doing size estimation,
-    // we first check if its possible for the fully replaced string to exceed the limit by assuming that
+    // we first check if it's possible for the fully replaced string to exceed the limit by assuming that
     // every possible substring is replaced.
     //
     // If that estimate exceeds the limit, we then do a more precise (and expensive) estimate by counting
     // the actual number of replacements that would occur, and using that to calculate the final size.
-    let text = datums[0].unwrap_str();
-    let from = datums[1].unwrap_str();
-    let to = datums[2].unwrap_str();
     let possible_size = text.len() * to.len();
     if possible_size > MAX_STRING_FUNC_RESULT_BYTES {
         let replacement_count = text.matches(from).count();
@@ -1673,9 +1651,7 @@ fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Result<Datum
         }
     }
 
-    Ok(Datum::String(
-        temp_storage.push_string(text.replace(from, to)),
-    ))
+    Ok(text.replace(from, to))
 }
 
 #[derive(
@@ -2355,6 +2331,7 @@ impl VariadicFunc {
             VariadicFunc::Or(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::ErrorIfNull(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::Least(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::Replace(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -2375,13 +2352,13 @@ impl VariadicFunc {
             | VariadicFunc::And(_)
             | VariadicFunc::Or(_)
             | VariadicFunc::ErrorIfNull(_)
+            | VariadicFunc::Replace(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::Concat(_) => text_concat_variadic(&ds, temp_storage),
             VariadicFunc::ConcatWs(_) => text_concat_ws(&ds, temp_storage),
             VariadicFunc::MakeTimestamp(_) => make_timestamp(&ds),
             VariadicFunc::PadLeading(_) => pad_leading(&ds, temp_storage),
             VariadicFunc::Substr(_) => substr(&ds),
-            VariadicFunc::Replace(_) => replace(&ds, temp_storage),
             VariadicFunc::Translate(_) => Ok(translate(&ds, temp_storage)),
             VariadicFunc::JsonbBuildArray(_) => Ok(jsonb_build_array(&ds, temp_storage)),
             VariadicFunc::JsonbBuildObject(_) => jsonb_build_object(&ds, temp_storage),
