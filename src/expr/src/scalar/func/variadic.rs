@@ -35,7 +35,7 @@ use mz_repr::adt::system::Oid;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    ColumnName, Datum, InputDatumType, OutputDatumType, ReprScalarType, Row, RowArena,
+    ColumnName, Datum, InputDatumType, OptionalArg, OutputDatumType, ReprScalarType, Row, RowArena,
     SqlColumnType, SqlScalarType, Variadic,
 };
 use serde::{Deserialize, Serialize};
@@ -1756,30 +1756,9 @@ fn string_to_array_impl<'a>(
     Ok(temp_storage.push_unary_row(row))
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct Substr;
-
-impl fmt::Display for Substr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("substr")
-    }
-}
-
-fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
-    let s: &'a str = datums[0].unwrap_str();
-
-    let raw_start_idx = i64::from(datums[1].unwrap_int32()) - 1;
+#[sqlfunc]
+fn substr<'a>(s: &'a str, start: i32, length: OptionalArg<i32>) -> Result<&'a str, EvalError> {
+    let raw_start_idx = i64::from(start) - 1;
     let start_idx = match usize::try_from(cmp::max(raw_start_idx, 0)) {
         Ok(i) => i,
         Err(_) => {
@@ -1799,14 +1778,14 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     let str_len = s.len();
     let start_char_idx = char_indices.nth(start_idx).map_or(str_len, get_str_index);
 
-    if datums.len() == 3 {
-        let end_idx = match i64::from(datums[2].unwrap_int32()) {
+    if let OptionalArg(Some(len)) = length {
+        let end_idx = match i64::from(len) {
             e if e < 0 => {
                 return Err(EvalError::InvalidParameterValue(
                     "negative substring length not allowed".into(),
                 ));
             }
-            e if e == 0 || e + raw_start_idx < 1 => return Ok(Datum::String("")),
+            e if e == 0 || e + raw_start_idx < 1 => return Ok(""),
             e => {
                 let e = cmp::min(raw_start_idx + e - 1, e - 1);
                 match usize::try_from(e) {
@@ -1822,9 +1801,9 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
 
         let end_char_idx = char_indices.nth(end_idx).map_or(str_len, get_str_index);
 
-        Ok(Datum::String(&s[start_char_idx..end_char_idx]))
+        Ok(&s[start_char_idx..end_char_idx])
     } else {
-        Ok(Datum::String(&s[start_char_idx..]))
+        Ok(&s[start_char_idx..])
     }
 }
 
@@ -2230,6 +2209,7 @@ impl VariadicFunc {
             VariadicFunc::Concat(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::ConcatWs(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::SplitPart(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::Substr(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -2255,10 +2235,10 @@ impl VariadicFunc {
             | VariadicFunc::Concat(_)
             | VariadicFunc::ConcatWs(_)
             | VariadicFunc::SplitPart(_)
+            | VariadicFunc::Substr(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::MakeTimestamp(_) => make_timestamp(&ds),
             VariadicFunc::PadLeading(_) => pad_leading(&ds, temp_storage),
-            VariadicFunc::Substr(_) => substr(&ds),
             VariadicFunc::JsonbBuildArray(_) => Ok(jsonb_build_array(&ds, temp_storage)),
             VariadicFunc::JsonbBuildObject(_) => jsonb_build_object(&ds, temp_storage),
             VariadicFunc::MapBuild(..) => Ok(map_build(&ds, temp_storage)),
