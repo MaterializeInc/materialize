@@ -5,7 +5,9 @@ description: >
   "run sqllogictest", "run mzcompose", "run cargo test", "run pgtest",
   "rewrite test results", "add a test", "reproduce a bug", "write a regression
   test", or mentions testing, testdrive, sqllogictest, mzcompose, pgtest,
-  cargo test, or flaky tests in the Materialize repository.
+  cargo test, nextest, flaky tests, or test failures in the Materialize
+  repository. Use this skill even if the user just says "test this" or
+  "how do I verify this works" without naming a specific framework.
 ---
 
 # Testing Materialize
@@ -14,12 +16,15 @@ description: >
 
 Run unit tests with `cargo test`.
 If available, use `cargo nextest` instead.
+Use `bin/cargo-test` to run the full unit/integration test suite.
 Rewrite datadriven test expectations with `REWRITE=1 cargo test ...`.
 Do not manually update `*.snap` files.
 Use `cargo test` followed by `cargo insta accept` to update snapshot files.
 
 Some tests require access to a metadata store.
 Set environment variables to `COCKROACH_URL=postgres://root@localhost:26257 METADATA_BACKEND_URL=postgres://root@localhost:26257`.
+
+Control log output during tests with `MZ_TEST_LOG_FILTER=<level>`, e.g. `MZ_TEST_LOG_FILTER=debug cargo test ...`.
 
 The first run includes a cargo build step that can take several minutes.
 Use a bash timeout of at least 600000ms (10 min) for test commands.
@@ -34,6 +39,7 @@ bin/sqllogictest --optimized -- PATH
 
 `PATH` is relative to the repo root, usually a file in `test/sqllogictest/`.
 Rewrite expected results with `bin/sqllogictest -- --rewrite-results PATH`.
+For large test files, `--optimized` significantly improves execution speed at the cost of longer compile time.
 
 ## Testdrive
 
