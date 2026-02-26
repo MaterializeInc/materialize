@@ -436,30 +436,16 @@ pub struct ArrayToString {
     pub elem_type: SqlScalarType,
 }
 
-impl fmt::Display for ArrayToString {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("array_to_string")
-    }
-}
-
-// WARNING: This function has potential OOM risk!
-// It is very difficult to calculate the output size ahead of time without knowing how to
-// calculate the stringified size of each element for all possible datatypes.
+#[sqlfunc]
 fn array_to_string<'a>(
-    datums: &[Datum<'a>],
-    elem_type: &SqlScalarType,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    if datums[0].is_null() || datums[1].is_null() {
-        return Ok(Datum::Null);
-    }
-    let array = datums[0].unwrap_array();
-    let delimiter = datums[1].unwrap_str();
-    let null_str = match datums.get(2) {
-        None | Some(Datum::Null) => None,
-        Some(d) => Some(d.unwrap_str()),
-    };
-
+    &self,
+    array: Array<'a>,
+    delimiter: &str,
+    null_str_arg: OptionalArg<Option<&str>>,
+) -> Result<String, EvalError> {
+    // `flatten` treats absent arguments (`None`) the same as explicit NULL
+    // (`Some(None)`), both becoming `None`.
+    let null_str = null_str_arg.flatten();
     let mut out = String::new();
     for elem in array.elements().iter() {
         if elem.is_null() {
@@ -468,7 +454,7 @@ fn array_to_string<'a>(
                 out.push_str(delimiter);
             }
         } else {
-            stringify_datum(&mut out, elem, elem_type)?;
+            stringify_datum(&mut out, elem, &self.elem_type)?;
             out.push_str(delimiter);
         }
     }
@@ -476,7 +462,7 @@ fn array_to_string<'a>(
         // Lop off last delimiter only if string is not empty
         out.truncate(out.len() - delimiter.len());
     }
-    Ok(Datum::String(temp_storage.push_string(out)))
+    Ok(out)
 }
 
 #[derive(
@@ -1794,6 +1780,7 @@ impl VariadicFunc {
             VariadicFunc::ListSliceLinear(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::ArrayFill(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::ArrayIndex(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::ArrayToString(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -1844,15 +1831,13 @@ impl VariadicFunc {
             | VariadicFunc::ListSliceLinear(_)
             | VariadicFunc::ArrayFill(_)
             | VariadicFunc::ArrayIndex(_)
+            | VariadicFunc::ArrayToString(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::MapBuild(..) => Ok(map_build(&ds, temp_storage)),
             VariadicFunc::ArrayCreate(ArrayCreate {
                 elem_type: SqlScalarType::Array(_),
             }) => array_create_multidim(&ds, temp_storage),
             VariadicFunc::ArrayCreate(..) => array_create_scalar(&ds, temp_storage),
-            VariadicFunc::ArrayToString(ArrayToString { elem_type }) => {
-                array_to_string(&ds, elem_type, temp_storage)
-            }
             VariadicFunc::ListCreate(..) | VariadicFunc::RecordCreate(..) => {
                 Ok(list_create(&ds, temp_storage))
             }
