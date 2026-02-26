@@ -796,106 +796,52 @@ impl LazyVariadicFunc for Greatest {
     }
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct HmacString;
-
-impl fmt::Display for HmacString {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("hmac")
-    }
+#[sqlfunc(sqlname = "hmac")]
+fn hmac_string(to_digest: &str, key: &str, typ: &str) -> Result<Vec<u8>, EvalError> {
+    let to_digest = to_digest.as_bytes();
+    let key = key.as_bytes();
+    hmac_inner(to_digest, key, typ)
 }
 
-pub fn hmac_string<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let to_digest = datums[0].unwrap_str().as_bytes();
-    let key = datums[1].unwrap_str().as_bytes();
-    let typ = datums[2].unwrap_str();
-    hmac_inner(to_digest, key, typ, temp_storage)
+#[sqlfunc(sqlname = "hmac")]
+fn hmac_bytes(to_digest: &[u8], key: &[u8], typ: &str) -> Result<Vec<u8>, EvalError> {
+    hmac_inner(to_digest, key, typ)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct HmacBytes;
-
-impl fmt::Display for HmacBytes {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("hmac")
-    }
-}
-
-pub fn hmac_bytes<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let to_digest = datums[0].unwrap_bytes();
-    let key = datums[1].unwrap_bytes();
-    let typ = datums[2].unwrap_str();
-    hmac_inner(to_digest, key, typ, temp_storage)
-}
-
-pub fn hmac_inner<'a>(
-    to_digest: &[u8],
-    key: &[u8],
-    typ: &str,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let bytes = match typ {
+pub fn hmac_inner(to_digest: &[u8], key: &[u8], typ: &str) -> Result<Vec<u8>, EvalError> {
+    match typ {
         "md5" => {
             let mut mac = Hmac::<Md5>::new_from_slice(key).expect("HMAC accepts any key size");
             mac.update(to_digest);
-            mac.finalize().into_bytes().to_vec()
+            Ok(mac.finalize().into_bytes().to_vec())
         }
         "sha1" => {
             let mut mac = Hmac::<Sha1>::new_from_slice(key).expect("HMAC accepts any key size");
             mac.update(to_digest);
-            mac.finalize().into_bytes().to_vec()
+            Ok(mac.finalize().into_bytes().to_vec())
         }
         "sha224" => {
             let mut mac = Hmac::<Sha224>::new_from_slice(key).expect("HMAC accepts any key size");
             mac.update(to_digest);
-            mac.finalize().into_bytes().to_vec()
+            Ok(mac.finalize().into_bytes().to_vec())
         }
         "sha256" => {
             let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key size");
             mac.update(to_digest);
-            mac.finalize().into_bytes().to_vec()
+            Ok(mac.finalize().into_bytes().to_vec())
         }
         "sha384" => {
             let mut mac = Hmac::<Sha384>::new_from_slice(key).expect("HMAC accepts any key size");
             mac.update(to_digest);
-            mac.finalize().into_bytes().to_vec()
+            Ok(mac.finalize().into_bytes().to_vec())
         }
         "sha512" => {
             let mut mac = Hmac::<Sha512>::new_from_slice(key).expect("HMAC accepts any key size");
             mac.update(to_digest);
-            mac.finalize().into_bytes().to_vec()
+            Ok(mac.finalize().into_bytes().to_vec())
         }
-        other => return Err(EvalError::InvalidHashAlgorithm(other.into())),
-    };
-    Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
+        other => Err(EvalError::InvalidHashAlgorithm(other.into())),
+    }
 }
 
 #[derive(
@@ -2129,6 +2075,8 @@ impl VariadicFunc {
             VariadicFunc::DateDiffTime(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::DateDiffTimestamp(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::DateDiffTimestampTz(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::HmacString(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::HmacBytes(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -2159,6 +2107,8 @@ impl VariadicFunc {
             | VariadicFunc::DateDiffTime(_)
             | VariadicFunc::DateDiffTimestamp(_)
             | VariadicFunc::DateDiffTimestampTz(_)
+            | VariadicFunc::HmacString(_)
+            | VariadicFunc::HmacBytes(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::MakeTimestamp(_) => make_timestamp(&ds),
             VariadicFunc::PadLeading(_) => pad_leading(&ds, temp_storage),
@@ -2179,8 +2129,6 @@ impl VariadicFunc {
             VariadicFunc::ListIndex(_) => Ok(list_index(&ds)),
             VariadicFunc::ListSliceLinear(_) => Ok(list_slice_linear(&ds, temp_storage)),
             VariadicFunc::RegexpMatch(_) => regexp_match_dynamic(&ds, temp_storage),
-            VariadicFunc::HmacString(_) => hmac_string(&ds, temp_storage),
-            VariadicFunc::HmacBytes(_) => hmac_bytes(&ds, temp_storage),
             VariadicFunc::DateBinTimestamp(_) => date_bin(
                 ds[0].unwrap_interval(),
                 ds[1].unwrap_timestamp(),
