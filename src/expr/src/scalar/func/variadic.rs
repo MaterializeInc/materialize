@@ -25,7 +25,6 @@ use md5::Md5;
 use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::{CastFrom, ReinterpretCast};
-use mz_ore::soft_assert_or_log;
 use mz_pgtz::timezone::TimezoneSpec;
 use mz_repr::ReprColumnType;
 use mz_repr::adt::array::{Array, ArrayDimension, ArrayDimensions, InvalidArrayError};
@@ -35,8 +34,8 @@ use mz_repr::adt::system::Oid;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    ColumnName, Datum, DatumList, InputDatumType, OptionalArg, OutputDatumType, ReprScalarType,
-    Row, RowArena, SqlColumnType, SqlScalarType, Variadic,
+    ColumnName, Datum, DatumList, InputDatumType, OptionalArg, OutputDatumType, Row, RowArena,
+    SqlColumnType, SqlScalarType, Variadic,
 };
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
@@ -569,31 +568,48 @@ impl fmt::Display for RangeCreate {
     }
 }
 
-fn create_range<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let flags = match datums[2] {
-        Datum::Null => {
-            return Err(EvalError::InvalidRange(
-                InvalidRangeError::NullRangeBoundFlags,
-            ));
+impl EagerVariadicFunc for RangeCreate {
+    type Input<'a> = (Datum<'a>, Datum<'a>, Datum<'a>);
+    type Output<'a> = Result<Datum<'a>, EvalError>;
+
+    fn call<'a>(
+        &self,
+        (lower, upper, flags_datum): Self::Input<'a>,
+        temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let flags = match flags_datum {
+            Datum::Null => {
+                return Err(EvalError::InvalidRange(
+                    InvalidRangeError::NullRangeBoundFlags,
+                ));
+            }
+            o => o.unwrap_str(),
+        };
+
+        let (lower_inclusive, upper_inclusive) = parse_range_bound_flags(flags)?;
+
+        let mut range = Range::new(Some((
+            RangeBound::new(lower, lower_inclusive),
+            RangeBound::new(upper, upper_inclusive),
+        )));
+
+        range.canonicalize()?;
+
+        Ok(temp_storage.make_datum(|row| {
+            row.push_range(range).expect("errors already handled");
+        }))
+    }
+
+    fn output_type(&self, _input_types: &[SqlColumnType]) -> SqlColumnType {
+        SqlScalarType::Range {
+            element_type: Box::new(self.elem_type.clone()),
         }
-        o => o.unwrap_str(),
-    };
+        .nullable(false)
+    }
 
-    let (lower_inclusive, upper_inclusive) = parse_range_bound_flags(flags)?;
-
-    let mut range = Range::new(Some((
-        RangeBound::new(datums[0], lower_inclusive),
-        RangeBound::new(datums[1], upper_inclusive),
-    )));
-
-    range.canonicalize()?;
-
-    Ok(temp_storage.make_datum(|row| {
-        row.push_range(range).expect("errors already handled");
-    }))
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
 }
 
 #[sqlfunc(sqlname = "datediff")]
@@ -1740,383 +1756,11 @@ derive_variadic! {
 }
 
 impl VariadicFunc {
-    pub fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        exprs: &'a [MirScalarExpr],
-    ) -> Result<Datum<'a>, EvalError> {
-        // Evaluate all non-eager functions directly
-        match self {
-            VariadicFunc::Coalesce(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::Greatest(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::And(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::Or(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::ErrorIfNull(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::Least(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::Replace(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::Translate(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::Concat(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::ConcatWs(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::SplitPart(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::Substr(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::DateDiffDate(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::DateDiffTime(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::DateDiffTimestamp(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::DateDiffTimestampTz(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::HmacString(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::HmacBytes(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::PadLeading(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::DateBinTimestamp(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::DateBinTimestampTz(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::TimezoneTimeVariadic(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::MakeAclItem(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::MakeMzAclItem(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::MakeTimestamp(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::RegexpReplace(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::JsonbBuildObject(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::JsonbBuildArray(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::ArrayPosition(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::RegexpMatch(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::RegexpSplitToArray(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::StringToArray(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::ListIndex(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::ListSliceLinear(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::ArrayFill(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::ArrayIndex(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::ArrayToString(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::MapBuild(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::ListCreate(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::RecordCreate(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::ArrayCreate(f) => return f.eval(datums, temp_storage, exprs),
-            _ => {}
-        };
-
-        // Compute parameters to eager functions
-        let ds = exprs
-            .iter()
-            .map(|e| e.eval(datums, temp_storage))
-            .collect::<Result<Vec<_>, _>>()?;
-        // Check NULL propagation
-        if self.propagates_nulls() && ds.iter().any(|d| d.is_null()) {
-            return Ok(Datum::Null);
-        }
-
-        // Evaluate eager functions
-        match self {
-            VariadicFunc::Coalesce(_)
-            | VariadicFunc::Greatest(_)
-            | VariadicFunc::And(_)
-            | VariadicFunc::Or(_)
-            | VariadicFunc::ErrorIfNull(_)
-            | VariadicFunc::Replace(_)
-            | VariadicFunc::Translate(_)
-            | VariadicFunc::Concat(_)
-            | VariadicFunc::ConcatWs(_)
-            | VariadicFunc::SplitPart(_)
-            | VariadicFunc::Substr(_)
-            | VariadicFunc::DateDiffDate(_)
-            | VariadicFunc::DateDiffTime(_)
-            | VariadicFunc::DateDiffTimestamp(_)
-            | VariadicFunc::DateDiffTimestampTz(_)
-            | VariadicFunc::HmacString(_)
-            | VariadicFunc::HmacBytes(_)
-            | VariadicFunc::PadLeading(_)
-            | VariadicFunc::DateBinTimestamp(_)
-            | VariadicFunc::DateBinTimestampTz(_)
-            | VariadicFunc::TimezoneTimeVariadic(_)
-            | VariadicFunc::MakeAclItem(_)
-            | VariadicFunc::MakeMzAclItem(_)
-            | VariadicFunc::MakeTimestamp(_)
-            | VariadicFunc::RegexpReplace(_)
-            | VariadicFunc::JsonbBuildObject(_)
-            | VariadicFunc::JsonbBuildArray(_)
-            | VariadicFunc::ArrayPosition(_)
-            | VariadicFunc::RegexpMatch(_)
-            | VariadicFunc::RegexpSplitToArray(_)
-            | VariadicFunc::StringToArray(_)
-            | VariadicFunc::ListIndex(_)
-            | VariadicFunc::ListSliceLinear(_)
-            | VariadicFunc::ArrayFill(_)
-            | VariadicFunc::ArrayIndex(_)
-            | VariadicFunc::ArrayToString(_)
-            | VariadicFunc::MapBuild(_)
-            | VariadicFunc::ListCreate(_)
-            | VariadicFunc::RecordCreate(_)
-            | VariadicFunc::ArrayCreate(_)
-            | VariadicFunc::Least(_) => unreachable!(),
-            VariadicFunc::RangeCreate(..) => create_range(&ds, temp_storage),
-        }
-    }
-
-    pub fn is_associative(&self) -> bool {
-        match self {
-            VariadicFunc::And(s) => s.is_associative(),
-            VariadicFunc::Coalesce(s) => s.is_associative(),
-            VariadicFunc::Greatest(s) => s.is_associative(),
-            VariadicFunc::Least(s) => s.is_associative(),
-            VariadicFunc::Concat(_) => true,
-            VariadicFunc::Or(s) => s.is_associative(),
-            VariadicFunc::ErrorIfNull(s) => s.is_associative(),
-
-            VariadicFunc::MakeTimestamp(_)
-            | VariadicFunc::PadLeading(_)
-            | VariadicFunc::ConcatWs(_)
-            | VariadicFunc::Substr(_)
-            | VariadicFunc::Replace(_)
-            | VariadicFunc::Translate(_)
-            | VariadicFunc::JsonbBuildArray(_)
-            | VariadicFunc::JsonbBuildObject(_)
-            | VariadicFunc::MapBuild(..)
-            | VariadicFunc::ArrayCreate(..)
-            | VariadicFunc::ArrayToString(..)
-            | VariadicFunc::ArrayIndex(..)
-            | VariadicFunc::ListCreate(..)
-            | VariadicFunc::RecordCreate(..)
-            | VariadicFunc::ListIndex(_)
-            | VariadicFunc::ListSliceLinear(_)
-            | VariadicFunc::SplitPart(_)
-            | VariadicFunc::RegexpMatch(_)
-            | VariadicFunc::HmacString(_)
-            | VariadicFunc::HmacBytes(_)
-            | VariadicFunc::DateBinTimestamp(_)
-            | VariadicFunc::DateBinTimestampTz(_)
-            | VariadicFunc::DateDiffTimestamp(_)
-            | VariadicFunc::DateDiffTimestampTz(_)
-            | VariadicFunc::DateDiffDate(_)
-            | VariadicFunc::DateDiffTime(_)
-            | VariadicFunc::RangeCreate(..)
-            | VariadicFunc::MakeAclItem(_)
-            | VariadicFunc::MakeMzAclItem(_)
-            | VariadicFunc::ArrayPosition(_)
-            | VariadicFunc::ArrayFill(..)
-            | VariadicFunc::TimezoneTimeVariadic(_)
-            | VariadicFunc::RegexpSplitToArray(_)
-            | VariadicFunc::StringToArray(_)
-            | VariadicFunc::RegexpReplace(_) => false,
-        }
-    }
-
-    pub fn output_sql_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
-        let in_nullable = input_types.iter().any(|t| t.nullable);
-        match self {
-            Self::And(s) => s.output_type(&input_types),
-            Self::Greatest(s) => s.output_type(&input_types),
-            Self::Least(s) => s.output_type(&input_types),
-            Self::Coalesce(s) => s.output_type(&input_types),
-            Self::Concat(_) | Self::ConcatWs(_) => SqlScalarType::String.nullable(in_nullable),
-            Self::MakeTimestamp(_) => SqlScalarType::Timestamp { precision: None }.nullable(true),
-            Self::PadLeading(_) => SqlScalarType::String.nullable(in_nullable),
-            Self::Substr(_) => SqlScalarType::String.nullable(in_nullable),
-            Self::Replace(_) => SqlScalarType::String.nullable(in_nullable),
-            Self::Translate(_) => SqlScalarType::String.nullable(in_nullable),
-            Self::JsonbBuildArray(_) | Self::JsonbBuildObject(_) => {
-                SqlScalarType::Jsonb.nullable(true)
-            }
-            Self::MapBuild(MapBuild { value_type }) => SqlScalarType::Map {
-                value_type: Box::new(value_type.clone()),
-                custom_id: None,
-            }
-            .nullable(true),
-            Self::ArrayCreate(ArrayCreate { elem_type }) => {
-                soft_assert_or_log!(
-                    input_types.iter().all(|t| {
-                        // This ensures that the types are compatiable, but nullability may vary deeply in the types.
-                        ReprScalarType::from(elem_type)
-                            .union(&ReprScalarType::from(&t.scalar_type))
-                            .is_ok()
-                    }),
-                    "Args to ArrayCreate should have types that are repr-compatible with the elem_type.\nArgs:{input_types:#?}\nelem_type:{elem_type:#?}"
-                );
-                match elem_type {
-                    SqlScalarType::Array(_) => elem_type.clone().nullable(false),
-                    _ => SqlScalarType::Array(Box::new(elem_type.clone())).nullable(false),
-                }
-            }
-            Self::ArrayToString(..) => SqlScalarType::String.nullable(in_nullable),
-            Self::ArrayIndex(..) => input_types[0]
-                .scalar_type
-                .unwrap_array_element_type()
-                .clone()
-                .nullable(true),
-            Self::ListCreate(ListCreate { elem_type }) => {
-                soft_assert_or_log!(
-                    input_types.iter().all(|t| {
-                        // This ensures that the types are compatiable, but nullability may vary deeply in the types.
-                        ReprScalarType::from(elem_type)
-                            .union(&ReprScalarType::from(&t.scalar_type))
-                            .is_ok()
-                    }),
-                    "Args to ListCreate should have types that are compatible with the elem_type.\nArgs:{input_types:#?}\nelem_type:{elem_type:#?}"
-                );
-                SqlScalarType::List {
-                    element_type: Box::new(elem_type.clone()),
-                    custom_id: None,
-                }
-                .nullable(false)
-            }
-            Self::ListIndex(_) => input_types[0]
-                .scalar_type
-                .unwrap_list_nth_layer_type(input_types.len() - 1)
-                .clone()
-                .nullable(true),
-            Self::ListSliceLinear(..) => input_types[0].scalar_type.clone().nullable(in_nullable),
-            Self::RecordCreate(RecordCreate { field_names }) => SqlScalarType::Record {
-                fields: field_names
-                    .clone()
-                    .into_iter()
-                    .zip_eq(input_types)
-                    .collect(),
-                custom_id: None,
-            }
-            .nullable(false),
-            Self::SplitPart(_) => SqlScalarType::String.nullable(in_nullable),
-            Self::RegexpMatch(_) => {
-                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true)
-            }
-            Self::HmacString(_) | Self::HmacBytes(_) => SqlScalarType::Bytes.nullable(in_nullable),
-            Self::ErrorIfNull(s) => s.output_type(&input_types),
-            Self::DateBinTimestamp(_) => {
-                SqlScalarType::Timestamp { precision: None }.nullable(in_nullable)
-            }
-            Self::DateBinTimestampTz(_) => {
-                SqlScalarType::TimestampTz { precision: None }.nullable(in_nullable)
-            }
-            Self::DateDiffTimestamp(_) => SqlScalarType::Int64.nullable(in_nullable),
-            Self::DateDiffTimestampTz(_) => SqlScalarType::Int64.nullable(in_nullable),
-            Self::DateDiffDate(_) => SqlScalarType::Int64.nullable(in_nullable),
-            Self::DateDiffTime(_) => SqlScalarType::Int64.nullable(in_nullable),
-            Self::Or(s) => s.output_type(&input_types),
-            Self::RangeCreate(RangeCreate { elem_type }) => SqlScalarType::Range {
-                element_type: Box::new(elem_type.clone()),
-            }
-            .nullable(false),
-            Self::MakeAclItem(_) => SqlScalarType::AclItem.nullable(true),
-            Self::MakeMzAclItem(_) => SqlScalarType::MzAclItem.nullable(true),
-            Self::ArrayPosition(_) => SqlScalarType::Int32.nullable(true),
-            Self::ArrayFill(ArrayFill { elem_type }) => {
-                SqlScalarType::Array(Box::new(elem_type.clone())).nullable(false)
-            }
-            Self::TimezoneTimeVariadic(_) => SqlScalarType::Time.nullable(in_nullable),
-            Self::RegexpSplitToArray(_) => {
-                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(in_nullable)
-            }
-            Self::RegexpReplace(_) => SqlScalarType::String.nullable(in_nullable),
-            Self::StringToArray(_) => {
-                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true)
-            }
-        }
-    }
-
-    /// Computes the representation type of this variadic function.
-    ///
-    /// This is a wrapper around [`Self::output_sql_type`] that converts the result to a representation type.
-    pub fn output_type(&self, input_types: Vec<ReprColumnType>) -> ReprColumnType {
-        ReprColumnType::from(
-            &self.output_sql_type(input_types.iter().map(SqlColumnType::from_repr).collect()),
-        )
-    }
-
-    /// Whether the function output is NULL if any of its inputs are NULL.
-    ///
-    /// NB: if any input is NULL the output will be returned as NULL without
-    /// calling the function.
-    pub fn propagates_nulls(&self) -> bool {
-        match self {
-            VariadicFunc::And(s) => return s.propagates_nulls(),
-            VariadicFunc::Or(s) => return s.propagates_nulls(),
-            VariadicFunc::Coalesce(s) => return s.propagates_nulls(),
-            VariadicFunc::Greatest(s) => return s.propagates_nulls(),
-            VariadicFunc::Least(s) => return s.propagates_nulls(),
-            VariadicFunc::ErrorIfNull(s) => return s.propagates_nulls(),
-            _ => {}
-        }
-        // NOTE: The following is a list of the variadic functions
-        // that **DO NOT** propagate nulls, unless they've been converted
-        // to the new variadic func infrastructure.
-        !matches!(
-            self,
-            VariadicFunc::Concat(_)
-                | VariadicFunc::ConcatWs(_)
-                | VariadicFunc::JsonbBuildArray(_)
-                | VariadicFunc::JsonbBuildObject(_)
-                | VariadicFunc::MapBuild(..)
-                | VariadicFunc::ListCreate(..)
-                | VariadicFunc::RecordCreate(..)
-                | VariadicFunc::ArrayCreate(..)
-                | VariadicFunc::ArrayToString(..)
-                | VariadicFunc::RangeCreate(..)
-                | VariadicFunc::ArrayPosition(_)
-                | VariadicFunc::ArrayFill(..)
-                | VariadicFunc::StringToArray(_)
-        )
-    }
-
-    /// Whether the function might return NULL even if none of its inputs are
-    /// NULL.
-    ///
-    /// This is presently conservative, and may indicate that a function
-    /// introduces nulls even when it does not.
-    pub fn introduces_nulls(&self) -> bool {
-        match self {
-            Self::And(s) => s.introduces_nulls(),
-            Self::Or(s) => s.introduces_nulls(),
-            Self::Coalesce(s) => s.introduces_nulls(),
-            Self::Greatest(s) => s.introduces_nulls(),
-            Self::Least(s) => s.introduces_nulls(),
-            Self::ErrorIfNull(s) => s.introduces_nulls(),
-            Self::Concat(_)
-            | Self::ConcatWs(_)
-            | Self::PadLeading(_)
-            | Self::Substr(_)
-            | Self::Replace(_)
-            | Self::Translate(_)
-            | Self::JsonbBuildArray(_)
-            | Self::JsonbBuildObject(_)
-            | Self::MapBuild(..)
-            | Self::ArrayCreate(..)
-            | Self::ArrayToString(..)
-            | Self::ListCreate(..)
-            | Self::RecordCreate(..)
-            | Self::ListSliceLinear(_)
-            | Self::SplitPart(_)
-            | Self::HmacString(_)
-            | Self::HmacBytes(_)
-            | Self::DateBinTimestamp(_)
-            | Self::DateBinTimestampTz(_)
-            | Self::DateDiffTimestamp(_)
-            | Self::DateDiffTimestampTz(_)
-            | Self::DateDiffDate(_)
-            | Self::DateDiffTime(_)
-            | Self::RangeCreate(..)
-            | Self::MakeAclItem(_)
-            | Self::MakeMzAclItem(_)
-            | Self::ArrayPosition(_)
-            | Self::ArrayFill(..)
-            | Self::TimezoneTimeVariadic(_)
-            | Self::RegexpSplitToArray(_)
-            | Self::RegexpReplace(_) => false,
-            Self::MakeTimestamp(_)
-            | Self::ArrayIndex(..)
-            | Self::StringToArray(_)
-            | Self::ListIndex(_)
-            | Self::RegexpMatch(_) => true,
-        }
-    }
-
     pub fn switch_and_or(&self) -> Self {
         match self {
             VariadicFunc::And(_) => Or.into(),
             VariadicFunc::Or(_) => And.into(),
             _ => unreachable!(),
-        }
-    }
-
-    pub fn is_infix_op(&self) -> bool {
-        match self {
-            VariadicFunc::And(s) => s.is_infix_op(),
-            VariadicFunc::Or(s) => s.is_infix_op(),
-            _ => false,
         }
     }
 
@@ -2136,84 +1780,6 @@ impl VariadicFunc {
             VariadicFunc::And(_) => MirScalarExpr::literal_false(),
             VariadicFunc::Or(_) => MirScalarExpr::literal_true(),
             _ => unreachable!(),
-        }
-    }
-
-    /// Returns true if the function could introduce an error on non-error inputs.
-    pub fn could_error(&self) -> bool {
-        match self {
-            VariadicFunc::And(s) => s.could_error(),
-            VariadicFunc::Or(s) => s.could_error(),
-            VariadicFunc::Coalesce(s) => s.could_error(),
-            VariadicFunc::Greatest(s) => s.could_error(),
-            VariadicFunc::ErrorIfNull(s) => s.could_error(),
-            VariadicFunc::Least(s) => s.could_error(),
-            VariadicFunc::Concat(_) | VariadicFunc::ConcatWs(_) => false,
-            VariadicFunc::Replace(_) => false,
-            VariadicFunc::Translate(_) => false,
-            VariadicFunc::ArrayIndex(..) => false,
-            VariadicFunc::ListCreate(..) | VariadicFunc::RecordCreate(..) => false,
-            // All other cases are unknown
-            _ => true,
-        }
-    }
-
-    /// Returns true if the function is monotone. (Non-strict; either increasing or decreasing.)
-    /// Monotone functions map ranges to ranges: ie. given a range of possible inputs, we can
-    /// determine the range of possible outputs just by mapping the endpoints.
-    ///
-    /// This describes the *pointwise* behaviour of the function:
-    /// ie. if more than one argument is provided, this describes the behaviour of
-    /// any specific argument as the others are held constant. (For example, `COALESCE(a, b)` is
-    /// monotone in `a` because for any particular value of `b`, increasing `a` will never
-    /// cause the result to decrease.)
-    ///
-    /// This property describes the behaviour of the function over ranges where the function is defined:
-    /// ie. the arguments and the result are non-error datums.
-    pub fn is_monotone(&self) -> bool {
-        match self {
-            VariadicFunc::Coalesce(s) => s.is_monotone(),
-            VariadicFunc::Greatest(s) => s.is_monotone(),
-            VariadicFunc::Least(s) => s.is_monotone(),
-            VariadicFunc::And(s) => s.is_monotone(),
-            VariadicFunc::Or(s) => s.is_monotone(),
-            VariadicFunc::Concat(_)
-            | VariadicFunc::ConcatWs(_)
-            | VariadicFunc::MakeTimestamp(_)
-            | VariadicFunc::PadLeading(_)
-            | VariadicFunc::Substr(_)
-            | VariadicFunc::Replace(_)
-            | VariadicFunc::JsonbBuildArray(_)
-            | VariadicFunc::JsonbBuildObject(_)
-            | VariadicFunc::MapBuild(..)
-            | VariadicFunc::ArrayCreate(..)
-            | VariadicFunc::ArrayToString(..)
-            | VariadicFunc::ArrayIndex(..)
-            | VariadicFunc::ListCreate(..)
-            | VariadicFunc::RecordCreate(..)
-            | VariadicFunc::ListIndex(_)
-            | VariadicFunc::ListSliceLinear(_)
-            | VariadicFunc::SplitPart(_)
-            | VariadicFunc::RegexpMatch(_)
-            | VariadicFunc::HmacString(_)
-            | VariadicFunc::HmacBytes(_) => false,
-            VariadicFunc::ErrorIfNull(s) => s.is_monotone(),
-            VariadicFunc::DateBinTimestamp(_)
-            | VariadicFunc::DateBinTimestampTz(_)
-            | VariadicFunc::RangeCreate(..)
-            | VariadicFunc::MakeAclItem(_)
-            | VariadicFunc::MakeMzAclItem(_)
-            | VariadicFunc::Translate(_)
-            | VariadicFunc::ArrayPosition(_)
-            | VariadicFunc::ArrayFill(..)
-            | VariadicFunc::DateDiffTimestamp(_)
-            | VariadicFunc::DateDiffTimestampTz(_)
-            | VariadicFunc::DateDiffDate(_)
-            | VariadicFunc::DateDiffTime(_)
-            | VariadicFunc::TimezoneTimeVariadic(_)
-            | VariadicFunc::RegexpSplitToArray(_)
-            | VariadicFunc::StringToArray(_)
-            | VariadicFunc::RegexpReplace(_) => false,
         }
     }
 }
