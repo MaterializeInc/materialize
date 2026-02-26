@@ -15,6 +15,59 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.13.0
+*Released to Materialize Cloud: 2026-02-26* <br>
+*Released to Materialize Self-Managed: 2026-02-27* <br>
+
+This release makes Iceberg sinks generally available, adds the `strpos`
+function for improved tool compatibility, and fixes several bugs including
+issues with multi-dimensional array null values, replacement materialized view
+dropping, and COPY FROM validation.
+
+### Features
+
+- **Iceberg Sinks Generally Available**: Iceberg sinks are now enabled by
+  default and no longer require a feature flag, allowing all users to export
+  data from Materialize into Apache Iceberg tables.
+
+### Improvements
+
+- Added `strpos` as a synonym for the `position` function, improving
+  compatibility with tools such as PowerBI.
+- Added pgwire password authentication support for the OIDC authenticator in
+  Self-Managed deployments, enabling password-based connections alongside OIDC
+  token authentication.
+- Improved performance of delta join dataflows when indexes have large amounts
+  of retained history, by consolidating updates before invoking join closures.
+- Enabled the subscribe optimization by default for Self-Managed deployments,
+  improving subscribe query performance.
+- Added ability to edit and drop roles in the Console UI, including managing
+  inherited roles and privileges with grant/revoke support.
+
+### Bug Fixes
+
+- Fixed a panic when constructing multi-dimensional arrays with null values,
+  now treating null elements as zero-dimensional arrays consistent with
+  PostgreSQL behavior.
+- Fixed a concurrency issue (futurelock) in persist that could cause data flow
+  stalls when multiple writers competed for update leases.
+- Fixed a bug where dropping a replacement materialized view (instead of
+  applying the replacement) could seal the target materialized view for all
+  times after an environmentd restart.
+- Fixed a panic when `COPY FROM` targets `NOT NULL` columns that lack default
+  values, now returning a descriptive error message instead.
+- Fixed a bug where `Int2Vector` to `Array` casting did not correctly handle
+  element type conversions, potentially causing incorrect results or errors.
+- Fixed a Helm chart version mismatch in Self-Managed deployments where the
+  current in-git Helm chart was always used even for older releases of
+  orchestratord, causing incompatibilities.
+- Fixed the memory-based calculation of replica size credits, which was
+  incorrectly multiplying by the number of workers instead of using the correct
+  per-process memory limit.
+- *Console*: Fixed an overflow display issue on the roles page.
+- *Console*: Fixed SSO connection configuration pages not loading properly due
+  to missing content security policy entries.
+
 ## v26.12.0
 *Released to Materialize Cloud: 2026-02-19* <br>
 *Released to Materialize Self-Managed: 2026-02-20* <br>
