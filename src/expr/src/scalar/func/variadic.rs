@@ -1122,61 +1122,48 @@ fn make_mz_acl_item(
     })
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct MakeTimestamp;
-
-impl fmt::Display for MakeTimestamp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("makets")
-    }
-}
-
+#[sqlfunc(sqlname = "makets")]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
-fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
-    let year: i32 = match datums[0].unwrap_int64().try_into() {
+fn make_timestamp(
+    year: i64,
+    month: i64,
+    day: i64,
+    hour: i64,
+    minute: i64,
+    second_float: f64,
+) -> Result<Option<CheckedTimestamp<NaiveDateTime>>, EvalError> {
+    let year: i32 = match year.try_into() {
         Ok(year) => year,
-        Err(_) => return Ok(Datum::Null),
+        Err(_) => return Ok(None),
     };
-    let month: u32 = match datums[1].unwrap_int64().try_into() {
+    let month: u32 = match month.try_into() {
         Ok(month) => month,
-        Err(_) => return Ok(Datum::Null),
+        Err(_) => return Ok(None),
     };
-    let day: u32 = match datums[2].unwrap_int64().try_into() {
+    let day: u32 = match day.try_into() {
         Ok(day) => day,
-        Err(_) => return Ok(Datum::Null),
+        Err(_) => return Ok(None),
     };
-    let hour: u32 = match datums[3].unwrap_int64().try_into() {
-        Ok(day) => day,
-        Err(_) => return Ok(Datum::Null),
+    let hour: u32 = match hour.try_into() {
+        Ok(hour) => hour,
+        Err(_) => return Ok(None),
     };
-    let minute: u32 = match datums[4].unwrap_int64().try_into() {
-        Ok(day) => day,
-        Err(_) => return Ok(Datum::Null),
+    let minute: u32 = match minute.try_into() {
+        Ok(minute) => minute,
+        Err(_) => return Ok(None),
     };
-    let second_float = datums[5].unwrap_float64();
     let second = second_float as u32;
     let micros = ((second_float - second as f64) * 1_000_000.0) as u32;
     let date = match NaiveDate::from_ymd_opt(year, month, day) {
         Some(date) => date,
-        None => return Ok(Datum::Null),
+        None => return Ok(None),
     };
     let timestamp = match date.and_hms_micro_opt(hour, minute, second, micros) {
         Some(timestamp) => timestamp,
-        None => return Ok(Datum::Null),
+        None => return Ok(None),
     };
-    Ok(timestamp.try_into()?)
+    Ok(Some(timestamp.try_into()?))
 }
 
 #[derive(
@@ -1987,6 +1974,7 @@ impl VariadicFunc {
             VariadicFunc::TimezoneTimeVariadic(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::MakeAclItem(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::MakeMzAclItem(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::MakeTimestamp(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -2025,8 +2013,8 @@ impl VariadicFunc {
             | VariadicFunc::TimezoneTimeVariadic(_)
             | VariadicFunc::MakeAclItem(_)
             | VariadicFunc::MakeMzAclItem(_)
+            | VariadicFunc::MakeTimestamp(_)
             | VariadicFunc::Least(_) => unreachable!(),
-            VariadicFunc::MakeTimestamp(_) => make_timestamp(&ds),
             VariadicFunc::JsonbBuildArray(_) => Ok(jsonb_build_array(&ds, temp_storage)),
             VariadicFunc::JsonbBuildObject(_) => jsonb_build_object(&ds, temp_storage),
             VariadicFunc::MapBuild(..) => Ok(map_build(&ds, temp_storage)),
