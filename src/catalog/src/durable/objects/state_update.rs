@@ -422,22 +422,6 @@ impl StateUpdateKindJson {
 /// Version of [`StateUpdateKind`] that is stored directly in persist.
 type PersistStateUpdate = ((SourceData, ()), Timestamp, StorageDiff);
 
-impl TryFrom<&StateUpdate<StateUpdateKind>> for Option<memory::objects::StateUpdate> {
-    type Error = DurableCatalogError;
-
-    fn try_from(
-        StateUpdate { kind, ts, diff }: &StateUpdate<StateUpdateKind>,
-    ) -> Result<Self, Self::Error> {
-        let kind: Option<memory::objects::StateUpdateKind> = TryInto::try_into(kind)?;
-        let update = kind.map(|kind| memory::objects::StateUpdate {
-            kind,
-            ts: ts.clone(),
-            diff: diff.clone().try_into().expect("invalid diff"),
-        });
-        Ok(update)
-    }
-}
-
 impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
     type Error = DurableCatalogError;
 
