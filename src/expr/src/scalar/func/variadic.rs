@@ -1973,45 +1973,19 @@ fn text_concat_ws<'a>(
     Ok(Datum::String(temp_storage.push_string(buf)))
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct Translate;
+#[sqlfunc]
+fn translate(string: &str, from_str: &str, to_str: &str) -> String {
+    let from = from_str.chars().collect::<Vec<_>>();
+    let to = to_str.chars().collect::<Vec<_>>();
 
-impl fmt::Display for Translate {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("translate")
-    }
+    string
+        .chars()
+        .filter_map(|c| match from.iter().position(|f| f == &c) {
+            Some(idx) => to.get(idx).copied(),
+            None => Some(c),
+        })
+        .collect()
 }
-
-fn translate<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    let string = datums[0].unwrap_str();
-    let from = datums[1].unwrap_str().chars().collect::<Vec<_>>();
-    let to = datums[2].unwrap_str().chars().collect::<Vec<_>>();
-
-    Datum::String(
-        temp_storage.push_string(
-            string
-                .chars()
-                .filter_map(|c| match from.iter().position(|f| f == &c) {
-                    Some(idx) => to.get(idx).copied(),
-                    None => Some(c),
-                })
-                .collect(),
-        ),
-    )
-}
-
-// TODO ///
 
 #[derive(
     Ord,
@@ -2332,6 +2306,7 @@ impl VariadicFunc {
             VariadicFunc::ErrorIfNull(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::Least(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::Replace(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::Translate(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -2353,13 +2328,13 @@ impl VariadicFunc {
             | VariadicFunc::Or(_)
             | VariadicFunc::ErrorIfNull(_)
             | VariadicFunc::Replace(_)
+            | VariadicFunc::Translate(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::Concat(_) => text_concat_variadic(&ds, temp_storage),
             VariadicFunc::ConcatWs(_) => text_concat_ws(&ds, temp_storage),
             VariadicFunc::MakeTimestamp(_) => make_timestamp(&ds),
             VariadicFunc::PadLeading(_) => pad_leading(&ds, temp_storage),
             VariadicFunc::Substr(_) => substr(&ds),
-            VariadicFunc::Translate(_) => Ok(translate(&ds, temp_storage)),
             VariadicFunc::JsonbBuildArray(_) => Ok(jsonb_build_array(&ds, temp_storage)),
             VariadicFunc::JsonbBuildObject(_) => jsonb_build_object(&ds, temp_storage),
             VariadicFunc::MapBuild(..) => Ok(map_build(&ds, temp_storage)),
