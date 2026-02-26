@@ -233,21 +233,22 @@ pub struct ArrayFill {
     pub elem_type: SqlScalarType,
 }
 
-impl fmt::Display for ArrayFill {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("array_fill")
-    }
-}
-
+#[sqlfunc(
+    ArrayFill,
+    output_type_expr = "SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false)",
+    introduces_nulls = false
+)]
 fn array_fill<'a>(
-    datums: &[Datum<'a>],
+    &self,
+    fill: Datum<'a>,
+    dims: Option<Array<'a>>,
+    lower_bounds: OptionalArg<Option<Array<'a>>>,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
     const MAX_SIZE: usize = 1 << 28 - 1;
     const NULL_ARR_ERR: &str = "dimension array or low bound array";
     const NULL_ELEM_ERR: &str = "dimension values";
 
-    let fill = datums[0];
     if matches!(fill, Datum::Array(_)) {
         return Err(EvalError::Unsupported {
             feature: "array_fill with arrays".into(),
@@ -255,9 +256,8 @@ fn array_fill<'a>(
         });
     }
 
-    let arr = match datums[1] {
-        Datum::Null => return Err(EvalError::MustNotBeNull(NULL_ARR_ERR.into())),
-        o => o.unwrap_array(),
+    let Some(arr) = dims else {
+        return Err(EvalError::MustNotBeNull(NULL_ARR_ERR.into()));
     };
 
     let dimensions = arr
@@ -269,11 +269,10 @@ fn array_fill<'a>(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let lower_bounds = match datums.get(2) {
+    let lower_bounds = match *lower_bounds {
         Some(d) => {
-            let arr = match d {
-                Datum::Null => return Err(EvalError::MustNotBeNull(NULL_ARR_ERR.into())),
-                o => o.unwrap_array(),
+            let Some(arr) = d else {
+                return Err(EvalError::MustNotBeNull(NULL_ARR_ERR.into()));
             };
 
             arr.elements()
@@ -1795,6 +1794,7 @@ impl VariadicFunc {
             VariadicFunc::StringToArray(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::ListIndex(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::ListSliceLinear(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::ArrayFill(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -1843,6 +1843,7 @@ impl VariadicFunc {
             | VariadicFunc::StringToArray(_)
             | VariadicFunc::ListIndex(_)
             | VariadicFunc::ListSliceLinear(_)
+            | VariadicFunc::ArrayFill(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::MapBuild(..) => Ok(map_build(&ds, temp_storage)),
             VariadicFunc::ArrayCreate(ArrayCreate {
@@ -1857,7 +1858,6 @@ impl VariadicFunc {
                 Ok(list_create(&ds, temp_storage))
             }
             VariadicFunc::RangeCreate(..) => create_range(&ds, temp_storage),
-            VariadicFunc::ArrayFill(..) => array_fill(&ds, temp_storage),
         }
     }
 
