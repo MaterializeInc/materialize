@@ -1828,32 +1828,9 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     }
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct SplitPart;
-
-impl fmt::Display for SplitPart {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("split_string")
-    }
-}
-
-fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
-    let string = datums[0].unwrap_str();
-    let delimiter = datums[1].unwrap_str();
-
-    // Provided index value begins at 1, not 0.
-    let index = match usize::try_from(i64::from(datums[2].unwrap_int32()) - 1) {
+#[sqlfunc(sqlname = "split_string")]
+fn split_part<'a>(string: &'a str, delimiter: &str, field: i32) -> Result<&'a str, EvalError> {
+    let index = match usize::try_from(i64::from(field) - 1) {
         Ok(index) => index,
         Err(_) => {
             return Err(EvalError::InvalidParameterValue(
@@ -1867,17 +1844,15 @@ fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     // characters. Instead, it generates the following parts: [string].
     if delimiter.is_empty() {
         if index == 0 {
-            return Ok(datums[0]);
+            return Ok(string);
         } else {
-            return Ok(Datum::String(""));
+            return Ok("");
         }
     }
 
     // If provided index is greater than the number of split parts,
     // return an empty string.
-    Ok(Datum::String(
-        string.split(delimiter).nth(index).unwrap_or(""),
-    ))
+    Ok(string.split(delimiter).nth(index).unwrap_or(""))
 }
 
 #[sqlfunc(is_associative = true)]
@@ -2254,6 +2229,7 @@ impl VariadicFunc {
             VariadicFunc::Translate(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::Concat(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::ConcatWs(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::SplitPart(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -2278,6 +2254,7 @@ impl VariadicFunc {
             | VariadicFunc::Translate(_)
             | VariadicFunc::Concat(_)
             | VariadicFunc::ConcatWs(_)
+            | VariadicFunc::SplitPart(_)
             | VariadicFunc::Least(_) => unreachable!(),
             VariadicFunc::MakeTimestamp(_) => make_timestamp(&ds),
             VariadicFunc::PadLeading(_) => pad_leading(&ds, temp_storage),
@@ -2298,7 +2275,6 @@ impl VariadicFunc {
             }
             VariadicFunc::ListIndex(_) => Ok(list_index(&ds)),
             VariadicFunc::ListSliceLinear(_) => Ok(list_slice_linear(&ds, temp_storage)),
-            VariadicFunc::SplitPart(_) => split_part(&ds),
             VariadicFunc::RegexpMatch(_) => regexp_match_dynamic(&ds, temp_storage),
             VariadicFunc::HmacString(_) => hmac_string(&ds, temp_storage),
             VariadicFunc::HmacBytes(_) => hmac_bytes(&ds, temp_storage),
