@@ -10,35 +10,37 @@ description: >
 
 # Committing in Materialize
 
+Read `doc/developer/guide-changes.md` for the full conventions on submitting and reviewing changes.
+
 ## Pre-commit checklist
 
-Before committing, run all of these and fix any warnings:
+Before committing, run these and fix any warnings:
 
-1. `bin/lint` (can error if tools are missing; use `bin/ci-builder run stable bin/lint` as an alternative)
-2. `bin/fmt` (formats `.rs`, `.py`, and `.proto` files)
+1. `bin/fmt` (formats `.rs`, `.py`, and `.proto` files)
+2. `bin/lint` (can error if tools are missing; use `bin/ci-builder run stable bin/lint` as an alternative)
 3. `cargo clippy --all-targets -- -D warnings`
-4. `cargo hakari generate`
-
-A change is clean when no unexpected warnings remain.
+4. `cargo hakari generate` (only needed when dependencies changed)
 
 Do not manually update `*.snap` files.
 Use `cargo test` followed by `cargo insta accept` to update snapshot files.
 Rewrite datadriven test expectations with `REWRITE=1 cargo test ...`.
 
-## Commit message format
+## PR titles and commit messages
 
-Use lowercase, with a `pkg: description` scope prefix matching the primary crate or area changed:
+Materialize uses squash merging, so the PR title becomes the commit subject on `main`.
 
-```
-adapter: fix panic in peek path when session is dropped
-```
+* Use imperative mood: "Fix X" not "Fixed X" or "Fixes X".
+* Be specific: "Fix panic in catalog sync when controller restarts" not "Fix bug".
+* Prefix with area if helpful: `adapter: `, `storage: `, `compute: `, `sql: `.
 
-For changes spanning multiple crates, use the most relevant high-level area (e.g., `adapter`, `storage`, `compute`, `sql`).
+Write a thorough PR description explaining the rationale for the change.
+Mention which tests were added or modified in the pull request description, but do not list which tests were run.
+To auto-close issues, include `Fixes database-issues#NNNN`.
+Add release notes for user-visible changes (should complete "This release will...").
 
 ## Git conventions
 
-* The base branch is always `upstream/main`.
-* Push branches to `origin`.
-* Pull requests use `upstream/main` as their base.
-* Mention which tests were added or modified in the pull request description, but do not list which tests were run.
-* Keep pull request descriptions short and precise.
+* Work against the `main` branch of `MaterializeInc/materialize`.
+* Push branches to your fork.
+* Pull requests target `main` on `MaterializeInc/materialize`.
+* Each PR should contain one semantic change.
