@@ -15,7 +15,7 @@
 //! where possible.
 
 use mz_expr::{EvalError, MapFilterProject, MfpPlan};
-use mz_repr::{Datum, Diff, Row, RowArena};
+use mz_repr::{Datum, Diff, Row, RowArena, SqlScalarType};
 
 use crate::engine::{CompiledExpr, ExprEngine};
 
@@ -37,6 +37,8 @@ pub struct CompiledExprSession {
     output_errors_ptr: usize,
     /// Original column indices this expression reads, in WASM parameter order.
     input_columns: Vec<usize>,
+    /// The scalar type of the output, used to decode the i64 result.
+    output_type: SqlScalarType,
 }
 
 impl CompiledExprSession {
@@ -104,14 +106,15 @@ impl CompiledExprSession {
             output_validity_ptr,
             output_errors_ptr,
             input_columns: compiled.input_columns().to_vec(),
+            output_type: compiled.output_type().clone(),
         })
     }
 
     /// Evaluates the compiled expression on a single row's datums.
     ///
     /// Writes input values into WASM memory, calls the compiled function,
-    /// and reads the result. Returns `Datum::Int64`, `Datum::Null`, or
-    /// an `EvalError` (e.g., numeric overflow).
+    /// and reads the result. Returns the appropriately typed `Datum`,
+    /// `Datum::Null`, or an `EvalError` (e.g., numeric overflow).
     pub fn eval<'a>(&mut self, datums: &[Datum<'a>]) -> Result<Datum<'static>, EvalError> {
         // Write input datum values to WASM memory.
         {
@@ -165,7 +168,16 @@ impl CompiledExprSession {
         } else if !is_valid {
             Ok(Datum::Null)
         } else {
-            Ok(Datum::Int64(result_value))
+            match self.output_type {
+                SqlScalarType::Bool => {
+                    if result_value != 0 {
+                        Ok(Datum::True)
+                    } else {
+                        Ok(Datum::False)
+                    }
+                }
+                _ => Ok(Datum::Int64(result_value)),
+            }
         }
     }
 }
@@ -173,11 +185,13 @@ impl CompiledExprSession {
 /// A compiled MFP that evaluates expressions via WASM where possible.
 ///
 /// Wraps an [`MfpPlan`] and adds compiled WASM sessions for expressions that
-/// were successfully compiled. Predicates, temporal bounds, and projection
-/// remain interpreted.
+/// were successfully compiled. Predicates and temporal bounds that cannot be
+/// compiled remain interpreted.
 pub struct CompiledMfp {
     /// One entry per expression in the MFP. `Some` = compiled, `None` = interpreted fallback.
     compiled_sessions: Vec<Option<CompiledExprSession>>,
+    /// One entry per predicate. `Some` = compiled, `None` = interpreted fallback.
+    compiled_predicates: Vec<Option<CompiledExprSession>>,
     /// The underlying plan, used for predicates, temporal bounds, and projection.
     plan: MfpPlan,
 }
@@ -185,10 +199,13 @@ pub struct CompiledMfp {
 impl CompiledMfp {
     /// Attempts to create a compiled MFP from the given plan.
     ///
-    /// Returns `Ok(Self)` if at least one expression was compiled to WASM.
-    /// Returns `Err(plan)` if no expressions could be compiled, returning
-    /// ownership of the plan for interpreted fallback.
-    pub fn try_new(plan: MfpPlan) -> Result<Self, MfpPlan> {
+    /// Returns `Ok(Self)` if at least one expression or predicate was compiled to WASM.
+    /// Returns `Err(plan)` if nothing could be compiled, returning ownership
+    /// of the plan for interpreted fallback.
+    ///
+    /// `input_types` provides the scalar types for input columns, used for
+    /// type inference when compiling generic comparison operators.
+    pub fn try_new(plan: MfpPlan, input_types: &[SqlScalarType]) -> Result<Self, MfpPlan> {
         let engine = match ExprEngine::new() {
             Ok(e) => e,
             Err(e) => {
@@ -201,12 +218,25 @@ impl CompiledMfp {
         let mut compiled_sessions = Vec::with_capacity(mfp.expressions.len());
         let mut any_compiled = false;
 
+        // Build compile-time type info: input_types as (SqlScalarType, bool) pairs.
+        let compile_types: Vec<(SqlScalarType, bool)> =
+            input_types.iter().map(|st| (st.clone(), true)).collect();
+
+        // Build the running list of known scalar types for type inference.
+        // Starts with input column types, grows as we infer expression output types.
+        let mut known_types: Vec<SqlScalarType> = input_types.to_vec();
+
         for expr in &mfp.expressions {
-            if crate::analyze::is_compilable(expr) {
-                let input_types = vec![];
-                match engine.compile(expr, &input_types) {
+            if crate::analyze::is_compilable(expr, &known_types) {
+                match engine.compile(expr, &compile_types) {
                     Ok(Some(compiled)) => match CompiledExprSession::new(&compiled) {
                         Ok(session) => {
+                            // Extend known types with this expression's output type.
+                            if let Some(out_type) = crate::analyze::infer_type(expr, &known_types) {
+                                known_types.push(out_type);
+                            } else {
+                                known_types.push(SqlScalarType::Int64);
+                            }
                             compiled_sessions.push(Some(session));
                             any_compiled = true;
                             continue;
@@ -221,19 +251,58 @@ impl CompiledMfp {
                     }
                 }
             }
+            // Track the type even for non-compiled expressions (for predicate inference).
+            if let Some(out_type) = crate::analyze::infer_type(expr, &known_types) {
+                known_types.push(out_type);
+            } else {
+                known_types.push(SqlScalarType::Int64);
+            }
             compiled_sessions.push(None);
+        }
+
+        // Compile predicates.
+        // At support level S, the available types are input_types plus
+        // output types of expressions 0..(S - input_arity).
+        let mut compiled_predicates = Vec::with_capacity(mfp.predicates.len());
+        for (_support, predicate) in &mfp.predicates {
+            // Predicates see all known types (input + all expression outputs).
+            if crate::analyze::is_compilable(predicate, &known_types) {
+                match engine.compile(predicate, &compile_types) {
+                    Ok(Some(compiled)) => match CompiledExprSession::new(&compiled) {
+                        Ok(session) => {
+                            compiled_predicates.push(Some(session));
+                            any_compiled = true;
+                            continue;
+                        }
+                        Err(e) => {
+                            tracing::debug!("WASM predicate session creation failed: {e}");
+                        }
+                    },
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::debug!("WASM predicate compilation failed: {e}");
+                    }
+                }
+            }
+            compiled_predicates.push(None);
         }
 
         if !any_compiled {
             return Err(plan);
         }
 
-        let compiled_count = compiled_sessions.iter().filter(|s| s.is_some()).count();
-        let total = compiled_sessions.len();
-        tracing::debug!("compiled MFP: {compiled_count}/{total} expressions compiled to WASM");
+        let expr_compiled = compiled_sessions.iter().filter(|s| s.is_some()).count();
+        let expr_total = compiled_sessions.len();
+        let pred_compiled = compiled_predicates.iter().filter(|s| s.is_some()).count();
+        let pred_total = compiled_predicates.len();
+        tracing::debug!(
+            "compiled MFP: {expr_compiled}/{expr_total} expressions, \
+             {pred_compiled}/{pred_total} predicates compiled to WASM"
+        );
 
         Ok(Self {
             compiled_sessions,
+            compiled_predicates,
             plan,
         })
     }
@@ -254,6 +323,7 @@ impl CompiledMfp {
         // Evaluate expressions and predicates (compiled + interpreted).
         match Self::evaluate_inner(
             &mut self.compiled_sessions,
+            &mut self.compiled_predicates,
             self.plan.non_temporal(),
             datums,
             arena,
@@ -349,15 +419,16 @@ impl CompiledMfp {
     /// Evaluates expressions and predicates, appending results to datums.
     ///
     /// Mirrors [`SafeMfpPlan::evaluate_inner`] but uses WASM for compiled
-    /// expressions and falls back to the interpreter for the rest.
+    /// expressions and predicates, falling back to the interpreter for the rest.
     fn evaluate_inner<'b, 'a: 'b>(
         sessions: &mut [Option<CompiledExprSession>],
+        pred_sessions: &mut [Option<CompiledExprSession>],
         mfp: &'a MapFilterProject,
         datums: &'b mut Vec<Datum<'a>>,
         arena: &'a RowArena,
     ) -> Result<bool, EvalError> {
         let mut expression = 0;
-        for (support, predicate) in mfp.predicates.iter() {
+        for (pred_idx, (support, predicate)) in mfp.predicates.iter().enumerate() {
             while mfp.input_arity + expression < *support {
                 let datum = if let Some(ref mut session) = sessions[expression] {
                     session.eval(datums)?
@@ -367,7 +438,12 @@ impl CompiledMfp {
                 datums.push(datum);
                 expression += 1;
             }
-            if predicate.eval(&datums[..], arena)? != Datum::True {
+            let passes = if let Some(ref mut session) = pred_sessions[pred_idx] {
+                session.eval(datums)? == Datum::True
+            } else {
+                predicate.eval(&datums[..], arena)? == Datum::True
+            };
+            if !passes {
                 return Ok(false);
             }
         }
@@ -480,12 +556,13 @@ mod tests {
             input_arity: 2,
         };
         let plan = mfp.into_plan().unwrap();
-        let mut compiled = CompiledMfp::try_new(plan).unwrap();
+        let mut compiled = CompiledMfp::try_new(plan, &[]).unwrap();
 
         let arena = RowArena::new();
         let mut datums: Vec<Datum<'_>> = vec![Datum::Int64(3), Datum::Int64(4)];
         let result = CompiledMfp::evaluate_inner(
             &mut compiled.compiled_sessions,
+            &mut compiled.compiled_predicates,
             compiled.plan.non_temporal(),
             &mut datums,
             &arena,
@@ -507,7 +584,7 @@ mod tests {
             input_arity: 2,
         };
         let plan = mfp.into_plan().unwrap();
-        let mut compiled = CompiledMfp::try_new(plan).unwrap();
+        let mut compiled = CompiledMfp::try_new(plan, &[]).unwrap();
 
         let arena = RowArena::new();
         let mut datums: Vec<Datum<'_>> = vec![Datum::Int64(5), Datum::Int64(10)];
@@ -544,7 +621,7 @@ mod tests {
             input_arity: 2,
         };
         let plan = mfp.into_plan().unwrap();
-        let mut compiled = CompiledMfp::try_new(plan).unwrap();
+        let mut compiled = CompiledMfp::try_new(plan, &[]).unwrap();
 
         // Verify first session is compiled, second is not.
         assert!(compiled.compiled_sessions[0].is_some());
@@ -583,7 +660,7 @@ mod tests {
             input_arity: 1,
         };
         let plan = mfp.into_plan().unwrap();
-        let result = CompiledMfp::try_new(plan);
+        let result = CompiledMfp::try_new(plan, &[]);
         assert!(result.is_err());
     }
 }

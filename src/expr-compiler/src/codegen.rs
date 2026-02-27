@@ -41,8 +41,11 @@ pub struct WasmLayout {
 /// * Errors: contiguous array of bytes (1 byte per row, 0=ok, 1=error)
 ///
 /// Returns `None` if the expression is not compilable.
-pub fn generate_wasm(expr: &MirScalarExpr) -> Option<(Vec<u8>, WasmLayout)> {
-    if !crate::analyze::is_compilable(expr) {
+pub fn generate_wasm(
+    expr: &MirScalarExpr,
+    input_types: &[mz_repr::SqlScalarType],
+) -> Option<(Vec<u8>, WasmLayout)> {
+    if !crate::analyze::is_compilable(expr, input_types) {
         return None;
     }
 
@@ -312,7 +315,13 @@ fn emit_expr(
                     func.instruction(&Instruction::LocalSet(l.local_is_null));
                     func.instruction(&Instruction::I64Const(0));
                 }
-                _ => unreachable!("analyze ensures only Int64/Null literals"),
+                Datum::True => {
+                    func.instruction(&Instruction::I64Const(1));
+                }
+                Datum::False => {
+                    func.instruction(&Instruction::I64Const(0));
+                }
+                _ => unreachable!("analyze ensures only Int64/Null/True/False literals"),
             }
         }
 
@@ -335,6 +344,24 @@ fn emit_expr(
             BinaryFunc::BitXorInt64(_) => {
                 emit_bitwise_int64(func, expr1, expr2, col_to_param, &l, &Instruction::I64Xor)
             }
+            BinaryFunc::Eq(_) => {
+                emit_comparison_int64(func, expr1, expr2, col_to_param, &l, &Instruction::I64Eq)
+            }
+            BinaryFunc::NotEq(_) => {
+                emit_comparison_int64(func, expr1, expr2, col_to_param, &l, &Instruction::I64Ne)
+            }
+            BinaryFunc::Lt(_) => {
+                emit_comparison_int64(func, expr1, expr2, col_to_param, &l, &Instruction::I64LtS)
+            }
+            BinaryFunc::Lte(_) => {
+                emit_comparison_int64(func, expr1, expr2, col_to_param, &l, &Instruction::I64LeS)
+            }
+            BinaryFunc::Gt(_) => {
+                emit_comparison_int64(func, expr1, expr2, col_to_param, &l, &Instruction::I64GtS)
+            }
+            BinaryFunc::Gte(_) => {
+                emit_comparison_int64(func, expr1, expr2, col_to_param, &l, &Instruction::I64GeS)
+            }
             _ => unreachable!("analyze ensures only supported binary functions"),
         },
 
@@ -345,6 +372,7 @@ fn emit_expr(
             UnaryFunc::NegInt64(_) => emit_neg_int64(func, child, col_to_param, &l),
             UnaryFunc::BitNotInt64(_) => emit_bit_not_int64(func, child, col_to_param, &l),
             UnaryFunc::AbsInt64(_) => emit_abs_int64(func, child, col_to_param, &l),
+            UnaryFunc::Not(_) => emit_not(func, child, col_to_param, &l),
             _ => unreachable!("analyze ensures only supported unary functions"),
         },
 
@@ -783,6 +811,78 @@ fn emit_bitwise_int64(
     // Stack: [result]
 }
 
+/// Emits WASM for an infallible comparison of two Int64 operands.
+///
+/// The `cmp_instruction` should be one of the WASM i64 comparison instructions
+/// (I64Eq, I64Ne, I64LtS, I64LeS, I64GtS, I64GeS). The result is an i32 (0 or 1),
+/// which is widened to i64 via `i64.extend_i32_u` to maintain the stack convention.
+fn emit_comparison_int64(
+    func: &mut wasm_encoder::Function,
+    expr1: &MirScalarExpr,
+    expr2: &MirScalarExpr,
+    col_to_param: &std::collections::BTreeMap<usize, usize>,
+    l: &EmitLocals,
+    cmp_instruction: &Instruction<'static>,
+) {
+    emit_expr(
+        func,
+        expr1,
+        col_to_param,
+        l.local_i,
+        l.local_result,
+        l.local_is_null,
+        l.local_is_error,
+        l.local_a,
+        l.local_b,
+        l.local_saved_null,
+    );
+    emit_expr(
+        func,
+        expr2,
+        col_to_param,
+        l.local_i,
+        l.local_result,
+        l.local_is_null,
+        l.local_is_error,
+        l.local_a,
+        l.local_b,
+        l.local_saved_null,
+    );
+    // Stack: [a(i64), b(i64)]
+    func.instruction(cmp_instruction);
+    // Stack: [result(i32)]  — WASM comparisons return i32
+    func.instruction(&Instruction::I64ExtendI32U);
+    // Stack: [result(i64)]  — widened to i64 for stack convention
+}
+
+/// Emits WASM for `NOT a` (boolean negation). Infallible.
+///
+/// Uses `i64.eqz` (returns 1 if input is 0, else 0) followed by `i64.extend_i32_u`.
+fn emit_not(
+    func: &mut wasm_encoder::Function,
+    expr: &MirScalarExpr,
+    col_to_param: &std::collections::BTreeMap<usize, usize>,
+    l: &EmitLocals,
+) {
+    emit_expr(
+        func,
+        expr,
+        col_to_param,
+        l.local_i,
+        l.local_result,
+        l.local_is_null,
+        l.local_is_error,
+        l.local_a,
+        l.local_b,
+        l.local_saved_null,
+    );
+    // Stack: [a(i64)]
+    func.instruction(&Instruction::I64Eqz);
+    // Stack: [result(i32)]  — 0→1, nonzero→0
+    func.instruction(&Instruction::I64ExtendI32U);
+    // Stack: [result(i64)]
+}
+
 /// Emits WASM for `-a` (negation) with overflow detection.
 ///
 /// `i64::MIN` cannot be negated: error code 3 (Int64OutOfRange).
@@ -908,7 +1008,7 @@ fn emit_abs_int64(
 mod tests {
     use super::*;
     use mz_expr::MirScalarExpr;
-    use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row};
+    use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, SqlScalarType};
 
     fn col(idx: usize) -> MirScalarExpr {
         MirScalarExpr::Column(idx, Default::default())
@@ -935,7 +1035,8 @@ mod tests {
     #[mz_ore::test]
     fn test_generate_simple_add() {
         let expr = add_i64(col(0), col(1));
-        let result = generate_wasm(&expr);
+        let types = vec![SqlScalarType::Int64, SqlScalarType::Int64];
+        let result = generate_wasm(&expr, &types);
         assert!(result.is_some());
         let (wasm_bytes, layout) = result.unwrap();
         assert_eq!(layout.num_input_cols, 2);
@@ -946,7 +1047,8 @@ mod tests {
     #[mz_ore::test]
     fn test_generate_add_with_literal() {
         let expr = add_i64(col(0), lit_i64(10));
-        let result = generate_wasm(&expr);
+        let types = vec![SqlScalarType::Int64];
+        let result = generate_wasm(&expr, &types);
         assert!(result.is_some());
         let (_, layout) = result.unwrap();
         assert_eq!(layout.num_input_cols, 1);
@@ -958,6 +1060,6 @@ mod tests {
             func: mz_expr::VariadicFunc::Coalesce(mz_expr::func::variadic::Coalesce),
             exprs: vec![col(0)],
         };
-        assert!(generate_wasm(&expr).is_none());
+        assert!(generate_wasm(&expr, &[]).is_none());
     }
 }

@@ -49,9 +49,12 @@ impl ExprEngine {
     pub fn compile(
         &self,
         expr: &MirScalarExpr,
-        _input_types: &[(SqlScalarType, bool)],
+        input_types: &[(SqlScalarType, bool)],
     ) -> Result<Option<CompiledExpr>, wasmtime::Error> {
-        let (wasm_bytes, layout) = match codegen::generate_wasm(expr) {
+        let scalar_types: Vec<SqlScalarType> =
+            input_types.iter().map(|(st, _)| st.clone()).collect();
+
+        let (wasm_bytes, layout) = match codegen::generate_wasm(expr, &scalar_types) {
             Some(result) => result,
             None => return Ok(None),
         };
@@ -60,8 +63,8 @@ impl ExprEngine {
 
         let input_columns = crate::analyze::referenced_columns(expr);
 
-        // For milestone 1, the output type is always Int64.
-        let output_type = SqlScalarType::Int64;
+        let output_type =
+            crate::analyze::infer_type(expr, &scalar_types).unwrap_or(SqlScalarType::Int64);
 
         Ok(Some(CompiledExpr {
             module,
@@ -86,6 +89,11 @@ impl CompiledExpr {
     /// Returns the input column indices this expression reads, in parameter order.
     pub fn input_columns(&self) -> &[usize] {
         &self.input_columns
+    }
+
+    /// Returns the output scalar type of this compiled expression.
+    pub fn output_type(&self) -> &SqlScalarType {
+        &self.output_type
     }
 
     /// Evaluates the compiled expression on the given column batch.
@@ -205,11 +213,19 @@ impl CompiledExpr {
             error_codes[i] = u32::from(error_byte);
         }
 
-        Ok(ResultColumn {
-            column: TypedColumn::Int64 {
+        let column = match self.output_type {
+            SqlScalarType::Bool => TypedColumn::Bool {
+                values: out_values.iter().map(|&v| v != 0).collect(),
+                validity: out_validity,
+            },
+            _ => TypedColumn::Int64 {
                 values: out_values,
                 validity: out_validity,
             },
+        };
+
+        Ok(ResultColumn {
+            column,
             errors: out_errors,
             error_codes,
         })
@@ -440,6 +456,8 @@ mod tests {
         // Convert to owned datum.
         Ok(match result {
             Datum::Int64(v) => Datum::Int64(v),
+            Datum::True => Datum::True,
+            Datum::False => Datum::False,
             Datum::Null => Datum::Null,
             other => panic!("unexpected datum type: {other:?}"),
         })
@@ -487,23 +505,25 @@ mod tests {
                 .collect();
 
             let interpreted = eval_interpreted(expr, &datums);
+
+            if result.errors[i] {
+                // Compiled path detected an error; interpreter should too.
+                assert!(
+                    interpreted.is_err(),
+                    "row {i}: compiled errored but interpreter returned {:?}",
+                    interpreted
+                );
+                continue;
+            }
+
             match &result.column {
                 TypedColumn::Int64 { values, validity } => {
-                    if result.errors[i] {
-                        // Compiled path detected an error; interpreter should too.
-                        assert!(
-                            interpreted.is_err(),
-                            "row {i}: compiled errored but interpreter returned {:?}",
-                            interpreted
-                        );
-                    } else if !validity[i] {
-                        // Compiled path says null; interpreter should agree.
+                    if !validity[i] {
                         assert!(
                             matches!(&interpreted, Ok(Datum::Null)),
                             "row {i}: compiled null but interpreter returned {interpreted:?}"
                         );
                     } else {
-                        // Compiled path returned a value; interpreter should match.
                         match &interpreted {
                             Ok(Datum::Int64(v)) => {
                                 assert_eq!(
@@ -518,7 +538,29 @@ mod tests {
                         }
                     }
                 }
-                _ => panic!("expected Int64 column"),
+                TypedColumn::Bool { values, validity } => {
+                    if !validity[i] {
+                        assert!(
+                            matches!(&interpreted, Ok(Datum::Null)),
+                            "row {i}: compiled null but interpreter returned {interpreted:?}"
+                        );
+                    } else {
+                        let expected = if values[i] { Datum::True } else { Datum::False };
+                        match &interpreted {
+                            Ok(d) => {
+                                assert_eq!(
+                                    *d, expected,
+                                    "row {i}: compiled={:?}, interpreted={:?}",
+                                    expected, d
+                                );
+                            }
+                            other => {
+                                panic!("row {i}: compiled {:?} but interpreted {other:?}", expected)
+                            }
+                        }
+                    }
+                }
+                other => panic!("unexpected column type: {other:?}"),
             }
         }
     }
@@ -675,6 +717,149 @@ mod tests {
         proptest!(|(rows in arb_batch(2, 50))| {
             let expr = abs_i64(sub_i64(col(0), col(1)));
             assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
+
+    // --- Comparison and Bool helpers ---
+
+    fn eq_expr(a: MirScalarExpr, b: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallBinary {
+            func: BinaryFunc::Eq(mz_expr::func::Eq),
+            expr1: Box::new(a),
+            expr2: Box::new(b),
+        }
+    }
+
+    fn not_eq_expr(a: MirScalarExpr, b: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallBinary {
+            func: BinaryFunc::NotEq(mz_expr::func::NotEq),
+            expr1: Box::new(a),
+            expr2: Box::new(b),
+        }
+    }
+
+    fn lt_expr(a: MirScalarExpr, b: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallBinary {
+            func: BinaryFunc::Lt(mz_expr::func::Lt),
+            expr1: Box::new(a),
+            expr2: Box::new(b),
+        }
+    }
+
+    fn lte_expr(a: MirScalarExpr, b: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallBinary {
+            func: BinaryFunc::Lte(mz_expr::func::Lte),
+            expr1: Box::new(a),
+            expr2: Box::new(b),
+        }
+    }
+
+    fn gt_expr(a: MirScalarExpr, b: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallBinary {
+            func: BinaryFunc::Gt(mz_expr::func::Gt),
+            expr1: Box::new(a),
+            expr2: Box::new(b),
+        }
+    }
+
+    fn gte_expr(a: MirScalarExpr, b: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallBinary {
+            func: BinaryFunc::Gte(mz_expr::func::Gte),
+            expr1: Box::new(a),
+            expr2: Box::new(b),
+        }
+    }
+
+    fn not_expr(a: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallUnary {
+            func: UnaryFunc::Not(mz_expr::func::Not),
+            expr: Box::new(a),
+        }
+    }
+
+    // --- Comparison proptests ---
+
+    #[mz_ore::test]
+    fn proptest_eq_two_columns() {
+        proptest!(|(rows in arb_batch(2, 100))| {
+            let expr = eq_expr(col(0), col(1));
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_not_eq_two_columns() {
+        proptest!(|(rows in arb_batch(2, 100))| {
+            let expr = not_eq_expr(col(0), col(1));
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_lt_two_columns() {
+        proptest!(|(rows in arb_batch(2, 100))| {
+            let expr = lt_expr(col(0), col(1));
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_lte_two_columns() {
+        proptest!(|(rows in arb_batch(2, 100))| {
+            let expr = lte_expr(col(0), col(1));
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_gt_two_columns() {
+        proptest!(|(rows in arb_batch(2, 100))| {
+            let expr = gt_expr(col(0), col(1));
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_gte_two_columns() {
+        proptest!(|(rows in arb_batch(2, 100))| {
+            let expr = gte_expr(col(0), col(1));
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_not_of_lt() {
+        // NOT (col0 < col1)
+        proptest!(|(rows in arb_batch(2, 100))| {
+            let expr = not_expr(lt_expr(col(0), col(1)));
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_comparison_with_arithmetic() {
+        // (col0 + col1) < col2
+        proptest!(|(rows in arb_batch(3, 50))| {
+            let expr = lt_expr(add_i64(col(0), col(1)), col(2));
+            assert_compiled_matches_interpreted(&expr, &rows, 3);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_nested_comparison_not() {
+        // NOT (col0 = (col1 + col2))
+        proptest!(|(rows in arb_batch(3, 50))| {
+            let expr = not_expr(eq_expr(col(0), add_i64(col(1), col(2))));
+            assert_compiled_matches_interpreted(&expr, &rows, 3);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_comparison_with_literal() {
+        // col0 < 42
+        proptest!(|(rows in arb_batch(1, 100))| {
+            let expr = lt_expr(col(0), lit_i64(42));
+            assert_compiled_matches_interpreted(&expr, &rows, 1);
         });
     }
 }
