@@ -23,7 +23,8 @@ use crate::engine::{CompiledExpr, ExprEngine};
 ///
 /// Created once per operator, reused across all rows. The WASM memory is
 /// pre-allocated for single-row evaluation, and parameter values (memory
-/// offsets) are precomputed.
+/// offsets) are precomputed. Supports both per-row [`eval`](Self::eval)
+/// and batch [`eval_batch`](Self::eval_batch) evaluation.
 pub struct CompiledExprSession {
     store: wasmtime::Store<()>,
     memory: wasmtime::Memory,
@@ -39,6 +40,10 @@ pub struct CompiledExprSession {
     input_columns: Vec<usize>,
     /// The scalar type of the output, used to decode the i64 result.
     output_type: SqlScalarType,
+    /// Number of input columns (cached for batch layout computation).
+    num_input_cols: usize,
+    /// Current WASM memory size in pages (64KB each). Used to grow for batch evaluation.
+    allocated_pages: u32,
 }
 
 impl CompiledExprSession {
@@ -96,6 +101,8 @@ impl CompiledExprSession {
             .get_func(&mut store, "eval")
             .expect("eval function must exist in compiled module");
 
+        #[allow(clippy::as_conversions)]
+        let allocated_pages = num_pages as u32;
         Ok(Self {
             store,
             memory,
@@ -107,6 +114,8 @@ impl CompiledExprSession {
             output_errors_ptr,
             input_columns: compiled.input_columns().to_vec(),
             output_type: compiled.output_type().clone(),
+            num_input_cols,
+            allocated_pages,
         })
     }
 
@@ -187,6 +196,161 @@ impl CompiledExprSession {
                 _ => Ok(Datum::Int64(result_value)),
             }
         }
+    }
+
+    /// Evaluates the compiled expression on a batch of rows in a single WASM call.
+    ///
+    /// Each element of `datums_per_row` is one row's worth of datums (same format
+    /// as [`eval`](Self::eval)). The WASM function is called once with `num_rows = N`,
+    /// processing all rows in its internal loop. This amortizes the per-call overhead
+    /// of crossing the WASM boundary.
+    ///
+    /// Memory is grown automatically if needed and reused across calls.
+    pub fn eval_batch(
+        &mut self,
+        datums_per_row: &[&[Datum<'_>]],
+    ) -> Vec<Result<Datum<'static>, EvalError>> {
+        let num_rows = datums_per_row.len();
+        if num_rows == 0 {
+            return vec![];
+        }
+
+        // Calculate memory layout for N rows.
+        let per_col_bytes = num_rows * 8 + num_rows;
+        let output_bytes = num_rows * 8 + num_rows + num_rows;
+        let total_bytes = self.num_input_cols * per_col_bytes + output_bytes;
+        let needed_pages = u32::try_from((total_bytes + 65535) / 65536).unwrap_or(1);
+
+        // Grow memory if needed.
+        if needed_pages > self.allocated_pages {
+            let delta = u64::from(needed_pages - self.allocated_pages);
+            self.memory
+                .grow(&mut self.store, delta)
+                .expect("WASM memory growth failed");
+            self.allocated_pages = needed_pages;
+        }
+
+        // Compute column-major offsets for this batch.
+        let mut offset = 0usize;
+        let mut col_offsets = Vec::with_capacity(self.num_input_cols);
+        for _ in 0..self.num_input_cols {
+            let values_ptr = offset;
+            offset += num_rows * 8;
+            let validity_ptr = offset;
+            offset += num_rows;
+            col_offsets.push((values_ptr, validity_ptr));
+        }
+        let out_values_ptr = offset;
+        offset += num_rows * 8;
+        let out_validity_ptr = offset;
+        offset += num_rows;
+        let out_errors_ptr = offset;
+
+        // Build batch parameters.
+        let mut params = Vec::with_capacity(1 + self.num_input_cols * 2 + 3);
+        #[allow(clippy::as_conversions)]
+        params.push(wasmtime::Val::I32(num_rows as i32));
+        #[allow(clippy::as_conversions)]
+        for &(vp, validp) in &col_offsets {
+            params.push(wasmtime::Val::I32(vp as i32));
+            params.push(wasmtime::Val::I32(validp as i32));
+        }
+        #[allow(clippy::as_conversions)]
+        {
+            params.push(wasmtime::Val::I32(out_values_ptr as i32));
+            params.push(wasmtime::Val::I32(out_validity_ptr as i32));
+            params.push(wasmtime::Val::I32(out_errors_ptr as i32));
+        }
+
+        // Write input data in column-major layout.
+        {
+            let mem_data = self.memory.data_mut(&mut self.store);
+            for (param_idx, &col_idx) in self.input_columns.iter().enumerate() {
+                let (values_ptr, validity_ptr) = col_offsets[param_idx];
+                for (row_idx, row_datums) in datums_per_row.iter().enumerate() {
+                    let dst = values_ptr + row_idx * 8;
+                    match row_datums[col_idx] {
+                        Datum::Int64(v) => {
+                            mem_data[dst..dst + 8].copy_from_slice(&v.to_le_bytes());
+                            mem_data[validity_ptr + row_idx] = 1;
+                        }
+                        Datum::True => {
+                            mem_data[dst..dst + 8].copy_from_slice(&1i64.to_le_bytes());
+                            mem_data[validity_ptr + row_idx] = 1;
+                        }
+                        Datum::False => {
+                            mem_data[dst..dst + 8].copy_from_slice(&0i64.to_le_bytes());
+                            mem_data[validity_ptr + row_idx] = 1;
+                        }
+                        Datum::Null => {
+                            mem_data[dst..dst + 8].copy_from_slice(&0i64.to_le_bytes());
+                            mem_data[validity_ptr + row_idx] = 0;
+                        }
+                        _ => {
+                            return vec![
+                                Err(EvalError::Internal(
+                                    "unsupported datum type for compiled WASM eval"
+                                        .to_string()
+                                        .into_boxed_str(),
+                                ));
+                                num_rows
+                            ];
+                        }
+                    }
+                }
+            }
+        }
+
+        // Single WASM call for all rows.
+        let mut results_buf = [];
+        if let Err(e) = self
+            .eval_func
+            .call(&mut self.store, &params, &mut results_buf)
+        {
+            return vec![
+                Err(EvalError::Internal(
+                    format!("WASM eval failed: {e}").into_boxed_str()
+                ));
+                num_rows
+            ];
+        }
+
+        // Read results from WASM memory.
+        let mem_data = self.memory.data(&self.store);
+        let mut results = Vec::with_capacity(num_rows);
+        for i in 0..num_rows {
+            let bytes: [u8; 8] = mem_data[out_values_ptr + i * 8..out_values_ptr + i * 8 + 8]
+                .try_into()
+                .expect("8 bytes");
+            let result_value = i64::from_le_bytes(bytes);
+            let is_valid = mem_data[out_validity_ptr + i] != 0;
+            let error_code = mem_data[out_errors_ptr + i];
+
+            if error_code != 0 {
+                results.push(Err(match error_code {
+                    1 => EvalError::NumericFieldOverflow,
+                    2 => EvalError::DivisionByZero,
+                    3 => EvalError::Int64OutOfRange("integer out of range".into()),
+                    _ => EvalError::Internal(
+                        format!("unknown WASM error code: {error_code}").into_boxed_str(),
+                    ),
+                }));
+            } else if !is_valid {
+                results.push(Ok(Datum::Null));
+            } else {
+                results.push(Ok(match self.output_type {
+                    SqlScalarType::Bool => {
+                        if result_value != 0 {
+                            Datum::True
+                        } else {
+                            Datum::False
+                        }
+                    }
+                    _ => Datum::Int64(result_value),
+                }));
+            }
+        }
+        results
     }
 }
 
@@ -652,6 +816,102 @@ mod tests {
         let unpacked: Vec<_> = row.iter().collect();
         assert_eq!(unpacked[0], Datum::Int64(10)); // 3 + 7
         assert_eq!(unpacked[1], Datum::Int64(3)); // coalesce(3) = 3
+    }
+
+    #[mz_ore::test]
+    fn test_eval_batch_simple_add() {
+        let engine = ExprEngine::new().unwrap();
+        let expr = add_i64(col(0), col(1));
+        let input_types = vec![];
+        let compiled = engine.compile(&expr, &input_types).unwrap().unwrap();
+        let mut session = CompiledExprSession::new(&compiled).unwrap();
+
+        let rows: Vec<Vec<Datum<'_>>> = vec![
+            vec![Datum::Int64(1), Datum::Int64(2)],
+            vec![Datum::Int64(10), Datum::Int64(20)],
+            vec![Datum::Null, Datum::Int64(5)],
+            vec![Datum::Int64(3), Datum::Null],
+        ];
+        let slices: Vec<&[Datum<'_>]> = rows.iter().map(|v| v.as_slice()).collect();
+        let results = session.eval_batch(&slices);
+
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0].as_ref().unwrap(), &Datum::Int64(3));
+        assert_eq!(results[1].as_ref().unwrap(), &Datum::Int64(30));
+        assert_eq!(results[2].as_ref().unwrap(), &Datum::Null);
+        assert_eq!(results[3].as_ref().unwrap(), &Datum::Null);
+    }
+
+    #[mz_ore::test]
+    fn test_eval_batch_reuse_with_growing_sizes() {
+        // Test that eval_batch handles memory growth across calls.
+        let engine = ExprEngine::new().unwrap();
+        let expr = add_i64(col(0), col(1));
+        let input_types = vec![];
+        let compiled = engine.compile(&expr, &input_types).unwrap().unwrap();
+        let mut session = CompiledExprSession::new(&compiled).unwrap();
+
+        // Small batch.
+        let rows_small: Vec<Vec<Datum<'_>>> = (0..10)
+            .map(|i| vec![Datum::Int64(i), Datum::Int64(i * 2)])
+            .collect();
+        let slices_small: Vec<&[Datum<'_>]> = rows_small.iter().map(|v| v.as_slice()).collect();
+        let results = session.eval_batch(&slices_small);
+        assert_eq!(results.len(), 10);
+        for i in 0..10 {
+            assert_eq!(
+                results[i].as_ref().unwrap(),
+                &Datum::Int64(i64::try_from(i).unwrap() * 3)
+            );
+        }
+
+        // Larger batch (forces memory growth).
+        let rows_large: Vec<Vec<Datum<'_>>> = (0..5000)
+            .map(|i| vec![Datum::Int64(i), Datum::Int64(1)])
+            .collect();
+        let slices_large: Vec<&[Datum<'_>]> = rows_large.iter().map(|v| v.as_slice()).collect();
+        let results = session.eval_batch(&slices_large);
+        assert_eq!(results.len(), 5000);
+        for i in 0..5000 {
+            assert_eq!(
+                results[i].as_ref().unwrap(),
+                &Datum::Int64(i64::try_from(i).unwrap() + 1)
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_eval_batch_matches_per_row() {
+        // Verify batch results match per-row eval results.
+        let engine = ExprEngine::new().unwrap();
+        let expr = add_i64(col(0), col(1));
+        let input_types = vec![];
+        let compiled = engine.compile(&expr, &input_types).unwrap().unwrap();
+        let mut session = CompiledExprSession::new(&compiled).unwrap();
+
+        let rows: Vec<Vec<Datum<'_>>> = vec![
+            vec![Datum::Int64(100), Datum::Int64(200)],
+            vec![Datum::Null, Datum::Int64(1)],
+            vec![Datum::Int64(i64::MAX - 1), Datum::Int64(1)],
+            vec![Datum::Int64(0), Datum::Int64(0)],
+        ];
+
+        // Per-row results.
+        let per_row: Vec<Result<Datum<'static>, EvalError>> =
+            rows.iter().map(|r| session.eval(r)).collect();
+
+        // Batch results.
+        let slices: Vec<&[Datum<'_>]> = rows.iter().map(|v| v.as_slice()).collect();
+        let batch = session.eval_batch(&slices);
+
+        assert_eq!(per_row.len(), batch.len());
+        for i in 0..per_row.len() {
+            match (&per_row[i], &batch[i]) {
+                (Ok(a), Ok(b)) => assert_eq!(a, b),
+                (Err(_), Err(_)) => {} // Both errored, ok
+                (pr, br) => panic!("mismatch at row {i}: per_row={pr:?}, batch={br:?}"),
+            }
+        }
     }
 
     #[mz_ore::test]

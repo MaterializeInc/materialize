@@ -11,14 +11,16 @@
 //!
 //! Each benchmark constructs a [`MapFilterProject`] with expressions and/or predicates,
 //! pre-generates a batch of input rows, then measures per-row evaluation throughput
-//! for both the interpreted ([`SafeMfpPlan`]) and compiled ([`CompiledMfp`]) paths.
+//! for the interpreted ([`SafeMfpPlan`]), compiled per-row ([`CompiledMfp`]),
+//! and compiled batch ([`CompiledExprSession::eval_batch`]) paths.
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 use mz_expr::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, UnaryFunc, VariadicFunc};
 use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, RowArena, SqlScalarType};
 
-use mz_expr_compiler::eval::CompiledMfp;
+use mz_expr_compiler::engine::ExprEngine;
+use mz_expr_compiler::eval::{CompiledExprSession, CompiledMfp};
 
 // ---------------------------------------------------------------------------
 // Expression builders
@@ -150,20 +152,24 @@ fn generate_rows(n: usize, num_cols: usize) -> Vec<Row> {
 struct Scenario {
     name: &'static str,
     mfp: MapFilterProject,
+    /// The key expression to batch-evaluate (either the MFP expression or predicate).
+    bench_expr: MirScalarExpr,
     input_types: Vec<SqlScalarType>,
     num_cols: usize,
 }
 
 /// Simple: `col(0) + col(1)`
 fn scenario_simple_add() -> Scenario {
+    let expr = add_i64(col(0), col(1));
     Scenario {
         name: "add_two_cols",
         mfp: MapFilterProject {
-            expressions: vec![add_i64(col(0), col(1))],
+            expressions: vec![expr.clone()],
             predicates: vec![],
             projection: vec![0, 1, 2],
             input_arity: 2,
         },
+        bench_expr: expr,
         input_types: vec![SqlScalarType::Int64, SqlScalarType::Int64],
         num_cols: 2,
     }
@@ -171,14 +177,16 @@ fn scenario_simple_add() -> Scenario {
 
 /// Arithmetic chain: `(col(0) + col(1)) * (col(2) - col(0))`
 fn scenario_arithmetic_chain() -> Scenario {
+    let expr = mul_i64(add_i64(col(0), col(1)), sub_i64(col(2), col(0)));
     Scenario {
         name: "arith_chain",
         mfp: MapFilterProject {
-            expressions: vec![mul_i64(add_i64(col(0), col(1)), sub_i64(col(2), col(0)))],
+            expressions: vec![expr.clone()],
             predicates: vec![],
             projection: vec![0, 1, 2, 3],
             input_arity: 3,
         },
+        bench_expr: expr,
         input_types: vec![
             SqlScalarType::Int64,
             SqlScalarType::Int64,
@@ -195,10 +203,11 @@ fn scenario_simple_predicate() -> Scenario {
         name: "where_gt_42",
         mfp: MapFilterProject {
             expressions: vec![],
-            predicates: vec![(1, pred)],
+            predicates: vec![(1, pred.clone())],
             projection: vec![0],
             input_arity: 1,
         },
+        bench_expr: pred,
         input_types: vec![SqlScalarType::Int64],
         num_cols: 1,
     }
@@ -211,10 +220,11 @@ fn scenario_compound_predicate() -> Scenario {
         name: "where_and",
         mfp: MapFilterProject {
             expressions: vec![],
-            predicates: vec![(2, pred)],
+            predicates: vec![(2, pred.clone())],
             projection: vec![0, 1],
             input_arity: 2,
         },
+        bench_expr: pred,
         input_types: vec![SqlScalarType::Int64, SqlScalarType::Int64],
         num_cols: 2,
     }
@@ -227,11 +237,12 @@ fn scenario_map_and_filter() -> Scenario {
     Scenario {
         name: "map_and_filter",
         mfp: MapFilterProject {
-            expressions: vec![expr],
+            expressions: vec![expr.clone()],
             predicates: vec![(2, pred)],
             projection: vec![2],
             input_arity: 2,
         },
+        bench_expr: expr,
         input_types: vec![SqlScalarType::Int64, SqlScalarType::Int64],
         num_cols: 2,
     }
@@ -246,10 +257,11 @@ fn scenario_complex_bool() -> Scenario {
         name: "complex_bool",
         mfp: MapFilterProject {
             expressions: vec![],
-            predicates: vec![(3, pred)],
+            predicates: vec![(3, pred.clone())],
             projection: vec![0, 1, 2],
             input_arity: 3,
         },
+        bench_expr: pred,
         input_types: vec![
             SqlScalarType::Int64,
             SqlScalarType::Int64,
@@ -266,10 +278,11 @@ fn scenario_is_null_filter() -> Scenario {
         name: "is_null_filter",
         mfp: MapFilterProject {
             expressions: vec![],
-            predicates: vec![(2, pred)],
+            predicates: vec![(2, pred.clone())],
             projection: vec![0, 1],
             input_arity: 2,
         },
+        bench_expr: pred,
         input_types: vec![SqlScalarType::Int64, SqlScalarType::Int64],
         num_cols: 2,
     }
@@ -290,6 +303,8 @@ fn bench_mfp(c: &mut Criterion) {
         scenario_is_null_filter(),
     ];
 
+    let engine = ExprEngine::new().unwrap();
+
     for num_rows in [100usize, 1_000, 10_000] {
         let mut group = c.benchmark_group(format!("mfp_{num_rows}_rows"));
         group.throughput(Throughput::Elements(u64::try_from(num_rows).unwrap()));
@@ -297,7 +312,11 @@ fn bench_mfp(c: &mut Criterion) {
         for scenario in &scenarios {
             let rows = generate_rows(num_rows, scenario.num_cols);
 
-            // --- Interpreted path ---
+            // Pre-unpack rows for batch evaluation (done once, outside benchmark loop).
+            let unpacked: Vec<Vec<Datum<'_>>> = rows.iter().map(|r| r.unpack()).collect();
+            let datum_slices: Vec<&[Datum<'_>]> = unpacked.iter().map(|v| v.as_slice()).collect();
+
+            // --- Interpreted path (full MFP, per-row) ---
             {
                 let mfp = scenario.mfp.clone();
                 let plan = mfp.into_plan().unwrap();
@@ -319,7 +338,7 @@ fn bench_mfp(c: &mut Criterion) {
                 );
             }
 
-            // --- Compiled path ---
+            // --- Compiled path (full MFP, per-row WASM calls) ---
             {
                 let mfp = scenario.mfp.clone();
                 let plan = mfp.into_plan().unwrap();
@@ -327,7 +346,7 @@ fn bench_mfp(c: &mut Criterion) {
                 let mut compiled = match CompiledMfp::try_new(plan, &input_types) {
                     Ok(c) => c,
                     Err(_) => {
-                        // If nothing compiled, skip this benchmark.
+                        // If nothing compiled, skip compiled benchmarks for this scenario.
                         continue;
                     }
                 };
@@ -350,6 +369,33 @@ fn bench_mfp(c: &mut Criterion) {
                                     &mut row_buf,
                                 );
                             }
+                        });
+                    },
+                );
+            }
+
+            // --- Compiled batch (single WASM call for all rows) ---
+            {
+                let compile_types: Vec<(SqlScalarType, bool)> = scenario
+                    .input_types
+                    .iter()
+                    .map(|st| (st.clone(), true))
+                    .collect();
+                let compiled_expr = match engine.compile(&scenario.bench_expr, &compile_types) {
+                    Ok(Some(c)) => c,
+                    _ => continue,
+                };
+                let mut session = match CompiledExprSession::new(&compiled_expr) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+
+                group.bench_with_input(
+                    BenchmarkId::new(format!("{}/compiled_batch", scenario.name), num_rows),
+                    &datum_slices,
+                    |b, slices| {
+                        b.iter(|| {
+                            let _ = session.eval_batch(slices);
                         });
                     },
                 );
