@@ -316,7 +316,9 @@ impl JoinImplementation {
                     MirRelationExpr::Join { implementation, .. }
                         if matches!(**implementation, IndexedFilter(..)) =>
                     {
-                        let IndexedFilter(id, ..) = &**implementation else { unreachable!() };
+                        let IndexedFilter(id, ..) = &**implementation else {
+                            unreachable!()
+                        };
                         available_arrangements[index]
                             .extend(indexes.get(Id::Global(id.clone())).map(|key| key.to_vec()));
                     }

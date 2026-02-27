@@ -2609,7 +2609,7 @@ impl AggregateExpr {
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
                 MirScalarExpr::call_variadic(
                     MapBuild {
-                        value_type: value_type.clone(),
+                        value_type: Box::new(value_type.clone()),
                     },
                     (0..2)
                         .map(|i| {
@@ -2673,11 +2673,11 @@ impl AggregateExpr {
 
                 MirScalarExpr::call_variadic(
                     ListCreate {
-                        elem_type: SqlScalarType::from_repr(&return_type_with_orig_row),
+                        elem_type: Box::new(SqlScalarType::from_repr(&return_type_with_orig_row)),
                     },
                     vec![MirScalarExpr::call_variadic(
                         RecordCreate {
-                            field_names: vec![column_name, ColumnName::from("?record?")],
+                            field_names: Box::new([column_name, ColumnName::from("?record?")]),
                         },
                         vec![result_expr, original_row],
                     )],
@@ -2716,11 +2716,11 @@ impl AggregateExpr {
 
                 MirScalarExpr::call_variadic(
                     ListCreate {
-                        elem_type: SqlScalarType::from_repr(&return_type_with_orig_row),
+                        elem_type: Box::new(SqlScalarType::from_repr(&return_type_with_orig_row)),
                     },
                     vec![MirScalarExpr::call_variadic(
                         RecordCreate {
-                            field_names: vec![column_name, ColumnName::from("?record?")],
+                            field_names: Box::new([column_name, ColumnName::from("?record?")]),
                         },
                         vec![result_expr, original_row],
                     )],
@@ -2759,11 +2759,11 @@ impl AggregateExpr {
 
                 MirScalarExpr::call_variadic(
                     ListCreate {
-                        elem_type: SqlScalarType::from_repr(&return_type_with_orig_row),
+                        elem_type: Box::new(SqlScalarType::from_repr(&return_type_with_orig_row)),
                     },
                     vec![MirScalarExpr::call_variadic(
                         RecordCreate {
-                            field_names: vec![column_name, ColumnName::from("?record?")],
+                            field_names: Box::new([column_name, ColumnName::from("?record?")]),
                         },
                         vec![result_expr, original_row],
                     )],
@@ -2810,11 +2810,11 @@ impl AggregateExpr {
 
                 MirScalarExpr::call_variadic(
                     ListCreate {
-                        elem_type: SqlScalarType::from_repr(&return_type),
+                        elem_type: Box::new(SqlScalarType::from_repr(&return_type)),
                     },
                     vec![MirScalarExpr::call_variadic(
                         RecordCreate {
-                            field_names: vec![column_name, ColumnName::from("?record?")],
+                            field_names: Box::new([column_name, ColumnName::from("?record?")]),
                         },
                         vec![result, original_row],
                     )],
@@ -2870,19 +2870,19 @@ impl AggregateExpr {
 
                 MirScalarExpr::call_variadic(
                     ListCreate {
-                        elem_type: SqlScalarType::from_repr(&return_type_with_orig_row),
+                        elem_type: Box::new(SqlScalarType::from_repr(&return_type_with_orig_row)),
                     },
                     vec![MirScalarExpr::call_variadic(
                         RecordCreate {
-                            field_names: vec![
+                            field_names: Box::new([
                                 ColumnName::from("?fused_window_aggr?"),
                                 ColumnName::from("?record?"),
-                            ],
+                            ]),
                         },
                         vec![
                             MirScalarExpr::call_variadic(
                                 RecordCreate {
-                                    field_names: col_names,
+                                    field_names: col_names.into_boxed_slice(),
                                 },
                                 func_result_exprs,
                             ),
@@ -2967,19 +2967,19 @@ impl AggregateExpr {
 
                 MirScalarExpr::call_variadic(
                     ListCreate {
-                        elem_type: SqlScalarType::from_repr(&return_type_with_orig_row),
+                        elem_type: Box::new(SqlScalarType::from_repr(&return_type_with_orig_row)),
                     },
                     vec![MirScalarExpr::call_variadic(
                         RecordCreate {
-                            field_names: vec![
+                            field_names: Box::new([
                                 ColumnName::from("?fused_value_window_func?"),
                                 ColumnName::from("?record?"),
-                            ],
+                            ]),
                         },
                         vec![
                             MirScalarExpr::call_variadic(
                                 RecordCreate {
-                                    field_names: col_names,
+                                    field_names: col_names.into_boxed_slice(),
                                 },
                                 func_result_exprs,
                             ),
@@ -3058,15 +3058,19 @@ impl AggregateExpr {
 
         MirScalarExpr::call_variadic(
             ListCreate {
-                elem_type: self
-                    .sql_typ(&sql_input_type)
-                    .scalar_type
-                    .unwrap_list_element_type()
-                    .clone(),
+                elem_type: Box::new(
+                    self.sql_typ(&sql_input_type)
+                        .scalar_type
+                        .unwrap_list_element_type()
+                        .clone(),
+                ),
             },
             vec![MirScalarExpr::call_variadic(
                 RecordCreate {
-                    field_names: vec![ColumnName::from(col_name), ColumnName::from("?record?")],
+                    field_names: Box::new([
+                        ColumnName::from(col_name),
+                        ColumnName::from("?record?"),
+                    ]),
                 },
                 vec![
                     MirScalarExpr::literal_ok(Datum::Int64(1), ReprScalarType::Int64),

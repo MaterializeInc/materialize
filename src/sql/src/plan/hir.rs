@@ -558,15 +558,9 @@ impl ScalarWindowExpr {
     pub fn into_expr(self) -> mz_expr::AggregateFunc {
         let order_by = self.order_by.into_boxed_slice();
         match self.func {
-            ScalarWindowFunc::RowNumber => mz_expr::AggregateFunc::RowNumber {
-                order_by,
-            },
-            ScalarWindowFunc::Rank => mz_expr::AggregateFunc::Rank {
-                order_by,
-            },
-            ScalarWindowFunc::DenseRank => mz_expr::AggregateFunc::DenseRank {
-                order_by,
-            },
+            ScalarWindowFunc::RowNumber => mz_expr::AggregateFunc::RowNumber { order_by },
+            ScalarWindowFunc::Rank => mz_expr::AggregateFunc::Rank { order_by },
+            ScalarWindowFunc::DenseRank => mz_expr::AggregateFunc::DenseRank { order_by },
         }
     }
 }
@@ -1402,10 +1396,12 @@ impl AggregateFunc {
             AggregateFunc::Count => mz_expr::AggregateFunc::Count,
             AggregateFunc::Any => mz_expr::AggregateFunc::Any,
             AggregateFunc::All => mz_expr::AggregateFunc::All,
-            AggregateFunc::JsonbAgg { order_by } => mz_expr::AggregateFunc::JsonbAgg { order_by: order_by.into_boxed_slice() },
-            AggregateFunc::JsonbObjectAgg { order_by } => {
-                mz_expr::AggregateFunc::JsonbObjectAgg { order_by: order_by.into_boxed_slice() }
-            }
+            AggregateFunc::JsonbAgg { order_by } => mz_expr::AggregateFunc::JsonbAgg {
+                order_by: order_by.into_boxed_slice(),
+            },
+            AggregateFunc::JsonbObjectAgg { order_by } => mz_expr::AggregateFunc::JsonbObjectAgg {
+                order_by: order_by.into_boxed_slice(),
+            },
             AggregateFunc::MapAgg {
                 order_by,
                 value_type,
@@ -1413,13 +1409,15 @@ impl AggregateFunc {
                 order_by: order_by.into_boxed_slice(),
                 value_type,
             },
-            AggregateFunc::ArrayConcat { order_by } => {
-                mz_expr::AggregateFunc::ArrayConcat { order_by: order_by.into_boxed_slice() }
-            }
-            AggregateFunc::ListConcat { order_by } => {
-                mz_expr::AggregateFunc::ListConcat { order_by: order_by.into_boxed_slice() }
-            }
-            AggregateFunc::StringAgg { order_by } => mz_expr::AggregateFunc::StringAgg { order_by: order_by.into_boxed_slice() },
+            AggregateFunc::ArrayConcat { order_by } => mz_expr::AggregateFunc::ArrayConcat {
+                order_by: order_by.into_boxed_slice(),
+            },
+            AggregateFunc::ListConcat { order_by } => mz_expr::AggregateFunc::ListConcat {
+                order_by: order_by.into_boxed_slice(),
+            },
+            AggregateFunc::StringAgg { order_by } => mz_expr::AggregateFunc::StringAgg {
+                order_by: order_by.into_boxed_slice(),
+            },
             // `AggregateFunc::FusedWindowAgg` should be specially handled in
             // `AggregateWindowExpr::into_expr`.
             AggregateFunc::FusedWindowAgg { funcs: _ } => {
@@ -3677,11 +3675,9 @@ impl HirScalarExpr {
         match expr {
             mz_expr::MirScalarExpr::Literal(result, _) => match *result {
                 Ok(row) => Ok(row),
-                Err(err) => Err(
-                    PlanError::ConstantExpressionSimplificationFailed(
-                        err.to_string_with_causes(),
-                    ),
-                ),
+                Err(err) => Err(PlanError::ConstantExpressionSimplificationFailed(
+                    err.to_string_with_causes(),
+                )),
             },
             _ => Err(PlanError::ConstantExpressionSimplificationFailed(
                 "Not a constant".to_string(),

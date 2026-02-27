@@ -1273,7 +1273,10 @@ impl MirScalarExpr {
                                     let source = exprs.swap_remove(0);
                                     source.call_binary(
                                         replacement,
-                                        BinaryFunc::from(func::RegexpReplace { regex, limit }),
+                                        BinaryFunc::from(func::RegexpReplace {
+                                            regex: Box::new(regex),
+                                            limit,
+                                        }),
                                     )
                                 }
                                 Err(err) => {
@@ -1482,7 +1485,7 @@ impl MirScalarExpr {
                 ..
             } = list_create
             {
-                ReprScalarType::from(typ)
+                ReprScalarType::from(typ.as_ref())
             } else {
                 unreachable!()
             }
@@ -3421,14 +3424,14 @@ mod tests {
     fn type_size_assertions() {
         use std::mem::size_of;
 
-        assert_eq!(size_of::<MirScalarExpr>(), 72);
+        assert_eq!(size_of::<MirScalarExpr>(), 56);
         assert_eq!(size_of::<crate::UnaryFunc>(), 48);
-        assert_eq!(size_of::<crate::BinaryFunc>(), 48);
-        assert_eq!(size_of::<crate::VariadicFunc>(), 40);
+        assert_eq!(size_of::<crate::BinaryFunc>(), 24);
+        assert_eq!(size_of::<crate::VariadicFunc>(), 24);
+
         assert_eq!(size_of::<crate::AggregateFunc>(), 48);
-        assert_eq!(size_of::<crate::AggregateExpr>(), 128);
+        assert_eq!(size_of::<crate::AggregateExpr>(), 112);
         assert_eq!(size_of::<EvalError>(), 40);
         assert_eq!(size_of::<crate::like_pattern::Matcher>(), 64);
     }
-
 }

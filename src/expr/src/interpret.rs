@@ -1620,9 +1620,9 @@ mod tests {
         let arena = RowArena::new();
 
         let expr = MirScalarExpr::CallUnary {
-            func: UnaryFunc::IsLikeMatch(IsLikeMatch(
-                Box::new(crate::like_pattern::compile("%whatever%", true).unwrap()),
-            )),
+            func: UnaryFunc::IsLikeMatch(IsLikeMatch(Box::new(
+                crate::like_pattern::compile("%whatever%", true).unwrap(),
+            ))),
             expr: Box::new(MirScalarExpr::column(0)),
         };
 

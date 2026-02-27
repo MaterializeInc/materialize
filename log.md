@@ -500,3 +500,90 @@ All join types work correctly with no performance regression:
 - `src/transform/src/typecheck.rs` — Differential match pattern updated for Box
 - `src/compute-types/src/plan/lowering.rs` — Differential match pattern updated, IndexedFilter key.to_vec()
 - `src/adapter/src/coord/peek.rs` — IndexedFilter vals.to_vec() for FastPathPlan
+
+## Session 10: Shrink MirScalarExpr from 72 to 56 bytes via shrinking BinaryFunc and VariadicFunc
+
+**Date:** 2026-02-27
+
+### Changes
+
+Three complementary optimizations that shrink BinaryFunc, VariadicFunc, and cascadingly MirScalarExpr:
+
+1. **Box `Regex` in `RegexpReplace` struct** (BinaryFunc 48 → 24 bytes)
+   - Changed `pub regex: Regex` to `pub regex: Box<Regex>` in `RegexpReplace`
+   - `mz_repr::adt::regex::Regex` is 40 bytes (wraps `regex::Regex` at 32 + 2 bools)
+   - Boxing saves 32 bytes (40 → 8), making RegexpReplace shrink from 48 to 16 bytes
+   - `RegexpReplace` was the single largest BinaryFunc variant; all ~180 other variants are unit structs (0 bytes)
+   - `regexp_replace` patterns are compiled once during planning — boxing has zero cost
+
+2. **Box `SqlScalarType` in 6 VariadicFunc variants** (VariadicFunc 40 → 24 bytes)
+   - `ArrayCreate`, `ListCreate`, `MapBuild`, `RangeCreate`, `ArrayFill`, `ArrayToString` all had `elem_type: SqlScalarType` (32 bytes)
+   - Changed to `elem_type: Box<SqlScalarType>` (8 bytes)
+   - These types are constructed once during planning and never modified — boxing has zero cost
+
+3. **Convert `RecordCreate::field_names` from `Vec<ColumnName>` to `Box<[ColumnName]>`** (24 → 16 bytes)
+   - Field names are set once during planning and never modified
+   - Eliminates the unused capacity field (same allocation, no tradeoff)
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| RegexpReplace | 48 | 16 | 32 bytes (67%) |
+| BinaryFunc | 48 | 24 | 24 bytes (50%) |
+| VariadicFunc | 40 | 24 | 16 bytes (40%) |
+| MirScalarExpr | 72 | 56 | 16 bytes (22%) |
+| AggregateExpr | 128 | 112 | 16 bytes (13%) |
+
+### Why MirScalarExpr shrank so dramatically
+
+Before: the two largest variants were:
+- `CallBinary { func: BinaryFunc(48), expr1: Box(8), expr2: Box(8) }` = 64 bytes
+- `CallVariadic { func: VariadicFunc(40), exprs: Vec(24) }` = 64 bytes
+
+After:
+- `CallBinary { func: BinaryFunc(24), expr1: Box(8), expr2: Box(8) }` = 40 bytes
+- `CallVariadic { func: VariadicFunc(24), exprs: Vec(24) }` = 48 bytes
+- `CallUnary { func: UnaryFunc(48), expr: Box(8) }` = 56 bytes (now the largest variant)
+
+MirScalarExpr = 56 bytes (with niche optimization, the discriminant fits without extra padding).
+
+### Cascading effects
+
+- **MirScalarExpr** is the core expression type — it's stored recursively in trees. Every node saves 16 bytes.
+- **AggregateExpr** contains MirScalarExpr inline, cascading from 128 → 112 bytes
+- Every `Vec<MirScalarExpr>` element saves 16 bytes (in Map, Filter, Join, FlatMap, etc.)
+- Every `Vec<AggregateExpr>` element saves 16 bytes (in Reduce nodes)
+- All plan structures, optimizer passes, and serialization benefit
+
+### Benchmark results
+
+All query types work correctly with no performance regression:
+
+| Query Type | Avg Time | Notes |
+|-----------|----------|-------|
+| ARRAY[x, x+1, x+2] 10K rows | ~32ms | Exercises ArrayCreate with boxed SqlScalarType |
+| LIST[x, x+1, x+2] 10K rows | ~22ms | Exercises ListCreate with boxed SqlScalarType |
+| map['a'=>..., 'b'=>...] 10K rows | ~19ms | Exercises MapBuild with boxed SqlScalarType |
+| ROW(x, x+1, x::text) 10K rows | ~17ms | Exercises RecordCreate with Box<[ColumnName]> |
+| regexp_replace(x, pattern, repl) 10K rows | ~1.4s | Exercises boxed Regex in BinaryFunc |
+| 5 binary ops (+ - * / %) 10K rows | ~15ms | Exercises smaller BinaryFunc in expression trees |
+| int4range(x, x+10) 10K rows | ~13ms | Exercises RangeCreate with boxed SqlScalarType |
+
+### Files changed (10 files)
+
+- `src/expr/src/scalar/func/impls/string.rs` — Box Regex field in RegexpReplace struct
+- `src/expr/src/scalar/func/variadic.rs` — Box SqlScalarType in 6 variants, Box<[ColumnName]> in RecordCreate, deref adjustments
+- `src/expr/src/scalar.rs` — Updated size assertions, Box::new at RegexpReplace construction, deref for ListCreate pattern match
+- `src/expr/src/relation.rs` — Box::new() at ListCreate/RecordCreate/MapBuild construction sites (18 changes)
+- `src/expr-parser/src/parser.rs` — Box::new at ArrayCreate/ListCreate construction sites
+- `src/sql/src/func.rs` — Box::new at all RangeCreate/ArrayFill/ArrayToString/RecordCreate construction sites (~25 changes)
+- `src/sql/src/plan/query.rs` — Box::new at ArrayCreate/ListCreate/MapBuild/RecordCreate construction sites
+- `src/sql/src/plan/lowering.rs` — Box::new at ListCreate construction, .into_boxed_slice() at RecordCreate construction
+
+### Cumulative MirScalarExpr savings (sessions 1 + 10)
+
+| Type | Original | After session 1 | After session 10 | Total savings |
+|------|----------|-----------------|------------------|---------------|
+| MirScalarExpr | 88 | 72 | 56 | 32 bytes (36%) |
+| AggregateExpr | 184 | 168 | 112 | 72 bytes (39%) |

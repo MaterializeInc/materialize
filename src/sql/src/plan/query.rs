@@ -3411,7 +3411,10 @@ fn plan_table_function_internal(
 
             let scope = Scope::from_source(scope_name.clone(), vec![column_name]);
 
-            let mut func = TableFunc::TabletizedScalar { relation: Box::new(relation), name };
+            let mut func = TableFunc::TabletizedScalar {
+                relation: Box::new(relation),
+                name,
+            };
             if with_ordinality {
                 func = TableFunc::with_ordinality(func.clone()).ok_or(PlanError::Unsupported {
                     feature: format!("WITH ORDINALITY on {}", func),
@@ -4569,7 +4572,7 @@ fn plan_subscript_jsonb(
     let expr = expr.call_binary(
         HirScalarExpr::call_variadic(
             ArrayCreate {
-                elem_type: SqlScalarType::String,
+                elem_type: Box::new(SqlScalarType::String),
             },
             exprs,
         ),
@@ -4611,7 +4614,12 @@ fn plan_list_subquery(
         ecx,
         query,
         |_| false,
-        |elem_type| ListCreate { elem_type }.into(),
+        |elem_type| {
+            ListCreate {
+                elem_type: Box::new(elem_type),
+            }
+            .into()
+        },
         |order_by| AggregateFunc::ListConcat { order_by },
         expr_func::ListListConcat.into(),
         |elem_type| {
@@ -4643,7 +4651,12 @@ fn plan_array_subquery(
                     | SqlScalarType::Map { .. }
             )
         },
-        |elem_type| ArrayCreate { elem_type }.into(),
+        |elem_type| {
+            ArrayCreate {
+                elem_type: Box::new(elem_type),
+            }
+            .into()
+        },
         |order_by| AggregateFunc::ArrayConcat { order_by },
         expr_func::ArrayArrayConcat.into(),
         |elem_type| {
@@ -4817,7 +4830,7 @@ fn plan_map_subquery(
 
     let aggregation_exprs: Vec<_> = iter::once(HirScalarExpr::call_variadic(
         RecordCreate {
-            field_names: vec![ColumnName::from("key"), ColumnName::from("value")],
+            field_names: Box::new([ColumnName::from("key"), ColumnName::from("value")]),
         },
         vec![
             HirScalarExpr::column(key_column),
@@ -4978,7 +4991,13 @@ fn plan_array(
         bail_unsupported!(format!("{}[]", ecx.humanize_scalar_type(&elem_type, false)));
     }
 
-    Ok(HirScalarExpr::call_variadic(ArrayCreate { elem_type }, exprs).into())
+    Ok(HirScalarExpr::call_variadic(
+        ArrayCreate {
+            elem_type: Box::new(elem_type),
+        },
+        exprs,
+    )
+    .into())
 }
 
 fn plan_list(
@@ -5015,7 +5034,13 @@ fn plan_list(
         bail_unsupported!("char list");
     }
 
-    Ok(HirScalarExpr::call_variadic(ListCreate { elem_type }, exprs).into())
+    Ok(HirScalarExpr::call_variadic(
+        ListCreate {
+            elem_type: Box::new(elem_type),
+        },
+        exprs,
+    )
+    .into())
 }
 
 fn plan_map(
@@ -5058,7 +5083,12 @@ fn plan_map(
         bail_unsupported!("char map");
     }
 
-    let expr = HirScalarExpr::call_variadic(MapBuild { value_type }, exprs);
+    let expr = HirScalarExpr::call_variadic(
+        MapBuild {
+            value_type: Box::new(value_type),
+        },
+        exprs,
+    );
     Ok(expr.into())
 }
 
@@ -5350,7 +5380,12 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
             let expr = if exprs.len() == 1 && has_exists_column.is_some() {
                 exprs.into_element()
             } else {
-                HirScalarExpr::call_variadic(RecordCreate { field_names }, exprs)
+                HirScalarExpr::call_variadic(
+                    RecordCreate {
+                        field_names: field_names.into_boxed_slice(),
+                    },
+                    exprs,
+                )
             };
             if let Some(has_exists_column) = has_exists_column {
                 Ok(HirScalarExpr::if_then_else(

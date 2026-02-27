@@ -137,7 +137,7 @@ impl LazyVariadicFunc for And {
     MzReflect
 )]
 pub struct ArrayCreate {
-    pub elem_type: SqlScalarType,
+    pub elem_type: Box<SqlScalarType>,
 }
 
 impl fmt::Display for ArrayCreate {
@@ -225,7 +225,7 @@ fn array_create_multidim<'a>(
     MzReflect
 )]
 pub struct ArrayFill {
-    pub elem_type: SqlScalarType,
+    pub elem_type: Box<SqlScalarType>,
 }
 
 impl fmt::Display for ArrayFill {
@@ -453,7 +453,7 @@ fn array_position<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     MzReflect
 )]
 pub struct ArrayToString {
-    pub elem_type: SqlScalarType,
+    pub elem_type: Box<SqlScalarType>,
 }
 
 impl fmt::Display for ArrayToString {
@@ -577,12 +577,12 @@ impl LazyVariadicFunc for Coalesce {
     MzReflect
 )]
 pub struct RangeCreate {
-    pub elem_type: SqlScalarType,
+    pub elem_type: Box<SqlScalarType>,
 }
 
 impl fmt::Display for RangeCreate {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(match &self.elem_type {
+        f.write_str(match &*self.elem_type {
             SqlScalarType::Int32 => "int4range",
             SqlScalarType::Int64 => "int8range",
             SqlScalarType::Date => "daterange",
@@ -1128,7 +1128,7 @@ impl LazyVariadicFunc for Least {
     MzReflect
 )]
 pub struct ListCreate {
-    pub elem_type: SqlScalarType,
+    pub elem_type: Box<SqlScalarType>,
 }
 
 impl fmt::Display for ListCreate {
@@ -1150,7 +1150,7 @@ impl fmt::Display for ListCreate {
     MzReflect
 )]
 pub struct RecordCreate {
-    pub field_names: Vec<ColumnName>,
+    pub field_names: Box<[ColumnName]>,
 }
 
 impl fmt::Display for RecordCreate {
@@ -1362,7 +1362,7 @@ fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     MzReflect
 )]
 pub struct MapBuild {
-    pub value_type: SqlScalarType,
+    pub value_type: Box<SqlScalarType>,
 }
 
 impl fmt::Display for MapBuild {
@@ -2300,9 +2300,9 @@ impl VariadicFunc {
             VariadicFunc::JsonbBuildArray(_) => Ok(jsonb_build_array(&ds, temp_storage)),
             VariadicFunc::JsonbBuildObject(_) => jsonb_build_object(&ds, temp_storage),
             VariadicFunc::MapBuild(..) => Ok(map_build(&ds, temp_storage)),
-            VariadicFunc::ArrayCreate(ArrayCreate {
-                elem_type: SqlScalarType::Array(_),
-            }) => array_create_multidim(&ds, temp_storage),
+            VariadicFunc::ArrayCreate(ac) if matches!(&*ac.elem_type, SqlScalarType::Array(_)) => {
+                array_create_multidim(&ds, temp_storage)
+            }
             VariadicFunc::ArrayCreate(..) => array_create_scalar(&ds, temp_storage),
             VariadicFunc::ArrayToString(ArrayToString { elem_type }) => {
                 array_to_string(&ds, elem_type, temp_storage)
@@ -2430,7 +2430,7 @@ impl VariadicFunc {
                 SqlScalarType::Jsonb.nullable(true)
             }
             Self::MapBuild(MapBuild { value_type }) => SqlScalarType::Map {
-                value_type: Box::new(value_type.clone()),
+                value_type: value_type.clone(),
                 custom_id: None,
             }
             .nullable(true),
@@ -2438,15 +2438,15 @@ impl VariadicFunc {
                 soft_assert_or_log!(
                     input_types.iter().all(|t| {
                         // This ensures that the types are compatiable, but nullability may vary deeply in the types.
-                        ReprScalarType::from(elem_type)
+                        ReprScalarType::from(elem_type.as_ref())
                             .union(&ReprScalarType::from(&t.scalar_type))
                             .is_ok()
                     }),
                     "Args to ArrayCreate should have types that are repr-compatible with the elem_type.\nArgs:{input_types:#?}\nelem_type:{elem_type:#?}"
                 );
-                match elem_type {
-                    SqlScalarType::Array(_) => elem_type.clone().nullable(false),
-                    _ => SqlScalarType::Array(Box::new(elem_type.clone())).nullable(false),
+                match &**elem_type {
+                    SqlScalarType::Array(_) => (*elem_type).clone().nullable(false),
+                    _ => SqlScalarType::Array(elem_type.clone()).nullable(false),
                 }
             }
             Self::ArrayToString(..) => SqlScalarType::String.nullable(in_nullable),
@@ -2459,14 +2459,14 @@ impl VariadicFunc {
                 soft_assert_or_log!(
                     input_types.iter().all(|t| {
                         // This ensures that the types are compatiable, but nullability may vary deeply in the types.
-                        ReprScalarType::from(elem_type)
+                        ReprScalarType::from(elem_type.as_ref())
                             .union(&ReprScalarType::from(&t.scalar_type))
                             .is_ok()
                     }),
                     "Args to ListCreate should have types that are compatible with the elem_type.\nArgs:{input_types:#?}\nelem_type:{elem_type:#?}"
                 );
                 SqlScalarType::List {
-                    element_type: Box::new(elem_type.clone()),
+                    element_type: elem_type.clone(),
                     custom_id: None,
                 }
                 .nullable(false)
@@ -2504,14 +2504,14 @@ impl VariadicFunc {
             Self::DateDiffTime(_) => SqlScalarType::Int64.nullable(in_nullable),
             Self::Or(s) => s.output_type(&input_types),
             Self::RangeCreate(RangeCreate { elem_type }) => SqlScalarType::Range {
-                element_type: Box::new(elem_type.clone()),
+                element_type: elem_type.clone(),
             }
             .nullable(false),
             Self::MakeAclItem(_) => SqlScalarType::AclItem.nullable(true),
             Self::MakeMzAclItem(_) => SqlScalarType::MzAclItem.nullable(true),
             Self::ArrayPosition(_) => SqlScalarType::Int32.nullable(true),
             Self::ArrayFill(ArrayFill { elem_type }) => {
-                SqlScalarType::Array(Box::new(elem_type.clone())).nullable(false)
+                SqlScalarType::Array(elem_type.clone()).nullable(false)
             }
             Self::TimezoneTime(_) => SqlScalarType::Time.nullable(in_nullable),
             Self::RegexpSplitToArray(_) => {

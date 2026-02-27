@@ -587,9 +587,13 @@ impl MirRelationExpr {
                 inputs,
                 equivalences,
                 implementation,
-            } if matches!(**implementation, JoinImplementation::Differential(..)
+            } if matches!(
+                **implementation,
+                JoinImplementation::Differential(..)
                     | JoinImplementation::DeltaQuery(..)
-                    | JoinImplementation::Unimplemented) => {
+                    | JoinImplementation::Unimplemented
+            ) =>
+            {
                 let has_equivalences = !equivalences.is_empty();
 
                 if has_equivalences {
@@ -629,11 +633,10 @@ impl MirRelationExpr {
                                     Id::Global(gid) => Some(global_id_name(gid)),
                                 },
                                 ArrangeBy { input, .. } => dig_name_from_expr(h, input),
-                                Join {
-                                    implementation,
-                                    ..
-                                } => match &**implementation {
-                                    JoinImplementation::IndexedFilter(gid, ..) => Some(global_id_name(gid)),
+                                Join { implementation, .. } => match &**implementation {
+                                    JoinImplementation::IndexedFilter(gid, ..) => {
+                                        Some(global_id_name(gid))
+                                    }
                                     _ => None,
                                 },
                                 _ => None,
@@ -746,7 +749,11 @@ impl MirRelationExpr {
                 inputs,
                 ..
             } if matches!(**implementation, JoinImplementation::IndexedFilter(..)) => {
-                let JoinImplementation::IndexedFilter(coll_id, idx_id, _key, literal_constraints) = &**implementation else { unreachable!() };
+                let JoinImplementation::IndexedFilter(coll_id, idx_id, _key, literal_constraints) =
+                    &**implementation
+                else {
+                    unreachable!()
+                };
                 let cse_id = match inputs.get(1).unwrap() {
                     // If the constant input is actually a Get, then let `fmt_indexed_filter` know.
                     Get { id, .. } => {

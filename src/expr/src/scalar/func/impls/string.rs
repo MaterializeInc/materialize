@@ -1230,7 +1230,7 @@ fn quote_ident<'a>(a: &'a str) -> Result<String, EvalError> {
     MzReflect
 )]
 pub struct RegexpReplace {
-    pub regex: Regex,
+    pub regex: Box<Regex>,
     pub limit: usize,
 }
 

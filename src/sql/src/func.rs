@@ -1879,7 +1879,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 };
 
                 Ok(HirScalarExpr::call_variadic(
-                    variadic::ArrayFill { elem_type },
+                    variadic::ArrayFill { elem_type: Box::new(elem_type) },
                     vec![elem, dims]
                 ))
             }) => ArrayAny, 1193;
@@ -1897,7 +1897,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                     ),
                 };
 
-                Ok(HirScalarExpr::call_variadic(variadic::ArrayFill { elem_type }, exprs))
+                Ok(HirScalarExpr::call_variadic(variadic::ArrayFill { elem_type: Box::new(elem_type) }, exprs))
             }) => ArrayAny, 1286;
         },
         "array_length" => Scalar {
@@ -2175,7 +2175,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                     Datum::String("[)"), SqlScalarType::String,
                 ));
                 Ok(HirScalarExpr::call_variadic(
-                    variadic::RangeCreate { elem_type: SqlScalarType::Date },
+                    variadic::RangeCreate { elem_type: Box::new(SqlScalarType::Date) },
                     exprs,
                 ))
             }) => SqlScalarType::Range {
@@ -2183,7 +2183,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             }, 3941;
             params!(Date, Date, String) => Operation::variadic(|_ecx, exprs| {
                 Ok(HirScalarExpr::call_variadic(
-                    variadic::RangeCreate { elem_type: SqlScalarType::Date },
+                    variadic::RangeCreate { elem_type: Box::new(SqlScalarType::Date) },
                     exprs,
                 ))
             }) => SqlScalarType::Range {
@@ -2330,7 +2330,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                     Datum::String("[)"), SqlScalarType::String,
                 ));
                 Ok(HirScalarExpr::call_variadic(
-                    variadic::RangeCreate { elem_type: SqlScalarType::Int32 },
+                    variadic::RangeCreate { elem_type: Box::new(SqlScalarType::Int32) },
                     exprs,
                 ))
             }) => SqlScalarType::Range {
@@ -2338,7 +2338,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             }, 3840;
             params!(Int32, Int32, String) => Operation::variadic(|_ecx, exprs| {
                 Ok(HirScalarExpr::call_variadic(
-                    variadic::RangeCreate { elem_type: SqlScalarType::Int32 },
+                    variadic::RangeCreate { elem_type: Box::new(SqlScalarType::Int32) },
                     exprs,
                 ))
             }) => SqlScalarType::Range {
@@ -2351,7 +2351,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                     Datum::String("[)"), SqlScalarType::String,
                 ));
                 Ok(HirScalarExpr::call_variadic(
-                    variadic::RangeCreate { elem_type: SqlScalarType::Int64 },
+                    variadic::RangeCreate { elem_type: Box::new(SqlScalarType::Int64) },
                     exprs,
                 ))
             }) => SqlScalarType::Range {
@@ -2359,7 +2359,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             }, 3945;
             params!(Int64, Int64, String) => Operation::variadic(|_ecx, exprs| {
                 Ok(HirScalarExpr::call_variadic(
-                    variadic::RangeCreate { elem_type: SqlScalarType::Int64 },
+                    variadic::RangeCreate { elem_type: Box::new(SqlScalarType::Int64) },
                     exprs,
                 ))
             }) => SqlScalarType::Range {
@@ -2527,7 +2527,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 ));
                 Ok(HirScalarExpr::call_variadic(
                     variadic::RangeCreate {
-                        elem_type: SqlScalarType::Numeric { max_scale: None },
+                        elem_type: Box::new(SqlScalarType::Numeric { max_scale: None }),
                     },
                     exprs,
                 ))
@@ -2537,7 +2537,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Numeric, Numeric, String) => Operation::variadic(|_ecx, exprs| {
                 Ok(HirScalarExpr::call_variadic(
                     variadic::RangeCreate {
-                        elem_type: SqlScalarType::Numeric { max_scale: None },
+                        elem_type: Box::new(SqlScalarType::Numeric { max_scale: None }),
                     },
                     exprs,
                 ))
@@ -3116,7 +3116,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 ));
                 Ok(HirScalarExpr::call_variadic(
                     variadic::RangeCreate {
-                        elem_type: SqlScalarType::Timestamp { precision: None },
+                        elem_type: Box::new(SqlScalarType::Timestamp { precision: None }),
                     },
                     exprs,
                 ))
@@ -3126,7 +3126,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Timestamp, Timestamp, String) => Operation::variadic(|_ecx, exprs| {
                 Ok(HirScalarExpr::call_variadic(
                     variadic::RangeCreate {
-                        elem_type: SqlScalarType::Timestamp { precision: None },
+                        elem_type: Box::new(SqlScalarType::Timestamp { precision: None }),
                     },
                     exprs,
                 ))
@@ -3141,7 +3141,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 ));
                 Ok(HirScalarExpr::call_variadic(
                     variadic::RangeCreate {
-                        elem_type: SqlScalarType::TimestampTz { precision: None },
+                        elem_type: Box::new(SqlScalarType::TimestampTz { precision: None }),
                     },
                     exprs,
                 ))
@@ -3151,7 +3151,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(TimestampTz, TimestampTz, String) => Operation::variadic(|_ecx, exprs| {
                 Ok(HirScalarExpr::call_variadic(
                     variadic::RangeCreate {
-                        elem_type: SqlScalarType::TimestampTz { precision: None },
+                        elem_type: Box::new(SqlScalarType::TimestampTz { precision: None }),
                     },
                     exprs,
                 ))
@@ -3648,7 +3648,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 // ArrayConcat excepts all inputs to be arrays, so wrap all input datums into
                 // arrays.
                 let e_arr = HirScalarExpr::call_variadic(
-                    variadic::ArrayCreate { elem_type },
+                    variadic::ArrayCreate { elem_type: Box::new(elem_type) },
                     vec![e],
                 );
                 Ok((e_arr, AggregateFunc::ArrayConcat { order_by }))
@@ -3770,7 +3770,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 );
                 let e = HirScalarExpr::call_variadic(
                     variadic::RecordCreate {
-                        field_names: vec![ColumnName::from("key"), ColumnName::from("val")],
+                        field_names: Box::new([ColumnName::from("key"), ColumnName::from("val")]),
                     },
                     vec![key, val],
                 );
@@ -3781,7 +3781,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(String, String) => Operation::binary_ordered(|_ecx, value, sep, order_by| {
                 let e = HirScalarExpr::call_variadic(
                     variadic::RecordCreate {
-                        field_names: vec![ColumnName::from("value"), ColumnName::from("sep")],
+                        field_names: Box::new([ColumnName::from("value"), ColumnName::from("sep")]),
                     },
                     vec![value, sep],
                 );
@@ -3833,11 +3833,11 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 let typ = ecx.scalar_type(&e);
                 let e = HirScalarExpr::call_variadic(
                     variadic::RecordCreate {
-                        field_names: vec![
+                        field_names: Box::new([
                             ColumnName::from("expr"),
                             ColumnName::from("offset"),
                             ColumnName::from("default"),
-                        ],
+                        ]),
                     },
                     vec![
                         e,
@@ -3851,11 +3851,11 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 let typ = ecx.scalar_type(&e);
                 let e = HirScalarExpr::call_variadic(
                     variadic::RecordCreate {
-                        field_names: vec![
+                        field_names: Box::new([
                             ColumnName::from("expr"),
                             ColumnName::from("offset"),
                             ColumnName::from("default"),
-                        ],
+                        ]),
                     },
                     vec![e, offset, HirScalarExpr::literal_null(typ)],
                 );
@@ -3864,11 +3864,11 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(AnyCompatible, Int32, AnyCompatible) => Operation::variadic(|_ecx, exprs| {
                 let e = HirScalarExpr::call_variadic(
                     variadic::RecordCreate {
-                        field_names: vec![
+                        field_names: Box::new([
                             ColumnName::from("expr"),
                             ColumnName::from("offset"),
                             ColumnName::from("default"),
-                        ],
+                        ]),
                     },
                     exprs,
                 );
@@ -3881,11 +3881,11 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 let typ = ecx.scalar_type(&e);
                 let e = HirScalarExpr::call_variadic(
                     variadic::RecordCreate {
-                        field_names: vec![
+                        field_names: Box::new([
                             ColumnName::from("expr"),
                             ColumnName::from("offset"),
                             ColumnName::from("default"),
-                        ],
+                        ]),
                     },
                     vec![
                         e,
@@ -3899,11 +3899,11 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 let typ = ecx.scalar_type(&e);
                 let e = HirScalarExpr::call_variadic(
                     variadic::RecordCreate {
-                        field_names: vec![
+                        field_names: Box::new([
                             ColumnName::from("expr"),
                             ColumnName::from("offset"),
                             ColumnName::from("default"),
-                        ],
+                        ]),
                     },
                     vec![e, offset, HirScalarExpr::literal_null(typ)],
                 );
@@ -3912,11 +3912,11 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(AnyCompatible, Int32, AnyCompatible) => Operation::variadic(|_ecx, exprs| {
                 let e = HirScalarExpr::call_variadic(
                     variadic::RecordCreate {
-                        field_names: vec![
+                        field_names: Box::new([
                             ColumnName::from("expr"),
                             ColumnName::from("offset"),
                             ColumnName::from("default"),
-                        ],
+                        ]),
                     },
                     exprs,
                 );
@@ -4538,7 +4538,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 // ListConcat excepts all inputs to be lists, so wrap all input datums into
                 // lists.
                 let e_arr = HirScalarExpr::call_variadic(
-                    variadic::ListCreate { elem_type: ecx.scalar_type(&e) },
+                    variadic::ListCreate { elem_type: Box::new(ecx.scalar_type(&e)) },
                     vec![e],
                 );
                 Ok((e_arr, AggregateFunc::ListConcat { order_by }))
@@ -4600,7 +4600,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
 
                 let e = HirScalarExpr::call_variadic(
                     variadic::RecordCreate {
-                        field_names: vec![ColumnName::from("key"), ColumnName::from("val")],
+                        field_names: Box::new([ColumnName::from("key"), ColumnName::from("val")]),
                     },
                     vec![key, val],
                 );
@@ -5339,7 +5339,9 @@ fn array_to_string(
         _ => unreachable!("array_to_string is guaranteed to receive array as first argument"),
     };
     Ok(HirScalarExpr::call_variadic(
-        variadic::ArrayToString { elem_type },
+        variadic::ArrayToString {
+            elem_type: Box::new(elem_type),
+        },
         exprs,
     ))
 }

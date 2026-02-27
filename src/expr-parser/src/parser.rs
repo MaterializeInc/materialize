@@ -394,7 +394,11 @@ mod relation {
         let parse_input = ParseChildren::new(input, flat_map.span().start());
         let input = Box::new(parse_input.parse_one(ctx, parse_expr)?);
 
-        Ok(MirRelationExpr::FlatMap { input, func: Box::new(func), exprs })
+        Ok(MirRelationExpr::FlatMap {
+            input,
+            func: Box::new(func),
+            exprs,
+        })
     }
 
     fn parse_filter(ctx: CtxRef, input: ParseStream) -> Result {
@@ -1054,7 +1058,7 @@ mod scalar {
     fn parse_literal_array(input: ParseStream) -> Result {
         use mz_expr::func::variadic::ArrayCreate;
 
-        let elem_type = SqlScalarType::Int64; // FIXME
+        let elem_type = Box::new(SqlScalarType::Int64); // FIXME
         let func = VariadicFunc::ArrayCreate(ArrayCreate { elem_type });
         let exprs = input.parse_comma_sep(parse_literal_ok)?;
 
@@ -1067,7 +1071,7 @@ mod scalar {
     fn parse_literal_list(input: ParseStream) -> Result {
         use mz_expr::func::variadic::ListCreate;
 
-        let elem_type = SqlScalarType::Int64; // FIXME
+        let elem_type = Box::new(SqlScalarType::Int64); // FIXME
         let func = VariadicFunc::ListCreate(ListCreate { elem_type });
         let exprs = input.parse_comma_sep(parse_literal_ok)?;
 
@@ -1086,7 +1090,7 @@ mod scalar {
         let inner;
         syn::bracketed!(inner in input);
 
-        let elem_type = SqlScalarType::Int64; // FIXME
+        let elem_type = Box::new(SqlScalarType::Int64); // FIXME
         let func = ArrayCreate { elem_type };
         let exprs = inner.parse_comma_sep(parse_expr)?;
 
@@ -1102,7 +1106,7 @@ mod scalar {
         let inner;
         syn::bracketed!(inner in input);
 
-        let elem_type = SqlScalarType::Int64; // FIXME
+        let elem_type = Box::new(SqlScalarType::Int64); // FIXME
         let func = ListCreate { elem_type };
         let exprs = inner.parse_comma_sep(parse_expr)?;
 

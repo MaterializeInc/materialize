@@ -978,7 +978,9 @@ impl HirScalarExpr {
 
             Ok::<MirScalarExpr, PlanError>(match self {
                 Column(col_ref, name) => SS::Column(col_map.get(&col_ref), name),
-                Literal(row, typ, _name) => SS::Literal(Box::new(Ok(row)), ReprColumnType::from(&typ)),
+                Literal(row, typ, _name) => {
+                    SS::Literal(Box::new(Ok(row)), ReprColumnType::from(&typ))
+                }
                 Parameter(_, _name) => {
                     panic!("cannot decorrelate expression with unbound parameters")
                 }
@@ -1198,7 +1200,7 @@ impl HirScalarExpr {
                          original_row_record_type: SqlScalarType| {
                             let agg_input = MirScalarExpr::call_variadic(
                                 variadic::ListCreate {
-                                    elem_type: original_row_record_type.clone(),
+                                    elem_type: Box::new(original_row_record_type.clone()),
                                 },
                                 vec![original_row_record],
                             );
@@ -1208,7 +1210,8 @@ impl HirScalarExpr {
                                 variadic::RecordCreate {
                                     field_names: (0..agg_input.len())
                                         .map(|_| ColumnName::from(UNKNOWN_COLUMN_NAME))
-                                        .collect_vec(),
+                                        .collect::<Vec<_>>()
+                                        .into_boxed_slice(),
                                 },
                                 agg_input,
                             );
@@ -1276,7 +1279,8 @@ impl HirScalarExpr {
                                     field_names: fn_input_record_fields
                                         .iter()
                                         .map(|(n, _)| n.clone())
-                                        .collect_vec(),
+                                        .collect::<Vec<_>>()
+                                        .into_boxed_slice(),
                                 },
                                 vec![original_row_record, mir_encoded_args],
                             );
@@ -1294,7 +1298,8 @@ impl HirScalarExpr {
                                 variadic::RecordCreate {
                                     field_names: (0..agg_input.len())
                                         .map(|_| ColumnName::from(UNKNOWN_COLUMN_NAME))
-                                        .collect_vec(),
+                                        .collect::<Vec<_>>()
+                                        .into_boxed_slice(),
                                 },
                                 agg_input,
                             );
@@ -1499,7 +1504,11 @@ impl HirScalarExpr {
                     // Original row made into a record
                     let original_row_record = MirScalarExpr::call_variadic(
                         variadic::RecordCreate {
-                            field_names: fields.iter().map(|(name, _)| name.clone()).collect_vec(),
+                            field_names: fields
+                                .iter()
+                                .map(|(name, _)| name.clone())
+                                .collect::<Vec<_>>()
+                                .into_boxed_slice(),
                         },
                         (0..input_arity).map(MirScalarExpr::column).collect_vec(),
                     );
@@ -1691,7 +1700,9 @@ impl HirScalarExpr {
 
         Ok(match self {
             Column(ColumnRef { level: 0, column }, name) => SS::Column(column, name),
-            Literal(datum, typ, _name) => SS::Literal(Box::new(Ok(datum)), ReprColumnType::from(&typ)),
+            Literal(datum, typ, _name) => {
+                SS::Literal(Box::new(Ok(datum)), ReprColumnType::from(&typ))
+            }
             CallUnmaterializable(func, _name) => SS::CallUnmaterializable(func),
             CallUnary {
                 func: func::UnaryFunc::CastVarCharToString(_),
