@@ -19,7 +19,12 @@ wasmtime = { version = "42.0.1", default-features = false, features = ["cranelif
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
+criterion = { version = "0.8.2" }
 proptest = { version = "1.10.0", default-features = false, features = ["std"] }
+
+[[bench]]
+name = "mfp_eval"
+harness = false
 
 [features]
 default = ["workspace-hack"]

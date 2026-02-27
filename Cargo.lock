@@ -6817,6 +6817,7 @@ dependencies = [
 name = "mz-expr-compiler"
 version = "0.0.0"
 dependencies = [
+ "criterion",
  "mz-expr",
  "mz-ore",
  "mz-repr",
