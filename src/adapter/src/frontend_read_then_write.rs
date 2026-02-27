@@ -233,7 +233,7 @@ impl PeekClient {
 
         // Optimize MIR
         let (optimizer, global_mir_plan) =
-            self.optimize_mir_read_then_write(catalog, &plan, cluster_id)?;
+            self.optimize_mir_read_then_write(catalog, session, &plan, cluster_id)?;
 
         // Determine timestamp and acquire read holds.
         let oracle_read_ts = self.oracle_read_ts(&timeline).await;
@@ -406,6 +406,7 @@ impl PeekClient {
     fn optimize_mir_read_then_write(
         &self,
         catalog: &Arc<Catalog>,
+        session: &dyn SessionMetadata,
         plan: &plan::ReadThenWritePlan,
         cluster_id: ComputeInstanceId,
     ) -> Result<
@@ -432,7 +433,19 @@ impl PeekClient {
         let expr = selection.clone().lower(catalog.system_config(), None)?;
 
         // Transform for subscribe-based diffs
-        let expr = apply_mutation_to_mir(expr, kind, assignments);
+        let mut expr = apply_mutation_to_mir(expr, kind, assignments);
+
+        // Resolve unmaterializable functions (now(), current_user, etc.)
+        // before the subscribe optimizer sees them. The subscribe uses
+        // ExprPrepMaintained which rejects these, but our subscribe is a
+        // one-shot read so we can safely resolve them to constants.
+        // mz_now() is already rejected by validate_read_then_write().
+        let style = ExprPrepOneShot {
+            logical_time: EvalTime::NotAvailable,
+            session,
+            catalog_state: catalog.state(),
+        };
+        expr.try_visit_scalars_mut(&mut |s| style.prep_scalar_expr(s))?;
 
         // Create optimizer
         let compute_instance = ComputeInstanceSnapshot::new_without_collections(cluster_id);
