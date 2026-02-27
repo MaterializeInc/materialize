@@ -126,6 +126,36 @@ Target cluster: quickstart
 
 EOF
 
+# Searched CASE with an interrupting arm that compares a different column.
+# The first 3 arms compare x, then one compares z, then 3 more compare x.
+# The first group of 3 gets merged, the z arm stays as-is, and the trailing
+# group of 3 gets merged into a second case_literal in the else branch.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT
+  CASE
+    WHEN x = 1 THEN 'a'
+    WHEN x = 2 THEN 'b'
+    WHEN x = 3 THEN 'c'
+    WHEN z = 99 THEN 'z'
+    WHEN x = 4 THEN 'd'
+    WHEN x = 5 THEN 'e'
+    WHEN x = 6 THEN 'f'
+    ELSE 'other'
+  END
+FROM t
+----
+Explained Query:
+  Project (#3)
+    Map (case #0{x} when 1 then "a" when 2 then "b" when 3 then "c" else case when (#2{z} = 99) then "z" else case #0{x} when 4 then "d" when 5 then "e" when 6 then "f" else "other" end end end)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
 # Verify correctness: CASE with matching input.
 query I
 SELECT
