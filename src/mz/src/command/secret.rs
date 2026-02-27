@@ -83,8 +83,19 @@ pub async fn create(
         commands.push(format!("SET search_path TO {schema};"));
     }
 
-    let buffer = escaped_string_literal(&buffer).to_string();
-    let name = Ident::new_unchecked(name).to_ast_string_simple();
+    // The most common ways to write a secret are the following ways:
+    // 1. Decode function: decode('c2VjcmV0Cg==', 'base64')
+    // 2. ASCII: 13de2601-24b4-4d8f-9931-375c0b2b5cd4
+    // For case 1) we pass through the expression as-is (it's a SQL expression, not a literal).
+    // For case 2) we escape the value as a string literal.
+    let buffer = if buffer.starts_with("decode") {
+        buffer
+    } else {
+        escaped_string_literal(&buffer).to_string()
+    };
+    // Lowercase the name to match SQL's behavior for unquoted identifiers,
+    // since the CLI accepts names without quoting.
+    let name = Ident::new_unchecked(name.to_lowercase()).to_ast_string_simple();
 
     if force {
         // Rather than checking if the SECRET exists, do an upsert.
