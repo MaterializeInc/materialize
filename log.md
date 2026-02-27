@@ -379,3 +379,61 @@ All aggregate and window function queries work correctly with no regression:
 - `src/expr/src/relation/func.rs` — 15 `order_by` fields + 2 `funcs`/`wrapped_aggregates` fields converted to `Box<[T]>`, function signatures `&Vec<T>` → `&[T]`, 3 assert_eq adjustments for Box deref
 - `src/expr/src/scalar.rs` — Updated size assertions (AggregateFunc 64→48, AggregateExpr 144→128)
 - `src/sql/src/plan/hir.rs` — Construction sites converted to use `.into_boxed_slice()` and `.collect::<Vec<_>>().into_boxed_slice()`
+
+## Session 8: Shrink like_pattern::Matcher from 72 to 64 bytes via String→Box<str> and Vec→Box<[T]>
+
+**Date:** 2026-02-27
+
+### Changes
+
+Convert immutable heap types in `like_pattern::Matcher` and its internals to their unsized equivalents, eliminating unused capacity fields:
+
+1. **`Matcher::pattern: String` → `Box<str>`** (saves 8 bytes: 24→16)
+   - Pattern string is set at compile time and never modified
+   - `Box<str>` stores `(ptr, len)` vs `String`'s `(ptr, len, capacity)`
+
+2. **`MatcherImpl::String(Vec<Subpattern>)` → `MatcherImpl::String(Box<[Subpattern]>)`** (saves 8 bytes: 24→16)
+   - The subpattern list is built once and never grown
+   - `Box<[T]>` stores `(ptr, len)` vs `Vec<T>`'s `(ptr, len, capacity)`
+
+3. **`Subpattern::suffix: String` → `Box<str>`** (saves 8 bytes per Subpattern: 40→32)
+   - Each suffix literal is set once during pattern compilation
+   - Removed `Default` derive from `Subpattern` (no longer needed with `Box<str>`)
+   - Refactored `build_subpatterns` to construct Subpattern values directly instead of using `mem::take()`
+
+### Key insight
+
+Same as sessions 5 and 7: `String` → `Box<str>` and `Vec<T>` → `Box<[T]>` are strictly better for immutable data — same heap allocation, same indirection, just without the wasted 8-byte capacity field. The `build_subpatterns` refactor also removes 2 `shrink_to_fit()` calls that were trying to reclaim the unused capacity, since `Box<str>` and `Box<[Subpattern]>` never have excess capacity in the first place.
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| Matcher | 72 | 64 | 8 bytes (11%) |
+| Subpattern (heap element) | 40 | 32 | 8 bytes (20%) |
+| MatcherImpl::String variant data | 24 | 16 | 8 bytes (33%) |
+
+### Cascading effects
+
+- `Matcher` is boxed inside `IsLikeMatch` in `UnaryFunc`, so the boxed heap allocation shrinks from 72 to 64 bytes
+- Each `Subpattern` on the heap is 20% smaller, improving cache utilization for complex LIKE patterns with multiple wildcards
+- The `build_subpatterns` function is cleaner: no more `shrink_to_fit()` calls or `Default` trait requirement
+
+### Benchmark results
+
+All LIKE and ILIKE queries work correctly with no regression:
+
+| Query Type | Avg Time | Notes |
+|-----------|----------|-------|
+| Prefix LIKE (`'John%'`) 10K rows | ~9.1ms | Simple prefix match |
+| Suffix LIKE (`'%Smith'`) 10K rows | ~12.4ms | Suffix search |
+| Contains LIKE (`'%oh%'`) 10K rows | ~9.5ms | Substring search |
+| Multi-wildcard LIKE (`'%o%n%'`) 10K rows | ~8.2ms | Complex pattern |
+| Single-char wildcard (`'J_n_ %'`) 10K rows | ~7.4ms | Underscore wildcard |
+| ILIKE (`'%SMITH%'`) 10K rows | ~9.6ms | Case-insensitive (regex path) |
+| Mixed LIKE + ILIKE | ~11.9ms | Combined patterns |
+
+### Files changed
+
+- `src/expr/src/scalar/like_pattern.rs` — `pattern: String` → `Box<str>`, `Vec<Subpattern>` → `Box<[Subpattern]>`, `suffix: String` → `Box<str>`, removed `Default` derive, refactored `build_subpatterns`
+- `src/expr/src/scalar.rs` — Added size assertion for `Matcher` (64 bytes)

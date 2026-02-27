@@ -3428,6 +3428,7 @@ mod tests {
         assert_eq!(size_of::<crate::AggregateFunc>(), 48);
         assert_eq!(size_of::<crate::AggregateExpr>(), 128);
         assert_eq!(size_of::<EvalError>(), 40);
+        assert_eq!(size_of::<crate::like_pattern::Matcher>(), 64);
     }
 
 }

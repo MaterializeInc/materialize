@@ -109,7 +109,7 @@ mod matcher {
     #[derive(Debug, Clone, Deserialize, Serialize, Derivative, MzReflect)]
     #[derivative(Eq, PartialEq, Ord, PartialOrd, Hash)]
     pub struct Matcher {
-        pub pattern: String,
+        pub pattern: Box<str>,
         pub case_insensitive: bool,
         #[derivative(
             PartialEq = "ignore",
@@ -131,7 +131,7 @@ mod matcher {
 
     #[derive(Debug, Clone, Deserialize, Serialize, MzReflect)]
     pub(super) enum MatcherImpl {
-        String(Vec<Subpattern>),
+        String(Box<[Subpattern]>),
         Regex(Regex),
     }
 }
@@ -150,7 +150,7 @@ pub fn compile(pattern: &str, case_insensitive: bool) -> Result<Matcher, EvalErr
     }
     let subpatterns = build_subpatterns(pattern)?;
     let matcher_impl = match case_insensitive || subpatterns.len() > MAX_SUBPATTERNS {
-        false => MatcherImpl::String(subpatterns),
+        false => MatcherImpl::String(subpatterns.into_boxed_slice()),
         true => MatcherImpl::Regex(build_regex(&subpatterns, case_insensitive)?),
     };
     Ok(Matcher {
@@ -185,14 +185,14 @@ pub fn compile(pattern: &str, case_insensitive: bool) -> Result<Matcher, EvalErr
 //     "__%__" = (4, many)
 //     "%%%_"  = (1, many)
 
-#[derive(Debug, Default, Clone, Deserialize, Serialize, MzReflect)]
+#[derive(Debug, Clone, Deserialize, Serialize, MzReflect)]
 struct Subpattern {
     /// The minimum number of characters that can be consumed by the wildcard expression.
     consume: usize,
     /// Whether the wildcard expression can consume an arbitrary number of characters.
     many: bool,
     /// A string literal that is expected after the wildcards.
-    suffix: String,
+    suffix: Box<str>,
 }
 
 impl Subpattern {
@@ -261,7 +261,7 @@ fn is_match_subpatterns(subpatterns: &[Subpattern], mut text: &str) -> bool {
             return true;
         }
         // Use rfind so we perform a greedy capture, like Regex.
-        let mut found = text.rfind(&subpattern.suffix);
+        let mut found = text.rfind(&*subpattern.suffix);
         loop {
             match found {
                 None => return false,
@@ -281,13 +281,13 @@ fn is_match_subpatterns(subpatterns: &[Subpattern], mut text: &str) -> bool {
                             break;
                         }
                     }
-                    found = text[..end].rfind(&subpattern.suffix);
+                    found = text[..end].rfind(&*subpattern.suffix);
                 }
             }
         }
     }
     // No string search needed, we just use a prefix match on rest.
-    if !text.starts_with(&subpattern.suffix) {
+    if !text.starts_with(&*subpattern.suffix) {
         return false;
     }
     is_match_subpatterns(subpatterns, &text[subpattern.suffix.len()..])
@@ -296,7 +296,9 @@ fn is_match_subpatterns(subpatterns: &[Subpattern], mut text: &str) -> bool {
 /// Breaks a LIKE pattern into a chain of sub-patterns.
 fn build_subpatterns(pattern: &str) -> Result<Vec<Subpattern>, EvalError> {
     let mut subpatterns = Vec::with_capacity(MAX_SUBPATTERNS);
-    let mut current = Subpattern::default();
+    let mut consume: usize = 0;
+    let mut many = false;
+    let mut suffix = String::new();
     let mut in_wildcard = true;
     let mut in_escape = false;
     for c in pattern.chars() {
@@ -307,22 +309,31 @@ fn build_subpatterns(pattern: &str) -> Result<Vec<Subpattern>, EvalError> {
             }
             '_' if !in_escape => {
                 if !in_wildcard {
-                    current.suffix.shrink_to_fit();
-                    subpatterns.push(mem::take(&mut current));
+                    subpatterns.push(Subpattern {
+                        consume,
+                        many,
+                        suffix: mem::take(&mut suffix).into_boxed_str(),
+                    });
+                    consume = 0;
+                    many = false;
                     in_wildcard = true;
                 }
-                current.consume += 1;
+                consume += 1;
             }
             '%' if !in_escape => {
                 if !in_wildcard {
-                    current.suffix.shrink_to_fit();
-                    subpatterns.push(mem::take(&mut current));
+                    subpatterns.push(Subpattern {
+                        consume,
+                        many,
+                        suffix: mem::take(&mut suffix).into_boxed_str(),
+                    });
+                    consume = 0;
                     in_wildcard = true;
                 }
-                current.many = true;
+                many = true;
             }
             c => {
-                current.suffix.push(c);
+                suffix.push(c);
                 in_escape = false;
                 in_wildcard = false;
             }
@@ -331,9 +342,11 @@ fn build_subpatterns(pattern: &str) -> Result<Vec<Subpattern>, EvalError> {
     if in_escape {
         return Err(EvalError::UnterminatedLikeEscapeSequence);
     }
-    current.suffix.shrink_to_fit();
-    subpatterns.push(current);
-    subpatterns.shrink_to_fit();
+    subpatterns.push(Subpattern {
+        consume,
+        many,
+        suffix: suffix.into_boxed_str(),
+    });
     Ok(subpatterns)
 }
 
