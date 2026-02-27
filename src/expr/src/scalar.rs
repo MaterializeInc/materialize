@@ -1081,7 +1081,7 @@ impl MirScalarExpr {
                             let format_str = expr2.as_literal_str().unwrap();
                             *e = MirScalarExpr::CallUnary {
                                 func: UnaryFunc::ToCharTimestamp(func::ToCharTimestamp {
-                                    format_string: format_str.to_string(),
+                                    format_string: format_str.into(),
                                     format: DateTimeFormat::compile(format_str),
                                 }),
                                 expr: Box::new(expr1.take()),
@@ -1092,7 +1092,7 @@ impl MirScalarExpr {
                             let format_str = expr2.as_literal_str().unwrap();
                             *e = MirScalarExpr::CallUnary {
                                 func: UnaryFunc::ToCharTimestampTz(func::ToCharTimestampTz {
-                                    format_string: format_str.to_string(),
+                                    format_string: format_str.into(),
                                     format: DateTimeFormat::compile(format_str),
                                 }),
                                 expr: Box::new(expr1.take()),
@@ -3417,10 +3417,11 @@ mod tests {
     fn type_size_assertions() {
         use std::mem::size_of;
         assert_eq!(size_of::<MirScalarExpr>(), 72);
-        assert_eq!(size_of::<crate::UnaryFunc>(), 56);
+        assert_eq!(size_of::<crate::UnaryFunc>(), 48);
         assert_eq!(size_of::<crate::BinaryFunc>(), 48);
         assert_eq!(size_of::<crate::VariadicFunc>(), 40);
         assert_eq!(size_of::<crate::AggregateFunc>(), 64);
         assert_eq!(size_of::<crate::AggregateExpr>(), 144);
     }
+
 }

@@ -836,7 +836,7 @@ impl fmt::Display for TimezoneTimestampTz {
     MzReflect
 )]
 pub struct ToCharTimestamp {
-    pub format_string: String,
+    pub format_string: Box<str>,
     pub format: DateTimeFormat,
 }
 
@@ -872,7 +872,7 @@ impl fmt::Display for ToCharTimestamp {
     MzReflect
 )]
 pub struct ToCharTimestampTz {
-    pub format_string: String,
+    pub format_string: Box<str>,
     pub format: DateTimeFormat,
 }
 

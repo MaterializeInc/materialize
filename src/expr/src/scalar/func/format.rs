@@ -850,7 +850,7 @@ impl DateTimeFormatNode {
     Deserialize,
     MzReflect
 )]
-pub struct DateTimeFormat(Vec<DateTimeFormatNode>);
+pub struct DateTimeFormat(Box<[DateTimeFormatNode]>);
 
 impl DateTimeFormat {
     /// Compiles a new `DateTimeFormat` from the input string `s`.
@@ -930,7 +930,7 @@ impl DateTimeFormat {
         for c in s[pos..].chars() {
             out.push(DateTimeFormatNode::Literal(c));
         }
-        DateTimeFormat(out)
+        DateTimeFormat(out.into_boxed_slice())
     }
 
     /// Renders the format string using the timestamp `ts` as the input. The
