@@ -51,7 +51,6 @@ For more information, refer to:
 
 ### Improvements
 - **Improved `SUBSCRIBE` Performance**: We've optimized `SUBSCRIBE` to skip initial snapshots in more cases. This can speed up `SUBSCRIBE` start times.
-- **Improved delta join performance**: We now consolidate updates before invoking join closures, improving the peformance of delta joins when indexes have large amounts of retained history.
 - **Improved compatibility with external tools**: We've added `strpos` as a synonym for the `position` function, improving compatibility with tools such as PowerBI.
 
 ### Bug Fixes
