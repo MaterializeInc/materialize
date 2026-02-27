@@ -18,11 +18,10 @@ cd "$(dirname "$0")/.."
 . misc/shlib/shlib.bash
 
 if [[ $# -lt 1 ]]; then
-    die "usage: $0 VERSION [--no-commit] [--no-console-bump] [--sbom]"
+    die "usage: $0 VERSION [--no-commit] [--sbom]"
 fi
 
 commit=true
-console_bump=true
 sbom=false
 
 version=${1#v}
@@ -32,14 +31,11 @@ while [[ $# -gt 0 ]]; do
     if [[ "$1" == "--no-commit" ]]; then
         commit=false
         shift
-    elif [[ "$1" == "--no-console-bump" ]]; then
-        console_bump=false
-        shift
     elif [[ "$1" == "--sbom" ]]; then
         sbom=true
         shift
     else
-        die "invalid flag: $2, only --no-commit, --no-console-bump and --sbom are supported"
+        die "invalid flag: $1, only --no-commit and --sbom are supported"
     fi
 done
 
@@ -47,15 +43,6 @@ if ! run git diff HEAD --compact-summary --exit-code; then
     die "cannot begin bump with uncommitted content"
 fi
 
-if $console_bump; then
-    console_image="materialize/console:$version"
-    sed -i.bak \
-        "s#FROM materialize/console:.* AS console#FROM $console_image AS console#" \
-        misc/images/materialized-base/Dockerfile
-    sed -i.bak \
-        "s/\"--console-image-tag-default=[^\"]*\"/\"--console-image-tag-default=$version\"/" \
-        misc/helm-charts/operator/templates/deployment.yaml
-fi
 
 sed -i.bak \
     "s/^version = .*/version = \"$version\"/" \

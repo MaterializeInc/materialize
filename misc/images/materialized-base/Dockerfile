@@ -9,13 +9,7 @@
 
 # This is a separate mzimage so that we don't have to re-install the apt things
 # every time we get a CI builder with a cold cache.
-
-# Package a pinned version of the console into the image, for ease of getting
-# started with Materialize. It's okay if this console lags a bit behind what's
-# deployed to production, but the version needs to be bumped whenever features
-# that the console depends upon are removed (to a version of the console that
-# doesn't depend on those features).
-FROM materialize/console:26.15.0-dev.0 AS console
+MZFROM console AS console
 
 MZFROM ubuntu-base
 
