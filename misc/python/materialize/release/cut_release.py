@@ -10,7 +10,6 @@
 """Cut a new release and push the tag to the upstream Materialize repository."""
 
 import argparse
-import pathlib
 import re
 import sys
 
@@ -58,11 +57,6 @@ def main():
     try:
         print(f"Checking out SHA {args.sha}")
         checkout(args.sha)
-        # Bump console here instead of in bump-version for git to have the correct permissions/author
-        print(f"Bumping console version to {version}")
-        console_version = version[1:]
-        console_image = f"materialize/console:{console_version}"
-
         print(f"Bumping version to {version}")
         spawn.runv(
             [
@@ -72,27 +66,8 @@ def main():
                 MZ_ROOT / "bin" / "bump-version",
                 version,
                 "--no-commit",
-                "--no-console-bump",
                 "--sbom",
             ]
-        )
-        dockerfile = pathlib.Path("misc/images/materialized-base/Dockerfile")
-        dockerfile_text = dockerfile.read_text()
-        dockerfile.write_text(
-            re.sub(
-                r"FROM materialize/console:.*? AS console",
-                f"FROM {console_image} AS console",
-                dockerfile_text,
-            )
-        )
-        deployment = pathlib.Path("misc/helm-charts/operator/templates/deployment.yaml")
-        deployment_text = deployment.read_text()
-        deployment.write_text(
-            re.sub(
-                r'"--console-image-tag-default=[^"]*"',
-                f'"--console-image-tag-default={console_version}"',
-                deployment_text,
-            )
         )
         # Commit here instead of in bump-version so we have access to the correct git author
         spawn.runv(["git", "commit", "-am", f"release: bump to version {version}"])
