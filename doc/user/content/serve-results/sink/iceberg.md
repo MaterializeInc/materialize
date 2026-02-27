@@ -10,11 +10,11 @@ menu:
 
 {{< public-preview />}}
 
-Iceberg sinks allow you to write data from Materialize into [Apache
+Iceberg sinks provide exactly once delivery of updates from Materialize into [Apache
 Iceberg](https://iceberg.apache.org/)[^1] tables hosted on [Amazon S3
 Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html)[^2].
 As data changes in Materialize, the corresponding Iceberg tables are
-automatically kept up to date.  You can sink data from a materialized view, a
+automatically kept up to date. You can sink data from a materialized view, a
 source, or a table.
 
 This guide walks you through the steps required to set up Iceberg sinks in
