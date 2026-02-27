@@ -1137,14 +1137,15 @@ impl Typecheck {
 
                 // check that the join implementation is consistent
                 match &**implementation {
-                    JoinImplementation::Differential((start_idx, first_key, _), others) => {
+                    JoinImplementation::Differential(start_info, others) => {
+                        let (start_idx, first_key, _) = start_info.as_ref();
                         if let Some(key) = first_key {
                             for k in key {
                                 let _ = tc.typecheck_scalar(k, expr, &t_in_local[*start_idx])?;
                             }
                         }
 
-                        for (idx, key, _) in others {
+                        for (idx, key, _) in others.iter() {
                             for k in key {
                                 let _ = tc.typecheck_scalar(k, expr, &t_in_local[*idx])?;
                             }

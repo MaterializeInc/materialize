@@ -189,8 +189,8 @@ impl LiteralConstraints {
                             implementation: Box::new(IndexedFilter(
                                 inp_id,
                                 idx_id,
-                                key.clone(),
-                                possible_vals,
+                                key.clone().into_boxed_slice(),
+                                possible_vals.into_boxed_slice(),
                             )),
                         };
 

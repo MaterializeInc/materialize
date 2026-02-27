@@ -653,7 +653,7 @@ mod delta_queries {
                 .iter_mut()
                 .for_each(|order| super::permute_order(order, &lifted_projections));
 
-            **implementation = JoinImplementation::DeltaQuery(orders);
+            **implementation = JoinImplementation::DeltaQuery(orders.into_boxed_slice());
 
             super::install_lifted_mfp(&mut new_join, lifted_mfp)?;
 
@@ -811,8 +811,8 @@ mod differential {
 
             // Install the implementation.
             **implementation = JoinImplementation::Differential(
-                (start, Some(start_key), start_characteristics),
-                order,
+                Box::new((start, Some(start_key), start_characteristics)),
+                order.into_boxed_slice(),
             );
 
             super::install_lifted_mfp(&mut new_join, lifted_mfp)?;

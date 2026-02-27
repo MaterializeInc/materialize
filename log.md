@@ -437,3 +437,66 @@ All LIKE and ILIKE queries work correctly with no regression:
 
 - `src/expr/src/scalar/like_pattern.rs` — `pattern: String` → `Box<str>`, `Vec<Subpattern>` → `Box<[Subpattern]>`, `suffix: String` → `Box<str>`, removed `Default` derive, refactored `build_subpatterns`
 - `src/expr/src/scalar.rs` — Added size assertion for `Matcher` (64 bytes)
+
+## Session 9: Shrink JoinImplementation from 120 to 64 bytes via boxing + Vec→Box<[T]>
+
+**Date:** 2026-02-27
+
+### Changes
+
+Combined two techniques to shrink `JoinImplementation`:
+
+1. **Box the Differential first tuple** (96→8 bytes inline)
+   - `(usize, Option<Vec<MirScalarExpr>>, Option<JoinInputCharacteristics>)` is ~96 bytes due to `JoinInputCharacteristics` being ~64 bytes
+   - This tuple is constructed once during join planning and only read during EXPLAIN/rendering
+   - Boxing reduces the inline footprint from 96 to 8 bytes
+
+2. **Convert outer `Vec<T>` → `Box<[T]>` in all variants** (saves 8 bytes per field, no new indirection)
+   - `Differential` second arg: `Vec<(...)>` → `Box<[(...)]>` (24→16)
+   - `DeltaQuery` outer arg: `Vec<Vec<(...)>>` → `Box<[Vec<(...)>]>` (24→16)
+   - `IndexedFilter` key: `Vec<MirScalarExpr>` → `Box<[MirScalarExpr]>` (24→16)
+   - `IndexedFilter` vals: `Vec<Row>` → `Box<[Row]>` (24→16)
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| JoinImplementation | 120 | 64 | 56 bytes (47%) |
+
+The 64-byte result is better than the naive 72-byte estimate because the compiler found a niche optimization (Box's non-null pointer encodes the `Unimplemented` variant discriminant).
+
+### Variant size breakdown (after)
+
+- `Differential`: Box(8) + Box<[T]>(16) = 24 bytes
+- `DeltaQuery`: Box<[T]>(16) = 16 bytes
+- `IndexedFilter`: GlobalId(16) + GlobalId(16) + Box<[T]>(16) + Box<[T]>(16) = 64 bytes
+- `Unimplemented`: 0 bytes (encoded via niche)
+
+### Cascading effects
+
+- `JoinImplementation` is stored as `Box<JoinImplementation>` in `MirRelationExpr::Join`, so each boxed allocation shrinks from 120 to 64 bytes
+- All optimizer passes that construct/inspect join implementations benefit from smaller allocations
+- The `Vec→Box<[T]>` conversions eliminate unused capacity fields — these are immutable after construction
+
+### Benchmark results
+
+All join types work correctly with no performance regression:
+
+| Query Type | Avg Time | Notes |
+|-----------|----------|-------|
+| 2-way join (1000 rows each) | ~7ms | Exercises Differential |
+| 3-way join (1000 rows each) | ~14ms | Exercises DeltaQuery |
+| IndexedFilter IN (1,5,10,50,100) | ~1.8ms | Exercises IndexedFilter with Box<[T]> |
+| Join with filters | ~8ms | Complex Differential with filters |
+| EXPLAIN 3-way join | instant | Differential/DeltaQuery plan rendering |
+| EXPLAIN indexed filter | instant | IndexedFilter plan rendering |
+
+### Files changed (7 files)
+
+- `src/expr/src/relation.rs` — JoinImplementation enum: Box Differential first tuple, Vec→Box<[T]> in all variants, size assertion 120→64, visit methods updated for Box patterns
+- `src/expr/src/explain/text.rs` — Differential match pattern updated for Box, join_order closure param `&Vec<T>` → `&[T]`, IndexedFilter `.to_vec()` for explain output
+- `src/transform/src/join_implementation.rs` — Differential/DeltaQuery construction with Box::new() and .into_boxed_slice()
+- `src/transform/src/literal_constraints.rs` — IndexedFilter construction with .into_boxed_slice()
+- `src/transform/src/typecheck.rs` — Differential match pattern updated for Box
+- `src/compute-types/src/plan/lowering.rs` — Differential match pattern updated, IndexedFilter key.to_vec()
+- `src/adapter/src/coord/peek.rs` — IndexedFilter vals.to_vec() for FastPathPlan

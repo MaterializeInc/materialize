@@ -1718,20 +1718,20 @@ impl MirRelationExpr {
                     }
                 }
                 match &mut **implementation {
-                    JoinImplementation::Differential((_, start_key, _), order) => {
-                        if let Some(start_key) = start_key {
+                    JoinImplementation::Differential(start_info, order) => {
+                        if let Some(start_key) = &mut start_info.1 {
                             for k in start_key {
                                 f(k)?;
                             }
                         }
-                        for (_, lookup_key, _) in order {
+                        for (_, lookup_key, _) in order.iter_mut() {
                             for k in lookup_key {
                                 f(k)?;
                             }
                         }
                     }
                     JoinImplementation::DeltaQuery(paths) => {
-                        for path in paths {
+                        for path in paths.iter_mut() {
                             for (_, lookup_key, _) in path {
                                 for k in lookup_key {
                                     f(k)?;
@@ -1740,7 +1740,7 @@ impl MirRelationExpr {
                         }
                     }
                     JoinImplementation::IndexedFilter(_coll_id, _idx_id, index_key, _) => {
-                        for k in index_key {
+                        for k in index_key.iter_mut() {
                             f(k)?;
                         }
                     }
@@ -1847,20 +1847,20 @@ impl MirRelationExpr {
                     }
                 }
                 match &**implementation {
-                    JoinImplementation::Differential((_, start_key, _), order) => {
-                        if let Some(start_key) = start_key {
+                    JoinImplementation::Differential(start_info, order) => {
+                        if let Some(start_key) = &start_info.1 {
                             for k in start_key {
                                 f(k)?;
                             }
                         }
-                        for (_, lookup_key, _) in order {
+                        for (_, lookup_key, _) in order.iter() {
                             for k in lookup_key {
                                 f(k)?;
                             }
                         }
                     }
                     JoinImplementation::DeltaQuery(paths) => {
-                        for path in paths {
+                        for path in paths.iter() {
                             for (_, lookup_key, _) in path {
                                 for k in lookup_key {
                                     f(k)?;
@@ -1869,7 +1869,7 @@ impl MirRelationExpr {
                         }
                     }
                     JoinImplementation::IndexedFilter(_coll_id, _idx_id, index_key, _) => {
-                        for k in index_key {
+                        for k in index_key.iter() {
                             f(k)?;
                         }
                     }
@@ -3190,12 +3190,12 @@ pub enum JoinImplementation {
     /// Each collection index should occur exactly once, either as the starting collection
     /// or somewhere in the list.
     Differential(
-        (
+        Box<(
             usize,
             Option<Vec<MirScalarExpr>>,
             Option<JoinInputCharacteristics>,
-        ),
-        Vec<(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)>,
+        )>,
+        Box<[(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)]>,
     ),
     /// Perform independent delta query dataflows for each input.
     ///
@@ -3204,7 +3204,7 @@ pub enum JoinImplementation {
     /// against collections identified by index and with the specified arrangement key.
     /// The JoinInputCharacteristics are for EXPLAINing the characteristics that were
     /// used for join ordering.
-    DeltaQuery(Vec<Vec<(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)>>),
+    DeltaQuery(Box<[Vec<(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)>]>),
     /// Join a user-created index with a constant collection to speed up the evaluation of a
     /// predicate such as `(f1 = 3 AND f2 = 5) OR (f1 = 7 AND f2 = 9)`.
     /// This gets translated to a Differential join during MIR -> LIR lowering, but we still want
@@ -3214,8 +3214,8 @@ pub enum JoinImplementation {
     IndexedFilter(
         GlobalId,
         GlobalId,
-        Vec<MirScalarExpr>,
-        #[mzreflect(ignore)] Vec<Row>,
+        Box<[MirScalarExpr]>,
+        #[mzreflect(ignore)] Box<[Row]>,
     ),
     /// No implementation yet selected.
     Unimplemented,
@@ -4032,7 +4032,7 @@ mod tests {
     fn type_size_assertions() {
         use std::mem::size_of;
         assert_eq!(size_of::<MirRelationExpr>(), 96);
-        assert_eq!(size_of::<JoinImplementation>(), 120);
+        assert_eq!(size_of::<JoinImplementation>(), 64);
         assert_eq!(size_of::<TableFunc>(), 40);
     }
 

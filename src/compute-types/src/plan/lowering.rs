@@ -572,7 +572,7 @@ impl Context {
                         // Start with the constant input. (This used to be important before database-issues#4016
                         // was fixed.)
                         let start: usize = 1;
-                        let order = vec![(0usize, key.clone(), None)];
+                        let order = vec![(0usize, key.to_vec(), None)];
                         // All columns of the constant input will be part of the arrangement key.
                         let source_arrangement = (
                             (0..key.len())
@@ -592,7 +592,8 @@ impl Context {
                         );
                         (JoinPlan::Linear(ljp), missing)
                     }
-                    Differential((start, start_arr, _start_characteristic), order) => {
+                    Differential(start_info, order) => {
+                        let (start, start_arr, _start_characteristic) = start_info.as_ref();
                         let source_arrangement = start_arr.as_ref().and_then(|key| {
                             input_keys[*start]
                                 .arranged

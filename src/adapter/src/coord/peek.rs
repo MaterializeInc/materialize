@@ -611,7 +611,7 @@ pub fn create_fast_path_plan<T: Timestamp>(
                         return Ok(Some(FastPathPlan::PeekExisting(
                             *coll_id,
                             *idx_id,
-                            Some(vals.clone()),
+                            Some(vals.to_vec()),
                             permute_oneshot_mfp_around_index(mfp, key)?,
                         )));
                     }

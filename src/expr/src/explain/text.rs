@@ -654,11 +654,11 @@ impl MirRelationExpr {
                     let join_order = |start_idx: usize,
                                       start_key: &Option<Vec<MirScalarExpr>>,
                                       start_characteristics: &Option<JoinInputCharacteristics>,
-                                      tail: &Vec<(
+                                      tail: &[(
                         usize,
                         Vec<MirScalarExpr>,
                         Option<JoinInputCharacteristics>,
-                    )>|
+                    )]|
                      -> String {
                         format!(
                             "{}{}{} » {}",
@@ -689,10 +689,9 @@ impl MirRelationExpr {
                     };
                     ctx.indented(|ctx| {
                         match &**implementation {
-                            JoinImplementation::Differential(
-                                (start_idx, start_key, start_characteristics),
-                                tail,
-                            ) => {
+                            JoinImplementation::Differential(start_info, tail) => {
+                                let (start_idx, start_key, start_characteristics) =
+                                    start_info.as_ref();
                                 soft_assert_eq_or_log!(inputs.len(), tail.len() + 1);
 
                                 writeln!(f, "{}implementation", ctx.indent)?;
@@ -764,7 +763,7 @@ impl MirRelationExpr {
                     ctx,
                     coll_id,
                     idx_id,
-                    Some(literal_constraints.clone()),
+                    Some(literal_constraints.to_vec()),
                     cse_id,
                 )?;
                 self.fmt_analyses(f, ctx)?;
