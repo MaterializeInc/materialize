@@ -325,9 +325,7 @@ mod tests {
             )),
             "UnionNegateFusion" => Ok(Box::new(mz_transform::compound::UnionNegateFusion)),
             "UnionFusion" => Ok(Box::new(mz_transform::fusion::union::Union)),
-            "CaseLiteral" => Ok(Box::new(
-                mz_transform::case_literal::CaseLiteralTransform,
-            )),
+            "CaseLiteral" => Ok(Box::new(mz_transform::case_literal::CaseLiteralTransform)),
             _ => Err(anyhow!(
                 "no transform named {} (you might have to add it to get_transform)",
                 name

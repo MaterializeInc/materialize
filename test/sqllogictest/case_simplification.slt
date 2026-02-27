@@ -10,6 +10,11 @@
 # Tests for the CaseLiteral optimizer transform, which rewrites
 # CASE expr WHEN lit1 THEN res1 ... chains into BTreeMap lookups.
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_case_literal_transform TO true;
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE t (x int, y text, z int)
 

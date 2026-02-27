@@ -5053,6 +5053,7 @@ pub fn unplan_create_cluster(
                 enable_eq_classes_withholding_errors: _,
                 enable_fast_path_plan_insights: _,
                 enable_cast_elimination: _,
+                enable_case_literal_transform: _,
             } = optimizer_feature_overrides;
             // The ones from above that don't occur below are not wired up to cluster features.
             let features_extracted = ClusterFeatureExtracted {
