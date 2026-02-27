@@ -238,6 +238,11 @@ fn handle_apply(
             let transform = SemijoinIdempotence::default();
             apply_transform(transform, catalog, input)
         }
+        "case_literal" => {
+            use mz_transform::case_literal::CaseLiteralTransform;
+            let transform = CaseLiteralTransform;
+            apply_transform(transform, catalog, input)
+        }
         "threshold_elision" => {
             use mz_transform::threshold_elision::ThresholdElision;
             let transform = ThresholdElision;
