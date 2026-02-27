@@ -19,33 +19,42 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-02-26* <br>
 *Released to Materialize Self-Managed: 2026-02-27* <br>
 
-This release makes Iceberg sinks generally available, adds the `strpos`
-function for improved tool compatibility, and fixes several bugs including
-issues with multi-dimensional array null values, replacement materialized view
-dropping, and COPY FROM validation.
+This release includes the release of our Iceberg Sink, performance improvements to SUBSCRIBE and bugfixes.
 
-### Features
+### Iceberg Sink
+{{< public-preview />}}
+Iceberg sinks allow you to write data from Materialize into [Apache
+Iceberg](https://iceberg.apache.org/) tables hosted on [Amazon S3
+Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html).
+As data changes in Materialize, the corresponding Iceberg tables are
+automatically kept up to date.  You can sink data from a materialized view, a
+source, or a table.
 
-- **Iceberg Sinks Generally Available**: Iceberg sinks are now enabled by
-  default and no longer require a feature flag, allowing all users to export
-  data from Materialize into Apache Iceberg tables.
+```mzsql
+CREATE SINK my_iceberg_sink
+  IN CLUSTER sink_cluster
+  FROM materialized_view_mv1
+  INTO ICEBERG CATALOG CONNECTION iceberg_catalog_connection (
+    NAMESPACE = 'my_iceberg_namespace',
+    TABLE = 'mv1'
+  )
+  USING AWS CONNECTION aws_connection
+  KEY (row_id)
+  MODE UPSERT
+  WITH (COMMIT INTERVAL = '60s');
+```
+
+For more information, refer to:
+- [Guide: How to export results from Materialize to Apache Iceberg Tables](/serve-results/sink/iceberg)
+- [Blog: Making Iceberg work for Operational Data](https://materialize.com/blog/making-iceberg-work-for-operational-data/)
+- [Syntax: CREATE SINK... INTO ICEBERG ](/sql/create-sink/iceberg)
 
 ### Improvements
-
-- Added `strpos` as a synonym for the `position` function, improving
-  compatibility with tools such as PowerBI.
-- Added pgwire password authentication support for the OIDC authenticator in
-  Self-Managed deployments, enabling password-based connections alongside OIDC
-  token authentication.
-- Improved performance of delta join dataflows when indexes have large amounts
-  of retained history, by consolidating updates before invoking join closures.
-- Enabled the subscribe optimization by default for Self-Managed deployments,
-  improving subscribe query performance.
-- Added ability to edit and drop roles in the Console UI, including managing
-  inherited roles and privileges with grant/revoke support.
+- **Improved `SUBSCRIBE` Performance**: We've optimized `SUBSCRIBE` to skip initial snapshots in more cases. This can speed up `SUBSCRIBE` start times.
+- **Improved delta join performance**: We now consolidate updates before invoking join closures, improving the peformance of delta joins when indexes have large amounts of retained history.
+- **Improved compatibility with external tools**: We've added `strpos` as a synonym for the `position` function, improving compatibility with tools such as PowerBI.
 
 ### Bug Fixes
-
 - Fixed a panic when constructing multi-dimensional arrays with null values,
   now treating null elements as zero-dimensional arrays consistent with
   PostgreSQL behavior.
@@ -54,19 +63,13 @@ dropping, and COPY FROM validation.
 - Fixed a bug where dropping a replacement materialized view (instead of
   applying the replacement) could seal the target materialized view for all
   times after an environmentd restart.
-- Fixed a panic when `COPY FROM` targets `NOT NULL` columns that lack default
-  values, now returning a descriptive error message instead.
 - Fixed a bug where `Int2Vector` to `Array` casting did not correctly handle
   element type conversions, potentially causing incorrect results or errors.
-- Fixed a Helm chart version mismatch in Self-Managed deployments where the
-  current in-git Helm chart was always used even for older releases of
-  orchestratord, causing incompatibilities.
 - Fixed the memory-based calculation of replica size credits, which was
   incorrectly multiplying by the number of workers instead of using the correct
   per-process memory limit.
-- *Console*: Fixed an overflow display issue on the roles page.
-- *Console*: Fixed SSO connection configuration pages not loading properly due
-  to missing content security policy entries.
+- Fixed an overflow display issue on the roles page in the console.
+- Fixed SSO connection configuration pages in the console, which did not loading properly due to missing content security policy entries.
 
 ## v26.12.0
 *Released to Materialize Cloud: 2026-02-19* <br>
