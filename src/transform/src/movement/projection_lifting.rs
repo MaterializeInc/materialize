@@ -188,7 +188,7 @@ impl ProjectionLifting {
 
                         *relation = inner
                             .take_dangerous()
-                            .flat_map(func.clone(), exprs.clone())
+                            .flat_map((**func).clone(), exprs.clone())
                             .project(new_outputs);
                     }
                     Ok(())
@@ -248,7 +248,7 @@ impl ProjectionLifting {
                             }
                         }
 
-                        *implementation = mz_expr::JoinImplementation::Unimplemented;
+                        **implementation = mz_expr::JoinImplementation::Unimplemented;
 
                         *relation = relation.take_dangerous().project(projection);
                     }
@@ -307,7 +307,7 @@ impl ProjectionLifting {
                             .top_k(
                                 group_key.clone(),
                                 order_key.clone(),
-                                limit.clone(),
+                                limit.as_deref().cloned(),
                                 offset.clone(),
                                 expected_group_size.clone(),
                             )

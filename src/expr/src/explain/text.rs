@@ -586,11 +586,10 @@ impl MirRelationExpr {
             Join {
                 inputs,
                 equivalences,
-                implementation:
-                    implementation @ (JoinImplementation::Differential(..)
+                implementation,
+            } if matches!(**implementation, JoinImplementation::Differential(..)
                     | JoinImplementation::DeltaQuery(..)
-                    | JoinImplementation::Unimplemented),
-            } => {
+                    | JoinImplementation::Unimplemented) => {
                 let has_equivalences = !equivalences.is_empty();
 
                 if has_equivalences {
@@ -631,9 +630,12 @@ impl MirRelationExpr {
                                 },
                                 ArrangeBy { input, .. } => dig_name_from_expr(h, input),
                                 Join {
-                                    implementation: JoinImplementation::IndexedFilter(gid, ..),
+                                    implementation,
                                     ..
-                                } => Some(global_id_name(gid)),
+                                } => match &**implementation {
+                                    JoinImplementation::IndexedFilter(gid, ..) => Some(global_id_name(gid)),
+                                    _ => None,
+                                },
                                 _ => None,
                             }
                         }
@@ -686,7 +688,7 @@ impl MirRelationExpr {
                         )
                     };
                     ctx.indented(|ctx| {
-                        match implementation {
+                        match &**implementation {
                             JoinImplementation::Differential(
                                 (start_idx, start_key, start_characteristics),
                                 tail,
@@ -741,11 +743,11 @@ impl MirRelationExpr {
                 })?;
             }
             Join {
-                implementation:
-                    JoinImplementation::IndexedFilter(coll_id, idx_id, _key, literal_constraints),
+                implementation,
                 inputs,
                 ..
-            } => {
+            } if matches!(**implementation, JoinImplementation::IndexedFilter(..)) => {
+                let JoinImplementation::IndexedFilter(coll_id, idx_id, _key, literal_constraints) = &**implementation else { unreachable!() };
                 let cse_id = match inputs.get(1).unwrap() {
                     // If the constant input is actually a Get, then let `fmt_indexed_filter` know.
                     Get { id, .. } => {
@@ -767,6 +769,8 @@ impl MirRelationExpr {
                 )?;
                 self.fmt_analyses(f, ctx)?;
             }
+            // The two Join arms above with guards cover all JoinImplementation variants.
+            Join { .. } => unreachable!(),
             Reduce {
                 group_key,
                 aggregates,
@@ -835,7 +839,7 @@ impl MirRelationExpr {
                             write!(f, " order_by=[{}]", separated(", ", order_by))?;
                         }
                         if let Some(limit) = limit {
-                            let limit = mode.expr(limit, cols);
+                            let limit = mode.expr(&**limit, cols);
                             write!(f, " limit={}", limit)?;
                         }
                         if offset > &0 {

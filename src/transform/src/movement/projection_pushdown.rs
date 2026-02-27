@@ -226,7 +226,7 @@ impl ProjectionPushdown {
                     implementation,
                 } if self.include_joins => {
                     assert!(
-                        matches!(implementation, JoinImplementation::Unimplemented),
+                        matches!(**implementation, JoinImplementation::Unimplemented),
                         "ProjectionPushdown can't deal with filled in join implementations. Turn off `include_joins` if you'd like to run it after `JoinImplementation`."
                     );
 
@@ -438,7 +438,7 @@ impl ProjectionPushdown {
                         ),
                         columns_to_pushdown.iter(),
                     );
-                    reverse_permute(limit.iter_mut(), columns_to_pushdown.iter());
+                    reverse_permute(limit.iter_mut().map(|l| &mut **l), columns_to_pushdown.iter());
                     self.action(input, &columns_to_pushdown, gets)?;
                     columns_to_pushdown
                 }

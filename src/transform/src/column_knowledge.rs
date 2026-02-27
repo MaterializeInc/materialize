@@ -345,7 +345,7 @@ impl ColumnKnowledge {
 
                         // We can produce composite knowledge for everything in the equivalence class.
                         for expr in equivalence.iter_mut() {
-                            if !matches!(implementation, IndexedFilter(..)) {
+                            if !matches!(**implementation, IndexedFilter(..)) {
                                 optimize(
                                     expr,
                                     &folded_input_col_types,

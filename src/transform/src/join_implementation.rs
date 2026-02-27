@@ -153,20 +153,23 @@ impl JoinImplementation {
             // that was inserted by a previous run of JoinImplementation. (We should eventually
             // refactor this to make ArrangeBy unambiguous somehow. Maybe move JoinImplementation
             // to the lowering.)
-            implementation: implementation @ (Unimplemented | Differential(..)),
+            implementation,
         } = relation
         {
+            if !matches!(**implementation, Unimplemented | Differential(..)) {
+                return Ok(());
+            }
             // If we eagerly plan delta joins, we don't need the second run to "pick up" delta joins
             // that could be planned with the arrangements from a differential. If such a delta
             // join were viable, we'd have already planned it the first time.
-            if features.enable_eager_delta_joins && !matches!(implementation, Unimplemented) {
+            if features.enable_eager_delta_joins && !matches!(**implementation, Unimplemented) {
                 return Ok(());
             }
 
             let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
 
             // Canonicalize the equivalence classes
-            if matches!(implementation, Unimplemented) {
+            if matches!(**implementation, Unimplemented) {
                 // Let's do this only if it's the first run of JoinImplementation, in which case we
                 // are guaranteed to produce a new plan, which will be compatible with the modified
                 // equivalences from the below call. Otherwise, if we already have a Differential or
@@ -247,10 +250,8 @@ impl JoinImplementation {
                 let mut characteristics = FilterCharacteristics::filter_characteristics(&filter)?;
                 if matches!(
                     input,
-                    MirRelationExpr::Join {
-                        implementation: IndexedFilter(..),
-                        ..
-                    }
+                    MirRelationExpr::Join { implementation, .. }
+                        if matches!(**implementation, IndexedFilter(..))
                 ) {
                     characteristics.add_literal_equality();
                 }
@@ -265,10 +266,8 @@ impl JoinImplementation {
                     characteristics |= FilterCharacteristics::filter_characteristics(&filter)?;
                     if matches!(
                         input,
-                        MirRelationExpr::Join {
-                            implementation: IndexedFilter(..),
-                            ..
-                        }
+                        MirRelationExpr::Join { implementation, .. }
+                            if matches!(**implementation, IndexedFilter(..))
                     ) {
                         characteristics.add_literal_equality();
                     }
@@ -314,10 +313,10 @@ impl JoinImplementation {
                         available_arrangements[index]
                             .push((0..group_key.len()).map(MirScalarExpr::column).collect());
                     }
-                    MirRelationExpr::Join {
-                        implementation: IndexedFilter(id, ..),
-                        ..
-                    } => {
+                    MirRelationExpr::Join { implementation, .. }
+                        if matches!(**implementation, IndexedFilter(..)) =>
+                    {
+                        let IndexedFilter(id, ..) = &**implementation else { unreachable!() };
                         available_arrangements[index]
                             .extend(indexes.get(Id::Global(id.clone())).map(|key| key.to_vec()));
                     }
@@ -363,7 +362,7 @@ impl JoinImplementation {
             // We've already planned a differential join... should we replace it with a delta join?
             //
             // This code path is only active when `eager_delta_joins` is false.
-            if matches!(old_implementation, Differential(..)) {
+            if matches!(*old_implementation, Differential(..)) {
                 soft_assert_or_log!(
                     !features.enable_eager_delta_joins,
                     "eager delta joins run join implementation just once"
@@ -471,7 +470,7 @@ impl JoinImplementation {
                 // If delta plan's inputs need no new arrangements, pick the delta plan.
                 Ok((delta_query_plan, 0)) => {
                     soft_assert_or_log!(
-                        matches!(old_implementation, Unimplemented | Differential(..)),
+                        matches!(*old_implementation, Unimplemented | Differential(..)),
                         "delta query plans should not be planned twice"
                     );
                     tracing::debug!(
@@ -496,7 +495,7 @@ impl JoinImplementation {
                             plan = ?delta_query_plan,
                             "picking delta query plan");
                         *relation = delta_query_plan;
-                    } else if let Unimplemented = old_implementation {
+                    } else if let Unimplemented = &*old_implementation {
                         // If we haven't planned the join yet, use the differential plan.
                         tracing::debug!(
                             plan = ?differential_query_plan,
@@ -506,7 +505,7 @@ impl JoinImplementation {
                         // But don't replace an existing differential plan.
                         tracing::debug!(plan = ?old_implementation, "keeping old plan");
                         soft_assert_or_log!(
-                            matches!(old_implementation, Differential(..)),
+                            matches!(*old_implementation, Differential(..)),
                             "implemented plan in second run of join implementation should be differential \
                              if the delta plan is not viable"
                         )
@@ -654,7 +653,7 @@ mod delta_queries {
                 .iter_mut()
                 .for_each(|order| super::permute_order(order, &lifted_projections));
 
-            *implementation = JoinImplementation::DeltaQuery(orders);
+            **implementation = JoinImplementation::DeltaQuery(orders);
 
             super::install_lifted_mfp(&mut new_join, lifted_mfp)?;
 
@@ -811,7 +810,7 @@ mod differential {
             order.remove(0);
 
             // Install the implementation.
-            *implementation = JoinImplementation::Differential(
+            **implementation = JoinImplementation::Differential(
                 (start, Some(start_key), start_characteristics),
                 order,
             );

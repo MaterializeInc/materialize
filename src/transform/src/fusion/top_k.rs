@@ -106,10 +106,10 @@ impl TopK {
                         } else {
                             inner_limit_minus_outer_offset
                         };
-                        *limit = Some(mz_expr::MirScalarExpr::literal_ok(
+                        *limit = Some(Box::new(mz_expr::MirScalarExpr::literal_ok(
                             mz_repr::Datum::Int64(new_limit),
                             ReprScalarType::Int64,
-                        ));
+                        )));
                     }
 
                     if let Some(0) = limit.as_ref().and_then(|l| l.as_literal_int64()) {

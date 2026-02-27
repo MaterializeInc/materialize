@@ -394,7 +394,7 @@ mod relation {
         let parse_input = ParseChildren::new(input, flat_map.span().start());
         let input = Box::new(parse_input.parse_one(ctx, parse_expr)?);
 
-        Ok(MirRelationExpr::FlatMap { input, func, exprs })
+        Ok(MirRelationExpr::FlatMap { input, func: Box::new(func), exprs })
     }
 
     fn parse_filter(ctx: CtxRef, input: ParseStream) -> Result {
@@ -426,7 +426,7 @@ mod relation {
         Ok(MirRelationExpr::Join {
             inputs,
             equivalences: vec![],
-            implementation: JoinImplementation::Unimplemented,
+            implementation: Box::new(JoinImplementation::Unimplemented),
         })
     }
 
@@ -445,7 +445,7 @@ mod relation {
         Ok(MirRelationExpr::Join {
             inputs,
             equivalences,
-            implementation: JoinImplementation::Unimplemented,
+            implementation: Box::new(JoinImplementation::Unimplemented),
         })
     }
 
@@ -574,7 +574,7 @@ mod relation {
             input,
             group_key,
             order_key,
-            limit,
+            limit: limit.map(Box::new),
             offset,
             monotonic,
             expected_group_size,

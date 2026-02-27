@@ -1136,7 +1136,7 @@ impl Typecheck {
                 }
 
                 // check that the join implementation is consistent
-                match implementation {
+                match &**implementation {
                     JoinImplementation::Differential((start_idx, first_key, _), others) => {
                         if let Some(key) = first_key {
                             for k in key {

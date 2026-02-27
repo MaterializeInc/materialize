@@ -191,7 +191,7 @@ impl SemijoinIdempotence {
 fn attempt_join_simplification(
     inputs: &mut [MirRelationExpr],
     equivalences: &Vec<Vec<MirScalarExpr>>,
-    implementation: &mut mz_expr::JoinImplementation,
+    implementation: &mut Box<mz_expr::JoinImplementation>,
     let_replacements: &BTreeMap<LocalId, Vec<Replacement>>,
     gets_behind_gets: &BTreeMap<LocalId, Vec<(Id, Vec<MirScalarExpr>)>>,
 ) {
@@ -222,7 +222,7 @@ fn attempt_join_simplification(
                 if ids0.contains(&candidate.id) {
                     if let Some(permutation) = validate_replacement(&ltr, &mut candidate) {
                         inputs[1] = candidate.replacement.project(permutation);
-                        *implementation = mz_expr::JoinImplementation::Unimplemented;
+                        **implementation = mz_expr::JoinImplementation::Unimplemented;
 
                         // Take a moment to think about pushing down `IS NOT NULL` tests.
                         // The pushdown is for the benefit of CSE on the `A` expressions,
@@ -258,7 +258,7 @@ fn attempt_join_simplification(
                 if ids1.contains(&candidate.id) {
                     if let Some(permutation) = validate_replacement(&rtl, &mut candidate) {
                         inputs[0] = candidate.replacement.project(permutation);
-                        *implementation = mz_expr::JoinImplementation::Unimplemented;
+                        **implementation = mz_expr::JoinImplementation::Unimplemented;
 
                         // Take a moment to think about pushing down `IS NOT NULL` tests.
                         // The pushdown is for the benefit of CSE on the `A` expressions,

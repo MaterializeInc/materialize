@@ -186,12 +186,12 @@ impl LiteralConstraints {
                                     vec![(*e).clone(), MirScalarExpr::column(i + inp_typ.arity())]
                                 })
                                 .collect(),
-                            implementation: IndexedFilter(
+                            implementation: Box::new(IndexedFilter(
                                 inp_id,
                                 idx_id,
                                 key.clone(),
                                 possible_vals,
-                            ),
+                            )),
                         };
 
                         // Rebuild the MFP to add the projection that removes the columns coming from

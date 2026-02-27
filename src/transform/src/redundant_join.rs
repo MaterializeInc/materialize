@@ -273,7 +273,7 @@ impl RedundantJoin {
                         }
 
                         // Unset implementation, as irrevocably hosed by this transformation.
-                        *implementation = mz_expr::JoinImplementation::Unimplemented;
+                        **implementation = mz_expr::JoinImplementation::Unimplemented;
 
                         *relation = relation.take_dangerous().map(bindings).project(projection);
                         // The projection will gum up provenance reasoning anyhow, so don't work hard.

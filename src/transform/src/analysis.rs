@@ -1119,7 +1119,7 @@ mod column_names {
                     let func_output_start = column_names.len();
                     let func_output_end = column_names.len() + func.output_arity();
                     column_names.extend(Self::anonymous(func_output_start..func_output_end));
-                    if let TableFunc::WithOrdinality { .. } = func {
+                    if let TableFunc::WithOrdinality { .. } = &**func {
                         // We know the name of the last column
                         // TODO(ggevay): generalize this to meaningful col names for all table functions
                         **column_names.last_mut().as_mut().expect(
@@ -1947,7 +1947,8 @@ mod cardinality {
                     ..
                 } => {
                     let input = results[index - 1];
-                    self.topk(group_key, limit, expected_group_size, input)
+                    let limit_unboxed = limit.as_deref().cloned();
+                    self.topk(group_key, &limit_unboxed, expected_group_size, input)
                 }
                 Threshold { .. } => {
                     let input = results[index - 1];

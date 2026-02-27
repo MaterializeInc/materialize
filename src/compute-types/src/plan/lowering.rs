@@ -416,7 +416,7 @@ impl Context {
                 // it would be very hard to hunt down all these parts. (For example, key inference
                 // infers the group key as a unique key.)
                 let fused_with_reduce = 'fusion: {
-                    if !matches!(func, TableFunc::UnnestList { .. }) {
+                    if !matches!(&**func, TableFunc::UnnestList { .. }) {
                         break 'fusion None;
                     }
                     // We might have a Project of a single col between the FlatMap and the
@@ -536,7 +536,7 @@ impl Context {
                             input_key,
                             input: Box::new(input),
                             exprs: exprs.clone(),
-                            func: func.clone(),
+                            func: (**func).clone(),
                             mfp_after: mfp,
                         }
                         .as_plan(lir_id),
@@ -567,7 +567,7 @@ impl Context {
                     JoinInputMapper::new_from_input_arities(input_arities.iter().copied());
 
                 // Extract temporal predicates as joins cannot currently absorb them.
-                let (plan, missing) = match implementation {
+                let (plan, missing) = match &**implementation {
                     IndexedFilter(_coll_id, _idx_id, key, _val) => {
                         // Start with the constant input. (This used to be important before database-issues#4016
                         // was fixed.)
@@ -725,7 +725,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     group_key.clone(),
                     order_key.clone(),
                     *offset,
-                    limit.clone(),
+                    limit.as_deref().cloned(),
                     arity,
                     *monotonic,
                     *expected_group_size,

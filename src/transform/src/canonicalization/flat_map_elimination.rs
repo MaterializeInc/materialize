@@ -57,7 +57,7 @@ impl FlatMapElimination {
         // call Wrap directly; we only create calls to Wrap ourselves, and we don't use
         // WithOrdinality on it.)
         if let MirRelationExpr::FlatMap { func, exprs, input } = relation {
-            if let TableFunc::Wrap { width, .. } = func {
+            if let TableFunc::Wrap { width, .. } = &**func {
                 if *width >= exprs.len() {
                     *relation = input.take_dangerous().map(std::mem::take(exprs));
                 }

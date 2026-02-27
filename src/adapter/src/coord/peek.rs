@@ -606,7 +606,7 @@ pub fn create_fast_path_plan<T: Timestamp>(
                 }
                 MirRelationExpr::Join { implementation, .. } => {
                     if let mz_expr::JoinImplementation::IndexedFilter(coll_id, idx_id, key, vals) =
-                        implementation
+                        &**implementation
                     {
                         return Ok(Some(FastPathPlan::PeekExisting(
                             *coll_id,

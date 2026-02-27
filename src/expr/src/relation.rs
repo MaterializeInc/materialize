@@ -194,8 +194,8 @@ pub enum MirRelationExpr {
     FlatMap {
         /// The source collection
         input: Box<MirRelationExpr>,
-        /// The table func to apply
-        func: TableFunc,
+        /// The table func to apply (boxed to reduce MirRelationExpr size)
+        func: Box<TableFunc>,
         /// The argument to the table func
         exprs: Vec<MirScalarExpr>,
     },
@@ -228,9 +228,9 @@ pub enum MirRelationExpr {
         /// inputs, but more general cases exist (e.g. complex functions of multiple columns
         /// from multiple inputs, or just constant literals).
         equivalences: Vec<Vec<MirScalarExpr>>,
-        /// Join implementation information.
+        /// Join implementation information (boxed to reduce MirRelationExpr size).
         #[serde(default)]
-        implementation: JoinImplementation,
+        implementation: Box<JoinImplementation>,
     },
     /// Group a dataflow by some columns and aggregate over each group
     ///
@@ -263,9 +263,9 @@ pub enum MirRelationExpr {
         group_key: Vec<usize>,
         /// Column indices used to order rows within groups.
         order_key: Vec<ColumnOrder>,
-        /// Number of records to retain
+        /// Number of records to retain (boxed to reduce MirRelationExpr size)
         #[serde(default)]
-        limit: Option<MirScalarExpr>,
+        limit: Option<Box<MirScalarExpr>>,
         /// Number of records to skip
         #[serde(default)]
         offset: usize,
@@ -1197,7 +1197,7 @@ impl MirRelationExpr {
     pub fn flat_map(self, func: TableFunc, exprs: Vec<MirScalarExpr>) -> Self {
         MirRelationExpr::FlatMap {
             input: Box::new(self),
-            func,
+            func: Box::new(func),
             exprs,
         }
     }
@@ -1315,7 +1315,7 @@ impl MirRelationExpr {
         MirRelationExpr::Join {
             inputs,
             equivalences,
-            implementation: JoinImplementation::Unimplemented,
+            implementation: Box::new(JoinImplementation::Unimplemented),
         }
     }
 
@@ -1357,7 +1357,7 @@ impl MirRelationExpr {
             input: Box::new(self),
             group_key,
             order_key,
-            limit,
+            limit: limit.map(Box::new),
             offset,
             expected_group_size,
             monotonic: false,
@@ -1717,7 +1717,7 @@ impl MirRelationExpr {
                         f(expr)?;
                     }
                 }
-                match implementation {
+                match &mut **implementation {
                     JoinImplementation::Differential((_, start_key, _), order) => {
                         if let Some(start_key) = start_key {
                             for k in start_key {
@@ -1846,7 +1846,7 @@ impl MirRelationExpr {
                         f(expr)?;
                     }
                 }
-                match implementation {
+                match &**implementation {
                     JoinImplementation::Differential((_, start_key, _), order) => {
                         if let Some(start_key) = start_key {
                             for k in start_key {
@@ -4024,6 +4024,17 @@ mod tests {
     use crate::explain::HumanizedExplain;
 
     use super::*;
+
+    /// Guard against accidental size regressions in key relation expression types.
+    /// MirRelationExpr is stored in large numbers throughout the system, so
+    /// keeping it small is important for memory efficiency.
+    #[mz_ore::test]
+    fn type_size_assertions() {
+        use std::mem::size_of;
+        assert_eq!(size_of::<MirRelationExpr>(), 104);
+        assert_eq!(size_of::<JoinImplementation>(), 120);
+        assert_eq!(size_of::<TableFunc>(), 80);
+    }
 
     #[mz_ore::test]
     fn test_row_set_finishing_as_text() {

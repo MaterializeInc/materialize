@@ -954,7 +954,7 @@ impl<'a> CollectIndexRequests<'a> {
                     implementation,
                     ..
                 } => {
-                    match implementation {
+                    match &**implementation {
                         JoinImplementation::Differential(..) => {
                             for input in inputs {
                                 this.collect_index_reqs_inner(
