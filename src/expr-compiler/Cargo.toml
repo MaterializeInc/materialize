@@ -1,0 +1,28 @@
+[package]
+name = "mz-expr-compiler"
+description = "WASM-compiled scalar expression evaluation for Materialize."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+mz-expr = { path = "../expr" }
+mz-ore = { path = "../ore" }
+mz-repr = { path = "../repr" }
+tracing = "0.1.44"
+wasm-encoder = "0.245.1"
+wasmtime = { version = "42.0.1", default-features = false, features = ["cranelift", "runtime"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[dev-dependencies]
+proptest = { version = "1.10.0", default-features = false, features = ["std"] }
+
+[features]
+default = ["workspace-hack"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

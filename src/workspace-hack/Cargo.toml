@@ -43,6 +43,7 @@ bit-set = { version = "0.8.0" }
 bit-vec = { version = "0.8.0" }
 brotli = { version = "8.0.2" }
 bstr = { version = "1.12.1" }
+bumpalo = { version = "3.17.0", features = ["allocator-api2"] }
 bytemuck = { version = "1.25.0", default-features = false, features = ["latest_stable_rust"] }
 bytes = { version = "1.11.1", features = ["serde"] }
 cast = { version = "0.3.0", default-features = false, features = ["std"] }
@@ -50,6 +51,7 @@ chrono = { version = "0.4.41", features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
 concurrent-queue = { version = "2.5.0" }
+cranelift-bitset = { version = "0.129.1", default-features = false, features = ["enable-serde"] }
 criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
 crossbeam-deque = { version = "0.8.6" }
 crossbeam-epoch = { version = "0.9.18" }
@@ -81,7 +83,7 @@ hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", defaul
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16.1" }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.32", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.20", features = ["client-legacy", "server-auto", "service", "tracing"] }
-indexmap = { version = "2.11.4", features = ["serde"] }
+indexmap = { version = "2.13.0", features = ["serde"] }
 insta = { version = "1.45.1", features = ["json"] }
 itertools = { version = "0.13.0" }
 jiff = { version = "0.2.20", features = ["serde"] }
@@ -118,6 +120,7 @@ proptest = { version = "1.10.0" }
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.16.3", default-features = false, features = ["serde"] }
 prost-types = { version = "0.14.3" }
+pulley-interpreter = { version = "42.0.1", default-features = false, features = ["disas", "interp", "std"] }
 quote = { version = "1.0.44" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.9.0" }
@@ -127,6 +130,7 @@ regex = { version = "1.12.2" }
 regex-automata = { version = "0.4.13", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "std", "unicode"] }
 regex-syntax = { version = "0.8.8" }
 reqwest = { version = "0.12.28", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
+rustc-hash = { version = "2.1.1" }
 schemars = { version = "1.2.1", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.27", features = ["serde"] }
@@ -161,6 +165,7 @@ unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.25" }
 url = { version = "2.5.8", features = ["serde"] }
 uuid = { version = "1.19.0", features = ["serde", "v4", "v5", "v7"] }
+wasmtime-internal-core = { version = "42.0.1", default-features = false, features = ["anyhow", "std"] }
 zeroize = { version = "1.8.2", features = ["serde"] }
 zip = { version = "6.0.0", default-features = false, features = ["deflate"] }
 zstd = { version = "0.13.3" }
@@ -170,10 +175,12 @@ zstd-sys = { version = "2.0.16", features = ["std"] }
 [build-dependencies]
 aho-corasick = { version = "1.1.4" }
 bindgen = { version = "0.72.1" }
+bumpalo = { version = "3.17.0", features = ["allocator-api2"] }
 bytes = { version = "1.11.1", features = ["serde"] }
 cc = { version = "1.2.55", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 clang-sys = { version = "1.8.1", default-features = false, features = ["clang_11_0", "runtime"] }
+cranelift-bitset = { version = "0.129.1", default-features = false, features = ["enable-serde"] }
 darling_core = { version = "0.20.11", default-features = false, features = ["suggestions"] }
 digest = { version = "0.10.7", features = ["mac", "oid", "std"] }
 either = { version = "1.15.0", features = ["use_std"] }
@@ -189,7 +196,7 @@ futures-util = { version = "0.3.31", features = ["channel", "io", "sink"] }
 getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2.16", default-features = false, features = ["std"] }
 hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15.3" }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16.1" }
-indexmap = { version = "2.11.4", features = ["serde"] }
+indexmap = { version = "2.13.0", features = ["serde"] }
 insta = { version = "1.45.1", features = ["json"] }
 itertools = { version = "0.13.0" }
 libc = { version = "0.2.182", features = ["extra_traits", "use_std"] }
@@ -210,6 +217,7 @@ proptest-derive = { version = "0.8.0", default-features = false, features = ["bo
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 prost-build = { version = "0.14.3", features = ["cleanup-markdown"] }
 prost-types = { version = "0.14.3" }
+pulley-interpreter = { version = "42.0.1", default-features = false, features = ["disas", "interp", "std"] }
 quote = { version = "1.0.44" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_core = { version = "0.6.4", default-features = false, features = ["std"] }
@@ -217,6 +225,7 @@ regex = { version = "1.12.2" }
 regex-automata = { version = "0.4.13", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "std", "unicode"] }
 regex-syntax = { version = "0.8.8" }
 reqwest = { version = "0.12.28", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
+rustc-hash = { version = "2.1.1" }
 semver = { version = "1.0.27", features = ["serde"] }
 serde = { version = "1.0.228", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1.0.228", features = ["alloc", "rc"] }
@@ -237,6 +246,7 @@ uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.25" }
 url = { version = "2.5.8", features = ["serde"] }
+wasmtime-internal-core = { version = "42.0.1", default-features = false, features = ["anyhow", "std"] }
 zip = { version = "6.0.0", default-features = false, features = ["deflate"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
@@ -244,14 +254,15 @@ bitflags = { version = "2.11.0", default-features = false, features = ["std"] }
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.8.1", features = ["client", "http1", "http2", "server"] }
 hyper-util = { version = "0.1.20", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.1.0" }
-linux-raw-sys-274715c4dabd11b0 = { package = "linux-raw-sys", version = "0.9.4", default-features = false, features = ["elf", "errno", "general", "ioctl", "no_std", "prctl"] }
+linux-raw-sys-5ef9efb8ec2df382 = { package = "linux-raw-sys", version = "0.12.1", default-features = false, features = ["auxvec", "elf", "errno", "general", "ioctl", "no_std", "prctl"] }
 linux-raw-sys-9fbad63c4bcf4a8f = { package = "linux-raw-sys", version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 miniz_oxide = { version = "0.8.9", default-features = false, features = ["simd", "with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
+object = { version = "0.37.3", default-features = false, features = ["archive", "read_core", "unaligned", "write"] }
 openssl = { version = "0.10.75", features = ["vendored"] }
 openssl-sys = { version = "0.9.111", default-features = false, features = ["vendored"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
-rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.7", features = ["event", "fs", "pipe", "process", "time"] }
+rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.1.4", features = ["event", "fs", "mm", "param", "pipe", "process", "time"] }
 spin = { version = "0.10.0" }
 tower-http = { version = "0.6.8", default-features = false, features = ["follow-redirect"] }
 
@@ -264,7 +275,7 @@ getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3.3", default
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.8.1", features = ["client", "http1", "http2", "server"] }
 hyper-util = { version = "0.1.20", features = ["client-legacy", "client-proxy", "client-proxy-system", "server-auto", "service", "tracing"] }
 idna = { version = "1.1.0" }
-linux-raw-sys-274715c4dabd11b0 = { package = "linux-raw-sys", version = "0.9.4", default-features = false, features = ["elf", "errno", "general", "ioctl", "no_std", "prctl"] }
+linux-raw-sys-5ef9efb8ec2df382 = { package = "linux-raw-sys", version = "0.12.1", default-features = false, features = ["auxvec", "elf", "errno", "general", "ioctl", "no_std", "prctl"] }
 linux-raw-sys-9fbad63c4bcf4a8f = { package = "linux-raw-sys", version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 lock_api = { version = "0.4.14", features = ["serde"] }
 miniz_oxide = { version = "0.8.9", default-features = false, features = ["simd", "with-alloc"] }
@@ -273,7 +284,7 @@ openssl = { version = "0.10.75", features = ["vendored"] }
 openssl-sys = { version = "0.9.111", default-features = false, features = ["vendored"] }
 parking_lot = { version = "0.12.5", features = ["serde"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
-rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.7", features = ["event", "fs", "pipe", "process", "time"] }
+rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.1.4", features = ["event", "fs", "mm", "param", "pipe", "process", "time"] }
 scopeguard = { version = "1.2.0" }
 time = { version = "0.3.47", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
 tokio = { version = "1.49.0", features = ["full", "test-util", "tracing"] }
@@ -292,8 +303,9 @@ hyper-util = { version = "0.1.20", default-features = false, features = ["client
 idna = { version = "1.1.0" }
 miniz_oxide = { version = "0.8.9", default-features = false, features = ["simd", "with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
+object = { version = "0.37.3", default-features = false, features = ["archive", "read_core", "unaligned", "write"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
-rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.7", features = ["event", "fs", "pipe", "process", "time"] }
+rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.1.4", features = ["event", "fs", "mm", "param", "pipe", "process", "time"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
 spin = { version = "0.10.0" }
 tower-http = { version = "0.6.8", default-features = false, features = ["follow-redirect"] }
@@ -312,7 +324,7 @@ miniz_oxide = { version = "0.8.9", default-features = false, features = ["simd",
 native-tls = { version = "0.2.14", default-features = false, features = ["alpn", "vendored"] }
 parking_lot = { version = "0.12.5", features = ["serde"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
-rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.7", features = ["event", "fs", "pipe", "process", "time"] }
+rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.1.4", features = ["event", "fs", "mm", "param", "pipe", "process", "time"] }
 scopeguard = { version = "1.2.0" }
 security-framework = { version = "2.10.0", features = ["alpn"] }
 time = { version = "0.3.47", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }

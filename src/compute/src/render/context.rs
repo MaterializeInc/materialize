@@ -19,7 +19,9 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::dyncfgs::ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION;
+use mz_compute_types::dyncfgs::{
+    ENABLE_COMPILED_EXPRESSIONS, ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION,
+};
 use mz_compute_types::plan::AvailableCollections;
 use mz_dyncfg::ConfigSet;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
@@ -725,6 +727,12 @@ where
             return self.as_specific_collection(key.as_deref(), config_set);
         }
 
+        // Attempt WASM compilation of MFP expressions when the feature flag is enabled.
+        // Currently logs the compilation result; batch evaluation is a follow-up.
+        if ENABLE_COMPILED_EXPRESSIONS.get(config_set) {
+            Self::try_compile_mfp_expressions(&mfp);
+        }
+
         let max_demand = mfp.demand().iter().max().map(|x| *x + 1).unwrap_or(0);
         mfp.permute_fn(|c| c, max_demand);
         mfp.optimize();
@@ -778,6 +786,43 @@ where
 
         (oks, errors.concat(&errs))
     }
+
+    /// Attempts to compile MFP expressions to WASM. Logs whether compilation succeeded.
+    ///
+    /// This is the integration point for WASM-compiled expression evaluation.
+    /// Currently only validates that compilation works at runtime; the actual
+    /// batch evaluation path is a follow-up.
+    fn try_compile_mfp_expressions(mfp: &MapFilterProject) {
+        let engine = match mz_expr_compiler::engine::ExprEngine::new() {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!("failed to create WASM engine: {e}");
+                return;
+            }
+        };
+
+        let mut compiled_count = 0;
+        let total = mfp.expressions.len();
+        for expr in &mfp.expressions {
+            if mz_expr_compiler::analyze::is_compilable(expr) {
+                let input_types = vec![];
+                match engine.compile(expr, &input_types) {
+                    Ok(Some(_)) => compiled_count += 1,
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::debug!("WASM compilation failed for expression: {e}");
+                    }
+                }
+            }
+        }
+
+        if total > 0 {
+            tracing::debug!(
+                "compiled expressions: {compiled_count}/{total} expressions compilable to WASM"
+            );
+        }
+    }
+
     pub fn ensure_collections(
         mut self,
         collections: AvailableCollections,
