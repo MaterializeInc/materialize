@@ -69,7 +69,7 @@ impl LazyUnaryFunc for CaseLiteral {
         }
     }
 
-    fn output_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
         self.return_type.clone()
     }
 
