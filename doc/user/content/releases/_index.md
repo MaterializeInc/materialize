@@ -69,7 +69,7 @@ For more information, refer to:
   incorrectly multiplying by the number of workers instead of using the correct
   per-process memory limit.
 - Fixed an overflow display issue on the roles page in the console.
-- Fixed SSO connection configuration pages in the console, which did not loading properly due to missing content security policy entries.
+- Fixed SSO connection configuration pages in the console, which did not load properly due to missing content security policy entries.
 
 ## v26.12.0
 *Released to Materialize Cloud: 2026-02-19* <br>
