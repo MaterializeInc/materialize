@@ -9,10 +9,13 @@
 
 //! Expression analysis: determines whether a [`MirScalarExpr`] can be compiled to WASM.
 //!
-//! For milestone 1, only a small subset of expressions is compilable:
+//! Compilable expressions:
 //! * `Column(idx)` — reads from an input column
-//! * `Literal(Ok(row), _)` where the datum is `Int64`
-//! * `CallBinary { func: BinaryFunc::AddInt64(..), .. }` where both children are compilable
+//! * `Literal(Ok(row), _)` where the datum is `Int64` or `Null`
+//! * `CallBinary` with a supported Int64 binary function (add, sub, mul, div, mod,
+//!   bitand, bitor, bitxor) where both children are compilable
+//! * `CallUnary` with a supported Int64 unary function (neg, bitnot, abs)
+//!   where the child is compilable
 
 use mz_expr::MirScalarExpr;
 use mz_repr::Datum;
@@ -31,6 +34,9 @@ pub fn is_compilable(expr: &MirScalarExpr) -> bool {
         MirScalarExpr::CallBinary { func, expr1, expr2 } => {
             is_compilable_binary_func(func) && is_compilable(expr1) && is_compilable(expr2)
         }
+        MirScalarExpr::CallUnary { func, expr } => {
+            is_compilable_unary_func(func) && is_compilable(expr)
+        }
         _ => false,
     }
 }
@@ -38,7 +44,26 @@ pub fn is_compilable(expr: &MirScalarExpr) -> bool {
 /// Returns `true` if the binary function is supported for WASM compilation.
 fn is_compilable_binary_func(func: &mz_expr::BinaryFunc) -> bool {
     use mz_expr::BinaryFunc;
-    matches!(func, BinaryFunc::AddInt64(_))
+    matches!(
+        func,
+        BinaryFunc::AddInt64(_)
+            | BinaryFunc::SubInt64(_)
+            | BinaryFunc::MulInt64(_)
+            | BinaryFunc::DivInt64(_)
+            | BinaryFunc::ModInt64(_)
+            | BinaryFunc::BitAndInt64(_)
+            | BinaryFunc::BitOrInt64(_)
+            | BinaryFunc::BitXorInt64(_)
+    )
+}
+
+/// Returns `true` if the unary function is supported for WASM compilation.
+fn is_compilable_unary_func(func: &mz_expr::UnaryFunc) -> bool {
+    use mz_expr::UnaryFunc;
+    matches!(
+        func,
+        UnaryFunc::NegInt64(_) | UnaryFunc::BitNotInt64(_) | UnaryFunc::AbsInt64(_)
+    )
 }
 
 /// Collects the set of input column indices referenced by a compilable expression.
@@ -57,6 +82,9 @@ fn collect_columns(expr: &MirScalarExpr, out: &mut Vec<usize>) {
         MirScalarExpr::CallBinary { expr1, expr2, .. } => {
             collect_columns(expr1, out);
             collect_columns(expr2, out);
+        }
+        MirScalarExpr::CallUnary { expr, .. } => {
+            collect_columns(expr, out);
         }
         _ => {}
     }

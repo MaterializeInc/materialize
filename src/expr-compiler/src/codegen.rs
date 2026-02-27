@@ -14,7 +14,7 @@
 //! and exports an `eval` function that loops over rows, reading input columns, computing
 //! the expression, and writing the result column.
 
-use mz_expr::{BinaryFunc, MirScalarExpr};
+use mz_expr::{BinaryFunc, MirScalarExpr, UnaryFunc};
 use mz_repr::Datum;
 use wasm_encoder::{
     CodeSection, EntityType, ExportKind, ExportSection, FunctionSection, ImportSection,
@@ -100,9 +100,10 @@ pub fn generate_wasm(expr: &MirScalarExpr) -> Option<(Vec<u8>, WasmLayout)> {
         (1, ValType::I32), // loop counter `i`
         (1, ValType::I64), // temp result value
         (1, ValType::I32), // temp null flag (0=not_null, 1=null)
-        (1, ValType::I32), // temp error flag
+        (1, ValType::I32), // temp error flag (0=ok, 1=overflow, 2=div-by-zero, 3=out-of-range)
         (1, ValType::I64), // temp operand a (for overflow detection)
         (1, ValType::I64), // temp operand b (for overflow detection)
+        (1, ValType::I32), // saved null flag (for restoring is_null across subtrees)
     ]);
 
     // Local variable indices:
@@ -117,6 +118,7 @@ pub fn generate_wasm(expr: &MirScalarExpr) -> Option<(Vec<u8>, WasmLayout)> {
     // (num_params+3): is_error (i32)
     // (num_params+4): operand_a (i64)
     // (num_params+5): operand_b (i64)
+    // (num_params+6): saved_null (i32)
     #[allow(clippy::as_conversions)]
     let local_i = num_params as u32;
     let local_result = local_i + 1;
@@ -124,6 +126,7 @@ pub fn generate_wasm(expr: &MirScalarExpr) -> Option<(Vec<u8>, WasmLayout)> {
     let local_is_error = local_i + 3;
     let local_a = local_i + 4;
     let local_b = local_i + 5;
+    let local_saved_null = local_i + 6;
 
     #[allow(clippy::as_conversions)]
     let out_ptr_local = (1 + num_input_cols * 2) as u32;
@@ -164,6 +167,7 @@ pub fn generate_wasm(expr: &MirScalarExpr) -> Option<(Vec<u8>, WasmLayout)> {
         local_is_error,
         local_a,
         local_b,
+        local_saved_null,
     );
     func.instruction(&Instruction::LocalSet(local_result));
 
@@ -223,10 +227,21 @@ pub fn generate_wasm(expr: &MirScalarExpr) -> Option<(Vec<u8>, WasmLayout)> {
     Some((wasm_bytes, WasmLayout { num_input_cols }))
 }
 
+/// Common parameters for all emit functions, reducing argument count.
+struct EmitLocals {
+    local_i: u32,
+    local_result: u32,
+    local_is_null: u32,
+    local_is_error: u32,
+    local_a: u32,
+    local_b: u32,
+    local_saved_null: u32,
+}
+
 /// Emits WASM instructions that evaluate `expr` and leave an i64 result on the stack.
 ///
 /// Side effects: sets `local_is_null` to 1 if the result is null,
-/// sets `local_is_error` to 1 if an overflow occurred.
+/// sets `local_is_error` to a nonzero code if an error occurred.
 fn emit_expr(
     func: &mut wasm_encoder::Function,
     expr: &MirScalarExpr,
@@ -237,7 +252,17 @@ fn emit_expr(
     local_is_error: u32,
     local_a: u32,
     local_b: u32,
+    local_saved_null: u32,
 ) {
+    let l = EmitLocals {
+        local_i,
+        local_result,
+        local_is_null,
+        local_is_error,
+        local_a,
+        local_b,
+        local_saved_null,
+    };
     match expr {
         MirScalarExpr::Column(idx, _) => {
             let param_idx = col_to_param[idx];
@@ -249,7 +274,7 @@ fn emit_expr(
 
             // Check validity: if mem[validity_ptr + i] == 0, this is null.
             func.instruction(&Instruction::LocalGet(validity_local));
-            func.instruction(&Instruction::LocalGet(local_i));
+            func.instruction(&Instruction::LocalGet(l.local_i));
             func.instruction(&Instruction::I32Add);
             func.instruction(&Instruction::I32Load8U(wasm_encoder::MemArg {
                 offset: 0,
@@ -260,12 +285,12 @@ fn emit_expr(
             func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
             // Null path: set is_null = 1.
             func.instruction(&Instruction::I32Const(1));
-            func.instruction(&Instruction::LocalSet(local_is_null));
+            func.instruction(&Instruction::LocalSet(l.local_is_null));
             func.instruction(&Instruction::End);
 
             // Load value: mem[values_ptr + i * 8] as i64.
             func.instruction(&Instruction::LocalGet(values_local));
-            func.instruction(&Instruction::LocalGet(local_i));
+            func.instruction(&Instruction::LocalGet(l.local_i));
             func.instruction(&Instruction::I32Const(8));
             func.instruction(&Instruction::I32Mul);
             func.instruction(&Instruction::I32Add);
@@ -284,7 +309,7 @@ fn emit_expr(
                 }
                 Datum::Null => {
                     func.instruction(&Instruction::I32Const(1));
-                    func.instruction(&Instruction::LocalSet(local_is_null));
+                    func.instruction(&Instruction::LocalSet(l.local_is_null));
                     func.instruction(&Instruction::I64Const(0));
                 }
                 _ => unreachable!("analyze ensures only Int64/Null literals"),
@@ -296,118 +321,587 @@ fn emit_expr(
             expr1,
             expr2,
         } => match bf {
-            BinaryFunc::AddInt64(_) => {
-                emit_add_int64(
-                    func,
-                    expr1,
-                    expr2,
-                    col_to_param,
-                    local_i,
-                    local_result,
-                    local_is_null,
-                    local_is_error,
-                    local_a,
-                    local_b,
-                );
+            BinaryFunc::AddInt64(_) => emit_add_int64(func, expr1, expr2, col_to_param, &l),
+            BinaryFunc::SubInt64(_) => emit_sub_int64(func, expr1, expr2, col_to_param, &l),
+            BinaryFunc::MulInt64(_) => emit_mul_int64(func, expr1, expr2, col_to_param, &l),
+            BinaryFunc::DivInt64(_) => emit_div_int64(func, expr1, expr2, col_to_param, &l),
+            BinaryFunc::ModInt64(_) => emit_mod_int64(func, expr1, expr2, col_to_param, &l),
+            BinaryFunc::BitAndInt64(_) => {
+                emit_bitwise_int64(func, expr1, expr2, col_to_param, &l, &Instruction::I64And)
             }
-            _ => unreachable!("analyze ensures only AddInt64"),
+            BinaryFunc::BitOrInt64(_) => {
+                emit_bitwise_int64(func, expr1, expr2, col_to_param, &l, &Instruction::I64Or)
+            }
+            BinaryFunc::BitXorInt64(_) => {
+                emit_bitwise_int64(func, expr1, expr2, col_to_param, &l, &Instruction::I64Xor)
+            }
+            _ => unreachable!("analyze ensures only supported binary functions"),
+        },
+
+        MirScalarExpr::CallUnary {
+            func: uf,
+            expr: child,
+        } => match uf {
+            UnaryFunc::NegInt64(_) => emit_neg_int64(func, child, col_to_param, &l),
+            UnaryFunc::BitNotInt64(_) => emit_bit_not_int64(func, child, col_to_param, &l),
+            UnaryFunc::AbsInt64(_) => emit_abs_int64(func, child, col_to_param, &l),
+            _ => unreachable!("analyze ensures only supported unary functions"),
         },
 
         _ => unreachable!("analyze ensures only compilable expressions"),
     }
 }
 
+/// Emits the save/restore preamble for a fallible binary operation.
+///
+/// Pushes the current `is_null` onto the WASM value stack, resets `is_null` to 0,
+/// evaluates both children (leaving `[saved_null(i32), a(i64), b(i64)]` on the stack),
+/// then pops children into `local_a`/`local_b` and the saved null into `local_saved_null`.
+///
+/// After this, `is_null` reflects only the current operation's children's null status,
+/// isolated from ancestors' or siblings' null states. The caller must merge `local_saved_null`
+/// back into `is_null` after its error check.
+fn emit_binary_preamble(
+    func: &mut wasm_encoder::Function,
+    expr1: &MirScalarExpr,
+    expr2: &MirScalarExpr,
+    col_to_param: &std::collections::BTreeMap<usize, usize>,
+    l: &EmitLocals,
+) {
+    // Save current is_null onto the WASM value stack and reset.
+    func.instruction(&Instruction::LocalGet(l.local_is_null));
+    func.instruction(&Instruction::I32Const(0));
+    func.instruction(&Instruction::LocalSet(l.local_is_null));
+    // Stack: [saved_null(i32)]
+
+    emit_expr(
+        func,
+        expr1,
+        col_to_param,
+        l.local_i,
+        l.local_result,
+        l.local_is_null,
+        l.local_is_error,
+        l.local_a,
+        l.local_b,
+        l.local_saved_null,
+    );
+    // Stack: [saved_null(i32), a(i64)]
+    emit_expr(
+        func,
+        expr2,
+        col_to_param,
+        l.local_i,
+        l.local_result,
+        l.local_is_null,
+        l.local_is_error,
+        l.local_a,
+        l.local_b,
+        l.local_saved_null,
+    );
+    // Stack: [saved_null(i32), a(i64), b(i64)]
+
+    func.instruction(&Instruction::LocalSet(l.local_b));
+    func.instruction(&Instruction::LocalSet(l.local_a));
+    // Stack: [saved_null(i32)]
+    func.instruction(&Instruction::LocalSet(l.local_saved_null));
+    // Stack: []
+}
+
+/// Emits the merge postamble: `is_null |= local_saved_null`, then pushes `local_result`.
+fn emit_merge_null_and_push_result(func: &mut wasm_encoder::Function, l: &EmitLocals) {
+    func.instruction(&Instruction::LocalGet(l.local_is_null));
+    func.instruction(&Instruction::LocalGet(l.local_saved_null));
+    func.instruction(&Instruction::I32Or);
+    func.instruction(&Instruction::LocalSet(l.local_is_null));
+    func.instruction(&Instruction::LocalGet(l.local_result));
+}
+
+/// Emits the save/restore preamble for a fallible unary operation.
+///
+/// Same principle as [`emit_binary_preamble`] but for a single child.
+fn emit_unary_preamble(
+    func: &mut wasm_encoder::Function,
+    expr: &MirScalarExpr,
+    col_to_param: &std::collections::BTreeMap<usize, usize>,
+    l: &EmitLocals,
+) {
+    // Save current is_null onto the WASM value stack and reset.
+    func.instruction(&Instruction::LocalGet(l.local_is_null));
+    func.instruction(&Instruction::I32Const(0));
+    func.instruction(&Instruction::LocalSet(l.local_is_null));
+    // Stack: [saved_null(i32)]
+
+    emit_expr(
+        func,
+        expr,
+        col_to_param,
+        l.local_i,
+        l.local_result,
+        l.local_is_null,
+        l.local_is_error,
+        l.local_a,
+        l.local_b,
+        l.local_saved_null,
+    );
+    // Stack: [saved_null(i32), a(i64)]
+
+    func.instruction(&Instruction::LocalSet(l.local_a));
+    // Stack: [saved_null(i32)]
+    func.instruction(&Instruction::LocalSet(l.local_saved_null));
+    // Stack: []
+}
+
 /// Emits WASM for `a + b` with overflow detection and null propagation.
 ///
-/// Uses the following approach for checked addition without overflow intrinsics:
-/// * Save operands into `local_a` and `local_b` before computing `a + b`
-/// * Detect overflow: `((a ^ result) & (b ^ result)) < 0` (sign bit set)
-/// * If overflow and result is not null, set the error flag
+/// Overflow: `((a ^ result) & (b ^ result)) < 0` (sign bit set).
 fn emit_add_int64(
     func: &mut wasm_encoder::Function,
     expr1: &MirScalarExpr,
     expr2: &MirScalarExpr,
     col_to_param: &std::collections::BTreeMap<usize, usize>,
-    local_i: u32,
-    local_result: u32,
-    local_is_null: u32,
-    local_is_error: u32,
-    local_a: u32,
-    local_b: u32,
+    l: &EmitLocals,
 ) {
-    // Evaluate left operand, save to local_a.
-    emit_expr(
-        func,
-        expr1,
-        col_to_param,
-        local_i,
-        local_result,
-        local_is_null,
-        local_is_error,
-        local_a,
-        local_b,
-    );
-    func.instruction(&Instruction::LocalTee(local_a));
-    // Stack: [a]
-
-    // Evaluate right operand, save to local_b.
-    emit_expr(
-        func,
-        expr2,
-        col_to_param,
-        local_i,
-        local_result,
-        local_is_null,
-        local_is_error,
-        local_a,
-        local_b,
-    );
-    func.instruction(&Instruction::LocalTee(local_b));
-    // Stack: [a, b]
-
-    // If either operand is null, the result is null (null propagation).
-    // The is_null flag is already set by emit_expr if either child is null.
-    // We just need to compute the add; the null flag will cause the validity
-    // bit to be cleared in the output.
+    emit_binary_preamble(func, expr1, expr2, col_to_param, l);
 
     // Wrapping add: WASM i64.add wraps on overflow.
+    func.instruction(&Instruction::LocalGet(l.local_a));
+    func.instruction(&Instruction::LocalGet(l.local_b));
     func.instruction(&Instruction::I64Add);
-    // Stack: [result]
+    func.instruction(&Instruction::LocalSet(l.local_result));
 
-    // Save result to local_result, clearing the stack so we can enter an if block.
-    func.instruction(&Instruction::LocalSet(local_result));
-    // Stack: []
-
-    // Overflow detection for signed i64 addition.
-    // Overflow occurs when both operands have the same sign but the result differs.
-    // Single-expression check: ((a ^ result) & (b ^ result)) < 0  (sign bit set)
-    // Skip the check when the result is null, since null-propagated results don't
-    // need overflow detection and may have garbage intermediate values.
-    func.instruction(&Instruction::LocalGet(local_is_null));
+    // Overflow detection: skip when is_null (operand values may be garbage).
+    func.instruction(&Instruction::LocalGet(l.local_is_null));
     func.instruction(&Instruction::I32Eqz);
     func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
     {
-        func.instruction(&Instruction::LocalGet(local_a));
-        func.instruction(&Instruction::LocalGet(local_result));
+        func.instruction(&Instruction::LocalGet(l.local_a));
+        func.instruction(&Instruction::LocalGet(l.local_result));
         func.instruction(&Instruction::I64Xor); // a ^ result
-        func.instruction(&Instruction::LocalGet(local_b));
-        func.instruction(&Instruction::LocalGet(local_result));
+        func.instruction(&Instruction::LocalGet(l.local_b));
+        func.instruction(&Instruction::LocalGet(l.local_result));
         func.instruction(&Instruction::I64Xor); // b ^ result
         func.instruction(&Instruction::I64And); // (a ^ result) & (b ^ result)
         func.instruction(&Instruction::I64Const(0));
         func.instruction(&Instruction::I64LtS); // true if sign bit set => overflow
         func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
         {
-            func.instruction(&Instruction::I32Const(1));
-            func.instruction(&Instruction::LocalSet(local_is_error));
+            func.instruction(&Instruction::I32Const(1)); // NumericFieldOverflow
+            func.instruction(&Instruction::LocalSet(l.local_is_error));
         }
-        func.instruction(&Instruction::End); // end inner if (overflow)
+        func.instruction(&Instruction::End);
     }
-    func.instruction(&Instruction::End); // end outer if (!is_null)
+    func.instruction(&Instruction::End);
 
-    // Push result back on stack for the caller.
-    func.instruction(&Instruction::LocalGet(local_result));
+    emit_merge_null_and_push_result(func, l);
+}
+
+/// Emits WASM for `a - b` with overflow detection and null propagation.
+///
+/// Overflow: `((a ^ b) & (a ^ result)) < 0`.
+fn emit_sub_int64(
+    func: &mut wasm_encoder::Function,
+    expr1: &MirScalarExpr,
+    expr2: &MirScalarExpr,
+    col_to_param: &std::collections::BTreeMap<usize, usize>,
+    l: &EmitLocals,
+) {
+    emit_binary_preamble(func, expr1, expr2, col_to_param, l);
+
+    func.instruction(&Instruction::LocalGet(l.local_a));
+    func.instruction(&Instruction::LocalGet(l.local_b));
+    func.instruction(&Instruction::I64Sub);
+    func.instruction(&Instruction::LocalSet(l.local_result));
+
+    // Overflow: ((a ^ b) & (a ^ result)) < 0
+    func.instruction(&Instruction::LocalGet(l.local_is_null));
+    func.instruction(&Instruction::I32Eqz);
+    func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    {
+        func.instruction(&Instruction::LocalGet(l.local_a));
+        func.instruction(&Instruction::LocalGet(l.local_b));
+        func.instruction(&Instruction::I64Xor); // a ^ b
+        func.instruction(&Instruction::LocalGet(l.local_a));
+        func.instruction(&Instruction::LocalGet(l.local_result));
+        func.instruction(&Instruction::I64Xor); // a ^ result
+        func.instruction(&Instruction::I64And); // (a ^ b) & (a ^ result)
+        func.instruction(&Instruction::I64Const(0));
+        func.instruction(&Instruction::I64LtS);
+        func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+        {
+            func.instruction(&Instruction::I32Const(1)); // NumericFieldOverflow
+            func.instruction(&Instruction::LocalSet(l.local_is_error));
+        }
+        func.instruction(&Instruction::End);
+    }
+    func.instruction(&Instruction::End);
+
+    emit_merge_null_and_push_result(func, l);
+}
+
+/// Emits WASM for `a * b` with overflow detection and null propagation.
+///
+/// Overflow detection via division-based verification:
+/// * If a == 0 || b == 0: no overflow
+/// * If a == -1: overflow iff b == i64::MIN
+/// * If b == -1: overflow iff a == i64::MIN
+/// * Else: overflow iff (result / a) != b
+fn emit_mul_int64(
+    func: &mut wasm_encoder::Function,
+    expr1: &MirScalarExpr,
+    expr2: &MirScalarExpr,
+    col_to_param: &std::collections::BTreeMap<usize, usize>,
+    l: &EmitLocals,
+) {
+    emit_binary_preamble(func, expr1, expr2, col_to_param, l);
+
+    func.instruction(&Instruction::LocalGet(l.local_a));
+    func.instruction(&Instruction::LocalGet(l.local_b));
+    func.instruction(&Instruction::I64Mul);
+    func.instruction(&Instruction::LocalSet(l.local_result));
+
+    // Overflow check (skip if null).
+    func.instruction(&Instruction::LocalGet(l.local_is_null));
+    func.instruction(&Instruction::I32Eqz);
+    func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    {
+        // if a == 0: no overflow (skip)
+        func.instruction(&Instruction::LocalGet(l.local_a));
+        func.instruction(&Instruction::I64Eqz);
+        func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+        // a == 0: no overflow, do nothing
+        func.instruction(&Instruction::Else);
+        {
+            // if b == 0: no overflow (skip)
+            func.instruction(&Instruction::LocalGet(l.local_b));
+            func.instruction(&Instruction::I64Eqz);
+            func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+            // b == 0: no overflow, do nothing
+            func.instruction(&Instruction::Else);
+            {
+                // if a == -1: overflow iff b == MIN
+                func.instruction(&Instruction::LocalGet(l.local_a));
+                func.instruction(&Instruction::I64Const(-1));
+                func.instruction(&Instruction::I64Eq);
+                func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+                {
+                    func.instruction(&Instruction::LocalGet(l.local_b));
+                    func.instruction(&Instruction::I64Const(i64::MIN));
+                    func.instruction(&Instruction::I64Eq);
+                    func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+                    {
+                        func.instruction(&Instruction::I32Const(1)); // NumericFieldOverflow
+                        func.instruction(&Instruction::LocalSet(l.local_is_error));
+                    }
+                    func.instruction(&Instruction::End);
+                }
+                func.instruction(&Instruction::Else);
+                {
+                    // if b == -1: overflow iff a == MIN
+                    func.instruction(&Instruction::LocalGet(l.local_b));
+                    func.instruction(&Instruction::I64Const(-1));
+                    func.instruction(&Instruction::I64Eq);
+                    func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+                    {
+                        func.instruction(&Instruction::LocalGet(l.local_a));
+                        func.instruction(&Instruction::I64Const(i64::MIN));
+                        func.instruction(&Instruction::I64Eq);
+                        func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+                        {
+                            func.instruction(&Instruction::I32Const(1)); // NumericFieldOverflow
+                            func.instruction(&Instruction::LocalSet(l.local_is_error));
+                        }
+                        func.instruction(&Instruction::End);
+                    }
+                    func.instruction(&Instruction::Else);
+                    {
+                        // General case: overflow iff (result / a) != b
+                        // Safe because a != 0 and a != -1.
+                        func.instruction(&Instruction::LocalGet(l.local_result));
+                        func.instruction(&Instruction::LocalGet(l.local_a));
+                        func.instruction(&Instruction::I64DivS);
+                        func.instruction(&Instruction::LocalGet(l.local_b));
+                        func.instruction(&Instruction::I64Ne);
+                        func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+                        {
+                            func.instruction(&Instruction::I32Const(1)); // NumericFieldOverflow
+                            func.instruction(&Instruction::LocalSet(l.local_is_error));
+                        }
+                        func.instruction(&Instruction::End);
+                    }
+                    func.instruction(&Instruction::End); // end b == -1
+                }
+                func.instruction(&Instruction::End); // end a == -1
+            }
+            func.instruction(&Instruction::End); // end b == 0
+        }
+        func.instruction(&Instruction::End); // end a == 0
+    }
+    func.instruction(&Instruction::End); // end !is_null
+
+    emit_merge_null_and_push_result(func, l);
+}
+
+/// Emits WASM for `a / b` with division-by-zero and overflow detection.
+///
+/// Pre-checks before `i64.div_s` (which traps on div-by-zero and MIN/-1):
+/// * b == 0 → error code 2 (DivisionByZero)
+/// * a == MIN && b == -1 → error code 3 (Int64OutOfRange)
+fn emit_div_int64(
+    func: &mut wasm_encoder::Function,
+    expr1: &MirScalarExpr,
+    expr2: &MirScalarExpr,
+    col_to_param: &std::collections::BTreeMap<usize, usize>,
+    l: &EmitLocals,
+) {
+    emit_binary_preamble(func, expr1, expr2, col_to_param, l);
+
+    // Skip error checks if null.
+    func.instruction(&Instruction::LocalGet(l.local_is_null));
+    func.instruction(&Instruction::I32Eqz);
+    func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    {
+        // Check b == 0.
+        func.instruction(&Instruction::LocalGet(l.local_b));
+        func.instruction(&Instruction::I64Eqz);
+        func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+        {
+            func.instruction(&Instruction::I32Const(2)); // DivisionByZero
+            func.instruction(&Instruction::LocalSet(l.local_is_error));
+        }
+        func.instruction(&Instruction::Else);
+        {
+            // Check a == MIN && b == -1.
+            func.instruction(&Instruction::LocalGet(l.local_a));
+            func.instruction(&Instruction::I64Const(i64::MIN));
+            func.instruction(&Instruction::I64Eq);
+            func.instruction(&Instruction::LocalGet(l.local_b));
+            func.instruction(&Instruction::I64Const(-1));
+            func.instruction(&Instruction::I64Eq);
+            func.instruction(&Instruction::I32And);
+            func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+            {
+                func.instruction(&Instruction::I32Const(3)); // Int64OutOfRange
+                func.instruction(&Instruction::LocalSet(l.local_is_error));
+            }
+            func.instruction(&Instruction::Else);
+            {
+                // Safe to divide.
+                func.instruction(&Instruction::LocalGet(l.local_a));
+                func.instruction(&Instruction::LocalGet(l.local_b));
+                func.instruction(&Instruction::I64DivS);
+                func.instruction(&Instruction::LocalSet(l.local_result));
+            }
+            func.instruction(&Instruction::End); // end MIN/-1 check
+        }
+        func.instruction(&Instruction::End); // end b == 0 check
+    }
+    func.instruction(&Instruction::End); // end !is_null
+
+    emit_merge_null_and_push_result(func, l);
+}
+
+/// Emits WASM for `a % b` with division-by-zero detection.
+///
+/// Pre-check (`i64.rem_s` traps on div-by-zero; MIN%-1 returns 0 per WASM spec):
+/// * b == 0 → error code 2 (DivisionByZero)
+/// * Otherwise: `i64.rem_s` (safe, including MIN % -1 = 0)
+fn emit_mod_int64(
+    func: &mut wasm_encoder::Function,
+    expr1: &MirScalarExpr,
+    expr2: &MirScalarExpr,
+    col_to_param: &std::collections::BTreeMap<usize, usize>,
+    l: &EmitLocals,
+) {
+    emit_binary_preamble(func, expr1, expr2, col_to_param, l);
+
+    // Skip if null.
+    func.instruction(&Instruction::LocalGet(l.local_is_null));
+    func.instruction(&Instruction::I32Eqz);
+    func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    {
+        // Check b == 0.
+        func.instruction(&Instruction::LocalGet(l.local_b));
+        func.instruction(&Instruction::I64Eqz);
+        func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+        {
+            func.instruction(&Instruction::I32Const(2)); // DivisionByZero
+            func.instruction(&Instruction::LocalSet(l.local_is_error));
+        }
+        func.instruction(&Instruction::Else);
+        {
+            // Safe: MIN % -1 = 0 in WASM's i64.rem_s.
+            func.instruction(&Instruction::LocalGet(l.local_a));
+            func.instruction(&Instruction::LocalGet(l.local_b));
+            func.instruction(&Instruction::I64RemS);
+            func.instruction(&Instruction::LocalSet(l.local_result));
+        }
+        func.instruction(&Instruction::End); // end b == 0 check
+    }
+    func.instruction(&Instruction::End); // end !is_null
+
+    emit_merge_null_and_push_result(func, l);
+}
+
+/// Emits WASM for an infallible bitwise binary operation (and, or, xor).
+///
+/// No overflow or error checks needed.
+fn emit_bitwise_int64(
+    func: &mut wasm_encoder::Function,
+    expr1: &MirScalarExpr,
+    expr2: &MirScalarExpr,
+    col_to_param: &std::collections::BTreeMap<usize, usize>,
+    l: &EmitLocals,
+    op: &Instruction<'static>,
+) {
+    emit_expr(
+        func,
+        expr1,
+        col_to_param,
+        l.local_i,
+        l.local_result,
+        l.local_is_null,
+        l.local_is_error,
+        l.local_a,
+        l.local_b,
+        l.local_saved_null,
+    );
+    emit_expr(
+        func,
+        expr2,
+        col_to_param,
+        l.local_i,
+        l.local_result,
+        l.local_is_null,
+        l.local_is_error,
+        l.local_a,
+        l.local_b,
+        l.local_saved_null,
+    );
+    // Stack: [a, b]
+    func.instruction(op);
     // Stack: [result]
+}
+
+/// Emits WASM for `-a` (negation) with overflow detection.
+///
+/// `i64::MIN` cannot be negated: error code 3 (Int64OutOfRange).
+/// WASM has no `i64.neg`, so we use `0 - a`.
+fn emit_neg_int64(
+    func: &mut wasm_encoder::Function,
+    expr: &MirScalarExpr,
+    col_to_param: &std::collections::BTreeMap<usize, usize>,
+    l: &EmitLocals,
+) {
+    emit_unary_preamble(func, expr, col_to_param, l);
+
+    // Skip if null.
+    func.instruction(&Instruction::LocalGet(l.local_is_null));
+    func.instruction(&Instruction::I32Eqz);
+    func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    {
+        // Check a == MIN.
+        func.instruction(&Instruction::LocalGet(l.local_a));
+        func.instruction(&Instruction::I64Const(i64::MIN));
+        func.instruction(&Instruction::I64Eq);
+        func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+        {
+            func.instruction(&Instruction::I32Const(3)); // Int64OutOfRange
+            func.instruction(&Instruction::LocalSet(l.local_is_error));
+        }
+        func.instruction(&Instruction::Else);
+        {
+            // 0 - a
+            func.instruction(&Instruction::I64Const(0));
+            func.instruction(&Instruction::LocalGet(l.local_a));
+            func.instruction(&Instruction::I64Sub);
+            func.instruction(&Instruction::LocalSet(l.local_result));
+        }
+        func.instruction(&Instruction::End);
+    }
+    func.instruction(&Instruction::End);
+
+    emit_merge_null_and_push_result(func, l);
+}
+
+/// Emits WASM for `~a` (bitwise NOT). Infallible.
+///
+/// WASM has no `i64.not`, so we use `a ^ -1`.
+fn emit_bit_not_int64(
+    func: &mut wasm_encoder::Function,
+    expr: &MirScalarExpr,
+    col_to_param: &std::collections::BTreeMap<usize, usize>,
+    l: &EmitLocals,
+) {
+    emit_expr(
+        func,
+        expr,
+        col_to_param,
+        l.local_i,
+        l.local_result,
+        l.local_is_null,
+        l.local_is_error,
+        l.local_a,
+        l.local_b,
+        l.local_saved_null,
+    );
+    // Stack: [a]
+    func.instruction(&Instruction::I64Const(-1));
+    func.instruction(&Instruction::I64Xor);
+    // Stack: [~a]
+}
+
+/// Emits WASM for `abs(a)` with overflow detection.
+///
+/// `i64::MIN` has no positive counterpart: error code 3 (Int64OutOfRange).
+/// For negative values, computes `0 - a`.
+fn emit_abs_int64(
+    func: &mut wasm_encoder::Function,
+    expr: &MirScalarExpr,
+    col_to_param: &std::collections::BTreeMap<usize, usize>,
+    l: &EmitLocals,
+) {
+    emit_unary_preamble(func, expr, col_to_param, l);
+
+    // Skip if null.
+    func.instruction(&Instruction::LocalGet(l.local_is_null));
+    func.instruction(&Instruction::I32Eqz);
+    func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    {
+        // Check a == MIN.
+        func.instruction(&Instruction::LocalGet(l.local_a));
+        func.instruction(&Instruction::I64Const(i64::MIN));
+        func.instruction(&Instruction::I64Eq);
+        func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+        {
+            func.instruction(&Instruction::I32Const(3)); // Int64OutOfRange
+            func.instruction(&Instruction::LocalSet(l.local_is_error));
+        }
+        func.instruction(&Instruction::Else);
+        {
+            // if a < 0: result = 0 - a; else: result = a
+            func.instruction(&Instruction::LocalGet(l.local_a));
+            func.instruction(&Instruction::I64Const(0));
+            func.instruction(&Instruction::I64LtS);
+            func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+            {
+                func.instruction(&Instruction::I64Const(0));
+                func.instruction(&Instruction::LocalGet(l.local_a));
+                func.instruction(&Instruction::I64Sub);
+                func.instruction(&Instruction::LocalSet(l.local_result));
+            }
+            func.instruction(&Instruction::Else);
+            {
+                func.instruction(&Instruction::LocalGet(l.local_a));
+                func.instruction(&Instruction::LocalSet(l.local_result));
+            }
+            func.instruction(&Instruction::End);
+        }
+        func.instruction(&Instruction::End);
+    }
+    func.instruction(&Instruction::End);
+
+    emit_merge_null_and_push_result(func, l);
 }
 
 #[cfg(test)]

@@ -200,11 +200,9 @@ impl CompiledExpr {
                 .expect("8 bytes");
             out_values[i] = i64::from_le_bytes(bytes);
             out_validity[i] = mem_data[out_validity_ptr + i] != 0;
-            out_errors[i] = mem_data[out_errors_ptr + i] != 0;
-            if out_errors[i] {
-                // EvalError::NumericFieldOverflow discriminant.
-                error_codes[i] = 1;
-            }
+            let error_byte = mem_data[out_errors_ptr + i];
+            out_errors[i] = error_byte != 0;
+            error_codes[i] = u32::from(error_byte);
         }
 
         Ok(ResultColumn {
@@ -221,7 +219,7 @@ impl CompiledExpr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_expr::{BinaryFunc, MirScalarExpr};
+    use mz_expr::{BinaryFunc, MirScalarExpr, UnaryFunc};
     use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, SqlScalarType};
 
     use crate::columnar::rows_to_columns;
@@ -245,6 +243,83 @@ mod tests {
             func: BinaryFunc::AddInt64(mz_expr::func::AddInt64),
             expr1: Box::new(a),
             expr2: Box::new(b),
+        }
+    }
+
+    fn sub_i64(a: MirScalarExpr, b: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallBinary {
+            func: BinaryFunc::SubInt64(mz_expr::func::SubInt64),
+            expr1: Box::new(a),
+            expr2: Box::new(b),
+        }
+    }
+
+    fn mul_i64(a: MirScalarExpr, b: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallBinary {
+            func: BinaryFunc::MulInt64(mz_expr::func::MulInt64),
+            expr1: Box::new(a),
+            expr2: Box::new(b),
+        }
+    }
+
+    fn div_i64(a: MirScalarExpr, b: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallBinary {
+            func: BinaryFunc::DivInt64(mz_expr::func::DivInt64),
+            expr1: Box::new(a),
+            expr2: Box::new(b),
+        }
+    }
+
+    fn mod_i64(a: MirScalarExpr, b: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallBinary {
+            func: BinaryFunc::ModInt64(mz_expr::func::ModInt64),
+            expr1: Box::new(a),
+            expr2: Box::new(b),
+        }
+    }
+
+    fn bitand_i64(a: MirScalarExpr, b: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallBinary {
+            func: BinaryFunc::BitAndInt64(mz_expr::func::BitAndInt64),
+            expr1: Box::new(a),
+            expr2: Box::new(b),
+        }
+    }
+
+    fn bitor_i64(a: MirScalarExpr, b: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallBinary {
+            func: BinaryFunc::BitOrInt64(mz_expr::func::BitOrInt64),
+            expr1: Box::new(a),
+            expr2: Box::new(b),
+        }
+    }
+
+    fn bitxor_i64(a: MirScalarExpr, b: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallBinary {
+            func: BinaryFunc::BitXorInt64(mz_expr::func::BitXorInt64),
+            expr1: Box::new(a),
+            expr2: Box::new(b),
+        }
+    }
+
+    fn neg_i64(a: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallUnary {
+            func: UnaryFunc::NegInt64(mz_expr::func::NegInt64),
+            expr: Box::new(a),
+        }
+    }
+
+    fn bitnot_i64(a: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallUnary {
+            func: UnaryFunc::BitNotInt64(mz_expr::func::BitNotInt64),
+            expr: Box::new(a),
+        }
+    }
+
+    fn abs_i64(a: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallUnary {
+            func: UnaryFunc::AbsInt64(mz_expr::func::AbsInt64),
+            expr: Box::new(a),
         }
     }
 
@@ -493,6 +568,113 @@ mod tests {
             // The proptest! macro interferes with rustfmt.
             let expr = add_i64(add_i64(col(0), col(1)), col(2));
             assert_compiled_matches_interpreted(&expr, &rows, 3);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_sub_two_columns() {
+        proptest!(|(rows in arb_batch(2, 100))| {
+            let expr = sub_i64(col(0), col(1));
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_mul_two_columns() {
+        proptest!(|(rows in arb_batch(2, 100))| {
+            let expr = mul_i64(col(0), col(1));
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_div_two_columns() {
+        proptest!(|(rows in arb_batch(2, 100))| {
+            let expr = div_i64(col(0), col(1));
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_mod_two_columns() {
+        proptest!(|(rows in arb_batch(2, 100))| {
+            let expr = mod_i64(col(0), col(1));
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_bitand_two_columns() {
+        proptest!(|(rows in arb_batch(2, 100))| {
+            let expr = bitand_i64(col(0), col(1));
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_bitor_two_columns() {
+        proptest!(|(rows in arb_batch(2, 100))| {
+            let expr = bitor_i64(col(0), col(1));
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_bitxor_two_columns() {
+        proptest!(|(rows in arb_batch(2, 100))| {
+            let expr = bitxor_i64(col(0), col(1));
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_neg_column() {
+        proptest!(|(rows in arb_batch(1, 100))| {
+            let expr = neg_i64(col(0));
+            assert_compiled_matches_interpreted(&expr, &rows, 1);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_bitnot_column() {
+        proptest!(|(rows in arb_batch(1, 100))| {
+            let expr = bitnot_i64(col(0));
+            assert_compiled_matches_interpreted(&expr, &rows, 1);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_abs_column() {
+        proptest!(|(rows in arb_batch(1, 100))| {
+            let expr = abs_i64(col(0));
+            assert_compiled_matches_interpreted(&expr, &rows, 1);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_nested_mixed_ops() {
+        // (col0 + col1) * (col2 - col0)
+        proptest!(|(rows in arb_batch(3, 50))| {
+            let expr = mul_i64(add_i64(col(0), col(1)), sub_i64(col(2), col(0)));
+            assert_compiled_matches_interpreted(&expr, &rows, 3);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_nested_unary_binary() {
+        // neg(col0 + col1)
+        proptest!(|(rows in arb_batch(2, 50))| {
+            let expr = neg_i64(add_i64(col(0), col(1)));
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_abs_of_sub() {
+        // abs(col0 - col1)
+        proptest!(|(rows in arb_batch(2, 50))| {
+            let expr = abs_i64(sub_i64(col(0), col(1)));
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
         });
     }
 }

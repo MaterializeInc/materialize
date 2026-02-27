@@ -151,10 +151,17 @@ impl CompiledExprSession {
             .expect("8 bytes");
         let result_value = i64::from_le_bytes(result_bytes);
         let is_valid = mem_data[self.output_validity_ptr] != 0;
-        let has_error = mem_data[self.output_errors_ptr] != 0;
+        let error_code = mem_data[self.output_errors_ptr];
 
-        if has_error {
-            Err(EvalError::NumericFieldOverflow)
+        if error_code != 0 {
+            Err(match error_code {
+                1 => EvalError::NumericFieldOverflow,
+                2 => EvalError::DivisionByZero,
+                3 => EvalError::Int64OutOfRange("integer out of range".into()),
+                _ => EvalError::Internal(
+                    format!("unknown WASM error code: {error_code}").into_boxed_str(),
+                ),
+            })
         } else if !is_valid {
             Ok(Datum::Null)
         } else {
