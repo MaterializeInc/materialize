@@ -18,6 +18,10 @@ steps:
     timeout_in_minutes: 60
     agents:
       queue: linux-x86_64
+    retry:
+      automatic:
+        - exit_status: "*"
+          limit: 2
     concurrency: 1
     concurrency_group: deploy/devsite
 
@@ -27,6 +31,10 @@ steps:
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64-small
+    retry:
+      automatic:
+        - exit_status: "*"
+          limit: 2
     concurrency: 1
     concurrency_group: deploy/linux
 
@@ -36,6 +44,10 @@ steps:
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64-small
+    retry:
+      automatic:
+        - exit_status: "*"
+          limit: 2
     concurrency: 1
     concurrency_group: deploy/pypi
 
@@ -45,6 +57,10 @@ steps:
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64-small
+    retry:
+      automatic:
+        - exit_status: "*"
+          limit: 2
     concurrency: 1
     concurrency_group: deploy/npm
 
@@ -55,5 +71,9 @@ steps:
     timeout_in_minutes: 15
     agents:
       queue: linux-x86_64
+    retry:
+      automatic:
+        - exit_status: "*"
+          limit: 2
     concurrency: 1
     concurrency_group: deploy/console
