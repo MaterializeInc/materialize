@@ -173,7 +173,7 @@ pub struct BuiltinTable {
     pub access: Vec<MzAclItem>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BuiltinSource {
     pub name: &'static str,
     pub schema: &'static str,
@@ -1765,6 +1765,13 @@ pub static MZ_CATALOG_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSou
     // The raw catalog contains unredacted SQL statements, so we limit access to the system user.
     access: vec![],
 });
+
+pub static MZ_CATALOG_RAW_DESCRIPTION: LazyLock<SystemObjectDescription> =
+    LazyLock::new(|| SystemObjectDescription {
+        schema_name: MZ_CATALOG_RAW.schema.to_string(),
+        object_type: CatalogItemType::Source,
+        object_name: MZ_CATALOG_RAW.name.to_string(),
+    });
 
 pub static MZ_DATAFLOW_OPERATORS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
     name: "mz_dataflow_operators_per_worker",
