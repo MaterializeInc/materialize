@@ -425,51 +425,40 @@ pub fn fuse_window_functions(
     /// Helper function to extract the above options.
     fn extract_options(call: &HirScalarExpr) -> WindowFuncCallOptions {
         match call {
-            HirScalarExpr::Windowing(
-                WindowExpr {
-                    func:
-                        WindowExprType::Value(ValueWindowExpr {
-                            order_by: inner_order_by,
-                            window_frame,
-                            ignore_nulls,
+            HirScalarExpr::Windowing(expr, _name) => match &expr.func {
+                WindowExprType::Value(ValueWindowExpr {
+                    order_by: inner_order_by,
+                    window_frame,
+                    ignore_nulls,
+                    func: _,
+                    args: _,
+                }) => WindowFuncCallOptions::Value(ValueWindowFuncCallOptions {
+                    partition_by: expr.partition_by.clone(),
+                    outer_order_by: expr.order_by.clone(),
+                    inner_order_by: inner_order_by.clone(),
+                    window_frame: window_frame.clone(),
+                    ignore_nulls: ignore_nulls.clone(),
+                }),
+                WindowExprType::Aggregate(AggregateWindowExpr {
+                    aggregate_expr:
+                        AggregateExpr {
+                            distinct,
                             func: _,
-                            args: _,
-                        }),
-                    partition_by,
-                    order_by: outer_order_by,
-                },
-                _name,
-            ) => WindowFuncCallOptions::Value(ValueWindowFuncCallOptions {
-                partition_by: partition_by.clone(),
-                outer_order_by: outer_order_by.clone(),
-                inner_order_by: inner_order_by.clone(),
-                window_frame: window_frame.clone(),
-                ignore_nulls: ignore_nulls.clone(),
-            }),
-            HirScalarExpr::Windowing(
-                WindowExpr {
-                    func:
-                        WindowExprType::Aggregate(AggregateWindowExpr {
-                            aggregate_expr:
-                                AggregateExpr {
-                                    distinct,
-                                    func: _,
-                                    expr: _,
-                                },
-                            order_by: inner_order_by,
-                            window_frame,
-                        }),
-                    partition_by,
-                    order_by: outer_order_by,
-                },
-                _name,
-            ) => WindowFuncCallOptions::Agg(AggregateWindowFuncCallOptions {
-                partition_by: partition_by.clone(),
-                outer_order_by: outer_order_by.clone(),
-                inner_order_by: inner_order_by.clone(),
-                window_frame: window_frame.clone(),
-                distinct: distinct.clone(),
-            }),
+                            expr: _,
+                        },
+                    order_by: inner_order_by,
+                    window_frame,
+                }) => WindowFuncCallOptions::Agg(AggregateWindowFuncCallOptions {
+                    partition_by: expr.partition_by.clone(),
+                    outer_order_by: expr.order_by.clone(),
+                    inner_order_by: inner_order_by.clone(),
+                    window_frame: window_frame.clone(),
+                    distinct: distinct.clone(),
+                }),
+                _ => panic!(
+                    "extract_options should only be called on value window functions or window aggregations"
+                ),
+            },
             _ => panic!(
                 "extract_options should only be called on value window functions or window aggregations"
             ),
@@ -497,23 +486,15 @@ pub fn fuse_window_functions(
                         .calls
                         .iter()
                         .map(|(_idx, call)| {
-                            if let HirScalarExpr::Windowing(
-                                WindowExpr {
-                                    func:
-                                        WindowExprType::Value(ValueWindowExpr {
-                                            func,
-                                            args,
-                                            order_by: _,
-                                            window_frame: _,
-                                            ignore_nulls: _,
-                                        }),
-                                    partition_by: _,
-                                    order_by: _,
-                                },
-                                _name,
-                            ) = call
-                            {
-                                (func.clone(), (**args).clone())
+                            if let HirScalarExpr::Windowing(expr, _name) = call {
+                                if let WindowExprType::Value(ValueWindowExpr {
+                                    func, args, ..
+                                }) = &expr.func
+                                {
+                                    (func.clone(), (**args).clone())
+                                } else {
+                                    panic!("unknown window function in FusionGroup")
+                                }
                             } else {
                                 panic!("unknown window function in FusionGroup")
                             }
@@ -547,26 +528,16 @@ pub fn fuse_window_functions(
                         .calls
                         .iter()
                         .map(|(_idx, call)| {
-                            if let HirScalarExpr::Windowing(
-                                WindowExpr {
-                                    func:
-                                        WindowExprType::Aggregate(AggregateWindowExpr {
-                                            aggregate_expr:
-                                                AggregateExpr {
-                                                    func,
-                                                    expr,
-                                                    distinct: _,
-                                                },
-                                            order_by: _,
-                                            window_frame: _,
-                                        }),
-                                    partition_by: _,
-                                    order_by: _,
-                                },
-                                _name,
-                            ) = call
-                            {
-                                (func.clone(), (**expr).clone())
+                            if let HirScalarExpr::Windowing(expr, _name) = call {
+                                if let WindowExprType::Aggregate(AggregateWindowExpr {
+                                    aggregate_expr: AggregateExpr { func, expr, .. },
+                                    ..
+                                }) = &expr.func
+                                {
+                                    (func.clone(), (**expr).clone())
+                                } else {
+                                    panic!("unknown window function in FusionGroup")
+                                }
                             } else {
                                 panic!("unknown window function in FusionGroup")
                             }
@@ -611,29 +582,26 @@ pub fn fuse_window_functions(
         // Look for calls only at the root of scalar expressions. This is enough
         // because they are always there, see 72e84bb78.
         match scalar_expr {
-            HirScalarExpr::Windowing(
-                WindowExpr {
-                    func: WindowExprType::Value(ValueWindowExpr { func, .. }),
-                    ..
-                },
-                _name,
-            ) => {
-                // Exclude those calls that are already fused. (We shouldn't currently
-                // encounter these, because we just do one pass, but it's better to be
-                // robust against future code changes.)
-                !matches!(func, ValueWindowFunc::Fused(..))
+            HirScalarExpr::Windowing(box_expr, _name)
+                if matches!(
+                    &box_expr.func,
+                    WindowExprType::Value(ValueWindowExpr { func, .. })
+                        if !matches!(func, ValueWindowFunc::Fused(..))
+                ) =>
+            {
+                true
             }
-            HirScalarExpr::Windowing(
-                WindowExpr {
-                    func:
-                        WindowExprType::Aggregate(AggregateWindowExpr {
-                            aggregate_expr: AggregateExpr { func, .. },
-                            ..
-                        }),
-                    ..
-                },
-                _name,
-            ) => !matches!(func, AggregateFunc::FusedWindowAgg { .. }),
+            HirScalarExpr::Windowing(box_expr, _name)
+                if matches!(
+                    &box_expr.func,
+                    WindowExprType::Aggregate(AggregateWindowExpr {
+                        aggregate_expr: AggregateExpr { func, .. },
+                        ..
+                    }) if !matches!(func, AggregateFunc::FusedWindowAgg { .. })
+                ) =>
+            {
+                true
+            }
             _ => false,
         }
     };

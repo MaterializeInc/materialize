@@ -233,7 +233,7 @@ fn plan_select_inner(
     expr.try_visit_mut_pre(&mut |expr| {
         if let HirRelationExpr::TopK { offset, .. } = expr {
             let offset_value = offset_into_value(offset.take())?;
-            *offset = HirScalarExpr::literal(Datum::Int64(offset_value), SqlScalarType::Int64);
+            **offset = HirScalarExpr::literal(Datum::Int64(offset_value), SqlScalarType::Int64);
         }
         Ok::<(), PlanError>(())
     })?;

@@ -666,3 +666,92 @@ All query types work correctly with no regression:
 - `src/adapter/src/catalog.rs` — Record/Map humanization
 - `src/adapter/src/catalog/builtin_table_updates.rs` — Map custom_id extraction
 - `src/storage-types/src/sources/envelope.rs` — Record construction
+
+## Session 12: Shrink HirScalarExpr from 192 to 80 bytes and HirRelationExpr from 456 to 88 bytes via boxing
+
+**Date:** 2026-02-27
+
+### Changes
+
+Three complementary boxing optimizations that dramatically shrink the two core HIR (High-level Intermediate Representation) types:
+
+1. **Box `WindowExpr` in `HirScalarExpr::Windowing`** (HirScalarExpr: 192 → 80 bytes)
+   - `WindowExpr` is 176 bytes (contains `WindowExprType(128)` + two `Vec<HirScalarExpr>(24)` each)
+   - The `Windowing` variant was 192 bytes (176 + 16 for `NameMetadata`), dwarfing all other variants
+   - After boxing: `Box<WindowExpr>(8) + NameMetadata(16) = 24` bytes
+   - Next-largest variants are `CallUnary(72)` and `Literal(72)`, so the enum settles at 80 bytes
+   - `Windowing` is only constructed for window function calls — relatively rare vs Column/CallUnary/CallBinary
+
+2. **Box `HirScalarExpr` in `HirRelationExpr::Join::on`** (cascading savings)
+   - `on: HirScalarExpr` was 192 bytes inline; now `on: Box<HirScalarExpr>` is 8 bytes
+   - Join variant shrinks from ~224 to ~40 bytes
+
+3. **Box `HirScalarExpr` in `HirRelationExpr::TopK::limit` and `offset`** (HirRelationExpr: 456 → 88 bytes)
+   - `limit: Option<HirScalarExpr>` was ~200 bytes; now `limit: Option<Box<HirScalarExpr>>` is 8 bytes (niche-optimized)
+   - `offset: HirScalarExpr` was 192 bytes; now `offset: Box<HirScalarExpr>` is 8 bytes
+   - TopK was the largest variant at ~464 bytes; after boxing: `8 + 24 + 24 + 8 + 8 + 16 = 88` bytes
+   - The next-largest variant is `Reduce` at ~72 bytes, so the enum settles at 88 bytes
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| HirScalarExpr | 192 | 80 | 112 bytes (58%) |
+| HirRelationExpr | 456 | 88 | 368 bytes (81%) |
+
+### Why this is the highest-impact optimization yet
+
+These are the two core HIR types — every SQL query is first represented as a tree of `HirScalarExpr` and `HirRelationExpr` nodes. Unlike the MIR types (which were already optimized in sessions 1-11), the HIR types were extremely bloated:
+
+- **HirScalarExpr** was 192 bytes (vs MirScalarExpr at 56 bytes) — every scalar expression in every query used 3.4x more memory than needed
+- **HirRelationExpr** was 456 bytes (vs MirRelationExpr at 96 bytes) — every relational node used 4.8x more memory than needed
+
+The savings compound because:
+- `HirScalarExpr` is stored recursively: every `Vec<HirScalarExpr>` element (in Map, Filter, CallTable, CallVariadic, WindowExpr) saves 112 bytes
+- `HirRelationExpr` is stored recursively: every `Box<HirRelationExpr>` allocation saves 368 bytes
+- HIR trees exist throughout planning (parsing → name resolution → type checking → optimization → lowering to MIR)
+
+### Benchmark results
+
+All query types work correctly with no regression:
+
+| Query Type | Avg Time | Notes |
+|-----------|----------|-------|
+| Inner Join (1000 rows) | ~33ms | Exercises boxed `on` field |
+| Left Join (1000 rows) | ~39ms | Exercises variadic left join lowering with boxed `on` |
+| 3-way Join (1000 rows) | ~35ms | Exercises multiple Join nodes |
+| TopK LIMIT+OFFSET | ~25ms | Exercises boxed `limit` and `offset` |
+| DISTINCT ON | ~32ms | Exercises TopK variant (limit=1) |
+| Window: row_number | ~455ms | Exercises boxed WindowExpr (Scalar) |
+| Window: first_value | ~455ms | Exercises boxed WindowExpr (Value) |
+| Window: sum aggregate | ~538ms | Exercises boxed WindowExpr (Aggregate) |
+| Fused: row_number+rank+dense_rank | ~455ms | Exercises fusion of boxed WindowExprs |
+| Complex: Join+TopK+Window | ~43ms | Combines all optimized paths |
+
+### Files changed (5 files)
+
+- `src/sql/src/plan/hir.rs` — Box WindowExpr in Windowing, Box HirScalarExpr in Join::on and TopK::limit/offset, windowing() constructor, top_k() constructor, size assertions
+- `src/sql/src/plan/lowering.rs` — Deref adjustments for boxed `on` in Join (2 sites in variadic left join extraction)
+- `src/sql/src/plan/transform_hir.rs` — Pattern matching adjustments for boxed WindowExpr (6 sites: extract_options, fused value, fused aggregate, is_value_or_agg_window_func_call)
+- `src/sql/src/plan/statement/dml.rs` — Deref adjustment for boxed `offset` assignment
+- `src/sql/src/plan/explain/text.rs` — No changes needed (auto-deref through Box)
+
+### Cumulative savings across all sessions
+
+| Type | Original | After all sessions | Total savings |
+|------|----------|-------------------|---------------|
+| MirScalarExpr | 88 | 56 | 32 bytes (36%) |
+| MirRelationExpr | 176 | 96 | 80 bytes (45%) |
+| HirScalarExpr | 192 | 80 | 112 bytes (58%) |
+| HirRelationExpr | 456 | 88 | 368 bytes (81%) |
+| AggregateFunc | 88 | 48 | 40 bytes (45%) |
+| AggregateExpr | 184 | 112 | 72 bytes (39%) |
+| UnaryFunc | 72 | 48 | 24 bytes (33%) |
+| BinaryFunc | 48 | 24 | 24 bytes (50%) |
+| VariadicFunc | 40 | 24 | 16 bytes (40%) |
+| TableFunc | 80 | 40 | 40 bytes (50%) |
+| EvalError | 56 | 40 | 16 bytes (29%) |
+| JoinImplementation | 120 | 64 | 56 bytes (47%) |
+| SqlScalarType | 32 | 24 | 8 bytes (25%) |
+| SqlColumnType | 40 | 32 | 8 bytes (20%) |
+| Matcher | 72 | 64 | 8 bytes (11%) |

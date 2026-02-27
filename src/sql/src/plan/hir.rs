@@ -154,7 +154,7 @@ pub enum HirRelationExpr {
     Join {
         left: Box<HirRelationExpr>,
         right: Box<HirRelationExpr>,
-        on: HirScalarExpr,
+        on: Box<HirScalarExpr>,
         kind: JoinKind,
     },
     /// Unlike MirRelationExpr, when `key` is empty AND `input` is empty this returns
@@ -185,12 +185,12 @@ pub enum HirRelationExpr {
         /// tools `describe` the prepared statement, they discover this type. If what they find
         /// were UInt64, then they might have trouble calling the prepared statement, because the
         /// unsigned types are non-standard, and also don't exist even in Postgres.)
-        limit: Option<HirScalarExpr>,
+        limit: Option<Box<HirScalarExpr>>,
         /// Number of records to skip.
         /// It is of SqlScalarType::Int64.
         /// This can contain parameters at first, but by the time we reach lowering, this should
         /// already be simply a Literal.
-        offset: HirScalarExpr,
+        offset: Box<HirScalarExpr>,
         /// User-supplied hint: how many rows will have the same group key.
         expected_group_size: Option<u64>,
     },
@@ -259,7 +259,7 @@ pub enum HirScalarExpr {
     /// * 1 row, return the value of that row
     /// * >1 rows, we return an error
     Select(Box<HirRelationExpr>, NameMetadata),
-    Windowing(WindowExpr, NameMetadata),
+    Windowing(Box<WindowExpr>, NameMetadata),
 }
 
 #[derive(
@@ -1832,8 +1832,8 @@ impl HirRelationExpr {
             input: Box::new(self),
             group_key,
             order_key,
-            limit,
-            offset,
+            limit: limit.map(Box::new),
+            offset: Box::new(offset),
             expected_group_size,
         }
     }
@@ -1920,7 +1920,7 @@ impl HirRelationExpr {
             HirRelationExpr::Join {
                 left: Box::new(self),
                 right: Box::new(right),
-                on,
+                on: Box::new(on),
                 kind,
             }
         }
@@ -3416,7 +3416,7 @@ impl HirScalarExpr {
     }
 
     pub fn windowing(expr: WindowExpr) -> Self {
-        HirScalarExpr::Windowing(expr, TreatAsEqual(None))
+        HirScalarExpr::Windowing(Box::new(expr), TreatAsEqual(None))
     }
 
     pub fn or(self, other: Self) -> Self {
@@ -4016,5 +4016,19 @@ impl AggregateExpr {
     /// (MIR has the same `is_count_asterisk`.)
     pub fn is_count_asterisk(&self) -> bool {
         self.func == AggregateFunc::Count && self.expr.is_literal_true() && !self.distinct
+    }
+}
+
+#[cfg(test)]
+mod size_tests {
+    use super::*;
+    use std::mem::size_of;
+
+    /// Guard against accidental size regressions in key HIR types.
+    /// These types are stored in large numbers throughout query planning.
+    #[mz_ore::test]
+    fn type_size_assertions() {
+        assert_eq!(size_of::<HirScalarExpr>(), 80);
+        assert_eq!(size_of::<HirRelationExpr>(), 88);
     }
 }

@@ -632,7 +632,7 @@ impl HirRelationExpr {
                     if context.config.enable_variadic_left_join_lowering {
                         // Attempt to extract a stack of left joins.
                         if let JoinKind::LeftOuter = kind {
-                            let mut rights = vec![(&*right, &on)];
+                            let mut rights = vec![(&*right, &*on)];
                             let mut left_test = &left;
                             while let Join {
                                 left,
@@ -641,7 +641,7 @@ impl HirRelationExpr {
                                 kind: JoinKind::LeftOuter,
                             } = &**left_test
                             {
-                                rights.push((&**right, on));
+                                rights.push((&**right, &**on));
                                 left_test = left;
                             }
                             if rights.len() > 1 {
