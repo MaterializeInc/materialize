@@ -11,16 +11,20 @@
 //! `CallVariadic { func: CaseLiteral { lookup, return_type }, exprs }` for
 //! O(log n) evaluation via `BTreeMap` lookup.
 //!
-//! Uses bottom-up traversal (`visit_mut_post`) so inner CaseLiterals are
-//! created first, then outer If nodes fold into them.
+//! Uses the `ReprRelationType` analysis to obtain column types in O(n),
+//! avoiding repeated `input.typ()` calls. Each scalar is then visited
+//! bottom-up so inner CaseLiterals are created first, then outer If nodes
+//! fold into them.
 
 use std::collections::BTreeMap;
 
+use itertools::Itertools;
 use mz_expr::visit::Visit;
 use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr, VariadicFunc};
 use mz_repr::{ReprColumnType, Row, SqlColumnType};
 
 use crate::TransformCtx;
+use crate::analysis::{DerivedBuilder, ReprRelationType};
 
 /// Rewrites If-chains matching a single expression against literals
 /// into a `CaseLiteral` variadic function with `BTreeMap` lookup.
@@ -40,56 +44,72 @@ impl crate::Transform for CaseLiteralTransform {
     fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
-        _ctx: &mut TransformCtx,
+        ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
-        relation.try_visit_mut_post(&mut Self::action)?;
+        // Pre-compute column types for all nodes in a single pass.
+        let mut builder = DerivedBuilder::new(ctx.features);
+        builder.require(ReprRelationType);
+        let derived = builder.visit(&*relation);
+
+        let mut todo = vec![(&mut *relation, derived.as_view())];
+        while let Some((expr, view)) = todo.pop() {
+            match expr {
+                MirRelationExpr::Map { scalars, .. } => {
+                    // Use the output type (includes scalars' types).
+                    let output_type: &Vec<ReprColumnType> = view
+                        .value::<ReprRelationType>()
+                        .expect("ReprRelationType required")
+                        .as_ref()
+                        .unwrap();
+                    let input_arity = output_type.len() - scalars.len();
+                    for (index, scalar) in scalars.iter_mut().enumerate() {
+                        Self::rewrite_scalar(scalar, &output_type[..input_arity + index])?;
+                    }
+                }
+                MirRelationExpr::Filter { predicates, .. } => {
+                    let input_type: &Vec<ReprColumnType> = view
+                        .last_child()
+                        .value::<ReprRelationType>()
+                        .expect("ReprRelationType required")
+                        .as_ref()
+                        .unwrap();
+                    for predicate in predicates.iter_mut() {
+                        Self::rewrite_scalar(predicate, input_type)?;
+                    }
+                }
+                MirRelationExpr::Reduce { aggregates, .. } => {
+                    let input_type: &Vec<ReprColumnType> = view
+                        .last_child()
+                        .value::<ReprRelationType>()
+                        .expect("ReprRelationType required")
+                        .as_ref()
+                        .unwrap();
+                    for agg in aggregates.iter_mut() {
+                        Self::rewrite_scalar(&mut agg.expr, input_type)?;
+                    }
+                }
+                MirRelationExpr::FlatMap { exprs, .. } => {
+                    let input_type: &Vec<ReprColumnType> = view
+                        .last_child()
+                        .value::<ReprRelationType>()
+                        .expect("ReprRelationType required")
+                        .as_ref()
+                        .unwrap();
+                    for e in exprs.iter_mut() {
+                        Self::rewrite_scalar(e, input_type)?;
+                    }
+                }
+                _ => {}
+            }
+            todo.extend(expr.children_mut().rev().zip_eq(view.children_rev()));
+        }
+
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
 }
 
 impl CaseLiteralTransform {
-    /// Rewrites scalar expressions within a single `MirRelationExpr` node.
-    ///
-    /// Collects column types from the input relation to compute return types
-    /// for the generated `CaseLiteral` nodes. Each scalar is visited bottom-up
-    /// via `try_visit_mut_post` so inner chains become CaseLiterals first,
-    /// then outer If nodes can fold into them.
-    fn action(relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
-        match relation {
-            MirRelationExpr::Map { input, scalars } => {
-                let mut column_types = input.typ().column_types;
-                for scalar in scalars.iter_mut() {
-                    Self::rewrite_scalar(scalar, &column_types)?;
-                    let new_type = scalar.typ(&column_types);
-                    column_types.push(new_type);
-                }
-            }
-            MirRelationExpr::Filter { input, predicates } => {
-                let column_types = input.typ().column_types;
-                for predicate in predicates.iter_mut() {
-                    Self::rewrite_scalar(predicate, &column_types)?;
-                }
-            }
-            MirRelationExpr::Reduce {
-                input, aggregates, ..
-            } => {
-                let column_types = input.typ().column_types;
-                for agg in aggregates.iter_mut() {
-                    Self::rewrite_scalar(&mut agg.expr, &column_types)?;
-                }
-            }
-            MirRelationExpr::FlatMap { input, exprs, .. } => {
-                let column_types = input.typ().column_types;
-                for e in exprs.iter_mut() {
-                    Self::rewrite_scalar(e, &column_types)?;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
     /// Rewrites a scalar expression tree bottom-up, replacing If-chains of
     /// `If(Eq(common_expr, literal), result, ...)` with `CaseLiteral`.
     fn rewrite_scalar(
