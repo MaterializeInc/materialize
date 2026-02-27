@@ -1219,7 +1219,7 @@ impl HirScalarExpr {
                                 element_type: Box::new(original_row_record_type),
                                 custom_id: None,
                             };
-                            let agg_input_type = SqlScalarType::Record {
+                            let agg_input_type = SqlScalarType::Record(Box::new(RecordType {
                                 fields: std::iter::once(&list_type)
                                     .map(|t| {
                                         (
@@ -1229,7 +1229,7 @@ impl HirScalarExpr {
                                     })
                                     .collect(),
                                 custom_id: None,
-                            }
+                            }))
                             .nullable(false);
 
                             Ok((agg_input, agg_input_type))
@@ -1284,10 +1284,10 @@ impl HirScalarExpr {
                                 },
                                 vec![original_row_record, mir_encoded_args],
                             );
-                            let fn_input_record_type = SqlScalarType::Record {
+                            let fn_input_record_type = SqlScalarType::Record(Box::new(RecordType {
                                 fields: fn_input_record_fields,
                                 custom_id: None,
-                            }
+                            }))
                             .nullable(false);
 
                             // Build a new record with the record above + the ORDER BY exprs
@@ -1304,14 +1304,14 @@ impl HirScalarExpr {
                                 agg_input,
                             );
 
-                            let agg_input_type = SqlScalarType::Record {
+                            let agg_input_type = SqlScalarType::Record(Box::new(RecordType {
                                 fields: [(
                                     ColumnName::from(UNKNOWN_COLUMN_NAME),
                                     fn_input_record_type.nullable(false),
                                 )]
                                 .into(),
                                 custom_id: None,
-                            }
+                            }))
                             .nullable(false);
 
                             Ok((agg_input, agg_input_type))
@@ -1512,10 +1512,10 @@ impl HirScalarExpr {
                         },
                         (0..input_arity).map(MirScalarExpr::column).collect_vec(),
                     );
-                    let original_row_record_type = SqlScalarType::Record {
+                    let original_row_record_type = SqlScalarType::Record(Box::new(RecordType {
                         fields,
                         custom_id: None,
-                    };
+                    }));
 
                     let (agg_input, agg_input_type) = lower_args(
                         id_gen,

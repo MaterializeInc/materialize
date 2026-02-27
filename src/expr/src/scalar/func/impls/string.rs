@@ -536,7 +536,7 @@ impl LazyUnaryFunc for CastStringToMap {
             a.unwrap_str(),
             matches!(
                 self.return_ty.unwrap_map_value_type(),
-                SqlScalarType::Map { .. }
+                SqlScalarType::Map(..)
             ),
             |value_text| -> Result<Datum, EvalError> {
                 let value_text = match value_text {

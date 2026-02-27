@@ -743,14 +743,14 @@ impl ValueWindowFunc {
             }
             ValueWindowFunc::Fused(funcs) => {
                 let input_types = input_type.scalar_type.unwrap_record_element_column_type();
-                SqlScalarType::Record {
+                SqlScalarType::Record(Box::new(RecordType {
                     fields: funcs
                         .iter()
                         .zip_eq(input_types)
                         .map(|(f, t)| (ColumnName::from(""), f.output_sql_type(t.clone())))
                         .collect(),
                     custom_id: None,
-                }
+                }))
                 .nullable(false)
             }
         }
@@ -1050,10 +1050,10 @@ impl CoercibleScalarType {
                 };
                 fields.push((name, ty))
             }
-            SqlScalarType::Record {
+            SqlScalarType::Record(Box::new(RecordType {
                 fields: fields.into(),
                 custom_id: None,
-            }
+            }))
         }
 
         if let CoercibleScalarType::Record(fields) = self {
@@ -1524,14 +1524,14 @@ impl AggregateFunc {
             AggregateFunc::SumUInt64 => SqlScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::ZERO),
             },
-            AggregateFunc::MapAgg { value_type, .. } => SqlScalarType::Map {
+            AggregateFunc::MapAgg { value_type, .. } => SqlScalarType::Map(Box::new(MapType {
                 value_type: Box::new(value_type.clone()),
                 custom_id: None,
-            },
+            })),
             AggregateFunc::ArrayConcat { .. } | AggregateFunc::ListConcat { .. } => {
                 match input_type.scalar_type {
                     // The input is wrapped in a Record if there's an ORDER BY, so extract it out.
-                    SqlScalarType::Record { fields, .. } => fields[0].1.scalar_type.clone(),
+                    SqlScalarType::Record(record) => record.fields[0].1.scalar_type.clone(),
                     _ => unreachable!(),
                 }
             }
@@ -1575,14 +1575,14 @@ impl AggregateFunc {
             | AggregateFunc::Dummy => input_type.scalar_type,
             AggregateFunc::FusedWindowAgg { funcs } => {
                 let input_types = input_type.scalar_type.unwrap_record_element_column_type();
-                SqlScalarType::Record {
+                SqlScalarType::Record(Box::new(RecordType {
                     fields: funcs
                         .iter()
                         .zip_eq(input_types)
                         .map(|(f, t)| (ColumnName::from(""), f.output_sql_type(t.clone())))
                         .collect(),
                     custom_id: None,
-                }
+                }))
             }
         };
         // max/min/sum return null on empty sets

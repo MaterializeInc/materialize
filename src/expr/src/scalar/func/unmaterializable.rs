@@ -19,7 +19,7 @@
 use std::fmt;
 
 use mz_lowertest::MzReflect;
-use mz_repr::{ReprColumnType, SqlColumnType, SqlScalarType};
+use mz_repr::{MapType, ReprColumnType, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
 #[derive(
@@ -83,10 +83,10 @@ impl UnmaterializableFunc {
             UnmaterializableFunc::MzEnvironmentId => SqlScalarType::String.nullable(false),
             UnmaterializableFunc::MzIsSuperuser => SqlScalarType::Bool.nullable(false),
             UnmaterializableFunc::MzNow => SqlScalarType::MzTimestamp.nullable(false),
-            UnmaterializableFunc::MzRoleOidMemberships => SqlScalarType::Map {
+            UnmaterializableFunc::MzRoleOidMemberships => SqlScalarType::Map(Box::new(MapType {
                 value_type: Box::new(SqlScalarType::Array(Box::new(SqlScalarType::String))),
                 custom_id: None,
-            }
+            }))
             .nullable(false),
             UnmaterializableFunc::MzSessionId => SqlScalarType::Uuid.nullable(false),
             UnmaterializableFunc::MzUptime => SqlScalarType::Interval.nullable(true),
@@ -98,10 +98,10 @@ impl UnmaterializableFunc {
             }
             UnmaterializableFunc::SessionUser => SqlScalarType::String.nullable(false),
             UnmaterializableFunc::Version => SqlScalarType::String.nullable(false),
-            UnmaterializableFunc::ViewableVariables => SqlScalarType::Map {
+            UnmaterializableFunc::ViewableVariables => SqlScalarType::Map(Box::new(MapType {
                 value_type: Box::new(SqlScalarType::String),
                 custom_id: None,
-            }
+            }))
             .nullable(false),
         }
     }

@@ -12,7 +12,7 @@ use std::fmt;
 use itertools::Itertools;
 use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
-use mz_repr::{Datum, DatumMap, RowArena, SqlColumnType, SqlScalarType};
+use mz_repr::{Datum, DatumMap, MapType, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
@@ -138,10 +138,10 @@ impl LazyUnaryFunc for MapBuildFromRecordList {
     }
 
     fn output_sql_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Map {
+        SqlScalarType::Map(Box::new(MapType {
             value_type: Box::new(self.value_type.clone()),
             custom_id: None,
-        }
+        }))
         .nullable(true)
     }
 

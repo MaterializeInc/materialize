@@ -233,9 +233,9 @@ pub fn col_values<'a>(
             | SqlScalarType::MzAclItem
             | SqlScalarType::Range { .. }
             | SqlScalarType::Array(_)
-            | SqlScalarType::Map { .. }
+            | SqlScalarType::Map(..)
             | SqlScalarType::List { .. }
-            | SqlScalarType::Record { .. }
+            | SqlScalarType::Record(..)
             | SqlScalarType::Int2Vector,
             ColumnStatKinds::None,
         ) => None,

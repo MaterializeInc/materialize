@@ -20,7 +20,7 @@ use mz_expr::func;
 use mz_expr::func::variadic::{JsonbBuildObject, RecordCreate};
 use mz_expr::func::{CastArrayToJsonb, CastListToJsonb};
 use mz_repr::{
-    ColumnName, Datum, SqlColumnType, SqlRelationType, SqlScalarBaseType, SqlScalarType,
+    ColumnName, Datum, RecordType, SqlColumnType, SqlRelationType, SqlScalarBaseType, SqlScalarType,
 };
 
 use crate::catalog::TypeCategory;
@@ -825,16 +825,16 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
                 }
 
                 if let (
-                    l @ SqlScalarType::Record {
-                        custom_id: Some(..), ..
-                    },
+                    l @ SqlScalarType::Record(record),
                     r,
                 ) = (from_type, to_type)
                 {
-                    // Changing `from`'s custom_id requires at least
-                    // Assignment context
-                    if ccx == CastContext::Implicit && l != r {
-                        return None;
+                    if record.custom_id.is_some() {
+                        // Changing `from`'s custom_id requires at least
+                        // Assignment context
+                        if ccx == CastContext::Implicit && l != r {
+                            return None;
+                        }
                     }
                 }
 
@@ -1187,9 +1187,9 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
         )
         .expect("cast known to exist")
         .call_unary(UnaryFunc::CastJsonbableToJsonb(func::CastJsonbableToJsonb)),
-        Record { fields, .. } => {
+        Record(record) => {
             let mut exprs = vec![];
-            for (i, (name, _ty)) in fields.iter().enumerate() {
+            for (i, (name, _ty)) in record.fields.iter().enumerate() {
                 exprs.push(HirScalarExpr::literal(
                     Datum::String(name),
                     SqlScalarType::String,
@@ -1255,7 +1255,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
         | VarChar { .. }
         | Uuid
         | Oid
-        | Map { .. }
+        | Map(..)
         | RegProc
         | RegType
         | RegClass
@@ -1312,10 +1312,10 @@ pub fn guess_best_common_type(
                 let guess = guess_best_common_type(ecx, &guesses)?;
                 fields.push((name, guess.nullable(nullable)));
             }
-            return Ok(SqlScalarType::Record {
+            return Ok(SqlScalarType::Record(Box::new(RecordType {
                 fields: fields.into(),
                 custom_id: None,
-            });
+            })));
         }
     }
 
@@ -1403,7 +1403,7 @@ pub fn plan_coerce<'a>(
         LiteralRecord(exprs) => {
             let arity = exprs.len();
             let coercions = match coerce_to {
-                SqlScalarType::Record { fields, .. } if fields.len() == arity => fields
+                SqlScalarType::Record(record) if record.fields.len() == arity => record.fields
                     .iter()
                     .map(|(_name, ty)| &ty.scalar_type)
                     .cloned()

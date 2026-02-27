@@ -194,18 +194,18 @@ impl Value {
                     .collect();
                 Some(Value::List(elements))
             }
-            (Datum::List(record), SqlScalarType::Record { fields, .. }) => {
+            (Datum::List(record), SqlScalarType::Record(rec_type)) => {
                 let fields = record
                     .iter()
-                    .zip_eq(fields)
+                    .zip_eq(rec_type.fields.iter())
                     .map(|(e, (_name, ty))| Value::from_datum(e, &ty.scalar_type))
                     .collect();
                 Some(Value::Record(fields))
             }
-            (Datum::Map(dict), SqlScalarType::Map { value_type, .. }) => {
+            (Datum::Map(dict), SqlScalarType::Map(map_type)) => {
                 let entries = dict
                     .iter()
-                    .map(|(k, v)| (k.to_owned(), Value::from_datum(v, value_type)))
+                    .map(|(k, v)| (k.to_owned(), Value::from_datum(v, &map_type.value_type)))
                     .collect();
                 Some(Value::Map(entries))
             }
@@ -612,8 +612,8 @@ impl Value {
             SqlScalarType::Array(elem_type) => Self::can_encode_binary(elem_type),
             SqlScalarType::Int2Vector => false, // "binary encoding of int2vector is not implemented"
             SqlScalarType::List { .. } => false, // "binary encoding of list types is not implemented"
-            SqlScalarType::Map { .. } => false, // "binary encoding of map types is not implemented"
-            SqlScalarType::Record { fields, .. } => fields
+            SqlScalarType::Map(..) => false, // "binary encoding of map types is not implemented"
+            SqlScalarType::Record(record) => record.fields
                 .iter()
                 .all(|(_, ty)| Self::can_encode_binary(&ty.scalar_type)),
             SqlScalarType::Range { element_type } => Self::can_encode_binary(element_type),

@@ -339,18 +339,12 @@ fn scalar_type_and_array_to_reader(
                 nulls: array.nulls().cloned(),
             })
         }
-        (
-            SqlScalarType::Record {
-                fields,
-                custom_id: _,
-            },
-            DataType::Struct(_),
-        ) => {
+        (SqlScalarType::Record(record), DataType::Struct(_)) => {
             let record_array = downcast_array::<StructArray>(array);
             let null_mask = record_array.nulls();
 
-            let mut decoders = Vec::with_capacity(fields.len());
-            for (name, typ) in fields.iter() {
+            let mut decoders = Vec::with_capacity(record.fields.len());
+            for (name, typ) in record.fields.iter() {
                 let inner_array = record_array
                     .column_by_name(name)
                     .ok_or_else(|| anyhow::anyhow!("missing name '{name}'"))?;

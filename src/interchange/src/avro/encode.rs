@@ -391,7 +391,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                         .collect();
                     Value::Array(values)
                 }
-                SqlScalarType::Map { value_type, .. } => {
+                SqlScalarType::Map(map_type) => {
                     let map = datum.unwrap_map();
                     let elements = map
                         .into_iter()
@@ -400,7 +400,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                                 datum,
                                 &SqlColumnType {
                                     nullable: true,
-                                    scalar_type: (**value_type).clone(),
+                                    scalar_type: (*map_type.value_type).clone(),
                                 },
                             )
                             .avro();
@@ -409,9 +409,9 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                         .collect();
                     Value::Map(elements)
                 }
-                SqlScalarType::Record { fields, .. } => {
+                SqlScalarType::Record(record) => {
                     let list = datum.unwrap_list();
-                    let fields = fields
+                    let fields = record.fields
                         .iter()
                         .zip_eq(list)
                         .map(|((name, typ), datum)| {

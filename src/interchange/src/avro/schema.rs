@@ -51,7 +51,7 @@ use mz_ore::future::OreFutureExt;
 use mz_ore::retry::Retry;
 use mz_repr::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, NumericMaxScale};
 use mz_repr::adt::timestamp::TimestampPrecision;
-use mz_repr::{ColumnName, RelationDesc, SqlColumnType, SqlScalarType, UNKNOWN_COLUMN_NAME};
+use mz_repr::{ColumnName, MapType, RecordType, RelationDesc, SqlColumnType, SqlScalarType, UNKNOWN_COLUMN_NAME};
 use tracing::warn;
 
 use crate::avro::is_null;
@@ -267,10 +267,10 @@ fn validate_schema_2(
                     seen_avro_nodes.remove(&named_idx);
                 }
             }
-            SqlScalarType::Record {
+            SqlScalarType::Record(Box::new(RecordType {
                 fields: columns.into(),
                 custom_id: None,
-            }
+            }))
         }
         SchemaPiece::Array(inner) => {
             let named_idx = match inner.as_ref() {
@@ -295,10 +295,10 @@ fn validate_schema_2(
             }
             ret
         }
-        SchemaPiece::Map(inner) => SqlScalarType::Map {
+        SchemaPiece::Map(inner) => SqlScalarType::Map(Box::new(MapType {
             value_type: Box::new(validate_schema_2(seen_avro_nodes, schema.step(inner))?),
             custom_id: None,
-        },
+        })),
 
         _ => bail!("Unsupported type in schema: {:?}", schema.inner),
     })

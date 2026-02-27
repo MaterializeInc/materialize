@@ -38,7 +38,7 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, ColumnName, RelationDesc, RelationVersion, RelationVersionSelector,
+    CatalogItemId, ColumnName, MapType, RelationDesc, RelationVersion, RelationVersionSelector,
     SqlColumnType, SqlRelationType, SqlScalarType, Timestamp, VersionedRelationDesc,
     preserves_order, strconv,
 };
@@ -630,10 +630,10 @@ pub fn plan_create_webhook_source(
     // Include a `headers` column, possibly filtered.
     if let Some(filters) = include_headers.column {
         column_ty.push(SqlColumnType {
-            scalar_type: SqlScalarType::Map {
+            scalar_type: SqlScalarType::Map(Box::new(MapType {
                 value_type: Box::new(SqlScalarType::String),
                 custom_id: None,
-            },
+            })),
             nullable: false,
         });
         column_names.push("headers".to_string());
@@ -2215,7 +2215,7 @@ fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(Option<usize>, usize
         .get_by_name(&"after".into())
         .ok_or_else(|| sql_err!("'after' column missing from debezium input"))?;
     let before_idx = if let Some((before_idx, before_ty)) = before {
-        if !matches!(before_ty.scalar_type, SqlScalarType::Record { .. }) {
+        if !matches!(before_ty.scalar_type, SqlScalarType::Record(..)) {
             sql_bail!("'before' column must be of type record");
         }
         if before_ty != after_ty {
@@ -3608,8 +3608,8 @@ fn plan_sink(
             }
 
             match &ty.scalar_type {
-                SqlScalarType::Map { value_type, .. }
-                    if matches!(&**value_type, SqlScalarType::String | SqlScalarType::Bytes) => {}
+                SqlScalarType::Map(map_type)
+                    if matches!(&*map_type.value_type, SqlScalarType::String | SqlScalarType::Bytes) => {}
                 _ => sql_bail!(
                     "HEADERS column must have type map[text => text] or map[text => bytea]"
                 ),

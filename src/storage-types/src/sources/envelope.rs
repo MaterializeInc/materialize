@@ -11,7 +11,7 @@
 
 use anyhow::{anyhow, bail};
 use itertools::Itertools;
-use mz_repr::{RelationDesc, SqlColumnType, SqlRelationType, SqlScalarType};
+use mz_repr::{RecordType, RelationDesc, SqlColumnType, SqlRelationType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
 /// `SourceEnvelope`s describe how to turn a stream of messages from `SourceDesc`s
@@ -187,14 +187,14 @@ impl UnplannedSourceEnvelope {
                                 let key_type = key_desc.typ();
                                 let key_as_record = SqlRelationType::new(vec![SqlColumnType {
                                     nullable: false,
-                                    scalar_type: SqlScalarType::Record {
+                                    scalar_type: SqlScalarType::Record(Box::new(RecordType {
                                         fields: key_desc
                                             .iter_names()
                                             .zip_eq(key_type.column_types.iter())
                                             .map(|(name, ty)| (name.clone(), ty.clone()))
                                             .collect(),
                                         custom_id: None,
-                                    },
+                                    })),
                                 }]);
 
                                 RelationDesc::new(key_as_record, [key_name.to_string()])
@@ -231,8 +231,8 @@ impl UnplannedSourceEnvelope {
                 style: UpsertStyle::Debezium { after_idx },
                 ..
             } => match &value_desc.typ().column_types[*after_idx].scalar_type {
-                SqlScalarType::Record { fields, .. } => {
-                    let mut desc = RelationDesc::from_names_and_types(fields.clone());
+                SqlScalarType::Record(record) => {
+                    let mut desc = RelationDesc::from_names_and_types(record.fields.clone());
                     let key = key_desc.map(|k| match_key_indices(&k, &desc)).transpose()?;
                     if let Some(key) = key.clone() {
                         desc = desc.with_key(key);
@@ -259,12 +259,12 @@ impl UnplannedSourceEnvelope {
                 // CdcV2 row data are in a record in a record in a list
                 match &value_desc.typ().column_types[0].scalar_type {
                     SqlScalarType::List { element_type, .. } => match &**element_type {
-                        SqlScalarType::Record { fields, .. } => {
+                        SqlScalarType::Record(record) => {
                             // TODO maybe check this by name
-                            match &fields[0].1.scalar_type {
-                                SqlScalarType::Record { fields, .. } => (
+                            match &record.fields[0].1.scalar_type {
+                                SqlScalarType::Record(record) => (
                                     self.into_source_envelope(None, None, None),
-                                    RelationDesc::from_names_and_types(fields.clone()),
+                                    RelationDesc::from_names_and_types(record.fields.clone()),
                                 ),
                                 ty => {
                                     bail!("Unexpected type for MATERIALIZE envelope: {:?}", ty)
@@ -317,7 +317,7 @@ fn compute_envelope_value_desc(
             let mut types = Vec::with_capacity(value_desc.arity() + 1);
             types.push(SqlColumnType {
                 nullable: true,
-                scalar_type: SqlScalarType::Record {
+                scalar_type: SqlScalarType::Record(Box::new(RecordType {
                     fields: [(
                         "description".into(),
                         SqlColumnType {
@@ -327,7 +327,7 @@ fn compute_envelope_value_desc(
                     )]
                     .into(),
                     custom_id: None,
-                },
+                })),
             });
             types.extend(value_desc.iter_types().map(|t| t.clone().nullable(true)));
             let relation_type = SqlRelationType::new(types);

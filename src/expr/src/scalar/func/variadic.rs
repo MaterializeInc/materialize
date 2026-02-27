@@ -34,7 +34,8 @@ use mz_repr::adt::system::Oid;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    ColumnName, Datum, OutputDatumType, ReprScalarType, Row, RowArena, SqlColumnType, SqlScalarType,
+    ColumnName, Datum, MapType, OutputDatumType, RecordType, ReprScalarType, Row, RowArena,
+    SqlColumnType, SqlScalarType,
 };
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
@@ -2429,10 +2430,10 @@ impl VariadicFunc {
             Self::JsonbBuildArray(_) | Self::JsonbBuildObject(_) => {
                 SqlScalarType::Jsonb.nullable(true)
             }
-            Self::MapBuild(MapBuild { value_type }) => SqlScalarType::Map {
+            Self::MapBuild(MapBuild { value_type }) => SqlScalarType::Map(Box::new(MapType {
                 value_type: value_type.clone(),
                 custom_id: None,
-            }
+            }))
             .nullable(true),
             Self::ArrayCreate(ArrayCreate { elem_type }) => {
                 soft_assert_or_log!(
@@ -2477,14 +2478,14 @@ impl VariadicFunc {
                 .clone()
                 .nullable(true),
             Self::ListSliceLinear(..) => input_types[0].scalar_type.clone().nullable(in_nullable),
-            Self::RecordCreate(RecordCreate { field_names }) => SqlScalarType::Record {
+            Self::RecordCreate(RecordCreate { field_names }) => SqlScalarType::Record(Box::new(RecordType {
                 fields: field_names
                     .clone()
                     .into_iter()
                     .zip_eq(input_types)
                     .collect(),
                 custom_id: None,
-            }
+            }))
             .nullable(false),
             Self::SplitPart(_) => SqlScalarType::String.nullable(in_nullable),
             Self::RegexpMatch(_) => {

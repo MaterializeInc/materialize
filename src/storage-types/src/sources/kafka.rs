@@ -20,7 +20,7 @@ use mz_kafka_util::client::MzClientContext;
 use mz_ore::collections::CollectionExt;
 use mz_ore::future::InTask;
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, SqlColumnType, SqlScalarType};
+use mz_repr::{CatalogItemId, Datum, GlobalId, RecordType, RelationDesc, Row, SqlColumnType, SqlScalarType};
 use mz_timely_util::order::{Extrema, Partitioned};
 use rdkafka::admin::AdminClient;
 use serde::{Deserialize, Serialize};
@@ -292,7 +292,7 @@ pub fn kafka_metadata_columns_desc(
                     use_bytes: false, ..
                 } => SqlScalarType::String.nullable(true),
                 KafkaMetadataKind::Headers => SqlScalarType::List {
-                    element_type: Box::new(SqlScalarType::Record {
+                    element_type: Box::new(SqlScalarType::Record(Box::new(RecordType {
                         fields: [
                             (
                                 "key".into(),
@@ -311,7 +311,7 @@ pub fn kafka_metadata_columns_desc(
                         ]
                         .into(),
                         custom_id: None,
-                    }),
+                    }))),
                     custom_id: None,
                 }
                 .nullable(false),

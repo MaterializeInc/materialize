@@ -67,9 +67,9 @@ use mz_repr::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, NumericMaxScale};
 use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{
-    CatalogItemId, ColumnIndex, ColumnName, Datum, RelationDesc, RelationVersionSelector,
-    ReprColumnType, Row, RowArena, SqlColumnType, SqlRelationType, SqlScalarType,
-    UNKNOWN_COLUMN_NAME, strconv,
+    CatalogItemId, ColumnIndex, ColumnName, Datum, MapType, RecordType, RelationDesc,
+    RelationVersionSelector, ReprColumnType, Row, RowArena, SqlColumnType, SqlRelationType,
+    SqlScalarType, UNKNOWN_COLUMN_NAME, strconv,
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
@@ -1195,10 +1195,10 @@ pub fn plan_webhook_validate_using(
             .unwrap_or_else(|| "headers".to_string());
 
         column_typs.push(SqlColumnType {
-            scalar_type: SqlScalarType::Map {
+            scalar_type: SqlScalarType::Map(Box::new(MapType {
                 value_type: Box::new(value_type),
                 custom_id: None,
-            },
+            })),
             nullable: false,
         });
         column_names.push(name);
@@ -3679,7 +3679,7 @@ fn expand_select_item<'a>(
             // this operation is slow in Postgres too.
             let expr = plan_expr(ecx, sql_expr)?.type_as_any(ecx)?;
             let fields = match ecx.scalar_type(&expr) {
-                SqlScalarType::Record { fields, .. } => fields,
+                SqlScalarType::Record(record) => record.fields,
                 ty => sql_bail!(
                     "type {} is not composite",
                     ecx.humanize_scalar_type(&ty, false)
@@ -4275,8 +4275,8 @@ fn plan_field_access(
     let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
     let ty = ecx.scalar_type(&expr);
     let i = match &ty {
-        SqlScalarType::Record { fields, .. } => {
-            fields.iter().position(|(name, _ty)| *name == field)
+        SqlScalarType::Record(record) => {
+            record.fields.iter().position(|(name, _ty)| *name == field)
         }
         ty => sql_bail!(
             "column notation applied to type {}, which is not a composite type",
@@ -4648,7 +4648,7 @@ fn plan_array_subquery(
                 SqlScalarType::Char { .. }
                     | SqlScalarType::Array { .. }
                     | SqlScalarType::List { .. }
-                    | SqlScalarType::Map { .. }
+                    | SqlScalarType::Map(..)
             )
         },
         |elem_type| {
@@ -4880,10 +4880,10 @@ fn plan_map_subquery(
             expr.select(),
             HirScalarExpr::literal(
                 Datum::empty_map(),
-                SqlScalarType::Map {
+                SqlScalarType::Map(Box::new(MapType {
                     value_type: Box::new(value_type),
                     custom_id: None,
-                },
+                })),
             ),
         ],
     );
@@ -4986,7 +4986,7 @@ fn plan_array(
     // semantics.
     if matches!(
         elem_type,
-        SqlScalarType::Char { .. } | SqlScalarType::List { .. } | SqlScalarType::Map { .. }
+        SqlScalarType::Char { .. } | SqlScalarType::List { .. } | SqlScalarType::Map(..)
     ) {
         bail_unsupported!(format!("{}[]", ecx.humanize_scalar_type(&elem_type, false)));
     }
@@ -5049,14 +5049,14 @@ fn plan_map(
     type_hint: Option<&SqlScalarType>,
 ) -> Result<CoercibleScalarExpr, PlanError> {
     let (value_type, exprs) = if entries.is_empty() {
-        if let Some(SqlScalarType::Map { value_type, .. }) = type_hint {
-            (value_type.without_modifiers(), vec![])
+        if let Some(SqlScalarType::Map(map_type)) = type_hint {
+            (map_type.value_type.without_modifiers(), vec![])
         } else {
             sql_bail!("cannot determine type of empty map");
         }
     } else {
         let type_hint = match type_hint {
-            Some(SqlScalarType::Map { value_type, .. }) => Some(&**value_type),
+            Some(SqlScalarType::Map(map_type)) => Some(&*map_type.value_type),
             _ => None,
         };
 
@@ -6064,10 +6064,10 @@ pub fn scalar_type_from_sql(
                     scx.humanize_scalar_type(&other, false)
                 ),
             }
-            Ok(SqlScalarType::Map {
+            Ok(SqlScalarType::Map(Box::new(MapType {
                 value_type: Box::new(scalar_type_from_sql(scx, value_type)?),
                 custom_id: None,
-            })
+            })))
         }
         ResolvedDataType::Named { id, modifiers, .. } => {
             scalar_type_from_catalog(scx.catalog, *id, modifiers)
@@ -6200,14 +6200,14 @@ pub fn scalar_type_from_catalog(
                     key_modifiers: _,
                     value_reference: value_id,
                     value_modifiers,
-                } => Ok(SqlScalarType::Map {
+                } => Ok(SqlScalarType::Map(Box::new(MapType {
                     value_type: Box::new(scalar_type_from_catalog(
                         catalog,
                         *value_id,
                         value_modifiers,
                     )?),
                     custom_id: Some(id),
-                }),
+                }))),
                 CatalogType::Range {
                     element_reference: element_id,
                 } => Ok(SqlScalarType::Range {
@@ -6231,10 +6231,10 @@ pub fn scalar_type_from_catalog(
                             ))
                         })
                         .collect::<Result<Box<_>, PlanError>>()?;
-                    Ok(SqlScalarType::Record {
+                    Ok(SqlScalarType::Record(Box::new(RecordType {
                         fields: scalars,
                         custom_id: Some(id),
-                    })
+                    })))
                 }
                 CatalogType::AclItem => Ok(SqlScalarType::AclItem),
                 CatalogType::Bool => Ok(SqlScalarType::Bool),

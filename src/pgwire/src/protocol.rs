@@ -1441,7 +1441,7 @@ where
                                 ))
                                 .await;
                         }
-                        (Format::Binary, mz_repr::SqlScalarType::Map { .. }) => {
+                        (Format::Binary, mz_repr::SqlScalarType::Map(..)) => {
                             return self
                                 .send_error_and_get_state(ErrorResponse::error(
                                     SqlState::PROTOCOL_VIOLATION,

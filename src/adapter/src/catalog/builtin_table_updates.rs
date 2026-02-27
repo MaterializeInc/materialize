@@ -855,19 +855,17 @@ impl CatalogState {
                     .map(|d| Datum::String(d))
                     .unwrap_or(Datum::Null);
                 let pgtype = mz_pgrepr::Type::from(&column_type.scalar_type);
-                let (type_name, type_oid) = match &column_type.scalar_type {
+                let custom_id = match &column_type.scalar_type {
                     SqlScalarType::List {
                         custom_id: Some(custom_id),
                         ..
-                    }
-                    | SqlScalarType::Map {
-                        custom_id: Some(custom_id),
-                        ..
-                    }
-                    | SqlScalarType::Record {
-                        custom_id: Some(custom_id),
-                        ..
-                    } => {
+                    } => Some(custom_id),
+                    SqlScalarType::Map(map_type) => map_type.custom_id.as_ref(),
+                    SqlScalarType::Record(record) => record.custom_id.as_ref(),
+                    _ => None,
+                };
+                let (type_name, type_oid) = match custom_id {
+                    Some(custom_id) => {
                         let entry = self.get_entry(custom_id);
                         // NOTE(benesch): the `mz_columns.type text` field is
                         // wrong. Types do not have a name that can be
@@ -887,7 +885,7 @@ impl CatalogState {
                         let oid = entry.oid();
                         (name, oid)
                     }
-                    _ => (pgtype.name(), pgtype.oid()),
+                    None => (pgtype.name(), pgtype.oid()),
                 };
                 updates.push(BuiltinTableUpdate::row(
                     &*MZ_COLUMNS,

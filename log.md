@@ -587,3 +587,82 @@ All query types work correctly with no performance regression:
 |------|----------|-----------------|------------------|---------------|
 | MirScalarExpr | 88 | 72 | 56 | 32 bytes (36%) |
 | AggregateExpr | 184 | 168 | 112 | 72 bytes (39%) |
+
+## Session 11: Shrink SqlScalarType from 32 to 24 bytes via boxing Record and Map variants
+
+**Date:** 2026-02-27
+
+### Changes
+
+Box the `Record` and `Map` variants of `SqlScalarType` to enable niche optimization:
+
+1. **`Record { fields: Box<[(ColumnName, SqlColumnType)]>, custom_id: Option<CatalogItemId> }` → `Record(Box<RecordType>)`**
+   - Introduced `RecordType` struct with `fields` and `custom_id`
+   - Record variant was the largest at 32 bytes (16 + 16); boxing reduces to 8 bytes
+
+2. **`Map { value_type: Box<SqlScalarType>, custom_id: Option<CatalogItemId> }` → `Map(Box<MapType>)`**
+   - Introduced `MapType` struct with `value_type` and `custom_id`
+   - Map variant was 24 bytes (8 + 16); boxing reduces to 8 bytes
+
+### Key insight: niche optimization requires a unique largest variant
+
+The `List` variant contains `Option<CatalogItemId>`, which provides 251 spare niche values from `CatalogItemId`'s discriminant byte (4 of 256 values used, minus 1 for `Option::None`). The Rust compiler can store the outer `SqlScalarType` discriminant in one of these niches, avoiding an extra 8-byte discriminant+padding.
+
+However, this only works when **exactly one variant** occupies the maximum size at the niche byte position. With both `List` and `Map` having `Option<CatalogItemId>` at the same offset, the compiler cannot distinguish between them using the niche byte alone, so it falls back to adding an explicit discriminant — wasting 8 bytes.
+
+Boxing `Map` (and `Record`) ensures `List` is the sole 24-byte variant with the niche field, enabling the optimization. This was verified experimentally: a test enum with 2 niche-bearing variants was 32 bytes, but the same enum with 1 niche variant + 1 boxed was 24 bytes.
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| SqlScalarType | 32 | 24 | 8 bytes (25%) |
+| SqlColumnType | 40 | 32 | 8 bytes (20%) |
+
+### Cascading effects
+
+- **SqlColumnType** embeds `SqlScalarType` inline, shrinking from 40 to 32 bytes
+- **SqlRelationType** contains `Box<[(ColumnName, SqlColumnType)]>` — each element on the heap saves 8 bytes
+- `SqlScalarType` is pervasive: it appears in every column type, relation type, function signature, and plan node
+- Every `Box<SqlScalarType>` allocation (used in `List`, `Array`, `Range`) is now 24 instead of 32 bytes
+- Record and Map types are relatively uncommon compared to primitive scalar types, so the extra Box indirection on access has minimal impact
+
+### Benchmark results
+
+All query types work correctly with no regression:
+
+| Query Type | Avg Time | Notes |
+|-----------|----------|-------|
+| 18-column SELECT (varied types) | ~3.5ms | Exercises SqlScalarType allocation |
+| jsonb operations | ~0.7ms | Exercises type inference |
+
+### Files changed (~25 files)
+
+- `src/repr/src/scalar.rs` — RecordType/MapType structs, variant changes, proto, arbitrary, methods, size assertions
+- `src/repr/src/lib.rs` — Export RecordType, MapType
+- `src/repr/src/relation.rs` — sql_union Record matching
+- `src/repr/src/row/encode.rs` — Record/Map encoding/decoding
+- `src/repr/src/stats.rs` — Map wildcard pattern
+- `src/arrow-util/src/builder.rs` — Record/Map arrow conversion
+- `src/arrow-util/src/reader.rs` — Record arrow reader
+- `src/pgrepr/src/types.rs` — Record/Map PG type conversion
+- `src/pgrepr/src/value.rs` — Record/Map value conversion
+- `src/pgwire/src/protocol.rs` — Map binary encoding guard
+- `src/sql/src/func.rs` — Record/Map function categories
+- `src/sql/src/plan/query.rs` — Record/Map construction/matching (~8 sites)
+- `src/sql/src/plan/hir.rs` — MapAgg return type
+- `src/sql/src/plan/statement/ddl.rs` — Map type construction
+- `src/sql/src/plan/typeconv.rs` — Record/Map conversions
+- `src/expr/src/scalar/func.rs` — Record/Map stringify
+- `src/expr/src/scalar/func/impls/map.rs` — MapGetValue return type
+- `src/expr/src/scalar/func/impls/record.rs` — RecordGet return type
+- `src/expr/src/scalar/func/impls/string.rs` — Map wildcard pattern
+- `src/expr/src/scalar/func/variadic.rs` — MapBuild return type
+- `src/expr/src/scalar/func/unmaterializable.rs` — Map type construction
+- `src/expr/src/relation/func.rs` — MapAgg return type
+- `src/interchange/src/json.rs` — Record/Map JSON conversion
+- `src/interchange/src/avro/encode.rs` — Map avro encoding
+- `src/interchange/src/avro/schema.rs` — Map avro schema
+- `src/adapter/src/catalog.rs` — Record/Map humanization
+- `src/adapter/src/catalog/builtin_table_updates.rs` — Map custom_id extraction
+- `src/storage-types/src/sources/envelope.rs` — Record construction

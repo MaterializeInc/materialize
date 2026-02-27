@@ -322,11 +322,8 @@ fn scalar_to_arrow_datatype(
             let field = field_with_typename("item", inner_type, true, &inner_name);
             (DataType::List(field.into()), "list")
         }
-        SqlScalarType::Map {
-            value_type,
-            custom_id: _,
-        } => {
-            let (value_type, value_name) = scalar_to_arrow_datatype(value_type)?;
+        SqlScalarType::Map(map_type) => {
+            let (value_type, value_name) = scalar_to_arrow_datatype(&map_type.value_type)?;
             // Arrow maps are represented as an 'entries' struct with 'keys' and 'values' fields.
             let field_names = MapFieldNames::default();
             let struct_type = DataType::Struct(
@@ -344,14 +341,11 @@ fn scalar_to_arrow_datatype(
                 "map",
             )
         }
-        SqlScalarType::Record {
-            fields,
-            custom_id: _,
-        } => {
+        SqlScalarType::Record(record) => {
             // Records are represented as Arrow Structs with one field per record field.
             // At runtime, records are stored as Datum::List with field values in order.
-            let mut arrow_fields = Vec::with_capacity(fields.len());
-            for (field_name, field_type) in fields.iter() {
+            let mut arrow_fields = Vec::with_capacity(record.fields.len());
+            for (field_name, field_type) in record.fields.iter() {
                 let (inner_type, inner_extension_name) =
                     scalar_to_arrow_datatype(&field_type.scalar_type)?;
                 let field = field_with_typename(

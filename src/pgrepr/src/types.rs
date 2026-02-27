@@ -12,7 +12,7 @@ use std::fmt;
 use std::mem::size_of;
 use std::sync::LazyLock;
 
-use mz_repr::SqlScalarType;
+use mz_repr::{MapType, RecordType, SqlScalarType};
 use mz_repr::adt::char::{CharLength as AdtCharLength, InvalidCharLengthError};
 use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
 use mz_repr::adt::numeric::{
@@ -1027,10 +1027,10 @@ impl TryFrom<&Type> for SqlScalarType {
                 element_type: Box::new(TryFrom::try_from(&**t)?),
                 custom_id: None,
             }),
-            Type::Map { value_type } => Ok(SqlScalarType::Map {
+            Type::Map { value_type } => Ok(SqlScalarType::Map(Box::new(MapType {
                 value_type: Box::new(TryFrom::try_from(&**value_type)?),
                 custom_id: None,
-            }),
+            }))),
             Type::Name => Ok(SqlScalarType::PgLegacyName),
             Type::Numeric { constraints } => {
                 let max_scale = match constraints {
@@ -1054,10 +1054,10 @@ impl TryFrom<&Type> for SqlScalarType {
                 Ok(SqlScalarType::Numeric { max_scale })
             }
             Type::Oid => Ok(SqlScalarType::Oid),
-            Type::Record(_) => Ok(SqlScalarType::Record {
+            Type::Record(_) => Ok(SqlScalarType::Record(Box::new(RecordType {
                 fields: [].into(),
                 custom_id: None,
-            }),
+            }))),
             Type::Text => Ok(SqlScalarType::String),
             Type::Time { precision: None } => Ok(SqlScalarType::Time),
             Type::Time { precision: Some(_) } => {
@@ -1228,13 +1228,13 @@ impl From<&SqlScalarType> for Type {
             SqlScalarType::List { element_type, .. } => {
                 Type::List(Box::new(From::from(&**element_type)))
             }
-            SqlScalarType::Map { value_type, .. } => Type::Map {
-                value_type: Box::new(From::from(&**value_type)),
+            SqlScalarType::Map(map_type) => Type::Map {
+                value_type: Box::new(From::from(&*map_type.value_type)),
             },
             SqlScalarType::PgLegacyName => Type::Name,
             SqlScalarType::Oid => Type::Oid,
-            SqlScalarType::Record { fields, .. } => Type::Record(
-                fields
+            SqlScalarType::Record(record) => Type::Record(
+                record.fields
                     .iter()
                     .map(|(_name, ty)| Type::from(&ty.scalar_type))
                     .collect(),

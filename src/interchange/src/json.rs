@@ -192,9 +192,9 @@ impl ToJson for TypedDatum<'_> {
                     .collect();
                 serde_json::Value::Array(values)
             }
-            SqlScalarType::Record { fields, .. } => {
+            SqlScalarType::Record(record) => {
                 let list = datum.unwrap_list();
-                let fields: Map<String, serde_json::Value> = fields
+                let fields: Map<String, serde_json::Value> = record.fields
                     .iter()
                     .zip_eq(list)
                     .map(|((name, typ), datum)| {
@@ -206,7 +206,7 @@ impl ToJson for TypedDatum<'_> {
                     .collect();
                 fields.into()
             }
-            SqlScalarType::Map { value_type, .. } => {
+            SqlScalarType::Map(map_type) => {
                 let map = datum.unwrap_map();
                 let elements = map
                     .into_iter()
@@ -215,7 +215,7 @@ impl ToJson for TypedDatum<'_> {
                             datum,
                             &SqlColumnType {
                                 nullable: true,
-                                scalar_type: (**value_type).clone(),
+                                scalar_type: (*map_type.value_type).clone(),
                             },
                         )
                         .json(number_policy);
@@ -336,13 +336,13 @@ fn build_row_schema_field_type(
                 "items": inner
             })
         }
-        SqlScalarType::Map { value_type, .. } => {
+        SqlScalarType::Map(map_type) => {
             let inner = build_row_schema_field_type(
                 type_namer,
                 custom_names,
                 &SqlColumnType {
                     nullable: true,
-                    scalar_type: (**value_type).clone(),
+                    scalar_type: (*map_type.value_type).clone(),
                 },
                 item_id,
                 options,
@@ -352,21 +352,19 @@ fn build_row_schema_field_type(
                 "values": inner
             })
         }
-        SqlScalarType::Record {
-            fields, custom_id, ..
-        } => {
-            let (name, name_seen) = match custom_id.as_ref().and_then(|id| custom_names.get(id)) {
+        SqlScalarType::Record(record) => {
+            let (name, name_seen) = match record.custom_id.as_ref().and_then(|id| custom_names.get(id)) {
                 Some(name) => type_namer.valid_name(name),
                 None => (type_namer.anonymous_record_name(), false),
             };
             if name_seen {
                 json!(name)
             } else {
-                let fields = fields.to_vec();
+                let fields = record.fields.to_vec();
                 let json_fields =
-                    build_row_schema_fields(&fields, type_namer, custom_names, *custom_id, options);
+                    build_row_schema_fields(&fields, type_namer, custom_names, record.custom_id, options);
                 if let Some(comment) =
-                    custom_id.and_then(|id| options.doc_comments.get(&DocTarget::Type(id)))
+                    record.custom_id.and_then(|id| options.doc_comments.get(&DocTarget::Type(id)))
                 {
                     json!({
                         "type": "record",

@@ -1646,12 +1646,12 @@ impl ExprHumanizer for ConnCatalog<'_> {
             List {
                 custom_id: Some(item_id),
                 ..
-            }
-            | Map {
-                custom_id: Some(item_id),
-                ..
             } => {
                 let item = self.get_item(item_id);
+                self.minimal_qualification(item.name()).to_string()
+            }
+            Map(map_type) if map_type.custom_id.is_some() => {
+                let item = self.get_item(map_type.custom_id.as_ref().unwrap());
                 self.minimal_qualification(item.name()).to_string()
             }
             List { element_type, .. } => {
@@ -1660,21 +1660,18 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     self.humanize_sql_scalar_type(element_type, postgres_compat)
                 )
             }
-            Map { value_type, .. } => format!(
+            Map(map_type) => format!(
                 "map[{}=>{}]",
                 self.humanize_sql_scalar_type(&SqlScalarType::String, postgres_compat),
-                self.humanize_sql_scalar_type(value_type, postgres_compat)
+                self.humanize_sql_scalar_type(&map_type.value_type, postgres_compat)
             ),
-            Record {
-                custom_id: Some(item_id),
-                ..
-            } => {
-                let item = self.get_item(item_id);
+            Record(record) if record.custom_id.is_some() => {
+                let item = self.get_item(record.custom_id.as_ref().unwrap());
                 self.minimal_qualification(item.name()).to_string()
             }
-            Record { fields, .. } => format!(
+            Record(record) => format!(
                 "record({})",
-                fields
+                record.fields
                     .iter()
                     .map(|f| format!(
                         "{}: {}",
@@ -3583,7 +3580,7 @@ mod tests {
                         | typ @ SqlScalarType::UInt64
                         | typ @ SqlScalarType::MzTimestamp
                         | typ @ SqlScalarType::List { .. }
-                        | typ @ SqlScalarType::Map { .. }
+                        | typ @ SqlScalarType::Map(..)
                         | typ @ SqlScalarType::MzAclItem => {
                             panic!("{typ:?} type found in {full_name}");
                         }
@@ -3608,7 +3605,7 @@ mod tests {
                         | SqlScalarType::Jsonb
                         | SqlScalarType::Uuid
                         | SqlScalarType::Array(_)
-                        | SqlScalarType::Record { .. }
+                        | SqlScalarType::Record(..)
                         | SqlScalarType::Oid
                         | SqlScalarType::RegProc
                         | SqlScalarType::RegType

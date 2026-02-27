@@ -106,7 +106,7 @@ pub fn preserves_order(scalar_type: &SqlScalarType) -> bool {
         | SqlScalarType::MzAclItem
         | SqlScalarType::AclItem => true,
         // We sort records lexicographically; a record has a meaningful sort if all its fields do.
-        SqlScalarType::Record { fields, .. } => fields
+        SqlScalarType::Record(record) => record.fields
             .iter()
             .all(|(_, field_type)| preserves_order(&field_type.scalar_type)),
         // Our floating-point encoding preserves order generally, but differs when comparing
@@ -125,7 +125,7 @@ pub fn preserves_order(scalar_type: &SqlScalarType) -> bool {
         | SqlScalarType::Array(_)
         | SqlScalarType::List { .. }
         | SqlScalarType::Oid
-        | SqlScalarType::Map { .. }
+        | SqlScalarType::Map(..)
         | SqlScalarType::RegProc
         | SqlScalarType::RegType
         | SqlScalarType::RegClass
@@ -1695,10 +1695,10 @@ fn array_to_decoder(
                 nulls: array.nulls().cloned(),
             }
         }
-        (DataType::Map(_, true), SqlScalarType::Map { value_type, .. }) => {
+        (DataType::Map(_, true), SqlScalarType::Map(map_type)) => {
             let array = downcast_array::<MapArray>(array)?;
             let keys = downcast_array::<StringArray>(array.keys())?;
-            let vals = array_to_decoder(array.values(), value_type)?;
+            let vals = array_to_decoder(array.values(), &map_type.value_type)?;
             DatumColumnDecoder::Map {
                 offsets: array.offsets().clone(),
                 keys: keys.clone(),
@@ -1706,12 +1706,12 @@ fn array_to_decoder(
                 nulls: array.nulls().cloned(),
             }
         }
-        (DataType::List(_), SqlScalarType::Map { value_type, .. }) => {
+        (DataType::List(_), SqlScalarType::Map(map_type)) => {
             let array: &ListArray = downcast_array(array)?;
             let entries: &StructArray = downcast_array(array.values())?;
             let [keys, values]: &[ArrayRef; 2] = entries.columns().try_into()?;
             let keys: &StringArray = downcast_array(keys)?;
-            let vals: DatumColumnDecoder = array_to_decoder(values, value_type)?;
+            let vals: DatumColumnDecoder = array_to_decoder(values, &map_type.value_type)?;
             DatumColumnDecoder::Map {
                 offsets: array.offsets().clone(),
                 keys: keys.clone(),
@@ -1719,15 +1719,15 @@ fn array_to_decoder(
                 nulls: array.nulls().cloned(),
             }
         }
-        (DataType::Boolean, SqlScalarType::Record { fields, .. }) if fields.is_empty() => {
+        (DataType::Boolean, SqlScalarType::Record(record)) if record.fields.is_empty() => {
             let empty_record_array = downcast_array::<BooleanArray>(array)?;
             DatumColumnDecoder::RecordEmpty(empty_record_array.clone())
         }
-        (DataType::Struct(_), SqlScalarType::Record { fields, .. }) => {
+        (DataType::Struct(_), SqlScalarType::Record(record)) => {
             let record_array = downcast_array::<StructArray>(array)?;
             let null_mask = record_array.nulls();
-            let mut decoders = Vec::with_capacity(fields.len());
-            for (tag, (_name, col_type)) in fields.iter().enumerate() {
+            let mut decoders = Vec::with_capacity(record.fields.len());
+            for (tag, (_name, col_type)) in record.fields.iter().enumerate() {
                 let inner_array = record_array
                     .column_by_name(&tag.to_string())
                     .ok_or_else(|| anyhow::anyhow!("no column named '{tag}'"))?;
@@ -1828,8 +1828,8 @@ fn scalar_type_to_encoder(col_ty: &SqlScalarType) -> Result<DatumColumnEncoder, 
                 nulls: None,
             }
         }
-        SqlScalarType::Map { value_type, .. } => {
-            let inner = scalar_type_to_encoder(&*value_type)?;
+        SqlScalarType::Map(map_type) => {
+            let inner = scalar_type_to_encoder(&map_type.value_type)?;
             DatumColumnEncoder::Map {
                 lengths: Vec::new(),
                 keys: StringBuilder::new(),
@@ -1837,11 +1837,11 @@ fn scalar_type_to_encoder(col_ty: &SqlScalarType) -> Result<DatumColumnEncoder, 
                 nulls: None,
             }
         }
-        SqlScalarType::Record { fields, .. } if fields.is_empty() => {
+        SqlScalarType::Record(record) if record.fields.is_empty() => {
             DatumColumnEncoder::RecordEmpty(BooleanBuilder::new())
         }
-        SqlScalarType::Record { fields, .. } => {
-            let encoders = fields
+        SqlScalarType::Record(record) => {
+            let encoders = record.fields
                 .iter()
                 .map(|(_name, ty)| {
                     scalar_type_to_encoder(&ty.scalar_type).map(|e| DatumEncoder {
@@ -2234,6 +2234,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::MapType;
     use crate::adt::array::ArrayDimension;
     use crate::adt::interval::Interval;
     use crate::adt::numeric::Numeric;
@@ -2241,7 +2242,7 @@ mod tests {
     use crate::fixed_length::ToDatumIter;
     use crate::relation::arb_relation_desc;
     use crate::{ColumnName, RowArena, SqlColumnType, arb_datum_for_column, arb_row_for_relation};
-    use crate::{Datum, RelationDesc, Row, SqlScalarType};
+    use crate::{Datum, RecordType, RelationDesc, Row, SqlScalarType};
 
     #[track_caller]
     fn roundtrip_datum<'a>(
@@ -2323,9 +2324,9 @@ mod tests {
                         | SqlScalarType::MzAclItem
                         | SqlScalarType::Range { .. }
                         | SqlScalarType::Array(_)
-                        | SqlScalarType::Map { .. }
+                        | SqlScalarType::Map(..)
                         | SqlScalarType::List { .. }
-                        | SqlScalarType::Record { .. }
+                        | SqlScalarType::Record(..)
                         | SqlScalarType::Int2Vector => (),
                         other => panic!("should have collected stats for {other:?}"),
                     }
@@ -2500,10 +2501,10 @@ mod tests {
             )
             .with_column(
                 "e",
-                SqlScalarType::Map {
+                SqlScalarType::Map(Box::new(MapType {
                     value_type: Box::new(SqlScalarType::Int16),
                     custom_id: None,
-                }
+                }))
                 .nullable(true),
             )
             .finish();
@@ -2585,7 +2586,7 @@ mod tests {
         let desc = RelationDesc::builder()
             .with_column(
                 "a",
-                SqlScalarType::Record {
+                SqlScalarType::Record(Box::new(RecordType {
                     fields: [
                         (
                             ColumnName::from("foo"),
@@ -2606,7 +2607,7 @@ mod tests {
                     ]
                     .into(),
                     custom_id: None,
-                }
+                }))
                 .nullable(true),
             )
             .finish();

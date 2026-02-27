@@ -30,8 +30,8 @@ use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::regex::{Regex as ReprRegex, RegexCompilationError};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::{
-    ColumnName, Datum, Diff, ReprColumnType, ReprRelationType, Row, RowArena, RowPacker, SharedRow,
-    SqlColumnType, SqlRelationType, SqlScalarType, datum_size,
+    ColumnName, Datum, Diff, MapType, RecordType, ReprColumnType, ReprRelationType, Row, RowArena,
+    RowPacker, SharedRow, SqlColumnType, SqlRelationType, SqlScalarType, datum_size,
 };
 use num::{CheckedAdd, Integer, Signed, ToPrimitive};
 use ordered_float::OrderedFloat;
@@ -2341,14 +2341,14 @@ impl AggregateFunc {
             AggregateFunc::SumUInt64 => SqlScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::ZERO),
             },
-            AggregateFunc::MapAgg { value_type, .. } => SqlScalarType::Map {
+            AggregateFunc::MapAgg { value_type, .. } => SqlScalarType::Map(Box::new(MapType {
                 value_type: Box::new(value_type.clone()),
                 custom_id: None,
-            },
+            })),
             AggregateFunc::ArrayConcat { .. } | AggregateFunc::ListConcat { .. } => {
                 match input_type.scalar_type {
                     // The input is wrapped in a Record if there's an ORDER BY, so extract it out.
-                    SqlScalarType::Record { ref fields, .. } => fields[0].1.scalar_type.clone(),
+                    SqlScalarType::Record(ref record) => record.fields[0].1.scalar_type.clone(),
                     _ => unreachable!(),
                 }
             }
@@ -2374,13 +2374,13 @@ impl AggregateFunc {
                 let column_name = Self::lag_lead_result_column_name(lag_lead_type);
 
                 SqlScalarType::List {
-                    element_type: Box::new(SqlScalarType::Record {
+                    element_type: Box::new(SqlScalarType::Record(Box::new(RecordType {
                         fields: [
                             (column_name, output_type_inner),
                             (ColumnName::from("?orig_row?"), original_row_type),
                         ].into(),
                         custom_id: None,
-                    }),
+                    }))),
                     custom_id: None,
                 }
             }
@@ -2395,13 +2395,13 @@ impl AggregateFunc {
                     .nullable(true); // null when the partition is empty
 
                 SqlScalarType::List {
-                    element_type: Box::new(SqlScalarType::Record {
+                    element_type: Box::new(SqlScalarType::Record(Box::new(RecordType {
                         fields: [
                             (ColumnName::from("?first_value?"), value_type),
                             (ColumnName::from("?orig_row?"), original_row_type),
                         ].into(),
                         custom_id: None,
-                    }),
+                    }))),
                     custom_id: None,
                 }
             }
@@ -2416,13 +2416,13 @@ impl AggregateFunc {
                     .nullable(true); // null when the partition is empty
 
                 SqlScalarType::List {
-                    element_type: Box::new(SqlScalarType::Record {
+                    element_type: Box::new(SqlScalarType::Record(Box::new(RecordType {
                         fields: [
                             (ColumnName::from("?last_value?"), value_type),
                             (ColumnName::from("?orig_row?"), original_row_type),
                         ].into(),
                         custom_id: None,
-                    }),
+                    }))),
                     custom_id: None,
                 }
             }
@@ -2440,13 +2440,13 @@ impl AggregateFunc {
                 let wrapped_aggr_out_type = wrapped_aggregate.output_sql_type(arg_type);
 
                 SqlScalarType::List {
-                    element_type: Box::new(SqlScalarType::Record {
+                    element_type: Box::new(SqlScalarType::Record(Box::new(RecordType {
                         fields: [
                             (ColumnName::from("?window_agg?"), wrapped_aggr_out_type),
                             (ColumnName::from("?orig_row?"), original_row_type),
                         ].into(),
                         custom_id: None,
-                    }),
+                    }))),
                     custom_id: None,
                 }
             }
@@ -2470,16 +2470,16 @@ impl AggregateFunc {
                 }).collect_vec();
 
                 SqlScalarType::List {
-                    element_type: Box::new(SqlScalarType::Record {
+                    element_type: Box::new(SqlScalarType::Record(Box::new(RecordType {
                         fields: [
-                            (ColumnName::from("?fused_window_agg?"), SqlScalarType::Record {
+                            (ColumnName::from("?fused_window_agg?"), SqlScalarType::Record(Box::new(RecordType {
                                 fields: out_fields.into(),
                                 custom_id: None,
-                            }.nullable(false)),
+                            })).nullable(false)),
                             (ColumnName::from("?orig_row?"), original_row_type),
                         ].into(),
                         custom_id: None,
-                    }),
+                    }))),
                     custom_id: None,
                 }
             }
@@ -2497,11 +2497,11 @@ impl AggregateFunc {
                     .unwrap_record_element_type();
 
                 SqlScalarType::List {
-                    element_type: Box::new(SqlScalarType::Record {
+                    element_type: Box::new(SqlScalarType::Record(Box::new(RecordType {
                         fields: [
                             (
                                 ColumnName::from("?fused_value_window_func?"),
-                                SqlScalarType::Record {
+                                SqlScalarType::Record(Box::new(RecordType {
                                 fields: encoded_args_type.into_iter().zip_eq(funcs).map(
                                     |(arg_type, func)| {
                                     match func {
@@ -2533,11 +2533,11 @@ impl AggregateFunc {
                                     }
                                 }).collect(),
                                 custom_id: None,
-                            }.nullable(false)),
+                            })).nullable(false)),
                             (ColumnName::from("?orig_row?"), original_row_type),
                         ].into(),
                         custom_id: None,
-                    }),
+                    }))),
                     custom_id: None,
                 }
             }
@@ -2590,9 +2590,9 @@ impl AggregateFunc {
             // Use the nullability of the underlying column being aggregated, not the Records wrapping it
             AggregateFunc::StringAgg { .. } => match input_type.scalar_type {
                 // The outer Record wraps the input in the first position, and any ORDER BY expressions afterwards
-                SqlScalarType::Record { fields, .. } => match &fields[0].1.scalar_type {
+                SqlScalarType::Record(record) => match &record.fields[0].1.scalar_type {
                     // The inner Record is a (value, separator) tuple
-                    SqlScalarType::Record { fields, .. } => fields[0].1.nullable,
+                    SqlScalarType::Record(record) => record.fields[0].1.nullable,
                     _ => unreachable!(),
                 },
                 _ => unreachable!(),
@@ -2615,15 +2615,15 @@ impl AggregateFunc {
         col_name: &str,
     ) -> SqlScalarType {
         match input_type.scalar_type {
-            SqlScalarType::Record { ref fields, .. } => SqlScalarType::List {
-                element_type: Box::new(SqlScalarType::Record {
+            SqlScalarType::Record(ref record) => SqlScalarType::List {
+                element_type: Box::new(SqlScalarType::Record(Box::new(RecordType {
                     fields: [
                         (
                             ColumnName::from(col_name),
                             SqlScalarType::Int64.nullable(false),
                         ),
                         (ColumnName::from("?orig_row?"), {
-                            let inner = match &fields[0].1.scalar_type {
+                            let inner = match &record.fields[0].1.scalar_type {
                                 SqlScalarType::List { element_type, .. } => element_type.clone(),
                                 _ => unreachable!(),
                             };
@@ -2632,7 +2632,7 @@ impl AggregateFunc {
                     ]
                     .into(),
                     custom_id: None,
-                }),
+                }))),
                 custom_id: None,
             },
             _ => unreachable!(),

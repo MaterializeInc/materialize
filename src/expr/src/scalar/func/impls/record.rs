@@ -185,8 +185,8 @@ impl LazyUnaryFunc for RecordGet {
 
     fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         match input_type.scalar_type {
-            SqlScalarType::Record { fields, .. } => {
-                let (_name, ty) = &fields[self.0];
+            SqlScalarType::Record(record) => {
+                let (_name, ty) = &record.fields[self.0];
                 let mut ty = ty.clone();
                 ty.nullable = ty.nullable || input_type.nullable;
                 ty

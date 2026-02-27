@@ -41,8 +41,8 @@ use mz_repr::adt::range::Range;
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::{
-    ArrayRustType, Datum, DatumList, DatumMap, ExcludeNull, InputDatumType, Row, RowArena,
-    SqlScalarType, strconv,
+    ArrayRustType, Datum, DatumList, DatumMap, ExcludeNull, InputDatumType, RecordType, Row,
+    RowArena, SqlScalarType, strconv,
 };
 use mz_sql_parser::ast::display::FormatMode;
 use mz_sql_pretty::{PrettyConfig, pretty_str};
@@ -2178,14 +2178,14 @@ fn timezone_interval_timestamp_tz_binary(
 }
 
 #[sqlfunc(
-    output_type_expr = r#"SqlScalarType::Record {
+    output_type_expr = r#"SqlScalarType::Record(Box::new(RecordType {
                 fields: [
                     ("abbrev".into(), SqlScalarType::String.nullable(false)),
                     ("base_utc_offset".into(), SqlScalarType::Interval.nullable(false)),
                     ("dst_offset".into(), SqlScalarType::Interval.nullable(false)),
                 ].into(),
                 custom_id: None,
-            }.nullable(true)"#,
+            })).nullable(true)"#,
     propagates_nulls = true,
     introduces_nulls = false
 )]
@@ -2547,8 +2547,8 @@ where
         }
         Jsonb => Ok(strconv::format_jsonb(buf, JsonbRef::from_datum(d))),
         Uuid => Ok(strconv::format_uuid(buf, d.unwrap_uuid())),
-        Record { fields, .. } => {
-            let mut fields = fields.iter();
+        Record(record) => {
+            let mut fields = record.fields.iter();
             strconv::format_record(buf, d.unwrap_list(), |buf, d| {
                 let (_name, ty) = fields.next().unwrap();
                 if d.is_null() {
@@ -2577,11 +2577,11 @@ where
                 stringify_datum(buf.nonnull_buffer(), d, element_type)
             }
         }),
-        Map { value_type, .. } => strconv::format_map(buf, &d.unwrap_map(), |buf, d| {
+        Map(map_type) => strconv::format_map(buf, &d.unwrap_map(), |buf, d| {
             if d.is_null() {
                 Ok(buf.write_null())
             } else {
-                stringify_datum(buf.nonnull_buffer(), d, value_type)
+                stringify_datum(buf.nonnull_buffer(), d, &map_type.value_type)
             }
         }),
         Int2Vector => strconv::format_legacy_vector(buf, d.unwrap_array().elements(), |buf, d| {

@@ -22,7 +22,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_pgrepr::oid;
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnName, Datum, SqlRelationType, SqlScalarBaseType, SqlScalarType};
+use mz_repr::{ColumnName, Datum, MapType, SqlRelationType, SqlScalarBaseType, SqlScalarType};
 
 use crate::ast::{SelectStatement, Statement};
 use crate::catalog::{CatalogType, TypeCategory, TypeReference};
@@ -104,14 +104,14 @@ impl TypeCategory {
             | SqlScalarType::String
             | SqlScalarType::Char { .. }
             | SqlScalarType::VarChar { .. } => Self::String,
-            SqlScalarType::Record { custom_id, .. } => {
-                if custom_id.is_some() {
+            SqlScalarType::Record(record) => {
+                if record.custom_id.is_some() {
                     Self::Composite
                 } else {
                     Self::Pseudo
                 }
             }
-            SqlScalarType::Map { .. } => Self::Pseudo,
+            SqlScalarType::Map(..) => Self::Pseudo,
             SqlScalarType::MzTimestamp => Self::Numeric,
             SqlScalarType::Range { .. } => Self::Range,
         }
@@ -742,7 +742,7 @@ impl ParamType {
             Any | AnyElement | AnyCompatible | ListElementAnyCompatible => true,
             ArrayAny | ArrayAnyCompatible => matches!(t, Array(..) | Int2Vector),
             ListAny | ListAnyCompatible => matches!(t, List { .. }),
-            MapAny | MapAnyCompatible => matches!(t, Map { .. }),
+            MapAny | MapAnyCompatible => matches!(t, Map(..)),
             RangeAny | RangeAnyCompatible => matches!(t, Range { .. }),
             NonVecAny | NonVecAnyCompatible => !t.is_vec(),
             Internal => false,
@@ -1457,10 +1457,10 @@ impl PolymorphicSolution {
                         custom_id: None,
                         element_type: Box::new(SqlScalarType::String),
                     }),
-                    PolymorphicCompatClass::BestCommonMap => Some(SqlScalarType::Map {
+                    PolymorphicCompatClass::BestCommonMap => Some(SqlScalarType::Map(Box::new(MapType {
                         value_type: Box::new(SqlScalarType::String),
                         custom_id: None,
-                    }),
+                    }))),
                     // Do not infer type.
                     PolymorphicCompatClass::StructuralEq | PolymorphicCompatClass::Any => None,
                 },
@@ -1536,10 +1536,10 @@ impl PolymorphicSolution {
                 element_type: Box::new(key.clone()),
                 custom_id: None,
             }),
-            MapAny => self.key.as_ref().map(|key| SqlScalarType::Map {
+            MapAny => self.key.as_ref().map(|key| SqlScalarType::Map(Box::new(MapType {
                 value_type: Box::new(key.clone()),
                 custom_id: None,
-            }),
+            }))),
             RangeAny | RangeAnyCompatible => self.key.as_ref().map(|key| SqlScalarType::Range {
                 element_type: Box::new(key.clone()),
             }),
@@ -2577,7 +2577,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "mz_row_size" => Scalar {
             params!(Any) => Operation::unary(|ecx, e| {
                 let s = ecx.scalar_type(&e);
-                if !matches!(s, SqlScalarType::Record{..}) {
+                if !matches!(s, SqlScalarType::Record(..)) {
                     sql_bail!("mz_row_size requires a record type");
                 }
                 Ok(e.call_unary(UnaryFunc::MzRowSize(func::MzRowSize)))
@@ -4635,12 +4635,12 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 // (text, T).
                 let value_type = match &ty {
                     SqlScalarType::List { element_type, .. } => match &**element_type {
-                        SqlScalarType::Record { fields, .. } if fields.len() == 2 => {
-                            if fields[0].1.scalar_type != SqlScalarType::String {
+                        SqlScalarType::Record(record) if record.fields.len() == 2 => {
+                            if record.fields[0].1.scalar_type != SqlScalarType::String {
                                 return err();
                             }
 
-                            fields[1].1.scalar_type.clone()
+                            record.fields[1].1.scalar_type.clone()
                         }
                         _ => return err(),
                     },
@@ -5113,12 +5113,12 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
         },
         "mz_role_oid_memberships" => Scalar {
             params!() => UnmaterializableFunc::MzRoleOidMemberships
-                => SqlScalarType::Map {
+                => SqlScalarType::Map(Box::new(MapType {
                     value_type: Box::new(SqlScalarType::Array(
                         Box::new(SqlScalarType::String),
                     )),
                     custom_id: None,
-                }, oid::FUNC_MZ_ROLE_OID_MEMBERSHIPS;
+                })), oid::FUNC_MZ_ROLE_OID_MEMBERSHIPS;
         },
         // There is no regclass equivalent for databases to look up
         // oids, so we have this helper function instead.

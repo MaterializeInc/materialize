@@ -19,7 +19,8 @@ use itertools::{EitherOrBoth, Itertools};
 use maplit::btreemap;
 use mz_ore::cast::CastFrom;
 use mz_repr::{
-    CatalogItemId, ColumnName, Datum, Diff, Row, RowPacker, SqlColumnType, SqlScalarType,
+    CatalogItemId, ColumnName, Datum, Diff, RecordType, Row, RowPacker, SqlColumnType,
+    SqlScalarType,
 };
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
@@ -143,10 +144,10 @@ pub(crate) fn dbz_envelope(
 ) -> Vec<(ColumnName, SqlColumnType)> {
     let row = SqlColumnType {
         nullable: true,
-        scalar_type: SqlScalarType::Record {
+        scalar_type: SqlScalarType::Record(Box::new(RecordType {
             fields: names_and_types.into(),
             custom_id: Some(DBZ_ROW_TYPE_ID),
-        },
+        })),
     };
     vec![("before".into(), row.clone()), ("after".into(), row)]
 }

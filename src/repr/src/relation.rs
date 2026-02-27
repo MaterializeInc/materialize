@@ -30,7 +30,7 @@ pub use crate::relation_and_scalar::{
     ProtoColumnMetadata, ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType,
     ProtoRelationVersion,
 };
-use crate::{Datum, ReprScalarType, Row, SqlScalarType, arb_datum_for_column};
+use crate::{Datum, RecordType, ReprScalarType, Row, SqlScalarType, arb_datum_for_column};
 
 /// The type of a [`Datum`].
 ///
@@ -127,14 +127,8 @@ impl SqlColumnType {
                     nullable: self.nullable || other.nullable,
                 })
             }
-            (
-                SqlScalarType::Record { fields, custom_id },
-                SqlScalarType::Record {
-                    fields: other_fields,
-                    custom_id: other_custom_id,
-                },
-            ) => {
-                if custom_id != other_custom_id {
+            (SqlScalarType::Record(rec), SqlScalarType::Record(other_rec)) => {
+                if rec.custom_id != other_rec.custom_id {
                     bail!(
                         "Can't union types: {:?} and {:?}",
                         self.scalar_type,
@@ -142,16 +136,16 @@ impl SqlColumnType {
                     );
                 };
 
-                if fields.len() != other_fields.len() {
+                if rec.fields.len() != other_rec.fields.len() {
                     bail!(
                         "Can't union types: {:?} and {:?}",
                         self.scalar_type,
                         other.scalar_type
                     );
                 }
-                let mut union_fields = Vec::with_capacity(fields.len());
+                let mut union_fields = Vec::with_capacity(rec.fields.len());
                 for ((name, typ), (other_name, other_typ)) in
-                    fields.iter().zip_eq(other_fields.iter())
+                    rec.fields.iter().zip_eq(other_rec.fields.iter())
                 {
                     if name != other_name {
                         bail!(
@@ -166,10 +160,10 @@ impl SqlColumnType {
                 }
 
                 Ok(SqlColumnType {
-                    scalar_type: SqlScalarType::Record {
+                    scalar_type: SqlScalarType::Record(Box::new(RecordType {
                         fields: union_fields.into(),
-                        custom_id: *custom_id,
-                    },
+                        custom_id: rec.custom_id,
+                    })),
                     nullable: self.nullable || other.nullable,
                 })
             }

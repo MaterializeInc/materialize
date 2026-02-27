@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, anyhow, bail};
 use mz_ore::str::StrExt;
-use mz_repr::{ColumnName, Datum, Row, RowPacker, SqlColumnType, SqlScalarType};
+use mz_repr::{ColumnName, Datum, RecordType, Row, RowPacker, SqlColumnType, SqlScalarType};
 use prost_reflect::{
     Cardinality, DescriptorPool, DynamicMessage, FieldDescriptor, Kind, MessageDescriptor,
     ReflectMessage, Value,
@@ -160,10 +160,10 @@ fn derive_inner_type(
                 fields.push((column_name, column_type))
             }
             seen_messages.remove(m.name());
-            let ty = SqlScalarType::Record {
+            let ty = SqlScalarType::Record(Box::new(RecordType {
                 fields: fields.into(),
                 custom_id: None,
-            };
+            }));
             Ok(ty.nullable(true))
         }
     }

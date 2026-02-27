@@ -1215,19 +1215,19 @@ impl<'a> Datum<'a> {
                     (Datum::List(list), SqlScalarType::List { element_type, .. }) => list
                         .iter()
                         .all(|e| e.is_null() || is_instance_of_scalar(e, element_type)),
-                    (Datum::List(list), SqlScalarType::Record { fields, .. }) => {
-                        if list.iter().count() != fields.len() {
+                    (Datum::List(list), SqlScalarType::Record(record)) => {
+                        if list.iter().count() != record.fields.len() {
                             return false;
                         }
 
-                        list.iter().zip_eq(fields).all(|(e, (_, t))| {
+                        list.iter().zip_eq(record.fields.iter()).all(|(e, (_, t))| {
                             (e.is_null() && t.nullable) || is_instance_of_scalar(e, &t.scalar_type)
                         })
                     }
                     (Datum::List(_), _) => false,
-                    (Datum::Map(map), SqlScalarType::Map { value_type, .. }) => map
+                    (Datum::Map(map), SqlScalarType::Map(map_type)) => map
                         .iter()
-                        .all(|(_k, v)| v.is_null() || is_instance_of_scalar(v, value_type)),
+                        .all(|(_k, v)| v.is_null() || is_instance_of_scalar(v, &map_type.value_type)),
                     (Datum::Map(_), _) => false,
                     (Datum::JsonNull, _) => false,
                     (Datum::Numeric(_), SqlScalarType::Numeric { .. }) => true,
@@ -1592,6 +1592,50 @@ impl fmt::Display for Datum<'_> {
 /// The type of a [`Datum`].
 ///
 /// There is a direct correspondence between `Datum` variants and `SqlScalarType`
+/// The data for `SqlScalarType::Record`.
+///
+/// Boxed inside the enum variant to keep `SqlScalarType` small (24 bytes).
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Ord,
+    PartialOrd,
+    Hash,
+    MzReflect
+)]
+pub struct RecordType {
+    /// The names and types of the fields of the record, in order from left
+    /// to right.
+    pub fields: Box<[(ColumnName, SqlColumnType)]>,
+    pub custom_id: Option<CatalogItemId>,
+}
+
+/// Boxed data for the [`SqlScalarType::Map`] variant.
+///
+/// Keys within the map are always of type [`SqlScalarType::String`].
+/// Values within the map are of the specified type. Values may always
+/// be [`Datum::Null`].
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Ord,
+    PartialOrd,
+    Hash,
+    MzReflect
+)]
+pub struct MapType {
+    pub value_type: Box<SqlScalarType>,
+    pub custom_id: Option<CatalogItemId>,
+}
+
 /// variants.
 ///
 /// Each variant maps to a variant of [`ReprScalarType`], with some overlap.
@@ -1714,25 +1758,19 @@ pub enum SqlScalarType {
         custom_id: Option<CatalogItemId>,
     },
     /// An ordered and named sequence of datums.
-    Record {
-        /// The names and types of the fields of the record, in order from left
-        /// to right.
-        ///
-        /// Boxed slice to reduce the size of the enum variant.
-        fields: Box<[(ColumnName, SqlColumnType)]>,
-        custom_id: Option<CatalogItemId>,
-    },
+    ///
+    /// The entire variant data is boxed to keep the `SqlScalarType` enum small
+    /// (24 bytes instead of 32). Records are relatively rare compared to
+    /// primitive scalar types, and field access is not on the hot evaluation path.
+    Record(Box<RecordType>),
     /// A PostgreSQL object identifier.
     Oid,
     /// The type of [`Datum::Map`]
     ///
-    /// Keys within the map are always of type [`SqlScalarType::String`].
-    /// Values within the map are of the specified type. Values may always
-    /// be [`Datum::Null`].
-    Map {
-        value_type: Box<SqlScalarType>,
-        custom_id: Option<CatalogItemId>,
-    },
+    /// The entire variant data is boxed so that [`SqlScalarType::List`] is the
+    /// only variant with an `Option<CatalogItemId>` field, enabling niche
+    /// optimization to keep the enum at 24 bytes.
+    Map(Box<MapType>),
     /// A PostgreSQL function name.
     RegProc,
     /// A PostgreSQL type name.
@@ -1825,17 +1863,14 @@ impl RustType<ProtoScalarType> for SqlScalarType {
                     element_type: Some(element_type.into_proto()),
                     custom_id: custom_id.map(|id| id.into_proto()),
                 })),
-                SqlScalarType::Record { custom_id, fields } => Record(ProtoRecord {
-                    custom_id: custom_id.map(|id| id.into_proto()),
-                    fields: fields.into_proto(),
+                SqlScalarType::Record(record) => Record(ProtoRecord {
+                    custom_id: record.custom_id.map(|id| id.into_proto()),
+                    fields: record.fields.into_proto(),
                 }),
                 SqlScalarType::Array(typ) => Array(typ.into_proto()),
-                SqlScalarType::Map {
-                    value_type,
-                    custom_id,
-                } => Map(Box::new(ProtoMap {
-                    value_type: Some(value_type.into_proto()),
-                    custom_id: custom_id.map(|id| id.into_proto()),
+                SqlScalarType::Map(map_type) => Map(Box::new(ProtoMap {
+                    value_type: Some(map_type.value_type.into_proto()),
+                    custom_id: map_type.custom_id.map(|id| id.into_proto()),
                 })),
                 SqlScalarType::MzTimestamp => MzTimestamp(()),
                 SqlScalarType::Range { element_type } => Range(Box::new(ProtoRange {
@@ -1907,18 +1942,18 @@ impl RustType<ProtoScalarType> for SqlScalarType {
                 ),
                 custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
             }),
-            Record(x) => Ok(SqlScalarType::Record {
+            Record(x) => Ok(SqlScalarType::Record(Box::new(RecordType {
                 custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
                 fields: x.fields.into_rust()?,
-            }),
-            Map(x) => Ok(SqlScalarType::Map {
+            }))),
+            Map(x) => Ok(SqlScalarType::Map(Box::new(MapType {
                 value_type: Box::new(
                     x.value_type
                         .map(|x| *x)
                         .into_rust_if_some("ProtoMap::value_type")?,
                 ),
                 custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
-            }),
+            }))),
             MzTimestamp(()) => Ok(SqlScalarType::MzTimestamp),
             Range(x) => Ok(SqlScalarType::Range {
                 element_type: Box::new(
@@ -3455,8 +3490,8 @@ impl SqlScalarType {
     /// Panics if called on anything other than a [`SqlScalarType::Record`].
     pub fn unwrap_record_element_type(&self) -> Vec<&SqlScalarType> {
         match self {
-            SqlScalarType::Record { fields, .. } => {
-                fields.iter().map(|(_, t)| &t.scalar_type).collect_vec()
+            SqlScalarType::Record(record) => {
+                record.fields.iter().map(|(_, t)| &t.scalar_type).collect_vec()
             }
             _ => panic!(
                 "SqlScalarType::unwrap_record_element_type called on {:?}",
@@ -3472,7 +3507,7 @@ impl SqlScalarType {
     /// Panics if called on anything other than a [`SqlScalarType::Record`].
     pub fn unwrap_record_element_column_type(&self) -> Vec<&SqlColumnType> {
         match self {
-            SqlScalarType::Record { fields, .. } => fields.iter().map(|(_, t)| t).collect_vec(),
+            SqlScalarType::Record(record) => record.fields.iter().map(|(_, t)| t).collect_vec(),
             _ => panic!(
                 "SqlScalarType::unwrap_record_element_column_type called on {:?}",
                 self
@@ -3511,18 +3546,12 @@ impl SqlScalarType {
                 element_type: Box::new(element_type.without_modifiers()),
                 custom_id: None,
             },
-            Map {
-                value_type,
+            Map(map_type) if map_type.custom_id.is_none() => Map(Box::new(MapType {
+                value_type: Box::new(map_type.value_type.without_modifiers()),
                 custom_id: None,
-            } => Map {
-                value_type: Box::new(value_type.without_modifiers()),
-                custom_id: None,
-            },
-            Record {
-                fields,
-                custom_id: None,
-            } => {
-                let fields = fields
+            })),
+            Record(record) if record.custom_id.is_none() => {
+                let fields = record.fields
                     .iter()
                     .map(|(column_name, column_type)| {
                         (
@@ -3534,10 +3563,10 @@ impl SqlScalarType {
                         )
                     })
                     .collect();
-                Record {
+                Record(Box::new(RecordType {
                     fields,
                     custom_id: None,
-                }
+                }))
             }
             Array(a) => Array(Box::new(a.without_modifiers())),
             Numeric { .. } => Numeric { max_scale: None },
@@ -3597,7 +3626,7 @@ impl SqlScalarType {
     /// Panics if called on anything other than a [`SqlScalarType::Map`].
     pub fn unwrap_map_value_type(&self) -> &SqlScalarType {
         match self {
-            SqlScalarType::Map { value_type, .. } => &**value_type,
+            SqlScalarType::Map(map_type) => &map_type.value_type,
             _ => panic!("SqlScalarType::unwrap_map_value_type called on {:?}", self),
         }
     }
@@ -3701,16 +3730,11 @@ impl SqlScalarType {
             List {
                 element_type: t,
                 custom_id,
-            }
-            | Map {
-                value_type: t,
-                custom_id,
             } => custom_id.is_some() || t.is_custom_type(),
-            Record {
-                fields, custom_id, ..
-            } => {
-                custom_id.is_some()
-                    || fields
+            Map(map_type) => map_type.custom_id.is_some() || map_type.value_type.is_custom_type(),
+            Record(record) => {
+                record.custom_id.is_some()
+                    || record.fields
                         .iter()
                         .map(|(_, t)| t)
                         .any(|t| t.scalar_type.is_custom_type())
@@ -3753,35 +3777,20 @@ impl SqlScalarType {
                     element_type: r,
                     custom_id: oid_r,
                 },
-            )
-            | (
-                Map {
-                    value_type: l,
-                    custom_id: oid_l,
-                },
-                Map {
-                    value_type: r,
-                    custom_id: oid_r,
-                },
             ) => l.eq_inner(r, structure_only) && (oid_l == oid_r || structure_only),
+            (Map(ml), Map(mr)) => {
+                ml.value_type.eq_inner(&mr.value_type, structure_only)
+                    && (ml.custom_id == mr.custom_id || structure_only)
+            }
             (Array(a), Array(b)) | (Range { element_type: a }, Range { element_type: b }) => {
                 a.eq_inner(b, structure_only)
             }
-            (
-                Record {
-                    fields: fields_a,
-                    custom_id: oid_a,
-                },
-                Record {
-                    fields: fields_b,
-                    custom_id: oid_b,
-                },
-            ) => {
-                (oid_a == oid_b || structure_only)
-                    && fields_a.len() == fields_b.len()
-                    && fields_a
+            (Record(rec_a), Record(rec_b)) => {
+                (rec_a.custom_id == rec_b.custom_id || structure_only)
+                    && rec_a.fields.len() == rec_b.fields.len()
+                    && rec_a.fields
                         .iter()
-                        .zip_eq(fields_b)
+                        .zip_eq(rec_b.fields.iter())
                         // Ignore nullability.
                         .all(|(a, b)| {
                             (a.0 == b.0 || structure_only)
@@ -3806,27 +3815,27 @@ impl SqlScalarType {
                 element_type.backport_nullability(backport_element_type);
             }
             (
-                SqlScalarType::Map { value_type, .. },
+                SqlScalarType::Map(map_type),
                 ReprScalarType::Map {
                     value_type: backport_value_type,
                     ..
                 },
             ) => {
-                value_type.backport_nullability(backport_value_type);
+                map_type.value_type.backport_nullability(backport_value_type);
             }
             (
-                SqlScalarType::Record { fields, .. },
+                SqlScalarType::Record(record),
                 ReprScalarType::Record {
                     fields: backport_fields,
                     ..
                 },
             ) => {
                 assert_eq!(
-                    fields.len(),
+                    record.fields.len(),
                     backport_fields.len(),
                     "HIR and MIR types should have the same number of fields"
                 );
-                fields
+                record.fields
                     .iter_mut()
                     .zip_eq(backport_fields)
                     .for_each(|(field, backport_field)| {
@@ -4308,9 +4317,9 @@ impl SqlScalarType {
                 )
             }
             SqlScalarType::List { .. } => Box::new((*LIST).iter()),
-            SqlScalarType::Record { .. } => Box::new((*RECORD).iter()),
+            SqlScalarType::Record(..) => Box::new((*RECORD).iter()),
             SqlScalarType::Oid => Box::new((*OID).iter()),
-            SqlScalarType::Map { .. } => Box::new((*MAP).iter()),
+            SqlScalarType::Map(..) => Box::new((*MAP).iter()),
             SqlScalarType::RegProc => Box::new((*OID).iter()),
             SqlScalarType::RegType => Box::new((*OID).iter()),
             SqlScalarType::RegClass => Box::new((*OID).iter()),
@@ -4385,10 +4394,10 @@ impl SqlScalarType {
                 element_type: todo!(),
                 custom_id: todo!(),
             },
-            SqlScalarType::Record {
+            SqlScalarType::Record(Box::new(RecordType {
                 fields: todo!(),
                 custom_id: todo!(),
-            },
+            })),
             SqlScalarType::Map {
                 value_type: todo!(),
                 custom_id: todo!(),
@@ -4429,7 +4438,7 @@ impl SqlScalarType {
             | SqlScalarType::VarChar { .. }
             | SqlScalarType::Jsonb
             | SqlScalarType::Uuid
-            | SqlScalarType::Record { .. }
+            | SqlScalarType::Record(..)
             | SqlScalarType::Oid
             | SqlScalarType::RegProc
             | SqlScalarType::RegType
@@ -4444,7 +4453,7 @@ impl SqlScalarType {
             // https://github.com/MaterializeInc/database-issues/issues/2360
             t @ (SqlScalarType::Char { .. }
             // not sensible to put in arrays
-            | SqlScalarType::Map { .. }
+            | SqlScalarType::Map(..)
             | SqlScalarType::List { .. }) => Err(t),
         }
     }
@@ -4546,10 +4555,10 @@ impl Arbitrary for SqlScalarType {
                     .boxed(),
                 // Map
                 (inner.clone(), any::<Option<CatalogItemId>>())
-                    .prop_map(|(x, id)| SqlScalarType::Map {
+                    .prop_map(|(x, id)| SqlScalarType::Map(Box::new(MapType {
                         value_type: Box::new(x),
                         custom_id: id,
-                    })
+                    })))
                     .boxed(),
                 // Record
                 {
@@ -4568,10 +4577,10 @@ impl Arbitrary for SqlScalarType {
 
                     // Now we combine it with the default strategies to get Records.
                     (fields_strat, any::<Option<CatalogItemId>>())
-                        .prop_map(|(fields, custom_id)| SqlScalarType::Record {
+                        .prop_map(|(fields, custom_id)| SqlScalarType::Record(Box::new(RecordType {
                             fields: fields.into(),
                             custom_id,
-                        })
+                        })))
                         .boxed()
                 },
             ])
@@ -4978,18 +4987,12 @@ impl From<&SqlScalarType> for ReprScalarType {
             } => ReprScalarType::List {
                 element_type: Box::new(element_type.as_ref().into()),
             },
-            SqlScalarType::Record {
-                fields,
-                custom_id: _,
-            } => ReprScalarType::Record {
-                fields: fields.into_iter().map(|(_, typ)| typ.into()).collect(),
+            SqlScalarType::Record(record) => ReprScalarType::Record {
+                fields: record.fields.iter().map(|(_, typ)| typ.into()).collect(),
             },
             SqlScalarType::Oid => ReprScalarType::UInt32,
-            SqlScalarType::Map {
-                value_type,
-                custom_id: _,
-            } => ReprScalarType::Map {
-                value_type: Box::new(value_type.as_ref().into()),
+            SqlScalarType::Map(map_type) => ReprScalarType::Map {
+                value_type: Box::new(map_type.value_type.as_ref().into()),
             },
             SqlScalarType::RegProc => ReprScalarType::UInt32,
             SqlScalarType::RegType => ReprScalarType::UInt32,
@@ -5056,7 +5059,7 @@ impl SqlScalarType {
                 element_type: Box::new(SqlScalarType::from_repr(element_type)),
                 custom_id: None,
             },
-            ReprScalarType::Record { fields } => SqlScalarType::Record {
+            ReprScalarType::Record { fields } => SqlScalarType::Record(Box::new(RecordType {
                 fields: fields
                     .iter()
                     .enumerate()
@@ -5069,11 +5072,11 @@ impl SqlScalarType {
                     .collect::<Vec<_>>()
                     .into_boxed_slice(),
                 custom_id: None,
-            },
-            ReprScalarType::Map { value_type } => SqlScalarType::Map {
+            })),
+            ReprScalarType::Map { value_type } => SqlScalarType::Map(Box::new(MapType {
                 value_type: Box::new(SqlScalarType::from_repr(value_type)),
                 custom_id: None,
-            },
+            })),
             ReprScalarType::Range { element_type } => SqlScalarType::Range {
                 element_type: Box::new(SqlScalarType::from_repr(element_type)),
             },
@@ -5337,11 +5340,11 @@ pub fn arb_datum_for_scalar(scalar_type: SqlScalarType) -> impl Strategy<Value =
         SqlScalarType::Int2Vector => arb_array(any::<i16>().prop_map(PropDatum::Int16).boxed())
             .prop_map(PropDatum::Array)
             .boxed(),
-        SqlScalarType::Map { value_type, .. } => arb_dict(arb_datum_for_scalar(*value_type))
+        SqlScalarType::Map(map_type) => arb_dict(arb_datum_for_scalar(*map_type.value_type))
             .prop_map(PropDatum::Map)
             .boxed(),
-        SqlScalarType::Record { fields, .. } => {
-            let field_strats = fields.iter().map(|(name, ty)| {
+        SqlScalarType::Record(record) => {
+            let field_strats = record.fields.iter().map(|(name, ty)| {
                 (
                     name.to_string(),
                     arb_datum_for_scalar(ty.scalar_type.clone()),
@@ -5763,7 +5766,7 @@ impl<'a> From<&'a PropDatum> for Datum<'a> {
 
 #[mz_ore::test]
 fn verify_base_eq_record_nullability() {
-    let s1 = SqlScalarType::Record {
+    let s1 = SqlScalarType::Record(Box::new(RecordType {
         fields: [(
             "c".into(),
             SqlColumnType {
@@ -5773,8 +5776,8 @@ fn verify_base_eq_record_nullability() {
         )]
         .into(),
         custom_id: None,
-    };
-    let s2 = SqlScalarType::Record {
+    }));
+    let s2 = SqlScalarType::Record(Box::new(RecordType {
         fields: [(
             "c".into(),
             SqlColumnType {
@@ -5784,21 +5787,33 @@ fn verify_base_eq_record_nullability() {
         )]
         .into(),
         custom_id: None,
-    };
-    let s3 = SqlScalarType::Record {
+    }));
+    let s3 = SqlScalarType::Record(Box::new(RecordType {
         fields: [].into(),
         custom_id: None,
-    };
+    }));
     assert!(s1.base_eq(&s2));
     assert!(!s1.base_eq(&s3));
 }
 
 #[cfg(test)]
 mod tests {
+    use std::mem::size_of;
+
     use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
 
     use super::*;
+
+    #[mz_ore::test]
+    fn scalar_type_sizes() {
+        // SqlScalarType is 24 bytes thanks to niche optimization: the List variant's
+        // Option<CatalogItemId> provides spare discriminant niches for the outer enum.
+        // Record and Map are boxed so that List is the sole 24-byte variant, enabling
+        // the compiler to reuse those niches (two variants at 24 bytes blocks this).
+        assert_eq!(size_of::<SqlScalarType>(), 24);
+        assert_eq!(size_of::<SqlColumnType>(), 32);
+    }
 
     proptest! {
        #[mz_ore::test]
