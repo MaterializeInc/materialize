@@ -135,7 +135,7 @@ class BumpVersion(Action):
     def execute(self, e: Executor) -> None:
         version = MzVersion.parse_cargo().bump_minor()
         spawn.runv(
-            ["bin/bump-version", str(version), "--no-commit", "--no-console-bump"],
+            ["bin/bump-version", str(version), "--no-commit"],
             cwd=MZ_ROOT,
         )
 
