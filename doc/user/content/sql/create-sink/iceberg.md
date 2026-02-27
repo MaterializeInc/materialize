@@ -65,7 +65,7 @@ name="exactly-once-delivery" >}}
 
 The `COMMIT INTERVAL` setting involves tradeoffs between latency and efficiency:
 
-| Shorter intervals (e.g., `10s`) | Longer intervals (e.g., `5m`) |
+| Shorter intervals (e.g., < `60s`) | Longer intervals (e.g., `5m`) |
 |---------------------------------|-------------------------------|
 | Lower latency - data visible sooner | Higher latency - data takes longer to appear |
 | More small files - can degrade query performance | Fewer, larger files - better query performance |
@@ -75,14 +75,12 @@ The `COMMIT INTERVAL` setting involves tradeoffs between latency and efficiency:
 **Recommendations:**
 - For production: `60s` to `5m`
 - For batch analytics: `5m` to `15m`
-- If query performance degrades due to small files, increase the interval and
-  run Iceberg compaction
 
 {{< note >}}
 Outside of development environments, commit intervals should be at least `60s`.
 Short commit intervals increase catalog overhead and produce many small files.
 Small files will result in degraded query performance. It also increases load on
-the Iceberg metadata, which can result in a degraded catalog, and non-responsive
+the Iceberg metadata, which can result in a degraded catalog and non-responsive
 queries.
 {{< /note >}}
 
@@ -165,7 +163,7 @@ CREATE SINK deduped_sink
   USING AWS CONNECTION aws_connection
   KEY (event_id) NOT ENFORCED
   MODE UPSERT
-  WITH (COMMIT INTERVAL = '10s');
+  WITH (COMMIT INTERVAL = '1m');
 ```
 
 {{< warning >}}
