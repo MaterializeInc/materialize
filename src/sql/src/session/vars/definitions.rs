@@ -2256,6 +2256,12 @@ feature_flags!(
         default: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_case_literal_transform,
+        desc: "Allow the optimizer to rewrite If-chains matching a single expression against literals into a CaseLiteral lookup.",
+        default: false,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2279,6 +2285,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_eq_classes_withholding_errors: vars.enable_eq_classes_withholding_errors(),
             enable_fast_path_plan_insights: vars.enable_fast_path_plan_insights(),
             enable_cast_elimination: vars.enable_cast_elimination(),
+            enable_case_literal_transform: vars.enable_case_literal_transform(),
         }
     }
 }

@@ -393,7 +393,8 @@ mod tests {
     /// Apply the CaseLiteralTransform to a relation and return the first scalar from the Map.
     fn apply_transform(scalar: MirScalarExpr) -> MirScalarExpr {
         let mut relation = wrap_in_map(scalar);
-        let features = mz_repr::optimize::OptimizerFeatures::default();
+        let mut features = mz_repr::optimize::OptimizerFeatures::default();
+        features.enable_case_literal_transform = true;
         let typecheck_ctx = crate::typecheck::empty_typechecking_context();
         let mut df_meta = crate::dataflow::DataflowMetainfo::default();
         let mut transform_ctx =
