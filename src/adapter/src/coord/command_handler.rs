@@ -1031,13 +1031,12 @@ impl Coordinator {
         //    `handle_execute_inner` to stop further processing (no planning, etc.) of the
         //    statement.
         // 2. A few other DDL statements (`ALTER .. RENAME/SWAP`) enter the `DDL` ops which allows
-        //    any number of only these DDL statements to be executed in a transaction. At sequencing
-        //    these generate the `Op::TransactionDryRun` catalog op. When applied with
-        //    `catalog_transact`, that op will always produce the `TransactionDryRun` error. The
-        //    `catalog_transact_with_ddl_transaction` function intercepts that error and reports
-        //    success to the user, but nothing is yet committed to the real catalog. At `COMMIT` all
-        //    of the ops but without dry run are applied. The purpose of this is to allow multiple,
-        //    atomic renames in the same transaction.
+        //    any number of only these DDL statements to be executed in a transaction. During
+        //    sequencing we run an incremental catalog dry run against in-memory transaction state
+        //    and store the resulting `CatalogState` in `TransactionOps::DDL`, but nothing is yet
+        //    committed to the durable catalog. At `COMMIT`, all accumulated ops are applied in one
+        //    catalog transaction. The purpose of this is to allow multiple, atomic renames in the
+        //    same transaction.
         // 3. Some DDLs do off-thread work during purification or sequencing that is expensive or
         //    makes network calls (interfacing with secrets, optimization of views/indexes, source
         //    purification). These must guarantee correctness when they return to the main

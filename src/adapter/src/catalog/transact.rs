@@ -242,12 +242,6 @@ pub enum Op {
         size_bytes: u64,
         collection_timestamp: EpochMillis,
     },
-    /// Performs a dry run of the commit, but errors with
-    /// [`AdapterError::TransactionDryRun`].
-    ///
-    /// When using this value, it should be included only as the last element of
-    /// the transaction and should not be the only value in the transaction.
-    TransactionDryRun,
 }
 
 /// Almost the same as `ObjectId`, but the `ClusterReplica` case has an extra
@@ -590,10 +584,6 @@ impl Catalog {
     /// Performs the transaction described by `ops` and returns the new state of the catalog, if
     /// it has changed. If `ops` don't result in a change in the state this method returns `None`.
     ///
-    /// # Panics
-    /// - If `ops` contains [`Op::TransactionDryRun`] and the value is not the
-    ///   final element.
-    /// - If the only element of `ops` is [`Op::TransactionDryRun`].
     #[instrument(name = "catalog::transact_inner")]
     async fn transact_inner(
         storage_collections: Option<
@@ -601,7 +591,7 @@ impl Catalog {
         >,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
-        mut ops: Vec<Op>,
+        ops: Vec<Op>,
         temporary_ids: BTreeSet<CatalogItemId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         parsed_catalog_updates: &mut Vec<ParsedStateUpdate>,
@@ -640,16 +630,9 @@ impl Catalog {
         // The final state that we will return, if modified.
         let mut state = Cow::Borrowed(state);
 
-        let dry_run_ops = match ops.last() {
-            Some(Op::TransactionDryRun) => {
-                // Remove dry run marker.
-                ops.pop();
-                assert!(!ops.is_empty(), "TransactionDryRun must not be the only op");
-                ops.clone()
-            }
-            Some(_) => vec![],
-            None => return Ok(None),
-        };
+        if ops.is_empty() {
+            return Ok(None);
+        }
 
         // Extract optimized expressions from CreateItem ops to avoid re-optimization
         // during apply_updates. We extract before the loop since `ops` is moved there.
@@ -730,41 +713,34 @@ impl Catalog {
             parsed_catalog_updates.extend(op_catalog_updates);
         }
 
-        if dry_run_ops.is_empty() {
-            // `storage_collections` should only be `None` for tests.
-            if let Some(c) = storage_collections {
-                c.prepare_state(
-                    tx,
-                    storage_collections_to_create,
-                    storage_collections_to_drop,
-                    storage_collections_to_register,
-                )
-                .await?;
-            }
+        // `storage_collections` should only be `None` for tests and dry runs.
+        if let Some(c) = storage_collections {
+            c.prepare_state(
+                tx,
+                storage_collections_to_create,
+                storage_collections_to_drop,
+                storage_collections_to_register,
+            )
+            .await?;
+        }
 
-            let updates = tx.get_and_commit_op_updates();
-            if !updates.is_empty() {
-                let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
-                let (op_builtin_table_updates, op_catalog_updates) = state
-                    .to_mut()
-                    .apply_updates(updates.clone(), &mut local_expr_cache)
-                    .await;
-                let op_builtin_table_updates = state
-                    .to_mut()
-                    .resolve_builtin_table_updates(op_builtin_table_updates);
-                builtin_table_updates.extend(op_builtin_table_updates);
-                parsed_catalog_updates.extend(op_catalog_updates);
-            }
+        let updates = tx.get_and_commit_op_updates();
+        if !updates.is_empty() {
+            let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
+            let (op_builtin_table_updates, op_catalog_updates) = state
+                .to_mut()
+                .apply_updates(updates.clone(), &mut local_expr_cache)
+                .await;
+            let op_builtin_table_updates = state
+                .to_mut()
+                .resolve_builtin_table_updates(op_builtin_table_updates);
+            builtin_table_updates.extend(op_builtin_table_updates);
+            parsed_catalog_updates.extend(op_catalog_updates);
+        }
 
-            match state {
-                Cow::Owned(state) => Ok(Some(state)),
-                Cow::Borrowed(_) => Ok(None),
-            }
-        } else {
-            Err(AdapterError::TransactionDryRun {
-                new_ops: dry_run_ops,
-                new_state: state.into_owned(),
-            })
+        match state {
+            Cow::Owned(state) => Ok(Some(state)),
+            Cow::Borrowed(_) => Ok(None),
         }
     }
 
@@ -792,9 +768,6 @@ impl Catalog {
         let mut temporary_item_updates = Vec::new();
 
         match op {
-            Op::TransactionDryRun => {
-                unreachable!("TransactionDryRun can only be used a final element of ops")
-            }
             Op::AlterRetainHistory { id, value, window } => {
                 let entry = state.get_entry(&id);
                 if id.is_system() {
