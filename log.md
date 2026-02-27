@@ -256,10 +256,126 @@ All to_char queries work correctly with no performance regression:
 - `src/expr/src/scalar/func/format.rs` — `DateTimeFormat(Vec<DateTimeFormatNode>)` → `DateTimeFormat(Box<[DateTimeFormatNode]>)`
 - `src/expr/src/scalar.rs` — Updated size assertion (UnaryFunc 56→48), `.to_string()` → `.into()` at construction sites
 
+## Session 6: Shrink EvalError from 56 to 40 bytes via boxing large variants
+
+**Date:** 2026-02-27
+
+### Changes
+
+Box three large `EvalError` variants that were inflating the enum:
+
+1. **`Parse(ParseError)` → `Parse(Box<ParseError>)`**
+   - `ParseError` is ~40 bytes (contains `ParseKind` enum + 3 string fields)
+   - Parse errors are only created on malformed input — rare hot path
+
+2. **`OutOfDomain(DomainLimit, DomainLimit, Box<str>)` → `OutOfDomain(Box<(DomainLimit, DomainLimit, Box<str>)>)`**
+   - The tuple is ~48 bytes inline; boxing reduces to 8 bytes
+   - Only triggered for domain violations (e.g., `acos(2.0)`)
+
+3. **`DateDiffOverflow { unit, a, b }` → `DateDiffOverflow(Box<(Box<str>, Box<str>, Box<str>)>)`**
+   - The struct variant is ~48 bytes (3 × Box<str> = 3 × 16); boxing reduces to 8 bytes
+   - Only triggered on extreme date ranges
+
+All three are error-path only — boxing has zero cost on the happy path since the Box is never allocated.
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| EvalError | 56 | 40 | 16 bytes (29%) |
+| MirRelationExpr | 104 | 96 | 8 bytes (8%, cascading) |
+
+### Cascading effects
+
+- **MirRelationExpr::Constant** contains `Result<Vec<(Row, Diff)>, EvalError>` inline — when EvalError shrinks by 16 bytes, the Constant variant shrinks, reducing MirRelationExpr from 104 to 96 bytes
+- Every `Box<MirRelationExpr>` allocation now uses 96 instead of 104 bytes
+- MirRelationExpr is the core IR type stored recursively, so savings compound at every tree node
+- `MirScalarExpr::Literal` contains `Box<Result<Row, EvalError>>` — the boxed allocation is also smaller
+
+### Benchmark results
+
+All query types and error paths work correctly with no regression:
+
+| Query Type | Avg Time | Notes |
+|-----------|----------|-------|
+| Trig functions (acos, asin, atanh, acosh) | instant | OutOfDomain error path tested |
+| VALUES clause (20 rows) | ~1.2ms | Exercises Constant nodes |
+| Scalar expressions (10K rows) | ~411ms | Exercises expression evaluation |
+| Parse errors (`'text'::int`) | instant | Parse error formatting correct |
+
+### Files changed (5 files)
+
+- `src/expr/src/scalar.rs` — Box Parse, OutOfDomain, DateDiffOverflow variants + Display/proto impls + size assertion
+- `src/expr/src/scalar/func/impls/float64.rs` — 4 OutOfDomain construction sites (acos, asin, acosh, atanh)
+- `src/expr/src/relation.rs` — MirRelationExpr size assertion (104→96)
+- `src/storage-types/src/errors.rs` — Columnation impl for boxed variants
+- `src/adapter/src/catalog.rs` — Pattern matching adjustment for boxed Literal
+
 ### Future optimization ideas (roadmap)
 
-- **Box large `EvalError` variants**: `DateDiffOverflow` and `OutOfDomain` at 48 bytes each drive EvalError to 56 bytes. Boxing these would reduce EvalError to ~32 bytes, which further shrinks Result<Row, EvalError> and could enable un-boxing the Literal Result.
 - **`Vec<T>` → `Box<[T]>` conversions**: Many plan struct fields use `Vec<T>` but never grow after construction. Converting to `Box<[T]>` saves 8 bytes per field (24→16). Key targets: `SqlRelationType::column_types`, `SqlRelationType::keys`, `LinearMfp` fields, various plan structures.
 - **`JoinImplementation` (120 bytes)**: The `Differential` variant contains `Option<JoinInputCharacteristics>` (64 bytes niche-optimized). Boxing this or the entire variant could shrink it significantly.
 - **`ReprRelationType` (48 bytes)**: Contains two Vecs (column_types + keys) that never grow. Converting to `Box<[T]>` would save 16 bytes.
 - **`like_pattern::Matcher` internals**: `pattern: String` → `Box<str>`, `Subpattern.suffix: String` → `Box<str>`, `Vec<Subpattern>` → `Box<[Subpattern]>` — all are immutable after construction.
+
+## Session 7: Shrink AggregateFunc from 48 to 48 bytes via Vec→Box<[T]> (net: 64→48 from session 2)
+
+**Date:** 2026-02-27
+
+### Changes
+
+Convert all `Vec<T>` fields in `AggregateFunc` to `Box<[T]>`, eliminating the unused capacity field. These fields are constructed once during planning and never grown afterward.
+
+**15 `Vec<ColumnOrder>` → `Box<[ColumnOrder]>` conversions** across all variants that have an `order_by` field:
+- `JsonbAgg`, `JsonbObjectAgg`, `MapAgg`, `ArrayConcat`, `ListConcat`, `StringAgg`
+- `RowNumber`, `Rank`, `DenseRank`, `LagLead`
+- `FirstValue`, `LastValue`, `FusedValueWindowFunc`
+- `WindowAggregate`, `FusedWindowAggregate`
+
+**2 `Vec<AggregateFunc>` → `Box<[AggregateFunc]>` conversions**:
+- `FusedValueWindowFunc::funcs`
+- `FusedWindowAggregate::wrapped_aggregates`
+
+Additionally, function signatures were improved from `&Vec<T>` to `&[T]` (idiomatic Rust).
+
+### Key insight
+
+Unlike boxing (which adds a new indirection), `Vec<T>` → `Box<[T]>` is strictly better for immutable data: same heap allocation, same pointer+length, just without the wasted 8-byte capacity field. There's no tradeoff — data that's constructed once and never grown doesn't need the capacity.
+
+### Size measurements (before → after)
+
+| Type | Before (session 2) | After | Savings |
+|------|---------------------|-------|---------|
+| AggregateFunc | 64 | 48 | 16 bytes (25%) |
+| AggregateExpr | 144 | 128 | 16 bytes (11%) |
+
+The largest variant was `FusedWindowAggregate` with `Vec<AggregateFunc>(24) + Vec<ColumnOrder>(24) + Box<WindowFrame>(8) = 56`. After converting to `Box<[T]>`: `Box<[AggregateFunc]>(16) + Box<[ColumnOrder]>(16) + Box<WindowFrame>(8) = 40`, fitting the enum in 48 bytes.
+
+### Cumulative AggregateFunc savings (sessions 2 + 7)
+
+| Type | Original | After session 2 | After session 7 | Total savings |
+|------|----------|-----------------|-----------------|---------------|
+| AggregateFunc | 88 | 64 | 48 | 40 bytes (45%) |
+| AggregateExpr | 184 | 144 | 128 | 56 bytes (30%) |
+
+### Benchmark results
+
+All aggregate and window function queries work correctly with no regression:
+
+| Query Type | Avg Time | Notes |
+|-----------|----------|-------|
+| string_agg with ORDER BY (5000 rows) | ~16ms | Exercises StringAgg |
+| jsonb_agg with ORDER BY | ~16ms | Exercises JsonbAgg |
+| array_agg with ORDER BY | ~12ms | Exercises ArrayConcat |
+| row_number OVER | ~26ms | Exercises RowNumber |
+| first_value OVER | ~23ms | Exercises FirstValue |
+| last_value OVER | ~21ms | Exercises LastValue |
+| rank + dense_rank OVER | ~36ms | Exercises Rank + DenseRank |
+| lag + lead OVER | ~27ms | Exercises LagLead (fused) |
+| sum OVER (window aggregate) | ~26ms | Exercises WindowAggregate |
+
+### Files changed
+
+- `src/expr/src/relation/func.rs` — 15 `order_by` fields + 2 `funcs`/`wrapped_aggregates` fields converted to `Box<[T]>`, function signatures `&Vec<T>` → `&[T]`, 3 assert_eq adjustments for Box deref
+- `src/expr/src/scalar.rs` — Updated size assertions (AggregateFunc 64→48, AggregateExpr 144→128)
+- `src/sql/src/plan/hir.rs` — Construction sites converted to use `.into_boxed_slice()` and `.collect::<Vec<_>>().into_boxed_slice()`

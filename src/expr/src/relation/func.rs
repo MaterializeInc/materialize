@@ -1124,8 +1124,8 @@ fn last_value_inner<'a>(
 fn fused_value_window_func<'a, I>(
     input_datums: I,
     callers_temp_storage: &'a RowArena,
-    funcs: &Vec<AggregateFunc>,
-    order_by: &Vec<ColumnOrder>,
+    funcs: &[AggregateFunc],
+    order_by: &[ColumnOrder],
 ) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -1142,8 +1142,8 @@ where
 fn fused_value_window_func_no_list<'a: 'b, 'b, I>(
     input_datums: I,
     callers_temp_storage: &'b RowArena,
-    funcs: &Vec<AggregateFunc>,
-    order_by: &Vec<ColumnOrder>,
+    funcs: &[AggregateFunc],
+    order_by: &[ColumnOrder],
 ) -> impl Iterator<Item = Datum<'b>>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -1180,7 +1180,7 @@ where
                 lag_lead,
                 ignore_nulls,
             } => {
-                assert_eq!(order_by, inner_order_by);
+                assert_eq!(order_by, &**inner_order_by);
                 let unwrapped_argss = encoded_argss
                     .into_iter()
                     .map(|encoded_args| unwrap_lag_lead_encoded_args(encoded_args))
@@ -1191,7 +1191,7 @@ where
                 order_by: inner_order_by,
                 window_frame,
             } => {
-                assert_eq!(order_by, inner_order_by);
+                assert_eq!(order_by, &**inner_order_by);
                 // (No unwrapping to do on the args here, because there is only 1 arg, so it's not
                 // wrapped into a record.)
                 first_value_inner(encoded_argss, window_frame)
@@ -1200,7 +1200,7 @@ where
                 order_by: inner_order_by,
                 window_frame,
             } => {
-                assert_eq!(order_by, inner_order_by);
+                assert_eq!(order_by, &**inner_order_by);
                 // (No unwrapping to do on the args here, because there is only 1 arg, so it's not
                 // wrapped into a record.)
                 last_value_inner(encoded_argss, &order_by_rows, window_frame)
@@ -1645,8 +1645,8 @@ where
 fn fused_window_aggr<'a, I, A>(
     input_datums: I,
     callers_temp_storage: &'a RowArena,
-    wrapped_aggregates: &Vec<AggregateFunc>,
-    order_by: &Vec<ColumnOrder>,
+    wrapped_aggregates: &[AggregateFunc],
+    order_by: &[ColumnOrder],
     window_frame: &WindowFrame,
 ) -> Datum<'a>
 where
@@ -1671,8 +1671,8 @@ where
 fn fused_window_aggr_no_list<'a: 'b, 'b, I, A>(
     input_datums: I,
     callers_temp_storage: &'b RowArena,
-    wrapped_aggregates: &Vec<AggregateFunc>,
-    order_by: &Vec<ColumnOrder>,
+    wrapped_aggregates: &[AggregateFunc],
+    order_by: &[ColumnOrder],
     window_frame: &WindowFrame,
 ) -> impl Iterator<Item = Datum<'b>>
 where
@@ -1872,7 +1872,7 @@ pub enum AggregateFunc {
     /// layer, this function filters out `Datum::Null`, for consistency with
     /// the other aggregate functions.
     JsonbAgg {
-        order_by: Vec<ColumnOrder>,
+        order_by: Box<[ColumnOrder]>,
     },
     /// Zips `Datum::List`s whose first element is a JSON-typed `Datum`s into a
     /// JSON map. The other elements are columns used by `order_by`.
@@ -1881,65 +1881,65 @@ pub enum AggregateFunc {
     /// layer, this function filters out `Datum::Null`, for consistency with
     /// the other aggregate functions.
     JsonbObjectAgg {
-        order_by: Vec<ColumnOrder>,
+        order_by: Box<[ColumnOrder]>,
     },
     /// Zips a `Datum::List` whose first element is a `Datum::List` guaranteed
     /// to be non-empty and whose len % 2 == 0 into a `Datum::Map`. The other
     /// elements are columns used by `order_by`.
     MapAgg {
-        order_by: Vec<ColumnOrder>,
+        order_by: Box<[ColumnOrder]>,
         value_type: SqlScalarType,
     },
     /// Accumulates `Datum::Array`s of `SqlScalarType::Record` whose first element is a `Datum::Array`
     /// into a single `Datum::Array` (the remaining fields are used by `order_by`).
     ArrayConcat {
-        order_by: Vec<ColumnOrder>,
+        order_by: Box<[ColumnOrder]>,
     },
     /// Accumulates `Datum::List`s of `SqlScalarType::Record` whose first field is a `Datum::List`
     /// into a single `Datum::List` (the remaining fields are used by `order_by`).
     ListConcat {
-        order_by: Vec<ColumnOrder>,
+        order_by: Box<[ColumnOrder]>,
     },
     StringAgg {
-        order_by: Vec<ColumnOrder>,
+        order_by: Box<[ColumnOrder]>,
     },
     RowNumber {
-        order_by: Vec<ColumnOrder>,
+        order_by: Box<[ColumnOrder]>,
     },
     Rank {
-        order_by: Vec<ColumnOrder>,
+        order_by: Box<[ColumnOrder]>,
     },
     DenseRank {
-        order_by: Vec<ColumnOrder>,
+        order_by: Box<[ColumnOrder]>,
     },
     LagLead {
-        order_by: Vec<ColumnOrder>,
+        order_by: Box<[ColumnOrder]>,
         lag_lead: LagLeadType,
         ignore_nulls: bool,
     },
     FirstValue {
-        order_by: Vec<ColumnOrder>,
+        order_by: Box<[ColumnOrder]>,
         window_frame: Box<WindowFrame>,
     },
     LastValue {
-        order_by: Vec<ColumnOrder>,
+        order_by: Box<[ColumnOrder]>,
         window_frame: Box<WindowFrame>,
     },
     /// Several value window functions fused into one function, to amortize overheads.
     FusedValueWindowFunc {
-        funcs: Vec<AggregateFunc>,
+        funcs: Box<[AggregateFunc]>,
         /// Currently, all the fused functions must have the same `order_by`. (We can later
         /// eliminate this limitation.)
-        order_by: Vec<ColumnOrder>,
+        order_by: Box<[ColumnOrder]>,
     },
     WindowAggregate {
         wrapped_aggregate: Box<AggregateFunc>,
-        order_by: Vec<ColumnOrder>,
+        order_by: Box<[ColumnOrder]>,
         window_frame: Box<WindowFrame>,
     },
     FusedWindowAggregate {
-        wrapped_aggregates: Vec<AggregateFunc>,
-        order_by: Vec<ColumnOrder>,
+        wrapped_aggregates: Box<[AggregateFunc]>,
+        order_by: Box<[ColumnOrder]>,
         window_frame: Box<WindowFrame>,
     },
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.

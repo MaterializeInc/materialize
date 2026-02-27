@@ -3420,12 +3420,13 @@ mod tests {
     #[mz_ore::test]
     fn type_size_assertions() {
         use std::mem::size_of;
+
         assert_eq!(size_of::<MirScalarExpr>(), 72);
         assert_eq!(size_of::<crate::UnaryFunc>(), 48);
         assert_eq!(size_of::<crate::BinaryFunc>(), 48);
         assert_eq!(size_of::<crate::VariadicFunc>(), 40);
-        assert_eq!(size_of::<crate::AggregateFunc>(), 64);
-        assert_eq!(size_of::<crate::AggregateExpr>(), 144);
+        assert_eq!(size_of::<crate::AggregateFunc>(), 48);
+        assert_eq!(size_of::<crate::AggregateExpr>(), 128);
         assert_eq!(size_of::<EvalError>(), 40);
     }
 

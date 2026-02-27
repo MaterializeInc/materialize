@@ -556,15 +556,16 @@ impl ScalarWindowExpr {
     }
 
     pub fn into_expr(self) -> mz_expr::AggregateFunc {
+        let order_by = self.order_by.into_boxed_slice();
         match self.func {
             ScalarWindowFunc::RowNumber => mz_expr::AggregateFunc::RowNumber {
-                order_by: self.order_by,
+                order_by,
             },
             ScalarWindowFunc::Rank => mz_expr::AggregateFunc::Rank {
-                order_by: self.order_by,
+                order_by,
             },
             ScalarWindowFunc::DenseRank => mz_expr::AggregateFunc::DenseRank {
-                order_by: self.order_by,
+                order_by,
             },
         }
     }
@@ -770,32 +771,36 @@ impl ValueWindowFunc {
         match self {
             // Lag and Lead are fundamentally the same function, just with opposite directions
             ValueWindowFunc::Lag => mz_expr::AggregateFunc::LagLead {
-                order_by,
+                order_by: order_by.into_boxed_slice(),
                 lag_lead: mz_expr::LagLeadType::Lag,
                 ignore_nulls,
             },
             ValueWindowFunc::Lead => mz_expr::AggregateFunc::LagLead {
-                order_by,
+                order_by: order_by.into_boxed_slice(),
                 lag_lead: mz_expr::LagLeadType::Lead,
                 ignore_nulls,
             },
             ValueWindowFunc::FirstValue => mz_expr::AggregateFunc::FirstValue {
-                order_by,
+                order_by: order_by.into_boxed_slice(),
                 window_frame: Box::new(window_frame),
             },
             ValueWindowFunc::LastValue => mz_expr::AggregateFunc::LastValue {
-                order_by,
+                order_by: order_by.into_boxed_slice(),
                 window_frame: Box::new(window_frame),
             },
-            ValueWindowFunc::Fused(funcs) => mz_expr::AggregateFunc::FusedValueWindowFunc {
-                funcs: funcs
-                    .into_iter()
-                    .map(|func| {
-                        func.into_expr(order_by.clone(), window_frame.clone(), ignore_nulls)
-                    })
-                    .collect(),
-                order_by,
-            },
+            ValueWindowFunc::Fused(funcs) => {
+                let order_by_boxed = order_by.clone().into_boxed_slice();
+                mz_expr::AggregateFunc::FusedValueWindowFunc {
+                    funcs: funcs
+                        .into_iter()
+                        .map(|func| {
+                            func.into_expr(order_by.clone(), window_frame.clone(), ignore_nulls)
+                        })
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                    order_by: order_by_boxed,
+                }
+            }
         }
     }
 }
@@ -846,12 +851,17 @@ impl AggregateWindowExpr {
     }
 
     pub fn into_expr(self) -> (Box<HirScalarExpr>, mz_expr::AggregateFunc) {
+        let order_by = self.order_by.into_boxed_slice();
         if let AggregateFunc::FusedWindowAgg { funcs } = &self.aggregate_expr.func {
             (
                 self.aggregate_expr.expr,
                 FusedWindowAggregate {
-                    wrapped_aggregates: funcs.iter().map(|f| f.clone().into_expr()).collect(),
-                    order_by: self.order_by,
+                    wrapped_aggregates: funcs
+                        .iter()
+                        .map(|f| f.clone().into_expr())
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                    order_by,
                     window_frame: Box::new(self.window_frame),
                 },
             )
@@ -860,7 +870,7 @@ impl AggregateWindowExpr {
                 self.aggregate_expr.expr,
                 WindowAggregate {
                     wrapped_aggregate: Box::new(self.aggregate_expr.func.into_expr()),
-                    order_by: self.order_by,
+                    order_by,
                     window_frame: Box::new(self.window_frame),
                 },
             )
@@ -1392,24 +1402,24 @@ impl AggregateFunc {
             AggregateFunc::Count => mz_expr::AggregateFunc::Count,
             AggregateFunc::Any => mz_expr::AggregateFunc::Any,
             AggregateFunc::All => mz_expr::AggregateFunc::All,
-            AggregateFunc::JsonbAgg { order_by } => mz_expr::AggregateFunc::JsonbAgg { order_by },
+            AggregateFunc::JsonbAgg { order_by } => mz_expr::AggregateFunc::JsonbAgg { order_by: order_by.into_boxed_slice() },
             AggregateFunc::JsonbObjectAgg { order_by } => {
-                mz_expr::AggregateFunc::JsonbObjectAgg { order_by }
+                mz_expr::AggregateFunc::JsonbObjectAgg { order_by: order_by.into_boxed_slice() }
             }
             AggregateFunc::MapAgg {
                 order_by,
                 value_type,
             } => mz_expr::AggregateFunc::MapAgg {
-                order_by,
+                order_by: order_by.into_boxed_slice(),
                 value_type,
             },
             AggregateFunc::ArrayConcat { order_by } => {
-                mz_expr::AggregateFunc::ArrayConcat { order_by }
+                mz_expr::AggregateFunc::ArrayConcat { order_by: order_by.into_boxed_slice() }
             }
             AggregateFunc::ListConcat { order_by } => {
-                mz_expr::AggregateFunc::ListConcat { order_by }
+                mz_expr::AggregateFunc::ListConcat { order_by: order_by.into_boxed_slice() }
             }
-            AggregateFunc::StringAgg { order_by } => mz_expr::AggregateFunc::StringAgg { order_by },
+            AggregateFunc::StringAgg { order_by } => mz_expr::AggregateFunc::StringAgg { order_by: order_by.into_boxed_slice() },
             // `AggregateFunc::FusedWindowAgg` should be specially handled in
             // `AggregateWindowExpr::into_expr`.
             AggregateFunc::FusedWindowAgg { funcs: _ } => {
