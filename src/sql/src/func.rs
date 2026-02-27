@@ -4716,7 +4716,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 }
                 Ok(TableFuncPlan {
                     imp: TableFuncImpl::CallTable {
-                        func: TableFunc::RegexpExtract(regex),
+                        func: TableFunc::RegexpExtract(Box::new(regex)),
                         exprs: vec![haystack],
                     },
                     column_names,

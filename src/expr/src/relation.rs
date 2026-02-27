@@ -4033,7 +4033,7 @@ mod tests {
         use std::mem::size_of;
         assert_eq!(size_of::<MirRelationExpr>(), 104);
         assert_eq!(size_of::<JoinImplementation>(), 120);
-        assert_eq!(size_of::<TableFunc>(), 80);
+        assert_eq!(size_of::<TableFunc>(), 40);
     }
 
     #[mz_ore::test]

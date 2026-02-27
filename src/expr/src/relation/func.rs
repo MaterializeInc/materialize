@@ -3347,7 +3347,7 @@ pub enum TableFunc {
     JsonbObjectKeys,
     JsonbArrayElements,
     JsonbArrayElementsStringify,
-    RegexpExtract(AnalyzedRegex),
+    RegexpExtract(Box<AnalyzedRegex>),
     CsvExtract(usize),
     GenerateSeriesInt32,
     GenerateSeriesInt64,
@@ -3399,7 +3399,7 @@ pub enum TableFunc {
     /// Execute some arbitrary scalar function as a table function.
     TabletizedScalar {
         name: String,
-        relation: SqlRelationType,
+        relation: Box<SqlRelationType>,
     },
     RegexpMatches,
     /// Implements the WITH ORDINALITY clause.
@@ -3691,7 +3691,7 @@ impl TableFunc {
                 (column_types, keys)
             }
             TableFunc::TabletizedScalar { relation, .. } => {
-                return relation.clone();
+                return SqlRelationType::clone(relation);
             }
             TableFunc::RegexpMatches => {
                 let column_types =

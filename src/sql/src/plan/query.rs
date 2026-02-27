@@ -3411,7 +3411,7 @@ fn plan_table_function_internal(
 
             let scope = Scope::from_source(scope_name.clone(), vec![column_name]);
 
-            let mut func = TableFunc::TabletizedScalar { relation, name };
+            let mut func = TableFunc::TabletizedScalar { relation: Box::new(relation), name };
             if with_ordinality {
                 func = TableFunc::with_ordinality(func.clone()).ok_or(PlanError::Unsupported {
                     feature: format!("WITH ORDINALITY on {}", func),
