@@ -101,6 +101,8 @@ pub fn generate_wasm(expr: &MirScalarExpr) -> Option<(Vec<u8>, WasmLayout)> {
         (1, ValType::I64), // temp result value
         (1, ValType::I32), // temp null flag (0=not_null, 1=null)
         (1, ValType::I32), // temp error flag
+        (1, ValType::I64), // temp operand a (for overflow detection)
+        (1, ValType::I64), // temp operand b (for overflow detection)
     ]);
 
     // Local variable indices:
@@ -113,11 +115,15 @@ pub fn generate_wasm(expr: &MirScalarExpr) -> Option<(Vec<u8>, WasmLayout)> {
     // (num_params+1): result_val (i64)
     // (num_params+2): is_null (i32)
     // (num_params+3): is_error (i32)
+    // (num_params+4): operand_a (i64)
+    // (num_params+5): operand_b (i64)
     #[allow(clippy::as_conversions)]
     let local_i = num_params as u32;
     let local_result = local_i + 1;
     let local_is_null = local_i + 2;
     let local_is_error = local_i + 3;
+    let local_a = local_i + 4;
+    let local_b = local_i + 5;
 
     #[allow(clippy::as_conversions)]
     let out_ptr_local = (1 + num_input_cols * 2) as u32;
@@ -153,8 +159,11 @@ pub fn generate_wasm(expr: &MirScalarExpr) -> Option<(Vec<u8>, WasmLayout)> {
         expr,
         &col_to_param,
         local_i,
+        local_result,
         local_is_null,
         local_is_error,
+        local_a,
+        local_b,
     );
     func.instruction(&Instruction::LocalSet(local_result));
 
@@ -223,8 +232,11 @@ fn emit_expr(
     expr: &MirScalarExpr,
     col_to_param: &std::collections::BTreeMap<usize, usize>,
     local_i: u32,
+    local_result: u32,
     local_is_null: u32,
     local_is_error: u32,
+    local_a: u32,
+    local_b: u32,
 ) {
     match expr {
         MirScalarExpr::Column(idx, _) => {
@@ -291,8 +303,11 @@ fn emit_expr(
                     expr2,
                     col_to_param,
                     local_i,
+                    local_result,
                     local_is_null,
                     local_is_error,
+                    local_a,
+                    local_b,
                 );
             }
             _ => unreachable!("analyze ensures only AddInt64"),
@@ -305,62 +320,94 @@ fn emit_expr(
 /// Emits WASM for `a + b` with overflow detection and null propagation.
 ///
 /// Uses the following approach for checked addition without overflow intrinsics:
-/// * Compute `a + b` as i64
-/// * Detect overflow: if `a` and `b` have the same sign but `result` has a different sign
-/// * If overflow, set error flag
+/// * Save operands into `local_a` and `local_b` before computing `a + b`
+/// * Detect overflow: `((a ^ result) & (b ^ result)) < 0` (sign bit set)
+/// * If overflow and result is not null, set the error flag
 fn emit_add_int64(
     func: &mut wasm_encoder::Function,
     expr1: &MirScalarExpr,
     expr2: &MirScalarExpr,
     col_to_param: &std::collections::BTreeMap<usize, usize>,
     local_i: u32,
+    local_result: u32,
     local_is_null: u32,
     local_is_error: u32,
+    local_a: u32,
+    local_b: u32,
 ) {
-    // Evaluate left operand.
+    // Evaluate left operand, save to local_a.
     emit_expr(
         func,
         expr1,
         col_to_param,
         local_i,
+        local_result,
         local_is_null,
         local_is_error,
+        local_a,
+        local_b,
     );
-    // Evaluate right operand.
+    func.instruction(&Instruction::LocalTee(local_a));
+    // Stack: [a]
+
+    // Evaluate right operand, save to local_b.
     emit_expr(
         func,
         expr2,
         col_to_param,
         local_i,
+        local_result,
         local_is_null,
         local_is_error,
+        local_a,
+        local_b,
     );
+    func.instruction(&Instruction::LocalTee(local_b));
+    // Stack: [a, b]
 
     // If either operand is null, the result is null (null propagation).
     // The is_null flag is already set by emit_expr if either child is null.
     // We just need to compute the add; the null flag will cause the validity
     // bit to be cleared in the output.
 
-    // Stack: [a, b]
+    // Wrapping add: WASM i64.add wraps on overflow.
     func.instruction(&Instruction::I64Add);
-    // Stack: [a+b]
+    // Stack: [result]
 
-    // Overflow detection for i64 add:
-    // We need to detect if the addition overflowed. WASM i64.add wraps on overflow.
-    // Overflow occurs when: sign(a) == sign(b) && sign(result) != sign(a).
-    //
-    // For simplicity in milestone 1, we use a conservative approach:
-    // Store a and b in locals, compute result, then check.
-    // But since we already consumed a and b from the stack, we need a different approach.
-    //
-    // Alternative: we rely on the fact that wasmtime i64.add is wrapping, and we
-    // detect overflow by checking if (result - a) != b (which only works for non-wrapping).
-    // Actually a simpler check: no overflow if result >= a when b >= 0, or result < a when b < 0.
-    //
-    // For milestone 1, we skip overflow detection in the WASM and handle it in the
-    // host-side ResultColumn post-processing. The WASM just does wrapping addition.
-    //
-    // TODO(milestone 2): Add overflow detection inline in WASM.
+    // Save result to local_result, clearing the stack so we can enter an if block.
+    func.instruction(&Instruction::LocalSet(local_result));
+    // Stack: []
+
+    // Overflow detection for signed i64 addition.
+    // Overflow occurs when both operands have the same sign but the result differs.
+    // Single-expression check: ((a ^ result) & (b ^ result)) < 0  (sign bit set)
+    // Skip the check when the result is null, since null-propagated results don't
+    // need overflow detection and may have garbage intermediate values.
+    func.instruction(&Instruction::LocalGet(local_is_null));
+    func.instruction(&Instruction::I32Eqz);
+    func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    {
+        func.instruction(&Instruction::LocalGet(local_a));
+        func.instruction(&Instruction::LocalGet(local_result));
+        func.instruction(&Instruction::I64Xor); // a ^ result
+        func.instruction(&Instruction::LocalGet(local_b));
+        func.instruction(&Instruction::LocalGet(local_result));
+        func.instruction(&Instruction::I64Xor); // b ^ result
+        func.instruction(&Instruction::I64And); // (a ^ result) & (b ^ result)
+        func.instruction(&Instruction::I64Const(0));
+        func.instruction(&Instruction::I64LtS); // true if sign bit set => overflow
+        func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+        {
+            func.instruction(&Instruction::I32Const(1));
+            func.instruction(&Instruction::LocalSet(local_is_error));
+        }
+        func.instruction(&Instruction::End); // end inner if (overflow)
+    }
+    func.instruction(&Instruction::End); // end outer if (!is_null)
+
+    // Push result back on stack for the caller.
+    func.instruction(&Instruction::LocalGet(local_result));
+    // Stack: [result]
 }
 
 #[cfg(test)]

@@ -422,32 +422,20 @@ mod tests {
                             interpreted
                         );
                     } else if !validity[i] {
-                        // Compiled path says null.
-                        match &interpreted {
-                            Ok(Datum::Null) => {}
-                            // Milestone 1: compiled path does wrapping add without overflow
-                            // detection, so null propagation can mask overflows that the
-                            // interpreter would catch.
-                            Err(_) => {}
-                            other => {
-                                panic!("row {i}: compiled null but interpreter returned {other:?}")
-                            }
-                        }
+                        // Compiled path says null; interpreter should agree.
+                        assert!(
+                            matches!(&interpreted, Ok(Datum::Null)),
+                            "row {i}: compiled null but interpreter returned {interpreted:?}"
+                        );
                     } else {
-                        // Compiled path returned a value.
+                        // Compiled path returned a value; interpreter should match.
                         match &interpreted {
                             Ok(Datum::Int64(v)) => {
-                                // Note: compiled path does wrapping add (no overflow detection yet),
-                                // so we only compare when the interpreted result doesn't overflow.
                                 assert_eq!(
                                     values[i], *v,
                                     "row {i}: compiled={}, interpreted={}",
                                     values[i], v
                                 );
-                            }
-                            Err(_) => {
-                                // Interpreter overflowed but compiled path wrapped.
-                                // This is expected for milestone 1 (no overflow detection in WASM).
                             }
                             other => {
                                 panic!("row {i}: compiled {} but interpreted {other:?}", values[i])
