@@ -73,6 +73,21 @@ impl ExprEngine {
 }
 
 impl CompiledExpr {
+    /// Returns a reference to the compiled WASM module.
+    pub fn module(&self) -> &wasmtime::Module {
+        &self.module
+    }
+
+    /// Returns the memory layout metadata.
+    pub fn layout(&self) -> &WasmLayout {
+        &self.layout
+    }
+
+    /// Returns the input column indices this expression reads, in parameter order.
+    pub fn input_columns(&self) -> &[usize] {
+        &self.input_columns
+    }
+
     /// Evaluates the compiled expression on the given column batch.
     ///
     /// The batch must contain columns at the indices referenced by the expression.

@@ -24,3 +24,4 @@ pub mod analyze;
 pub mod codegen;
 pub mod columnar;
 pub mod engine;
+pub mod eval;

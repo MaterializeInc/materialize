@@ -53,6 +53,12 @@ use crate::typedefs::{
     RowRowSpine,
 };
 
+/// Dispatches between interpreted and WASM-compiled MFP evaluation.
+enum MfpEvaluator {
+    Interpreted(mz_expr::MfpPlan),
+    Compiled(mz_expr_compiler::eval::CompiledMfp),
+}
+
 /// Dataflow-local collections and arrangements.
 ///
 /// A context means to wrap available data assets and present them in an easy-to-use manner.
@@ -727,16 +733,20 @@ where
             return self.as_specific_collection(key.as_deref(), config_set);
         }
 
-        // Attempt WASM compilation of MFP expressions when the feature flag is enabled.
-        // Currently logs the compilation result; batch evaluation is a follow-up.
-        if ENABLE_COMPILED_EXPRESSIONS.get(config_set) {
-            Self::try_compile_mfp_expressions(&mfp);
-        }
-
         let max_demand = mfp.demand().iter().max().map(|x| *x + 1).unwrap_or(0);
         mfp.permute_fn(|c| c, max_demand);
         mfp.optimize();
         let mfp_plan = mfp.into_plan().unwrap();
+
+        // Attempt WASM compilation of MFP expressions when the feature flag is enabled.
+        let mut evaluator = if ENABLE_COMPILED_EXPRESSIONS.get(config_set) {
+            match mz_expr_compiler::eval::CompiledMfp::try_new(mfp_plan) {
+                Ok(compiled) => MfpEvaluator::Compiled(compiled),
+                Err(plan) => MfpEvaluator::Interpreted(plan),
+            }
+        } else {
+            MfpEvaluator::Interpreted(mfp_plan)
+        };
 
         let mut datum_vec = DatumVec::new();
         // Wrap in an `Rc` so that lifetimes work out.
@@ -744,36 +754,53 @@ where
 
         let (stream, errors) = self.flat_map(key_val, max_demand, move |row_datums, time, diff| {
             let mut row_builder = SharedRow::get();
-            let until = std::rc::Rc::clone(&until);
             let temp_storage = RowArena::new();
             let row_iter = row_datums.iter();
             let mut datums_local = datum_vec.borrow();
             datums_local.extend(row_iter);
             let time = time.clone();
             let event_time = time.event_time();
-            mfp_plan
-                .evaluate(
-                    &mut datums_local,
-                    &temp_storage,
-                    event_time,
-                    diff.clone(),
-                    move |time| !until.less_equal(time),
-                    &mut row_builder,
-                )
-                .map(move |x| match x {
-                    Ok((row, event_time, diff)) => {
-                        // Copy the whole time, and re-populate event time.
-                        let mut time: S::Timestamp = time.clone();
-                        *time.event_time_mut() = event_time;
-                        (Ok(row), time, diff)
-                    }
-                    Err((e, event_time, diff)) => {
-                        // Copy the whole time, and re-populate event time.
-                        let mut time: S::Timestamp = time.clone();
-                        *time.event_time_mut() = event_time;
-                        (Err(e), time, diff)
-                    }
-                })
+            let results: Vec<
+                Result<(Row, mz_repr::Timestamp, Diff), (DataflowError, mz_repr::Timestamp, Diff)>,
+            > = match &mut evaluator {
+                MfpEvaluator::Interpreted(plan) => {
+                    let until = std::rc::Rc::clone(&until);
+                    plan.evaluate(
+                        &mut datums_local,
+                        &temp_storage,
+                        event_time,
+                        diff.clone(),
+                        move |time| !until.less_equal(time),
+                        &mut row_builder,
+                    )
+                    .collect()
+                }
+                MfpEvaluator::Compiled(compiled) => {
+                    let until = std::rc::Rc::clone(&until);
+                    compiled.evaluate(
+                        &mut datums_local,
+                        &temp_storage,
+                        event_time,
+                        diff.clone(),
+                        move |time| !until.less_equal(time),
+                        &mut row_builder,
+                    )
+                }
+            };
+            results.into_iter().map(move |x| match x {
+                Ok((row, event_time, diff)) => {
+                    // Copy the whole time, and re-populate event time.
+                    let mut time: S::Timestamp = time.clone();
+                    *time.event_time_mut() = event_time;
+                    (Ok(row), time, diff)
+                }
+                Err((e, event_time, diff)) => {
+                    // Copy the whole time, and re-populate event time.
+                    let mut time: S::Timestamp = time.clone();
+                    *time.event_time_mut() = event_time;
+                    (Err(e), time, diff)
+                }
+            })
         });
 
         use differential_dataflow::AsCollection;
@@ -785,42 +812,6 @@ where
             );
 
         (oks, errors.concat(&errs))
-    }
-
-    /// Attempts to compile MFP expressions to WASM. Logs whether compilation succeeded.
-    ///
-    /// This is the integration point for WASM-compiled expression evaluation.
-    /// Currently only validates that compilation works at runtime; the actual
-    /// batch evaluation path is a follow-up.
-    fn try_compile_mfp_expressions(mfp: &MapFilterProject) {
-        let engine = match mz_expr_compiler::engine::ExprEngine::new() {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!("failed to create WASM engine: {e}");
-                return;
-            }
-        };
-
-        let mut compiled_count = 0;
-        let total = mfp.expressions.len();
-        for expr in &mfp.expressions {
-            if mz_expr_compiler::analyze::is_compilable(expr) {
-                let input_types = vec![];
-                match engine.compile(expr, &input_types) {
-                    Ok(Some(_)) => compiled_count += 1,
-                    Ok(None) => {}
-                    Err(e) => {
-                        tracing::debug!("WASM compilation failed for expression: {e}");
-                    }
-                }
-            }
-        }
-
-        if total > 0 {
-            tracing::debug!(
-                "compiled expressions: {compiled_count}/{total} expressions compilable to WASM"
-            );
-        }
     }
 
     pub fn ensure_collections(
