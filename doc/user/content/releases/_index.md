@@ -19,7 +19,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-02-26* <br>
 *Released to Materialize Self-Managed: 2026-02-27* <br>
 
-This release includes the release of our Iceberg Sink, performance improvements to SUBSCRIBE and bugfixes.
+This release includes the release of our Iceberg Sink, performance improvements to `SUBSCRIBE`, and bugfixes.
 
 ### Iceberg Sink
 {{< public-preview />}}
