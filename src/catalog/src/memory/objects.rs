@@ -948,7 +948,7 @@ pub enum TableDataSource {
     },
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum DataSourceDesc {
     /// Receives data from an external system
     Ingestion {
