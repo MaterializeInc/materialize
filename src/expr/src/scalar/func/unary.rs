@@ -200,6 +200,7 @@ derive_unary!(
     IsNull,
     IsTrue,
     IsFalse,
+    CaseLiteral,
     BitNotInt16,
     BitNotInt32,
     BitNotInt64,
