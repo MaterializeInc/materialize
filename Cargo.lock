@@ -6576,6 +6576,7 @@ dependencies = [
  "mz-repr",
  "mz-sql-parser",
  "mz-sql-pretty",
+ "mz-transform",
  "num",
  "num_enum 0.7.5",
  "ordered-float 5.1.0",
