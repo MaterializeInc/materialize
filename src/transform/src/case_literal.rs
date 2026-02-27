@@ -42,88 +42,66 @@ impl crate::Transform for CaseLiteralTransform {
         relation: &mut MirRelationExpr,
         _ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
-        relation.try_visit_mut_post::<_, crate::TransformError>(
-            &mut |expr: &mut MirRelationExpr| {
-                rewrite_scalars_in_relation(expr);
-                Ok(())
-            },
-        )?;
+        relation.try_visit_mut_post(&mut Self::action)?;
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
 }
 
-/// Rewrites scalar expressions within a single `MirRelationExpr` node.
-///
-/// Collects column types from the input relation to compute return types
-/// for the generated `CaseLiteral` nodes.
-fn rewrite_scalars_in_relation(expr: &mut MirRelationExpr) {
-    match expr {
-        MirRelationExpr::Map { input, scalars } => {
-            let mut column_types = input.typ().column_types;
-            for scalar in scalars.iter_mut() {
-                rewrite_scalar(scalar, &column_types);
-                let new_type = scalar.typ(&column_types);
-                column_types.push(new_type);
+impl CaseLiteralTransform {
+    /// Rewrites scalar expressions within a single `MirRelationExpr` node.
+    ///
+    /// Collects column types from the input relation to compute return types
+    /// for the generated `CaseLiteral` nodes. Each scalar is visited bottom-up
+    /// via `try_visit_mut_post` so inner chains become CaseLiterals first,
+    /// then outer If nodes can fold into them.
+    fn action(relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
+        match relation {
+            MirRelationExpr::Map { input, scalars } => {
+                let mut column_types = input.typ().column_types;
+                for scalar in scalars.iter_mut() {
+                    Self::rewrite_scalar(scalar, &column_types)?;
+                    let new_type = scalar.typ(&column_types);
+                    column_types.push(new_type);
+                }
             }
-        }
-        MirRelationExpr::Filter { input, predicates } => {
-            let column_types = input.typ().column_types;
-            for predicate in predicates.iter_mut() {
-                rewrite_scalar(predicate, &column_types);
+            MirRelationExpr::Filter { input, predicates } => {
+                let column_types = input.typ().column_types;
+                for predicate in predicates.iter_mut() {
+                    Self::rewrite_scalar(predicate, &column_types)?;
+                }
             }
-        }
-        MirRelationExpr::Reduce {
-            input, aggregates, ..
-        } => {
-            let column_types = input.typ().column_types;
-            for agg in aggregates.iter_mut() {
-                rewrite_scalar(&mut agg.expr, &column_types);
+            MirRelationExpr::Reduce {
+                input, aggregates, ..
+            } => {
+                let column_types = input.typ().column_types;
+                for agg in aggregates.iter_mut() {
+                    Self::rewrite_scalar(&mut agg.expr, &column_types)?;
+                }
             }
-        }
-        MirRelationExpr::FlatMap { input, exprs, .. } => {
-            let column_types = input.typ().column_types;
-            for e in exprs.iter_mut() {
-                rewrite_scalar(e, &column_types);
+            MirRelationExpr::FlatMap { input, exprs, .. } => {
+                let column_types = input.typ().column_types;
+                for e in exprs.iter_mut() {
+                    Self::rewrite_scalar(e, &column_types)?;
+                }
             }
+            _ => {}
         }
-        _ => {}
-    }
-}
-
-/// Rewrites a scalar expression tree bottom-up, replacing If-chains of
-/// `If(Eq(common_expr, literal), result, ...)` with `CaseLiteral`.
-///
-/// Bottom-up order ensures inner chains become CaseLiterals first,
-/// then outer If nodes can fold into them via the fold rule.
-fn rewrite_scalar(expr: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
-    // Bottom-up: visit children first, then process the current node.
-    // We use a manual recursive approach because we need `column_types` in scope.
-    match expr {
-        MirScalarExpr::Column(..) | MirScalarExpr::Literal(..) => {}
-        MirScalarExpr::CallUnmaterializable(_) => {}
-        MirScalarExpr::CallUnary { expr: inner, .. } => {
-            rewrite_scalar(inner, column_types);
-        }
-        MirScalarExpr::CallBinary { expr1, expr2, .. } => {
-            rewrite_scalar(expr1, column_types);
-            rewrite_scalar(expr2, column_types);
-        }
-        MirScalarExpr::CallVariadic { exprs, .. } => {
-            for e in exprs {
-                rewrite_scalar(e, column_types);
-            }
-        }
-        MirScalarExpr::If { cond, then, els } => {
-            rewrite_scalar(cond, column_types);
-            rewrite_scalar(then, column_types);
-            rewrite_scalar(els, column_types);
-        }
+        Ok(())
     }
 
-    // After children are processed, try the fold rule and chain-walk rule.
-    try_fold_into_case_literal(expr);
-    try_create_case_literal(expr, column_types);
+    /// Rewrites a scalar expression tree bottom-up, replacing If-chains of
+    /// `If(Eq(common_expr, literal), result, ...)` with `CaseLiteral`.
+    fn rewrite_scalar(
+        expr: &mut MirScalarExpr,
+        column_types: &[ReprColumnType],
+    ) -> Result<(), crate::TransformError> {
+        expr.try_visit_mut_post(&mut |node: &mut MirScalarExpr| {
+            try_fold_into_case_literal(node);
+            try_create_case_literal(node, column_types);
+            Ok(())
+        })
+    }
 }
 
 /// Fold rule: if node is `If(Eq(x, lit), res, CallVariadic(CaseLiteral{..}, [x, ...]))`
