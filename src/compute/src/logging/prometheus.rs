@@ -20,9 +20,9 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
+use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange, Column};
 use prometheus::proto::MetricType;
-use timely::container::CapacityContainerBuilder;
+use timely::container::DrainContainer;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Operator;
@@ -57,6 +57,8 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
 ) -> Return {
     let variant = LogVariant::Compute(ComputeLog::PrometheusMetrics);
     let mut collections = BTreeMap::new();
+    let interval = config.interval;
+    let interval_ms = std::cmp::max(1, interval.as_millis());
 
     if !config.index_logs.contains_key(&variant) {
         return Return { collections };
@@ -67,8 +69,8 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
     // Build a source operator that periodically gathers Prometheus metrics.
     let mut builder = OperatorBuilder::new("PrometheusMetrics".to_string(), scope.clone());
     type SourceData = ((SnapshotKey, SnapshotValue), Timestamp, Diff);
-    let (output, stream) = builder.new_output::<Vec<SourceData>>();
-    let mut output = OutputBuilder::<_, CapacityContainerBuilder<Vec<SourceData>>>::from(output);
+    let (output, stream) = builder.new_output::<Column<SourceData>>();
+    let mut output = OutputBuilder::<_, ColumnBuilder<SourceData>>::from(output);
 
     let operator_info = builder.operator_info();
     builder.build(move |capabilities| {
@@ -76,18 +78,22 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         let activator = scope.activator_for(operator_info.address);
 
         let mut prev_snapshot: BTreeMap<SnapshotKey, SnapshotValue> = BTreeMap::new();
+        let mut next_scrape = Instant::now();
 
         move |_frontiers| {
             let elapsed = now.elapsed();
             let elapsed_ms = elapsed.as_millis();
-            let scrape_interval = PROMETHEUS_SCRAPE_INTERVAL.get(&worker_config);
-            let interval_ms = std::cmp::max(1, scrape_interval.as_millis());
             let time_ms: u128 =
                 ((elapsed_ms + start_offset.as_millis()) / interval_ms + 1) * interval_ms;
             let ts: Timestamp = time_ms.try_into().expect("must fit");
 
             // Downgrade capability to the current timestamp.
             cap.downgrade(&ts);
+            if Instant::now() > next_scrape {
+                return;
+            }
+            let scrape_interval = PROMETHEUS_SCRAPE_INTERVAL.get(&worker_config);
+            next_scrape = Instant::now() + scrape_interval;
 
             // Gather current metrics and build new snapshot.
             let metric_families = metrics_registry.gather();
@@ -102,7 +108,9 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                 match new_snapshot.get(key) {
                     Some(new_val) if new_val == old_val => {}
                     _ => {
-                        session.give(((key.clone(), old_val.clone()), ts, Diff::MINUS_ONE));
+                        let key = (&key.0, &key.1);
+                        let val = (&old_val.0, &old_val.1, &old_val.2);
+                        session.give(((key, val), ts, Diff::MINUS_ONE));
                     }
                 }
             }
@@ -112,7 +120,9 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                 match prev_snapshot.get(key) {
                     Some(old_val) if old_val == new_val => {}
                     _ => {
-                        session.give(((key.clone(), new_val.clone()), ts, Diff::ONE));
+                        let key = (&key.0, &key.1);
+                        let val = (&new_val.0, &new_val.1, &new_val.2);
+                        session.give(((key, val), ts, Diff::ONE));
                     }
                 }
             }
@@ -120,7 +130,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             prev_snapshot = new_snapshot;
 
             // Reschedule after the current scrape interval.
-            activator.activate_after(scrape_interval);
+            activator.activate_after(interval);
         }
     });
 
@@ -132,7 +142,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                 input.for_each(|time, data| {
                     let mut session = output.session_with_builder(&time);
                     for (((metric_name, labels_key), (value, metric_type, help)), ts, diff) in
-                        data.iter()
+                        data.drain()
                     {
                         let labels = parse_labels(labels_key);
                         let (key, val) = pack_row(
@@ -144,7 +154,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                             help,
                             worker_id,
                         );
-                        session.give(((key, val), *ts, *diff));
+                        session.give(((key, val), ts, diff));
                     }
                 });
             }
