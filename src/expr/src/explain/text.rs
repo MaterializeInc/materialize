@@ -1296,7 +1296,18 @@ where
                         }
                     }
                 }
-                if let Some(is) = func.is() {
+                if let crate::UnaryFunc::CaseLiteral(cl) = func {
+                    let input = self.child::<MirScalarExpr>(&*expr);
+                    write!(f, "case {}", input)?;
+                    for (literal_row, result_expr) in &cl.cases {
+                        let result = self.child::<MirScalarExpr>(result_expr);
+                        write!(f, " when ")?;
+                        self.mode.humanize_datum(literal_row.unpack_first(), f)?;
+                        write!(f, " then {}", result)?;
+                    }
+                    let els = self.child::<MirScalarExpr>(&cl.els);
+                    write!(f, " else {} end", els)
+                } else if let Some(is) = func.is() {
                     let expr = self.child::<MirScalarExpr>(&*expr);
                     write!(f, "({}) IS {}", expr, is)
                 } else {

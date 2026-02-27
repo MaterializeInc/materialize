@@ -26,7 +26,7 @@ FROM t
 ----
 Explained Query:
   Project (#3)
-    Map (case_literal[2 cases](#0{x}))
+    Map (case #0{x} when 1 then 10 when 2 then 20 else 0 end)
       ReadStorage materialize.public.t
 
 Source materialize.public.t
@@ -51,7 +51,7 @@ FROM t
 ----
 Explained Query:
   Project (#3)
-    Map (case_literal[5 cases](#0{x}))
+    Map (case #0{x} when 1 then 10 when 2 then 20 when 3 then 30 when 4 then 40 when 5 then 50 else 0 end)
       ReadStorage materialize.public.t
 
 Source materialize.public.t
@@ -74,7 +74,7 @@ FROM t
 ----
 Explained Query:
   Project (#3)
-    Map (case_literal[3 cases](#0{x}))
+    Map (case #0{x} when 1 then "one" when 2 then "two" when 3 then "three" else "other" end)
       ReadStorage materialize.public.t
 
 Source materialize.public.t
