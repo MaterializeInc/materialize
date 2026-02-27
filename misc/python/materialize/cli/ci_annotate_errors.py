@@ -319,7 +319,7 @@ class ObservedErrorWithIssue(ObservedError, WithIssue):
 
     def to_markdown(self) -> str:
         filters = [{"id": "issue", "value": f"database-issues/{self.issue_number} "}]
-        ci_failures_url = f"https://ci-failures.dev.materialize.com/?key=test-failures&tfFilters={urllib.parse.quote(json.dumps(filters), safe='')}"
+        ci_failures_url = f"https://ci-dev-ui.mtrl.dev/?key=test-failures&tfFilters={urllib.parse.quote(json.dumps(filters), safe='')}"
         return f'<a href="{ci_failures_url}">{self.error_type}</a> <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}{self.additional_collapsed_error_details_as_markdown()}'
 
 
@@ -330,7 +330,7 @@ class ObservedErrorWithLocation(ObservedError):
 
     def to_markdown(self) -> str:
         filters = [{"id": "content", "value": self.error_message_as_text()[:2000]}]
-        ci_failures_url = f"https://ci-failures.dev.materialize.com/?key=test-failures&tfFilters={urllib.parse.quote(json.dumps(filters), safe='')}"
+        ci_failures_url = f"https://ci-dev-ui.mtrl.dev/?key=test-failures&tfFilters={urllib.parse.quote(json.dumps(filters), safe='')}"
         return f'<a href="{ci_failures_url}">{self.error_type}</a> in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}{self.additional_collapsed_error_details_as_markdown()}'
 
 

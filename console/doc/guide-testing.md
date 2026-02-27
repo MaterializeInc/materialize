@@ -17,11 +17,10 @@ To run our suite, run `yarn test`.
 
 SQL tests require the [console
 mzcompose](https://github.com/MaterializeInc/materialize/pull/26600) workflow and Docker to be
-running. Also, the materialize repo must be cloned in the same directory as console,
-since we use a relative path to call `mzcompose`.
+running.
 
 ```shell
-cd ../materialize/test/console
+cd ../test/console
 ./mzcompose run default
 cd -
 yarn test:sql
@@ -32,7 +31,7 @@ Once the workflow is running, you generally shouldn't have to restart it.
 When you are done, you can stop the docker containers:
 
 ```shell
-cd ../materialize/test/console
+cd ../test/console
 ./mzcompose down
 ```
 
@@ -96,7 +95,7 @@ Address: 127.0.0.1
 
 ### Running E2E tests
 
-To start, follow the [Cloud Setup](/README.md#cloud-setup) to set up your local stack.
+To start, follow the [Cloud Setup](../README.md#cloud-setup) to set up your local stack.
 
 Before attempting to run these tests, you should make sure you've pulled the latest
 cloud changes and docker images (or build the docker images locally. One wrinkle here is
@@ -105,7 +104,7 @@ to check out a previous commit, or build updated images. The docker images are t
 with the commit SHA, so it's easy to check for the latest SHA in the
 [Github Pacakges repo](https://github.com/MaterializeInc/cloud/pkgs/container/cloud).
 
-First, in `/console`, install all playwright dependencies if you haven't already.
+First, in the `console/` directory, install all playwright dependencies if you haven't already.
 
 ```shell
 yarn playwright install --with-deps
@@ -121,7 +120,7 @@ DEFAULT_STACK=local yarn start
 Then, in another terminal, use the cloud scripts to bring up the local stack:
 
 ```shell
-cd ../cloud
+cd ../../cloud
 # Activate the python venv, required for some cloud scripts
 source venv/bin/activate
 # Export necessary variables for staging Frontegg
@@ -135,10 +134,10 @@ bin/kind-delete && bin/kind-create
 In yet another terminal:
 
 ```shell
-cd ../cloud
+cd ../../cloud
 # Export the test user password
 export E2E_TEST_PASSWORD=$(bin/pulumi stack output --stack materialize/mzcloud/staging --show-secrets console_e2e_test_password)
-cd ../console
+cd ../materialize/console
 yarn test:e2e
 ```
 

@@ -32,14 +32,16 @@ use std::collections::BTreeMap;
 
 use itertools::Itertools;
 use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
-use mz_repr::Datum;
+use mz_repr::{Datum, ReprScalarType};
 use tracing::debug;
 
 use crate::analysis::equivalences::{
     EqClassesImpl, EquivalenceClasses, EquivalenceClassesWithholdingErrors, Equivalences,
     ExpressionReducer,
 };
-use crate::analysis::{Arity, DerivedView, SqlRelationType};
+use mz_repr::ReprColumnType;
+
+use crate::analysis::{Arity, DerivedView, ReprRelationType};
 
 use crate::{TransformCtx, TransformError};
 
@@ -66,6 +68,7 @@ impl crate::Transform for EquivalencePropagation {
         use crate::analysis::DerivedBuilder;
         let mut builder = DerivedBuilder::new(ctx.features);
         builder.require(Equivalences);
+        builder.require(ReprRelationType);
         let derived = builder.visit(relation);
         let derived = derived.as_view();
 
@@ -130,10 +133,11 @@ impl EquivalencePropagation {
         // This has the potential to do a lot more cloning (of `outer_equivalences`), and some care is needed
         // for `get_equivalences` which would be scoped to the whole method rather than tupled and enqueued.
 
-        let expr_type = derived
-            .value::<SqlRelationType>()
-            .expect("SqlRelationType required");
-        assert!(expr_type.is_some());
+        let repr_expr_type = derived
+            .value::<ReprRelationType>()
+            .expect("ReprRelationType required");
+        assert!(repr_expr_type.is_some());
+        let expr_type: Option<&Vec<ReprColumnType>> = repr_expr_type.as_ref();
         let expr_equivalences = derived
             .value::<Equivalences>()
             .expect("Equivalences required");
@@ -142,7 +146,7 @@ impl EquivalencePropagation {
         let expr_equivalences = if let Some(e) = expr_equivalences {
             e
         } else {
-            expr.take_safely_with_col_types(expr_type.clone().unwrap());
+            expr.take_safely_with_col_types(expr_type.unwrap().clone());
             return;
         };
 
@@ -155,9 +159,9 @@ impl EquivalencePropagation {
             }
         }
 
-        outer_equivalences.minimize(expr_type.as_ref().map(|x| &x[..]));
+        outer_equivalences.minimize(expr_type.map(|x| &x[..]));
         if outer_equivalences.unsatisfiable() {
-            expr.take_safely_with_col_types(expr_type.clone().unwrap());
+            expr.take_safely_with_col_types(expr_type.unwrap().clone());
             return;
         }
 
@@ -267,9 +271,9 @@ impl EquivalencePropagation {
                         input_equivalences_cloned = Some(input_equivalences_orig.clone());
                     }
                     // Get all output types, to reveal a prefix to each scaler expr.
-                    let input_types = derived
-                        .value::<SqlRelationType>()
-                        .expect("SqlRelationType required")
+                    let input_types: &Vec<ReprColumnType> = derived
+                        .value::<ReprRelationType>()
+                        .expect("ReprRelationType required")
                         .as_ref()
                         .unwrap();
                     let input_arity = input_types.len() - scalars.len();
@@ -331,15 +335,17 @@ impl EquivalencePropagation {
                     .expect("Equivalences required");
 
                 if let Some(input_equivalences) = input_equivalences {
-                    let input_types = derived
+                    let input_types: &Vec<ReprColumnType> = derived
                         .last_child()
-                        .value::<SqlRelationType>()
-                        .expect("SqlRelationType required");
+                        .value::<ReprRelationType>()
+                        .expect("ReprRelationType required")
+                        .as_ref()
+                        .unwrap();
                     let reducer = input_equivalences.reducer();
                     for expr in exprs.iter_mut() {
                         let changed = reducer.reduce_expr(expr);
                         if changed || !ctx.features.enable_less_reduce_in_eqprop {
-                            expr.reduce(input_types.as_ref().unwrap());
+                            expr.reduce(input_types);
                         }
                     }
                     let input_arity = *derived
@@ -365,25 +371,24 @@ impl EquivalencePropagation {
                     .value::<Equivalences>()
                     .expect("Equivalences required");
                 if let Some(input_equivalences) = input_equivalences {
-                    let input_types = derived
+                    let input_types: &Vec<ReprColumnType> = derived
                         .last_child()
-                        .value::<SqlRelationType>()
-                        .expect("SqlRelationType required");
+                        .value::<ReprRelationType>()
+                        .expect("ReprRelationType required")
+                        .as_ref()
+                        .unwrap();
                     let reducer = input_equivalences.reducer();
                     for expr in predicates.iter_mut() {
                         let changed = reducer.reduce_expr(expr);
                         if changed || !ctx.features.enable_less_reduce_in_eqprop {
-                            expr.reduce(input_types.as_ref().unwrap());
+                            expr.reduce(input_types);
                         }
                     }
                     // Incorporate `predicates` into `outer_equivalences`.
                     let mut class = predicates.clone();
-                    class.push(MirScalarExpr::literal_ok(
-                        Datum::True,
-                        mz_repr::SqlScalarType::Bool,
-                    ));
+                    class.push(MirScalarExpr::literal_ok(Datum::True, ReprScalarType::Bool));
                     outer_equivalences.classes.push(class);
-                    outer_equivalences.minimize(input_types.as_ref().map(|x| &x[..]));
+                    outer_equivalences.minimize(Some(input_types));
                     self.apply(
                         input,
                         derived.last_child(),
@@ -418,8 +423,8 @@ impl EquivalencePropagation {
                     children
                         .iter()
                         .flat_map(|c| {
-                            c.value::<SqlRelationType>()
-                                .expect("SqlRelationType required")
+                            c.value::<ReprRelationType>()
+                                .expect("ReprRelationType required")
                                 .as_ref()
                                 .unwrap()
                                 .iter()
@@ -555,10 +560,12 @@ impl EquivalencePropagation {
                     .value::<Equivalences>()
                     .expect("Equivalences required");
                 if let Some(input_equivalences) = input_equivalences {
-                    let input_type = derived
+                    let input_type: &Vec<ReprColumnType> = derived
                         .last_child()
-                        .value::<SqlRelationType>()
-                        .expect("SqlRelationType required");
+                        .value::<ReprRelationType>()
+                        .expect("ReprRelationType required")
+                        .as_ref()
+                        .unwrap();
                     let reducer = input_equivalences.reducer();
                     for key in group_key.iter_mut() {
                         // Semijoin elimination currently fails if you do more advanced simplification than
@@ -567,7 +574,7 @@ impl EquivalencePropagation {
                         let changed = reducer.reduce_expr(key);
                         let acceptable_sub = literal_domination(&old_key, key);
                         if changed || !ctx.features.enable_less_reduce_in_eqprop {
-                            key.reduce(input_type.as_ref().unwrap());
+                            key.reduce(input_type);
                         }
                         if !acceptable_sub && !literal_domination(&old_key, key) {
                             key.clone_from(&old_key);
@@ -576,7 +583,7 @@ impl EquivalencePropagation {
                     for aggr in aggregates.iter_mut() {
                         let changed = reducer.reduce_expr(&mut aggr.expr);
                         if changed || !ctx.features.enable_less_reduce_in_eqprop {
-                            aggr.expr.reduce(input_type.as_ref().unwrap());
+                            aggr.expr.reduce(input_type);
                         }
                         // A count expression over a non-null expression can discard the expression.
                         if aggr.func == mz_expr::AggregateFunc::Count && !aggr.distinct {
@@ -630,17 +637,19 @@ impl EquivalencePropagation {
                     .value::<Equivalences>()
                     .expect("Equivalences required");
                 if let Some(input_equivalences) = input_equivalences {
-                    let input_types = derived
+                    let input_types: &Vec<ReprColumnType> = derived
                         .last_child()
-                        .value::<SqlRelationType>()
-                        .expect("SqlRelationType required");
+                        .value::<ReprRelationType>()
+                        .expect("ReprRelationType required")
+                        .as_ref()
+                        .unwrap();
                     let reducer = input_equivalences.reducer();
                     if let Some(expr) = limit {
                         let old_expr = expr.clone();
                         let changed = reducer.reduce_expr(expr);
                         let acceptable_sub = literal_domination(&old_expr, expr);
                         if changed || !ctx.features.enable_less_reduce_in_eqprop {
-                            expr.reduce(input_types.as_ref().unwrap());
+                            expr.reduce(input_types);
                         }
                         if !acceptable_sub && !literal_domination(&old_expr, expr) {
                             expr.clone_from(&old_expr);

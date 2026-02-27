@@ -13,6 +13,10 @@ SELECT true
 
 # Exercise the Fivetran Destination.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
+ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
+
 > SELECT 1;
 1
 
@@ -111,19 +115,12 @@ $ fivetran-destination action=write_batch
 
 > CREATE TABLE foo.large (a int, b text, c text, d int)
 
-# Set the max copy from size to 100MiB.
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET max_copy_from_size = 104857600;
-
 # Repeating this line 1,300,000 times should get us close to 100MiB.
 $ file-append container=fivetran path=c.csv compression=gzip header=a,b,c,d repeat=1300000
 5000,"I am a large log line, <- can this comma mess us up?",foo_bar_baz,10
 
 $ file-append container=fivetran path=d.csv compression=gzip header=a,b,c,d repeat=1300000
 5000,"I am a large log line, <- can this comma mess us up?",foo_bar_baz,10
-
-# Note: Both 'c.csv' and 'd.csv' are individually under the 'max_copy_from_size', but together
-# they exceed it. We want to make sure the write_batch still succeeds in this case.
 
 $ fivetran-destination action=write_batch
 {
@@ -180,7 +177,7 @@ $ fivetran-destination action=write_batch
 > SELECT * FROM foo.large LIMIT 1;
 5000 "I am a large log line, <- can this comma mess us up?" foo_bar_baz 10
 
-# Try copying a file that is over the limit.
+# Copy a large file (previously limited by max_copy_from_size, now unlimited).
 
 $ file-append container=fivetran path=too_large.csv compression=gzip header=a,b,c,d repeat=2000000
 5000,"I am a large log line, <- can this comma mess us up?",foo_bar_baz,10
@@ -227,13 +224,26 @@ $ fivetran-destination action=write_batch
 }
 {
     "response": {
-        "Warning": {"message": "error when calling Materialize: Error { kind: Db, cause: Some(DbError { severity: \"ERROR\", parsed_severity: None, code: SqlState(E53000), message: \"COPY FROM STDIN too large\", detail: None, hint: None, position: None, where_: None, schema: None, table: None, column: None, datatype: None, constraint: None, file: None, line: None, routine: None }) }: closing sink: replace_files: replace files: write_batch"}
+        "Success": true
     }
 }
 
-# No new data should have been inserted.
 > SELECT COUNT(*) FROM foo.large;
-2600000
+2000000
+
+> SELECT count(*) >= 5
+  FROM mz_internal.mz_recent_activity_log
+  WHERE application_name = 'materialize_fivetran_destination'
+    AND sql LIKE 'COPY % FROM STDIN WITH (FORMAT CSV, HEADER false, NULL %)'
+    AND finished_status = 'success';
+true
+
+> SELECT count(*)
+  FROM mz_internal.mz_recent_activity_log
+  WHERE application_name = 'materialize_fivetran_destination'
+    AND sql LIKE 'COPY % FROM STDIN WITH (FORMAT CSV, HEADER false, NULL %)'
+    AND finished_status = 'aborted';
+0
 
 # Cleanup.
 > DROP SCHEMA foo CASCADE;

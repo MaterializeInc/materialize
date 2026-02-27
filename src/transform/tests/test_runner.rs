@@ -34,7 +34,7 @@ mod tests {
     use mz_transform::dataflow::{
         DataflowMetainfo, optimize_dataflow_demand_inner, optimize_dataflow_filters_inner,
     };
-    use mz_transform::{Optimizer, Transform, TransformCtx, reprtypecheck};
+    use mz_transform::{Optimizer, Transform, TransformCtx, typecheck};
     use proc_macro2::TokenTree;
 
     use crate::explain::Explainable;
@@ -50,11 +50,11 @@ mod tests {
 
     fn full_transform_list() -> Vec<Box<dyn Transform>> {
         let features = OptimizerFeatures::default();
-        let repr_typecheck_ctx = reprtypecheck::empty_context();
+        let typecheck_ctx = typecheck::empty_typechecking_context();
         let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx = TransformCtx::local(
             &features,
-            &repr_typecheck_ctx,
+            &typecheck_ctx,
             &mut df_meta,
             None,
             Some(TEST_GLOBAL_ID),
@@ -184,11 +184,11 @@ mod tests {
         test_type: TestType,
     ) -> Result<String, Error> {
         let features = OptimizerFeatures::default();
-        let repr_typecheck_ctx = reprtypecheck::empty_context();
+        let typecheck_ctx = typecheck::empty_typechecking_context();
         let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx = TransformCtx::local(
             &features,
-            &repr_typecheck_ctx,
+            &typecheck_ctx,
             &mut df_meta,
             None,
             Some(TEST_GLOBAL_ID),
@@ -356,7 +356,7 @@ mod tests {
                         "MirRelationExpr",
                         &mut MirRelationExprDeserializeContext::new(cat),
                     )?;
-                    let id = cat.insert(&name, rel.typ(), true)?;
+                    let id = cat.insert(&name, rel.sql_typ(), true)?;
                     dataflow.push((id, rel));
                 }
                 other => return Err(format!("Could not parse {:?} as view", other)),
@@ -368,11 +368,11 @@ mod tests {
         let mut out = String::new();
         if test_type == TestType::Opt {
             let features = OptimizerFeatures::default();
-            let repr_typecheck_ctx = reprtypecheck::empty_context();
+            let typecheck_ctx = typecheck::empty_typechecking_context();
             let mut df_meta = DataflowMetainfo::default();
             let mut transform_ctx = TransformCtx::local(
                 &features,
-                &repr_typecheck_ctx,
+                &typecheck_ctx,
                 &mut df_meta,
                 None,
                 Some(TEST_GLOBAL_ID),
@@ -409,11 +409,11 @@ mod tests {
         };
         if test_type == TestType::Opt {
             let features = OptimizerFeatures::default();
-            let repr_typecheck_ctx = reprtypecheck::empty_context();
+            let typecheck_ctx = typecheck::empty_typechecking_context();
             let mut df_meta = DataflowMetainfo::default();
             let mut transform_ctx = TransformCtx::local(
                 &features,
-                &repr_typecheck_ctx,
+                &typecheck_ctx,
                 &mut df_meta,
                 None,
                 Some(TEST_GLOBAL_ID),

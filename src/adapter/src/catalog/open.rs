@@ -55,6 +55,7 @@ use mz_sql::names::CommentObjectId;
 use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
+use mz_storage_client::controller::StorageMetadata;
 use mz_storage_client::storage_collections::StorageCollections;
 use tracing::{Instrument, info, warn};
 use uuid::Uuid;
@@ -130,26 +131,26 @@ impl Catalog {
         }
 
         let mut state = CatalogState {
-            database_by_name: BTreeMap::new(),
-            database_by_id: BTreeMap::new(),
-            entry_by_id: BTreeMap::new(),
-            entry_by_global_id: BTreeMap::new(),
-            ambient_schemas_by_name: BTreeMap::new(),
-            ambient_schemas_by_id: BTreeMap::new(),
-            clusters_by_name: BTreeMap::new(),
-            clusters_by_id: BTreeMap::new(),
-            roles_by_name: BTreeMap::new(),
-            roles_by_id: BTreeMap::new(),
-            network_policies_by_id: BTreeMap::new(),
-            role_auth_by_id: BTreeMap::new(),
-            network_policies_by_name: BTreeMap::new(),
-            system_configuration,
-            default_privileges: DefaultPrivileges::default(),
-            system_privileges: PrivilegeMap::default(),
-            comments: CommentsMap::default(),
-            source_references: BTreeMap::new(),
-            storage_metadata: Default::default(),
-            temporary_schemas: BTreeMap::new(),
+            database_by_name: imbl::OrdMap::new(),
+            database_by_id: imbl::OrdMap::new(),
+            entry_by_id: imbl::OrdMap::new(),
+            entry_by_global_id: imbl::OrdMap::new(),
+            ambient_schemas_by_name: imbl::OrdMap::new(),
+            ambient_schemas_by_id: imbl::OrdMap::new(),
+            clusters_by_name: imbl::OrdMap::new(),
+            clusters_by_id: imbl::OrdMap::new(),
+            roles_by_name: imbl::OrdMap::new(),
+            roles_by_id: imbl::OrdMap::new(),
+            network_policies_by_id: imbl::OrdMap::new(),
+            role_auth_by_id: imbl::OrdMap::new(),
+            network_policies_by_name: imbl::OrdMap::new(),
+            system_configuration: Arc::new(system_configuration),
+            default_privileges: Arc::new(DefaultPrivileges::default()),
+            system_privileges: Arc::new(PrivilegeMap::default()),
+            comments: Arc::new(CommentsMap::default()),
+            source_references: imbl::OrdMap::new(),
+            storage_metadata: Arc::new(StorageMetadata::default()),
+            temporary_schemas: imbl::OrdMap::new(),
             mock_authentication_nonce: Default::default(),
             config: mz_sql::catalog::CatalogConfig {
                 start_time: to_datetime((config.now)()),
@@ -734,7 +735,7 @@ impl CatalogState {
         name: &str,
         value: VarInput,
     ) -> Result<(), Error> {
-        Ok(self.system_configuration.set_default(name, value)?)
+        Ok(Arc::make_mut(&mut self.system_configuration).set_default(name, value)?)
     }
 }
 

@@ -91,7 +91,7 @@ pub(crate) fn attempt_left_join_magic(
     // We may use these relations multiple times to extract augmenting values.
     let id = LocalId::new(id_gen.allocate_id());
     // The join body that we will iteratively develop.
-    let mut body = MirRelationExpr::local_get(id, full_left_typ);
+    let mut body = MirRelationExpr::local_get(id, full_left_typ.clone());
     bindings.push((id, body.clone(), left));
     bound_to.extend((0..la).map(|_| 1));
     arities.push(la);
@@ -140,7 +140,7 @@ pub(crate) fn attempt_left_join_magic(
         }
         right_type.keys.clear();
         let aug_id = LocalId::new(id_gen.allocate_id());
-        let aug_right = MirRelationExpr::local_get(aug_id, right_type);
+        let aug_right = MirRelationExpr::local_get(aug_id, right_type.clone());
 
         bindings.push((id, get_right.clone(), right));
         bound_to.extend((0..ra).map(|_| 2 + index));
@@ -242,7 +242,7 @@ pub(crate) fn attempt_left_join_magic(
                         ),
                         Diff::ONE,
                     )]),
-                    typ: left_typ,
+                    typ: left_typ.clone(),
                 },
             )
             .project(

@@ -36,7 +36,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::explain::trace_plan;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, GlobalId, Row};
+use mz_repr::{Datum, GlobalId, ReprRelationType, Row};
 use mz_sql::catalog::CatalogRole;
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -336,7 +336,12 @@ impl<'a> DataflowBuilder<'a> {
                     let desc = entry
                         .relation_desc()
                         .expect("indexes can only be built on items with descs");
-                    dataflow.import_index(index_id, index_desc, desc.typ().clone(), monotonic);
+                    dataflow.import_index(
+                        index_id,
+                        index_desc,
+                        ReprRelationType::from(desc.typ()),
+                        monotonic,
+                    );
                 }
             } else {
                 drop(valid_indexes);
@@ -581,7 +586,10 @@ fn eval_unmaterializable_func(
                 datums,
             )
             .expect("known to be a valid array");
-        Ok(MirScalarExpr::Literal(Ok(row), f.output_type()))
+        Ok(MirScalarExpr::literal_from_single_element_row(
+            row,
+            f.output_type().scalar_type,
+        ))
     };
     let pack_dict = |mut datums: Vec<(String, String)>| {
         datums.sort();
@@ -591,7 +599,10 @@ fn eval_unmaterializable_func(
                 .iter()
                 .map(|(key, value)| (key.as_str(), Datum::from(value.as_str()))),
         );
-        Ok(MirScalarExpr::Literal(Ok(row), f.output_type()))
+        Ok(MirScalarExpr::literal_from_single_element_row(
+            row,
+            f.output_type().scalar_type,
+        ))
     };
     let pack = |datum| {
         Ok(MirScalarExpr::literal_ok(
@@ -692,7 +703,10 @@ fn eval_unmaterializable_func(
                     ).expect("role_membership is 1 dimensional, and its length is used for the array length");
                 }
             });
-            Ok(MirScalarExpr::Literal(Ok(row), f.output_type()))
+            Ok(MirScalarExpr::literal_from_single_element_row(
+                row,
+                f.output_type().scalar_type,
+            ))
         }
         UnmaterializableFunc::MzSessionId => pack(Datum::from(state.config().session_id)),
         UnmaterializableFunc::MzUptime => {

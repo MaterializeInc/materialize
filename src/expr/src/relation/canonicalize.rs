@@ -16,14 +16,14 @@ use std::rc::Rc;
 
 use itertools::Itertools;
 use mz_ore::soft_assert_or_log;
-use mz_repr::{SqlColumnType, SqlScalarType};
+use mz_repr::{ReprColumnType, ReprScalarType};
 
 use crate::visit::Visit;
 use crate::{MirScalarExpr, UnaryFunc, VariadicFunc, func};
 
 /// Canonicalize equivalence classes of a join and expressions contained in them.
 ///
-/// `input_types` can be the [SqlColumnType]s of the join or the [SqlColumnType]s of
+/// `input_types` can be the [ReprColumnType]s of the join or the [ReprColumnType]s of
 /// the individual inputs of the join in order.
 ///
 /// This function:
@@ -40,9 +40,9 @@ pub fn canonicalize_equivalences<'a, I>(
     equivalences: &mut Vec<Vec<MirScalarExpr>>,
     input_column_types: I,
 ) where
-    I: Iterator<Item = &'a Vec<SqlColumnType>>,
+    I: Iterator<Item = &'a Vec<ReprColumnType>>,
 {
-    let column_types = input_column_types
+    let repr_column_types = input_column_types
         .flat_map(|f| f.clone())
         .collect::<Vec<_>>();
     // Calculate the number of non-leaves for each expression.
@@ -85,7 +85,7 @@ pub fn canonicalize_equivalences<'a, I>(
                         expressions_rewritten = true;
                     }
                 });
-                popped_expr.reduce(&column_types);
+                popped_expr.reduce(&repr_column_types);
                 new_equivalence.push((rank_complexity(&popped_expr), popped_expr));
             }
             new_equivalence.sort();
@@ -216,17 +216,19 @@ where
 /// null rejecting predicate for the same sub-expression.
 pub fn canonicalize_predicates(
     predicates: &mut Vec<MirScalarExpr>,
-    column_types: &[SqlColumnType],
+    repr_column_types: &[ReprColumnType],
 ) {
     soft_assert_or_log!(
         predicates
             .iter()
-            .all(|p| p.typ(column_types).scalar_type == SqlScalarType::Bool),
+            .all(|p| p.typ(repr_column_types).scalar_type == ReprScalarType::Bool),
         "cannot canonicalize predicates that are not of type bool"
     );
 
     // 1) Reduce each individual predicate.
-    predicates.iter_mut().for_each(|p| p.reduce(column_types));
+    predicates
+        .iter_mut()
+        .for_each(|p| p.reduce(repr_column_types));
 
     // 2) Split "A and B" into two predicates: "A" and "B"
     // Relies on the `reduce` above having flattened nested ANDs.
@@ -300,7 +302,7 @@ pub fn canonicalize_predicates(
                             other_predicate,
                             expr,
                             constant_bool,
-                            column_types,
+                            repr_column_types,
                         );
                     }
                     for other_idx in (0..completed.len()).rev() {
@@ -308,7 +310,7 @@ pub fn canonicalize_predicates(
                             &mut completed[other_idx],
                             expr,
                             constant_bool,
-                            column_types,
+                            repr_column_types,
                         ) {
                             // If a predicate in the `completed` list has
                             // been simplified, stick it back into the `todo` list.
@@ -369,7 +371,7 @@ pub fn canonicalize_predicates(
         (p.is_literal_false() || p.is_literal_null()) &&
         // This extra check is only needed if we determine that the soft-assert
         // at the top of this function would ever fail for a good reason.
-        p.typ(column_types).scalar_type == SqlScalarType::Bool
+        p.typ(repr_column_types).scalar_type == ReprScalarType::Bool
     }) {
         // all rows get filtered away if any predicate is null or false.
         *predicates = vec![MirScalarExpr::literal_false()]
@@ -390,7 +392,7 @@ fn replace_subexpr_and_reduce(
     predicate: &mut MirScalarExpr,
     replace_if_equal_to: &MirScalarExpr,
     replace_with: &MirScalarExpr,
-    column_types: &[SqlColumnType],
+    repr_column_types: &[ReprColumnType],
 ) -> bool {
     let mut changed = false;
     #[allow(deprecated)]
@@ -434,7 +436,7 @@ fn replace_subexpr_and_reduce(
         },
     );
     if changed {
-        predicate.reduce(column_types);
+        predicate.reduce(repr_column_types);
     }
     changed
 }

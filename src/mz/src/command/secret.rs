@@ -19,6 +19,11 @@
 
 use std::io::{self, Write};
 
+use mz_sql_parser::ast::{
+    Ident,
+    display::{AstDisplay, escaped_string_literal},
+};
+
 use crate::{context::RegionContext, error::Error};
 
 /// Represents the args needed to create a secret
@@ -74,16 +79,12 @@ pub async fn create(
     }
 
     if let Some(schema) = schema {
-        commands.push(format!("SET search_path TO {}", schema));
+        let schema = Ident::new_unchecked(schema).to_ast_string_simple();
+        commands.push(format!("SET search_path TO {schema};"));
     }
 
-    // The most common ways to write a secret are the following ways:
-    // 1. Decode function: decode('c2VjcmV0Cg==', 'base64')
-    // 2. ASCII: 13de2601-24b4-4d8f-9931-375c0b2b5cd4
-    // For case 2) we want to scape the value for a better experience.
-    if !buffer.starts_with("decode") {
-        buffer = format!("'{}'", buffer);
-    }
+    let buffer = escaped_string_literal(&buffer).to_string();
+    let name = Ident::new_unchecked(name).to_ast_string_simple();
 
     if force {
         // Rather than checking if the SECRET exists, do an upsert.

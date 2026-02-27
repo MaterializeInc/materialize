@@ -330,7 +330,7 @@ impl EagerUnaryFunc for AdjustNumericScale {
         Ok(d)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Numeric {
             max_scale: Some(self.0),
         }

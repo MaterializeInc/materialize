@@ -183,7 +183,7 @@ impl EagerUnaryFunc for CastStringToNumeric {
         Ok(d.into_inner())
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
     }
 
@@ -240,7 +240,7 @@ impl EagerUnaryFunc for CastStringToTimestamp {
         Ok(updated)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Timestamp { precision: self.0 }.nullable(input.nullable)
     }
 
@@ -294,7 +294,7 @@ impl EagerUnaryFunc for CastStringToTimestampTz {
         Ok(updated)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::TimestampTz { precision: self.0 }.nullable(input.nullable)
     }
 
@@ -375,7 +375,7 @@ impl LazyUnaryFunc for CastStringToArray {
     }
 
     /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         self.return_ty.clone().nullable(input_type.nullable)
     }
 
@@ -463,7 +463,7 @@ impl LazyUnaryFunc for CastStringToList {
     }
 
     /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         self.return_ty
             .without_modifiers()
             .nullable(input_type.nullable)
@@ -561,7 +561,7 @@ impl LazyUnaryFunc for CastStringToMap {
     }
 
     /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         self.return_ty.clone().nullable(input_type.nullable)
     }
 
@@ -630,7 +630,7 @@ impl EagerUnaryFunc for CastStringToChar {
         Ok(Char(s))
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Char {
             length: self.length,
         }
@@ -712,7 +712,7 @@ impl LazyUnaryFunc for CastStringToRange {
     }
 
     /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         self.return_ty
             .without_modifiers()
             .nullable(input_type.nullable)
@@ -784,7 +784,7 @@ impl EagerUnaryFunc for CastStringToVarChar {
         Ok(VarChar(s))
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::VarChar {
             max_length: self.length,
         }
@@ -864,7 +864,7 @@ impl LazyUnaryFunc for CastStringToInt2Vector {
     }
 
     /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Int2Vector.nullable(input_type.nullable)
     }
 
@@ -1011,7 +1011,7 @@ impl EagerUnaryFunc for IsLikeMatch {
         self.0.is_match(haystack)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Bool.nullable(input.nullable)
     }
 }
@@ -1049,7 +1049,7 @@ impl EagerUnaryFunc for IsRegexpMatch {
         self.0.is_match(haystack)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Bool.nullable(input.nullable)
     }
 }
@@ -1094,7 +1094,7 @@ impl LazyUnaryFunc for RegexpMatch {
     }
 
     /// The output SqlColumnType of this function
-    fn output_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true)
     }
 
@@ -1163,7 +1163,7 @@ impl LazyUnaryFunc for RegexpSplitToArray {
     }
 
     /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(input_type.nullable)
     }
 
@@ -1249,7 +1249,7 @@ impl binary::EagerBinaryFunc for RegexpReplace {
         self.regex.replacen(source, self.limit, replacement)
     }
 
-    fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
+    fn output_sql_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
         use mz_repr::AsColumnType;
         let output = <Self::Output<'_> as AsColumnType>::as_column_type();
         let propagates_nulls = binary::EagerBinaryFunc::propagates_nulls(self);

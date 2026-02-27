@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
@@ -3447,7 +3448,7 @@ impl SqlScalarType {
         }
     }
 
-    /// Returns vector of [`SqlScalarType`] elements in a [`SqlScalarType::Record`].
+    /// Returns a vector of [`SqlScalarType`] elements in a [`SqlScalarType::Record`].
     ///
     /// # Panics
     ///
@@ -3734,28 +3735,6 @@ impl SqlScalarType {
         self.eq_inner(other, false)
     }
 
-    /// Determines equality among scalar types that acknowledges custom OIDs,
-    /// falling back to representation type equality (which ignores OIDs and
-    /// other inessential, SQL-level difference) when that fails.
-    ///
-    /// This function should only be called in assertion-like contexts, where
-    /// we really expect `true` as the result---it calls `::tracing::error!`
-    /// when `base_eq` returns `false`.
-    pub fn base_eq_or_repr_eq_for_assertion(&self, other: &SqlScalarType) -> bool {
-        if self.base_eq(other) {
-            return true;
-        }
-
-        ::tracing::trace!("repr type error: base_eq failed for {self:?} and {other:?}");
-        // SqlScalarType::base_eq does not consider nullability at all, but `ReprScalarType::eq` does
-        // To reconcile these differences, we check "compatibility", i.e., if we can union the types wthout error.
-        // Since ReprScalarType::union is a glorified nullability compositor, a successful union means the types
-        // are equal (modulo nullability)
-        ReprScalarType::from(self)
-            .union(&ReprScalarType::from(other))
-            .is_ok()
-    }
-
     // Determines equality among scalar types that ignores any custom OIDs or
     // embedded values.
     pub fn structural_eq(&self, other: &SqlScalarType) -> bool {
@@ -3815,12 +3794,11 @@ impl SqlScalarType {
 
     /// Adopts the nullability from another [`SqlScalarType`].
     /// Traverses deeply into structured types.
-    pub fn backport_nullability(&mut self, backport_typ: &SqlScalarType) {
-        use SqlScalarType::*;
+    pub fn backport_nullability(&mut self, backport_typ: &ReprScalarType) {
         match (self, backport_typ) {
             (
-                List { element_type, .. },
-                List {
+                SqlScalarType::List { element_type, .. },
+                ReprScalarType::List {
                     element_type: backport_element_type,
                     ..
                 },
@@ -3828,8 +3806,8 @@ impl SqlScalarType {
                 element_type.backport_nullability(backport_element_type);
             }
             (
-                Map { value_type, .. },
-                Map {
+                SqlScalarType::Map { value_type, .. },
+                ReprScalarType::Map {
                     value_type: backport_value_type,
                     ..
                 },
@@ -3837,8 +3815,8 @@ impl SqlScalarType {
                 value_type.backport_nullability(backport_value_type);
             }
             (
-                Record { fields, .. },
-                Record {
+                SqlScalarType::Record { fields, .. },
+                ReprScalarType::Record {
                     fields: backport_fields,
                     ..
                 },
@@ -3852,15 +3830,15 @@ impl SqlScalarType {
                     .iter_mut()
                     .zip_eq(backport_fields)
                     .for_each(|(field, backport_field)| {
-                        field.1.backport_nullability(&backport_field.1);
+                        field.1.backport_nullability(backport_field);
                     });
             }
-            (Array(a), Array(b)) => {
+            (SqlScalarType::Array(a), ReprScalarType::Array(b)) => {
                 a.backport_nullability(b);
             }
             (
-                Range { element_type },
-                Range {
+                SqlScalarType::Range { element_type },
+                ReprScalarType::Range {
                     element_type: backport_element_type,
                 },
             ) => {
@@ -4717,19 +4695,7 @@ impl Arbitrary for ReprScalarType {
 ///
 /// It is important that any new variants for this enum be added to the `Arbitrary` instance
 /// and the `union` method.
-#[derive(
-    Clone,
-    Debug,
-    EnumKind,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    Ord,
-    PartialOrd,
-    Hash,
-    MzReflect
-)]
+#[derive(Clone, Debug, EnumKind, Serialize, Deserialize, MzReflect)]
 #[enum_kind(ReprScalarBaseType, derive(PartialOrd, Ord, Hash))]
 pub enum ReprScalarType {
     Bool,
@@ -4763,7 +4729,101 @@ pub enum ReprScalarType {
     AclItem,
 }
 
+impl PartialEq for ReprScalarType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ReprScalarType::Array(a), ReprScalarType::Array(b)) => a.eq(b),
+            (
+                ReprScalarType::List { element_type: a },
+                ReprScalarType::List { element_type: b },
+            ) => a.eq(b),
+            (ReprScalarType::Record { fields: a }, ReprScalarType::Record { fields: b }) => {
+                a.len() == b.len()
+                    && a.iter()
+                        .zip_eq(b.iter())
+                        .all(|(af, bf)| af.scalar_type.eq(&bf.scalar_type))
+            }
+            (ReprScalarType::Map { value_type: a }, ReprScalarType::Map { value_type: b }) => {
+                a.eq(b)
+            }
+            (
+                ReprScalarType::Range { element_type: a },
+                ReprScalarType::Range { element_type: b },
+            ) => a.eq(b),
+            _ => ReprScalarBaseType::from(self) == ReprScalarBaseType::from(other),
+        }
+    }
+}
+impl Eq for ReprScalarType {}
+
+impl Hash for ReprScalarType {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            ReprScalarType::Array(a) => a.hash(state),
+            ReprScalarType::List { element_type: a } => a.hash(state),
+            ReprScalarType::Record { fields: a } => {
+                for field in a {
+                    field.scalar_type.hash(state);
+                }
+            }
+            ReprScalarType::Map { value_type: a } => a.hash(state),
+            ReprScalarType::Range { element_type: a } => a.hash(state),
+            _ => ReprScalarBaseType::from(self).hash(state),
+        }
+    }
+}
+
+impl PartialOrd for ReprScalarType {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ReprScalarType {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (ReprScalarType::Array(a), ReprScalarType::Array(b)) => a.cmp(b),
+            (
+                ReprScalarType::List { element_type: a },
+                ReprScalarType::List { element_type: b },
+            ) => a.cmp(b),
+            (ReprScalarType::Record { fields: a }, ReprScalarType::Record { fields: b }) => {
+                let len_ordering = a.len().cmp(&b.len());
+                if len_ordering != Ordering::Equal {
+                    return len_ordering;
+                }
+
+                // NB ignoring nullability
+                for (af, bf) in a.iter().zip_eq(b.iter()) {
+                    let scalar_type_ordering = af.scalar_type.cmp(&bf.scalar_type);
+                    if scalar_type_ordering != Ordering::Equal {
+                        return scalar_type_ordering;
+                    }
+                }
+
+                Ordering::Equal
+            }
+            (ReprScalarType::Map { value_type: a }, ReprScalarType::Map { value_type: b }) => {
+                a.cmp(b)
+            }
+            (
+                ReprScalarType::Range { element_type: a },
+                ReprScalarType::Range { element_type: b },
+            ) => a.cmp(b),
+            _ => ReprScalarBaseType::from(self).cmp(&ReprScalarBaseType::from(other)),
+        }
+    }
+}
+
 impl ReprScalarType {
+    /// Returns a [`ReprColumnType`] with the given nullability.
+    pub fn nullable(self, nullable: bool) -> ReprColumnType {
+        ReprColumnType {
+            scalar_type: self,
+            nullable,
+        }
+    }
+
     /// Returns the union of two `ReprScalarType` or an error.
     ///
     /// Errors can only occur if the two types are built somewhere using different constructors.
@@ -4847,6 +4907,38 @@ impl ReprScalarType {
                 element_type: Box::new(element_type.union(other_element_type)?),
             }),
             (_, _) => bail!("Can't union scalar types: {:?} and {:?}", self, scalar_type),
+        }
+    }
+
+    /// Returns the [`ReprScalarType`] of elements in a [`ReprScalarType::List`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ReprScalarType::List`].
+    pub fn unwrap_list_element_type(&self) -> &ReprScalarType {
+        match self {
+            ReprScalarType::List { element_type, .. } => element_type,
+            _ => panic!(
+                "ReprScalarType::unwrap_list_element_type called on {:?}",
+                self
+            ),
+        }
+    }
+
+    /// Returns a vector of [`ReprScalarType`] elements in a [`ReprScalarType::Record`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ReprScalarType::Record`].
+    pub fn unwrap_record_element_type(&self) -> Vec<&ReprScalarType> {
+        match self {
+            ReprScalarType::Record { fields, .. } => {
+                fields.iter().map(|t| &t.scalar_type).collect_vec()
+            }
+            _ => panic!(
+                "SqlScalarType::unwrap_record_element_type called on {:?}",
+                self
+            ),
         }
     }
 }

@@ -370,8 +370,10 @@ impl Coordinator {
                     full_name,
                 )) => {
                     compute_sinks_to_drop.push((mv.cluster_id, mv.global_id_writes()));
-                    sources_to_drop.extend(mv.global_ids().map(|gid| (catalog_id, gid)));
-                    dropped_item_names.insert(mv.global_id_writes(), full_name);
+                    for gid in mv.global_ids() {
+                        sources_to_drop.push((catalog_id, gid));
+                        dropped_item_names.insert(gid, full_name.clone());
+                    }
                 }
                 CatalogImplication::View(CatalogImplicationKind::Added(view)) => {
                     tracing::debug!(?view, "not handling AddView in here yet");

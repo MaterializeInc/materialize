@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this directory.
 
 ## Build and Development Commands
 
@@ -47,7 +47,8 @@ yarn gen:api
 yarn gen:types
 
 # Optional: Enable pre-commit hook to auto-run ESLint --fix on staged files
-ln -s ../../misc/githooks/pre-commit .git/hooks/pre-commit
+# Run from the materialize repo root:
+ln -s ../../console/misc/githooks/pre-commit .git/hooks/pre-commit
 ```
 
 ## Architecture Overview

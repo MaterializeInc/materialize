@@ -771,6 +771,35 @@ CREATE CONNECTION sqlserver_connection TO SQL SERVER (
 );
 ```
 
+### Iceberg Catalog
+
+{{< public-preview />}}
+
+An Iceberg catalog connection establishes a link to an [Apache Iceberg](https://iceberg.apache.org/)
+catalog. You can use Iceberg catalog connections to create [Iceberg sinks](/sql/create-sink/iceberg).
+
+#### Syntax {#iceberg-catalog-syntax}
+
+{{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog" %}}
+
+#### Example {#iceberg-catalog-example}
+
+```mzsql
+-- First, create an AWS connection for authentication
+CREATE CONNECTION aws_connection
+  TO AWS (ASSUME ROLE ARN = 'arn:aws:iam::123456789012:role/MaterializeIceberg');
+
+-- Create the Iceberg catalog connection
+CREATE CONNECTION iceberg_catalog TO ICEBERG CATALOG (
+    CATALOG TYPE = 's3tablesrest',
+    URL = 'https://s3tables.us-east-1.amazonaws.com/iceberg',
+    WAREHOUSE = 'arn:aws:s3tables:us-east-1:123456789012:bucket/my-table-bucket',
+    AWS CONNECTION = aws_connection
+);
+```
+
+For more information about using Iceberg sinks, see the [Iceberg sink documentation](/serve-results/sink/iceberg/).
+
 ## Network security connections
 
 

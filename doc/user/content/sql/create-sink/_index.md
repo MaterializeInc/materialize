@@ -55,6 +55,15 @@ By default, the message key is encoded using the same format as the message valu
 
 For details, see [CREATE Sink: Kafka/Redpanda](/sql/create-sink/kafka/).
 {{< /tab >}}
+
+{{< tab "Iceberg" >}}
+
+{{< public-preview />}}
+
+{{% include-example file="examples/create_sink_iceberg" example="syntax" %}}
+
+For details, see [CREATE Sink: Iceberg](/sql/create-sink/iceberg/).
+{{< /tab >}}
 {{< /tabs >}}
 
 ## Best practices
@@ -76,10 +85,6 @@ some burst capacity.
 A sink cannot be created directly on a catalog object. As a workaround you can
 create a materialized view on a catalog object and create a sink on the
 materialized view.
-
-### Kafka transaction markers
-
-{{< include-md file="shared-content/kafka-transaction-markers.md" >}}
 
 [//]: # "TODO(morsapaes) Add best practices for sizing sinks."
 

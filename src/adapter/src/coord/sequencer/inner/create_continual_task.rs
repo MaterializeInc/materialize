@@ -21,7 +21,7 @@ use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
-use mz_repr::optimize::OverrideFrom;
+use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::{
     GlobalId, RelationVersion, RelationVersionSelector, Timestamp, VersionedRelationDesc,
 };
@@ -96,12 +96,13 @@ impl Coordinator {
         // Construct the CatalogItem for this CT and optimize it.
         let mut item = crate::continual_task::ct_item_from_plan(plan, global_id, resolved_ids)?;
         let full_name = bootstrap_catalog.resolve_full_name(&name, Some(ctx.session().conn_id()));
-        let (optimized_plan, mut physical_plan, metainfo) = self.optimize_create_continual_task(
-            &item,
-            global_id,
-            Arc::new(bootstrap_catalog),
-            full_name.to_string(),
-        )?;
+        let (optimized_plan, mut physical_plan, metainfo, optimizer_features) = self
+            .optimize_create_continual_task(
+                &item,
+                global_id,
+                Arc::new(bootstrap_catalog),
+                full_name.to_string(),
+            )?;
 
         // Timestamp selection
         let mut id_bundle = dataflow_import_id_bundle(&physical_plan, cluster_id.clone());
@@ -139,6 +140,7 @@ impl Coordinator {
                     catalog.set_optimized_plan(global_id, optimized_plan);
                     catalog.set_physical_plan(global_id, physical_plan.clone());
                     catalog.set_dataflow_metainfo(global_id, metainfo);
+                    catalog.cache_expressions(global_id, None, optimizer_features);
 
                     coord
                         .controller
@@ -173,6 +175,7 @@ impl Coordinator {
             DataflowDescription<OptimizedMirRelationExpr>,
             DataflowDescription<Plan>,
             DataflowMetainfo<Arc<OptimizerNotice>>,
+            OptimizerFeatures,
         ),
         AdapterError,
     > {
@@ -184,6 +187,7 @@ impl Coordinator {
             .expect("compute instance does not exist");
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(ct.cluster_id).config.features());
+        let optimizer_features = optimizer_config.features.clone();
         let non_null_assertions = Vec::new();
         let refresh_schedule = None;
         // Continual Tasks turn an "input" into diffs by inserting retractions,
@@ -244,7 +248,7 @@ impl Coordinator {
             .catalog()
             .render_notices(metainfo, notice_ids, Some(output_id));
 
-        Ok((optimized_plan, physical_plan, metainfo))
+        Ok((optimized_plan, physical_plan, metainfo, optimizer_features))
     }
 }
 

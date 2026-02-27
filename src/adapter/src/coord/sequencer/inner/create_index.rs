@@ -322,6 +322,7 @@ impl Coordinator {
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
             .override_from(&explain_ctx);
+        let optimizer_features = optimizer_config.features.clone();
 
         // Build an optimizer for this INDEX.
         let mut optimizer = optimize::index::Optimizer::new(
@@ -376,6 +377,7 @@ impl Coordinator {
                                     resolved_ids,
                                     global_mir_plan,
                                     global_lir_plan,
+                                    optimizer_features,
                                 })
                             }
                         }
@@ -436,6 +438,7 @@ impl Coordinator {
             resolved_ids,
             global_mir_plan,
             global_lir_plan,
+            optimizer_features,
             ..
         } = stage;
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
@@ -479,6 +482,10 @@ impl Coordinator {
                     let notice_builtin_updates_fut = coord
                         .process_dataflow_metainfo(df_meta, global_id, ctx, notice_ids)
                         .await;
+
+                    coord
+                        .catalog()
+                        .cache_expressions(global_id, None, optimizer_features);
 
                     // We're putting in place read holds, such that ship_dataflow,
                     // below, which calls update_read_capabilities, can successfully

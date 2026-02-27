@@ -29,4 +29,4 @@ ci-location: test-read-frontier-advancement
 ci-location: services.log
 ```
 
-When a test issue is discovered and the GitHub issue is still open, you may want the failure to not cause a test failure, so that CI does not become flaky, but still add an annotation and record the failure into https://ci-failures.dev.materialize.com. You can use `ci-ignore-failure: true` for that.
+When a test issue is discovered and the GitHub issue is still open, you may want the failure to not cause a test failure, so that CI does not become flaky, but still add an annotation and record the failure into https://ci-dev-ui.mtrl.dev/. You can use `ci-ignore-failure: true` for that.

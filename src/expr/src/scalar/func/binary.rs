@@ -10,7 +10,7 @@
 //! Utilities for binary functions.
 
 use mz_ore::assert_none;
-use mz_repr::{Datum, InputDatumType, OutputDatumType, RowArena, SqlColumnType};
+use mz_repr::{Datum, InputDatumType, OutputDatumType, ReprColumnType, RowArena, SqlColumnType};
 
 use crate::{EvalError, MirScalarExpr};
 
@@ -25,7 +25,19 @@ pub(crate) trait LazyBinaryFunc {
     ) -> Result<Datum<'a>, EvalError>;
 
     /// The output SqlColumnType of this function.
-    fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType;
+    fn output_sql_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType;
+
+    /// A wrapper around [`Self::output_sql_type`] that works with representation types.
+    fn output_type(&self, input_types: &[ReprColumnType]) -> ReprColumnType {
+        ReprColumnType::from(
+            &self.output_sql_type(
+                &input_types
+                    .iter()
+                    .map(SqlColumnType::from_repr)
+                    .collect::<Vec<_>>(),
+            ),
+        )
+    }
 
     /// Whether this function will produce NULL on NULL input.
     fn propagates_nulls(&self) -> bool;
@@ -67,7 +79,20 @@ pub(crate) trait EagerBinaryFunc {
     fn call<'a>(&self, input: Self::Input<'a>, temp_storage: &'a RowArena) -> Self::Output<'a>;
 
     /// The output SqlColumnType of this function
-    fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType;
+    fn output_sql_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType;
+
+    /// The output of this function as a representation type.
+    #[allow(dead_code)]
+    fn output_type(&self, input_types: &[ReprColumnType]) -> ReprColumnType {
+        ReprColumnType::from(
+            &self.output_sql_type(
+                &input_types
+                    .iter()
+                    .map(SqlColumnType::from_repr)
+                    .collect::<Vec<_>>(),
+            ),
+        )
+    }
 
     /// Whether this function will produce NULL on NULL input
     fn propagates_nulls(&self) -> bool {
@@ -128,8 +153,8 @@ impl<T: EagerBinaryFunc> LazyBinaryFunc for T {
         self.call(input, temp_storage).into_result(temp_storage)
     }
 
-    fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
-        self.output_type(input_types)
+    fn output_sql_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
+        self.output_sql_type(input_types)
     }
 
     fn propagates_nulls(&self) -> bool {
@@ -162,7 +187,7 @@ pub use derive::BinaryFunc;
 mod derive {
     use std::fmt;
 
-    use mz_repr::{Datum, RowArena, SqlColumnType};
+    use mz_repr::{Datum, ReprColumnType, RowArena, SqlColumnType};
 
     use crate::scalar::func::binary::LazyBinaryFunc;
     use crate::scalar::func::*;
@@ -426,57 +451,28 @@ mod test {
     #[mz_ore::test]
     fn output_types_infallible() {
         assert_eq!(
-            Infallible1.output_type(&[
+            Infallible1.output_sql_type(&[
                 SqlScalarType::Float32.nullable(true),
                 SqlScalarType::Float32.nullable(true)
             ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Infallible1.output_type(&[
+            Infallible1.output_sql_type(&[
                 SqlScalarType::Float32.nullable(true),
                 SqlScalarType::Float32.nullable(false)
             ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Infallible1.output_type(&[
+            Infallible1.output_sql_type(&[
                 SqlScalarType::Float32.nullable(false),
                 SqlScalarType::Float32.nullable(true)
             ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Infallible1.output_type(&[
-                SqlScalarType::Float32.nullable(false),
-                SqlScalarType::Float32.nullable(false)
-            ]),
-            SqlScalarType::Float32.nullable(false)
-        );
-
-        assert_eq!(
-            Infallible2.output_type(&[
-                SqlScalarType::Float32.nullable(true),
-                SqlScalarType::Float32.nullable(true)
-            ]),
-            SqlScalarType::Float32.nullable(false)
-        );
-        assert_eq!(
-            Infallible2.output_type(&[
-                SqlScalarType::Float32.nullable(true),
-                SqlScalarType::Float32.nullable(false)
-            ]),
-            SqlScalarType::Float32.nullable(false)
-        );
-        assert_eq!(
-            Infallible2.output_type(&[
-                SqlScalarType::Float32.nullable(false),
-                SqlScalarType::Float32.nullable(true)
-            ]),
-            SqlScalarType::Float32.nullable(false)
-        );
-        assert_eq!(
-            Infallible2.output_type(&[
+            Infallible1.output_sql_type(&[
                 SqlScalarType::Float32.nullable(false),
                 SqlScalarType::Float32.nullable(false)
             ]),
@@ -484,28 +480,57 @@ mod test {
         );
 
         assert_eq!(
-            Infallible3.output_type(&[
+            Infallible2.output_sql_type(&[
+                SqlScalarType::Float32.nullable(true),
+                SqlScalarType::Float32.nullable(true)
+            ]),
+            SqlScalarType::Float32.nullable(false)
+        );
+        assert_eq!(
+            Infallible2.output_sql_type(&[
+                SqlScalarType::Float32.nullable(true),
+                SqlScalarType::Float32.nullable(false)
+            ]),
+            SqlScalarType::Float32.nullable(false)
+        );
+        assert_eq!(
+            Infallible2.output_sql_type(&[
+                SqlScalarType::Float32.nullable(false),
+                SqlScalarType::Float32.nullable(true)
+            ]),
+            SqlScalarType::Float32.nullable(false)
+        );
+        assert_eq!(
+            Infallible2.output_sql_type(&[
+                SqlScalarType::Float32.nullable(false),
+                SqlScalarType::Float32.nullable(false)
+            ]),
+            SqlScalarType::Float32.nullable(false)
+        );
+
+        assert_eq!(
+            Infallible3.output_sql_type(&[
                 SqlScalarType::Float32.nullable(true),
                 SqlScalarType::Float32.nullable(true)
             ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Infallible3.output_type(&[
+            Infallible3.output_sql_type(&[
                 SqlScalarType::Float32.nullable(true),
                 SqlScalarType::Float32.nullable(false)
             ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Infallible3.output_type(&[
+            Infallible3.output_sql_type(&[
                 SqlScalarType::Float32.nullable(false),
                 SqlScalarType::Float32.nullable(true)
             ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Infallible3.output_type(&[
+            Infallible3.output_sql_type(&[
                 SqlScalarType::Float32.nullable(false),
                 SqlScalarType::Float32.nullable(false)
             ]),
@@ -546,57 +571,28 @@ mod test {
     #[mz_ore::test]
     fn output_types_fallible() {
         assert_eq!(
-            Fallible1.output_type(&[
+            Fallible1.output_sql_type(&[
                 SqlScalarType::Float32.nullable(true),
                 SqlScalarType::Float32.nullable(true)
             ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Fallible1.output_type(&[
+            Fallible1.output_sql_type(&[
                 SqlScalarType::Float32.nullable(true),
                 SqlScalarType::Float32.nullable(false)
             ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Fallible1.output_type(&[
+            Fallible1.output_sql_type(&[
                 SqlScalarType::Float32.nullable(false),
                 SqlScalarType::Float32.nullable(true)
             ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Fallible1.output_type(&[
-                SqlScalarType::Float32.nullable(false),
-                SqlScalarType::Float32.nullable(false)
-            ]),
-            SqlScalarType::Float32.nullable(false)
-        );
-
-        assert_eq!(
-            Fallible2.output_type(&[
-                SqlScalarType::Float32.nullable(true),
-                SqlScalarType::Float32.nullable(true)
-            ]),
-            SqlScalarType::Float32.nullable(false)
-        );
-        assert_eq!(
-            Fallible2.output_type(&[
-                SqlScalarType::Float32.nullable(true),
-                SqlScalarType::Float32.nullable(false)
-            ]),
-            SqlScalarType::Float32.nullable(false)
-        );
-        assert_eq!(
-            Fallible2.output_type(&[
-                SqlScalarType::Float32.nullable(false),
-                SqlScalarType::Float32.nullable(true)
-            ]),
-            SqlScalarType::Float32.nullable(false)
-        );
-        assert_eq!(
-            Fallible2.output_type(&[
+            Fallible1.output_sql_type(&[
                 SqlScalarType::Float32.nullable(false),
                 SqlScalarType::Float32.nullable(false)
             ]),
@@ -604,28 +600,57 @@ mod test {
         );
 
         assert_eq!(
-            Fallible3.output_type(&[
+            Fallible2.output_sql_type(&[
+                SqlScalarType::Float32.nullable(true),
+                SqlScalarType::Float32.nullable(true)
+            ]),
+            SqlScalarType::Float32.nullable(false)
+        );
+        assert_eq!(
+            Fallible2.output_sql_type(&[
+                SqlScalarType::Float32.nullable(true),
+                SqlScalarType::Float32.nullable(false)
+            ]),
+            SqlScalarType::Float32.nullable(false)
+        );
+        assert_eq!(
+            Fallible2.output_sql_type(&[
+                SqlScalarType::Float32.nullable(false),
+                SqlScalarType::Float32.nullable(true)
+            ]),
+            SqlScalarType::Float32.nullable(false)
+        );
+        assert_eq!(
+            Fallible2.output_sql_type(&[
+                SqlScalarType::Float32.nullable(false),
+                SqlScalarType::Float32.nullable(false)
+            ]),
+            SqlScalarType::Float32.nullable(false)
+        );
+
+        assert_eq!(
+            Fallible3.output_sql_type(&[
                 SqlScalarType::Float32.nullable(true),
                 SqlScalarType::Float32.nullable(true)
             ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Fallible3.output_type(&[
+            Fallible3.output_sql_type(&[
                 SqlScalarType::Float32.nullable(true),
                 SqlScalarType::Float32.nullable(false)
             ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Fallible3.output_type(&[
+            Fallible3.output_sql_type(&[
                 SqlScalarType::Float32.nullable(false),
                 SqlScalarType::Float32.nullable(true)
             ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Fallible3.output_type(&[
+            Fallible3.output_sql_type(&[
                 SqlScalarType::Float32.nullable(false),
                 SqlScalarType::Float32.nullable(false)
             ]),

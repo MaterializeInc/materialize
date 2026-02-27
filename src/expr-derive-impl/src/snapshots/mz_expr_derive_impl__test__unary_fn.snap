@@ -22,7 +22,10 @@ impl crate::func::EagerUnaryFunc for UnaryFn {
     fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         unary_fn(a)
     }
-    fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {
+    fn output_sql_type(
+        &self,
+        input_type: mz_repr::SqlColumnType,
+    ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
         let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);

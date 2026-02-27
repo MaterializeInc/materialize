@@ -53,29 +53,29 @@ mod test {
     #[mz_ore::test]
     fn output_types_infallible() {
         assert_eq!(
-            Infallible1.output_type(SqlScalarType::Float32.nullable(true)),
+            Infallible1.output_sql_type(SqlScalarType::Float32.nullable(true)),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Infallible1.output_type(SqlScalarType::Float32.nullable(false)),
+            Infallible1.output_sql_type(SqlScalarType::Float32.nullable(false)),
             SqlScalarType::Float32.nullable(false)
         );
 
         assert_eq!(
-            Infallible2.output_type(SqlScalarType::Float32.nullable(true)),
+            Infallible2.output_sql_type(SqlScalarType::Float32.nullable(true)),
             SqlScalarType::Float32.nullable(false)
         );
         assert_eq!(
-            Infallible2.output_type(SqlScalarType::Float32.nullable(false)),
+            Infallible2.output_sql_type(SqlScalarType::Float32.nullable(false)),
             SqlScalarType::Float32.nullable(false)
         );
 
         assert_eq!(
-            Infallible3.output_type(SqlScalarType::Float32.nullable(true)),
+            Infallible3.output_sql_type(SqlScalarType::Float32.nullable(true)),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Infallible3.output_type(SqlScalarType::Float32.nullable(false)),
+            Infallible3.output_sql_type(SqlScalarType::Float32.nullable(false)),
             SqlScalarType::Float32.nullable(true)
         );
     }
@@ -110,29 +110,29 @@ mod test {
     #[mz_ore::test]
     fn output_types_fallible() {
         assert_eq!(
-            Fallible1.output_type(SqlScalarType::Float32.nullable(true)),
+            Fallible1.output_sql_type(SqlScalarType::Float32.nullable(true)),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Fallible1.output_type(SqlScalarType::Float32.nullable(false)),
+            Fallible1.output_sql_type(SqlScalarType::Float32.nullable(false)),
             SqlScalarType::Float32.nullable(false)
         );
 
         assert_eq!(
-            Fallible2.output_type(SqlScalarType::Float32.nullable(true)),
+            Fallible2.output_sql_type(SqlScalarType::Float32.nullable(true)),
             SqlScalarType::Float32.nullable(false)
         );
         assert_eq!(
-            Fallible2.output_type(SqlScalarType::Float32.nullable(false)),
+            Fallible2.output_sql_type(SqlScalarType::Float32.nullable(false)),
             SqlScalarType::Float32.nullable(false)
         );
 
         assert_eq!(
-            Fallible3.output_type(SqlScalarType::Float32.nullable(true)),
+            Fallible3.output_sql_type(SqlScalarType::Float32.nullable(true)),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Fallible3.output_type(SqlScalarType::Float32.nullable(false)),
+            Fallible3.output_sql_type(SqlScalarType::Float32.nullable(false)),
             SqlScalarType::Float32.nullable(true)
         );
     }
@@ -166,7 +166,12 @@ macro_rules! derive_unary {
                 }
             }
 
-            pub fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+            pub fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+                match self {
+                    $(Self::$name(f) => LazyUnaryFunc::output_sql_type(f, input_type),)*
+                }
+            }
+            pub fn output_type(&self, input_type: ReprColumnType) -> ReprColumnType {
                 match self {
                     $(Self::$name(f) => LazyUnaryFunc::output_type(f, input_type),)*
                 }
@@ -283,11 +288,17 @@ macro_rules! derive_binary {
                 }
             }
 
-            pub fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
+            pub fn output_sql_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
                 match self {
                     $(Self::$name(f) => {
-                        LazyBinaryFunc::output_type(f, input_types)
+                        LazyBinaryFunc::output_sql_type(f, input_types)
                     },)*
+                }
+            }
+
+            pub fn output_type(&self, input_types: &[ReprColumnType]) -> ReprColumnType {
+                match self {
+                    $(Self::$name(f) => LazyBinaryFunc::output_type(f, input_types),)*
                 }
             }
 

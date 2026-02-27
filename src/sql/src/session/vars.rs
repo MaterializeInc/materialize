@@ -1102,7 +1102,7 @@ impl SystemVars {
             &MAX_NETWORK_POLICIES,
             &MAX_RULES_PER_NETWORK_POLICY,
             &MAX_RESULT_SIZE,
-            &MAX_COPY_FROM_SIZE,
+            &MAX_COPY_FROM_ROW_SIZE,
             &ALLOWED_CLUSTER_REPLICA_SIZES,
             &upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE,
             &upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
@@ -1644,9 +1644,10 @@ impl SystemVars {
         self.expect_value::<ByteSize>(&MAX_RESULT_SIZE).as_bytes()
     }
 
-    /// Returns the value of the `max_copy_from_size` configuration parameter.
-    pub fn max_copy_from_size(&self) -> u32 {
-        *self.expect_value(&MAX_COPY_FROM_SIZE)
+    /// Returns the value of the `max_copy_from_row_size` configuration parameter.
+    pub fn max_copy_from_row_size(&self) -> u64 {
+        self.expect_value::<ByteSize>(&MAX_COPY_FROM_ROW_SIZE)
+            .as_bytes()
     }
 
     /// Returns the value of the `allowed_cluster_replica_sizes` configuration parameter.

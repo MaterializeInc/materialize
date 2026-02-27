@@ -13,6 +13,6 @@ See the [README in the MaterializeInc/materialize repo](
 You can also check out recent design doc examples in that subdirectory.
 
 ## Additional Console-Specific Guidance
-- Create your console design documents within the console repo, in this directory (`doc/design/`).
+- Create your console design documents within the `console/doc/design/` directory.
 - Follow the console-specific template [`00000000_template.md`](00000000_template.md).
 - For all user-facing features, share your design doc with the appropriate designer and PM as well. You should also collaborate with the designer and PM as you write the design doc where applicable, to define the problem and iterate on the MVP and mockups.

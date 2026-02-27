@@ -5509,6 +5509,7 @@ dependencies = [
  "mz-frontegg-auth",
  "mz-frontegg-client",
  "mz-ore",
+ "mz-sql-parser",
  "open",
  "openssl-probe",
  "reqwest",
@@ -5554,6 +5555,7 @@ dependencies = [
  "hex",
  "http 1.4.0",
  "hyper-tls 0.5.0",
+ "imbl",
  "ipnet",
  "itertools 0.14.0",
  "launchdarkly-server-sdk",
@@ -5800,7 +5802,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "26.14.0-dev.0"
+version = "26.15.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5941,7 +5943,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "26.14.0-dev.0"
+version = "26.15.0-dev.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -6101,7 +6103,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "26.14.0-dev.0"
+version = "26.15.0-dev.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6302,6 +6304,7 @@ dependencies = [
  "mz-cloud-resources",
  "mz-ore",
  "mz-server-core",
+ "mz-sql-parser",
  "mz-tls-util",
  "postgres-openssl",
  "regex",
@@ -6403,7 +6406,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "26.14.0-dev.0"
+version = "26.15.0-dev.0"
 dependencies = [
  "anyhow",
  "askama",
@@ -6929,7 +6932,7 @@ dependencies = [
 
 [[package]]
 name = "mz-materialized"
-version = "26.14.0-dev.0"
+version = "26.15.0-dev.0"
 dependencies = [
  "custom-labels",
  "mz-clusterd",
@@ -7147,7 +7150,7 @@ dependencies = [
 
 [[package]]
 name = "mz-orchestratord"
-version = "26.14.0-dev.0"
+version = "26.15.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7334,7 +7337,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "26.14.0-dev.0"
+version = "26.15.0-dev.0"
 dependencies = [
  "anyhow",
  "arrayvec 0.7.6",
@@ -7504,6 +7507,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "bytesize",
+ "csv-core",
  "enum-kinds",
  "futures",
  "itertools 0.14.0",
@@ -7574,6 +7578,7 @@ dependencies = [
  "mz-ore",
  "mz-proto",
  "mz-repr",
+ "mz-sql-parser",
  "mz-ssh-util",
  "mz-tls-util",
  "openssh",
@@ -8447,7 +8452,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "26.14.0-dev.0"
+version = "26.15.0-dev.0"
 dependencies = [
  "anyhow",
  "arrow",

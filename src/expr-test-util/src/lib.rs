@@ -16,7 +16,10 @@ use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_ore::str::separated;
 use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
-use mz_repr::{Diff, GlobalId, Row, SqlColumnType, SqlRelationType, SqlScalarType};
+use mz_repr::{
+    Diff, GlobalId, ReprColumnType, ReprRelationType, ReprScalarType, Row, SqlRelationType,
+    SqlScalarType,
+};
 use mz_repr_test_util::*;
 use proc_macro2::TokenTree;
 use serde::{Deserialize, Serialize};
@@ -60,12 +63,13 @@ pub fn json_to_spec(rel_json: &str, catalog: &TestCatalog) -> (String, Vec<Strin
     );
     let mut source_defs = ctx
         .list_scope_references()
-        .map(|(name, typ)| {
+        .map(|(name, repr_typ)| {
+            let sql_typ = SqlRelationType::from_repr(repr_typ);
             format!(
                 "(defsource {} {})",
                 name,
                 serialize_generic::<SqlRelationType>(
-                    &serde_json::to_value(typ).unwrap(),
+                    &serde_json::to_value(&sql_typ).unwrap(),
                     "SqlRelationType",
                 )
             )
@@ -183,8 +187,8 @@ impl ExprHumanizer for TestCatalog {
         self.humanize_id_unqualified(id).map(|name| vec![name])
     }
 
-    fn humanize_scalar_type(&self, ty: &SqlScalarType, postgres_compat: bool) -> String {
-        DummyHumanizer.humanize_scalar_type(ty, postgres_compat)
+    fn humanize_sql_scalar_type(&self, ty: &SqlScalarType, postgres_compat: bool) -> String {
+        DummyHumanizer.humanize_sql_scalar_type(ty, postgres_compat)
     }
 
     fn column_names_for_id(&self, _id: GlobalId) -> Option<Vec<String>> {
@@ -258,7 +262,7 @@ impl MirScalarExprDeserializeContext {
                     deserialize_optional_generic(rest_of_stream, "SqlScalarType")?;
                 Ok(Some(MirScalarExpr::literal(
                     Err(error),
-                    typ.unwrap_or(SqlScalarType::Bool),
+                    ReprScalarType::from(&typ.unwrap_or(SqlScalarType::Bool)),
                 )))
             }
             _ => self.build_literal_ok_if_able(first_arg, rest_of_stream),
@@ -276,9 +280,9 @@ impl MirScalarExprDeserializeContext {
         match extract_literal_string(&first_arg, rest_of_stream)? {
             Some(litval) => {
                 let littyp = get_scalar_type_or_default(&litval[..], rest_of_stream)?;
-                Ok(Some(MirScalarExpr::Literal(
-                    Ok(test_spec_to_row(std::iter::once((&litval[..], &littyp)))?),
-                    littyp.nullable(matches!(&litval[..], "null")),
+                Ok(Some(MirScalarExpr::literal_from_single_element_row(
+                    test_spec_to_row(std::iter::once((&litval[..], &littyp)))?,
+                    ReprScalarType::from(&littyp),
                 )))
             }
             None => Ok(None),
@@ -329,7 +333,7 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
                         ));
                     }
                     "Literal" => {
-                        let column_type: SqlColumnType =
+                        let column_type: ReprColumnType =
                             serde_json::from_value(data.as_array().unwrap()[1].clone()).unwrap();
                         let obj = data.as_array().unwrap()[0].as_object().unwrap();
                         if let Some(inner_data) = obj.get("Ok") {
@@ -337,9 +341,9 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
                             let result = format!(
                                 "({} {})",
                                 datum_to_test_spec(row.unpack_first()),
-                                serialize::<SqlScalarType, _>(
+                                serialize::<ReprScalarType, _>(
                                     &serde_json::to_value(&column_type.scalar_type).unwrap(),
-                                    "SqlScalarType",
+                                    "ReprScalarType",
                                     self
                                 )
                             );
@@ -348,9 +352,9 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
                             let result = format!(
                                 "(err {} {})",
                                 serialize::<EvalError, _>(inner_data, "EvalError", self),
-                                serialize::<SqlScalarType, _>(
+                                serialize::<ReprScalarType, _>(
                                     &serde_json::to_value(&column_type.scalar_type).unwrap(),
-                                    "SqlScalarType",
+                                    "ReprScalarType",
                                     self
                                 ),
                             );
@@ -412,7 +416,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
         }
     }
 
-    pub fn list_scope_references(&self) -> impl Iterator<Item = (&String, &SqlRelationType)> {
+    pub fn list_scope_references(&self) -> impl Iterator<Item = (&String, &ReprRelationType)> {
         self.scope.iter()
     }
 
@@ -446,7 +450,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
         };
         Ok(MirRelationExpr::Constant {
             rows: Ok(rows),
-            typ,
+            typ: ReprRelationType::from(&typ),
         })
     }
 
@@ -459,7 +463,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
 
         Ok(MirRelationExpr::Constant {
             rows: Err(error),
-            typ,
+            typ: ReprRelationType::from(&typ),
         })
     }
 
@@ -477,7 +481,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
                         None => Err(format!("no catalog object named {}", name)),
                         Some((id, typ)) => Ok(MirRelationExpr::Get {
                             id: Id::Global(*id),
-                            typ: typ.clone(),
+                            typ: ReprRelationType::from(typ),
                             access_strategy: AccessStrategy::UnknownOrLocal,
                         }),
                     },
@@ -646,11 +650,12 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                                             Some(source) => format!("(get {})", source),
                                             // Treat the GlobalId
                                             None => {
-                                                let typ: SqlRelationType = serde_json::from_value(
-                                                    inner_map["typ"].clone(),
-                                                )
-                                                .unwrap();
-                                                self.scope.insert(&id.to_string(), typ);
+                                                let repr_typ: ReprRelationType =
+                                                    serde_json::from_value(
+                                                        inner_map["typ"].clone(),
+                                                    )
+                                                    .unwrap();
+                                                self.scope.insert(&id.to_string(), repr_typ);
                                                 format!("(get {})", id)
                                             }
                                         }
@@ -674,21 +679,29 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                                             ))
                                         }
                                     }
+                                    let repr_typ: ReprRelationType =
+                                        serde_json::from_value(inner_map["typ"].clone()).unwrap();
+                                    let sql_typ = SqlRelationType::from_repr(&repr_typ);
+                                    let sql_typ_json = serde_json::to_value(&sql_typ).unwrap();
                                     return Some(format!(
                                         "(constant [{}] {})",
                                         separated(" ", rows),
                                         serialize::<SqlRelationType, _>(
-                                            &inner_map["typ"],
+                                            &sql_typ_json,
                                             "SqlRelationType",
                                             self
                                         )
                                     ));
                                 } else if let Some(inner_data) = inner_map["rows"].get("Err") {
+                                    let repr_typ: ReprRelationType =
+                                        serde_json::from_value(inner_map["typ"].clone()).unwrap();
+                                    let sql_typ = SqlRelationType::from_repr(&repr_typ);
+                                    let sql_typ_json = serde_json::to_value(&sql_typ).unwrap();
                                     return Some(format!(
                                         "(constant_err {} {})",
                                         serialize::<EvalError, _>(inner_data, "EvalError", self),
                                         serialize::<SqlRelationType, _>(
-                                            &inner_map["typ"],
+                                            &sql_typ_json,
                                             "SqlRelationType",
                                             self
                                         )
@@ -723,7 +736,7 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
 /// in the body of the `let`.
 #[derive(Debug, Default)]
 struct Scope {
-    objects: BTreeMap<String, (Id, SqlRelationType)>,
+    objects: BTreeMap<String, (Id, ReprRelationType)>,
     names: BTreeMap<Id, String>,
 }
 
@@ -731,15 +744,15 @@ impl Scope {
     fn insert(
         &mut self,
         name: &str,
-        typ: SqlRelationType,
-    ) -> (LocalId, Option<(Id, SqlRelationType)>) {
+        typ: ReprRelationType,
+    ) -> (LocalId, Option<(Id, ReprRelationType)>) {
         let old_val = self.get(name);
         let id = LocalId::new(u64::cast_from(self.objects.len()));
         self.set(name, Id::Local(id), typ);
         (id, old_val)
     }
 
-    fn set(&mut self, name: &str, id: Id, typ: SqlRelationType) {
+    fn set(&mut self, name: &str, id: Id, typ: ReprRelationType) {
         self.objects.insert(name.to_string(), (id, typ));
         self.names.insert(id, name.to_string());
     }
@@ -748,11 +761,11 @@ impl Scope {
         self.objects.remove(name);
     }
 
-    fn get(&self, name: &str) -> Option<(Id, SqlRelationType)> {
+    fn get(&self, name: &str) -> Option<(Id, ReprRelationType)> {
         self.objects.get(name).cloned()
     }
 
-    fn iter(&self) -> impl Iterator<Item = (&String, &SqlRelationType)> {
+    fn iter(&self) -> impl Iterator<Item = (&String, &ReprRelationType)> {
         self.objects.iter().map(|(s, (_, typ))| (s, typ))
     }
 }

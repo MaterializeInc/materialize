@@ -21,6 +21,7 @@
 use anyhow::{Context as _, Result};
 use csv_async::AsyncSerializer;
 use futures::TryStreamExt;
+use mz_sql_parser::ast::display::escaped_string_literal;
 use mz_tls_util::make_tls;
 use std::fmt;
 use std::path::PathBuf;
@@ -746,7 +747,10 @@ pub async fn query_relation(
     if let Some(cluster_replica) = &cluster_replica {
         transaction
             .execute(
-                &format!("SET LOCAL CLUSTER = '{}'", cluster_replica.cluster_name),
+                &format!(
+                    "SET LOCAL CLUSTER = {}",
+                    escaped_string_literal(&cluster_replica.cluster_name)
+                ),
                 &[],
             )
             .await
@@ -757,8 +761,8 @@ pub async fn query_relation(
         transaction
             .execute(
                 &format!(
-                    "SET LOCAL CLUSTER_REPLICA = '{}'",
-                    cluster_replica.replica_name
+                    "SET LOCAL CLUSTER_REPLICA = {}",
+                    escaped_string_literal(&cluster_replica.replica_name)
                 ),
                 &[],
             )

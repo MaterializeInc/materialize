@@ -26,6 +26,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_ore::soft_assert_or_log;
 use mz_pgtz::timezone::TimezoneSpec;
+use mz_repr::ReprColumnType;
 use mz_repr::adt::array::{ArrayDimension, ArrayDimensions, InvalidArrayError};
 use mz_repr::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
 use mz_repr::adt::range::{InvalidRangeError, Range, RangeBound, parse_range_bound_flags};
@@ -2412,7 +2413,7 @@ impl VariadicFunc {
         }
     }
 
-    pub fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+    pub fn output_sql_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
         let in_nullable = input_types.iter().any(|t| t.nullable);
         match self {
             Self::And(s) => s.output_type(&input_types),
@@ -2521,6 +2522,15 @@ impl VariadicFunc {
                 SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true)
             }
         }
+    }
+
+    /// Computes the representation type of this variadic function.
+    ///
+    /// This is a wrapper around [`Self::output_sql_type`] that converts the result to a representation type.
+    pub fn output_type(&self, input_types: Vec<ReprColumnType>) -> ReprColumnType {
+        ReprColumnType::from(
+            &self.output_sql_type(input_types.iter().map(SqlColumnType::from_repr).collect()),
+        )
     }
 
     /// Whether the function output is NULL if any of its inputs are NULL.

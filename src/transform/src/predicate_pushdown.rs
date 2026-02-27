@@ -29,22 +29,28 @@
 //! ```rust
 //! use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr, func};
 //! use mz_ore::id_gen::IdGen;
-//! use mz_repr::{SqlColumnType, Datum, SqlRelationType, SqlScalarType};
+//! use mz_repr::{ReprColumnType, ReprRelationType, ReprScalarType};
 //! use mz_repr::optimize::OptimizerFeatures;
-//! use mz_transform::{reprtypecheck, typecheck,Transform, TransformCtx};
+//! use mz_transform::{reprtypecheck, Transform, TransformCtx};
 //! use mz_transform::dataflow::DataflowMetainfo;
 //!
 //! use mz_transform::predicate_pushdown::PredicatePushdown;
 //!
-//! let input1 = MirRelationExpr::constant(vec![], SqlRelationType::new(vec![
-//!     SqlScalarType::Bool.nullable(false),
-//! ]));
-//! let input2 = MirRelationExpr::constant(vec![], SqlRelationType::new(vec![
-//!     SqlScalarType::Bool.nullable(false),
-//! ]));
-//! let input3 = MirRelationExpr::constant(vec![], SqlRelationType::new(vec![
-//!     SqlScalarType::Bool.nullable(false),
-//! ]));
+//! let bool_typ = ReprRelationType::new(vec![
+//!     ReprColumnType { scalar_type: ReprScalarType::Bool, nullable: false },
+//! ]);
+//! let input1 = MirRelationExpr::Constant {
+//!     rows: Ok(vec![]),
+//!     typ: bool_typ.clone(),
+//! };
+//! let input2 = MirRelationExpr::Constant {
+//!     rows: Ok(vec![]),
+//!     typ: bool_typ.clone(),
+//! };
+//! let input3 = MirRelationExpr::Constant {
+//!     rows: Ok(vec![]),
+//!     typ: bool_typ,
+//! };
 //! let join = MirRelationExpr::join(
 //!     vec![input1.clone(), input2.clone(), input3.clone()],
 //!     vec![vec![(0, 0), (2, 0)].into_iter().collect()],
@@ -64,10 +70,9 @@
 //!    ]);
 //!
 //! let features = OptimizerFeatures::default();
-//! let typecheck_ctx = typecheck::empty_context();
-//! let repr_typecheck_ctx = reprtypecheck::empty_context();
+//! let typecheck_ctx = reprtypecheck::empty_context();
 //! let mut df_meta = DataflowMetainfo::default();
-//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &repr_typecheck_ctx, &mut df_meta, None, None);
+//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None, None);
 //!
 //! PredicatePushdown::default().transform(&mut expr, &mut transform_ctx);
 //!
@@ -94,7 +99,7 @@ use mz_expr::{
 };
 use mz_ore::soft_assert_eq_no_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
-use mz_repr::{Datum, SqlColumnType, SqlScalarType};
+use mz_repr::{Datum, ReprColumnType, ReprScalarType};
 
 use crate::{TransformCtx, TransformError};
 
@@ -331,7 +336,7 @@ impl PredicatePushdown {
                                             push_down.push(aggregates[0].expr.clone());
                                             aggregates[0].expr = MirScalarExpr::literal_ok(
                                                 Datum::True,
-                                                SqlScalarType::Bool,
+                                                ReprScalarType::Bool,
                                             );
                                         } else {
                                             retain.push(predicate);
@@ -1152,7 +1157,7 @@ impl PredicatePushdown {
     /// extract `expr1` and `expr2`.
     fn extract_equal_or_both_null(
         s: &mut MirScalarExpr,
-        column_types: &[SqlColumnType],
+        column_types: &[ReprColumnType],
     ) -> Option<(MirScalarExpr, MirScalarExpr)> {
         if let MirScalarExpr::CallVariadic {
             func: VariadicFunc::Or(_),
@@ -1173,7 +1178,7 @@ impl PredicatePushdown {
     fn extract_equal_or_both_null_inner(
         or_arg1: &MirScalarExpr,
         or_arg2: &MirScalarExpr,
-        column_types: &[SqlColumnType],
+        column_types: &[ReprColumnType],
     ) -> Option<(MirScalarExpr, MirScalarExpr)> {
         use mz_expr::BinaryFunc;
         if let MirScalarExpr::CallBinary {
@@ -1198,7 +1203,7 @@ impl PredicatePushdown {
     /// Reduces the given expression and returns its AND-ed terms.
     fn extract_reduced_conjunction_terms(
         mut s: MirScalarExpr,
-        column_types: &[SqlColumnType],
+        column_types: &[ReprColumnType],
     ) -> Vec<MirScalarExpr> {
         s.reduce(column_types);
 

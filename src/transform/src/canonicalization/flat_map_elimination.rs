@@ -18,7 +18,7 @@
 use itertools::Itertools;
 use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, MirScalarExpr, TableFunc};
-use mz_repr::{Diff, Row, RowArena};
+use mz_repr::{Diff, RowArena};
 
 use crate::TransformCtx;
 
@@ -90,7 +90,7 @@ impl FlatMapElimination {
                         let map_exprs = first_row
                             .into_iter()
                             .zip_eq(types)
-                            .map(|(d, typ)| MirScalarExpr::Literal(Ok(Row::pack_slice(&[d])), typ))
+                            .map(|(d, typ)| MirScalarExpr::literal_ok(d, typ.scalar_type))
                             .collect();
                         *relation = input.take_dangerous().map(map_exprs);
                     }

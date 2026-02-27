@@ -175,7 +175,10 @@ use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::schemas::get_pg_major_version;
 use mz_postgres_util::{Client, Config, PostgresError, simple_query_opt};
 use mz_repr::{Datum, DatumVec, Diff, Row};
-use mz_sql_parser::ast::{Ident, display::AstDisplay};
+use mz_sql_parser::ast::{
+    Ident,
+    display::{AstDisplay, escaped_string_literal},
+};
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::parameters::PgSourceSnapshotConfig;
@@ -867,7 +870,10 @@ async fn use_snapshot(client: &Client, snapshot: &str) -> Result<(), TransientEr
     client
         .simple_query("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ;")
         .await?;
-    let query = format!("SET TRANSACTION SNAPSHOT '{snapshot}';");
+    let query = format!(
+        "SET TRANSACTION SNAPSHOT {};",
+        escaped_string_literal(snapshot)
+    );
     client.simple_query(&query).await?;
     Ok(())
 }
@@ -919,8 +925,14 @@ async fn report_snapshot_size(
             Ident::new_unchecked(info.desc.namespace.clone()).to_ast_string_simple(),
             Ident::new_unchecked(info.desc.name.clone()).to_ast_string_simple()
         );
-        let stats =
-            collect_table_statistics(client, snapshot_config, &table, info.desc.oid).await?;
+        let stats = collect_table_statistics(
+            client,
+            snapshot_config,
+            &info.desc.namespace,
+            &info.desc.name,
+            info.desc.oid,
+        )
+        .await?;
         metrics.record_table_count_latency(table, stats.count_latency);
         for &output_index in outputs.keys() {
             export_statistics[&(oid, output_index)].set_snapshot_records_known(stats.count);
@@ -939,11 +951,17 @@ struct TableStatistics {
 async fn collect_table_statistics(
     client: &Client,
     config: PgSourceSnapshotConfig,
-    table: &str,
+    namespace: &str,
+    table_name: &str,
     oid: u32,
 ) -> Result<TableStatistics, anyhow::Error> {
     use mz_ore::metrics::MetricsFutureExt;
     let mut stats = TableStatistics::default();
+    let table = format!(
+        "{}.{}",
+        Ident::new_unchecked(namespace).to_ast_string_simple(),
+        Ident::new_unchecked(table_name).to_ast_string_simple()
+    );
 
     let estimate_row = simple_query_opt(
         client,

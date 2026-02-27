@@ -50,7 +50,7 @@ impl LazyUnaryFunc for CastMapToString {
         Ok(Datum::String(temp_storage.push_string(buf)))
     }
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         SqlScalarType::String.nullable(input_type.nullable)
     }
 
@@ -137,7 +137,7 @@ impl LazyUnaryFunc for MapBuildFromRecordList {
         Ok(map)
     }
 
-    fn output_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Map {
             value_type: Box::new(self.value_type.clone()),
             custom_id: None,

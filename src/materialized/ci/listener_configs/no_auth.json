@@ -24,7 +24,9 @@
         "webhook": true,
         "internal": false,
         "metrics": false,
-        "profiling": false
+        "profiling": false,
+        "mcp_agents": true,
+        "mcp_observatory": true
       }
     },
     "internal": {
@@ -37,7 +39,9 @@
         "webhook": true,
         "internal": true,
         "metrics": true,
-        "profiling": true
+        "profiling": true,
+        "mcp_agents": true,
+        "mcp_observatory": true
       }
     }
   }

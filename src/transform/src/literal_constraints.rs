@@ -30,7 +30,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::vec::swap_remove_multiple;
-use mz_repr::{Diff, GlobalId, Row, SqlRelationType};
+use mz_repr::{Diff, GlobalId, ReprRelationType, Row};
 
 use crate::TransformCtx;
 use crate::canonicalize_mfp::CanonicalizeMfp;
@@ -90,7 +90,7 @@ impl LiteralConstraints {
                 mfp: &mut MapFilterProject,
                 orig_mfp: &MapFilterProject,
                 relation: &MirRelationExpr,
-                relation_type: SqlRelationType,
+                relation_type: ReprRelationType,
             ) {
                 // undo list_of_predicates_to_and_of_predicates, distribute_and_over_or, unary_and
                 // (It undoes the latter 2 through `MirScalarExp::reduce`.)
@@ -151,14 +151,10 @@ impl LiteralConstraints {
                             .iter()
                             .map(|val| (val.clone(), Diff::ONE))
                             .collect()),
-                        typ: mz_repr::SqlRelationType {
+                        typ: ReprRelationType {
                             column_types: key
                                 .iter()
-                                .map(|e| {
-                                    e.typ(&inp_typ.column_types)
-                                        // We make sure to not include a null in `expr_eq_literal`.
-                                        .nullable(false)
-                                })
+                                .map(|e| e.typ(&inp_typ.column_types).scalar_type.nullable(false))
                                 .collect(),
                             // (Note that the key inference for `MirRelationExpr::Constant` inspects
                             // the constant values to detect keys not listed within the node, but it
@@ -178,7 +174,7 @@ impl LiteralConstraints {
                         // this transform.
                         *relation = MirRelationExpr::Join {
                             // It's important to keep the `filter_list` in the second position.
-                            // Both the lowering and EXPLAIN depends on this.
+                            // Both the lowering and EXPLAIN depend on this.
                             inputs: vec![
                                 relation.clone().arrange_by(std::slice::from_ref(&key)),
                                 filter_list,
@@ -615,7 +611,7 @@ impl LiteralConstraints {
     fn canonicalize_predicates(
         mfp: &mut MapFilterProject,
         relation: &MirRelationExpr,
-        relation_type: SqlRelationType,
+        relation_type: ReprRelationType,
     ) {
         let (map, mut predicates, project) = mfp.as_map_filter_project();
         let typ_after_map = relation

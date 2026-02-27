@@ -50,7 +50,7 @@ impl LazyUnaryFunc for CastListToString {
         Ok(Datum::String(temp_storage.push_string(buf)))
     }
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         SqlScalarType::String.nullable(input_type.nullable)
     }
 
@@ -123,7 +123,7 @@ impl LazyUnaryFunc for CastListToJsonb {
         Ok(temp_storage.push_unary_row(row))
     }
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Jsonb.nullable(input_type.nullable)
     }
 
@@ -199,7 +199,7 @@ impl LazyUnaryFunc for CastList1ToList2 {
         Ok(temp_storage.make_datum(|packer| packer.push_list(cast_datums)))
     }
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         self.return_ty
             .without_modifiers()
             .nullable(input_type.nullable)
@@ -293,7 +293,7 @@ impl EagerBinaryFunc for ListLengthMax {
             }
         }
     }
-    fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
+    fn output_sql_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
         let output = Self::Output::as_column_type();
         let propagates_nulls = self.propagates_nulls();
         let nullable = output.nullable;

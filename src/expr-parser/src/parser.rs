@@ -71,7 +71,7 @@ mod relation {
     use std::collections::BTreeMap;
 
     use mz_expr::{AccessStrategy, Id, JoinImplementation, LocalId, MirRelationExpr};
-    use mz_repr::{Diff, Row, SqlRelationType, SqlScalarType};
+    use mz_repr::{Diff, ReprRelationType, Row, SqlScalarType};
 
     use crate::parser::analyses::Analyses;
 
@@ -123,19 +123,21 @@ mod relation {
     fn parse_constant(ctx: CtxRef, input: ParseStream) -> Result {
         let constant = input.parse::<kw::Constant>()?;
 
-        let parse_typ = |input: ParseStream| -> syn::Result<SqlRelationType> {
+        let parse_typ = |input: ParseStream| -> syn::Result<ReprRelationType> {
             let analyses = analyses::parse_analyses(input)?;
             let Some(column_types) = analyses.types else {
                 let msg = "Missing expected `types` analyses for Constant line";
                 Err(Error::new(input.span(), msg))?
             };
             let keys = analyses.keys.unwrap_or_default();
-            Ok(SqlRelationType { column_types, keys })
+            Ok(ReprRelationType::new(column_types).with_keys(keys))
         };
-
         if input.eat3(syn::Token![<], kw::empty, syn::Token![>]) {
             let typ = parse_typ(input)?;
-            Ok(MirRelationExpr::constant(vec![], typ))
+            Ok(MirRelationExpr::Constant {
+                rows: Ok(vec![]),
+                typ,
+            })
         } else {
             let typ = parse_typ(input)?;
             let parse_children = ParseChildren::new(input, constant.span().start());
@@ -176,12 +178,12 @@ mod relation {
         match ctx.catalog.get(&ident.to_string()) {
             Some((id, _cols, typ)) => Ok(MirRelationExpr::Get {
                 id: Id::Global(*id),
-                typ: typ.clone(),
+                typ: ReprRelationType::from(typ),
                 access_strategy: AccessStrategy::UnknownOrLocal,
             }),
             None => Ok(MirRelationExpr::Get {
                 id: Id::Local(parse_local_id(ident)?),
-                typ: SqlRelationType::empty(),
+                typ: ReprRelationType::empty(),
                 access_strategy: AccessStrategy::UnknownOrLocal,
             }),
         }
@@ -257,15 +259,14 @@ mod relation {
                         Err(Error::new(with.span(), msg))?
                     };
                     let keys = analyses.keys.unwrap_or_default();
-                    SqlRelationType { column_types, keys }
+                    ReprRelationType::new(column_types).with_keys(keys)
                 };
-
                 // An ugly-ugly hack to pass the type information of the WMR CTE
                 // to the `fix_types` pass.
                 let value = {
                     let get_cte = MirRelationExpr::Get {
                         id: Id::Local(id),
-                        typ: typ.clone(),
+                        typ,
                         access_strategy: AccessStrategy::UnknownOrLocal,
                     };
                     // Do not use the `union` smart constructor here!
@@ -643,8 +644,8 @@ mod relation {
 
     #[derive(Default)]
     pub struct FixTypesCtx {
-        env: BTreeMap<LocalId, SqlRelationType>,
-        typ: Vec<SqlRelationType>,
+        env: BTreeMap<LocalId, ReprRelationType>,
+        typ: Vec<ReprRelationType>,
     }
 
     pub fn fix_types(
@@ -724,7 +725,9 @@ mod scalar {
     use mz_expr::{
         BinaryFunc, ColumnOrder, MirScalarExpr, UnaryFunc, UnmaterializableFunc, VariadicFunc, func,
     };
-    use mz_repr::{AsColumnType, Datum, Row, RowArena, SqlScalarType};
+    use mz_repr::{
+        AsColumnType, Datum, ReprColumnType, ReprScalarType, Row, RowArena, SqlScalarType,
+    };
 
     use super::*;
 
@@ -1005,24 +1008,27 @@ mod scalar {
         let typ = if input.eat(kw::null) {
             packer.push(Datum::Null);
             input.parse::<syn::Token![::]>()?;
-            analyses::parse_scalar_type(input)?.nullable(true)
+            ReprColumnType {
+                scalar_type: analyses::parse_scalar_type(input)?,
+                nullable: true,
+            }
         } else {
             match input.parse::<syn::Lit>()? {
                 syn::Lit::Str(l) => {
                     packer.push(Datum::from(l.value().as_str()));
-                    Ok(String::as_column_type())
+                    Ok(ReprColumnType::from(&String::as_column_type()))
                 }
                 syn::Lit::Int(l) => {
                     packer.push(Datum::from(l.base10_parse::<i64>()?));
-                    Ok(i64::as_column_type())
+                    Ok(ReprColumnType::from(&i64::as_column_type()))
                 }
                 syn::Lit::Float(l) => {
                     packer.push(Datum::from(l.base10_parse::<f64>()?));
-                    Ok(f64::as_column_type())
+                    Ok(ReprColumnType::from(&f64::as_column_type()))
                 }
                 syn::Lit::Bool(l) => {
                     packer.push(Datum::from(l.value));
-                    Ok(bool::as_column_type())
+                    Ok(ReprColumnType::from(&bool::as_column_type()))
                 }
                 _ => Err(Error::new(input.span(), "cannot parse literal")),
             }?
@@ -1030,7 +1036,6 @@ mod scalar {
 
         Ok(MirScalarExpr::Literal(Ok(row), typ))
     }
-
     fn parse_literal_err(input: ParseStream) -> Result {
         input.parse::<kw::error>()?;
         let mut msg = {
@@ -1043,7 +1048,7 @@ mod scalar {
         } else {
             Err(Error::new(msg.span(), "expected `internal error: $msg`"))
         }?;
-        Ok(MirScalarExpr::Literal(Err(err), bool::as_column_type())) // FIXME
+        Ok(MirScalarExpr::literal(Err(err), ReprScalarType::Bool))
     }
 
     fn parse_literal_array(input: ParseStream) -> Result {
@@ -1056,10 +1061,9 @@ mod scalar {
         // Evaluate into a datum
         let temp_storage = RowArena::default();
         let datum = func.eval(&[], &temp_storage, &exprs).expect("datum");
-        let typ = SqlScalarType::Array(Box::new(SqlScalarType::Int64)); // FIXME
+        let typ = ReprScalarType::from(&SqlScalarType::Array(Box::new(SqlScalarType::Int64))); // FIXME
         Ok(MirScalarExpr::literal_ok(datum, typ))
     }
-
     fn parse_literal_list(input: ParseStream) -> Result {
         use mz_expr::func::variadic::ListCreate;
 
@@ -1070,10 +1074,9 @@ mod scalar {
         // Evaluate into a datum
         let temp_storage = RowArena::default();
         let datum = func.eval(&[], &temp_storage, &exprs).expect("datum");
-        let typ = SqlScalarType::Array(Box::new(SqlScalarType::Int64)); // FIXME
+        let typ = ReprScalarType::from(&SqlScalarType::Array(Box::new(SqlScalarType::Int64))); // FIXME
         Ok(MirScalarExpr::literal_ok(datum, typ))
     }
-
     fn parse_array(input: ParseStream) -> Result {
         use mz_expr::func::variadic::ArrayCreate;
 
@@ -1288,13 +1291,13 @@ mod row {
 }
 
 mod analyses {
-    use mz_repr::{SqlColumnType, SqlScalarType};
+    use mz_repr::{ReprColumnType, ReprScalarType};
 
     use super::*;
 
     #[derive(Default)]
     pub struct Analyses {
-        pub types: Option<Vec<SqlColumnType>>,
+        pub types: Option<Vec<ReprColumnType>>,
         pub keys: Option<Vec<Vec<usize>>>,
     }
 
@@ -1333,36 +1336,39 @@ mod analyses {
         Ok(analyses)
     }
 
-    fn parse_types(input: ParseStream) -> syn::Result<Vec<SqlColumnType>> {
+    fn parse_types(input: ParseStream) -> syn::Result<Vec<ReprColumnType>> {
         let inner;
         syn::parenthesized!(inner in input);
         inner.parse_comma_sep(parse_column_type)
     }
 
-    pub fn parse_column_type(input: ParseStream) -> syn::Result<SqlColumnType> {
+    pub fn parse_column_type(input: ParseStream) -> syn::Result<ReprColumnType> {
         let scalar_type = parse_scalar_type(input)?;
-        Ok(scalar_type.nullable(input.eat(syn::Token![?])))
+        Ok(ReprColumnType {
+            scalar_type,
+            nullable: input.eat(syn::Token![?]),
+        })
     }
 
-    pub fn parse_scalar_type(input: ParseStream) -> syn::Result<SqlScalarType> {
+    pub fn parse_scalar_type(input: ParseStream) -> syn::Result<ReprScalarType> {
         let lookahead = input.lookahead1();
 
         let scalar_type = if input.look_and_eat(bigint, &lookahead) {
-            SqlScalarType::Int64
+            ReprScalarType::Int64
         } else if input.look_and_eat(double, &lookahead) {
             input.parse::<precision>()?;
-            SqlScalarType::Float64
+            ReprScalarType::Float64
         } else if input.look_and_eat(boolean, &lookahead) {
-            SqlScalarType::Bool
+            ReprScalarType::Bool
         } else if input.look_and_eat(character, &lookahead) {
             input.parse::<varying>()?;
-            SqlScalarType::VarChar { max_length: None }
+            ReprScalarType::String
         } else if input.look_and_eat(integer, &lookahead) {
-            SqlScalarType::Int32
+            ReprScalarType::Int32
         } else if input.look_and_eat(smallint, &lookahead) {
-            SqlScalarType::Int16
+            ReprScalarType::Int16
         } else if input.look_and_eat(text, &lookahead) {
-            SqlScalarType::String
+            ReprScalarType::String
         } else {
             Err(lookahead.error())?
         };
@@ -1444,7 +1450,7 @@ mod def {
         input.parse::<syn::Token![-]>()?;
         let column_name = input.parse::<syn::Ident>()?.to_string();
         input.parse::<syn::Token![:]>()?;
-        let column_type = analyses::parse_column_type(input)?;
+        let column_type = SqlColumnType::from_repr(&analyses::parse_column_type(input)?);
         Ok((column_name, column_type))
     }
 

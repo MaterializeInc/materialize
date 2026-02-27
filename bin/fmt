@@ -17,7 +17,7 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-try cargo fmt
+try cargo fmt -- --config error_on_line_overflow=true
 try buf format src -w
 
 if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then

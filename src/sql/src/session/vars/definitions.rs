@@ -592,11 +592,10 @@ pub static MAX_QUERY_RESULT_SIZE: VarDefinition = VarDefinition::new(
     true,
 );
 
-pub static MAX_COPY_FROM_SIZE: VarDefinition = VarDefinition::new(
-    "max_copy_from_size",
-    // 1 GiB, this limit is noted in the docs, if you change it make sure to update our docs.
-    value!(u32; 1_073_741_824),
-    "The maximum size in bytes we buffer for COPY FROM statements (Materialize).",
+pub static MAX_COPY_FROM_ROW_SIZE: VarDefinition = VarDefinition::new(
+    "max_copy_from_row_size",
+    value!(ByteSize; ByteSize::mb(128)),
+    "The maximum size in bytes for a single COPY FROM STDIN row (Materialize).",
     true,
 );
 

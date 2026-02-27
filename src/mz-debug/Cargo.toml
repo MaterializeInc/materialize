@@ -21,6 +21,7 @@ mz-build-info = { path = "../build-info" }
 mz-cloud-resources = { path = "../cloud-resources"}
 mz-ore = { path = "../ore", features = ["cli", "test"] }
 mz-server-core = { path = "../server-core"}
+mz-sql-parser = { path = "../sql-parser" }
 mz-tls-util = { path = "../tls-util" }
 postgres-openssl = { version = "0.5.2" }
 regex = "1.12.2"

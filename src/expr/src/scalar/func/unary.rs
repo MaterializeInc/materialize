@@ -15,7 +15,7 @@
 
 use std::{fmt, str};
 
-use mz_repr::{Datum, InputDatumType, OutputDatumType, RowArena, SqlColumnType};
+use mz_repr::{Datum, InputDatumType, OutputDatumType, ReprColumnType, RowArena, SqlColumnType};
 
 use crate::scalar::func::impls::*;
 use crate::{EvalError, MirScalarExpr};
@@ -31,7 +31,11 @@ pub trait LazyUnaryFunc {
     ) -> Result<Datum<'a>, EvalError>;
 
     /// The output SqlColumnType of this function.
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType;
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType;
+
+    fn output_type(&self, input_type: ReprColumnType) -> ReprColumnType {
+        ReprColumnType::from(&self.output_sql_type(SqlColumnType::from_repr(&input_type)))
+    }
 
     /// Whether this function will produce NULL on NULL input.
     fn propagates_nulls(&self) -> bool;
@@ -105,7 +109,12 @@ pub trait EagerUnaryFunc {
     fn call<'a>(&self, input: Self::Input<'a>) -> Self::Output<'a>;
 
     /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType;
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType;
+
+    /// The output of this function as a representation type.
+    fn output_type(&self, input_type: ReprColumnType) -> ReprColumnType {
+        ReprColumnType::from(&self.output_sql_type(SqlColumnType::from_repr(&input_type)))
+    }
 
     /// Whether this function will produce NULL on NULL input
     fn propagates_nulls(&self) -> bool {
@@ -157,8 +166,8 @@ impl<T: EagerUnaryFunc> LazyUnaryFunc for T {
         }
     }
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        self.output_type(input_type)
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+        self.output_sql_type(input_type)
     }
 
     fn propagates_nulls(&self) -> bool {

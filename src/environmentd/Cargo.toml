@@ -1,7 +1,7 @@
 [package]
 name = "mz-environmentd"
 description = "Manages a single Materialize environment."
-version = "26.14.0-dev.0"
+version = "26.15.0-dev.0"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 edition.workspace = true
@@ -76,6 +76,7 @@ mz-segment = { path = "../segment" }
 mz-server-core = { path = "../server-core" }
 mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
+mz-sql-parser = { path = "../sql-parser" }
 mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing", optional = true }
 nix = { version = "0.30.1", features = ["signal"] }

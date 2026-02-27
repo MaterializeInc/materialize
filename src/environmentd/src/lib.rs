@@ -36,7 +36,7 @@ use mz_adapter_types::dyncfgs::{
     WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use mz_auth::password::Password;
-use mz_authenticator::{Authenticator, GenericOidcAuthenticator};
+use mz_authenticator::GenericOidcAuthenticator;
 use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
@@ -57,7 +57,7 @@ use mz_pgwire_common::ConnectionCounter;
 use mz_repr::strconv;
 use mz_secrets::SecretsController;
 use mz_server_core::listeners::{
-    AuthenticatorKind, HttpListenerConfig, ListenerConfig, ListenersConfig, SqlListenerConfig,
+    HttpListenerConfig, ListenerConfig, ListenersConfig, SqlListenerConfig,
 };
 use mz_server_core::{
     ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext, ServeConfig,
@@ -371,26 +371,8 @@ impl Listeners {
             internal_console_redirect_url: config.internal_console_redirect_url,
         });
 
-        let (authenticator_frontegg_tx, authenticator_frontegg_rx) = oneshot::channel();
-        let authenticator_frontegg_rx = authenticator_frontegg_rx.shared();
-        let (authenticator_password_tx, authenticator_password_rx) = oneshot::channel();
-        let authenticator_password_rx = authenticator_password_rx.shared();
         let (authenticator_oidc_tx, authenticator_oidc_rx) = oneshot::channel();
         let authenticator_oidc_rx = authenticator_oidc_rx.shared();
-        let (authenticator_none_tx, authenticator_none_rx) = oneshot::channel();
-        let authenticator_none_rx = authenticator_none_rx.shared();
-
-        // We can only send the Frontegg and None variants immediately.
-        // The Password and OIDC variants require an adapter client.
-        if let Some(frontegg) = &config.frontegg {
-            authenticator_frontegg_tx
-                .send(Arc::new(Authenticator::Frontegg(frontegg.clone())))
-                .expect("rx known to be live");
-        }
-        authenticator_none_tx
-            .send(Arc::new(Authenticator::None))
-            .expect("rx known to be live");
-
         let (adapter_client_tx, adapter_client_rx) = oneshot::channel();
         let adapter_client_rx = adapter_client_rx.shared();
 
@@ -399,13 +381,6 @@ impl Listeners {
         let mut http_listener_handles = BTreeMap::new();
         for (name, listener) in self.http {
             let authenticator_kind = listener.config.authenticator_kind();
-            let authenticator_rx = match authenticator_kind {
-                AuthenticatorKind::Frontegg => authenticator_frontegg_rx.clone(),
-                AuthenticatorKind::Password => authenticator_password_rx.clone(),
-                AuthenticatorKind::Sasl => authenticator_password_rx.clone(),
-                AuthenticatorKind::Oidc => authenticator_oidc_rx.clone(),
-                AuthenticatorKind::None => authenticator_none_rx.clone(),
-            };
             let source: &'static str = Box::leak(name.clone().into_boxed_str());
             let tls = if listener.config.enable_tls() {
                 tls_reloading_context.clone()
@@ -419,7 +394,8 @@ impl Listeners {
                 source,
                 tls,
                 authenticator_kind,
-                authenticator_rx,
+                frontegg: config.frontegg.clone(),
+                oidc_rx: authenticator_oidc_rx.clone(),
                 allowed_origin: config.cors_allowed_origin.clone(),
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
                 metrics: metrics.clone(),
@@ -807,13 +783,9 @@ impl Listeners {
         let serve_postamble_start = Instant::now();
         info!("startup: envd serve: postamble beginning");
 
-        // Send adapter client to the HTTP servers.
-        authenticator_password_tx
-            .send(Arc::new(Authenticator::Password(adapter_client.clone())))
-            .expect("rx known to be live");
-
+        // Send adapter client and OIDC authenticator to the HTTP servers.
         authenticator_oidc_tx
-            .send(Arc::new(Authenticator::Oidc(oidc.clone())))
+            .send(oidc.clone())
             .expect("rx known to be live");
         adapter_client_tx
             .send(adapter_client.clone())

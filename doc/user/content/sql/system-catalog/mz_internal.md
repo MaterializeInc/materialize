@@ -538,6 +538,20 @@ each materialized view with a refresh strategy other than `on-commit`.
 | `last_completed_refresh` | [`mz_timestamp`]             | The time of the last successfully completed refresh. `NULL` if the materialized view hasn't completed any refreshes yet.  |
 | `next_refresh`           | [`mz_timestamp`]             | The time of the next scheduled refresh. `NULL` if the materialized view has no future scheduled refreshes.                 |
 
+## `mz_mcp_data_products`
+
+The `mz_mcp_data_products` view exposes data products (indexed materialized views)
+available through the Model Context Protocol (MCP) server. Each data product
+represents a queryable dataset with a defined schema.
+
+<!-- RELATION_SPEC mz_internal.mz_mcp_data_products -->
+| Field         | Type     | Meaning                                                                                  |
+| ------------- | -------- | ---------------------------------------------------------------------------------------- |
+| `object_name` | [`text`] | Fully qualified object name (database.schema.name).                                      |
+| `cluster`     | [`text`] | Cluster where the index is hosted.                                                       |
+| `description` | [`text`] | Index comment (used as data product description).                                        |
+| `schema`      | [`jsonb`]| JSON Schema describing the object's columns and types.                                   |
+
 ## `mz_object_dependencies`
 
 The `mz_object_dependencies` table describes the dependency structure between

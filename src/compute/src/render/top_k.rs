@@ -30,7 +30,7 @@ use mz_expr::func::CastUint64ToInt64;
 use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, UnaryFunc, func};
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
-use mz_repr::{Datum, DatumVec, Diff, Row, SharedRow, SqlScalarType};
+use mz_repr::{Datum, DatumVec, Diff, ReprScalarType, Row, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::Container;
@@ -291,12 +291,12 @@ where
 
                 if let Some(new_limit) = new_limit {
                     limit =
-                        MirScalarExpr::literal_ok(Datum::Int64(new_limit), SqlScalarType::Int64);
+                        MirScalarExpr::literal_ok(Datum::Int64(new_limit), ReprScalarType::Int64);
                 } else {
                     limit = limit.call_binary(
                         MirScalarExpr::literal_ok(
                             Datum::UInt64(u64::cast_from(offset)),
-                            SqlScalarType::UInt64,
+                            ReprScalarType::UInt64,
                         )
                         .call_unary(UnaryFunc::CastUint64ToInt64(CastUint64ToInt64)),
                         BinaryFunc::AddInt64(func::AddInt64),

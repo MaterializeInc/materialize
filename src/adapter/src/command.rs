@@ -63,6 +63,20 @@ use crate::{
     AdapterNotice, AppendWebhookError, CollectionIdBundle, ReadHolds, TimestampExplanation,
 };
 
+/// A handle for pgwire to stream raw byte chunks to the coordinator's
+/// parallel background batch builder tasks during COPY FROM STDIN.
+#[derive(Debug)]
+pub struct CopyFromStdinWriter {
+    /// Channels for distributing raw byte chunks (split at row boundaries)
+    /// across parallel worker tasks. pgwire round-robins chunks across these.
+    pub batch_txs: Vec<mpsc::Sender<Vec<u8>>>,
+    /// Receives the final result (`Vec<ProtoBatch>` + total row count, or error)
+    /// from the collector task. pgwire uses this to commit the batches.
+    pub completion_rx: oneshot::Receiver<
+        Result<(Vec<mz_persist_client::batch::ProtoBatch>, u64), crate::AdapterError>,
+    >,
+}
+
 #[derive(Debug)]
 pub struct CatalogSnapshot {
     pub catalog: Arc<Catalog>,
@@ -151,6 +165,21 @@ pub enum Command {
     Terminate {
         conn_id: ConnectionId,
         tx: Option<oneshot::Sender<Result<(), AdapterError>>>,
+    },
+
+    /// Sets up a streaming COPY FROM STDIN operation. The coordinator
+    /// creates parallel background batch builder tasks and returns a
+    /// [`CopyFromStdinWriter`] that pgwire uses to stream raw byte chunks.
+    StartCopyFromStdin {
+        target_id: CatalogItemId,
+        target_name: String,
+        columns: Vec<ColumnIndex>,
+        /// The row description for the target table (used for constraint checks).
+        row_desc: mz_repr::RelationDesc,
+        /// Copy format parameters (text/csv/binary) for decoding raw bytes.
+        params: mz_pgcopy::CopyFormatParams<'static>,
+        session: Session,
+        tx: oneshot::Sender<Response<CopyFromStdinWriter>>,
     },
 
     /// Performs any cleanup and logging actions necessary for
@@ -300,7 +329,9 @@ pub enum Command {
 impl Command {
     pub fn session(&self) -> Option<&Session> {
         match self {
-            Command::Execute { session, .. } | Command::Commit { session, .. } => Some(session),
+            Command::Execute { session, .. }
+            | Command::Commit { session, .. }
+            | Command::StartCopyFromStdin { session, .. } => Some(session),
             Command::CancelRequest { .. }
             | Command::Startup { .. }
             | Command::AuthenticatePassword { .. }
@@ -333,7 +364,9 @@ impl Command {
 
     pub fn session_mut(&mut self) -> Option<&mut Session> {
         match self {
-            Command::Execute { session, .. } | Command::Commit { session, .. } => Some(session),
+            Command::Execute { session, .. }
+            | Command::Commit { session, .. }
+            | Command::StartCopyFromStdin { session, .. } => Some(session),
             Command::CancelRequest { .. }
             | Command::Startup { .. }
             | Command::AuthenticatePassword { .. }

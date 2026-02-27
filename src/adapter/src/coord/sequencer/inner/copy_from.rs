@@ -8,25 +8,39 @@
 // by the Apache License, Version 2.0.
 
 use std::str::FromStr;
+use std::sync::Arc;
 
 use mz_adapter_types::connection::ConnectionId;
 use mz_ore::cast::CastInto;
+use mz_persist_client::Diagnostics;
 use mz_persist_client::batch::ProtoBatch;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_pgcopy::CopyFormatParams;
-use mz_repr::{CatalogItemId, Datum, NotNullViolation, RowArena};
+use mz_repr::{CatalogItemId, ColumnIndex, Datum, NotNullViolation, RelationDesc, Row, RowArena};
+use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{self, CopyFromFilter, CopyFromSource, HirScalarExpr};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TableData;
+use mz_storage_types::StorageDiff;
 use mz_storage_types::oneshot_sources::{ContentShape, OneshotIngestionRequest};
+use mz_storage_types::sources::SourceData;
 use smallvec::SmallVec;
+use timely::progress::Antichain;
+use tokio::sync::{mpsc, oneshot};
 use url::Url;
 use uuid::Uuid;
 
+use crate::command::CopyFromStdinWriter;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{ActiveCopyFrom, Coordinator, TargetCluster};
+use crate::optimize;
 use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
-use crate::session::{TransactionOps, WriteOp};
+use crate::session::{Session, TransactionOps, WriteOp};
 use crate::{AdapterError, ExecuteContext, ExecuteResponse};
+
+/// Finalize persist batches periodically during COPY FROM STDIN to avoid
+/// unbounded in-memory growth in a single giant batch.
+const COPY_FROM_STDIN_MAX_BATCH_BYTES: usize = 32 * 1024 * 1024;
 
 impl Coordinator {
     pub(crate) async fn sequence_copy_from(
@@ -249,6 +263,306 @@ impl Coordinator {
             .await;
     }
 
+    /// Sets up a streaming COPY FROM STDIN operation.
+    ///
+    /// Spawns N parallel background batch builder tasks that each receive
+    /// raw byte chunks, decode them, apply column defaults/reordering,
+    /// and build persist batches. Returns a [`CopyFromStdinWriter`] for
+    /// pgwire to distribute raw byte chunks across the workers.
+    pub(crate) fn setup_copy_from_stdin(
+        &self,
+        session: &Session,
+        target_id: CatalogItemId,
+        target_name: String,
+        columns: Vec<ColumnIndex>,
+        row_desc: RelationDesc,
+        params: CopyFormatParams<'static>,
+    ) -> Result<CopyFromStdinWriter, AdapterError> {
+        // Look up the table and its persist shard metadata.
+        let Some(dest_table) = self.catalog().get_entry(&target_id).table() else {
+            let typ = self.catalog().get_entry(&target_id).item().typ();
+            return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                "programming error: expected a Table found {typ:?}"
+            )));
+        };
+        let collection_id = dest_table.global_id_writes();
+
+        let collection_meta = self
+            .controller
+            .storage
+            .collection_metadata(collection_id)
+            .map_err(|e| AdapterError::Unstructured(anyhow::anyhow!("{e}")))?;
+        let shard_id = collection_meta.data_shard;
+        let collection_desc = collection_meta.relation_desc.clone();
+
+        // Pre-compute the column transformation.
+        let pcx = session.pcx().clone();
+        let session_meta = session.meta();
+        let catalog = self.catalog().clone();
+        let conn_catalog = catalog.for_session(session);
+        let catalog_state = conn_catalog.state();
+        let optimizer_config = optimize::OptimizerConfig::from(conn_catalog.system_vars());
+
+        // Determine if we need column rewriting (defaults/reordering).
+        let target_desc = catalog
+            .try_get_entry(&target_id)
+            .expect("table must exist")
+            .relation_desc_latest()
+            .expect("table has desc")
+            .into_owned();
+        let all_columns_in_order = columns.len() == target_desc.arity()
+            && columns.iter().enumerate().all(|(i, c)| c.to_raw() == i);
+
+        // If we need column rewriting, pre-compute the transform by running
+        // plan_copy_from with a single dummy row through the optimizer.
+        let column_transform = if all_columns_in_order {
+            None
+        } else {
+            let dummy_datums: Vec<Datum> = columns.iter().map(|_| Datum::Null).collect();
+            let dummy_row = Row::pack(&dummy_datums);
+
+            let prep = ExprPrepOneShot {
+                logical_time: EvalTime::NotAvailable,
+                session: &session_meta,
+                catalog_state,
+            };
+            let mut optimizer = optimize::view::Optimizer::new_with_prep_no_limit(
+                optimizer_config.clone(),
+                None,
+                prep,
+            );
+
+            let hir = mz_sql::plan::plan_copy_from(
+                &pcx,
+                &conn_catalog,
+                target_id,
+                target_name.clone(),
+                columns.clone(),
+                vec![dummy_row],
+            )?;
+            let mir = optimize::Optimize::optimize(&mut optimizer, hir)?;
+            let mir_expr = mir.into_inner();
+            let (result_ref, _) = mir_expr
+                .as_const()
+                .expect("optimizer should produce constant");
+            let result_rows = result_ref
+                .clone()
+                .map_err(|e| AdapterError::Unstructured(anyhow::anyhow!("eval error: {e}")))?;
+
+            let (full_row, _) = result_rows.into_iter().next().expect("should have one row");
+            let full_datums: Vec<Datum> = full_row.unpack();
+
+            let col_to_source: std::collections::BTreeMap<ColumnIndex, usize> =
+                columns.iter().enumerate().map(|(a, b)| (*b, a)).collect();
+
+            let mut sources: Vec<ColumnSource> = Vec::with_capacity(target_desc.arity());
+            let mut default_datums: Vec<Datum> = Vec::new();
+
+            for i in 0..target_desc.arity() {
+                let col_idx = ColumnIndex::from_raw(i);
+                if let Some(&src_idx) = col_to_source.get(&col_idx) {
+                    sources.push(ColumnSource::Input(src_idx));
+                } else {
+                    sources.push(ColumnSource::Default(default_datums.len()));
+                    default_datums.push(full_datums[i]);
+                }
+            }
+
+            let defaults_row = Row::pack(&default_datums);
+
+            Some(ColumnTransform {
+                sources,
+                defaults_row,
+            })
+        };
+
+        // Compute column types for decoding (same logic as pgwire used to do).
+        let column_types: Arc<[mz_pgrepr::Type]> = row_desc
+            .typ()
+            .column_types
+            .iter()
+            .map(|x| &x.scalar_type)
+            .map(mz_pgrepr::Type::from)
+            .collect::<Vec<_>>()
+            .into();
+
+        // Determine number of parallel workers.
+        let num_workers = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        tracing::info!(
+            %target_id, num_workers,
+            "starting parallel COPY FROM STDIN batch builders"
+        );
+
+        // Shared state across workers.
+        let column_transform = Arc::new(column_transform);
+        let target_desc = Arc::new(target_desc);
+        let collection_desc = Arc::new(collection_desc);
+        let persist_client = self.persist_client.clone();
+
+        // Create per-worker channels and spawn workers on blocking threads.
+        // Each worker does CPU-intensive TSV decoding + columnar encoding,
+        // so they need dedicated OS threads (not tokio async tasks) for
+        // true parallelism.
+        let rt_handle = tokio::runtime::Handle::current();
+        let mut batch_txs = Vec::with_capacity(num_workers);
+        let mut worker_handles = Vec::with_capacity(num_workers);
+
+        for worker_id in 0..num_workers {
+            // Keep in-flight buffering tight: at most one chunk queued per
+            // worker in addition to the currently-processed chunk.
+            let (batch_tx, batch_rx) = mpsc::channel::<Vec<u8>>(1);
+            batch_txs.push(batch_tx);
+
+            let persist_client = persist_client.clone();
+            let column_types = Arc::clone(&column_types);
+            let column_transform = Arc::clone(&column_transform);
+            let target_desc = Arc::clone(&target_desc);
+            let collection_desc = Arc::clone(&collection_desc);
+            let params = params.clone();
+            let rt = rt_handle.clone();
+
+            let handle = mz_ore::task::spawn_blocking(
+                || format!("copy_from_stdin_worker:{target_id}:{worker_id}"),
+                move || {
+                    rt.block_on(Self::copy_from_stdin_batch_builder(
+                        persist_client,
+                        shard_id,
+                        collection_id,
+                        collection_desc,
+                        target_desc,
+                        column_transform,
+                        column_types,
+                        params,
+                        batch_rx,
+                    ))
+                },
+            );
+            worker_handles.push(handle);
+        }
+
+        // Spawn a collector task that waits for all workers.
+        let (completion_tx, completion_rx) = oneshot::channel();
+        mz_ore::task::spawn(
+            || format!("copy_from_stdin_collector:{target_id}"),
+            async move {
+                let mut all_batches = Vec::with_capacity(num_workers);
+                let mut total_rows: u64 = 0;
+
+                for handle in worker_handles {
+                    match handle.await {
+                        Ok((proto_batches, count)) => {
+                            all_batches.extend(proto_batches);
+                            total_rows += count;
+                        }
+                        Err(e) => {
+                            let _ = completion_tx.send(Err(e));
+                            return;
+                        }
+                    }
+                }
+
+                let _ = completion_tx.send(Ok((all_batches, total_rows)));
+            },
+        );
+
+        Ok(CopyFromStdinWriter {
+            batch_txs,
+            completion_rx,
+        })
+    }
+
+    /// Background task: receives raw byte chunks, decodes rows, and builds
+    /// persist batches. One instance runs per parallel worker.
+    async fn copy_from_stdin_batch_builder(
+        persist_client: mz_persist_client::PersistClient,
+        shard_id: mz_persist_client::ShardId,
+        collection_id: mz_repr::GlobalId,
+        collection_desc: Arc<RelationDesc>,
+        target_desc: Arc<RelationDesc>,
+        column_transform: Arc<Option<ColumnTransform>>,
+        column_types: Arc<[mz_pgrepr::Type]>,
+        params: CopyFormatParams<'static>,
+        mut batch_rx: mpsc::Receiver<Vec<u8>>,
+    ) -> Result<(Vec<ProtoBatch>, u64), AdapterError> {
+        let persist_diagnostics = Diagnostics {
+            shard_name: collection_id.to_string(),
+            handle_purpose: "CopyFromStdin::batch_builder".to_string(),
+        };
+        let write_handle = persist_client
+            .open_writer::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
+                shard_id,
+                collection_desc,
+                Arc::new(UnitSchema),
+                persist_diagnostics,
+            )
+            .await
+            .map_err(|e| AdapterError::Unstructured(anyhow::anyhow!("persist open: {e}")))?;
+
+        // Build a batch at the minimum timestamp. The coordinator will
+        // re-timestamp it during commit.
+        let lower = mz_repr::Timestamp::MIN;
+        let upper = Antichain::from_elem(lower.step_forward());
+        let mut batch_builder = write_handle.builder(Antichain::from_elem(lower));
+        let mut row_count: u64 = 0;
+        let mut row_count_in_batch: u64 = 0;
+        let mut batch_bytes: usize = 0;
+        let mut proto_batches = Vec::new();
+
+        while let Some(raw_bytes) = batch_rx.recv().await {
+            // Decode raw bytes into rows.
+            let rows = mz_pgcopy::decode_copy_format(&raw_bytes, &column_types, params.clone())
+                .map_err(|e| AdapterError::CopyFormatError(e.to_string()))?;
+
+            for row in rows {
+                // Apply column transform if needed (add defaults, reorder).
+                let full_row = if let Some(ref transform) = *column_transform {
+                    transform.apply(&row)
+                } else {
+                    row
+                };
+
+                // Check constraints.
+                for (i, datum) in full_row.iter().enumerate() {
+                    target_desc.constraints_met(i, &datum).map_err(|e| {
+                        AdapterError::Unstructured(anyhow::anyhow!("constraint violation: {e}"))
+                    })?;
+                }
+
+                let data = SourceData(Ok(full_row));
+                batch_builder
+                    .add(&data, &(), &lower, &1)
+                    .await
+                    .map_err(|e| AdapterError::Unstructured(anyhow::anyhow!("persist add: {e}")))?;
+                row_count += 1;
+                row_count_in_batch += 1;
+            }
+
+            batch_bytes = batch_bytes.saturating_add(raw_bytes.len());
+            if batch_bytes >= COPY_FROM_STDIN_MAX_BATCH_BYTES {
+                let batch = batch_builder.finish(upper.clone()).await.map_err(|e| {
+                    AdapterError::Unstructured(anyhow::anyhow!("persist finish: {e}"))
+                })?;
+                proto_batches.push(batch.into_transmittable_batch());
+
+                batch_builder = write_handle.builder(Antichain::from_elem(lower));
+                row_count_in_batch = 0;
+                batch_bytes = 0;
+            }
+        }
+
+        if row_count_in_batch > 0 || proto_batches.is_empty() {
+            let batch = batch_builder
+                .finish(upper)
+                .await
+                .map_err(|e| AdapterError::Unstructured(anyhow::anyhow!("persist finish: {e}")))?;
+            proto_batches.push(batch.into_transmittable_batch());
+        }
+
+        Ok((proto_batches, row_count))
+    }
+
     pub(crate) fn commit_staged_batches(
         &mut self,
         conn_id: ConnectionId,
@@ -336,5 +650,38 @@ impl Coordinator {
 
             ctx.retire(Err(AdapterError::Canceled));
         }
+    }
+}
+
+/// Describes how to transform a partial row (with only specified columns)
+/// into a full row matching the table schema.
+struct ColumnTransform {
+    /// For each column in the target table, where to get the value.
+    sources: Vec<ColumnSource>,
+    /// Pre-computed default values for columns not in the COPY column list.
+    /// Packed as a Row; indexed by the `Default(idx)` variant.
+    defaults_row: Row,
+}
+
+enum ColumnSource {
+    /// Take the value from the input row at this position.
+    Input(usize),
+    /// Use the pre-computed default at this index in `defaults_row`.
+    Default(usize),
+}
+
+impl ColumnTransform {
+    /// Apply the transform to produce a full row from a partial input row.
+    fn apply(&self, input: &Row) -> Row {
+        let input_datums: Vec<Datum> = input.unpack();
+        let default_datums: Vec<Datum> = self.defaults_row.unpack();
+        let mut output_datums = Vec::with_capacity(self.sources.len());
+        for source in &self.sources {
+            match source {
+                ColumnSource::Input(idx) => output_datums.push(input_datums[*idx]),
+                ColumnSource::Default(idx) => output_datums.push(default_datums[*idx]),
+            }
+        }
+        Row::pack(&output_datums)
     }
 }

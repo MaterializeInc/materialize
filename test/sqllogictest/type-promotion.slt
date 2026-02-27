@@ -1690,9 +1690,9 @@ EXPLAIN OPTIMIZED PLAN WITH (TYPES) AS VERBOSE TEXT FOR
 (SELECT * FROM t1) UNION ALL (SELECT * FROM t2);
 ----
 Explained Query:
-  Union // { types: "(varchar?)" }
-    ReadStorage materialize.public.t1 // { types: "(varchar(3)?)" }
-    ReadStorage materialize.public.t2 // { types: "(varchar(4)?)" }
+  Union // { types: "(text?)" }
+    ReadStorage materialize.public.t1 // { types: "(text?)" }
+    ReadStorage materialize.public.t2 // { types: "(text?)" }
 
 Source materialize.public.t1
 Source materialize.public.t2
@@ -1726,11 +1726,11 @@ EXPLAIN OPTIMIZED PLAN WITH (TYPES) AS VERBOSE TEXT FOR
 (SELECT * FROM t1) UNION ALL (SELECT * FROM t3);
 ----
 Explained Query:
-  Union // { types: "(varchar?)" }
-    ReadStorage materialize.public.t1 // { types: "(varchar(3)?)" }
-    Project (#1) // { types: "(varchar?)" }
-      Map (text_to_varchar[len=unbounded](#0)) // { types: "(char(2)?, varchar?)" }
-        ReadStorage materialize.public.t3 // { types: "(char(2)?)" }
+  Union // { types: "(text?)" }
+    ReadStorage materialize.public.t1 // { types: "(text?)" }
+    Project (#1) // { types: "(text?)" }
+      Map (text_to_varchar[len=unbounded](#0)) // { types: "(text?, text?)" }
+        ReadStorage materialize.public.t3 // { types: "(text?)" }
 
 Source materialize.public.t1
 Source materialize.public.t3
@@ -1757,10 +1757,10 @@ EXPLAIN OPTIMIZED PLAN WITH (TYPES) AS VERBOSE TEXT FOR
 (SELECT * FROM t3) UNION (SELECT * FROM t4);
 ----
 Explained Query:
-  Distinct project=[#0] // { types: "(char?)" }
-    Union // { types: "(char?)" }
-      ReadStorage materialize.public.t3 // { types: "(char(2)?)" }
-      ReadStorage materialize.public.t4 // { types: "(char(3)?)" }
+  Distinct project=[#0] // { types: "(text?)" }
+    Union // { types: "(text?)" }
+      ReadStorage materialize.public.t3 // { types: "(text?)" }
+      ReadStorage materialize.public.t4 // { types: "(text?)" }
 
 Source materialize.public.t3
 Source materialize.public.t4

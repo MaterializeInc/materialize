@@ -1,0 +1,94 @@
+- name: "syntax"
+  code: |
+    CREATE SINK [IF NOT EXISTS] <sink_name>
+    [IN CLUSTER <cluster_name>]
+    FROM <item_name>
+    INTO ICEBERG CATALOG CONNECTION <catalog_connection> (
+      NAMESPACE = '<namespace>',
+      TABLE = '<table>'
+    )
+    USING AWS CONNECTION <aws_connection>
+    KEY ( <key_col> [, ...] ) [NOT ENFORCED]
+    MODE UPSERT
+    WITH (COMMIT INTERVAL = '<interval>')
+  syntax_elements:
+    - name: "`<sink_name>`"
+      description: |
+        The name for the sink.
+    - name: "**IF NOT EXISTS**"
+      description: |
+        Optional. If specified, do not throw an error if a sink with the same name already exists.
+    - name: "**IN CLUSTER** `<cluster_name>`"
+      description: |
+        Optional. The [cluster](/sql/create-cluster) to maintain this sink. If
+        unspecified, defaults to the active cluster.
+    - name: "`<item_name>`"
+      description: |
+        The name of the source, table, or materialized view to sink.
+    - name: "**ICEBERG CATALOG CONNECTION** `<catalog_connection>`"
+      description: |
+        The name of the [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog) to use.
+    - name: "**NAMESPACE** `'<namespace>'`"
+      description: |
+        The Iceberg namespace (database) containing the table.
+    - name: "**TABLE** `'<table>'`"
+      description: |
+        The name of the unpartitioned Iceberg table to write to. If the table
+        doesn't exist, Materialize creates it automatically. For details, see
+        [Iceberg table
+        creation](/sql/create-sink/iceberg/#iceberg-table-creation).
+    - name: "**USING AWS CONNECTION** `<aws_connection>`"
+      description: |
+        The [AWS connection](/sql/create-connection/#aws) for object storage access.
+    - name: "**KEY** ( `<key_col>` [, ...] )"
+      description: |
+        The columns that uniquely identify rows. Materialize validates that the key is unique unless `NOT ENFORCED` is specified.
+    - name: "**NOT ENFORCED**"
+      description: |
+        Optional. Disable validation of key uniqueness. Use only when you have outside knowledge that the key is unique.
+    - name: "**MODE UPSERT**"
+      description: |
+        Indicates that the sink uses upsert semantics based on the `KEY`.
+    - name: "**COMMIT INTERVAL** `'<interval>'`"
+      description: |
+        How frequently to commit snapshots to Iceberg (e.g., `'60s'`, `'5m'`). See [Commit interval tradeoffs](#commit-interval-tradeoffs).
+
+- name: "example-create-iceberg-sink"
+  description: |
+    Using the previously created AWS and Iceberg catalog connection, the
+    following example creates an Iceberg sink with a composite key:
+  code: |
+    CREATE SINK user_events_iceberg
+      IN CLUSTER analytics_cluster
+      FROM user_events
+      INTO ICEBERG CATALOG CONNECTION iceberg_catalog_connection (
+        NAMESPACE = 'events',
+        TABLE = 'user_events'
+      )
+      USING AWS CONNECTION aws_connection
+      KEY (user_id, event_timestamp)
+      MODE UPSERT
+      WITH (COMMIT INTERVAL = '1m');
+  testable: false
+
+- name: "restrictions-limitations-regions"
+  content: |
+    Your S3 Tables bucket must be in the same AWS region as your Materialize
+    deployment.
+
+- name: "restrictions-limitations-partitioned-tables"
+  content: |
+    Partitioned tables are not supported.
+
+- name: "restrictions-limitations-schema-evolution"
+  content: |
+    Schema evolution of an Iceberg table is not supported. If the `SINK FROM` object's schema changes, you must drop and recreate the sink.
+
+- name: "exactly-once-delivery"
+  content: |
+    Iceberg sinks provide **exactly-once delivery**. After a restart,
+    Materialize resumes from the last committed snapshot without duplicating
+    data.
+
+    Materialize stores progress information in Iceberg snapshot metadata
+    properties (`mz-frontier` and `mz-sink-version`).

@@ -59,7 +59,7 @@ impl EagerUnaryFunc for CastDateToTimestamp {
         Ok(updated)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Timestamp { precision: self.0 }.nullable(input.nullable)
     }
 
@@ -110,7 +110,7 @@ impl EagerUnaryFunc for CastDateToTimestampTz {
         Ok(updated)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::TimestampTz { precision: self.0 }.nullable(input.nullable)
     }
 
@@ -187,7 +187,7 @@ impl EagerUnaryFunc for ExtractDate {
         extract_date_inner(self.0, a.into())
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Numeric { max_scale: None }.nullable(input.nullable)
     }
 

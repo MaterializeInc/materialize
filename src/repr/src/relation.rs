@@ -15,6 +15,7 @@ use anyhow::bail;
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
+use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
 use mz_ore::{assert_none, assert_ok};
 use mz_persist_types::schema::SchemaId;
@@ -94,7 +95,7 @@ impl SqlColumnType {
     /// Backports nullability information from `backport_typ` into `self`,
     /// affecting the outer `.nullable` field but also record fields deeper
     /// into the type.
-    pub fn backport_nullability(&mut self, backport_typ: &SqlColumnType) {
+    pub fn backport_nullability(&mut self, backport_typ: &ReprColumnType) {
         self.scalar_type
             .backport_nullability(&backport_typ.scalar_type);
         self.nullable = backport_typ.nullable;
@@ -191,13 +192,21 @@ impl SqlColumnType {
     /// nullabilities.
     pub fn try_union(&self, other: &Self) -> Result<Self, anyhow::Error> {
         self.sql_union(other).or_else(|e| {
-            ::tracing::trace!("repr type error: sql_union({self:?}, {other:?}): {e}");
-
             let repr_self = ReprColumnType::from(self);
             let repr_other = ReprColumnType::from(other);
-            repr_self
-                .union(&repr_other)
-                .map(|typ| SqlColumnType::from_repr(&typ))
+            match repr_self.union(&repr_other) {
+                Ok(typ) => {
+                    // sql_union failed but repr union succeeded — this indicates
+                    // a repr-type canonicalization gap that we want CI visibility for.
+                    soft_panic_or_log!("repr type error: sql_union({self:?}, {other:?}): {e}");
+                    Ok(SqlColumnType::from_repr(&typ))
+                }
+                Err(_) => {
+                    // Both sql_union and repr union failed — genuine type mismatch,
+                    // not a canonicalization issue. Just propagate the original error.
+                    Err(e)
+                }
+            }
         })
     }
 
@@ -333,7 +342,7 @@ impl SqlRelationType {
     /// Adopts the nullability and keys from another `SqlRelationType`.
     ///
     /// Panics if the number of columns does not match.
-    pub fn backport_nullability_and_keys(&mut self, backport_typ: &SqlRelationType) {
+    pub fn backport_nullability_and_keys(&mut self, backport_typ: &ReprRelationType) {
         assert_eq!(
             backport_typ.column_types.len(),
             self.column_types.len(),
@@ -348,6 +357,20 @@ impl SqlRelationType {
         }
 
         self.keys = backport_typ.keys.clone();
+    }
+
+    /// Constructs a `SqlRelationType` from a `ReprRelationType` by converting
+    /// each column type via [`SqlColumnType::from_repr`]. This is a lossy
+    /// inverse of `ReprRelationType::from(&SqlRelationType)`.
+    pub fn from_repr(repr: &ReprRelationType) -> Self {
+        SqlRelationType {
+            column_types: repr
+                .column_types
+                .iter()
+                .map(SqlColumnType::from_repr)
+                .collect(),
+            keys: repr.keys.clone(),
+        }
     }
 }
 
@@ -389,7 +412,8 @@ impl RustType<ProtoKey> for Vec<usize> {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash
+    Hash,
+    MzReflect
 )]
 pub struct ReprRelationType {
     /// The type for each column, in order.

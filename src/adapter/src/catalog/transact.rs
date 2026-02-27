@@ -31,8 +31,8 @@ use mz_catalog::durable::{NetworkPolicy, Transaction};
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ClusterConfig, DataSourceDesc, SourceReferences, StateDiff,
-    StateUpdate, StateUpdateKind, TemporaryItem,
+    CatalogEntry, CatalogItem, ClusterConfig, DataSourceDesc, DefaultPrivileges, SourceReferences,
+    StateDiff, StateUpdate, StateUpdateKind, TemporaryItem,
 };
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -1943,7 +1943,7 @@ impl Catalog {
                         ObjectId::Role(_) | ObjectId::ClusterReplica(_) => {}
                     },
                     SystemObjectId::System => {
-                        let mut system_privileges = state.system_privileges.clone();
+                        let mut system_privileges = PrivilegeMap::clone(&state.system_privileges);
                         update_privilege_fn(&mut system_privileges);
                         let new_privilege =
                             system_privileges.get_acl_item(&privilege.grantee, &privilege.grantor);
@@ -1980,7 +1980,7 @@ impl Catalog {
                 privilege_acl_item,
                 variant,
             } => {
-                let mut default_privileges = state.default_privileges.clone();
+                let mut default_privileges = DefaultPrivileges::clone(&state.default_privileges);
                 match variant {
                     UpdatePrivilegeVariant::Grant => default_privileges
                         .grant(privilege_object.clone(), privilege_acl_item.clone()),

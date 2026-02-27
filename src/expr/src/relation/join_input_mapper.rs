@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 
 use itertools::Itertools;
-use mz_repr::{ReprRelationType, SqlRelationType};
+use mz_repr::ReprRelationType;
 
 use crate::scalar::func::variadic::{And, Or};
 use crate::visit::Visit;
@@ -49,15 +49,8 @@ impl JoinInputMapper {
 
     /// Creates a new `JoinInputMapper` and calculates the mapping of global context
     /// columns to local context columns. Using this method is more
-    /// efficient if input SQL types have been pre-calculated
-    pub fn new_from_input_types(types: &[SqlRelationType]) -> Self {
-        Self::new_from_input_arities(types.iter().map(|t| t.arity()))
-    }
-
-    /// Creates a new `JoinInputMapper` and calculates the mapping of global context
-    /// columns to local context columns. Using this method is more
     /// efficient if input repr types have been pre-calculated.
-    pub fn new_from_input_repr_types(types: &[ReprRelationType]) -> Self {
+    pub fn new_from_input_types(types: &[ReprRelationType]) -> Self {
         Self::new_from_input_arities(types.iter().map(|t| t.arity()))
     }
 
@@ -272,13 +265,13 @@ impl JoinInputMapper {
     /// # Examples
     ///
     /// ```
-    /// use mz_repr::{Datum, SqlColumnType, SqlRelationType, SqlScalarType};
+    /// use mz_repr::{Datum, ReprColumnType, ReprRelationType, ReprScalarType};
     /// use mz_expr::{JoinInputMapper, MirRelationExpr, MirScalarExpr};
     ///
     /// // A two-column schema common to each of the three inputs
-    /// let schema = SqlRelationType::new(vec![
-    ///   SqlScalarType::Int32.nullable(false),
-    ///   SqlScalarType::Int32.nullable(false),
+    /// let schema = ReprRelationType::new(vec![
+    ///   ReprScalarType::Int32.nullable(false),
+    ///   ReprScalarType::Int32.nullable(false),
     /// ]);
     ///
     /// // the specific data are not important here.
@@ -447,7 +440,7 @@ impl JoinInputMapper {
 
 #[cfg(test)]
 mod tests {
-    use mz_repr::{Datum, SqlScalarType};
+    use mz_repr::{Datum, ReprScalarType};
 
     use crate::scalar::func;
     use crate::{BinaryFunc, MirScalarExpr, UnaryFunc};
@@ -496,7 +489,7 @@ mod tests {
             expr1: Box::new(MirScalarExpr::column(2)),
             expr2: Box::new(MirScalarExpr::literal(
                 Ok(Datum::Int32(4)),
-                SqlScalarType::Int32,
+                ReprScalarType::Int32,
             )),
         };
         let key22 = MirScalarExpr::column(5);

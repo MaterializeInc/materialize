@@ -445,7 +445,10 @@ pub fn create_fast_path_plan<T: Timestamp>(
         let mut mir = &*dataflow_plan.objects_to_build[0].plan.as_inner_mut();
         if let Some((rows, found_typ)) = mir.as_const() {
             // In the case of a constant, we can return the result now.
-            let plan = FastPathPlan::Constant(rows.clone(), found_typ.clone());
+            let plan = FastPathPlan::Constant(
+                rows.clone(),
+                mz_repr::SqlRelationType::from_repr(found_typ),
+            );
             return Ok(Some(plan));
         } else {
             // If there is a TopK that would be completely covered by the finishing, then jump
@@ -487,7 +490,7 @@ pub fn create_fast_path_plan<T: Timestamp>(
             match mir {
                 MirRelationExpr::Get {
                     id: Id::Global(get_id),
-                    typ: relation_typ,
+                    typ: repr_typ,
                     ..
                 } => {
                     // Just grab any arrangement if an arrangement exists
@@ -508,28 +511,43 @@ pub fn create_fast_path_plan<T: Timestamp>(
                     let safe_mfp = mfp_to_safe_plan(mfp)?;
                     let (_maps, filters, projection) = safe_mfp.as_map_filter_project();
 
-                    let literal_constraint = if persist_fast_path_order {
-                        let mut row = Row::default();
-                        let mut packer = row.packer();
-                        for (idx, col) in relation_typ.column_types.iter().enumerate() {
-                            if !preserves_order(&col.scalar_type) {
-                                break;
-                            }
-                            let col_expr = MirScalarExpr::column(idx);
-
-                            let Some((literal, _)) = filters
-                                .iter()
-                                .filter_map(|f| f.expr_eq_literal(&col_expr))
-                                .next()
-                            else {
-                                break;
-                            };
-                            packer.extend_by_row(&literal);
-                        }
-                        if row.is_empty() { None } else { Some(row) }
+                    let persist_fast_path_order_relation_typ = if persist_fast_path_order {
+                        Some(
+                            dataflow_plan
+                                .source_imports
+                                .get(get_id)
+                                .expect("Get's ID is also imported")
+                                .desc
+                                .typ
+                                .clone(),
+                        )
                     } else {
                         None
                     };
+
+                    let literal_constraint =
+                        if let Some(relation_typ) = &persist_fast_path_order_relation_typ {
+                            let mut row = Row::default();
+                            let mut packer = row.packer();
+                            for (idx, col) in relation_typ.column_types.iter().enumerate() {
+                                if !preserves_order(&col.scalar_type) {
+                                    break;
+                                }
+                                let col_expr = MirScalarExpr::column(idx);
+
+                                let Some((literal, _)) = filters
+                                    .iter()
+                                    .filter_map(|f| f.expr_eq_literal(&col_expr))
+                                    .next()
+                                else {
+                                    break;
+                                };
+                                packer.extend_by_row(&literal);
+                            }
+                            if row.is_empty() { None } else { Some(row) }
+                        } else {
+                            None
+                        };
 
                     let finish_ok = match &finishing {
                         None => false,
@@ -539,24 +557,25 @@ pub fn create_fast_path_plan<T: Timestamp>(
                             offset,
                             ..
                         }) => {
-                            let order_ok = if persist_fast_path_order {
-                                order_by.iter().enumerate().all(|(idx, order)| {
-                                    // Map the ordering column back to the column in the source data.
-                                    // (If it's not one of the input columns, we can't make any guarantees.)
-                                    let column_idx = projection[order.column];
-                                    if column_idx >= safe_mfp.input_arity {
-                                        return false;
-                                    }
-                                    let column_type = &relation_typ.column_types[column_idx];
-                                    let index_ok = idx == column_idx;
-                                    let nulls_ok = !column_type.nullable || order.nulls_last;
-                                    let asc_ok = !order.desc;
-                                    let type_ok = preserves_order(&column_type.scalar_type);
-                                    index_ok && nulls_ok && asc_ok && type_ok
-                                })
-                            } else {
-                                order_by.is_empty()
-                            };
+                            let order_ok =
+                                if let Some(relation_typ) = &persist_fast_path_order_relation_typ {
+                                    order_by.iter().enumerate().all(|(idx, order)| {
+                                        // Map the ordering column back to the column in the source data.
+                                        // (If it's not one of the input columns, we can't make any guarantees.)
+                                        let column_idx = projection[order.column];
+                                        if column_idx >= safe_mfp.input_arity {
+                                            return false;
+                                        }
+                                        let column_type = &relation_typ.column_types[column_idx];
+                                        let index_ok = idx == column_idx;
+                                        let nulls_ok = !column_type.nullable || order.nulls_last;
+                                        let asc_ok = !order.desc;
+                                        let type_ok = preserves_order(&column_type.scalar_type);
+                                        index_ok && nulls_ok && asc_ok && type_ok
+                                    })
+                                } else {
+                                    order_by.is_empty()
+                                };
                             let limit_ok = limit.map_or(false, |l| {
                                 usize::cast_from(l) + *offset < persist_fast_path_limit
                             });
@@ -566,7 +585,7 @@ pub fn create_fast_path_plan<T: Timestamp>(
 
                     let key_constraint = if let Some(literal) = &literal_constraint {
                         let prefix_len = literal.iter().count();
-                        relation_typ
+                        repr_typ
                             .keys
                             .iter()
                             .any(|k| k.iter().all(|idx| *idx < prefix_len))

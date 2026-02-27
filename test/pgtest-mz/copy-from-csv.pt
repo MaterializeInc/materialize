@@ -55,6 +55,32 @@ DataRow {"fields":["7","seven\n8,eight\n"]}
 CommandComplete {"tag":"SELECT 7"}
 ReadyForQuery {"status":"I"}
 
+# Valid multiline CSV field: newline in quoted field must not terminate row.
+send
+Query {"query": "DELETE FROM t"}
+Query {"query": "COPY t FROM STDIN WITH (FORMAT CSV)"}
+CopyData "1,\"hello\n"
+CopyData "world\"\n2,two\n"
+CopyDone
+Query {"query": "SELECT * FROM t ORDER BY i"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DELETE 7"}
+ReadyForQuery {"status":"I"}
+CopyIn {"format":"text","column_formats":["text","text"]}
+CommandComplete {"tag":"COPY 2"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"i"},{"name":"t"}]}
+DataRow {"fields":["1","hello\nworld"]}
+DataRow {"fields":["2","two"]}
+CommandComplete {"tag":"SELECT 2"}
+ReadyForQuery {"status":"I"}
+
 # Change options. Note that:
 # - After receiving terminating char, no other data should be accepted
 # - Quoted end of copy markers are still processed as end of copy markers
@@ -79,7 +105,7 @@ ReadyForQuery
 ReadyForQuery
 ReadyForQuery
 ----
-CommandComplete {"tag":"DELETE 7"}
+CommandComplete {"tag":"DELETE 2"}
 ReadyForQuery {"status":"I"}
 CopyIn {"format":"text","column_formats":["text","text"]}
 CommandComplete {"tag":"COPY 6"}
@@ -299,7 +325,7 @@ CopyData "4,\"fo,ur\"\n"
 CopyData "5,\"\"\n"
 CopyData "6,\n"
 CopyDone
-Query {"query": "SELECT * FROM t4"}
+Query {"query": "SELECT * FROM t4 ORDER BY x"}
 ----
 
 until
@@ -310,12 +336,12 @@ CopyIn {"format":"text","column_formats":["text","text"]}
 CommandComplete {"tag":"COPY 6"}
 ReadyForQuery {"status":"I"}
 RowDescription {"fields":[{"name":"t"},{"name":"x"},{"name":"y"}]}
-DataRow {"fields":["materialize","5","NULL"]}
-DataRow {"fields":["materialize","6","NULL"]}
 DataRow {"fields":["materialize","1","one"]}
 DataRow {"fields":["materialize","2","two"]}
-DataRow {"fields":["materialize","4","fo,ur"]}
 DataRow {"fields":["materialize","3","\"three\""]}
+DataRow {"fields":["materialize","4","fo,ur"]}
+DataRow {"fields":["materialize","5","NULL"]}
+DataRow {"fields":["materialize","6","NULL"]}
 CommandComplete {"tag":"SELECT 6"}
 ReadyForQuery {"status":"I"}
 
@@ -340,7 +366,7 @@ CopyData "4,\"fo,ur\"\n"
 CopyData "5,\"\"\n"
 CopyData "6,\n"
 CopyDone
-Query {"query": "SELECT * FROM t5"}
+Query {"query": "SELECT * FROM t5 ORDER BY x"}
 ----
 
 until
@@ -351,11 +377,11 @@ CopyIn {"format":"text","column_formats":["text","text"]}
 CommandComplete {"tag":"COPY 6"}
 ReadyForQuery {"status":"I"}
 RowDescription {"fields":[{"name":"t"},{"name":"x"},{"name":"y"}]}
-DataRow {"fields":["user:materialize","5","NULL"]}
-DataRow {"fields":["user:materialize","6","NULL"]}
 DataRow {"fields":["user:materialize","1","one"]}
 DataRow {"fields":["user:materialize","2","two"]}
-DataRow {"fields":["user:materialize","4","fo,ur"]}
 DataRow {"fields":["user:materialize","3","\"three\""]}
+DataRow {"fields":["user:materialize","4","fo,ur"]}
+DataRow {"fields":["user:materialize","5","NULL"]}
+DataRow {"fields":["user:materialize","6","NULL"]}
 CommandComplete {"tag":"SELECT 6"}
 ReadyForQuery {"status":"I"}

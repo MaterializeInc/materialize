@@ -49,7 +49,7 @@ impl LazyUnaryFunc for CastRecordToString {
         Ok(Datum::String(temp_storage.push_string(buf)))
     }
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         SqlScalarType::String.nullable(input_type.nullable)
     }
 
@@ -118,7 +118,7 @@ impl LazyUnaryFunc for CastRecord1ToRecord2 {
         Ok(temp_storage.make_datum(|packer| packer.push_list(cast_datums)))
     }
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         self.return_ty
             .without_modifiers()
             .nullable(input_type.nullable)
@@ -183,7 +183,7 @@ impl LazyUnaryFunc for RecordGet {
         Ok(a.unwrap_list().iter().nth(self.0).unwrap())
     }
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         match input_type.scalar_type {
             SqlScalarType::Record { fields, .. } => {
                 let (_name, ty) = &fields[self.0];

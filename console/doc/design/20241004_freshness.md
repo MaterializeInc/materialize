@@ -36,17 +36,17 @@ The objects that the user will most likely care about are whatever’s directly 
 
 We’ll have a new Freshness card that’ll appear in the environment overview dashboard, cluster overview dashboard, and a new tab in an object’s detail page labelled “Freshness”:
 
-![image.png](/doc/design/20241004_freshness/freshness_card.png)
+![image.png](20241004_freshness/freshness_card.png)
 
 The freshness card will consist of a time filter with options `last hour, last 6 hours, last 24 hours`. We map each object (depending on the dashboard) on a line graph on the left and we show the current/latest lag as a table on the right. The table will be sorted by lag descending. The table serves as navigation, a place to get current values, and follows a similar design to the resource intensive object table. In terms of components and actual design, we’ll reuse as much as we can from our cluster overview dashboard and figure out a table variant that’ll look good in a card. The following are my inspirations for this layout:
 
 Grafana:
 
-![Screenshot 2024-09-04 at 1.37.58 PM.png](/doc/design/20241004_freshness/grafana.png)
+![Screenshot 2024-09-04 at 1.37.58 PM.png](20241004_freshness/grafana.png)
 
 Datadog:
 
-![Screenshot 2024-10-04 at 5.36.50 AM.png](/doc/design/20241004_freshness/datadog.png)
+![Screenshot 2024-10-04 at 5.36.50 AM.png](20241004_freshness/datadog.png)
 
 ### Environment overview dashboard
 
@@ -152,7 +152,7 @@ We can’t show all objects of a cluster because for some customers(i.e. General
 
 Ideally the table will look like the following, sorted by lag descending:
 
-![Screenshot 2024-10-04 at 5.46.37 AM.png](/doc/design/20241004_freshness/table.png)
+![Screenshot 2024-10-04 at 5.46.37 AM.png](20241004_freshness/table.png)
 
 Then when users want to debug further, they can navigate to its Freshness tab.
 
@@ -160,7 +160,7 @@ For the SQL queries, it’ll essentially look like the environment dashboard que
 
 Here’s a rough sketch of how I see this all fitting together in the Cluster overview page.
 
-![IMG_3499.heic](/doc/design/20241004_freshness/layout_sketch.png)
+![IMG_3499.heic](20241004_freshness/layout_sketch.png)
 
 We move the “Memory intensive objects” table into the “Resource Usage” card and remove the “Lag behind source” column. We’ll also replace “Lag behind source” columns in each Cluster subpage with our new freshness metric.
 
@@ -168,11 +168,11 @@ We move the “Memory intensive objects” table into the “Resource Usage” c
 
 The freshness tab will consist of a graph with the lag of the object and its current lag.
 
-![image.png](/doc/design/20241004_freshness/object_lag_card.png)
+![image.png](20241004_freshness/object_lag_card.png)
 
 Ideally we’d add a freshness workflow graph below like in the previous design doc below:
 
-![image.png](/doc/design/20241004_freshness/workflow.png)
+![image.png](20241004_freshness/workflow.png)
 
 but I’ll discuss why this is out of scope later on.
 

@@ -9,6 +9,7 @@
 import argparse
 import os
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timedelta
@@ -200,7 +201,7 @@ class LintingThread(threading.Thread):
 class StatusPrinterThread(threading.Thread):
     def __init__(self, current_step: str) -> None:
         super().__init__(target=self.print_status, args=())
-        self.active = not buildkite.is_in_buildkite()
+        self.active = not buildkite.is_in_buildkite() and sys.stdout.isatty()
         self.current_step = current_step
 
     def print_status(self) -> None:

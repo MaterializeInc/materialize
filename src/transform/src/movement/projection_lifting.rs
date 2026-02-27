@@ -17,6 +17,7 @@ use std::mem;
 use itertools::zip_eq;
 use mz_expr::{AccessStrategy, Id, MirRelationExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_repr::ReprRelationType;
 
 use crate::TransformCtx;
 
@@ -67,7 +68,7 @@ impl ProjectionLifting {
         &self,
         relation: &mut MirRelationExpr,
         // Map from names to new get type and projection required at use.
-        gets: &mut BTreeMap<Id, (mz_repr::SqlRelationType, Vec<usize>)>,
+        gets: &mut BTreeMap<Id, (ReprRelationType, Vec<usize>)>,
     ) -> Result<(), crate::TransformError> {
         self.checked_recur(|_| {
             match relation {

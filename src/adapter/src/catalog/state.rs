@@ -115,41 +115,41 @@ pub struct CatalogState {
     // include:
     //  - Temporary items.
     //  - Certain objects are partially derived from read-only state.
-    pub(super) database_by_name: BTreeMap<String, DatabaseId>,
+    pub(super) database_by_name: imbl::OrdMap<String, DatabaseId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub(super) database_by_id: BTreeMap<DatabaseId, Database>,
+    pub(super) database_by_id: imbl::OrdMap<DatabaseId, Database>,
     #[serde(serialize_with = "skip_temp_items")]
-    pub(super) entry_by_id: BTreeMap<CatalogItemId, CatalogEntry>,
+    pub(super) entry_by_id: imbl::OrdMap<CatalogItemId, CatalogEntry>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub(super) entry_by_global_id: BTreeMap<GlobalId, CatalogItemId>,
-    pub(super) ambient_schemas_by_name: BTreeMap<String, SchemaId>,
+    pub(super) entry_by_global_id: imbl::OrdMap<GlobalId, CatalogItemId>,
+    pub(super) ambient_schemas_by_name: imbl::OrdMap<String, SchemaId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub(super) ambient_schemas_by_id: BTreeMap<SchemaId, Schema>,
-    pub(super) clusters_by_name: BTreeMap<String, ClusterId>,
+    pub(super) ambient_schemas_by_id: imbl::OrdMap<SchemaId, Schema>,
+    pub(super) clusters_by_name: imbl::OrdMap<String, ClusterId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub(super) clusters_by_id: BTreeMap<ClusterId, Cluster>,
-    pub(super) roles_by_name: BTreeMap<String, RoleId>,
+    pub(super) clusters_by_id: imbl::OrdMap<ClusterId, Cluster>,
+    pub(super) roles_by_name: imbl::OrdMap<String, RoleId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub(super) roles_by_id: BTreeMap<RoleId, Role>,
-    pub(super) network_policies_by_name: BTreeMap<String, NetworkPolicyId>,
+    pub(super) roles_by_id: imbl::OrdMap<RoleId, Role>,
+    pub(super) network_policies_by_name: imbl::OrdMap<String, NetworkPolicyId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub(super) network_policies_by_id: BTreeMap<NetworkPolicyId, NetworkPolicy>,
+    pub(super) network_policies_by_id: imbl::OrdMap<NetworkPolicyId, NetworkPolicy>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub(super) role_auth_by_id: BTreeMap<RoleId, RoleAuth>,
+    pub(super) role_auth_by_id: imbl::OrdMap<RoleId, RoleAuth>,
 
     #[serde(skip)]
-    pub(super) system_configuration: SystemVars,
-    pub(super) default_privileges: DefaultPrivileges,
-    pub(super) system_privileges: PrivilegeMap,
-    pub(super) comments: CommentsMap,
+    pub(super) system_configuration: Arc<SystemVars>,
+    pub(super) default_privileges: Arc<DefaultPrivileges>,
+    pub(super) system_privileges: Arc<PrivilegeMap>,
+    pub(super) comments: Arc<CommentsMap>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub(super) source_references: BTreeMap<CatalogItemId, SourceReferences>,
-    pub(super) storage_metadata: StorageMetadata,
+    pub(super) source_references: imbl::OrdMap<CatalogItemId, SourceReferences>,
+    pub(super) storage_metadata: Arc<StorageMetadata>,
     pub(super) mock_authentication_nonce: Option<String>,
 
     // Mutable state not derived from the durable catalog.
     #[serde(skip)]
-    pub(super) temporary_schemas: BTreeMap<ConnectionId, Schema>,
+    pub(super) temporary_schemas: imbl::OrdMap<ConnectionId, Schema>,
 
     // Read-only state not derived from the durable catalog.
     #[serde(skip)]
@@ -261,7 +261,7 @@ impl LocalExpressionCache {
 }
 
 fn skip_temp_items<S>(
-    entries: &BTreeMap<CatalogItemId, CatalogEntry>,
+    entries: &imbl::OrdMap<CatalogItemId, CatalogEntry>,
     serializer: S,
 ) -> Result<S::Ok, S::Error>
 where
@@ -311,16 +311,16 @@ impl CatalogState {
             },
             cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
             availability_zones: Default::default(),
-            system_configuration: Default::default(),
+            system_configuration: Arc::new(SystemVars::default()),
             egress_addresses: Default::default(),
             aws_principal_context: Default::default(),
             aws_privatelink_availability_zones: Default::default(),
             http_host_name: Default::default(),
-            default_privileges: Default::default(),
-            system_privileges: Default::default(),
-            comments: Default::default(),
+            default_privileges: Arc::new(DefaultPrivileges::default()),
+            system_privileges: Arc::new(PrivilegeMap::default()),
+            comments: Arc::new(CommentsMap::default()),
             source_references: Default::default(),
-            storage_metadata: Default::default(),
+            storage_metadata: Arc::new(StorageMetadata::default()),
             license_key: ValidatedLicenseKey::for_tests(),
             mock_authentication_nonce: Default::default(),
         }
@@ -1508,8 +1508,8 @@ impl CatalogState {
         //    should be `enable_for_item_parsing` set to `true`.
         // 2. After this step, feature flag configuration must not be
         //    overridden.
-        let restore = self.system_configuration.clone();
-        self.system_configuration.enable_for_item_parsing();
+        let restore = Arc::clone(&self.system_configuration);
+        Arc::make_mut(&mut self.system_configuration).enable_for_item_parsing();
         let res = f(self);
         self.system_configuration = restore;
         res
@@ -2253,7 +2253,7 @@ impl CatalogState {
 
     /// Return a mutable reference to the current system configuration.
     pub fn system_config_mut(&mut self) -> &mut SystemVars {
-        &mut self.system_configuration
+        Arc::make_mut(&mut self.system_configuration)
     }
 
     /// Serializes the catalog's in-memory state.

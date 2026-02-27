@@ -16,7 +16,7 @@ use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelati
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{GlobalId, SqlRelationType};
+use mz_repr::{GlobalId, ReprRelationType, SqlRelationType};
 use mz_storage_types::time_dependence::TimeDependence;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
@@ -40,7 +40,7 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     pub objects_to_build: Vec<BuildDesc<P>>,
     /// Indexes to be made available to be shared with other dataflows
     /// (id of new index, description of index, relationtype of base source/view/table)
-    pub index_exports: BTreeMap<GlobalId, (IndexDesc, SqlRelationType)>,
+    pub index_exports: BTreeMap<GlobalId, (IndexDesc, ReprRelationType)>,
     /// sinks to be created
     /// (id of new sink, description of sink)
     pub sink_exports: BTreeMap<GlobalId, ComputeSinkDesc<S, T>>,
@@ -133,7 +133,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
         &mut self,
         id: GlobalId,
         desc: IndexDesc,
-        typ: SqlRelationType,
+        typ: ReprRelationType,
         monotonic: bool,
     ) {
         self.index_imports.insert(
@@ -176,7 +176,12 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     ///
     /// Future uses of `import_index` in other dataflow descriptions may use `id`,
     /// as long as this dataflow has not been terminated in the meantime.
-    pub fn export_index(&mut self, id: GlobalId, description: IndexDesc, on_type: SqlRelationType) {
+    pub fn export_index(
+        &mut self,
+        id: GlobalId,
+        description: IndexDesc,
+        on_type: ReprRelationType,
+    ) {
         // We first create a "view" named `id` that ensures that the
         // data are correctly arranged and available for export.
         self.insert_plan(
@@ -597,7 +602,7 @@ pub struct IndexImport {
     /// Description of index.
     pub desc: IndexDesc,
     /// Schema and keys of the object the index is on.
-    pub typ: SqlRelationType,
+    pub typ: ReprRelationType,
     /// Whether the index will supply monotonic data.
     pub monotonic: bool,
     /// Whether this import must include the snapshot data.

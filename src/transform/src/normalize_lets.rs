@@ -198,6 +198,7 @@ mod support {
     use itertools::Itertools;
 
     use mz_expr::{Id, LetRecLimit, LocalId, MirRelationExpr};
+    use mz_repr::ReprRelationType;
     use mz_repr::optimize::OptimizerFeatures;
 
     pub(super) fn replace_bindings_from_map(
@@ -249,16 +250,18 @@ mod support {
     /// It only refreshes the nullability and unique key information. As this information can regress,
     /// we do not error if the type weakens, even though that may be something we want to look into.
     ///
-    /// The method relies on the `analysis::{UniqueKeys, SqlRelationType}` analyses to improve its type
-    /// information for `LetRec` stages.
+    /// The method relies on the `analysis::{UniqueKeys, ReprRelationType}` analyses to improve its
+    /// type information for `LetRec` stages.
     pub(super) fn refresh_types(
         expr: &mut MirRelationExpr,
         features: &OptimizerFeatures,
     ) -> Result<(), crate::TransformError> {
         // Assemble type information once for the whole expression.
-        use crate::analysis::{DerivedBuilder, SqlRelationType, UniqueKeys};
+        use crate::analysis::{
+            DerivedBuilder, ReprRelationType as ReprRelationTypeAnalysis, UniqueKeys,
+        };
         let mut builder = DerivedBuilder::new(features);
-        builder.require(SqlRelationType);
+        builder.require(ReprRelationTypeAnalysis);
         builder.require(UniqueKeys);
         let derived = builder.visit(expr);
         let derived_view = derived.as_view();
@@ -275,16 +278,16 @@ mod support {
             if !ids.is_empty() {
                 // The `skip(1)` skips the `body` child, and is followed by binding children.
                 for (id, view) in ids.iter().rev().zip_eq(view.children_rev().skip(1)) {
-                    let cols = view
-                        .value::<SqlRelationType>()
-                        .expect("SqlRelationType required")
+                    let repr_cols = view
+                        .value::<ReprRelationTypeAnalysis>()
+                        .expect("ReprRelationType required")
                         .clone()
                         .expect("Expression not well typed");
                     let keys = view
                         .value::<UniqueKeys>()
                         .expect("UniqueKeys required")
                         .clone();
-                    types.insert(*id, mz_repr::SqlRelationType::new(cols).with_keys(keys));
+                    types.insert(*id, ReprRelationType::new(repr_cols).with_keys(keys));
                 }
             }
             todo.extend(expr.children().rev().zip_eq(view.children_rev()));
@@ -308,14 +311,17 @@ mod support {
                         )))?;
                     }
                     // Assert that the column types have not changed.
+                    // NB the ReprScalarType::eq ignores nullability (correctly!)
+                    // since record field nullability can legitimately differ between the stored
+                    // type and the analysis-recomputed type.
+                    // Note: We also want to ignore nullability changes at the top level, but
+                    // ReprColumnType has the derived Eq, so that wouldn't ignore nullability, hence
+                    // the `.zip_eq(...).all(...)` dance.
                     if !new_type
                         .column_types
                         .iter()
                         .zip_eq(typ.column_types.iter())
-                        .all(|(t1, t2)| {
-                            t1.scalar_type
-                                .base_eq_or_repr_eq_for_assertion(&t2.scalar_type)
-                        })
+                        .all(|(t1, t2)| t1.scalar_type == t2.scalar_type)
                     {
                         Err(crate::TransformError::Internal(format!(
                             "scalar types do not match: {:?} v {:?}",

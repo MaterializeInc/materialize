@@ -479,6 +479,36 @@ ALTER SYSTEM SET max_result_size = 17179869184;
         )
 
 
+class CopyFromStdin(DML):
+    """Measure the time it takes for COPY FROM STDIN to insert rows.
+
+    Uses psycopg's COPY protocol to send pre-generated tab-delimited data
+    directly to Materialize, exercising the parallel decode + persist pipeline.
+    """
+
+    def benchmark(self) -> BenchmarkingSequence:
+        n = self.n()
+        data = "".join(
+            f"{i}\thello world\t{i * 2}\tsome text value here\n" for i in range(n)
+        )
+
+        def setup(executor):
+            conn = executor._composition.sql_connection()
+            conn.execute("DROP TABLE IF EXISTS copy_t")
+            conn.execute(
+                "CREATE TABLE copy_t (f1 INTEGER, f2 TEXT, f3 INTEGER, f4 TEXT)"
+            )
+            conn.close()
+
+        def do_copy(executor):
+            conn = executor._composition.sql_connection()
+            with conn.cursor().copy("COPY copy_t FROM STDIN") as copy:
+                copy.write(data)
+            conn.close()
+
+        return [Lambda(setup), Lambda(do_copy)]
+
+
 class Dataflow(Scenario):
     """Benchmark scenarios around individual dataflow patterns/operators"""
 

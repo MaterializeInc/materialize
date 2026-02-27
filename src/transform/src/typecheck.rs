@@ -25,17 +25,16 @@ use mz_repr::adt::range::Range;
 use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{
     ColumnName, Datum, ReprColumnType, ReprRelationType, ReprScalarBaseType, ReprScalarType,
-    SqlColumnType,
 };
 
 /// Typechecking contexts as shared by various typechecking passes.
 ///
 /// We use a `RefCell` to ensure that contexts are shared by multiple typechecker passes.
 /// Shared contexts help catch consistency issues.
-pub type SharedContext = Arc<Mutex<Context>>;
+pub type SharedTypecheckingContext = Arc<Mutex<Context>>;
 
 /// Generates an empty context
-pub fn empty_context() -> SharedContext {
+pub fn empty_typechecking_context() -> SharedTypecheckingContext {
     Arc::new(Mutex::new(BTreeMap::new()))
 }
 
@@ -820,7 +819,7 @@ fn row_difference_with_column_types<'a>(
 #[derive(Debug)]
 pub struct Typecheck {
     /// The known types of the queries so far
-    ctx: SharedContext,
+    ctx: SharedTypecheckingContext,
     /// Whether or not this is the first run of the transform
     disallow_new_globals: bool,
     /// Whether or not to be strict about join equivalences having the same nullability
@@ -839,7 +838,7 @@ impl CheckedRecursion for Typecheck {
 
 impl Typecheck {
     /// Creates a typechecking consistency checking pass using a given shared context
-    pub fn new(ctx: SharedContext) -> Self {
+    pub fn new(ctx: SharedTypecheckingContext) -> Self {
         Self {
             ctx,
             disallow_new_globals: false,
@@ -898,7 +897,7 @@ impl Typecheck {
                         let col_types = typ
                             .column_types
                             .iter()
-                            .map(ReprColumnType::from)
+                            .cloned()
                             .collect_vec();
                         row_difference_with_column_types(
                             expr, &datums, &col_types,
@@ -914,23 +913,23 @@ impl Typecheck {
                     }
                 }
 
-                Ok(typ.column_types.iter().map(ReprColumnType::from).collect_vec())
+                Ok(typ.column_types.iter().cloned().collect_vec())
             }
             Get { typ, id, .. } => {
                 if let Id::Global(_global_id) = id {
                     if !ctx.contains_key(id) {
                         // TODO(mgree) pass QueryContext through to check these types
-                        return Ok(typ.column_types.iter().map(ReprColumnType::from).collect_vec());
+                        return Ok(typ.column_types.iter().cloned().collect_vec());
                     }
                 }
 
                 let ctx_typ = ctx.get(id).ok_or_else(|| TypeError::Unbound {
                     source: expr,
                     id: id.clone(),
-                    typ: ReprRelationType::from(typ),
+                    typ: typ.clone(),
                 })?;
 
-                let column_types = typ.column_types.iter().map(ReprColumnType::from).collect_vec();
+                let column_types = typ.column_types.iter().cloned().collect_vec();
 
                 // covariant: the ascribed type must be a subtype of the actual type in the context
                 let diffs = relation_subtype_difference(&column_types, ctx_typ)
@@ -995,12 +994,8 @@ impl Typecheck {
                 }
                 // TODO(mgree) check t_exprs agrees with `func`'s input type
 
-                let t_out = func
-                    .output_type()
-                    .column_types
-                    .iter()
-                    .map(ReprColumnType::from)
-                    .collect_vec();
+                let t_out: Vec<ReprColumnType> = func
+                    .output_type().column_types;
 
                 // FlatMap extends the existing columns
                 t_in.extend(t_out);
@@ -1381,11 +1376,7 @@ impl Typecheck {
 
                     let id = Id::Local(id.clone());
                     if let Some(ctx_typ) = ctx.get_mut(&id) {
-                        let typ = typ
-                            .column_types
-                            .iter()
-                            .map(ReprColumnType::from)
-                            .collect_vec();
+                        let typ = typ.column_types.iter().cloned().collect_vec();
 
                         if ctx_typ.len() != typ.len() {
                             let diffs = relation_subtype_difference(&typ, ctx_typ);
@@ -1415,13 +1406,7 @@ impl Typecheck {
                             }
                         }
                     } else {
-                        ctx.insert(
-                            id,
-                            typ.column_types
-                                .iter()
-                                .map(ReprColumnType::from)
-                                .collect_vec(),
-                        );
+                        ctx.insert(id, typ.column_types.iter().cloned().collect_vec());
                     }
                 }
                 Get {
@@ -1509,7 +1494,7 @@ impl Typecheck {
                 }),
             },
             Literal(row, typ) => {
-                let typ = ReprColumnType::from(typ);
+                let typ = typ.clone();
                 if let Ok(row) = row {
                     let datums = row.unpack();
 
@@ -1518,31 +1503,23 @@ impl Typecheck {
 
                 Ok(typ)
             }
-            CallUnmaterializable(func) => Ok(ReprColumnType::from(&func.output_type())),
+            CallUnmaterializable(func) => Ok(func.output_type()),
             CallUnary { expr, func } => {
                 let typ_in = tc.typecheck_scalar(expr, source, column_types)?;
-                let typ_out = func.output_type(SqlColumnType::from_repr(&typ_in));
-                Ok(ReprColumnType::from(&typ_out))
+                let typ_out = func.output_type(typ_in);
+                Ok(typ_out)
             }
             CallBinary { expr1, expr2, func } => {
                 let typ_in1 = tc.typecheck_scalar(expr1, source, column_types)?;
                 let typ_in2 = tc.typecheck_scalar(expr2, source, column_types)?;
-                let typ_out = func.output_type(&[
-                    SqlColumnType::from_repr(&typ_in1),
-                    SqlColumnType::from_repr(&typ_in2),
-                ]);
-                Ok(ReprColumnType::from(&typ_out))
+                let typ_out = func.output_type(&[typ_in1, typ_in2]);
+                Ok(typ_out)
             }
-            CallVariadic { exprs, func } => Ok(ReprColumnType::from(
-                &func.output_type(
-                    exprs
-                        .iter()
-                        .map(|e| {
-                            tc.typecheck_scalar(e, source, column_types)
-                                .map(|typ| SqlColumnType::from_repr(&typ))
-                        })
-                        .collect::<Result<Vec<_>, TypeError>>()?,
-                ),
+            CallVariadic { exprs, func } => Ok(func.output_type(
+                exprs
+                    .iter()
+                    .map(|e| tc.typecheck_scalar(e, source, column_types))
+                    .collect::<Result<Vec<_>, TypeError>>()?,
             )),
             If { cond, then, els } => {
                 let cond_type = tc.typecheck_scalar(cond, source, column_types)?;
@@ -1599,9 +1576,7 @@ impl Typecheck {
 
             // TODO check that t_in is actually acceptable for `func`
 
-            Ok(ReprColumnType::from(
-                &expr.func.output_type(SqlColumnType::from_repr(&t_in)),
-            ))
+            Ok(expr.func.output_type(t_in))
         })
     }
 }
@@ -1718,7 +1693,7 @@ where
 
     let mut it = cols.iter().peekable();
     while let Some(col) = it.next() {
-        s.push_str(&humanizer.humanize_column_type_repr(col, false));
+        s.push_str(&humanizer.humanize_column_type(col, false));
 
         if it.peek().is_some() {
             s.push_str(", ");
@@ -1772,14 +1747,14 @@ impl ReprColumnTypeDifference {
 
         match self {
             NotSubtype { sub, sup } => {
-                let sub = h.humanize_scalar_type_repr(sub, false);
-                let sup = h.humanize_scalar_type_repr(sup, false);
+                let sub = h.humanize_scalar_type(sub, false);
+                let sup = h.humanize_scalar_type(sup, false);
 
                 writeln!(f, "{sub} is a not a subtype of {sup}")
             }
             Nullability { sub, sup } => {
-                let sub = h.humanize_column_type_repr(sub, false);
-                let sup = h.humanize_column_type_repr(sup, false);
+                let sub = h.humanize_column_type(sub, false);
+                let sup = h.humanize_column_type(sup, false);
 
                 writeln!(f, "{sub} is nullable but {sup} is not")
             }
@@ -1824,7 +1799,7 @@ impl DatumTypeDifference {
 
         match self {
             DatumTypeDifference::Null { expected } => {
-                let expected = h.humanize_scalar_type_repr(expected, false);
+                let expected = h.humanize_scalar_type(expected, false);
                 writeln!(
                     f,
                     "unexpected null, expected representation type {expected}"
@@ -1834,7 +1809,7 @@ impl DatumTypeDifference {
                 got_debug,
                 expected,
             } => {
-                let expected = h.humanize_scalar_type_repr(expected, false);
+                let expected = h.humanize_scalar_type(expected, false);
                 // NB `got_debug` will be redacted as appropriate
                 writeln!(
                     f,
@@ -1948,8 +1923,8 @@ impl<'a> TypeError<'a> {
                 diffs,
                 message,
             } => {
-                let got = humanizer.humanize_column_type_repr(got, false);
-                let expected = humanizer.humanize_column_type_repr(expected, false);
+                let got = humanizer.humanize_column_type(got, false);
+                let expected = humanizer.humanize_column_type(expected, false);
                 writeln!(
                     f,
                     "mismatched column types: {message}\n      got {got}\nexpected {expected}"
@@ -2079,7 +2054,7 @@ impl<'a> TypeError<'a> {
 #[cfg(test)]
 mod tests {
     use mz_ore::{assert_err, assert_ok};
-    use mz_repr::{arb_datum, arb_datum_for_column};
+    use mz_repr::{SqlColumnType, arb_datum, arb_datum_for_column};
     use proptest::prelude::*;
 
     use super::*;

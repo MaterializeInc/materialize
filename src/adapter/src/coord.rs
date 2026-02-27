@@ -203,7 +203,7 @@ use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::{
     StatementEndedExecutionReason, StatementLifecycleEvent, StatementLoggingId,
 };
-use crate::util::{ClientTransmitter, ResultExt};
+use crate::util::{ClientTransmitter, ResultExt, sort_topological};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{AdapterNotice, ReadHolds, flags};
 
@@ -378,6 +378,7 @@ impl Message {
                 Command::UnregisterFrontendPeek { .. } => "unregister-frontend-peek",
                 Command::ExplainTimestamp { .. } => "explain-timestamp",
                 Command::FrontendStatementLogging(..) => "frontend-statement-logging",
+                Command::StartCopyFromStdin { .. } => "start-copy-from-stdin",
             },
             Message::ControllerReady {
                 controller: ControllerReadiness::Compute,
@@ -643,6 +644,7 @@ pub struct CreateIndexFinish {
     resolved_ids: ResolvedIds,
     global_mir_plan: optimize::index::GlobalMirPlan,
     global_lir_plan: optimize::index::GlobalLirPlan,
+    optimizer_features: OptimizerFeatures,
 }
 
 #[derive(Debug)]
@@ -845,6 +847,7 @@ pub struct CreateMaterializedViewFinish {
     local_mir_plan: optimize::materialized_view::LocalMirPlan,
     global_mir_plan: optimize::materialized_view::GlobalMirPlan,
     global_lir_plan: optimize::materialized_view::GlobalLirPlan,
+    optimizer_features: OptimizerFeatures,
 }
 
 #[derive(Debug)]
@@ -2033,9 +2036,16 @@ impl Coordinator {
         // buffers.
         self.controller.start_compute_introspection_sink();
 
+        let sorting_start = Instant::now();
+        info!("startup: coordinator init: bootstrap: sorting catalog entries");
+        let entries = self.bootstrap_sort_catalog_entries();
+        info!(
+            "startup: coordinator init: bootstrap: sorting catalog entries complete in {:?}",
+            sorting_start.elapsed()
+        );
+
         let optimize_dataflows_start = Instant::now();
         info!("startup: coordinator init: bootstrap: optimize dataflow plans beginning");
-        let entries: Vec<_> = self.catalog().entries().cloned().collect();
         let uncached_global_exps = self.bootstrap_dataflow_plans(&entries, cached_global_exprs)?;
         info!(
             "startup: coordinator init: bootstrap: optimize dataflow plans complete in {:?}",
@@ -2046,6 +2056,7 @@ impl Coordinator {
         let _fut = self.catalog().update_expression_cache(
             uncached_local_exprs.into_iter().collect(),
             uncached_global_exps.into_iter().collect(),
+            Default::default(),
         );
 
         // Select dataflow as-ofs. This step relies on the storage collections created by
@@ -3006,7 +3017,7 @@ impl Coordinator {
                 .catalog()
                 .resolve_full_name(entry.name(), None)
                 .to_string();
-            let (_optimized_plan, physical_plan, _metainfo) = self
+            let (_optimized_plan, physical_plan, _metainfo, _optimizer_features) = self
                 .optimize_create_continual_task(&ct, *id, self.owned_catalog(), debug_name)
                 .expect("builtin CT should optimize successfully");
 
@@ -3024,6 +3035,39 @@ impl Coordinator {
             .create_collections(self.catalog.state().storage_metadata(), None, collections)
             .await
             .unwrap_or_terminate("cannot fail to create collections");
+    }
+
+    /// Returns the current list of catalog entries, sorted into an appropriate order for
+    /// bootstrapping.
+    ///
+    /// The returned entries are in dependency order. Indexes are sorted immediately after the
+    /// objects they index, to ensure that all dependants of these indexed objects can make use of
+    /// the respective indexes.
+    fn bootstrap_sort_catalog_entries(&self) -> Vec<CatalogEntry> {
+        let mut indexes_on = BTreeMap::<_, Vec<_>>::new();
+        let mut non_indexes = Vec::new();
+        for entry in self.catalog().entries().cloned() {
+            if let Some(index) = entry.index() {
+                indexes_on.entry(index.on).or_default().push(entry);
+            } else {
+                non_indexes.push(entry);
+            }
+        }
+
+        let key_fn = |entry: &CatalogEntry| entry.id;
+        let dependencies_fn = |entry: &CatalogEntry| entry.uses();
+        sort_topological(&mut non_indexes, key_fn, dependencies_fn);
+
+        let mut result = Vec::new();
+        for entry in non_indexes {
+            let gid = entry.latest_global_id();
+            result.push(entry);
+            if let Some(mut indexes) = indexes_on.remove(&gid) {
+                result.append(&mut indexes);
+            }
+        }
+
+        result
     }
 
     /// Invokes the optimizer on all indexes and materialized views in the catalog and inserts the
@@ -3095,7 +3139,7 @@ impl Coordinator {
                                         self.owned_catalog(),
                                         compute_instance.clone(),
                                         global_id,
-                                        optimizer_config,
+                                        optimizer_config.clone(),
                                         self.optimizer_metrics(),
                                     );
 
@@ -3135,9 +3179,7 @@ impl Coordinator {
                                         global_mir: optimized_plan.clone(),
                                         physical_plan: physical_plan.clone(),
                                         dataflow_metainfos: metainfo.clone(),
-                                        optimizer_features: OptimizerFeatures::from(
-                                            self.catalog().system_config(),
-                                        ),
+                                        optimizer_features: optimizer_config.features.clone(),
                                     },
                                 );
                                 (optimized_plan, physical_plan, metainfo)
@@ -3194,7 +3236,7 @@ impl Coordinator {
                                         mv.non_null_assertions.clone(),
                                         mv.refresh_schedule.clone(),
                                         debug_name,
-                                        optimizer_config,
+                                        optimizer_config.clone(),
                                         self.optimizer_metrics(),
                                         force_non_monotonic,
                                     );
@@ -3236,9 +3278,7 @@ impl Coordinator {
                                         global_mir: optimized_plan.clone(),
                                         physical_plan: physical_plan.clone(),
                                         dataflow_metainfos: metainfo.clone(),
-                                        optimizer_features: OptimizerFeatures::from(
-                                            self.catalog().system_config(),
-                                        ),
+                                        optimizer_features: optimizer_config.features.clone(),
                                     },
                                 );
                                 (optimized_plan, physical_plan, metainfo)
@@ -3280,8 +3320,8 @@ impl Coordinator {
                                     .catalog()
                                     .resolve_full_name(entry.name(), None)
                                     .to_string();
-                                let (optimized_plan, physical_plan, metainfo) = self
-                                    .optimize_create_continual_task(
+                                let (optimized_plan, physical_plan, metainfo, optimizer_features) =
+                                    self.optimize_create_continual_task(
                                         ct,
                                         global_id,
                                         self.owned_catalog(),
@@ -3293,9 +3333,7 @@ impl Coordinator {
                                         global_mir: optimized_plan.clone(),
                                         physical_plan: physical_plan.clone(),
                                         dataflow_metainfos: metainfo.clone(),
-                                        optimizer_features: OptimizerFeatures::from(
-                                            self.catalog().system_config(),
-                                        ),
+                                        optimizer_features,
                                     },
                                 );
                                 (optimized_plan, physical_plan, metainfo)

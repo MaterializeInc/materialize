@@ -10,7 +10,9 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
-use mz_repr::{Datum, Row, RowArena, SqlColumnType, SqlRelationType, SqlScalarType};
+use mz_repr::{
+    Datum, ReprColumnType, Row, RowArena, SqlColumnType, SqlRelationType, SqlScalarType,
+};
 
 use crate::scalar::func::variadic::And;
 use crate::{
@@ -372,8 +374,7 @@ pub trait Interpreter {
 
     /// A literal value.
     /// (Stored as a row, because we can't own a Datum.)
-    fn literal(&self, result: &Result<Row, EvalError>, col_type: &SqlColumnType) -> Self::Summary;
-
+    fn literal(&self, result: &Result<Row, EvalError>, col_type: &ReprColumnType) -> Self::Summary;
     /// A call to an unmaterializable function.
     ///
     /// These functions cannot be evaluated by `MirScalarExpr::eval`. They must
@@ -494,7 +495,7 @@ impl<'a, E: Interpreter + ?Sized> Interpreter for MfpEval<'a, E> {
         }
     }
 
-    fn literal(&self, result: &Result<Row, EvalError>, col_type: &SqlColumnType) -> Self::Summary {
+    fn literal(&self, result: &Result<Row, EvalError>, col_type: &ReprColumnType) -> Self::Summary {
         self.evaluator.literal(result, col_type)
     }
 
@@ -763,7 +764,7 @@ impl<'a> ColumnSpecs<'a> {
         let range = self
             .unmaterializables
             .entry(func.clone())
-            .or_insert_with(|| ResultSpec::has_type(&func.output_type(), true));
+            .or_insert_with(|| ResultSpec::has_type(&func.output_sql_type(), true));
         *range = range.clone().intersect(update);
     }
 
@@ -790,7 +791,7 @@ impl<'a> ColumnSpecs<'a> {
                 Err(error) => *literal = Err(error),
                 Ok(datum) => {
                     assert!(
-                        datum.is_instance_of_sql(col_type),
+                        datum.is_instance_of(col_type),
                         "{datum:?} must be an instance of {col_type:?}"
                     );
                     match literal {
@@ -820,7 +821,10 @@ impl<'a> ColumnSpecs<'a> {
     /// [Self::set_literal] is called on the resulting expression to give it a meaningful value
     /// before evaluating.
     fn placeholder(col_type: SqlColumnType) -> MirScalarExpr {
-        MirScalarExpr::Literal(Err(EvalError::Internal("".into())), col_type)
+        MirScalarExpr::Literal(
+            Err(EvalError::Internal("".into())),
+            ReprColumnType::from(&col_type),
+        )
     }
 }
 
@@ -833,8 +837,8 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         ColumnSpec { col_type, range }
     }
 
-    fn literal(&self, result: &Result<Row, EvalError>, col_type: &SqlColumnType) -> Self::Summary {
-        let col_type = col_type.clone();
+    fn literal(&self, result: &Result<Row, EvalError>, col_type: &ReprColumnType) -> Self::Summary {
+        let col_type = SqlColumnType::from_repr(col_type);
         let range = self.eval_result(result.as_ref().map(|row| {
             self.arena
                 .make_datum(|packer| packer.push(row.unpack_first()))
@@ -843,12 +847,12 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     }
 
     fn unmaterializable(&self, func: &UnmaterializableFunc) -> Self::Summary {
-        let col_type = func.output_type();
+        let col_type = func.output_sql_type();
         let range = self
             .unmaterializables
             .get(func)
             .cloned()
-            .unwrap_or_else(|| ResultSpec::has_type(&func.output_type(), true));
+            .unwrap_or_else(|| ResultSpec::has_type(&func.output_sql_type(), true));
         ColumnSpec { col_type, range }
     }
 
@@ -868,7 +872,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
             })
         };
 
-        let col_type = func.output_type(summary.col_type);
+        let col_type = func.output_sql_type(summary.col_type);
 
         let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, fallible));
         ColumnSpec { col_type, range }
@@ -900,7 +904,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
             })
         };
 
-        let col_type = func.output_type(&[left.col_type, right.col_type]);
+        let col_type = func.output_sql_type(&[left.col_type, right.col_type]);
 
         let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, fallible));
         ColumnSpec { col_type, range }
@@ -950,7 +954,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         };
 
         let col_types = args.into_iter().map(|spec| spec.col_type).collect();
-        let col_type = func.output_type(col_types);
+        let col_type = func.output_sql_type(col_types);
 
         let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, fallible));
 
@@ -1043,7 +1047,7 @@ impl Interpreter for Trace {
     fn literal(
         &self,
         _result: &Result<Row, EvalError>,
-        _col_type: &SqlColumnType,
+        _col_type: &ReprColumnType,
     ) -> Self::Summary {
         TraceSummary::Constant
     }
@@ -1101,7 +1105,7 @@ impl Interpreter for Trace {
 mod tests {
     use itertools::Itertools;
     use mz_repr::adt::datetime::DateTimeUnits;
-    use mz_repr::{Datum, PropDatum, RowArena, SqlScalarType};
+    use mz_repr::{Datum, PropDatum, ReprScalarType, RowArena, SqlScalarType};
     use proptest::prelude::*;
     use proptest::sample::{Index, select};
 
@@ -1298,7 +1302,10 @@ mod tests {
                     .prop_map(move |datum| Ok(Row::pack_slice(&[datum])))
                     .boxed();
                 error_gen.prop_union(value_gen).prop_map(move |result| {
-                    (MirScalarExpr::Literal(result, ct.clone()), ct.clone())
+                    (
+                        MirScalarExpr::Literal(result, ReprColumnType::from(&ct)),
+                        ct.clone(),
+                    )
                 })
             })
             .boxed();
@@ -1311,7 +1318,7 @@ mod tests {
                         if !unary_typecheck(&func, &type_in) {
                             return None;
                         }
-                        let type_out = func.output_type(type_in);
+                        let type_out = func.output_sql_type(type_in);
                         let expr_out = MirScalarExpr::CallUnary {
                             func,
                             expr: Box::new(expr_in),
@@ -1330,7 +1337,7 @@ mod tests {
                             if !binary_typecheck(&func, &type_left, &type_right) {
                                 return None;
                             }
-                            let type_out = func.output_type(&[type_left, type_right]);
+                            let type_out = func.output_sql_type(&[type_left, type_right]);
                             let expr_out = MirScalarExpr::CallBinary {
                                 func,
                                 expr1: Box::new(expr_left),
@@ -1349,7 +1356,7 @@ mod tests {
                         if !variadic_typecheck(&func, &type_in) {
                             return None;
                         }
-                        let type_out = func.output_type(type_in);
+                        let type_out = func.output_sql_type(type_in);
                         let expr_out = MirScalarExpr::CallVariadic {
                             func,
                             exprs: exprs_in,
@@ -1471,9 +1478,9 @@ mod tests {
                     CallBinary {
                         func: Eq.into(),
                         expr1: Box::new(MirScalarExpr::column(0)),
-                        expr2: Box::new(Literal(
-                            Ok(Row::pack_slice(&[Datum::Int32(1727694505)])),
-                            SqlScalarType::Int32.nullable(false),
+                        expr2: Box::new(MirScalarExpr::literal_ok(
+                            Datum::Int32(1727694505),
+                            ReprScalarType::Int32,
                         )),
                     },
                 ),
@@ -1496,8 +1503,8 @@ mod tests {
             Concat,
             vec![
                 MirScalarExpr::column(0),
-                MirScalarExpr::literal_ok(Datum::String("a"), SqlScalarType::String),
-                MirScalarExpr::literal_ok(Datum::String("b"), SqlScalarType::String),
+                MirScalarExpr::literal_ok(Datum::String("a"), ReprScalarType::String),
+                MirScalarExpr::literal_ok(Datum::String("b"), ReprScalarType::String),
             ],
         );
 
@@ -1511,10 +1518,7 @@ mod tests {
     #[mz_ore::test]
     fn test_eval_range() {
         // Example inspired by the tumbling windows temporal filter in the docs
-        let period_ms = MirScalarExpr::Literal(
-            Ok(Row::pack_slice(&[Datum::Int64(10)])),
-            SqlScalarType::Int64.nullable(false),
-        );
+        let period_ms = MirScalarExpr::literal_ok(Datum::Int64(10), ReprScalarType::Int64);
         let expr = MirScalarExpr::CallBinary {
             func: Gte.into(),
             expr1: Box::new(MirScalarExpr::CallUnmaterializable(
@@ -1583,10 +1587,7 @@ mod tests {
 
         let expr = MirScalarExpr::column(0)
             .call_binary(
-                MirScalarExpr::Literal(
-                    Ok(Row::pack_slice(&["ts".into()])),
-                    SqlScalarType::String.nullable(false),
-                ),
+                MirScalarExpr::literal_ok(Datum::from("ts"), ReprScalarType::String),
                 JsonbGetString,
             )
             .call_unary(CastJsonbToNumeric(None));

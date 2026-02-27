@@ -264,6 +264,22 @@
         "deprecated": false
       },
       {
+        "name": "privateKeyAlgorithm",
+        "type": "CertificatePrivateKeyAlgorithm",
+        "description": "Optional algorithm to use for the private key. If not specified, a recommended default will be chosen.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "privateKeySize",
+        "type": "Integer",
+        "description": "Optional size for the private key.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
         "name": "renewBefore",
         "type": "String",
         "description": "Duration before expiration the certificate will be renewed.\nValue must be in units accepted by Go\n[`time.ParseDuration`](https://golang.org/pkg/time/#ParseDuration).",

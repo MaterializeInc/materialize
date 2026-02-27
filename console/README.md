@@ -4,19 +4,19 @@ This is the web console interface for Materialize.
 
 Doc index
 
-- [Self-hosted Console Impersonation](/misc/docker/README.md) - describes
+- [Self-hosted Console Impersonation](misc/docker/README.md) - describes
   how to build and deploy a self-hosted version of the Console.
-- [CI](/doc/CI.md) - a high level overview of our CI/CD pipeline.
-- [Architecture](/doc/architecture.md) - a general overview of how Console
+- [CI](doc/CI.md) - a high level overview of our CI/CD pipeline.
+- [Architecture](doc/architecture.md) - a general overview of how Console
   talks to the rest of the Materialize.
-- [Testing guide](/doc/guide-testing.md) - a guide for testing in the Console.
-- [Internal apps](/doc/internal-apps.md) - how to build internal only features
+- [Testing guide](doc/guide-testing.md) - a guide for testing in the Console.
+- [Internal apps](doc/internal-apps.md) - how to build internal only features
   in console.
-- [SSO/Frontegg Debugging](/doc/testing-sso.md) - how to test OpenID Connect, SAML, and anything that can be done in Frontegg staging/production but not in local development.
-- [Mz Backwards Compatibility](/doc/mz-backwards-compatibility.md) - How to handle backwards compatibility during Materialize version changes
-- [Organization Impersonation](/doc/organization-impersonation.md) - describes
+- [SSO/Frontegg Debugging](doc/testing-sso.md) - how to test OpenID Connect, SAML, and anything that can be done in Frontegg staging/production but not in local development.
+- [Mz Backwards Compatibility](doc/mz-backwards-compatibility.md) - How to handle backwards compatibility during Materialize version changes
+- [Organization Impersonation](doc/organization-impersonation.md) - describes
   our how console can impersonate customer organizations.
-- [Design docs](/doc/design/README.md) - details about our technical design
+- [Design docs](doc/design/README.md) - details about our technical design
   doc process.
 
 ## Running the app locally
@@ -39,7 +39,7 @@ Volta-distributed Node](https://github.com/volta-cli/volta/issues/987).
 
 ### Cloud setup
 
-Clone the [Cloud repo](MaterializeInc/cloud) as a sibling to this repo. We rely
+Clone the [Cloud repo](https://github.com/MaterializeInc/cloud) as a sibling to the materialize repo. We rely
 on cloud for a few things:
 
 - The mzadmin tool for getting cli access to AWS and configuring our k8s
@@ -192,7 +192,8 @@ To automatically run ESLint on staged files before each commit, you can enable
 the pre-commit hook:
 
 ```bash
-ln -s ../../misc/githooks/pre-commit .git/hooks/pre-commit
+# From the materialize repo root:
+ln -s ../../console/misc/githooks/pre-commit .git/hooks/pre-commit
 ```
 
 ### Component files

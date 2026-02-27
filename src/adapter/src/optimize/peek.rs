@@ -19,15 +19,13 @@ use mz_compute_types::plan::Plan;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::soft_assert_or_log;
 use mz_repr::explain::trace_plan;
-use mz_repr::{GlobalId, SqlRelationType, Timestamp};
+use mz_repr::{GlobalId, ReprRelationType, SqlRelationType, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
-use mz_transform::reprtypecheck::{
-    SharedContext as ReprTypecheckContext, empty_context as empty_repr_context,
-};
+use mz_transform::typecheck::{SharedTypecheckingContext, empty_typechecking_context};
 use mz_transform::{StatisticsOracle, TransformCtx};
 use timely::progress::Antichain;
 use tracing::debug_span;
@@ -46,7 +44,7 @@ use crate::optimize::{
 
 pub struct Optimizer {
     /// A representation typechecking context to use throughout the optimizer pipeline.
-    repr_typecheck_ctx: ReprTypecheckContext,
+    typecheck_ctx: SharedTypecheckingContext,
     /// A snapshot of the catalog state.
     catalog: Arc<Catalog>,
     /// A snapshot of the cluster that will run the dataflows.
@@ -76,7 +74,7 @@ impl Optimizer {
         metrics: OptimizerMetrics,
     ) -> Self {
         Self {
-            repr_typecheck_ctx: empty_repr_context(),
+            typecheck_ctx: empty_typechecking_context(),
             catalog,
             compute_instance,
             finishing,
@@ -183,7 +181,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
         let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx = TransformCtx::local(
             &self.config.features,
-            &self.repr_typecheck_ctx,
+            &self.typecheck_ctx,
             &mut df_meta,
             Some(&mut self.metrics),
             Some(self.select_id),
@@ -294,7 +292,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                     on_id: self.select_id,
                     key,
                 },
-                typ.clone(),
+                ReprRelationType::from(&typ),
             );
         }
 
@@ -341,7 +339,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             &df_builder,
             &*stats,
             &self.config.features,
-            &self.repr_typecheck_ctx,
+            &self.typecheck_ctx,
             &mut df_meta,
             Some(&mut self.metrics),
         );

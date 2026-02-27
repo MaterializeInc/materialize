@@ -53,16 +53,16 @@ from materialize.xcompile import Arch, target
 GHCR_PREFIX = "ghcr.io/materializeinc/"
 
 
-class RustICE(Exception):
+class RustIncrementalBuildFailure(Exception):
     pass
 
 
-def run_and_detect_rust_ice(
+def run_and_detect_rust_incremental_build_failure(
     cmd: list[str], cwd: str | Path
 ) -> subprocess.CompletedProcess:
     """This function is complex since it prints out each line immediately to
     stdout/stderr, but still records them at the same time so that we can scan
-    for the Rust ICE."""
+    for known incremental build failures."""
     stdout_result = io.StringIO()
     stderr_result = io.StringIO()
     p = subprocess.Popen(
@@ -120,9 +120,13 @@ def run_and_detect_rust_ice(
     stderr_contents = stderr_result.getvalue()
     stderr_result.close()
     if retcode:
-        panic_msg = "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs"
-        if panic_msg in stdout_contents or panic_msg in stderr_contents:
-            raise RustICE()
+        incremental_build_failure_msgs = [
+            "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs",
+            "ld.lld: error: undefined symbol",
+        ]
+        combined = stdout_contents + stderr_contents
+        if any(msg in combined for msg in incremental_build_failure_msgs):
+            raise RustIncrementalBuildFailure()
 
         raise subprocess.CalledProcessError(
             retcode, p.args, output=stdout_contents, stderr=stderr_contents
@@ -630,7 +634,7 @@ class CargoBuild(CargoPreImage):
             rd, list(bins), list(examples), list(features) if features else None
         )
 
-        run_and_detect_rust_ice(cargo_build, cwd=rd.root)
+        run_and_detect_rust_incremental_build_failure(cargo_build, cwd=rd.root)
 
         # Re-run with JSON-formatted messages and capture the output so we can
         # later analyze the build artifacts in `run`. This should be nearly

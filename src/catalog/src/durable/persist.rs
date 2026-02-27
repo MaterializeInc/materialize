@@ -77,42 +77,11 @@ const MIN_EPOCH: Epoch = unsafe { Epoch::new_unchecked(1) };
 
 /// Human readable catalog shard name.
 const CATALOG_SHARD_NAME: &str = "catalog";
-/// Human readable catalog upgrade shard name.
-const UPGRADE_SHARD_NAME: &str = "catalog_upgrade";
 
 /// Seed used to generate the persist shard ID for the catalog.
 const CATALOG_SEED: usize = 1;
-/// Seed used to generate the catalog upgrade shard ID.
-///
-/// All state that gets written to persist is tagged with the version of the code that wrote that
-/// state. Persist has limited forward compatibility in how many versions in the future a reader can
-/// read. Reading from persist updates state and the version that the state is tagged with. As a
-/// consequence, reading from persist may unintentionally fence out other readers and writers with
-/// a lower version. We use the catalog upgrade shard to track what database version is actively
-/// deployed so readers from the future, such as the upgrade checker tool, don't accidentally fence out the
-/// database from persist. Only writable opened catalogs can increment the version in the upgrade
-/// shard.
-///
-/// One specific example that we are trying to avoid with the catalog upgrade shard is the
-/// following:
-///
-///   1. Database is running on version 0.X.0.
-///   2. Upgrade checker is run on version 0.X+1.0.
-///   3. Upgrade checker is run on version 0.X+2.0.
-///
-/// With the catalog upgrade shard, the upgrade checker in step (3) can see that the database is
-/// currently running on v0.X.0 and reading the catalog would cause the database to get fenced out.
-/// So instead of reading the catalog it errors out. Without the catalog upgrade shard, the upgrade
-/// checker could read the version in the catalog shard, and see that it is v0.X+1.0, but it would
-/// be impossible to differentiate between the following two scenarios:
-///
-///   - The database is running on v0.X+1.0 and it's safe to run the upgrade checker at v0.X+2.0.
-///   - Some other upgrade checker incremented the version to v0.X+1.0, the database is running on
-///   version v0.X.0, and it is not safe to run the upgrade checker.
-///
-/// Persist guarantees that the shard versions are non-decreasing, so we don't need to worry about
-/// race conditions where the shard version decreases after reading it.
-const UPGRADE_SEED: usize = 2;
+/// Legacy seed used to generate the persist shard ID for the upgrade shard. DO NOT REUSE.
+const _UPGRADE_SEED: usize = 2;
 /// Legacy seed used to generate the persist shard ID for builtin table migrations. DO NOT REUSE.
 pub const _BUILTIN_MIGRATION_SEED: usize = 3;
 /// Legacy seed used to generate the persist shard ID for the expression cache. DO NOT REUSE.
@@ -392,23 +361,6 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
 }
 
 impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
-    /// Increment the version in the catalog upgrade shard to the code's current version.
-    async fn increment_catalog_upgrade_shard_version(&self, organization_id: Uuid) {
-        let upgrade_shard_id = shard_id(organization_id, UPGRADE_SEED);
-
-        let () = self
-            .persist_client
-            .upgrade_version::<(), (), Timestamp, StorageDiff>(
-                upgrade_shard_id,
-                Diagnostics {
-                    shard_name: UPGRADE_SHARD_NAME.to_string(),
-                    handle_purpose: "durable catalog state upgrade".to_string(),
-                },
-            )
-            .await
-            .expect("invalid usage");
-    }
-
     /// Fetch the current upper of the catalog state.
     #[mz_ore::instrument]
     async fn current_upper(&mut self) -> Timestamp {
@@ -870,8 +822,6 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
 /// Applies updates for an unopened catalog.
 #[derive(Debug)]
 pub(crate) struct UnopenedCatalogStateInner {
-    /// The organization ID of the environment.
-    organization_id: Uuid,
     /// A cache of the config collection of the catalog.
     configs: BTreeMap<String, u64>,
     /// A cache of the settings collection of the catalog.
@@ -879,9 +829,8 @@ pub(crate) struct UnopenedCatalogStateInner {
 }
 
 impl UnopenedCatalogStateInner {
-    fn new(organization_id: Uuid) -> UnopenedCatalogStateInner {
+    fn new() -> UnopenedCatalogStateInner {
         UnopenedCatalogStateInner {
-            organization_id,
             configs: BTreeMap::new(),
             settings: BTreeMap::new(),
         }
@@ -964,27 +913,17 @@ impl UnopenedPersistCatalogState {
         metrics: Arc<Metrics>,
     ) -> Result<UnopenedPersistCatalogState, DurableCatalogError> {
         let catalog_shard_id = shard_id(organization_id, CATALOG_SEED);
-        let upgrade_shard_id = shard_id(organization_id, UPGRADE_SEED);
-        debug!(
-            ?catalog_shard_id,
-            ?upgrade_shard_id,
-            "new persist backed catalog state"
-        );
+        debug!(?catalog_shard_id, "new persist backed catalog state");
 
-        // Check the catalog upgrade shard to see ensure that we don't fence anyone out of persist.
-        let version_in_upgrade_shard =
-            fetch_catalog_upgrade_shard_version(&persist_client, upgrade_shard_id).await;
-        // If this is `None`, no version was found in the upgrade shard. This is a brand-new
-        // environment, and we don't need to worry about fencing existing users.
-        if let Some(version_in_upgrade_shard) = version_in_upgrade_shard {
-            // Check that the current version of the code can handle data from the shard.
-            // (We used to reverse this check, to confirm that whatever code wrote the data
-            // in the shard would be able to read data written by the current version... but
-            // we now require the current code to be able to maintain compat with whatever
-            // data format versions pass this check.)
-            if !mz_persist_client::cfg::code_can_write_data(&version, &version_in_upgrade_shard) {
+        // Check the catalog shard version to ensure that we are compatible with the persist
+        // data format. This lets us return an error gracefully, rather than panicking later in
+        // persist.
+        let version_in_catalog_shard =
+            fetch_catalog_shard_version(&persist_client, catalog_shard_id).await;
+        if let Some(version_in_catalog_shard) = version_in_catalog_shard {
+            if !mz_persist_client::cfg::code_can_write_data(&version, &version_in_catalog_shard) {
                 return Err(DurableCatalogError::IncompatiblePersistVersion {
-                    found_version: version_in_upgrade_shard,
+                    found_version: version_in_catalog_shard,
                     catalog_version: version,
                 });
             }
@@ -1064,7 +1003,7 @@ impl UnopenedPersistCatalogState {
             shard_id: catalog_shard_id,
             // Initialize empty in-memory state.
             snapshot: Vec::new(),
-            update_applier: UnopenedCatalogStateInner::new(organization_id),
+            update_applier: UnopenedCatalogStateInner::new(),
             upper,
             fenceable_token: FenceableToken::new(deploy_generation),
             catalog_content_version: version,
@@ -1295,14 +1234,7 @@ impl UnopenedPersistCatalogState {
             txn.commit_internal(commit_ts).await?;
         }
 
-        // Now that we've fully opened the catalog at the current version, we can increment the
-        // version in the catalog upgrade shard to signal to readers that the allowable versions
-        // have increased.
         if matches!(catalog.mode, Mode::Writable) {
-            catalog
-                .increment_catalog_upgrade_shard_version(self.update_applier.organization_id)
-                .await;
-
             let write_handle = catalog
                 .persist_client
                 .open_writer::<SourceData, (), Timestamp, i64>(
@@ -1855,24 +1787,23 @@ fn as_of(
     as_of
 }
 
-/// Fetch the persist version of the catalog upgrade shard, if one exists. A version will not
+/// Fetch the persist version of the catalog shard, if one exists. A version will not
 /// exist if we are creating a brand-new environment.
-async fn fetch_catalog_upgrade_shard_version(
+async fn fetch_catalog_shard_version(
     persist_client: &PersistClient,
-    upgrade_shard_id: ShardId,
+    catalog_shard_id: ShardId,
 ) -> Option<semver::Version> {
     let shard_state = persist_client
-        .inspect_shard::<Timestamp>(&upgrade_shard_id)
+        .inspect_shard::<Timestamp>(&catalog_shard_id)
         .await
         .ok()?;
     let json_state = serde_json::to_value(shard_state).expect("state serialization error");
-    let upgrade_version = json_state
+    let json_version = json_state
         .get("applier_version")
         .cloned()
         .expect("missing applier_version");
-    let upgrade_version =
-        serde_json::from_value(upgrade_version).expect("version deserialization error");
-    Some(upgrade_version)
+    let version = serde_json::from_value(json_version).expect("version deserialization error");
+    Some(version)
 }
 
 /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog

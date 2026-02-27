@@ -51,12 +51,13 @@ use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::result::ResultExt as _;
-use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log};
+use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
 use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::namespaces::MZ_TEMP_SCHEMA;
 use mz_repr::network_policy_id::NetworkPolicyId;
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersionSelector, SqlScalarType};
 use mz_secrets::InMemorySecretsController;
@@ -1407,17 +1408,71 @@ impl Catalog {
             .deserialize_plan_with_enable_for_item_parsing(create_sql, force_if_exists_skip)
     }
 
+    /// Cache global and, optionally, local expressions for the given `GlobalId`.
+    ///
+    /// This takes the required plans and metainfo from the catalog and expects that they were
+    /// previously stored via [`Catalog::set_optimized_plan`], [`Catalog::set_physical_plan`], and
+    /// [`Catalog::set_dataflow_metainfo`].
+    pub(crate) fn cache_expressions(
+        &self,
+        id: GlobalId,
+        local_mir: Option<OptimizedMirRelationExpr>,
+        optimizer_features: OptimizerFeatures,
+    ) {
+        let Some(mut global_mir) = self.try_get_optimized_plan(&id).cloned() else {
+            soft_panic_or_log!("optimized plan missing for ID {id}");
+            return;
+        };
+        let Some(mut physical_plan) = self.try_get_physical_plan(&id).cloned() else {
+            soft_panic_or_log!("physical plan missing for ID {id}");
+            return;
+        };
+        let Some(dataflow_metainfos) = self.try_get_dataflow_metainfo(&id).cloned() else {
+            soft_panic_or_log!("dataflow metainfo missing for ID {id}");
+            return;
+        };
+
+        // Make sure we're not caching the result of timestamp selection, as it will almost
+        // certainly be wrong if we re-install the dataflow at a later time.
+        global_mir.as_of = None;
+        global_mir.until = Default::default();
+        physical_plan.as_of = None;
+        physical_plan.until = Default::default();
+
+        let mut local_exprs = Vec::new();
+        if let Some(local_mir) = local_mir {
+            local_exprs.push((
+                id,
+                LocalExpressions {
+                    local_mir,
+                    optimizer_features: optimizer_features.clone(),
+                },
+            ));
+        }
+        let global_exprs = vec![(
+            id,
+            GlobalExpressions {
+                global_mir,
+                physical_plan,
+                dataflow_metainfos,
+                optimizer_features,
+            },
+        )];
+        let _fut = self.update_expression_cache(local_exprs, global_exprs, Default::default());
+    }
+
     pub(crate) fn update_expression_cache<'a, 'b>(
         &'a self,
         new_local_expressions: Vec<(GlobalId, LocalExpressions)>,
         new_global_expressions: Vec<(GlobalId, GlobalExpressions)>,
+        invalidate_ids: BTreeSet<GlobalId>,
     ) -> BoxFuture<'b, ()> {
         if let Some(expr_cache) = &self.expr_cache_handle {
             expr_cache
                 .update(
                     new_local_expressions,
                     new_global_expressions,
-                    Default::default(),
+                    invalidate_ids,
                 )
                 .boxed()
         } else {
@@ -1583,11 +1638,11 @@ impl ExprHumanizer for ConnCatalog<'_> {
         Some(self.resolve_full_name(entry.name()).into_parts())
     }
 
-    fn humanize_scalar_type(&self, typ: &SqlScalarType, postgres_compat: bool) -> String {
+    fn humanize_sql_scalar_type(&self, typ: &SqlScalarType, postgres_compat: bool) -> String {
         use SqlScalarType::*;
 
         match typ {
-            Array(t) => format!("{}[]", self.humanize_scalar_type(t, postgres_compat)),
+            Array(t) => format!("{}[]", self.humanize_sql_scalar_type(t, postgres_compat)),
             List {
                 custom_id: Some(item_id),
                 ..
@@ -1602,13 +1657,13 @@ impl ExprHumanizer for ConnCatalog<'_> {
             List { element_type, .. } => {
                 format!(
                     "{} list",
-                    self.humanize_scalar_type(element_type, postgres_compat)
+                    self.humanize_sql_scalar_type(element_type, postgres_compat)
                 )
             }
             Map { value_type, .. } => format!(
                 "map[{}=>{}]",
-                self.humanize_scalar_type(&SqlScalarType::String, postgres_compat),
-                self.humanize_scalar_type(value_type, postgres_compat)
+                self.humanize_sql_scalar_type(&SqlScalarType::String, postgres_compat),
+                self.humanize_sql_scalar_type(value_type, postgres_compat)
             ),
             Record {
                 custom_id: Some(item_id),
@@ -1624,7 +1679,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     .map(|f| format!(
                         "{}: {}",
                         f.0,
-                        self.humanize_column_type(&f.1, postgres_compat)
+                        self.humanize_sql_column_type(&f.1, postgres_compat)
                     ))
                     .join(",")
             ),
@@ -2123,7 +2178,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn system_vars_mut(&mut self) -> &mut SystemVars {
-        &mut self.state.to_mut().system_configuration
+        Arc::make_mut(&mut self.state.to_mut().system_configuration)
     }
 
     fn get_owner_id(&self, id: &ObjectId) -> Option<RoleId> {
@@ -3375,13 +3430,13 @@ mod tests {
                         // we get from the catalog.
                         soft_assert_eq_or_log!(
                             mir_typ.scalar_type,
-                            return_styp,
+                            (&return_styp).into(),
                             "MIR type did not match the catalog type (cast elimination/repr type error)"
                         );
                         // The following will check not just that the scalar type
                         // is ok, but also catches if the function returned a null
                         // but the MIR type inference said "non-nullable".
-                        if !eval_result_datum.is_instance_of_sql(&mir_typ) {
+                        if !eval_result_datum.is_instance_of(&mir_typ) {
                             panic!(
                                 "{call_name}: expected return type of {return_styp:?}, got {eval_result_datum}"
                             );

@@ -17,6 +17,7 @@ use std::{iter, mem};
 
 use base64::prelude::*;
 use byteorder::{ByteOrder, NetworkEndian};
+use csv_core::ReadRecordResult;
 use futures::future::{BoxFuture, FutureExt, pending};
 use itertools::Itertools;
 use mz_adapter::client::RecordFirstRowStream;
@@ -55,7 +56,7 @@ use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::INTERNAL_USER_NAMES;
-use mz_sql::session::vars::{MAX_COPY_FROM_SIZE, Var, VarInput};
+use mz_sql::session::vars::VarInput;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
@@ -868,7 +869,7 @@ where
 
                 // Process the error, doing any state cleanup.
                 let error_response = err.into_response(Severity::Fatal);
-                let error_state = self.error(error_response).await;
+                let error_state = self.send_error_and_get_state(error_response).await;
 
                 // Terminate __after__ we do any cleanup.
                 self.adapter_client.terminate().await;
@@ -1044,7 +1045,9 @@ where
             .declare(EMPTY_PORTAL.to_string(), stmt, sql)
             .await
         {
-            return self.error(e.into_response(Severity::Error)).await;
+            return self
+                .send_error_and_get_state(e.into_response(Severity::Error))
+                .await;
         }
         let portal = self
             .adapter_client
@@ -1057,7 +1060,7 @@ where
         let stmt_desc = portal.desc.clone();
         if !stmt_desc.param_types.is_empty() {
             return self
-                .error(ErrorResponse::error(
+                .send_error_and_get_state(ErrorResponse::error(
                     SqlState::UNDEFINED_PARAMETER,
                     "there is no parameter $1",
                 ))
@@ -1096,7 +1099,8 @@ where
             }
             Err(e) => {
                 self.send_pending_notices().await?;
-                self.error(e.into_response(Severity::Error)).await
+                self.send_error_and_get_state(e.into_response(Severity::Error))
+                    .await
             }
         };
 
@@ -1157,7 +1161,7 @@ where
         let stmts = match self.parse_sql(&sql) {
             Ok(stmts) => stmts,
             Err(err) => {
-                self.error(err).await?;
+                self.send_error_and_get_state(err).await?;
                 return self.ready().await;
             }
         };
@@ -1222,7 +1226,7 @@ where
                     Ok(ty) => param_types.push(Some(ty)),
                     Err(err) => {
                         return self
-                            .error(ErrorResponse::error(
+                            .send_error_and_get_state(ErrorResponse::error(
                                 SqlState::INVALID_PARAMETER_VALUE,
                                 err.to_string(),
                             ))
@@ -1232,7 +1236,7 @@ where
                 Err(_) if oid == 0 => param_types.push(None),
                 Err(e) => {
                     return self
-                        .error(ErrorResponse::error(
+                        .send_error_and_get_state(ErrorResponse::error(
                             SqlState::PROTOCOL_VIOLATION,
                             e.to_string(),
                         ))
@@ -1244,12 +1248,12 @@ where
         let stmts = match self.parse_sql(&sql) {
             Ok(stmts) => stmts,
             Err(err) => {
-                return self.error(err).await;
+                return self.send_error_and_get_state(err).await;
             }
         };
         if stmts.len() > 1 {
             return self
-                .error(ErrorResponse::error(
+                .send_error_and_get_state(ErrorResponse::error(
                     SqlState::INTERNAL_ERROR,
                     "cannot insert multiple commands into a prepared statement",
                 ))
@@ -1271,7 +1275,10 @@ where
                 self.send(BackendMessage::ParseComplete).await?;
                 Ok(State::Ready)
             }
-            Err(e) => self.error(e.into_response(Severity::Error)).await,
+            Err(e) => {
+                self.send_error_and_get_state(e.into_response(Severity::Error))
+                    .await
+            }
         }
     }
 
@@ -1320,7 +1327,11 @@ where
             .await
         {
             Ok(stmt) => stmt,
-            Err(err) => return self.error(err.into_response(Severity::Error)).await,
+            Err(err) => {
+                return self
+                    .send_error_and_get_state(err.into_response(Severity::Error))
+                    .await;
+            }
         };
 
         let param_types = &stmt.desc().param_types;
@@ -1333,14 +1344,20 @@ where
                 expected = param_types.len()
             );
             return self
-                .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, message))
+                .send_error_and_get_state(ErrorResponse::error(
+                    SqlState::PROTOCOL_VIOLATION,
+                    message,
+                ))
                 .await;
         }
         let param_formats = match pad_formats(param_formats, raw_params.len()) {
             Ok(param_formats) => param_formats,
             Err(msg) => {
                 return self
-                    .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, msg))
+                    .send_error_and_get_state(ErrorResponse::error(
+                        SqlState::PROTOCOL_VIOLATION,
+                        msg,
+                    ))
                     .await;
             }
         };
@@ -1362,14 +1379,20 @@ where
                         Ok(datum) => datum,
                         Err(msg) => {
                             return self
-                                .error(ErrorResponse::error(SqlState::INVALID_PARAMETER_VALUE, msg))
+                                .send_error_and_get_state(ErrorResponse::error(
+                                    SqlState::INVALID_PARAMETER_VALUE,
+                                    msg,
+                                ))
                                 .await;
                         }
                     },
                     Err(err) => {
                         let msg = format!("unable to decode parameter: {}", err);
                         return self
-                            .error(ErrorResponse::error(SqlState::INVALID_PARAMETER_VALUE, msg))
+                            .send_error_and_get_state(ErrorResponse::error(
+                                SqlState::INVALID_PARAMETER_VALUE,
+                                msg,
+                            ))
                             .await;
                     }
                 },
@@ -1388,7 +1411,10 @@ where
             Ok(result_formats) => result_formats,
             Err(msg) => {
                 return self
-                    .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, msg))
+                    .send_error_and_get_state(ErrorResponse::error(
+                        SqlState::PROTOCOL_VIOLATION,
+                        msg,
+                    ))
                     .await;
             }
         };
@@ -1409,7 +1435,7 @@ where
                     match (format, &ty.scalar_type) {
                         (Format::Binary, mz_repr::SqlScalarType::List { .. }) => {
                             return self
-                                .error(ErrorResponse::error(
+                                .send_error_and_get_state(ErrorResponse::error(
                                     SqlState::PROTOCOL_VIOLATION,
                                     "binary encoding of list types is not implemented",
                                 ))
@@ -1417,7 +1443,7 @@ where
                         }
                         (Format::Binary, mz_repr::SqlScalarType::Map { .. }) => {
                             return self
-                                .error(ErrorResponse::error(
+                                .send_error_and_get_state(ErrorResponse::error(
                                     SqlState::PROTOCOL_VIOLATION,
                                     "binary encoding of map types is not implemented",
                                 ))
@@ -1425,7 +1451,7 @@ where
                         }
                         (Format::Binary, mz_repr::SqlScalarType::AclItem) => {
                             return self
-                                .error(ErrorResponse::error(
+                                .send_error_and_get_state(ErrorResponse::error(
                                     SqlState::PROTOCOL_VIOLATION,
                                     "binary encoding of aclitem types does not exist",
                                 ))
@@ -1450,7 +1476,9 @@ where
             result_formats,
             state_revision,
         ) {
-            return self.error(err.into_response(Severity::Error)).await;
+            return self
+                .send_error_and_get_state(err.into_response(Severity::Error))
+                .await;
         }
 
         self.send(BackendMessage::BindComplete).await?;
@@ -1488,7 +1516,10 @@ where
                         );
                     }
                     return self
-                        .error(ErrorResponse::error(SqlState::INVALID_CURSOR_NAME, msg))
+                        .send_error_and_get_state(ErrorResponse::error(
+                            SqlState::INVALID_CURSOR_NAME,
+                            msg,
+                        ))
                         .await;
                 }
             };
@@ -1539,7 +1570,8 @@ where
                         }
                         Err(e) => {
                             self.send_pending_notices().await?;
-                            self.error(e.into_response(Severity::Error)).await
+                            self.send_error_and_get_state(e.into_response(Severity::Error))
+                                .await
                         }
                     }
                 }
@@ -1635,7 +1667,7 @@ where
                             },
                         );
                     }
-                    self.error(ErrorResponse::error(
+                    self.send_error_and_get_state(ErrorResponse::error(
                         SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
                         error,
                     ))
@@ -1654,7 +1686,11 @@ where
 
         let stmt = match self.adapter_client.get_prepared_statement(name).await {
             Ok(stmt) => stmt,
-            Err(err) => return self.error(err.into_response(Severity::Error)).await,
+            Err(err) => {
+                return self
+                    .send_error_and_get_state(err.into_response(Severity::Error))
+                    .await;
+            }
         };
         // Cloning to avoid a mutable borrow issue because `send` also uses `adapter_client`
         let parameter_desc = BackendMessage::ParameterDescription(
@@ -1688,7 +1724,7 @@ where
                 Ok(State::Ready)
             }
             None => {
-                self.error(ErrorResponse::error(
+                self.send_error_and_get_state(ErrorResponse::error(
                     SqlState::INVALID_CURSOR_NAME,
                     format!("portal {} does not exist", name.quoted()),
                 ))
@@ -1759,7 +1795,10 @@ where
                         },
                     );
                     return self
-                        .error(ErrorResponse::error(SqlState::FEATURE_NOT_SUPPORTED, msg))
+                        .send_error_and_get_state(ErrorResponse::error(
+                            SqlState::FEATURE_NOT_SUPPORTED,
+                            msg,
+                        ))
                         .await;
                 }
                 ExecuteCount::Count(count)
@@ -1773,7 +1812,10 @@ where
                     },
                 );
                 return self
-                    .error(ErrorResponse::error(SqlState::FEATURE_NOT_SUPPORTED, msg))
+                    .send_error_and_get_state(ErrorResponse::error(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        msg,
+                    ))
                     .await;
             }
             (ExecuteCount::All, FetchDirection::ForwardAll) => ExecuteCount::All,
@@ -2160,7 +2202,7 @@ where
                     }
                     _ => {
                         return self
-                            .error(ErrorResponse::error(
+                            .send_error_and_get_state(ErrorResponse::error(
                                 SqlState::INTERNAL_ERROR,
                                 "unsupported COPY response type".to_string(),
                             ))
@@ -2364,7 +2406,7 @@ where
                     if let Err(err) = verify_datum_desc(&row_desc, &mut batch_rows) {
                         let msg = err.to_string();
                         return self
-                            .error(err.into_response(Severity::Error))
+                            .send_error_and_get_state(err.into_response(Severity::Error))
                             .await
                             .map(|state| (state, SendRowsEndedReason::Errored { error: msg }));
                     }
@@ -2419,13 +2461,16 @@ where
                 }
                 FetchResult::Error(text) => {
                     return self
-                        .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone()))
+                        .send_error_and_get_state(ErrorResponse::error(
+                            SqlState::INTERNAL_ERROR,
+                            text.clone(),
+                        ))
                         .await
                         .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
                 }
                 FetchResult::Canceled => {
                     return self
-                        .error(ErrorResponse::error(
+                        .send_error_and_get_state(ErrorResponse::error(
                             SqlState::QUERY_CANCELED,
                             "canceling statement due to user request",
                         ))
@@ -2518,7 +2563,10 @@ where
             CopyFormat::Parquet => {
                 let text = "Parquet format is not supported".to_string();
                 return self
-                    .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone()))
+                    .send_error_and_get_state(ErrorResponse::error(
+                        SqlState::INTERNAL_ERROR,
+                        text.clone(),
+                    ))
                     .await
                     .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
             }
@@ -2561,13 +2609,15 @@ where
                 batch = stream.recv() => match batch {
                     None => break,
                     Some(PeekResponseUnary::Error(text)) => {
+                        let err =
+                            ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone());
                         return self
-                            .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone()))
-                        .await
-                        .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
+                            .send_error_and_get_state(err)
+                            .await
+                            .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
                     }
                     Some(PeekResponseUnary::Canceled) => {
-                        return self.error(ErrorResponse::error(
+                        return self.send_error_and_get_state(ErrorResponse::error(
                                 SqlState::QUERY_CANCELED,
                                 "canceling statement due to user request",
                             ))
@@ -2620,7 +2670,7 @@ where
         target_id: CatalogItemId,
         target_name: String,
         columns: Vec<ColumnIndex>,
-        params: CopyFormatParams<'_>,
+        params: CopyFormatParams<'static>,
         row_desc: RelationDesc,
         mut ctx_extra: ExecuteContextGuard,
     ) -> Result<State, io::Error> {
@@ -2635,6 +2685,16 @@ where
             )
             .await;
         match &res {
+            Ok(State::Ready) => {
+                self.adapter_client.retire_execute(
+                    ctx_extra,
+                    StatementEndedExecutionReason::Success {
+                        result_size: None,
+                        rows_returned: None,
+                        execution_strategy: None,
+                    },
+                );
+            }
             Ok(State::Done) => {
                 // The connection closed gracefully without sending us a `CopyDone`,
                 // causing us to just drop the copy request.
@@ -2650,10 +2710,12 @@ where
                     },
                 );
             }
+            Ok(state) if matches!(state, State::Drain) => {}
             other => {
-                tracing::warn!(?other, "aborting COPY FROM");
-                self.adapter_client
-                    .retire_execute(ctx_extra, StatementEndedExecutionReason::Aborted);
+                mz_ore::soft_panic_or_log!(
+                    "unexpected COPY FROM state in copy_from: {other:?}; \
+                     relying on ExecuteContextGuard::drop to retire as Aborted"
+                );
             }
         }
         res
@@ -2664,7 +2726,7 @@ where
         target_id: CatalogItemId,
         target_name: String,
         columns: Vec<ColumnIndex>,
-        params: CopyFormatParams<'_>,
+        params: CopyFormatParams<'static>,
         row_desc: RelationDesc,
         ctx_extra: &mut ExecuteContextGuard,
     ) -> Result<State, io::Error> {
@@ -2677,38 +2739,144 @@ where
         .await?;
         self.conn.flush().await?;
 
-        let system_vars = self.adapter_client.get_system_vars().await;
-        let max_size = system_vars
-            .get(MAX_COPY_FROM_SIZE.name())
-            .ok()
-            .and_then(|max_size| max_size.value().parse().ok())
+        // Set up the parallel streaming batch builders in the coordinator.
+        let writer = match self
+            .adapter_client
+            .start_copy_from_stdin(
+                target_id,
+                target_name.clone(),
+                columns.clone(),
+                row_desc.clone(),
+                params.clone(),
+            )
+            .await
+        {
+            Ok(writer) => writer,
+            Err(e) => {
+                // Drain remaining CopyData/CopyDone/CopyFail messages from the
+                // socket. Since CopyInResponse was already sent, the client may
+                // have pipelined copy data that we must consume before returning
+                // the error, otherwise they'd be misinterpreted as top-level
+                // protocol messages and cause a deadlock.
+                loop {
+                    match self.conn.recv().await? {
+                        Some(FrontendMessage::CopyData(_)) => {}
+                        Some(FrontendMessage::CopyDone) | Some(FrontendMessage::CopyFail(_)) => {
+                            break;
+                        }
+                        Some(FrontendMessage::Flush) | Some(FrontendMessage::Sync) => {}
+                        Some(_) => break,
+                        None => return Ok(State::Done),
+                    }
+                }
+                self.adapter_client.retire_execute(
+                    std::mem::take(ctx_extra),
+                    StatementEndedExecutionReason::Errored {
+                        error: e.to_string(),
+                    },
+                );
+                return self
+                    .send_error_and_get_state(e.into_response(Severity::Error))
+                    .await;
+            }
+        };
+
+        // Enable copy mode on the codec to skip aggregate buffer size checks.
+        self.conn.set_copy_mode(true);
+
+        // Batch size for splitting raw data across parallel workers (~32MB).
+        const BATCH_SIZE: usize = 32 * 1024 * 1024;
+        let max_copy_from_row_size = self
+            .adapter_client
+            .get_system_vars()
+            .await
+            .max_copy_from_row_size()
+            .try_into()
             .unwrap_or(usize::MAX);
-        tracing::debug!("COPY FROM max buffer size: {max_size} bytes");
 
         let mut data = Vec::new();
+        let mut row_scanner = CopyRowScanner::new(&params);
+        let num_workers = writer.batch_txs.len();
+        let mut next_worker: usize = 0;
+        let mut saw_copy_done = false;
+        let mut saw_end_marker = false;
+        let mut copy_from_error: Option<(SqlState, String)> = None;
+
+        // Receive loop: accumulate CopyData, split at row boundaries,
+        // round-robin raw chunks to parallel batch builder workers.
         loop {
             let message = self.conn.recv().await?;
             match message {
                 Some(FrontendMessage::CopyData(buf)) => {
-                    // Bail before we OOM.
-                    if (data.len() + buf.len()) > max_size {
-                        return self
-                            .error(ErrorResponse::error(
-                                SqlState::INSUFFICIENT_RESOURCES,
-                                "COPY FROM STDIN too large",
-                            ))
-                            .await;
+                    if saw_end_marker {
+                        // Per PostgreSQL COPY behavior, ignore all bytes after
+                        // the end-of-copy marker until CopyDone.
+                        continue;
                     }
-                    data.extend(buf)
+                    data.extend(buf);
+                    row_scanner.scan_new_bytes(&data);
+
+                    if let Some(end_pos) = row_scanner.end_marker_end() {
+                        data.truncate(end_pos);
+                        row_scanner.on_truncate(end_pos);
+                        saw_end_marker = true;
+                    }
+
+                    // Guard against pathological single rows that never terminate.
+                    if row_scanner.current_row_size(data.len()) > max_copy_from_row_size {
+                        copy_from_error = Some((
+                            SqlState::INSUFFICIENT_RESOURCES,
+                            format!(
+                                "COPY FROM STDIN row exceeded max_copy_from_row_size \
+                                 ({max_copy_from_row_size} bytes)"
+                            ),
+                        ));
+                        break;
+                    }
+
+                    // When buffer exceeds batch size, split at the last complete row
+                    // and send the complete rows chunk to the next worker.
+                    let mut send_failed = false;
+                    while data.len() >= BATCH_SIZE {
+                        let split_pos = match row_scanner.last_row_end() {
+                            Some(pos) => pos,
+                            None => break, // no complete row yet
+                        };
+                        let remainder = data.split_off(split_pos);
+                        let chunk = std::mem::replace(&mut data, remainder);
+                        row_scanner.on_split(split_pos);
+                        if writer.batch_txs[next_worker].send(chunk).await.is_err() {
+                            send_failed = true;
+                            break;
+                        }
+                        next_worker = (next_worker + 1) % num_workers;
+                    }
+                    // Worker dropped (likely errored) — stop sending,
+                    // fall through to completion_rx for the real error.
+                    if send_failed {
+                        break;
+                    }
                 }
-                Some(FrontendMessage::CopyDone) => break,
+                Some(FrontendMessage::CopyDone) => {
+                    // Send any remaining data to the next worker.
+                    if !data.is_empty() {
+                        let chunk = std::mem::take(&mut data);
+                        // Ignore send failure — completion_rx will have the error.
+                        let _ = writer.batch_txs[next_worker].send(chunk).await;
+                    }
+                    saw_copy_done = true;
+                    break;
+                }
                 Some(FrontendMessage::CopyFail(err)) => {
                     self.adapter_client.retire_execute(
                         std::mem::take(ctx_extra),
                         StatementEndedExecutionReason::Canceled,
                     );
+                    // Drop the writer to signal cancellation to the background tasks.
+                    drop(writer);
+                    self.conn.set_copy_mode(false);
                     return self
-                        .error(ErrorResponse::error(
+                        .send_error_and_get_state(ErrorResponse::error(
                             SqlState::QUERY_CANCELED,
                             format!("COPY from stdin failed: {}", err),
                         ))
@@ -2723,26 +2891,84 @@ where
                             error: msg.to_string(),
                         },
                     );
+                    drop(writer);
+                    self.conn.set_copy_mode(false);
                     return self
-                        .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, msg))
+                        .send_error_and_get_state(ErrorResponse::error(
+                            SqlState::PROTOCOL_VIOLATION,
+                            msg,
+                        ))
                         .await;
                 }
                 None => {
+                    drop(writer);
+                    self.conn.set_copy_mode(false);
                     return Ok(State::Done);
                 }
             }
         }
 
-        let column_types = typ
-            .column_types
-            .iter()
-            .map(|x| &x.scalar_type)
-            .map(mz_pgrepr::Type::from)
-            .collect::<Vec<mz_pgrepr::Type>>();
+        // If we exited the receive loop before seeing `CopyDone` (e.g. because
+        // a worker failed and dropped its channel), keep draining COPY input to
+        // avoid desynchronizing the protocol state machine.
+        if !saw_copy_done {
+            loop {
+                match self.conn.recv().await? {
+                    Some(FrontendMessage::CopyData(_)) => {}
+                    Some(FrontendMessage::CopyDone) | Some(FrontendMessage::CopyFail(_)) => {
+                        break;
+                    }
+                    Some(FrontendMessage::Flush) | Some(FrontendMessage::Sync) => {}
+                    Some(_) => {
+                        let msg = "unexpected message type during COPY from stdin";
+                        self.adapter_client.retire_execute(
+                            std::mem::take(ctx_extra),
+                            StatementEndedExecutionReason::Errored {
+                                error: msg.to_string(),
+                            },
+                        );
+                        drop(writer);
+                        self.conn.set_copy_mode(false);
+                        return self
+                            .send_error_and_get_state(ErrorResponse::error(
+                                SqlState::PROTOCOL_VIOLATION,
+                                msg,
+                            ))
+                            .await;
+                    }
+                    None => {
+                        drop(writer);
+                        self.conn.set_copy_mode(false);
+                        return Ok(State::Done);
+                    }
+                }
+            }
+        }
 
-        let rows = match mz_pgcopy::decode_copy_format(&data, &column_types, params) {
-            Ok(rows) => rows,
-            Err(e) => {
+        if let Some((code, msg)) = copy_from_error {
+            self.adapter_client.retire_execute(
+                std::mem::take(ctx_extra),
+                StatementEndedExecutionReason::Errored { error: msg.clone() },
+            );
+            drop(writer);
+            self.conn.set_copy_mode(false);
+            return self
+                .send_error_and_get_state(ErrorResponse::error(code, msg))
+                .await;
+        }
+
+        self.conn.set_copy_mode(false);
+
+        // Drop all senders to signal EOF to the background batch builders.
+        // If copy_err is set, a worker already failed — dropping the senders
+        // will cause remaining workers to stop, and we'll get the real error
+        // from completion_rx below.
+        drop(writer.batch_txs);
+
+        // Wait for all parallel workers to finish building batches.
+        let (proto_batches, row_count) = match writer.completion_rx.await {
+            Ok(Ok(result)) => result,
+            Ok(Err(e)) => {
                 self.adapter_client.retire_execute(
                     std::mem::take(ctx_extra),
                     StatementEndedExecutionReason::Errored {
@@ -2750,26 +2976,27 @@ where
                     },
                 );
                 return self
-                    .error(ErrorResponse::error(
-                        SqlState::BAD_COPY_FILE_FORMAT,
-                        format!("{}", e),
-                    ))
+                    .send_error_and_get_state(e.into_response(Severity::Error))
+                    .await;
+            }
+            Err(_) => {
+                let msg = "COPY FROM STDIN: background batch builder tasks dropped";
+                self.adapter_client.retire_execute(
+                    std::mem::take(ctx_extra),
+                    StatementEndedExecutionReason::Errored {
+                        error: msg.to_string(),
+                    },
+                );
+                return self
+                    .send_error_and_get_state(ErrorResponse::error(SqlState::INTERNAL_ERROR, msg))
                     .await;
             }
         };
 
-        let count = rows.len();
-
+        // Stage all batches in the session's transaction for atomic commit.
         if let Err(e) = self
             .adapter_client
-            .insert_rows(
-                target_id,
-                target_name,
-                columns,
-                rows,
-                std::mem::take(ctx_extra),
-            )
-            .await
+            .stage_copy_from_stdin_batches(target_id, proto_batches)
         {
             self.adapter_client.retire_execute(
                 std::mem::take(ctx_extra),
@@ -2777,10 +3004,12 @@ where
                     error: e.to_string(),
                 },
             );
-            return self.error(e.into_response(Severity::Error)).await;
+            return self
+                .send_error_and_get_state(e.into_response(Severity::Error))
+                .await;
         }
 
-        let tag = format!("COPY {}", count);
+        let tag = format!("COPY {}", row_count);
         self.send(BackendMessage::CommandComplete { tag }).await?;
 
         Ok(State::Ready)
@@ -2799,7 +3028,7 @@ where
     }
 
     #[instrument(level = "debug")]
-    async fn error(&mut self, err: ErrorResponse) -> Result<State, io::Error> {
+    async fn send_error_and_get_state(&mut self, err: ErrorResponse) -> Result<State, io::Error> {
         assert!(err.severity.is_error());
         debug!(
             "cid={} error code={}",
@@ -2964,6 +3193,173 @@ enum FetchResult {
     Canceled,
     Error(String),
     Notice(AdapterNotice),
+}
+
+#[derive(Debug)]
+struct CopyRowScanner {
+    scan_pos: usize,
+    last_row_end: Option<usize>,
+    end_marker_end: Option<usize>,
+    csv: Option<CsvScanState>,
+}
+
+#[derive(Debug)]
+struct CsvScanState {
+    reader: csv_core::Reader,
+    output: Vec<u8>,
+    ends: Vec<usize>,
+    record: Vec<u8>,
+    record_ends: Vec<usize>,
+    skip_first_record: bool,
+}
+
+impl CopyRowScanner {
+    fn new(params: &CopyFormatParams<'_>) -> Self {
+        let csv = match params {
+            CopyFormatParams::Csv(CopyCsvFormatParams {
+                delimiter,
+                quote,
+                escape,
+                header,
+                ..
+            }) => Some(CsvScanState::new(*delimiter, *quote, *escape, *header)),
+            _ => None,
+        };
+
+        CopyRowScanner {
+            scan_pos: 0,
+            last_row_end: None,
+            end_marker_end: None,
+            csv,
+        }
+    }
+
+    fn scan_new_bytes(&mut self, data: &[u8]) {
+        if self.scan_pos >= data.len() {
+            return;
+        }
+
+        if let Some(csv) = self.csv.as_mut() {
+            let mut input = &data[self.scan_pos..];
+            let mut consumed = 0usize;
+            while !input.is_empty() {
+                let (result, n_input, n_output, n_ends) =
+                    csv.reader
+                        .read_record(input, &mut csv.output, &mut csv.ends);
+                consumed += n_input;
+                input = &input[n_input..];
+                if !csv.output.is_empty() {
+                    csv.record.extend_from_slice(&csv.output[..n_output]);
+                }
+                if !csv.ends.is_empty() {
+                    csv.record_ends.extend_from_slice(&csv.ends[..n_ends]);
+                }
+
+                match result {
+                    ReadRecordResult::InputEmpty => break,
+                    ReadRecordResult::OutputFull => {
+                        if n_input == 0 {
+                            csv.output
+                                .resize(csv.output.len().saturating_mul(2).max(1), 0);
+                        }
+                    }
+                    ReadRecordResult::OutputEndsFull => {
+                        if n_input == 0 {
+                            csv.ends.resize(csv.ends.len().saturating_mul(2).max(1), 0);
+                        }
+                    }
+                    ReadRecordResult::Record | ReadRecordResult::End => {
+                        let row_end = self.scan_pos + consumed;
+                        self.last_row_end = Some(row_end);
+                        if self.end_marker_end.is_none() {
+                            let is_marker = if csv.skip_first_record {
+                                csv.skip_first_record = false;
+                                false
+                            } else if csv.record_ends.len() == 1 {
+                                let end = csv.record_ends[0];
+                                end == 2 && csv.record.get(0..end) == Some(b"\\.")
+                            } else {
+                                false
+                            };
+                            if is_marker {
+                                self.end_marker_end = Some(row_end);
+                                break;
+                            }
+                        }
+                        csv.record.clear();
+                        csv.record_ends.clear();
+                    }
+                }
+            }
+        } else {
+            let mut row_start = self.last_row_end.unwrap_or(0);
+            for (offset, b) in data[self.scan_pos..].iter().enumerate() {
+                if *b == b'\n' {
+                    let row_end = self.scan_pos + offset + 1;
+                    self.last_row_end = Some(row_end);
+                    if self.end_marker_end.is_none() {
+                        let row = &data[row_start..row_end];
+                        if row.get(0..2) == Some(b"\\.") {
+                            self.end_marker_end = Some(row_end);
+                            break;
+                        }
+                    }
+                    row_start = row_end;
+                }
+            }
+        }
+
+        self.scan_pos = data.len();
+    }
+
+    fn last_row_end(&self) -> Option<usize> {
+        self.last_row_end
+    }
+
+    fn end_marker_end(&self) -> Option<usize> {
+        self.end_marker_end
+    }
+
+    fn current_row_size(&self, data_len: usize) -> usize {
+        data_len.saturating_sub(self.last_row_end.unwrap_or(0))
+    }
+
+    fn on_split(&mut self, split_pos: usize) {
+        self.scan_pos = self.scan_pos.saturating_sub(split_pos);
+        self.last_row_end = None;
+        self.end_marker_end = self
+            .end_marker_end
+            .and_then(|end| end.checked_sub(split_pos));
+    }
+
+    fn on_truncate(&mut self, new_len: usize) {
+        self.scan_pos = self.scan_pos.min(new_len);
+        self.last_row_end = self.last_row_end.filter(|&end| end <= new_len);
+        self.end_marker_end = self.end_marker_end.filter(|&end| end <= new_len);
+    }
+}
+
+impl CsvScanState {
+    fn new(delimiter: u8, quote: u8, escape: u8, header: bool) -> Self {
+        let (double_quote, escape) = if quote == escape {
+            (true, None)
+        } else {
+            (false, Some(escape))
+        };
+        CsvScanState {
+            reader: csv_core::ReaderBuilder::new()
+                .delimiter(delimiter)
+                .quote(quote)
+                .double_quote(double_quote)
+                .escape(escape)
+                .build(),
+            output: vec![0; 1],
+            ends: vec![0; 1],
+            record: Vec::new(),
+            record_ends: Vec::new(),
+            skip_first_record: header,
+        }
+    }
 }
 
 #[cfg(test)]

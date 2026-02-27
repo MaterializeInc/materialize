@@ -1347,7 +1347,6 @@ async fn test_auth_base_require_tls_oidc() {
 
     let oidc_bearer = Authorization::bearer(&jwt_token).unwrap();
     let oidc_header_bearer = make_header(oidc_bearer);
-    let oidc_header_basic = make_header(Authorization::basic(oidc_user, &jwt_token));
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
@@ -1378,29 +1377,10 @@ async fn test_auth_base_require_tls_oidc() {
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
-            // HTTP with basic username/password should succeed.
-            TestCase::Http {
-                user_to_auth_as: oidc_user,
-                user_reported_by_system: oidc_user,
-                scheme: Scheme::HTTPS,
-                headers: &oidc_header_basic,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
-                assert: Assert::Success,
-            },
             // Ws with bearer token should succeed.
             TestCase::Ws {
                 auth: &WebSocketAuth::Bearer {
                     token: jwt_token.clone(),
-                    options: BTreeMap::default(),
-                },
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
-                assert: Assert::Success,
-            },
-            // Ws with basic username/password should succeed.
-            TestCase::Ws {
-                auth: &WebSocketAuth::Basic {
-                    user: oidc_user.to_string(),
-                    password: Password(jwt_token.clone()),
                     options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1703,6 +1683,9 @@ async fn test_auth_oidc_audience_optional() {
 #[cfg_attr(miri, ignore)]
 async fn test_auth_oidc_password_fallback() {
     let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
     let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
     let kid = "test-key-1".to_string();
     let oidc_server = OidcMockServer::start(
@@ -1719,6 +1702,7 @@ async fn test_auth_oidc_password_fallback() {
     let user_password = "secure_password";
 
     let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
         .with_oidc_auth(Some(oidc_server.issuer), None)
         .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_password_auth(Password("mz_system_password".to_owned()))
@@ -1727,9 +1711,12 @@ async fn test_auth_oidc_password_fallback() {
 
     let admin_client = server
         .connect()
-        .no_tls()
         .user("mz_system")
         .password("mz_system_password")
+        .ssl_mode(SslMode::Require)
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })))
         .await
         .unwrap();
     admin_client
@@ -1740,6 +1727,8 @@ async fn test_auth_oidc_password_fallback() {
         .await
         .unwrap();
 
+    let oidc_header_basic = make_header(Authorization::basic(oidc_user, user_password));
+
     run_tests(
         "OIDC Password Fallback (oidc_auth_enabled=false or not set)",
         &server,
@@ -1749,7 +1738,7 @@ async fn test_auth_oidc_password_fallback() {
                 user_to_auth_as: oidc_user,
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(user_password)),
-                ssl_mode: SslMode::Prefer,
+                ssl_mode: SslMode::Require,
                 options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
@@ -1759,7 +1748,7 @@ async fn test_auth_oidc_password_fallback() {
                 user_to_auth_as: oidc_user,
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(user_password)),
-                ssl_mode: SslMode::Prefer,
+                ssl_mode: SslMode::Require,
                 options: Some("--oidc_auth_enabled=false"),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
@@ -1769,13 +1758,32 @@ async fn test_auth_oidc_password_fallback() {
                 user_to_auth_as: oidc_user,
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed("wrong_password")),
-                ssl_mode: SslMode::Prefer,
+                ssl_mode: SslMode::Require,
                 options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
                     assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
                 })),
+            },
+            // HTTP with basic username/password should use password authentication
+            TestCase::Http {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                scheme: Scheme::HTTPS,
+                headers: &oidc_header_basic,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // Ws with basic username/password should use password authentication
+            TestCase::Ws {
+                auth: &WebSocketAuth::Basic {
+                    user: oidc_user.to_string(),
+                    password: Password(user_password.to_string()),
+                    options: BTreeMap::default(),
+                },
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
             },
         ],
     )

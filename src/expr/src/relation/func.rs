@@ -30,8 +30,8 @@ use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::regex::{Regex as ReprRegex, RegexCompilationError};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::{
-    ColumnName, Datum, Diff, Row, RowArena, RowPacker, SharedRow, SqlColumnType, SqlRelationType,
-    SqlScalarType, datum_size,
+    ColumnName, Datum, Diff, ReprColumnType, ReprRelationType, Row, RowArena, RowPacker, SharedRow,
+    SqlColumnType, SqlRelationType, SqlScalarType, datum_size,
 };
 use num::{CheckedAdd, Integer, Signed, ToPrimitive};
 use ordered_float::OrderedFloat;
@@ -2324,7 +2324,7 @@ impl AggregateFunc {
     /// The output column type also contains nullability information, which
     /// is (without further information) true for aggregations that are not
     /// counts.
-    pub fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    pub fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         let scalar_type = match self {
             AggregateFunc::Count => SqlScalarType::Int64,
             AggregateFunc::Any => SqlScalarType::Bool,
@@ -2437,7 +2437,7 @@ impl AggregateFunc {
                 let arg_type = fields[0].unwrap_record_element_type()[1]
                     .clone()
                     .nullable(true);
-                let wrapped_aggr_out_type = wrapped_aggregate.output_type(arg_type);
+                let wrapped_aggr_out_type = wrapped_aggregate.output_sql_type(arg_type);
 
                 SqlScalarType::List {
                     element_type: Box::new(SqlScalarType::Record {
@@ -2465,7 +2465,7 @@ impl AggregateFunc {
                     |(arg_type, wrapped_agg)| {
                     (
                         ColumnName::from(wrapped_agg.name()),
-                        wrapped_agg.output_type((**arg_type).clone().nullable(true)),
+                        wrapped_agg.output_sql_type((**arg_type).clone().nullable(true)),
                     )
                 }).collect_vec();
 
@@ -2600,6 +2600,13 @@ impl AggregateFunc {
             _ => input_type.nullable,
         };
         scalar_type.nullable(nullable)
+    }
+
+    /// Computes the representation type of this aggregate function.
+    ///
+    /// This is a wrapper around [`Self::output_sql_type`] that converts the result to a representation type.
+    pub fn output_type(&self, input_type: ReprColumnType) -> ReprColumnType {
+        ReprColumnType::from(&self.output_sql_type(SqlColumnType::from_repr(&input_type)))
     }
 
     /// Compute output type for ROW_NUMBER, RANK, DENSE_RANK
@@ -3555,7 +3562,7 @@ impl TableFunc {
         }
     }
 
-    pub fn output_type(&self) -> SqlRelationType {
+    pub fn output_sql_type(&self) -> SqlRelationType {
         let (column_types, keys) = match self {
             TableFunc::AclExplode => {
                 let column_types = vec![
@@ -3694,7 +3701,7 @@ impl TableFunc {
                 (column_types, keys)
             }
             TableFunc::WithOrdinality(WithOrdinality { inner }) => {
-                let mut typ = inner.output_type();
+                let mut typ = inner.output_sql_type();
                 // Add the ordinality column.
                 typ.column_types.push(SqlScalarType::Int64.nullable(false));
                 // The ordinality column is always a key.
@@ -3710,6 +3717,13 @@ impl TableFunc {
         } else {
             SqlRelationType::new(column_types)
         }
+    }
+
+    /// Computes the representation type of this table function.
+    ///
+    /// This is a wrapper around [`Self::output_sql_type`] that converts the result to a representation type.
+    pub fn output_type(&self) -> ReprRelationType {
+        ReprRelationType::from(&self.output_sql_type())
     }
 
     pub fn output_arity(&self) -> usize {
