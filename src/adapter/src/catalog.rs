@@ -3478,7 +3478,7 @@ mod tests {
                         reduced.reduce(&[]);
                         match reduced {
                             MirScalarExpr::Literal(reduce_result, ctyp) => {
-                                match reduce_result {
+                                match *reduce_result {
                                     Ok(reduce_result_row) => {
                                         let reduce_result_datum = reduce_result_row.unpack_first();
                                         assert_eq!(

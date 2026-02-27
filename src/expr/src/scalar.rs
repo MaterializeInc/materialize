@@ -2670,13 +2670,13 @@ pub enum EvalError {
     UnknownUnits(Box<str>),
     UnsupportedUnits(Box<str>, Box<str>),
     UnterminatedLikeEscapeSequence,
-    Parse(ParseError),
+    Parse(Box<ParseError>),
     ParseHex(ParseHexError),
     Internal(Box<str>),
     InfinityOutOfDomain(Box<str>),
     NegativeOutOfDomain(Box<str>),
     ZeroOutOfDomain(Box<str>),
-    OutOfDomain(DomainLimit, DomainLimit, Box<str>),
+    OutOfDomain(Box<(DomainLimit, DomainLimit, Box<str>)>),
     ComplexOutOfRange(Box<str>),
     MultipleRowsFromSubquery,
     Undefined(Box<str>),
@@ -2704,11 +2704,7 @@ pub enum EvalError {
     ArrayFillWrongArraySubscripts,
     // TODO: propagate this check more widely throughout the expr crate
     MaxArraySizeExceeded(usize),
-    DateDiffOverflow {
-        unit: Box<str>,
-        a: Box<str>,
-        b: Box<str>,
-    },
+    DateDiffOverflow(Box<(Box<str>, Box<str>, Box<str>)>),
     // The error for ErrorIfNull; this should not be used in other contexts as a generic error
     // printer.
     IfNullError(Box<str>),
@@ -2836,7 +2832,8 @@ impl fmt::Display for EvalError {
             EvalError::ZeroOutOfDomain(s) => {
                 write!(f, "function {} is not defined for zero", s)
             }
-            EvalError::OutOfDomain(lower, upper, s) => {
+            EvalError::OutOfDomain(detail) => {
+                let (lower, upper, s) = detail.as_ref();
                 use DomainLimit::*;
                 write!(f, "function {s} is defined for numbers ")?;
                 match (lower, upper) {
@@ -2915,7 +2912,8 @@ impl fmt::Display for EvalError {
                     "array size exceeds the maximum allowed ({max_size} bytes)"
                 )
             }
-            EvalError::DateDiffOverflow { unit, a, b } => {
+            EvalError::DateDiffOverflow(detail) => {
+                let (unit, a, b) = detail.as_ref();
                 write!(f, "datediff overflow, {unit} of {a}, {b}")
             }
             EvalError::IfNullError(s) => f.write_str(s),
@@ -2971,7 +2969,7 @@ impl std::error::Error for EvalError {}
 
 impl From<ParseError> for EvalError {
     fn from(e: ParseError) -> EvalError {
-        EvalError::Parse(e)
+        EvalError::Parse(Box::new(e))
     }
 }
 
@@ -3123,18 +3121,21 @@ impl RustType<ProtoEvalError> for EvalError {
                 typ: typ.into_proto(),
             }),
             EvalError::UnterminatedLikeEscapeSequence => UnterminatedLikeEscapeSequence(()),
-            EvalError::Parse(error) => Parse(error.into_proto()),
+            EvalError::Parse(error) => Parse(*error.into_proto()),
             EvalError::PrettyError(error) => PrettyError(error.into_proto()),
             EvalError::ParseHex(error) => ParseHex(error.into_proto()),
             EvalError::Internal(v) => Internal(v.into_proto()),
             EvalError::InfinityOutOfDomain(v) => InfinityOutOfDomain(v.into_proto()),
             EvalError::NegativeOutOfDomain(v) => NegativeOutOfDomain(v.into_proto()),
             EvalError::ZeroOutOfDomain(v) => ZeroOutOfDomain(v.into_proto()),
-            EvalError::OutOfDomain(lower, upper, id) => OutOfDomain(ProtoOutOfDomain {
-                lower: Some(lower.into_proto()),
-                upper: Some(upper.into_proto()),
-                id: id.into_proto(),
-            }),
+            EvalError::OutOfDomain(detail) => {
+                let (lower, upper, id) = detail.as_ref();
+                OutOfDomain(ProtoOutOfDomain {
+                    lower: Some(lower.into_proto()),
+                    upper: Some(upper.into_proto()),
+                    id: id.into_proto(),
+                })
+            }
             EvalError::ComplexOutOfRange(v) => ComplexOutOfRange(v.into_proto()),
             EvalError::MultipleRowsFromSubquery => MultipleRowsFromSubquery(()),
             EvalError::Undefined(v) => Undefined(v.into_proto()),
@@ -3172,11 +3173,14 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::MaxArraySizeExceeded(max_size) => {
                 MaxArraySizeExceeded(u64::cast_from(*max_size))
             }
-            EvalError::DateDiffOverflow { unit, a, b } => DateDiffOverflow(ProtoDateDiffOverflow {
-                unit: unit.into_proto(),
-                a: a.into_proto(),
-                b: b.into_proto(),
-            }),
+            EvalError::DateDiffOverflow(detail) => {
+                let (unit, a, b) = detail.as_ref();
+                DateDiffOverflow(ProtoDateDiffOverflow {
+                    unit: unit.into_proto(),
+                    a: a.into_proto(),
+                    b: b.into_proto(),
+                })
+            }
             EvalError::IfNullError(s) => IfNullError(s.into_proto()),
             EvalError::LengthTooLarge => LengthTooLarge(()),
             EvalError::AclArrayNullElement => AclArrayNullElement(()),
@@ -3257,17 +3261,17 @@ impl RustType<ProtoEvalError> for EvalError {
                     Ok(EvalError::UnsupportedUnits(v.units.into(), v.typ.into()))
                 }
                 UnterminatedLikeEscapeSequence(()) => Ok(EvalError::UnterminatedLikeEscapeSequence),
-                Parse(error) => Ok(EvalError::Parse(error.into_rust()?)),
+                Parse(error) => Ok(EvalError::Parse(Box::new(error.into_rust()?))),
                 ParseHex(error) => Ok(EvalError::ParseHex(error.into_rust()?)),
                 Internal(v) => Ok(EvalError::Internal(v.into())),
                 InfinityOutOfDomain(v) => Ok(EvalError::InfinityOutOfDomain(v.into())),
                 NegativeOutOfDomain(v) => Ok(EvalError::NegativeOutOfDomain(v.into())),
                 ZeroOutOfDomain(v) => Ok(EvalError::ZeroOutOfDomain(v.into())),
-                OutOfDomain(v) => Ok(EvalError::OutOfDomain(
+                OutOfDomain(v) => Ok(EvalError::OutOfDomain(Box::new((
                     v.lower.into_rust_if_some("ProtoDomainLimit::lower")?,
                     v.upper.into_rust_if_some("ProtoDomainLimit::upper")?,
                     v.id.into(),
-                )),
+                )))),
                 ComplexOutOfRange(v) => Ok(EvalError::ComplexOutOfRange(v.into())),
                 MultipleRowsFromSubquery(()) => Ok(EvalError::MultipleRowsFromSubquery),
                 Undefined(v) => Ok(EvalError::Undefined(v.into())),
@@ -3298,11 +3302,11 @@ impl RustType<ProtoEvalError> for EvalError {
                 MaxArraySizeExceeded(max_size) => {
                     Ok(EvalError::MaxArraySizeExceeded(usize::cast_from(max_size)))
                 }
-                DateDiffOverflow(v) => Ok(EvalError::DateDiffOverflow {
-                    unit: v.unit.into(),
-                    a: v.a.into(),
-                    b: v.b.into(),
-                }),
+                DateDiffOverflow(v) => Ok(EvalError::DateDiffOverflow(Box::new((
+                    v.unit.into(),
+                    v.a.into(),
+                    v.b.into(),
+                )))),
                 IfNullError(v) => Ok(EvalError::IfNullError(v.into())),
                 LengthTooLarge(()) => Ok(EvalError::LengthTooLarge),
                 AclArrayNullElement(()) => Ok(EvalError::AclArrayNullElement),
@@ -3422,6 +3426,7 @@ mod tests {
         assert_eq!(size_of::<crate::VariadicFunc>(), 40);
         assert_eq!(size_of::<crate::AggregateFunc>(), 64);
         assert_eq!(size_of::<crate::AggregateExpr>(), 144);
+        assert_eq!(size_of::<EvalError>(), 40);
     }
 
 }

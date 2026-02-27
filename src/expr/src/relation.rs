@@ -4031,7 +4031,7 @@ mod tests {
     #[mz_ore::test]
     fn type_size_assertions() {
         use std::mem::size_of;
-        assert_eq!(size_of::<MirRelationExpr>(), 104);
+        assert_eq!(size_of::<MirRelationExpr>(), 96);
         assert_eq!(size_of::<JoinImplementation>(), 120);
         assert_eq!(size_of::<TableFunc>(), 40);
     }

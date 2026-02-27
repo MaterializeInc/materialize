@@ -764,19 +764,22 @@ mod columnation {
                             self.string_region.copy(x),
                             self.string_region.copy(y),
                         ),
-                        EvalError::Parse(ParseError {
-                            kind,
-                            type_name,
-                            input,
-                            details,
-                        }) => EvalError::Parse(ParseError {
-                            kind: *kind,
-                            type_name: self.string_region.copy(type_name),
-                            input: self.string_region.copy(input),
-                            details: details
-                                .as_ref()
-                                .map(|details| self.string_region.copy(details)),
-                        }),
+                        EvalError::Parse(e) => {
+                            let ParseError {
+                                kind,
+                                type_name,
+                                input,
+                                details,
+                            } = e.as_ref();
+                            EvalError::Parse(Box::new(ParseError {
+                                kind: *kind,
+                                type_name: self.string_region.copy(type_name),
+                                input: self.string_region.copy(input),
+                                details: details
+                                    .as_ref()
+                                    .map(|details| self.string_region.copy(details)),
+                            }))
+                        }
                         e @ EvalError::ParseHex(x) => {
                             assert_copy(x);
                             e.clone()
@@ -791,10 +794,11 @@ mod columnation {
                         EvalError::ZeroOutOfDomain(x) => {
                             EvalError::ZeroOutOfDomain(self.string_region.copy(x))
                         }
-                        EvalError::OutOfDomain(x, y, z) => {
+                        EvalError::OutOfDomain(detail) => {
+                            let (x, y, z) = detail.as_ref();
                             assert_copy(x);
                             assert_copy(y);
-                            EvalError::OutOfDomain(*x, *y, self.string_region.copy(z))
+                            EvalError::OutOfDomain(Box::new((*x, *y, self.string_region.copy(z))))
                         }
                         EvalError::ComplexOutOfRange(x) => {
                             EvalError::ComplexOutOfRange(self.string_region.copy(x))
@@ -853,11 +857,14 @@ mod columnation {
                             assert_copy(x);
                             e.clone()
                         }
-                        EvalError::DateDiffOverflow { unit, a, b } => EvalError::DateDiffOverflow {
-                            unit: self.string_region.copy(unit),
-                            a: self.string_region.copy(a),
-                            b: self.string_region.copy(b),
-                        },
+                        EvalError::DateDiffOverflow(detail) => {
+                            let (unit, a, b) = detail.as_ref();
+                            EvalError::DateDiffOverflow(Box::new((
+                                self.string_region.copy(unit),
+                                self.string_region.copy(a),
+                                self.string_region.copy(b),
+                            )))
+                        }
                         EvalError::IfNullError(x) => {
                             EvalError::IfNullError(self.string_region.copy(x))
                         }

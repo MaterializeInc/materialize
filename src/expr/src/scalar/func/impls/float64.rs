@@ -276,11 +276,11 @@ fn cos(a: f64) -> Result<f64, EvalError> {
 #[sqlfunc]
 fn acos(a: f64) -> Result<f64, EvalError> {
     if a < -1.0 || 1.0 < a {
-        return Err(EvalError::OutOfDomain(
+        return Err(EvalError::OutOfDomain(Box::new((
             DomainLimit::Inclusive(-1),
             DomainLimit::Inclusive(1),
             "acos".into(),
-        ));
+        ))));
     }
     Ok(a.acos())
 }
@@ -293,11 +293,11 @@ fn cosh(a: f64) -> f64 {
 #[sqlfunc]
 fn acosh(a: f64) -> Result<f64, EvalError> {
     if a < 1.0 {
-        return Err(EvalError::OutOfDomain(
+        return Err(EvalError::OutOfDomain(Box::new((
             DomainLimit::Inclusive(1),
             DomainLimit::None,
             "acosh".into(),
-        ));
+        ))));
     }
     Ok(a.acosh())
 }
@@ -313,11 +313,11 @@ fn sin(a: f64) -> Result<f64, EvalError> {
 #[sqlfunc]
 fn asin(a: f64) -> Result<f64, EvalError> {
     if a < -1.0 || 1.0 < a {
-        return Err(EvalError::OutOfDomain(
+        return Err(EvalError::OutOfDomain(Box::new((
             DomainLimit::Inclusive(-1),
             DomainLimit::Inclusive(1),
             "asin".into(),
-        ));
+        ))));
     }
     Ok(a.asin())
 }
@@ -353,11 +353,11 @@ fn tanh(a: f64) -> f64 {
 #[sqlfunc]
 fn atanh(a: f64) -> Result<f64, EvalError> {
     if a < -1.0 || 1.0 < a {
-        return Err(EvalError::OutOfDomain(
+        return Err(EvalError::OutOfDomain(Box::new((
             DomainLimit::Inclusive(-1),
             DomainLimit::Inclusive(1),
             "atanh".into(),
-        ));
+        ))));
     }
     Ok(a.atanh())
 }
