@@ -6822,7 +6822,7 @@ dependencies = [
  "mz-repr",
  "proptest",
  "tracing",
- "wasm-encoder 0.245.1",
+ "wasm-encoder",
  "wasmtime",
  "workspace-hack",
 ]
@@ -13637,17 +13637,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "990065f2fe63003fe337b932cfb5e3b80e0b4d0f5ff650e6985b1048f62c8319"
 dependencies = [
  "leb128fmt",
- "wasmparser 0.244.0",
-]
-
-[[package]]
-name = "wasm-encoder"
-version = "0.245.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f9dca005e69bf015e45577e415b9af8c67e8ee3c0e38b5b0add5aa92581ed5c"
-dependencies = [
- "leb128fmt",
- "wasmparser 0.245.1",
+ "wasmparser",
 ]
 
 [[package]]
@@ -13677,17 +13667,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasmparser"
-version = "0.245.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f08c9adee0428b7bddf3890fc27e015ac4b761cc608c822667102b8bfd6995e"
-dependencies = [
- "bitflags 2.11.0",
- "indexmap 2.13.0",
- "semver",
-]
-
-[[package]]
 name = "wasmprinter"
 version = "0.244.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13695,7 +13674,7 @@ checksum = "09390d7b2bd7b938e563e4bff10aa345ef2e27a3bc99135697514ef54495e68f"
 dependencies = [
  "anyhow",
  "termcolor",
- "wasmparser 0.244.0",
+ "wasmparser",
 ]
 
 [[package]]
@@ -13723,7 +13702,7 @@ dependencies = [
  "serde_derive",
  "smallvec",
  "target-lexicon",
- "wasmparser 0.244.0",
+ "wasmparser",
  "wasmtime-environ",
  "wasmtime-internal-core",
  "wasmtime-internal-cranelift",
@@ -13754,8 +13733,8 @@ dependencies = [
  "serde_derive",
  "smallvec",
  "target-lexicon",
- "wasm-encoder 0.244.0",
- "wasmparser 0.244.0",
+ "wasm-encoder",
+ "wasmparser",
  "wasmprinter",
  "wasmtime-internal-core",
 ]
@@ -13790,7 +13769,7 @@ dependencies = [
  "smallvec",
  "target-lexicon",
  "thiserror 2.0.18",
- "wasmparser 0.244.0",
+ "wasmparser",
  "wasmtime-environ",
  "wasmtime-internal-core",
  "wasmtime-internal-unwinder",
@@ -14210,6 +14189,7 @@ version = "0.0.0"
 dependencies = [
  "ahash 0.8.12",
  "aho-corasick",
+ "anyhow",
  "arrayvec 0.7.6",
  "arrow",
  "arrow-array",

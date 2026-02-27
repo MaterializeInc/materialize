@@ -445,50 +445,51 @@ mod tests {
         }
     }
 
-    mod proptest_tests {
-        use super::*;
-        use proptest::prelude::*;
+    use proptest::prelude::*;
 
-        /// Strategy for generating an optional i64 (Some = value, None = null).
-        fn arb_nullable_i64() -> impl Strategy<Value = Option<i64>> {
-            proptest::strategy::Union::new_weighted(vec![
-                (9, any::<i64>().prop_map(Some).boxed()),
-                (1, Just(None).boxed()),
-            ])
-        }
+    /// Strategy for generating an optional i64 (Some = value, None = null).
+    fn arb_nullable_i64() -> impl Strategy<Value = Option<i64>> {
+        proptest::strategy::Union::new_weighted(vec![
+            (9, any::<i64>().prop_map(Some).boxed()),
+            (1, Just(None).boxed()),
+        ])
+    }
 
-        /// Strategy for generating a row of `num_cols` nullable i64 values.
-        fn arb_row(num_cols: usize) -> impl Strategy<Value = Vec<Option<i64>>> {
-            proptest::collection::vec(arb_nullable_i64(), num_cols)
-        }
+    /// Strategy for generating a row of `num_cols` nullable i64 values.
+    fn arb_row(num_cols: usize) -> impl Strategy<Value = Vec<Option<i64>>> {
+        proptest::collection::vec(arb_nullable_i64(), num_cols)
+    }
 
-        /// Strategy for generating a batch of rows.
-        fn arb_batch(
-            num_cols: usize,
-            max_rows: usize,
-        ) -> impl Strategy<Value = Vec<Vec<Option<i64>>>> {
-            proptest::collection::vec(arb_row(num_cols), 0..=max_rows)
-        }
+    /// Strategy for generating a batch of rows.
+    fn arb_batch(num_cols: usize, max_rows: usize) -> impl Strategy<Value = Vec<Vec<Option<i64>>>> {
+        proptest::collection::vec(arb_row(num_cols), 0..=max_rows)
+    }
 
-        proptest::proptest! {
-            #[test]
-            fn proptest_add_two_columns(rows in arb_batch(2, 100)) {
-                let expr = add_i64(col(0), col(1));
-                assert_compiled_matches_interpreted(&expr, &rows, 2);
-            }
+    #[mz_ore::test]
+    fn proptest_add_two_columns() {
+        proptest!(|(rows in arb_batch(2, 100))| {
+            // The proptest! macro interferes with rustfmt.
+            let expr = add_i64(col(0), col(1));
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
 
-            #[test]
-            fn proptest_add_column_and_literal(rows in arb_batch(1, 100), lit_val in any::<i64>()) {
-                let expr = add_i64(col(0), lit_i64(lit_val));
-                assert_compiled_matches_interpreted(&expr, &rows, 1);
-            }
+    #[mz_ore::test]
+    fn proptest_add_column_and_literal() {
+        proptest!(|(rows in arb_batch(1, 100), lit_val in any::<i64>())| {
+            // The proptest! macro interferes with rustfmt.
+            let expr = add_i64(col(0), lit_i64(lit_val));
+            assert_compiled_matches_interpreted(&expr, &rows, 1);
+        });
+    }
 
-            #[test]
-            fn proptest_nested_add(rows in arb_batch(3, 50)) {
-                // (col0 + col1) + col2
-                let expr = add_i64(add_i64(col(0), col(1)), col(2));
-                assert_compiled_matches_interpreted(&expr, &rows, 3);
-            }
-        }
+    #[mz_ore::test]
+    fn proptest_nested_add() {
+        // (col0 + col1) + col2
+        proptest!(|(rows in arb_batch(3, 50))| {
+            // The proptest! macro interferes with rustfmt.
+            let expr = add_i64(add_i64(col(0), col(1)), col(2));
+            assert_compiled_matches_interpreted(&expr, &rows, 3);
+        });
     }
 }

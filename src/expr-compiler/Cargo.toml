@@ -14,7 +14,7 @@ mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
 tracing = "0.1.44"
-wasm-encoder = "0.245.1"
+wasm-encoder = "0.244.0"
 wasmtime = { version = "42.0.1", default-features = false, features = ["cranelift", "runtime"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
