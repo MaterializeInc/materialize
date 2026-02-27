@@ -6714,3 +6714,69 @@ def workflow_test_github_11219(c: Composition) -> None:
 
         c.sql_query("SELECT a FROM t1")
         c.sql_query("SELECT a FROM mv2")
+
+
+def workflow_test_prometheus_metrics(c: Composition) -> None:
+    """Test that mz_compute_prometheus_metrics_per_worker reports metrics."""
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "unsafe_enable_unsafe_functions": "true",
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
+                "compute_prometheus_scrape_interval": "1s",
+            },
+            support_external_clusterd=True,
+        ),
+        Clusterd(name="clusterd1", workers=1),
+        Testdrive(no_reset=True, default_timeout="30s"),
+    ):
+        c.up("materialized", "clusterd1")
+
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (
+                replica1 (
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
+                    WORKERS 1
+                )
+            );
+            GRANT ALL ON CLUSTER cluster1 TO materialize;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        # Create a materialized view to generate compute activity.
+        c.sql(
+            """
+            SET cluster = cluster1;
+            CREATE TABLE t (a int);
+            CREATE MATERIALIZED VIEW mv AS SELECT count(*) FROM t;
+            """
+        )
+
+        c.testdrive(
+            dedent(
+                """
+                > SET cluster = cluster1
+
+                > SELECT count(*) > 0
+                  FROM mz_introspection.mz_compute_prometheus_metrics_per_worker
+                true
+
+                > SELECT DISTINCT metric_type
+                  FROM mz_introspection.mz_compute_prometheus_metrics_per_worker
+                  WHERE metric_type IN ('counter', 'gauge')
+                counter
+                gauge
+
+                > SELECT DISTINCT worker_id
+                  FROM mz_introspection.mz_compute_prometheus_metrics_per_worker
+                0
+                """
+            )
+        )

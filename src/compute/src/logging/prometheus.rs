@@ -20,7 +20,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange, Column};
+use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use prometheus::proto::MetricType;
 use timely::container::DrainContainer;
 use timely::dataflow::Scope;
