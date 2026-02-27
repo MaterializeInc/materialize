@@ -740,7 +740,10 @@ where
 
         // Attempt WASM compilation of MFP expressions when the feature flag is enabled.
         let mut evaluator = if ENABLE_COMPILED_EXPRESSIONS.get(config_set) {
-            match mz_expr_compiler::eval::CompiledMfp::try_new(mfp_plan, &[]) {
+            let input_types = mz_expr_compiler::analyze::infer_input_types_from_mfp(
+                mfp_plan.non_temporal(),
+            );
+            match mz_expr_compiler::eval::CompiledMfp::try_new(mfp_plan, &input_types) {
                 Ok(compiled) => MfpEvaluator::Compiled(compiled),
                 Err(plan) => MfpEvaluator::Interpreted(plan),
             }

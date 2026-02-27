@@ -136,7 +136,7 @@ impl CompiledExpr {
             let col = &batch.columns[col_idx];
             let values_ptr = offset;
 
-            // Write values.
+            // Write values as i64 into WASM memory.
             match col {
                 TypedColumn::Int64 { values, .. } => {
                     let mem_data = memory.data_mut(&mut store);
@@ -146,8 +146,16 @@ impl CompiledExpr {
                         mem_data[dst..dst + 8].copy_from_slice(&bytes);
                     }
                 }
+                TypedColumn::Bool { values, .. } => {
+                    let mem_data = memory.data_mut(&mut store);
+                    for (i, &v) in values.iter().enumerate() {
+                        let val: i64 = if v { 1 } else { 0 };
+                        let bytes = val.to_le_bytes();
+                        let dst = values_ptr + i * 8;
+                        mem_data[dst..dst + 8].copy_from_slice(&bytes);
+                    }
+                }
                 _ => {
-                    // Milestone 1: only Int64 columns.
                     return Ok(ResultColumn::new(TypedColumn::new_for_type(
                         &self.output_type,
                         num_rows,
@@ -861,5 +869,417 @@ mod tests {
             let expr = lt_expr(col(0), lit_i64(42));
             assert_compiled_matches_interpreted(&expr, &rows, 1);
         });
+    }
+
+    // --- Bool expression helpers ---
+
+    fn lit_bool(v: bool) -> MirScalarExpr {
+        MirScalarExpr::Literal(
+            Ok(Row::pack_slice(&[if v {
+                Datum::True
+            } else {
+                Datum::False
+            }])),
+            mz_repr::ReprColumnType {
+                scalar_type: ReprScalarType::Bool,
+                nullable: false,
+            },
+        )
+    }
+
+    fn lit_null_bool() -> MirScalarExpr {
+        MirScalarExpr::Literal(
+            Ok(Row::pack_slice(&[Datum::Null])),
+            mz_repr::ReprColumnType {
+                scalar_type: ReprScalarType::Bool,
+                nullable: true,
+            },
+        )
+    }
+
+    fn and_expr(children: Vec<MirScalarExpr>) -> MirScalarExpr {
+        MirScalarExpr::CallVariadic {
+            func: mz_expr::VariadicFunc::And(mz_expr::func::variadic::And),
+            exprs: children,
+        }
+    }
+
+    fn or_expr(children: Vec<MirScalarExpr>) -> MirScalarExpr {
+        MirScalarExpr::CallVariadic {
+            func: mz_expr::VariadicFunc::Or(mz_expr::func::variadic::Or),
+            exprs: children,
+        }
+    }
+
+    fn is_null_expr(child: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallUnary {
+            func: UnaryFunc::IsNull(mz_expr::func::IsNull),
+            expr: Box::new(child),
+        }
+    }
+
+    fn is_true_expr(child: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallUnary {
+            func: UnaryFunc::IsTrue(mz_expr::func::IsTrue),
+            expr: Box::new(child),
+        }
+    }
+
+    fn is_false_expr(child: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallUnary {
+            func: UnaryFunc::IsFalse(mz_expr::func::IsFalse),
+            expr: Box::new(child),
+        }
+    }
+
+    /// Nullable bool datum: Some(true) = TRUE, Some(false) = FALSE, None = NULL.
+    #[derive(Debug, Clone)]
+    enum NullBool {
+        True,
+        False,
+        Null,
+    }
+
+    impl NullBool {
+        fn to_datum(&self) -> Datum<'static> {
+            match self {
+                NullBool::True => Datum::True,
+                NullBool::False => Datum::False,
+                NullBool::Null => Datum::Null,
+            }
+        }
+    }
+
+    fn arb_nullable_bool() -> impl Strategy<Value = NullBool> {
+        proptest::strategy::Union::new_weighted(vec![
+            (4, Just(NullBool::True).boxed()),
+            (4, Just(NullBool::False).boxed()),
+            (2, Just(NullBool::Null).boxed()),
+        ])
+    }
+
+    fn arb_bool_row(num_cols: usize) -> impl Strategy<Value = Vec<NullBool>> {
+        proptest::collection::vec(arb_nullable_bool(), num_cols)
+    }
+
+    fn arb_bool_batch(
+        num_cols: usize,
+        max_rows: usize,
+    ) -> impl Strategy<Value = Vec<Vec<NullBool>>> {
+        proptest::collection::vec(arb_bool_row(num_cols), 0..=max_rows)
+    }
+
+    /// Compares compiled and interpreted evaluation for Bool-input expressions.
+    fn assert_compiled_matches_interpreted_bool(
+        expr: &MirScalarExpr,
+        rows: &[Vec<NullBool>],
+        input_types: &[(SqlScalarType, bool)],
+    ) {
+        let engine = ExprEngine::new().unwrap();
+        let compiled = engine.compile(expr, input_types).unwrap().unwrap();
+
+        let row_values: Vec<Row> = rows
+            .iter()
+            .map(|row| {
+                let datums: Vec<Datum<'_>> = row.iter().map(|v| v.to_datum()).collect();
+                Row::pack_slice(&datums)
+            })
+            .collect();
+
+        let batch = rows_to_columns(&row_values, input_types);
+        let result = compiled.evaluate(&batch).unwrap();
+
+        for (i, row) in rows.iter().enumerate() {
+            let datums: Vec<Datum<'_>> = row.iter().map(|v| v.to_datum()).collect();
+            let interpreted = eval_interpreted(expr, &datums);
+
+            if result.errors[i] {
+                assert!(
+                    interpreted.is_err(),
+                    "row {i}: compiled errored but interpreter returned {:?}",
+                    interpreted
+                );
+                continue;
+            }
+
+            match &result.column {
+                TypedColumn::Bool { values, validity } => {
+                    if !validity[i] {
+                        assert!(
+                            matches!(&interpreted, Ok(Datum::Null)),
+                            "row {i}: compiled null but interpreter returned {interpreted:?}"
+                        );
+                    } else {
+                        let expected = if values[i] { Datum::True } else { Datum::False };
+                        match &interpreted {
+                            Ok(d) => {
+                                assert_eq!(
+                                    *d, expected,
+                                    "row {i}: compiled={:?}, interpreted={:?}",
+                                    expected, d
+                                );
+                            }
+                            other => {
+                                panic!("row {i}: compiled {:?} but interpreted {other:?}", expected)
+                            }
+                        }
+                    }
+                }
+                TypedColumn::Int64 { values, validity } => {
+                    if !validity[i] {
+                        assert!(
+                            matches!(&interpreted, Ok(Datum::Null)),
+                            "row {i}: compiled null but interpreter returned {interpreted:?}"
+                        );
+                    } else {
+                        match &interpreted {
+                            Ok(Datum::Int64(v)) => {
+                                assert_eq!(values[i], *v, "row {i}: mismatch");
+                            }
+                            other => {
+                                panic!("row {i}: compiled {} but interpreted {other:?}", values[i])
+                            }
+                        }
+                    }
+                }
+                other => panic!("unexpected column type: {other:?}"),
+            }
+        }
+    }
+
+    // --- And/Or proptests ---
+
+    #[mz_ore::test]
+    fn proptest_and_two_columns() {
+        // AND(col0, col1)
+        proptest!(|(rows in arb_bool_batch(2, 100))| {
+            let expr = and_expr(vec![col(0), col(1)]);
+            let types = vec![(SqlScalarType::Bool, true), (SqlScalarType::Bool, true)];
+            assert_compiled_matches_interpreted_bool(&expr, &rows, &types);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_or_two_columns() {
+        // OR(col0, col1)
+        proptest!(|(rows in arb_bool_batch(2, 100))| {
+            let expr = or_expr(vec![col(0), col(1)]);
+            let types = vec![(SqlScalarType::Bool, true), (SqlScalarType::Bool, true)];
+            assert_compiled_matches_interpreted_bool(&expr, &rows, &types);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_and_three_columns() {
+        // AND(col0, col1, col2)
+        proptest!(|(rows in arb_bool_batch(3, 50))| {
+            let expr = and_expr(vec![col(0), col(1), col(2)]);
+            let types = vec![
+                (SqlScalarType::Bool, true),
+                (SqlScalarType::Bool, true),
+                (SqlScalarType::Bool, true),
+            ];
+            assert_compiled_matches_interpreted_bool(&expr, &rows, &types);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_or_three_columns() {
+        // OR(col0, col1, col2)
+        proptest!(|(rows in arb_bool_batch(3, 50))| {
+            let expr = or_expr(vec![col(0), col(1), col(2)]);
+            let types = vec![
+                (SqlScalarType::Bool, true),
+                (SqlScalarType::Bool, true),
+                (SqlScalarType::Bool, true),
+            ];
+            assert_compiled_matches_interpreted_bool(&expr, &rows, &types);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_and_with_comparison() {
+        // AND(col0 < col1, col2 > 0)
+        proptest!(|(rows in arb_batch(3, 50))| {
+            let expr = and_expr(vec![lt_expr(col(0), col(1)), gt_expr(col(2), lit_i64(0))]);
+            assert_compiled_matches_interpreted(&expr, &rows, 3);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_or_with_comparison() {
+        // OR(col0 = col1, col0 < 0)
+        proptest!(|(rows in arb_batch(2, 50))| {
+            let expr = or_expr(vec![eq_expr(col(0), col(1)), lt_expr(col(0), lit_i64(0))]);
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
+
+    // --- IsNull proptests ---
+
+    #[mz_ore::test]
+    fn proptest_is_null_int64() {
+        // IS NULL(col0) where col0 is Int64
+        proptest!(|(rows in arb_batch(1, 100))| {
+            let expr = is_null_expr(col(0));
+            assert_compiled_matches_interpreted(&expr, &rows, 1);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_is_null_bool() {
+        // IS NULL(col0) where col0 is Bool
+        proptest!(|(rows in arb_bool_batch(1, 100))| {
+            let expr = is_null_expr(col(0));
+            let types = vec![(SqlScalarType::Bool, true)];
+            assert_compiled_matches_interpreted_bool(&expr, &rows, &types);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_is_null_of_add() {
+        // IS NULL(col0 + col1) — null if either operand is null
+        proptest!(|(rows in arb_batch(2, 50))| {
+            let expr = is_null_expr(add_i64(col(0), col(1)));
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
+
+    // --- IsTrue/IsFalse proptests ---
+
+    #[mz_ore::test]
+    fn proptest_is_true_column() {
+        // IS TRUE(col0)
+        proptest!(|(rows in arb_bool_batch(1, 100))| {
+            let expr = is_true_expr(col(0));
+            let types = vec![(SqlScalarType::Bool, true)];
+            assert_compiled_matches_interpreted_bool(&expr, &rows, &types);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_is_false_column() {
+        // IS FALSE(col0)
+        proptest!(|(rows in arb_bool_batch(1, 100))| {
+            let expr = is_false_expr(col(0));
+            let types = vec![(SqlScalarType::Bool, true)];
+            assert_compiled_matches_interpreted_bool(&expr, &rows, &types);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_is_true_of_comparison() {
+        // IS TRUE(col0 < col1)
+        proptest!(|(rows in arb_batch(2, 50))| {
+            let expr = is_true_expr(lt_expr(col(0), col(1)));
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_is_false_of_comparison() {
+        // IS FALSE(col0 = col1)
+        proptest!(|(rows in arb_batch(2, 50))| {
+            let expr = is_false_expr(eq_expr(col(0), col(1)));
+            assert_compiled_matches_interpreted(&expr, &rows, 2);
+        });
+    }
+
+    // --- Nested bool proptests ---
+
+    #[mz_ore::test]
+    fn proptest_not_of_and() {
+        // NOT(AND(col0, col1))
+        proptest!(|(rows in arb_bool_batch(2, 50))| {
+            let expr = not_expr(and_expr(vec![col(0), col(1)]));
+            let types = vec![(SqlScalarType::Bool, true), (SqlScalarType::Bool, true)];
+            assert_compiled_matches_interpreted_bool(&expr, &rows, &types);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_and_of_or() {
+        // AND(OR(col0, col1), col2)
+        proptest!(|(rows in arb_bool_batch(3, 50))| {
+            let expr = and_expr(vec![or_expr(vec![col(0), col(1)]), col(2)]);
+            let types = vec![
+                (SqlScalarType::Bool, true),
+                (SqlScalarType::Bool, true),
+                (SqlScalarType::Bool, true),
+            ];
+            assert_compiled_matches_interpreted_bool(&expr, &rows, &types);
+        });
+    }
+
+    // --- Deterministic And/Or edge-case tests ---
+
+    #[mz_ore::test]
+    fn test_and_false_dominates_null() {
+        // AND(FALSE, NULL) → FALSE
+        let engine = ExprEngine::new().unwrap();
+        let expr = and_expr(vec![lit_bool(false), lit_null_bool()]);
+        let types = vec![];
+        let compiled = engine.compile(&expr, &types).unwrap().unwrap();
+        let batch = rows_to_columns(&[Row::pack_slice(&[])], &types);
+        let result = compiled.evaluate(&batch).unwrap();
+        match &result.column {
+            TypedColumn::Bool { values, validity } => {
+                assert!(validity[0], "should not be null");
+                assert!(!values[0], "AND(FALSE, NULL) should be FALSE");
+            }
+            other => panic!("expected Bool column, got {other:?}"),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_or_true_dominates_null() {
+        // OR(TRUE, NULL) → TRUE
+        let engine = ExprEngine::new().unwrap();
+        let expr = or_expr(vec![lit_bool(true), lit_null_bool()]);
+        let types = vec![];
+        let compiled = engine.compile(&expr, &types).unwrap().unwrap();
+        let batch = rows_to_columns(&[Row::pack_slice(&[])], &types);
+        let result = compiled.evaluate(&batch).unwrap();
+        match &result.column {
+            TypedColumn::Bool { values, validity } => {
+                assert!(validity[0], "should not be null");
+                assert!(values[0], "OR(TRUE, NULL) should be TRUE");
+            }
+            other => panic!("expected Bool column, got {other:?}"),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_and_null_and_true_is_null() {
+        // AND(NULL, TRUE) → NULL
+        let engine = ExprEngine::new().unwrap();
+        let expr = and_expr(vec![lit_null_bool(), lit_bool(true)]);
+        let types = vec![];
+        let compiled = engine.compile(&expr, &types).unwrap().unwrap();
+        let batch = rows_to_columns(&[Row::pack_slice(&[])], &types);
+        let result = compiled.evaluate(&batch).unwrap();
+        match &result.column {
+            TypedColumn::Bool { validity, .. } => {
+                assert!(!validity[0], "AND(NULL, TRUE) should be NULL");
+            }
+            other => panic!("expected Bool column, got {other:?}"),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_or_null_and_false_is_null() {
+        // OR(NULL, FALSE) → NULL
+        let engine = ExprEngine::new().unwrap();
+        let expr = or_expr(vec![lit_null_bool(), lit_bool(false)]);
+        let types = vec![];
+        let compiled = engine.compile(&expr, &types).unwrap().unwrap();
+        let batch = rows_to_columns(&[Row::pack_slice(&[])], &types);
+        let result = compiled.evaluate(&batch).unwrap();
+        match &result.column {
+            TypedColumn::Bool { validity, .. } => {
+                assert!(!validity[0], "OR(NULL, FALSE) should be NULL");
+            }
+            other => panic!("expected Bool column, got {other:?}"),
+        }
     }
 }

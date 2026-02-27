@@ -19,8 +19,11 @@
 //! * `CallUnary` with a supported Int64 unary function (neg, bitnot, abs)
 //!   where the child is compilable
 //! * `CallUnary` with `Not` where the child infers to Bool and is compilable
+//! * `CallUnary` with `IsNull` where the child is compilable (any type)
+//! * `CallUnary` with `IsTrue`/`IsFalse` where the child infers to Bool and is compilable
+//! * `CallVariadic` with `And`/`Or` where all children infer to Bool and are compilable
 
-use mz_expr::MirScalarExpr;
+use mz_expr::{MapFilterProject, MirScalarExpr};
 use mz_repr::{Datum, SqlScalarType};
 
 /// Infers the output scalar type of an expression, given column types.
@@ -62,8 +65,18 @@ pub fn infer_type(expr: &MirScalarExpr, input_types: &[SqlScalarType]) -> Option
                 UnaryFunc::NegInt64(_) | UnaryFunc::BitNotInt64(_) | UnaryFunc::AbsInt64(_) => {
                     Some(SqlScalarType::Int64)
                 }
-                // Not produces Bool.
-                UnaryFunc::Not(_) => Some(SqlScalarType::Bool),
+                // Bool-producing unary ops.
+                UnaryFunc::Not(_)
+                | UnaryFunc::IsNull(_)
+                | UnaryFunc::IsTrue(_)
+                | UnaryFunc::IsFalse(_) => Some(SqlScalarType::Bool),
+                _ => None,
+            }
+        }
+        MirScalarExpr::CallVariadic { func, .. } => {
+            use mz_expr::VariadicFunc;
+            match func {
+                VariadicFunc::And(_) | VariadicFunc::Or(_) => Some(SqlScalarType::Bool),
                 _ => None,
             }
         }
@@ -104,9 +117,23 @@ pub fn is_compilable(expr: &MirScalarExpr, input_types: &[SqlScalarType]) -> boo
             if is_int64_unary_func(func) {
                 is_compilable(expr, input_types)
             } else if is_bool_unary_func(func) {
-                // Not: compilable iff child infers to Bool and is compilable.
+                // Not/IsTrue/IsFalse: compilable iff child infers to Bool and is compilable.
                 infer_type(expr, input_types) == Some(SqlScalarType::Bool)
                     && is_compilable(expr, input_types)
+            } else if is_null_consuming_unary_func(func) {
+                // IsNull: compilable for any child type.
+                is_compilable(expr, input_types)
+            } else {
+                false
+            }
+        }
+        MirScalarExpr::CallVariadic { func, exprs } => {
+            if is_bool_variadic_func(func) {
+                // And/Or: compilable when all children infer to Bool and are compilable.
+                exprs.iter().all(|e| {
+                    infer_type(e, input_types) == Some(SqlScalarType::Bool)
+                        && is_compilable(e, input_types)
+                })
             } else {
                 false
             }
@@ -154,10 +181,25 @@ fn is_int64_unary_func(func: &mz_expr::UnaryFunc) -> bool {
     )
 }
 
-/// Returns `true` if the unary function is a Bool operation.
+/// Returns `true` if the unary function is a Bool-to-Bool operation.
 fn is_bool_unary_func(func: &mz_expr::UnaryFunc) -> bool {
     use mz_expr::UnaryFunc;
-    matches!(func, UnaryFunc::Not(_))
+    matches!(
+        func,
+        UnaryFunc::Not(_) | UnaryFunc::IsTrue(_) | UnaryFunc::IsFalse(_)
+    )
+}
+
+/// Returns `true` if the unary function is a null-consuming operation (any input type).
+fn is_null_consuming_unary_func(func: &mz_expr::UnaryFunc) -> bool {
+    use mz_expr::UnaryFunc;
+    matches!(func, UnaryFunc::IsNull(_))
+}
+
+/// Returns `true` if the variadic function is a Bool operation (And/Or).
+fn is_bool_variadic_func(func: &mz_expr::VariadicFunc) -> bool {
+    use mz_expr::VariadicFunc;
+    matches!(func, VariadicFunc::And(_) | VariadicFunc::Or(_))
 }
 
 /// Collects the set of input column indices referenced by a compilable expression.
@@ -180,7 +222,116 @@ fn collect_columns(expr: &MirScalarExpr, out: &mut Vec<usize>) {
         MirScalarExpr::CallUnary { expr, .. } => {
             collect_columns(expr, out);
         }
+        MirScalarExpr::CallVariadic { exprs, .. } => {
+            for e in exprs {
+                collect_columns(e, out);
+            }
+        }
         _ => {}
+    }
+}
+
+/// Infers input column types from the operations used in an MFP.
+///
+/// Scans all expressions and predicates to find typed operations that constrain
+/// column types. For example, if a column appears as an operand of `AddInt64`,
+/// it must be `Int64`. If it appears as an operand of `Not`, it must be `Bool`.
+///
+/// Returns a `Vec<SqlScalarType>` with `input_arity` entries. Columns that
+/// cannot be inferred default to `Int64` for backwards compatibility.
+pub fn infer_input_types_from_mfp(mfp: &MapFilterProject) -> Vec<SqlScalarType> {
+    let mut types: Vec<Option<SqlScalarType>> = vec![None; mfp.input_arity];
+
+    // Walk all expressions and predicates.
+    for expr in &mfp.expressions {
+        infer_column_types_from_expr(expr, &mut types);
+    }
+    for (_support, predicate) in &mfp.predicates {
+        infer_column_types_from_expr(predicate, &mut types);
+    }
+
+    // Default unknown columns to Int64.
+    types
+        .into_iter()
+        .map(|t| t.unwrap_or(SqlScalarType::Int64))
+        .collect()
+}
+
+/// Recursively walks an expression, setting column types based on typed operations.
+fn infer_column_types_from_expr(expr: &MirScalarExpr, types: &mut Vec<Option<SqlScalarType>>) {
+    match expr {
+        MirScalarExpr::CallBinary { func, expr1, expr2 } => {
+            if is_int64_binary_func(func) {
+                // Both operands must be Int64.
+                set_column_type(expr1, SqlScalarType::Int64, types);
+                set_column_type(expr2, SqlScalarType::Int64, types);
+            } else if is_comparison_func(func) {
+                // Propagate: if one side has a known type and the other is a column,
+                // propagate the type. Both sides are typically Int64 for compilable comparisons.
+                propagate_comparison_types(expr1, expr2, types);
+            }
+            infer_column_types_from_expr(expr1, types);
+            infer_column_types_from_expr(expr2, types);
+        }
+        MirScalarExpr::CallUnary { func, expr } => {
+            use mz_expr::UnaryFunc;
+            match func {
+                UnaryFunc::NegInt64(_) | UnaryFunc::BitNotInt64(_) | UnaryFunc::AbsInt64(_) => {
+                    set_column_type(expr, SqlScalarType::Int64, types);
+                }
+                UnaryFunc::Not(_) | UnaryFunc::IsTrue(_) | UnaryFunc::IsFalse(_) => {
+                    set_column_type(expr, SqlScalarType::Bool, types);
+                }
+                _ => {}
+            }
+            infer_column_types_from_expr(expr, types);
+        }
+        MirScalarExpr::CallVariadic { func, exprs } => {
+            use mz_expr::VariadicFunc;
+            if matches!(func, VariadicFunc::And(_) | VariadicFunc::Or(_)) {
+                for e in exprs {
+                    set_column_type(e, SqlScalarType::Bool, types);
+                }
+            }
+            for e in exprs {
+                infer_column_types_from_expr(e, types);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Sets the type for a column reference if the expression is a direct column ref.
+fn set_column_type(expr: &MirScalarExpr, ty: SqlScalarType, types: &mut [Option<SqlScalarType>]) {
+    if let MirScalarExpr::Column(idx, _) = expr {
+        if *idx < types.len() {
+            types[*idx] = Some(ty);
+        }
+    }
+}
+
+/// For a comparison, propagate types between the two operands.
+/// If one side is a typed operation (e.g., AddInt64) and the other is a column,
+/// propagate the inferred type.
+fn propagate_comparison_types(
+    expr1: &MirScalarExpr,
+    expr2: &MirScalarExpr,
+    types: &mut [Option<SqlScalarType>],
+) {
+    // Use a simple Vec<SqlScalarType> snapshot for infer_type calls.
+    let snapshot: Vec<SqlScalarType> = types
+        .iter()
+        .map(|t| t.clone().unwrap_or(SqlScalarType::Int64))
+        .collect();
+
+    let ty1 = infer_type(expr1, &snapshot);
+    let ty2 = infer_type(expr2, &snapshot);
+
+    if let Some(ty) = ty1 {
+        set_column_type(expr2, ty, types);
+    }
+    if let Some(ty) = ty2 {
+        set_column_type(expr1, ty, types);
     }
 }
 
@@ -317,7 +468,7 @@ mod tests {
 
     #[mz_ore::test]
     fn test_unsupported_not_compilable() {
-        // CallVariadic is not supported
+        // Coalesce is not supported.
         let expr = MirScalarExpr::CallVariadic {
             func: mz_expr::VariadicFunc::Coalesce(mz_expr::func::variadic::Coalesce),
             exprs: vec![col(0)],
@@ -325,10 +476,186 @@ mod tests {
         assert!(!is_compilable(&expr, &[]));
     }
 
+    // --- And/Or compilability ---
+
+    fn and_expr(children: Vec<MirScalarExpr>) -> MirScalarExpr {
+        MirScalarExpr::CallVariadic {
+            func: mz_expr::VariadicFunc::And(mz_expr::func::variadic::And),
+            exprs: children,
+        }
+    }
+
+    fn or_expr(children: Vec<MirScalarExpr>) -> MirScalarExpr {
+        MirScalarExpr::CallVariadic {
+            func: mz_expr::VariadicFunc::Or(mz_expr::func::variadic::Or),
+            exprs: children,
+        }
+    }
+
+    fn is_null(a: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallUnary {
+            func: UnaryFunc::IsNull(mz_expr::func::IsNull),
+            expr: Box::new(a),
+        }
+    }
+
+    fn is_true(a: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallUnary {
+            func: UnaryFunc::IsTrue(mz_expr::func::IsTrue),
+            expr: Box::new(a),
+        }
+    }
+
+    fn is_false(a: MirScalarExpr) -> MirScalarExpr {
+        MirScalarExpr::CallUnary {
+            func: UnaryFunc::IsFalse(mz_expr::func::IsFalse),
+            expr: Box::new(a),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_and_is_compilable() {
+        let types = vec![SqlScalarType::Bool, SqlScalarType::Bool];
+        assert!(is_compilable(&and_expr(vec![col(0), col(1)]), &types));
+        // And with comparison children.
+        let int_types = vec![SqlScalarType::Int64, SqlScalarType::Int64];
+        assert!(is_compilable(
+            &and_expr(vec![lt(col(0), col(1)), eq(col(0), lit_i64(0))]),
+            &int_types
+        ));
+    }
+
+    #[mz_ore::test]
+    fn test_or_is_compilable() {
+        let types = vec![SqlScalarType::Bool, SqlScalarType::Bool];
+        assert!(is_compilable(&or_expr(vec![col(0), col(1)]), &types));
+    }
+
+    #[mz_ore::test]
+    fn test_and_non_bool_not_compilable() {
+        // And with Int64 children — not compilable.
+        let types = vec![SqlScalarType::Int64, SqlScalarType::Int64];
+        assert!(!is_compilable(&and_expr(vec![col(0), col(1)]), &types));
+    }
+
+    #[mz_ore::test]
+    fn test_is_null_is_compilable() {
+        let int_types = vec![SqlScalarType::Int64];
+        assert!(is_compilable(&is_null(col(0)), &int_types));
+        let bool_types = vec![SqlScalarType::Bool];
+        assert!(is_compilable(&is_null(col(0)), &bool_types));
+        // IsNull of a nested expression.
+        assert!(is_compilable(
+            &is_null(add_i64(col(0), lit_i64(1))),
+            &int_types
+        ));
+    }
+
+    #[mz_ore::test]
+    fn test_is_true_is_compilable() {
+        let bool_types = vec![SqlScalarType::Bool];
+        assert!(is_compilable(&is_true(col(0)), &bool_types));
+        // IsTrue of comparison.
+        let int_types = vec![SqlScalarType::Int64, SqlScalarType::Int64];
+        assert!(is_compilable(&is_true(lt(col(0), col(1))), &int_types));
+    }
+
+    #[mz_ore::test]
+    fn test_is_false_is_compilable() {
+        let bool_types = vec![SqlScalarType::Bool];
+        assert!(is_compilable(&is_false(col(0)), &bool_types));
+    }
+
+    #[mz_ore::test]
+    fn test_is_true_non_bool_not_compilable() {
+        // IsTrue on Int64 column — not compilable (child must be Bool).
+        let types = vec![SqlScalarType::Int64];
+        assert!(!is_compilable(&is_true(col(0)), &types));
+    }
+
+    #[mz_ore::test]
+    fn test_infer_type_and_or() {
+        let types = vec![SqlScalarType::Bool, SqlScalarType::Bool];
+        assert_eq!(
+            infer_type(&and_expr(vec![col(0), col(1)]), &types),
+            Some(SqlScalarType::Bool)
+        );
+        assert_eq!(
+            infer_type(&or_expr(vec![col(0), col(1)]), &types),
+            Some(SqlScalarType::Bool)
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_infer_type_is_null_true_false() {
+        let types = vec![SqlScalarType::Int64];
+        assert_eq!(
+            infer_type(&is_null(col(0)), &types),
+            Some(SqlScalarType::Bool)
+        );
+        let bool_types = vec![SqlScalarType::Bool];
+        assert_eq!(
+            infer_type(&is_true(col(0)), &bool_types),
+            Some(SqlScalarType::Bool)
+        );
+        assert_eq!(
+            infer_type(&is_false(col(0)), &bool_types),
+            Some(SqlScalarType::Bool)
+        );
+    }
+
+    // --- Input type inference from MFP ---
+
+    #[mz_ore::test]
+    fn test_infer_input_types_from_mfp_simple_add() {
+        // MFP: col(0) + col(1), input_arity=2
+        let mfp = MapFilterProject {
+            expressions: vec![add_i64(col(0), col(1))],
+            predicates: vec![],
+            projection: vec![0, 1, 2],
+            input_arity: 2,
+        };
+        let types = infer_input_types_from_mfp(&mfp);
+        assert_eq!(types, vec![SqlScalarType::Int64, SqlScalarType::Int64]);
+    }
+
+    #[mz_ore::test]
+    fn test_infer_input_types_from_mfp_comparison_predicate() {
+        // MFP: predicate col(0) < 42, input_arity=2
+        let mfp = MapFilterProject {
+            expressions: vec![],
+            predicates: vec![(2, lt(col(0), lit_i64(42)))],
+            projection: vec![0, 1],
+            input_arity: 2,
+        };
+        let types = infer_input_types_from_mfp(&mfp);
+        // col(0) is compared against a literal Int64, so should be inferred as Int64.
+        assert_eq!(types[0], SqlScalarType::Int64);
+    }
+
+    #[mz_ore::test]
+    fn test_infer_input_types_from_mfp_bool_not() {
+        // MFP: predicate NOT(col(0)), input_arity=1
+        let mfp = MapFilterProject {
+            expressions: vec![],
+            predicates: vec![(1, not(col(0)))],
+            projection: vec![0],
+            input_arity: 1,
+        };
+        let types = infer_input_types_from_mfp(&mfp);
+        assert_eq!(types[0], SqlScalarType::Bool);
+    }
+
     #[mz_ore::test]
     fn test_referenced_columns() {
         let expr = add_i64(col(0), add_i64(col(2), col(0)));
         assert_eq!(referenced_columns(&expr), vec![0, 2]);
+    }
+
+    #[mz_ore::test]
+    fn test_referenced_columns_variadic() {
+        let expr = and_expr(vec![lt(col(0), col(1)), eq(col(2), col(0))]);
+        assert_eq!(referenced_columns(&expr), vec![0, 1, 2]);
     }
 
     #[mz_ore::test]

@@ -126,6 +126,14 @@ impl CompiledExprSession {
                         mem_data[values_ptr..values_ptr + 8].copy_from_slice(&v.to_le_bytes());
                         mem_data[validity_ptr] = 1;
                     }
+                    Datum::True => {
+                        mem_data[values_ptr..values_ptr + 8].copy_from_slice(&1i64.to_le_bytes());
+                        mem_data[validity_ptr] = 1;
+                    }
+                    Datum::False => {
+                        mem_data[values_ptr..values_ptr + 8].copy_from_slice(&0i64.to_le_bytes());
+                        mem_data[validity_ptr] = 1;
+                    }
                     Datum::Null => {
                         mem_data[values_ptr..values_ptr + 8].copy_from_slice(&0i64.to_le_bytes());
                         mem_data[validity_ptr] = 0;

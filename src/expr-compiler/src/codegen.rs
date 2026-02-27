@@ -14,7 +14,7 @@
 //! and exports an `eval` function that loops over rows, reading input columns, computing
 //! the expression, and writing the result column.
 
-use mz_expr::{BinaryFunc, MirScalarExpr, UnaryFunc};
+use mz_expr::{BinaryFunc, MirScalarExpr, UnaryFunc, VariadicFunc};
 use mz_repr::Datum;
 use wasm_encoder::{
     CodeSection, EntityType, ExportKind, ExportSection, FunctionSection, ImportSection,
@@ -107,6 +107,9 @@ pub fn generate_wasm(
         (1, ValType::I64), // temp operand a (for overflow detection)
         (1, ValType::I64), // temp operand b (for overflow detection)
         (1, ValType::I32), // saved null flag (for restoring is_null across subtrees)
+        (1, ValType::I32), // any_dominant flag (for And/Or three-valued logic)
+        (1, ValType::I32), // any_null flag (for And/Or three-valued logic)
+        (1, ValType::I32), // saved caller is_null for And/Or (survives nested And/Or)
     ]);
 
     // Local variable indices:
@@ -122,6 +125,9 @@ pub fn generate_wasm(
     // (num_params+4): operand_a (i64)
     // (num_params+5): operand_b (i64)
     // (num_params+6): saved_null (i32)
+    // (num_params+7): any_dominant (i32) — for And/Or
+    // (num_params+8): any_null (i32) — for And/Or
+    // (num_params+9): saved_caller_null (i32) — for And/Or nesting
     #[allow(clippy::as_conversions)]
     let local_i = num_params as u32;
     let local_result = local_i + 1;
@@ -130,6 +136,9 @@ pub fn generate_wasm(
     let local_a = local_i + 4;
     let local_b = local_i + 5;
     let local_saved_null = local_i + 6;
+    let local_any_dominant = local_i + 7;
+    let local_any_null = local_i + 8;
+    let local_saved_caller_null = local_i + 9;
 
     #[allow(clippy::as_conversions)]
     let out_ptr_local = (1 + num_input_cols * 2) as u32;
@@ -171,6 +180,9 @@ pub fn generate_wasm(
         local_a,
         local_b,
         local_saved_null,
+        local_any_dominant,
+        local_any_null,
+        local_saved_caller_null,
     );
     func.instruction(&Instruction::LocalSet(local_result));
 
@@ -239,6 +251,9 @@ struct EmitLocals {
     local_a: u32,
     local_b: u32,
     local_saved_null: u32,
+    local_any_dominant: u32,
+    local_any_null: u32,
+    local_saved_caller_null: u32,
 }
 
 /// Emits WASM instructions that evaluate `expr` and leave an i64 result on the stack.
@@ -256,6 +271,9 @@ fn emit_expr(
     local_a: u32,
     local_b: u32,
     local_saved_null: u32,
+    local_any_dominant: u32,
+    local_any_null: u32,
+    local_saved_caller_null: u32,
 ) {
     let l = EmitLocals {
         local_i,
@@ -265,6 +283,9 @@ fn emit_expr(
         local_a,
         local_b,
         local_saved_null,
+        local_any_dominant,
+        local_any_null,
+        local_saved_caller_null,
     };
     match expr {
         MirScalarExpr::Column(idx, _) => {
@@ -373,7 +394,16 @@ fn emit_expr(
             UnaryFunc::BitNotInt64(_) => emit_bit_not_int64(func, child, col_to_param, &l),
             UnaryFunc::AbsInt64(_) => emit_abs_int64(func, child, col_to_param, &l),
             UnaryFunc::Not(_) => emit_not(func, child, col_to_param, &l),
+            UnaryFunc::IsNull(_) => emit_is_null(func, child, col_to_param, &l),
+            UnaryFunc::IsTrue(_) => emit_is_true(func, child, col_to_param, &l),
+            UnaryFunc::IsFalse(_) => emit_is_false(func, child, col_to_param, &l),
             _ => unreachable!("analyze ensures only supported unary functions"),
+        },
+
+        MirScalarExpr::CallVariadic { func: vf, exprs } => match vf {
+            VariadicFunc::And(_) => emit_and(func, exprs, col_to_param, &l),
+            VariadicFunc::Or(_) => emit_or(func, exprs, col_to_param, &l),
+            _ => unreachable!("analyze ensures only supported variadic functions"),
         },
 
         _ => unreachable!("analyze ensures only compilable expressions"),
@@ -413,6 +443,9 @@ fn emit_binary_preamble(
         l.local_a,
         l.local_b,
         l.local_saved_null,
+        l.local_any_dominant,
+        l.local_any_null,
+        l.local_saved_caller_null,
     );
     // Stack: [saved_null(i32), a(i64)]
     emit_expr(
@@ -426,6 +459,9 @@ fn emit_binary_preamble(
         l.local_a,
         l.local_b,
         l.local_saved_null,
+        l.local_any_dominant,
+        l.local_any_null,
+        l.local_saved_caller_null,
     );
     // Stack: [saved_null(i32), a(i64), b(i64)]
 
@@ -471,6 +507,9 @@ fn emit_unary_preamble(
         l.local_a,
         l.local_b,
         l.local_saved_null,
+        l.local_any_dominant,
+        l.local_any_null,
+        l.local_saved_caller_null,
     );
     // Stack: [saved_null(i32), a(i64)]
 
@@ -793,6 +832,9 @@ fn emit_bitwise_int64(
         l.local_a,
         l.local_b,
         l.local_saved_null,
+        l.local_any_dominant,
+        l.local_any_null,
+        l.local_saved_caller_null,
     );
     emit_expr(
         func,
@@ -805,6 +847,9 @@ fn emit_bitwise_int64(
         l.local_a,
         l.local_b,
         l.local_saved_null,
+        l.local_any_dominant,
+        l.local_any_null,
+        l.local_saved_caller_null,
     );
     // Stack: [a, b]
     func.instruction(op);
@@ -835,6 +880,9 @@ fn emit_comparison_int64(
         l.local_a,
         l.local_b,
         l.local_saved_null,
+        l.local_any_dominant,
+        l.local_any_null,
+        l.local_saved_caller_null,
     );
     emit_expr(
         func,
@@ -847,6 +895,9 @@ fn emit_comparison_int64(
         l.local_a,
         l.local_b,
         l.local_saved_null,
+        l.local_any_dominant,
+        l.local_any_null,
+        l.local_saved_caller_null,
     );
     // Stack: [a(i64), b(i64)]
     func.instruction(cmp_instruction);
@@ -875,6 +926,9 @@ fn emit_not(
         l.local_a,
         l.local_b,
         l.local_saved_null,
+        l.local_any_dominant,
+        l.local_any_null,
+        l.local_saved_caller_null,
     );
     // Stack: [a(i64)]
     func.instruction(&Instruction::I64Eqz);
@@ -944,6 +998,9 @@ fn emit_bit_not_int64(
         l.local_a,
         l.local_b,
         l.local_saved_null,
+        l.local_any_dominant,
+        l.local_any_null,
+        l.local_saved_caller_null,
     );
     // Stack: [a]
     func.instruction(&Instruction::I64Const(-1));
@@ -1002,6 +1059,285 @@ fn emit_abs_int64(
     func.instruction(&Instruction::End);
 
     emit_merge_null_and_push_result(func, l);
+}
+
+/// Helper to call `emit_expr` using `EmitLocals`.
+fn emit_child(
+    func: &mut wasm_encoder::Function,
+    expr: &MirScalarExpr,
+    col_to_param: &std::collections::BTreeMap<usize, usize>,
+    l: &EmitLocals,
+) {
+    emit_expr(
+        func,
+        expr,
+        col_to_param,
+        l.local_i,
+        l.local_result,
+        l.local_is_null,
+        l.local_is_error,
+        l.local_a,
+        l.local_b,
+        l.local_saved_null,
+        l.local_any_dominant,
+        l.local_any_null,
+        l.local_saved_caller_null,
+    );
+}
+
+/// Emits WASM for `IsNull(child)`. Null-consuming: output is never null.
+///
+/// `is_null(NULL) = TRUE (1)`, `is_null(non-NULL) = FALSE (0)`.
+fn emit_is_null(
+    func: &mut wasm_encoder::Function,
+    expr: &MirScalarExpr,
+    col_to_param: &std::collections::BTreeMap<usize, usize>,
+    l: &EmitLocals,
+) {
+    // Save current is_null onto local_saved_null and reset.
+    func.instruction(&Instruction::LocalGet(l.local_is_null));
+    func.instruction(&Instruction::LocalSet(l.local_saved_null));
+    func.instruction(&Instruction::I32Const(0));
+    func.instruction(&Instruction::LocalSet(l.local_is_null));
+
+    emit_child(func, expr, col_to_param, l);
+    // Stack: [child_val(i64)]
+    func.instruction(&Instruction::Drop);
+
+    // Result = child's is_null flag, widened to i64.
+    func.instruction(&Instruction::LocalGet(l.local_is_null));
+    func.instruction(&Instruction::I64ExtendI32U);
+    // Stack: [result(i64)]
+
+    // Restore original is_null (IsNull consumes child nullness).
+    func.instruction(&Instruction::LocalGet(l.local_saved_null));
+    func.instruction(&Instruction::LocalSet(l.local_is_null));
+}
+
+/// Emits WASM for `IsTrue(child)`. Null-consuming: output is never null.
+///
+/// `is_true(TRUE) = TRUE`, `is_true(FALSE) = FALSE`, `is_true(NULL) = FALSE`.
+fn emit_is_true(
+    func: &mut wasm_encoder::Function,
+    expr: &MirScalarExpr,
+    col_to_param: &std::collections::BTreeMap<usize, usize>,
+    l: &EmitLocals,
+) {
+    // Save current is_null and reset.
+    func.instruction(&Instruction::LocalGet(l.local_is_null));
+    func.instruction(&Instruction::LocalSet(l.local_saved_null));
+    func.instruction(&Instruction::I32Const(0));
+    func.instruction(&Instruction::LocalSet(l.local_is_null));
+
+    emit_child(func, expr, col_to_param, l);
+    // Stack: [child_val(i64)]
+    func.instruction(&Instruction::LocalSet(l.local_a));
+
+    // Result = (not null) AND (value != 0)
+    func.instruction(&Instruction::LocalGet(l.local_is_null));
+    func.instruction(&Instruction::I32Eqz); // not_null flag
+    func.instruction(&Instruction::LocalGet(l.local_a));
+    func.instruction(&Instruction::I64Const(0));
+    func.instruction(&Instruction::I64Ne); // value != 0
+    func.instruction(&Instruction::I32And); // both conditions
+    func.instruction(&Instruction::I64ExtendI32U);
+    // Stack: [result(i64)]
+
+    // Restore original is_null.
+    func.instruction(&Instruction::LocalGet(l.local_saved_null));
+    func.instruction(&Instruction::LocalSet(l.local_is_null));
+}
+
+/// Emits WASM for `IsFalse(child)`. Null-consuming: output is never null.
+///
+/// `is_false(FALSE) = TRUE`, `is_false(TRUE) = FALSE`, `is_false(NULL) = FALSE`.
+fn emit_is_false(
+    func: &mut wasm_encoder::Function,
+    expr: &MirScalarExpr,
+    col_to_param: &std::collections::BTreeMap<usize, usize>,
+    l: &EmitLocals,
+) {
+    // Save current is_null and reset.
+    func.instruction(&Instruction::LocalGet(l.local_is_null));
+    func.instruction(&Instruction::LocalSet(l.local_saved_null));
+    func.instruction(&Instruction::I32Const(0));
+    func.instruction(&Instruction::LocalSet(l.local_is_null));
+
+    emit_child(func, expr, col_to_param, l);
+    // Stack: [child_val(i64)]
+    func.instruction(&Instruction::LocalSet(l.local_a));
+
+    // Result = (not null) AND (value == 0)
+    func.instruction(&Instruction::LocalGet(l.local_is_null));
+    func.instruction(&Instruction::I32Eqz); // not_null flag
+    func.instruction(&Instruction::LocalGet(l.local_a));
+    func.instruction(&Instruction::I64Eqz); // value == 0 (returns i32)
+    func.instruction(&Instruction::I32And); // both conditions
+    func.instruction(&Instruction::I64ExtendI32U);
+    // Stack: [result(i64)]
+
+    // Restore original is_null.
+    func.instruction(&Instruction::LocalGet(l.local_saved_null));
+    func.instruction(&Instruction::LocalSet(l.local_is_null));
+}
+
+/// Emits WASM for `AND(children...)` with three-valued null logic.
+///
+/// FALSE dominates: if any child is FALSE, return FALSE even if others are NULL.
+/// Result: if any FALSE → FALSE(0); else if any NULL → NULL; else TRUE(1).
+fn emit_and(
+    func: &mut wasm_encoder::Function,
+    exprs: &[MirScalarExpr],
+    col_to_param: &std::collections::BTreeMap<usize, usize>,
+    l: &EmitLocals,
+) {
+    emit_and_or(func, exprs, col_to_param, l, true);
+}
+
+/// Emits WASM for `OR(children...)` with three-valued null logic.
+///
+/// TRUE dominates: if any child is TRUE, return TRUE even if others are NULL.
+/// Result: if any TRUE → TRUE(1); else if any NULL → NULL; else FALSE(0).
+fn emit_or(
+    func: &mut wasm_encoder::Function,
+    exprs: &[MirScalarExpr],
+    col_to_param: &std::collections::BTreeMap<usize, usize>,
+    l: &EmitLocals,
+) {
+    emit_and_or(func, exprs, col_to_param, l, false);
+}
+
+/// Shared implementation for And/Or with three-valued null logic.
+///
+/// `is_and == true` → And (FALSE dominates), `is_and == false` → Or (TRUE dominates).
+fn emit_and_or(
+    func: &mut wasm_encoder::Function,
+    exprs: &[MirScalarExpr],
+    col_to_param: &std::collections::BTreeMap<usize, usize>,
+    l: &EmitLocals,
+    is_and: bool,
+) {
+    // Save caller's is_null into local_saved_caller_null (local_saved_null would be
+    // clobbered by nested And/Or or unary preamble calls).
+    func.instruction(&Instruction::LocalGet(l.local_is_null));
+    func.instruction(&Instruction::LocalSet(l.local_saved_caller_null));
+
+    // Reset is_null for this And/Or.
+    func.instruction(&Instruction::I32Const(0));
+    func.instruction(&Instruction::LocalSet(l.local_is_null));
+
+    // Initialize tracking locals.
+    func.instruction(&Instruction::I32Const(0));
+    func.instruction(&Instruction::LocalSet(l.local_any_dominant)); // no dominant value seen
+    func.instruction(&Instruction::I32Const(0));
+    func.instruction(&Instruction::LocalSet(l.local_any_null)); // no NULL seen
+
+    for child in exprs {
+        // Save any_dominant and any_null on the WASM stack before evaluating the child,
+        // because a nested And/Or child will clobber these locals.
+        func.instruction(&Instruction::LocalGet(l.local_any_dominant));
+        func.instruction(&Instruction::LocalGet(l.local_any_null));
+        // Stack: [saved_any_dominant(i32), saved_any_null(i32)]
+
+        // Reset is_null for this child.
+        func.instruction(&Instruction::I32Const(0));
+        func.instruction(&Instruction::LocalSet(l.local_is_null));
+
+        emit_child(func, child, col_to_param, l);
+        // Stack: [saved_any_dominant, saved_any_null, child_val(i64)]
+        func.instruction(&Instruction::LocalSet(l.local_result));
+        // Stack: [saved_any_dominant, saved_any_null]
+
+        // Restore any_null and any_dominant from WASM stack (reverse order).
+        func.instruction(&Instruction::LocalSet(l.local_any_null));
+        func.instruction(&Instruction::LocalSet(l.local_any_dominant));
+        // Stack: []
+
+        // Check if child is null.
+        func.instruction(&Instruction::LocalGet(l.local_is_null));
+        func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+        {
+            // Child is null: mark any_null.
+            func.instruction(&Instruction::I32Const(1));
+            func.instruction(&Instruction::LocalSet(l.local_any_null));
+        }
+        func.instruction(&Instruction::Else);
+        {
+            // Child is not null: check for dominant value.
+            if is_and {
+                // AND: FALSE (0) is dominant.
+                func.instruction(&Instruction::LocalGet(l.local_result));
+                func.instruction(&Instruction::I64Eqz); // value == 0 → child is FALSE
+            } else {
+                // OR: TRUE (nonzero) is dominant.
+                func.instruction(&Instruction::LocalGet(l.local_result));
+                func.instruction(&Instruction::I64Const(0));
+                func.instruction(&Instruction::I64Ne); // value != 0 → child is TRUE
+            }
+            func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+            {
+                func.instruction(&Instruction::I32Const(1));
+                func.instruction(&Instruction::LocalSet(l.local_any_dominant));
+            }
+            func.instruction(&Instruction::End);
+        }
+        func.instruction(&Instruction::End);
+    }
+
+    // After all children: produce result.
+    // Reset is_null to 0 (And/Or control null explicitly).
+    func.instruction(&Instruction::I32Const(0));
+    func.instruction(&Instruction::LocalSet(l.local_is_null));
+
+    // If any_dominant: result is the dominant value, is_null stays 0.
+    func.instruction(&Instruction::LocalGet(l.local_any_dominant));
+    func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    {
+        if is_and {
+            // AND dominant = FALSE → result = 0
+            func.instruction(&Instruction::I64Const(0));
+        } else {
+            // OR dominant = TRUE → result = 1
+            func.instruction(&Instruction::I64Const(1));
+        }
+        func.instruction(&Instruction::LocalSet(l.local_result));
+    }
+    func.instruction(&Instruction::Else);
+    {
+        // No dominant. Check any_null.
+        func.instruction(&Instruction::LocalGet(l.local_any_null));
+        func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+        {
+            // Some child was NULL, no dominant → result is NULL.
+            func.instruction(&Instruction::I32Const(1));
+            func.instruction(&Instruction::LocalSet(l.local_is_null));
+            func.instruction(&Instruction::I64Const(0)); // garbage, masked by null
+            func.instruction(&Instruction::LocalSet(l.local_result));
+        }
+        func.instruction(&Instruction::Else);
+        {
+            // No dominant, no null → all children had non-dominant value.
+            if is_and {
+                // AND: all TRUE → result = 1
+                func.instruction(&Instruction::I64Const(1));
+            } else {
+                // OR: all FALSE → result = 0
+                func.instruction(&Instruction::I64Const(0));
+            }
+            func.instruction(&Instruction::LocalSet(l.local_result));
+        }
+        func.instruction(&Instruction::End);
+    }
+    func.instruction(&Instruction::End);
+
+    // Merge caller's is_null (saved in local_saved_caller_null) into is_null.
+    func.instruction(&Instruction::LocalGet(l.local_is_null));
+    func.instruction(&Instruction::LocalGet(l.local_saved_caller_null));
+    func.instruction(&Instruction::I32Or);
+    func.instruction(&Instruction::LocalSet(l.local_is_null));
+
+    // Push result onto stack.
+    func.instruction(&Instruction::LocalGet(l.local_result));
 }
 
 #[cfg(test)]
