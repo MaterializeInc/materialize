@@ -62,7 +62,8 @@ use crate::catalog::Catalog;
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::WriteResult;
 use crate::coord::sequencer::validate_read_dependencies;
-use crate::coord::{ExecuteContextGuard, TargetCluster};
+use crate::coord::timestamp_selection::TimestampProvider;
+use crate::coord::{Coordinator, ExecuteContextGuard, TargetCluster};
 use crate::error::AdapterError;
 use crate::optimize::Optimize;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, EvalTime, ExprPrep, ExprPrepOneShot};
@@ -236,7 +237,7 @@ impl PeekClient {
             self.optimize_mir_read_then_write(catalog, session, &plan, cluster_id)?;
 
         // Determine timestamp and acquire read holds.
-        let oracle_read_ts = self.oracle_read_ts(&timeline).await;
+        let oracle_read_ts = self.oracle_read_ts(&timeline).await?;
         let bundle = global_mir_plan.id_bundle(cluster_id);
         let (determination, read_holds) = self
             .frontend_determine_timestamp(
@@ -503,16 +504,18 @@ impl PeekClient {
     }
 
     /// Get the oracle read timestamp for the timeline.
-    async fn oracle_read_ts(&mut self, timeline: &TimelineContext) -> Option<Timestamp> {
-        if matches!(timeline, TimelineContext::TimelineDependent(_)) {
-            let timeline = timeline.timeline().expect("timeline is set");
-            let oracle = match self.ensure_oracle(timeline.clone()).await {
-                Ok(oracle) => oracle,
-                Err(_) => return None,
-            };
-            Some(oracle.read_ts().await)
-        } else {
-            None
+    async fn oracle_read_ts(
+        &mut self,
+        timeline: &TimelineContext,
+    ) -> Result<Option<Timestamp>, AdapterError> {
+        let timeline = <Coordinator as TimestampProvider>::get_timeline(timeline);
+
+        match timeline {
+            Some(timeline) => {
+                let oracle = self.ensure_oracle(timeline).await?;
+                Ok(Some(oracle.read_ts().await))
+            }
+            None => Ok(None),
         }
     }
 
