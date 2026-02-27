@@ -1001,7 +1001,7 @@ fn normalize(text: &str, form_str: &str) -> Result<String, EvalError> {
     Hash,
     MzReflect
 )]
-pub struct IsLikeMatch(pub like_pattern::Matcher);
+pub struct IsLikeMatch(pub Box<like_pattern::Matcher>);
 
 impl EagerUnaryFunc for IsLikeMatch {
     type Input<'a> = &'a str;

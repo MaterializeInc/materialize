@@ -552,7 +552,7 @@ mod test {
             UnaryFunc::IsNull(IsNull),
             UnaryFunc::CastVarCharToString(CastVarCharToString),
             UnaryFunc::Not(Not),
-            UnaryFunc::IsLikeMatch(IsLikeMatch(like_pattern::compile("%hi%", false).unwrap())),
+            UnaryFunc::IsLikeMatch(IsLikeMatch(Box::new(like_pattern::compile("%hi%", false).unwrap()))),
         ] {
             assert!(!func.could_error())
         }

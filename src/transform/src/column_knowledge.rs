@@ -510,7 +510,7 @@ enum DatumKnowledge {
 impl From<&MirScalarExpr> for DatumKnowledge {
     fn from(expr: &MirScalarExpr) -> Self {
         if let MirScalarExpr::Literal(l, t) = expr {
-            let value = l.clone();
+            let value = l.as_ref().clone();
             let typ = t.scalar_type.clone();
             Self::Lit { value, typ }
         } else {
@@ -780,7 +780,7 @@ fn optimize(
                     let index = *index;
                     if let DatumKnowledge::Lit { value, typ } = &column_knowledge[index] {
                         *e = MirScalarExpr::Literal(
-                            value.clone(),
+                            Box::new(value.clone()),
                             typ.clone().nullable(column_knowledge[index].nullable()),
                         );
                     }

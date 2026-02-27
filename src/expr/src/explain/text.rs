@@ -1284,7 +1284,7 @@ where
             }
             Literal(row, _) => {
                 // Delegate to the `HumanizedExpr<'a, _>` implementation.
-                self.child(row).fmt(f)
+                self.child(row.as_ref()).fmt(f)
             }
             CallUnmaterializable(func) => write!(f, "{}()", func),
             CallUnary { func, expr } => {

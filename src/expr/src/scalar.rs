@@ -70,7 +70,10 @@ pub enum MirScalarExpr {
     Column(usize, TreatAsEqual<Option<Arc<str>>>),
     /// A literal value.
     /// (Stored as a row, because we can't own a Datum)
-    Literal(Result<Row, EvalError>, ReprColumnType),
+    ///
+    /// The result is boxed to keep the overall enum small (the Err variant,
+    /// EvalError, is 56 bytes, which would inflate every MirScalarExpr).
+    Literal(Box<Result<Row, EvalError>>, ReprColumnType),
     /// A call to an unmaterializable function.
     ///
     /// These functions cannot be evaluated by `MirScalarExpr::eval`. They must
@@ -153,7 +156,7 @@ impl MirScalarExpr {
             nullable: matches!(res, Ok(Datum::Null)),
         };
         let row = res.map(|datum| Row::pack_slice(&[datum]));
-        MirScalarExpr::Literal(row, typ)
+        MirScalarExpr::Literal(Box::new(row), typ)
     }
 
     pub fn literal_ok(datum: Datum, typ: ReprScalarType) -> Self {
@@ -174,7 +177,7 @@ impl MirScalarExpr {
             scalar_type: typ,
             nullable,
         };
-        MirScalarExpr::Literal(Ok(row), typ)
+        MirScalarExpr::Literal(Box::new(Ok(row)), typ)
     }
 
     pub fn literal_null(typ: ReprScalarType) -> Self {
@@ -519,7 +522,7 @@ impl MirScalarExpr {
     /// Otherwise, it returns None.
     pub fn as_literal(&self) -> Option<Result<Datum<'_>, &EvalError>> {
         if let MirScalarExpr::Literal(lit, _column_type) = self {
-            Some(lit.as_ref().map(|row| row.unpack_first()))
+            Some(lit.as_ref().as_ref().map(|row| row.unpack_first()))
         } else {
             None
         }
@@ -533,7 +536,7 @@ impl MirScalarExpr {
 
     pub fn as_literal_owned(&self) -> Option<Result<Row, EvalError>> {
         if let MirScalarExpr::Literal(lit, _column_type) = self {
-            Some(lit.clone())
+            Some(lit.as_ref().clone())
         } else {
             None
         }
@@ -574,11 +577,11 @@ impl MirScalarExpr {
     }
 
     pub fn is_literal_ok(&self) -> bool {
-        matches!(self, MirScalarExpr::Literal(Ok(_), _typ))
+        matches!(self, MirScalarExpr::Literal(result, _typ) if result.is_ok())
     }
 
     pub fn is_literal_err(&self) -> bool {
-        matches!(self, MirScalarExpr::Literal(Err(_), _typ))
+        matches!(self, MirScalarExpr::Literal(result, _typ) if result.is_err())
     }
 
     pub fn is_column(&self) -> bool {
@@ -826,7 +829,7 @@ impl MirScalarExpr {
                                 let pattern = expr2.as_literal_str().unwrap();
                                 *e = match like_pattern::compile(pattern, true) {
                                     Ok(matcher) => expr1.take().call_unary(UnaryFunc::IsLikeMatch(
-                                        func::IsLikeMatch(matcher),
+                                        func::IsLikeMatch(Box::new(matcher)),
                                     )),
                                     Err(err) => MirScalarExpr::literal(
                                         Err(err),
@@ -840,7 +843,7 @@ impl MirScalarExpr {
                                 let pattern = expr2.as_literal_str().unwrap();
                                 *e = match like_pattern::compile(pattern, false) {
                                     Ok(matcher) => expr1.take().call_unary(UnaryFunc::IsLikeMatch(
-                                        func::IsLikeMatch(matcher),
+                                        func::IsLikeMatch(Box::new(matcher)),
                                     )),
                                     Err(err) => MirScalarExpr::literal(
                                         Err(err),
@@ -855,7 +858,9 @@ impl MirScalarExpr {
                         ) {
                             let case_insensitive =
                                 matches!(func, BinaryFunc::IsRegexpMatchCaseInsensitive(_));
-                            if let MirScalarExpr::Literal(Ok(row), _) = &**expr2 {
+                            if let MirScalarExpr::Literal(result, _) = &**expr2
+                                && let Ok(row) = result.as_ref()
+                            {
                                 *e = match Regex::new(
                                     row.unpack_first().unwrap_str(),
                                     case_insensitive,
@@ -1102,7 +1107,7 @@ impl MirScalarExpr {
                         } else if let (
                             BinaryFunc::Eq(_),
                             MirScalarExpr::Literal(
-                                Ok(lit_row),
+                                result,
                                 ReprColumnType {
                                     scalar_type:
                                         ReprScalarType::Record {
@@ -1117,6 +1122,7 @@ impl MirScalarExpr {
                                 exprs: rec_create_args,
                             },
                         ) = (&*func, &**expr1, &**expr2)
+                            && let Ok(lit_row) = result.as_ref()
                         {
                             // Literal([c1, c2]) = record_create(e1, e2)
                             //  -->
@@ -1340,7 +1346,7 @@ impl MirScalarExpr {
                                 Ok(Datum::False) | Ok(Datum::Null) => *e = els.take(),
                                 Err(err) => {
                                     *e = MirScalarExpr::Literal(
-                                        Err(err.clone()),
+                                        Box::new(Err(err.clone())),
                                         then.typ(column_types)
                                             .union(&els.typ(column_types))
                                             .unwrap(),
@@ -2035,7 +2041,7 @@ impl MirScalarExpr {
     ) -> Result<Datum<'a>, EvalError> {
         match self {
             MirScalarExpr::Column(index, _name) => Ok(datums[*index]),
-            MirScalarExpr::Literal(res, _column_type) => match res {
+            MirScalarExpr::Literal(res, _column_type) => match res.as_ref() {
                 Ok(row) => Ok(row.unpack_first()),
                 Err(e) => Err(e.clone()),
             },
@@ -2109,8 +2115,8 @@ impl MirScalarExpr {
     pub fn contains_dummy(&self) -> bool {
         let mut contains = false;
         self.visit_pre(|e| {
-            if let MirScalarExpr::Literal(row, _) = e {
-                if let Ok(row) = row {
+            if let MirScalarExpr::Literal(result, _) = e {
+                if let Ok(row) = result.as_ref() {
                     contains |= row.iter().any(|d| d.contains_dummy());
                 }
             }
@@ -3402,5 +3408,17 @@ mod tests {
                 tc.output
             );
         }
+    }
+
+    /// Guard against accidental size regressions in key expression types.
+    /// These types are stored in large numbers throughout the system, so
+    /// keeping them small is important for memory efficiency.
+    #[mz_ore::test]
+    fn type_size_assertions() {
+        use std::mem::size_of;
+        assert_eq!(size_of::<MirScalarExpr>(), 72);
+        assert_eq!(size_of::<crate::UnaryFunc>(), 56);
+        assert_eq!(size_of::<crate::BinaryFunc>(), 48);
+        assert_eq!(size_of::<crate::VariadicFunc>(), 40);
     }
 }

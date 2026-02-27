@@ -978,7 +978,7 @@ impl HirScalarExpr {
 
             Ok::<MirScalarExpr, PlanError>(match self {
                 Column(col_ref, name) => SS::Column(col_map.get(&col_ref), name),
-                Literal(row, typ, _name) => SS::Literal(Ok(row), ReprColumnType::from(&typ)),
+                Literal(row, typ, _name) => SS::Literal(Box::new(Ok(row)), ReprColumnType::from(&typ)),
                 Parameter(_, _name) => {
                     panic!("cannot decorrelate expression with unbound parameters")
                 }
@@ -1691,7 +1691,7 @@ impl HirScalarExpr {
 
         Ok(match self {
             Column(ColumnRef { level: 0, column }, name) => SS::Column(column, name),
-            Literal(datum, typ, _name) => SS::Literal(Ok(datum), ReprColumnType::from(&typ)),
+            Literal(datum, typ, _name) => SS::Literal(Box::new(Ok(datum)), ReprColumnType::from(&typ)),
             CallUnmaterializable(func, _name) => SS::CallUnmaterializable(func),
             CallUnary {
                 func: func::UnaryFunc::CastVarCharToString(_),

@@ -1034,7 +1034,7 @@ mod scalar {
             }?
         };
 
-        Ok(MirScalarExpr::Literal(Ok(row), typ))
+        Ok(MirScalarExpr::Literal(Box::new(Ok(row)), typ))
     }
     fn parse_literal_err(input: ParseStream) -> Result {
         input.parse::<kw::error>()?;

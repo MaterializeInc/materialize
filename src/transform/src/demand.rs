@@ -199,7 +199,7 @@ impl Demand {
                             if !scalar.is_literal() {
                                 let typ = relation_type.column_types[arity + index].clone();
                                 *scalar = MirScalarExpr::Literal(
-                                    Ok(Row::pack_slice(&[Datum::Dummy])),
+                                    Box::new(Ok(Row::pack_slice(&[Datum::Dummy]))),
                                     typ,
                                 );
                             }

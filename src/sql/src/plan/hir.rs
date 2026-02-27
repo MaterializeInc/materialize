@@ -3634,7 +3634,10 @@ impl HirScalarExpr {
         // canonicalization is discarded.
         expr.reduce(&[]);
         match expr {
-            mz_expr::MirScalarExpr::Literal(Ok(row), _) => Some(row),
+            mz_expr::MirScalarExpr::Literal(result, _) => match *result {
+                Ok(row) => Some(row),
+                Err(_) => None,
+            },
             _ => None,
         }
     }
@@ -3662,10 +3665,14 @@ impl HirScalarExpr {
         // canonicalization is discarded.
         expr.reduce(&[]);
         match expr {
-            mz_expr::MirScalarExpr::Literal(Ok(row), _) => Ok(row),
-            mz_expr::MirScalarExpr::Literal(Err(err), _) => Err(
-                PlanError::ConstantExpressionSimplificationFailed(err.to_string_with_causes()),
-            ),
+            mz_expr::MirScalarExpr::Literal(result, _) => match *result {
+                Ok(row) => Ok(row),
+                Err(err) => Err(
+                    PlanError::ConstantExpressionSimplificationFailed(
+                        err.to_string_with_causes(),
+                    ),
+                ),
+            },
             _ => Err(PlanError::ConstantExpressionSimplificationFailed(
                 "Not a constant".to_string(),
             )),

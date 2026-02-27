@@ -788,13 +788,13 @@ impl<'a> ColumnSpecs<'a> {
     fn set_literal(expr: &mut MirScalarExpr, update: Result<Datum, EvalError>) {
         match expr {
             MirScalarExpr::Literal(literal, col_type) => match update {
-                Err(error) => *literal = Err(error),
+                Err(error) => **literal = Err(error),
                 Ok(datum) => {
                     assert!(
                         datum.is_instance_of(col_type),
                         "{datum:?} must be an instance of {col_type:?}"
                     );
-                    match literal {
+                    match literal.as_mut() {
                         // Reuse the allocation if we can
                         Ok(row) => row.packer().push(datum),
                         literal => *literal = Ok(Row::pack_slice(&[datum])),
@@ -822,7 +822,7 @@ impl<'a> ColumnSpecs<'a> {
     /// before evaluating.
     fn placeholder(col_type: SqlColumnType) -> MirScalarExpr {
         MirScalarExpr::Literal(
-            Err(EvalError::Internal("".into())),
+            Box::new(Err(EvalError::Internal("".into()))),
             ReprColumnType::from(&col_type),
         )
     }
@@ -1303,7 +1303,7 @@ mod tests {
                     .boxed();
                 error_gen.prop_union(value_gen).prop_map(move |result| {
                     (
-                        MirScalarExpr::Literal(result, ReprColumnType::from(&ct)),
+                        MirScalarExpr::Literal(Box::new(result), ReprColumnType::from(&ct)),
                         ct.clone(),
                     )
                 })
@@ -1621,7 +1621,7 @@ mod tests {
 
         let expr = MirScalarExpr::CallUnary {
             func: UnaryFunc::IsLikeMatch(IsLikeMatch(
-                crate::like_pattern::compile("%whatever%", true).unwrap(),
+                Box::new(crate::like_pattern::compile("%whatever%", true).unwrap()),
             )),
             expr: Box::new(MirScalarExpr::column(0)),
         };

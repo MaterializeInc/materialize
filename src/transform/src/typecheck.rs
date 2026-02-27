@@ -1495,7 +1495,7 @@ impl Typecheck {
             },
             Literal(row, typ) => {
                 let typ = typ.clone();
-                if let Ok(row) = row {
+                if let Ok(row) = row.as_ref() {
                     let datums = row.unpack();
 
                     row_difference_with_column_types(source, &datums, std::slice::from_ref(&typ))?;

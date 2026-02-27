@@ -1098,7 +1098,9 @@ impl EquivalenceClasses {
         for class in self.classes.iter() {
             let mut literal_ok = None;
             for expr in class.iter() {
-                if let MirScalarExpr::Literal(Ok(row), _) = expr {
+                if let MirScalarExpr::Literal(result, _) = expr
+                    && let Ok(row) = result.as_ref()
+                {
                     if literal_ok.is_some() && literal_ok != Some(row) {
                         return true;
                     } else {
