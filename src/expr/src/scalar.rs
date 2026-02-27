@@ -3420,5 +3420,7 @@ mod tests {
         assert_eq!(size_of::<crate::UnaryFunc>(), 56);
         assert_eq!(size_of::<crate::BinaryFunc>(), 48);
         assert_eq!(size_of::<crate::VariadicFunc>(), 40);
+        assert_eq!(size_of::<crate::AggregateFunc>(), 64);
+        assert_eq!(size_of::<crate::AggregateExpr>(), 144);
     }
 }

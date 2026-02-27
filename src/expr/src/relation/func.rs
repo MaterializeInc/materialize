@@ -1919,11 +1919,11 @@ pub enum AggregateFunc {
     },
     FirstValue {
         order_by: Vec<ColumnOrder>,
-        window_frame: WindowFrame,
+        window_frame: Box<WindowFrame>,
     },
     LastValue {
         order_by: Vec<ColumnOrder>,
-        window_frame: WindowFrame,
+        window_frame: Box<WindowFrame>,
     },
     /// Several value window functions fused into one function, to amortize overheads.
     FusedValueWindowFunc {
@@ -1935,12 +1935,12 @@ pub enum AggregateFunc {
     WindowAggregate {
         wrapped_aggregate: Box<AggregateFunc>,
         order_by: Vec<ColumnOrder>,
-        window_frame: WindowFrame,
+        window_frame: Box<WindowFrame>,
     },
     FusedWindowAggregate {
         wrapped_aggregates: Vec<AggregateFunc>,
         order_by: Vec<ColumnOrder>,
-        window_frame: WindowFrame,
+        window_frame: Box<WindowFrame>,
     },
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
@@ -3093,7 +3093,7 @@ where
                 f.write_str(name)?;
                 f.write_str("[")?;
                 write!(f, "order_by=[{}]", separated(", ", order_by))?;
-                if *window_frame != WindowFrame::default() {
+                if **window_frame != WindowFrame::default() {
                     write!(f, " {}", window_frame)?;
                 }
                 f.write_str("]")
@@ -3106,7 +3106,7 @@ where
                 f.write_str(name)?;
                 f.write_str("[")?;
                 write!(f, "order_by=[{}]", separated(", ", order_by))?;
-                if *window_frame != WindowFrame::default() {
+                if **window_frame != WindowFrame::default() {
                     write!(f, " {}", window_frame)?;
                 }
                 f.write_str("]")
@@ -3122,7 +3122,7 @@ where
                 f.write_str("[")?;
                 write!(f, "{} ", wrapped_aggregate)?;
                 write!(f, "order_by=[{}]", separated(", ", order_by))?;
-                if *window_frame != WindowFrame::default() {
+                if **window_frame != WindowFrame::default() {
                     write!(f, " {}", window_frame)?;
                 }
                 f.write_str("]")

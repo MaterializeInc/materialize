@@ -781,11 +781,11 @@ impl ValueWindowFunc {
             },
             ValueWindowFunc::FirstValue => mz_expr::AggregateFunc::FirstValue {
                 order_by,
-                window_frame,
+                window_frame: Box::new(window_frame),
             },
             ValueWindowFunc::LastValue => mz_expr::AggregateFunc::LastValue {
                 order_by,
-                window_frame,
+                window_frame: Box::new(window_frame),
             },
             ValueWindowFunc::Fused(funcs) => mz_expr::AggregateFunc::FusedValueWindowFunc {
                 funcs: funcs
@@ -852,7 +852,7 @@ impl AggregateWindowExpr {
                 FusedWindowAggregate {
                     wrapped_aggregates: funcs.iter().map(|f| f.clone().into_expr()).collect(),
                     order_by: self.order_by,
-                    window_frame: self.window_frame,
+                    window_frame: Box::new(self.window_frame),
                 },
             )
         } else {
@@ -861,7 +861,7 @@ impl AggregateWindowExpr {
                 WindowAggregate {
                     wrapped_aggregate: Box::new(self.aggregate_expr.func.into_expr()),
                     order_by: self.order_by,
-                    window_frame: self.window_frame,
+                    window_frame: Box::new(self.window_frame),
                 },
             )
         }
