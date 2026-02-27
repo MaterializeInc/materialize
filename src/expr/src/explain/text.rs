@@ -1296,18 +1296,7 @@ where
                         }
                     }
                 }
-                if let crate::UnaryFunc::CaseLiteral(cl) = func {
-                    let input = self.child::<MirScalarExpr>(&*expr);
-                    write!(f, "case {}", input)?;
-                    for (literal_row, result_expr) in &cl.cases {
-                        let result = self.child::<MirScalarExpr>(result_expr);
-                        write!(f, " when ")?;
-                        self.mode.humanize_datum(literal_row.unpack_first(), f)?;
-                        write!(f, " then {}", result)?;
-                    }
-                    let els = self.child::<MirScalarExpr>(&cl.els);
-                    write!(f, " else {} end", els)
-                } else if let Some(is) = func.is() {
+                if let Some(is) = func.is() {
                     let expr = self.child::<MirScalarExpr>(&*expr);
                     write!(f, "({}) IS {}", expr, is)
                 } else {
@@ -1326,28 +1315,41 @@ where
             }
             CallVariadic { func, exprs } => {
                 use crate::VariadicFunc::*;
-                let exprs = exprs.iter().map(|expr| self.child(expr));
-                match func {
-                    ArrayCreate(..) => {
-                        let exprs = separated(", ", exprs);
-                        write!(f, "array[{}]", exprs)
+                if let CaseLiteral(cl) = func {
+                    let input = self.child::<MirScalarExpr>(&exprs[0]);
+                    write!(f, "case {}", input)?;
+                    for (literal_row, &idx) in &cl.lookup {
+                        let result = self.child::<MirScalarExpr>(&exprs[idx]);
+                        write!(f, " when ")?;
+                        self.mode.humanize_datum(literal_row.unpack_first(), f)?;
+                        write!(f, " then {}", result)?;
                     }
-                    ListCreate(..) => {
-                        let exprs = separated(", ", exprs);
-                        write!(f, "list[{}]", exprs)
-                    }
-                    RecordCreate(..) => {
-                        let exprs = separated(", ", exprs);
-                        write!(f, "row({})", exprs)
-                    }
-                    func if func.is_infix_op() && exprs.len() > 1 => {
-                        let func = format!(" {} ", func);
-                        let exprs = separated(&func, exprs);
-                        write!(f, "({})", exprs)
-                    }
-                    func => {
-                        let exprs = separated(", ", exprs);
-                        write!(f, "{}({})", func, exprs)
+                    let els = self.child::<MirScalarExpr>(exprs.last().unwrap());
+                    write!(f, " else {} end", els)
+                } else {
+                    let exprs = exprs.iter().map(|expr| self.child(expr));
+                    match func {
+                        ArrayCreate(..) => {
+                            let exprs = separated(", ", exprs);
+                            write!(f, "array[{}]", exprs)
+                        }
+                        ListCreate(..) => {
+                            let exprs = separated(", ", exprs);
+                            write!(f, "list[{}]", exprs)
+                        }
+                        RecordCreate(..) => {
+                            let exprs = separated(", ", exprs);
+                            write!(f, "row({})", exprs)
+                        }
+                        func if func.is_infix_op() && exprs.len() > 1 => {
+                            let func = format!(" {} ", func);
+                            let exprs = separated(&func, exprs);
+                            write!(f, "({})", exprs)
+                        }
+                        func => {
+                            let exprs = separated(", ", exprs);
+                            write!(f, "{}({})", func, exprs)
+                        }
                     }
                 }
             }

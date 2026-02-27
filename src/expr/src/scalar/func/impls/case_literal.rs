@@ -11,6 +11,13 @@
 //!
 //! [`CaseLiteral`] replaces chains of `If(Eq(expr, literal), result, If(...))`
 //! with a single `BTreeMap` lookup, turning O(n) evaluation into O(log n).
+//!
+//! Represented as a `CallVariadic { func: CaseLiteral { lookup, return_type }, exprs }`
+//! where:
+//! * `exprs[0]` = input expression (the `x` in `CASE x WHEN ...`)
+//! * `exprs[1..n]` = case result expressions
+//! * `exprs[last]` = `els` (fallback)
+//! * `lookup: BTreeMap<Row, usize>` maps literal values to indices in `exprs`
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -19,15 +26,15 @@ use mz_lowertest::MzReflect;
 use mz_repr::{Datum, Row, RowArena, SqlColumnType};
 use serde::{Deserialize, Serialize};
 
-use crate::scalar::func::LazyUnaryFunc;
+use crate::scalar::func::variadic::LazyVariadicFunc;
 use crate::{EvalError, MirScalarExpr};
 
 /// Evaluates a CASE expression by looking up the input datum in a `BTreeMap`.
 ///
-/// The input expression is evaluated once, packed into a temporary `Row`,
-/// and looked up in `cases`. If found, the corresponding result expression
-/// is evaluated; otherwise `els` is evaluated. NULL inputs go straight to `els`
-/// (since SQL `NULL = x` is always NULL/falsy).
+/// The input expression (`exprs[0]`) is evaluated once, packed into a temporary
+/// `Row`, and looked up in `lookup`. If found, the corresponding result expression
+/// (`exprs[idx]`) is evaluated; otherwise the fallback (`exprs.last()`) is evaluated.
+/// NULL inputs go straight to the fallback (since SQL `NULL = x` is always NULL/falsy).
 #[derive(
     Ord,
     PartialOrd,
@@ -41,45 +48,43 @@ use crate::{EvalError, MirScalarExpr};
     MzReflect
 )]
 pub struct CaseLiteral {
-    /// Map from literal values (as single-datum `Row`s) to result expressions.
-    pub cases: BTreeMap<Row, MirScalarExpr>,
-    /// The fallback expression, evaluated when no case matches or the input is NULL.
-    pub els: Box<MirScalarExpr>,
+    /// Map from literal values (as single-datum `Row`s) to indices in the `exprs` vector.
+    pub lookup: BTreeMap<Row, usize>,
     /// The output type of this CASE expression.
     pub return_type: SqlColumnType,
 }
 
-impl LazyUnaryFunc for CaseLiteral {
+impl LazyVariadicFunc for CaseLiteral {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        exprs: &'a [MirScalarExpr],
     ) -> Result<Datum<'a>, EvalError> {
-        let input = a.eval(datums, temp_storage)?;
-        // SQL NULL = x is always NULL/falsy, so go straight to `els`.
+        let input = exprs[0].eval(datums, temp_storage)?;
+        // SQL NULL = x is always NULL/falsy, so go straight to the fallback.
         if input.is_null() {
-            return self.els.eval(datums, temp_storage);
+            return exprs.last().unwrap().eval(datums, temp_storage);
         }
         let key = Row::pack_slice(&[input]);
-        if let Some(result_expr) = self.cases.get(&key) {
-            result_expr.eval(datums, temp_storage)
+        if let Some(&idx) = self.lookup.get(&key) {
+            exprs[idx].eval(datums, temp_storage)
         } else {
-            self.els.eval(datums, temp_storage)
+            exprs.last().unwrap().eval(datums, temp_storage)
         }
     }
 
-    fn output_sql_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
+    fn output_type(&self, _input_types: &[SqlColumnType]) -> SqlColumnType {
         self.return_type.clone()
     }
 
     fn propagates_nulls(&self) -> bool {
-        // NULL input goes to `els`, not automatically to NULL output.
+        // NULL input goes to the fallback, not automatically to NULL output.
         false
     }
 
     fn introduces_nulls(&self) -> bool {
-        // Branch results or `els` may be NULL.
+        // Branch results or the fallback may be NULL.
         true
     }
 
@@ -87,21 +92,17 @@ impl LazyUnaryFunc for CaseLiteral {
         true
     }
 
-    fn preserves_uniqueness(&self) -> bool {
+    fn is_monotone(&self) -> bool {
         false
     }
 
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
+    fn is_associative(&self) -> bool {
         false
     }
 }
 
 impl fmt::Display for CaseLiteral {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "case_literal[{} cases]", self.cases.len())
+        write!(f, "case_literal[{} cases]", self.lookup.len())
     }
 }

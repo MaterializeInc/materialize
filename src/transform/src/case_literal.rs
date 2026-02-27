@@ -8,18 +8,22 @@
 // by the Apache License, Version 2.0.
 
 //! Rewrites chains of `If(Eq(expr, literal), result, If(...))` into
-//! `CaseLiteral { cases, els }` for O(log n) evaluation via `BTreeMap` lookup.
+//! `CallVariadic { func: CaseLiteral { lookup, return_type }, exprs }` for
+//! O(log n) evaluation via `BTreeMap` lookup.
+//!
+//! Uses bottom-up traversal (`visit_mut_post`) so inner CaseLiterals are
+//! created first, then outer If nodes fold into them.
 
 use std::collections::BTreeMap;
 
 use mz_expr::visit::Visit;
-use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
+use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr, VariadicFunc};
 use mz_repr::{ReprColumnType, Row, SqlColumnType};
 
 use crate::TransformCtx;
 
 /// Rewrites If-chains matching a single expression against literals
-/// into a `CaseLiteral` unary function with `BTreeMap` lookup.
+/// into a `CaseLiteral` variadic function with `BTreeMap` lookup.
 #[derive(Debug)]
 pub struct CaseLiteralTransform;
 
@@ -58,7 +62,7 @@ fn rewrite_scalars_in_relation(expr: &mut MirRelationExpr) {
         MirRelationExpr::Map { input, scalars } => {
             let mut column_types = input.typ().column_types;
             for scalar in scalars.iter_mut() {
-                rewrite_if_chain(scalar, &column_types);
+                rewrite_scalar(scalar, &column_types);
                 let new_type = scalar.typ(&column_types);
                 column_types.push(new_type);
             }
@@ -66,7 +70,7 @@ fn rewrite_scalars_in_relation(expr: &mut MirRelationExpr) {
         MirRelationExpr::Filter { input, predicates } => {
             let column_types = input.typ().column_types;
             for predicate in predicates.iter_mut() {
-                rewrite_if_chain(predicate, &column_types);
+                rewrite_scalar(predicate, &column_types);
             }
         }
         MirRelationExpr::Reduce {
@@ -74,70 +78,108 @@ fn rewrite_scalars_in_relation(expr: &mut MirRelationExpr) {
         } => {
             let column_types = input.typ().column_types;
             for agg in aggregates.iter_mut() {
-                rewrite_if_chain(&mut agg.expr, &column_types);
+                rewrite_scalar(&mut agg.expr, &column_types);
             }
         }
         MirRelationExpr::FlatMap { input, exprs, .. } => {
             let column_types = input.typ().column_types;
             for e in exprs.iter_mut() {
-                rewrite_if_chain(e, &column_types);
+                rewrite_scalar(e, &column_types);
             }
         }
         _ => {}
     }
 }
 
-/// Rewrites a scalar expression tree, replacing If-chains of
+/// Rewrites a scalar expression tree bottom-up, replacing If-chains of
 /// `If(Eq(common_expr, literal), result, ...)` with `CaseLiteral`.
 ///
-/// Uses a pre-order approach for If-chains: the outermost If is processed
-/// first so it can greedily consume the entire chain. After rewriting,
-/// the transform recurses into the result subexpressions.
-fn rewrite_if_chain(expr: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
-    // Try to rewrite the current node first (greedy top-down for If-chains).
-    try_rewrite_if_chain(expr, column_types);
-
-    // Then recurse into children.
+/// Bottom-up order ensures inner chains become CaseLiterals first,
+/// then outer If nodes can fold into them via the fold rule.
+fn rewrite_scalar(expr: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
+    // Bottom-up: visit children first, then process the current node.
+    // We use a manual recursive approach because we need `column_types` in scope.
     match expr {
         MirScalarExpr::Column(..) | MirScalarExpr::Literal(..) => {}
         MirScalarExpr::CallUnmaterializable(_) => {}
         MirScalarExpr::CallUnary { expr: inner, .. } => {
-            rewrite_if_chain(inner, column_types);
+            rewrite_scalar(inner, column_types);
         }
         MirScalarExpr::CallBinary { expr1, expr2, .. } => {
-            rewrite_if_chain(expr1, column_types);
-            rewrite_if_chain(expr2, column_types);
+            rewrite_scalar(expr1, column_types);
+            rewrite_scalar(expr2, column_types);
         }
         MirScalarExpr::CallVariadic { exprs, .. } => {
             for e in exprs {
-                rewrite_if_chain(e, column_types);
+                rewrite_scalar(e, column_types);
             }
         }
         MirScalarExpr::If { cond, then, els } => {
-            rewrite_if_chain(cond, column_types);
-            rewrite_if_chain(then, column_types);
-            rewrite_if_chain(els, column_types);
+            rewrite_scalar(cond, column_types);
+            rewrite_scalar(then, column_types);
+            rewrite_scalar(els, column_types);
         }
     }
+
+    // After children are processed, try the fold rule and chain-walk rule.
+    try_fold_into_case_literal(expr);
+    try_create_case_literal(expr, column_types);
 }
 
-/// Attempts to rewrite a single `If` node as a `CaseLiteral`.
-///
-/// Returns without modification if the pattern doesn't match or
-/// fewer than 2 arms are collected.
-fn try_rewrite_if_chain(expr: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
-    // First pass: read-only scan to determine if the pattern matches with >= 2 arms.
+/// Fold rule: if node is `If(Eq(x, lit), res, CallVariadic(CaseLiteral{..}, [x, ...]))`
+/// where the CaseLiteral's input (`exprs[0]`) structurally equals `x` and `lit` is
+/// not already in `lookup`, insert `res` into the existing CaseLiteral.
+fn try_fold_into_case_literal(expr: &mut MirScalarExpr) {
+    let MirScalarExpr::If { cond, then, els } = expr else {
+        return;
+    };
+    let Some((common_expr, literal_row)) = peek_eq_literal(cond) else {
+        return;
+    };
+    let MirScalarExpr::CallVariadic {
+        func: VariadicFunc::CaseLiteral(cl),
+        exprs,
+    } = els.as_mut()
+    else {
+        return;
+    };
+
+    // Check that the CaseLiteral's input matches the If's common expression.
+    if exprs[0] != *common_expr {
+        return;
+    }
+
+    // Don't fold if the literal is already present (first occurrence wins per SQL CASE).
+    if cl.lookup.contains_key(literal_row) {
+        return;
+    }
+
+    // Insert: push `then` before `els` (which is the last element), and update lookup.
+    let new_idx = exprs.len() - 1;
+    let then_expr = std::mem::replace(then.as_mut(), MirScalarExpr::literal_false());
+    // Insert the new result before the fallback (last position).
+    exprs.insert(new_idx, then_expr);
+    cl.lookup.insert(literal_row.clone(), new_idx);
+
+    // Replace the If with the CaseLiteral.
+    let inner = std::mem::replace(els.as_mut(), MirScalarExpr::literal_false());
+    *expr = inner;
+}
+
+/// Chain-walk rule: if node is an If-chain with >= 2 consecutive arms matching
+/// `Eq(same_expr, literal)`, create a new CaseLiteral.
+fn try_create_case_literal(expr: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
     let arm_count = count_if_chain_arms(expr);
     if arm_count < 2 {
         return;
     }
 
-    // Second pass: take the expression and dismantle it.
+    // Take the expression and dismantle it.
     let chain = std::mem::replace(expr, MirScalarExpr::literal_false());
     let (collected_cases, common, els) = collect_if_chain_arms(chain);
 
-    let mut common = common.expect("common expr must be set when arm_count >= 2");
-    let mut els = els;
+    let common = common.expect("common expr must be set when arm_count >= 2");
+    let els = els;
 
     // Compute the return type as the union of all branch types and els type.
     let mut return_type: Option<ReprColumnType> = None;
@@ -155,24 +197,23 @@ fn try_rewrite_if_chain(expr: &mut MirScalarExpr, column_types: &[ReprColumnType
     };
     let sql_return_type = SqlColumnType::from_repr(&return_type);
 
-    // Recurse into subexpressions that may themselves contain rewritable If-chains.
-    rewrite_if_chain(&mut common, column_types);
-    rewrite_if_chain(&mut els, column_types);
-    let cases_map: BTreeMap<Row, MirScalarExpr> = collected_cases
-        .into_iter()
-        .map(|(row, mut result_expr)| {
-            rewrite_if_chain(&mut result_expr, column_types);
-            (row, result_expr)
-        })
-        .collect();
+    // Build the exprs vector: [input, result1, result2, ..., els]
+    let mut exprs = Vec::with_capacity(collected_cases.len() + 2);
+    exprs.push(common);
+    let mut lookup = BTreeMap::new();
+    for (row, result_expr) in collected_cases {
+        let idx = exprs.len();
+        lookup.insert(row, idx);
+        exprs.push(result_expr);
+    }
+    exprs.push(els);
 
-    *expr = MirScalarExpr::CallUnary {
-        func: UnaryFunc::CaseLiteral(mz_expr::func::CaseLiteral {
-            cases: cases_map,
-            els: Box::new(els),
+    *expr = MirScalarExpr::CallVariadic {
+        func: VariadicFunc::CaseLiteral(mz_expr::func::CaseLiteral {
+            lookup,
             return_type: sql_return_type,
         }),
-        expr: Box::new(common),
+        exprs,
     };
 }
 
@@ -328,7 +369,7 @@ fn is_literal(expr: &MirScalarExpr) -> bool {
 #[cfg(test)]
 mod tests {
     use mz_expr::func::Eq;
-    use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
+    use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr, VariadicFunc};
     use mz_repr::{Datum, ReprColumnType, ReprRelationType, ReprScalarType};
 
     use super::*;
@@ -390,15 +431,15 @@ mod tests {
     /// Verify that the result is a CaseLiteral with the expected number of cases.
     fn assert_case_literal(expr: &MirScalarExpr, expected_cases: usize) {
         match expr {
-            MirScalarExpr::CallUnary {
-                func: UnaryFunc::CaseLiteral(cl),
+            MirScalarExpr::CallVariadic {
+                func: VariadicFunc::CaseLiteral(cl),
                 ..
             } => {
                 assert_eq!(
-                    cl.cases.len(),
+                    cl.lookup.len(),
                     expected_cases,
                     "expected {expected_cases} cases, got {}",
-                    cl.cases.len()
+                    cl.lookup.len()
                 );
             }
             other => panic!("expected CaseLiteral, got {other:?}"),
@@ -514,14 +555,14 @@ mod tests {
         };
 
         // Should be a CaseLiteral with 2 arms (#0 matches), and the els
-        // should be an If (the #1 comparison).
+        // (last expr) should be an If (the #1 comparison).
         match &result {
-            MirScalarExpr::CallUnary {
-                func: UnaryFunc::CaseLiteral(cl),
-                ..
+            MirScalarExpr::CallVariadic {
+                func: VariadicFunc::CaseLiteral(cl),
+                exprs,
             } => {
-                assert_eq!(cl.cases.len(), 2);
-                assert!(matches!(*cl.els, MirScalarExpr::If { .. }));
+                assert_eq!(cl.lookup.len(), 2);
+                assert!(matches!(exprs.last().unwrap(), MirScalarExpr::If { .. }));
             }
             other => panic!("expected CaseLiteral, got {other:?}"),
         }
@@ -547,7 +588,11 @@ mod tests {
         let result = apply_transform(expr);
         // The NULL arm breaks the chain at the top level. The inner 2 arms
         // (comparing #0 to 2 and 3) should still be converted.
-        // The result should be If(Eq(#0, NULL), 10, CaseLiteral(...))
+        // With bottom-up, the inner chain becomes a CaseLiteral first.
+        // Then the outer If(Eq(#0, NULL), 10, CaseLiteral) has a CaseLiteral
+        // in els, but the cond is Eq(#0, NULL) which is not a valid literal
+        // (NULL is skipped), so the fold rule doesn't fire.
+        // Result: If(Eq(#0, NULL), 10, CaseLiteral(...))
         match &result {
             MirScalarExpr::If { els, .. } => {
                 assert_case_literal(els, 2);
