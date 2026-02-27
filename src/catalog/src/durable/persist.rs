@@ -14,7 +14,7 @@ use std::cmp::max;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -30,7 +30,7 @@ use mz_ore::{
 };
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_CATALOG;
 use mz_persist_client::cli::admin::{CATALOG_FORCE_COMPACTION_FUEL, CATALOG_FORCE_COMPACTION_WAIT};
-use mz_persist_client::critical::{Opaque, SinceHandle};
+use mz_persist_client::critical::{CriticalReaderId, Opaque, SinceHandle};
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
@@ -38,6 +38,7 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::Diff;
+use mz_storage_client::controller::PersistEpoch;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
 use sha2::Digest;
@@ -77,6 +78,14 @@ const MIN_EPOCH: Epoch = unsafe { Epoch::new_unchecked(1) };
 
 /// Human readable catalog shard name.
 const CATALOG_SHARD_NAME: &str = "catalog";
+
+/// [`CriticalReaderId`] for the catalog shard's own since hold, separate from
+/// [`PersistClient::CONTROLLER_CRITICAL_SINCE`].
+static CATALOG_CRITICAL_SINCE: LazyLock<CriticalReaderId> = LazyLock::new(|| {
+    "c55555555-6666-7777-8888-999999999999"
+        .parse()
+        .expect("valid CriticalReaderId")
+});
 
 /// Seed used to generate the persist shard ID for the catalog.
 const CATALOG_SEED: usize = 1;
@@ -934,9 +943,7 @@ impl UnopenedPersistCatalogState {
         let since_handle = persist_client
             .open_critical_since(
                 catalog_shard_id,
-                // TODO: We may need to use a different critical reader
-                // id for this if we want to be able to introspect it via SQL.
-                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                CATALOG_CRITICAL_SINCE.clone(),
                 Opaque::encode(&i64::MIN),
                 Diagnostics {
                     shard_name: CATALOG_SHARD_NAME.to_string(),
@@ -945,6 +952,7 @@ impl UnopenedPersistCatalogState {
             )
             .await
             .expect("invalid usage");
+
         let (mut write_handle, mut read_handle) = persist_client
             .open(
                 catalog_shard_id,
@@ -1124,6 +1132,41 @@ impl UnopenedPersistCatalogState {
             }
             self.fenceable_token = current_fenceable_token;
             break;
+        }
+
+        if matches!(self.mode, Mode::Writable) {
+            // One-time migration: The catalog previously used `CONTROLLER_CRITICAL_SINCE` for its
+            // since handle. Now it uses its own `CATALOG_CRITICAL_SINCE`, to free
+            // `CONTROLLER_CRITICAL_SINCE` up for the storage controller. The catalog and
+            // controller handles differ in the `Opaque` codec, so we need a migration.
+            //
+            // TODO: Remove this once we don't support upgrading from v26 anymore.
+            let mut controller_handle = self
+                .persist_client
+                .open_critical_since::<SourceData, (), Timestamp, StorageDiff>(
+                    self.shard_id,
+                    PersistClient::CONTROLLER_CRITICAL_SINCE,
+                    Opaque::encode(&i64::MIN),
+                    Diagnostics {
+                        shard_name: CATALOG_SHARD_NAME.to_string(),
+                        handle_purpose: "durable catalog state critical since (migration)"
+                            .to_string(),
+                    },
+                )
+                .await
+                .expect("invalid usage");
+
+            let since = controller_handle.since().clone();
+            let res = controller_handle
+                .compare_and_downgrade_since(
+                    &Opaque::encode(&i64::MIN),
+                    (&Opaque::encode(&PersistEpoch::default()), &since),
+                )
+                .await;
+            match res {
+                Ok(_) => info!("migrated Opaque of catalog since handle"),
+                Err(_) => { /* critical since was already migrated */ }
+            }
         }
 
         let is_initialized = self.is_initialized_inner();
