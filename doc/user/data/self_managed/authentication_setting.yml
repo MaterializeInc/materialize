@@ -19,8 +19,7 @@ rows:
 
       - Standard password authentication for HTTP/Web Console connections.
 
-      When enabled, users must authenticate with their password. Passwords are
-      automatically stored in SCRAM-SHA-256 format in the database.
+      When enabled, users must authenticate with their password.
 
       {{< tip >}}
       When enabled, you must also set the `mz_system` user password in

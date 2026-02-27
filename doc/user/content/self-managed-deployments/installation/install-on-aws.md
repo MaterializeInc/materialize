@@ -124,9 +124,11 @@ An active AWS account with appropriate permissions to create:
 
 The simple example used in this tutorial enables [Password
 authentication](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/main/aws/examples/simple/main.tf#L380)
-for the Materialize instance. To use SASL/SCRAM-SHA-256, set
-[`authenticator_kind`](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/main/kubernetes/modules/materialize-instance/README.md#input_authenticator_kind)
-to `"Sasl"`.
+for the Materialize instance. To use a different authentication method, update
+[`authenticator_kind`](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/main/kubernetes/modules/materialize-instance/README.md#input_authenticator_kind).
+See [Authentication](/security/self-managed/authentication/) for the supported
+authentication mechanisms.
+
 {{< /tip >}}
 
 ### Step 1: Set Up the Environment

@@ -29,8 +29,7 @@ used:
 SASL/SCRAM-SHA-256 authentication requires Materialize `v26.0.0` or later.
 {{< /note >}}
 
-SASL authentication requires users to log in with a password. Passwords are
-automatically stored in SCRAM-SHA-256 format in the database.
+SASL authentication requires users to log in with a password.
 
 When SASL authentication is enabled:
 - **PostgreSQL connections** (e.g., `psql`, client libraries, [connection
