@@ -339,6 +339,21 @@ pub struct TransactionResult {
     pub audit_events: Vec<VersionedEvent>,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum TransactInnerMode {
+    /// Prepare storage state and return a commit-ready transaction state.
+    ///
+    /// This mode is used by durable catalog transactions.
+    Commit,
+    /// Execute a dry run against a durable transaction that will not be
+    /// committed.
+    ///
+    /// This mode still validates and applies updates to an in-memory
+    /// `CatalogState`, but it must not call `prepare_state` because dry runs
+    /// must not trigger controller side effects.
+    DryRun,
+}
+
 impl Catalog {
     fn should_audit_log_item(item: &CatalogItem) -> bool {
         !item.is_temporary()
@@ -439,6 +454,7 @@ impl Catalog {
             .unwrap_or_terminate("starting catalog transaction");
 
         let new_state = Self::transact_inner(
+            TransactInnerMode::Commit,
             storage_collections,
             oracle_write_ts,
             session,
@@ -517,10 +533,10 @@ impl Catalog {
             tx.set_next_oid(next_oid)?;
         }
 
-        // Process only the new ops against the accumulated state.
-        // Pass `None` for storage_collections to skip `prepare_state`.
+        // Process only the new ops against the accumulated state in dry-run mode.
         let new_state = Self::transact_inner(
-            None, // skip prepare_state
+            TransactInnerMode::DryRun,
+            None,
             oracle_write_ts,
             session,
             ops,
@@ -584,8 +600,13 @@ impl Catalog {
     /// Performs the transaction described by `ops` and returns the new state of the catalog, if
     /// it has changed. If `ops` don't result in a change in the state this method returns `None`.
     ///
+    /// `mode` controls whether storage prepare-state side effects are allowed.
+    /// In `DryRun` mode, this method may update the in-memory state returned to
+    /// the caller, but it must not trigger controller side effects.
+    ///
     #[instrument(name = "catalog::transact_inner")]
     async fn transact_inner(
+        mode: TransactInnerMode,
         storage_collections: Option<
             &mut Arc<dyn StorageCollections<Timestamp = mz_repr::Timestamp> + Send + Sync>,
         >,
@@ -713,15 +734,25 @@ impl Catalog {
             parsed_catalog_updates.extend(op_catalog_updates);
         }
 
-        // `storage_collections` should only be `None` for tests and dry runs.
-        if let Some(c) = storage_collections {
-            c.prepare_state(
-                tx,
-                storage_collections_to_create,
-                storage_collections_to_drop,
-                storage_collections_to_register,
-            )
-            .await?;
+        match mode {
+            TransactInnerMode::Commit => {
+                // `storage_collections` can be `None` in tests.
+                if let Some(c) = storage_collections {
+                    c.prepare_state(
+                        tx,
+                        storage_collections_to_create,
+                        storage_collections_to_drop,
+                        storage_collections_to_register,
+                    )
+                    .await?;
+                }
+            }
+            TransactInnerMode::DryRun => {
+                debug_assert!(
+                    storage_collections.is_none(),
+                    "dry-run mode must not prepare storage state"
+                );
+            }
         }
 
         let updates = tx.get_and_commit_op_updates();
