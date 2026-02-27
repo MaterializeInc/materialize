@@ -223,14 +223,14 @@ else
   git tag "$TERRAFORM_SELF_MANAGED_VERSION"
   git --no-pager diff HEAD~
   run_if_not_dry git push origin main "$TERRAFORM_SELF_MANAGED_VERSION"
+  cd ..
 fi
 
 if [[ "$BUILDKITE_TAG" != *"-rc."* ]]; then
   echo "--- Bumping versions in Self-Managed Materialize documentation"
   ORCHESTRATORD_VERSION=$(yq -r '.operator.image.tag' misc/helm-charts/operator/values.yaml)
-  DOCS_BRANCH=main
-  git fetch origin "$DOCS_BRANCH"
-  git checkout "origin/$DOCS_BRANCH"
+  git fetch origin main
+  git checkout origin/main
   git submodule update --init --recursive
   git config user.email "noreply@materialize.com"
   git config user.name "Buildkite"
