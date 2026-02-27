@@ -961,6 +961,8 @@ mod scalar {
             parse_array(input)
         } else if lookahead.peek(kw::list) {
             parse_list(input)
+        } else if lookahead.peek(kw::case) {
+            parse_case(input)
         } else if lookahead.peek(syn::Ident) {
             parse_apply(input)
         } else if lookahead.peek(syn::token::Brace) {
@@ -976,7 +978,28 @@ mod scalar {
             syn::parenthesized!(inner in input);
             parse_expr(&inner)
         } else {
-            Err(lookahead.error()) // FIXME: support IfThenElse variants
+            Err(lookahead.error())
+        }
+    }
+
+    /// Parses `case when {cond} then {then} else {els} end`.
+    fn parse_case(input: ParseStream) -> Result {
+        input.parse::<kw::case>()?;
+        if input.peek(kw::when) {
+            input.parse::<kw::when>()?;
+            let cond = parse_expr(input)?;
+            input.parse::<kw::then>()?;
+            let then = parse_expr(input)?;
+            input.parse::<syn::Token![else]>()?;
+            let els = parse_expr(input)?;
+            input.parse::<kw::end>()?;
+            Ok(MirScalarExpr::If {
+                cond: Box::new(cond),
+                then: Box::new(then),
+                els: Box::new(els),
+            })
+        } else {
+            Err(Error::new(input.span(), "expected 'when' after 'case'"))
         }
     }
 
@@ -1614,6 +1637,8 @@ mod kw {
     syn::custom_keyword!(ArrangeBy);
     syn::custom_keyword!(array);
     syn::custom_keyword!(asc);
+    // case when ... then ... else ... end
+    syn::custom_keyword!(case);
     syn::custom_keyword!(Constant);
     syn::custom_keyword!(CrossJoin);
     syn::custom_keyword!(cte);
@@ -1621,6 +1646,7 @@ mod kw {
     syn::custom_keyword!(distinct);
     syn::custom_keyword!(Distinct);
     syn::custom_keyword!(empty);
+    syn::custom_keyword!(end);
     syn::custom_keyword!(eq);
     syn::custom_keyword!(error);
     syn::custom_keyword!(exp_group_size);
@@ -1652,10 +1678,12 @@ mod kw {
     syn::custom_keyword!(Recursive);
     syn::custom_keyword!(Reduce);
     syn::custom_keyword!(Return);
+    syn::custom_keyword!(then);
     syn::custom_keyword!(Threshold);
     syn::custom_keyword!(TopK);
     syn::custom_keyword!(TRUE);
     syn::custom_keyword!(Union);
+    syn::custom_keyword!(when);
     syn::custom_keyword!(With);
     syn::custom_keyword!(x);
 }
