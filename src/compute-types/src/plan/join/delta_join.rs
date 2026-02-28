@@ -38,7 +38,7 @@ pub struct DeltaJoinPlan {
     ///
     /// Each path identifies its source relation, so the order is only
     /// important for determinism of dataflow construction.
-    pub path_plans: Vec<DeltaPathPlan>,
+    pub path_plans: Box<[DeltaPathPlan]>,
 }
 
 /// A delta query path is implemented by a sequences of stages,
@@ -47,11 +47,11 @@ pub struct DeltaPathPlan {
     /// The relation whose updates seed the dataflow path.
     pub source_relation: usize,
     /// The key we expect the source relation to be arranged by.
-    pub source_key: Vec<MirScalarExpr>,
+    pub source_key: Box<[MirScalarExpr]>,
     /// An initial closure to apply before any stages.
     pub initial_closure: JoinClosure,
     /// A *sequence* of stages to apply one after the other.
-    pub stage_plans: Vec<DeltaStagePlan>,
+    pub stage_plans: Box<[DeltaStagePlan]>,
     /// A concluding closure to apply after the last stage.
     ///
     /// Values of `None` indicate the identity closure.
@@ -68,11 +68,11 @@ pub struct DeltaStagePlan {
     /// While this starts as a stream of the source relation,
     /// it evolves through multiple lookups and ceases to be
     /// the same thing, hence the different name.
-    pub stream_key: Vec<MirScalarExpr>,
+    pub stream_key: Box<[MirScalarExpr]>,
     /// The thinning expression to apply on the value part of the stream
-    pub stream_thinning: Vec<usize>,
+    pub stream_thinning: Box<[usize]>,
     /// The key expressions to use for the lookup relation.
-    pub lookup_key: Vec<MirScalarExpr>,
+    pub lookup_key: Box<[MirScalarExpr]>,
     /// The closure to apply to the concatenation of columns
     /// of the stream and lookup relations.
     pub closure: JoinClosure,
@@ -109,10 +109,8 @@ impl DeltaJoinPlan {
             .map(|k| k.expect("There should be at least one arrangement for each relation!"))
             .collect();
 
-        // Create an empty plan, with capacity for the intended number of path plans.
-        let mut join_plan = DeltaJoinPlan {
-            path_plans: Vec::with_capacity(number_of_inputs),
-        };
+        // Create an empty plan, accumulate path plans in a Vec.
+        let mut path_plans = Vec::with_capacity(number_of_inputs);
 
         let temporal_mfp = map_filter_project.extract_temporal();
 
@@ -216,9 +214,9 @@ impl DeltaJoinPlan {
                 // record the stage plan as next in the path.
                 stage_plans.push(DeltaStagePlan {
                     lookup_relation: *lookup_relation,
-                    stream_key,
-                    lookup_key: lookup_key.clone(),
-                    stream_thinning,
+                    stream_key: stream_key.into_boxed_slice(),
+                    lookup_key: lookup_key.clone().into_boxed_slice(),
+                    stream_thinning: stream_thinning.into_boxed_slice(),
                     closure,
                 });
             }
@@ -231,12 +229,12 @@ impl DeltaJoinPlan {
             };
 
             // Insert the path plan.
-            join_plan.path_plans.push(DeltaPathPlan {
+            path_plans.push(DeltaPathPlan {
                 source_relation,
                 initial_closure,
-                stage_plans,
+                stage_plans: stage_plans.into_boxed_slice(),
                 final_closure,
-                source_key: source_key.to_vec(),
+                source_key: source_key.to_vec().into_boxed_slice(),
             });
         }
 
@@ -244,6 +242,9 @@ impl DeltaJoinPlan {
         // assign the remaining temporal predicates to it, for the caller's use.
         *map_filter_project = temporal_mfp;
 
+        let join_plan = DeltaJoinPlan {
+            path_plans: path_plans.into_boxed_slice(),
+        };
         (join_plan, requested)
     }
 }

@@ -318,8 +318,8 @@ where
 fn build_halfjoin<G, Tr, CF>(
     updates: VecCollection<G, (Row, G::Timestamp), Diff>,
     trace: Arranged<G, Tr>,
-    prev_key: Vec<MirScalarExpr>,
-    prev_thinning: Vec<usize>,
+    prev_key: Box<[MirScalarExpr]>,
+    prev_thinning: Box<[usize]>,
     comparison: CF,
     closure: JoinClosure,
 ) -> (

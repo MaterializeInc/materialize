@@ -57,7 +57,7 @@ pub enum JoinPlan {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct JoinClosure {
     /// TODO(database-issues#7533): Add documentation.
-    pub ready_equivalences: Vec<Vec<MirScalarExpr>>,
+    pub ready_equivalences: Box<[Vec<MirScalarExpr>]>,
     /// TODO(database-issues#7533): Add documentation.
     pub before: mz_expr::SafeMfpPlan,
 }
@@ -206,7 +206,7 @@ impl JoinClosure {
 
         // Cons up an instance of the closure with the closed-over state.
         Self {
-            ready_equivalences,
+            ready_equivalences: ready_equivalences.into_boxed_slice(),
             before: before.into_plan().unwrap().into_nontemporal().unwrap(),
         }
     }
@@ -335,7 +335,7 @@ impl JoinBuildState {
         mfp.optimize();
 
         JoinClosure {
-            ready_equivalences: equivalences,
+            ready_equivalences: equivalences.into_boxed_slice(),
             before: mfp.into_plan().unwrap().into_nontemporal().unwrap(),
         }
     }

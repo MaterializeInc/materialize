@@ -837,5 +837,17 @@ mod tests {
         assert_eq!(size_of::<PlanNode>(), 88);
         // Plan wraps PlanNode with a LirId (u64).
         assert_eq!(size_of::<Plan>(), 96);
+
+        // Join plan types — Vec→Box<[T]> conversions eliminate unused capacity fields.
+        use join::{JoinClosure, JoinPlan};
+        use join::linear_join::{LinearJoinPlan, LinearStagePlan};
+        use join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
+        assert_eq!(size_of::<JoinClosure>(), 96);
+        assert_eq!(size_of::<LinearStagePlan>(), 152);
+        assert_eq!(size_of::<LinearJoinPlan>(), 232);
+        assert_eq!(size_of::<DeltaStagePlan>(), 152);
+        assert_eq!(size_of::<DeltaPathPlan>(), 232);
+        assert_eq!(size_of::<DeltaJoinPlan>(), 16);
+        assert_eq!(size_of::<JoinPlan>(), 232);
     }
 }

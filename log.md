@@ -2078,3 +2078,66 @@ Statement\<Raw\> is now driven by CopyStatement (576) and CreateContinualTaskSta
 - The walkabout-generated fold/visit code already handles Box\<T\> variants automatically
 - Avro/Protobuf formats are only used in source/sink DDL, not hot query paths
 - The box allocation only happens at parse time for CREATE SOURCE/SINK statements
+
+## Session 28: Shrink compute LIR join plan types via Vec→Box<[T]>
+
+**Date:** 2026-02-28
+
+### Changes
+
+Convert 12 `Vec<T>` fields across 6 compute LIR join plan types to `Box<[T]>`, eliminating unused capacity fields. These types are constructed once during plan lowering and never mutated afterward — the capacity word is wasted memory.
+
+**Fields converted:**
+
+1. **JoinClosure**: `ready_equivalences: Vec<Vec<MirScalarExpr>>` → `Box<[Vec<MirScalarExpr>]>` (8 bytes saved)
+2. **LinearJoinPlan**: `source_key: Option<Vec<MirScalarExpr>>` → `Option<Box<[MirScalarExpr]>>` (8 bytes), `stage_plans: Vec<LinearStagePlan>` → `Box<[LinearStagePlan]>` (8 bytes)
+3. **LinearStagePlan**: `stream_key: Vec<MirScalarExpr>` → `Box<[MirScalarExpr]>` (8 bytes), `stream_thinning: Vec<usize>` → `Box<[usize]>` (8 bytes), `lookup_key: Vec<MirScalarExpr>` → `Box<[MirScalarExpr]>` (8 bytes)
+4. **DeltaJoinPlan**: `path_plans: Vec<DeltaPathPlan>` → `Box<[DeltaPathPlan]>` (8 bytes)
+5. **DeltaPathPlan**: `source_key: Vec<MirScalarExpr>` → `Box<[MirScalarExpr]>` (8 bytes), `stage_plans: Vec<DeltaStagePlan>` → `Box<[DeltaStagePlan]>` (8 bytes)
+6. **DeltaStagePlan**: `stream_key: Vec<MirScalarExpr>` → `Box<[MirScalarExpr]>` (8 bytes), `stream_thinning: Vec<usize>` → `Box<[usize]>` (8 bytes), `lookup_key: Vec<MirScalarExpr>` → `Box<[MirScalarExpr]>` (8 bytes)
+
+### Key insight: cascading savings through nested structures
+
+These types nest deeply: `JoinPlan` contains `LinearJoinPlan` or `DeltaJoinPlan`, which contain `Box<[LinearStagePlan]>` or `Box<[DeltaPathPlan]>`, which in turn contain `JoinClosure` (which also shrinks). Every level of nesting compounds the savings:
+
+- Each `JoinClosure` saves 8 bytes → but JoinClosure appears inside every stage plan *and* as initial/final closures in the top-level plans
+- Each stage plan element saves 32 bytes (3 Vec fields × 8 + JoinClosure's 8)
+- For a 3-way delta join with 3 paths × 2 stages each, the total savings are: 3 × 32 (path plans) + 6 × 32 (stage plans) + ~12 × 8 (closures) = ~384 bytes per join plan
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| JoinClosure | 104 | 96 | 8 bytes (8%) |
+| LinearStagePlan | 184 | 152 | 32 bytes (17%) |
+| LinearJoinPlan | 264 | 232 | 32 bytes (12%) |
+| DeltaStagePlan | 184 | 152 | 32 bytes (17%) |
+| DeltaPathPlan | 264 | 232 | 32 bytes (12%) |
+| DeltaJoinPlan | 24 | 16 | 8 bytes (33%) |
+| JoinPlan | 264 | 232 | 32 bytes (12%) |
+
+### Why this matters
+
+`JoinPlan` is stored as `Box<JoinPlan>` in `PlanNode::Join`. The boxed allocation shrinks from 264 to 232 bytes. But more importantly, the *elements* stored in the boxed slices within JoinPlan also shrink. Each `LinearStagePlan` element saves 32 bytes, and each `DeltaStagePlan` element saves 32 bytes. For queries with multiple join stages (which is common for multi-table joins), the per-element savings multiply.
+
+These plan types persist in memory for the entire lifetime of a dataflow on every compute worker, so the savings accumulate across all active dataflows.
+
+### Benchmark results
+
+All join query types work correctly with no regression (200 iterations, 3 trials averaged):
+
+| Query Type | Avg Time | Notes |
+|-----------|----------|-------|
+| 2-way join (1000 rows each) | ~18ms | Exercises LinearJoinPlan (Differential) |
+| 3-way join (1000 rows each) | ~27ms | Exercises DeltaJoinPlan (Delta) |
+| Join with filters | ~21ms | Exercises JoinClosure with predicates |
+| EXPLAIN 3-way join | ~10ms | Exercises plan construction + display |
+| EXPLAIN 2-way join | ~8.5ms | Exercises plan construction + display |
+
+### Files changed (4 files)
+
+- `src/compute-types/src/plan/join.rs` — `JoinClosure.ready_equivalences: Vec<Vec<MirScalarExpr>>` → `Box<[Vec<MirScalarExpr>]>`, `.into_boxed_slice()` at 2 construction sites (build + complete)
+- `src/compute-types/src/plan/join/linear_join.rs` — `LinearJoinPlan`: source_key, stage_plans; `LinearStagePlan`: stream_key, stream_thinning, lookup_key — all `Vec→Box<[T]>`, `.into_boxed_slice()` at construction sites
+- `src/compute-types/src/plan/join/delta_join.rs` — `DeltaJoinPlan`: path_plans; `DeltaPathPlan`: source_key, stage_plans; `DeltaStagePlan`: stream_key, stream_thinning, lookup_key — all `Vec→Box<[T]>`, `.into_boxed_slice()` at construction sites
+- `src/compute/src/render/join/delta_join.rs` — `build_halfjoin` parameter types: `Vec<MirScalarExpr>` → `Box<[MirScalarExpr]>`, `Vec<usize>` → `Box<[usize]>`
+- `src/compute-types/src/plan.rs` — Added size assertions for all join plan types

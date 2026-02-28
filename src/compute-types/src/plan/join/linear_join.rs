@@ -27,13 +27,13 @@ pub struct LinearJoinPlan {
     /// The source relation from which we start the join.
     pub source_relation: usize,
     /// The arrangement to use for the source relation, if any
-    pub source_key: Option<Vec<MirScalarExpr>>,
+    pub source_key: Option<Box<[MirScalarExpr]>>,
     /// An initial closure to apply before any stages.
     ///
     /// Values of `None` indicate the identity closure.
     pub initial_closure: Option<JoinClosure>,
     /// A *sequence* of stages to apply one after the other.
-    pub stage_plans: Vec<LinearStagePlan>,
+    pub stage_plans: Box<[LinearStagePlan]>,
     /// A concluding closure to apply after the last stage.
     ///
     /// Values of `None` indicate the identity closure.
@@ -50,13 +50,13 @@ pub struct LinearStagePlan {
     /// The index of the relation into which we will look up.
     pub lookup_relation: usize,
     /// The key expressions to use for the stream relation.
-    pub stream_key: Vec<MirScalarExpr>,
+    pub stream_key: Box<[MirScalarExpr]>,
     /// Columns to retain from the stream relation.
     /// These columns are those that are not redundant with `stream_key`,
     /// and cannot be read out of the key component of an arrangement.
-    pub stream_thinning: Vec<usize>,
+    pub stream_thinning: Box<[usize]>,
     /// The key expressions to use for the lookup relation.
-    pub lookup_key: Vec<MirScalarExpr>,
+    pub lookup_key: Box<[MirScalarExpr]>,
     /// The closure to apply to the concatenation of the key columns,
     /// the stream value columns, and the lookup value colunms.
     pub closure: JoinClosure,
@@ -191,9 +191,9 @@ impl LinearJoinPlan {
             // record the stage plan as next in the path.
             stage_plans.push(LinearStagePlan {
                 lookup_relation: *lookup_relation,
-                stream_key,
-                stream_thinning,
-                lookup_key: lookup_key.to_vec(),
+                stream_key: stream_key.into_boxed_slice(),
+                stream_thinning: stream_thinning.into_boxed_slice(),
+                lookup_key: lookup_key.to_vec().into_boxed_slice(),
                 closure,
             });
             unthinned_stream_arity = new_unthinned_stream_arity;
@@ -214,9 +214,10 @@ impl LinearJoinPlan {
         // Form and return the complete join plan.
         let plan = LinearJoinPlan {
             source_relation,
-            source_key: source_arrangement.map(|(key, _, _)| key.clone()),
+            source_key: source_arrangement
+                .map(|(key, _, _)| key.clone().into_boxed_slice()),
             initial_closure: None,
-            stage_plans,
+            stage_plans: stage_plans.into_boxed_slice(),
             final_closure,
         };
         (plan, requested)
