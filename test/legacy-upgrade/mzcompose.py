@@ -142,7 +142,7 @@ def get_all_and_latest_two_minor_mz_versions(
 ) -> tuple[list[MzVersion], list[MzVersion]]:
     current_version = MzVersion.parse_cargo()
     if use_versions_from_docs:
-        version_list = VersionsFromDocs(respect_released_tag=False)
+        version_list = VersionsFromDocs(respect_released_tag=False, skip_rc=True)
         all_versions = [v for v in version_list.all_versions() if v < current_version]
         tested_versions = version_list.minor_versions()[-2:]
     else:

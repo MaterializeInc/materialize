@@ -612,6 +612,7 @@ class VersionsFromDocs:
         respect_released_tag: bool,
         respect_date: bool = False,
         only_publish_helm_chart: bool = True,
+        skip_rc: bool = False,
     ) -> None:
         files = Path(MZ_ROOT / "doc" / "user" / "content" / "releases").glob("v*.md")
         self.versions = []
@@ -631,6 +632,8 @@ class VersionsFromDocs:
             current_rc = metadata.get("rc", 0)
 
             if current_rc > 0:
+                if skip_rc:
+                    continue
                 for rc in range(1, current_rc + 1):
                     version = MzVersion.parse_mz(f"{base}.{current_patch}-rc.{rc}")
                     if not respect_released_tag and version >= current_version:
