@@ -1286,3 +1286,89 @@ All query types work correctly with no regression:
 | Matcher | 72 | 64 | 8 bytes (11%) |
 | ReprRelationType | 48 | 40 | 8 bytes (17%) |
 | ColumnOrder | 16 | 8 | 8 bytes (50%) |
+
+## Session 19: Shrink Ident from 24 to 16 bytes via String→Box<str>
+
+**Date:** 2026-02-28
+
+### Changes
+
+Changed `Ident` (SQL identifier type) from `String` (24 bytes: ptr+len+capacity) to `Box<str>` (16 bytes: ptr+len). Identifiers are immutable after construction — they're created during SQL parsing and never grown — so the capacity field provided by `String` is pure waste.
+
+1. **`Ident(pub(crate) String)` → `Ident(pub(crate) Box<str>)`** (`src/sql-parser/src/ast/defs/name.rs`)
+   - Updated all factory methods (`new`, `new_lossy`, `new_unchecked`, `append_lossy`, `into_string`)
+   - `append_lossy` converts to String temporarily for mutation, then back to Box<str>
+   - **Ident: 24 → 16 bytes (33% reduction)**
+
+2. **Walkabout codegen fix** (`src/walkabout/src/ir.rs`, `src/walkabout/src/generated.rs`)
+   - Added `"str"` to the primitive type list so `Box<str>` is recognized as `Box<Primitive>`
+   - Updated fold/visit code generation: `Box<primitive>` passes through unchanged (nothing to fold/visit)
+   - Without this fix, the AST folder would try to recursively fold into `Box<str>` which doesn't make sense
+
+3. **`From<Ident> for Value`** (`src/sql-parser/src/ast/defs/value.rs`)
+   - `Self::String(ident.0)` → `Self::String(ident.0.into())` to convert Box<str> → String
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| Ident | 24 | 16 | 8 bytes (33%) |
+| UnresolvedDatabaseName | 24 | 16 | 8 bytes (33%) |
+| Option\<Ident\> | 24 | 16 | 8 bytes (33%) |
+
+### Why this is high-impact
+
+Ident is the most numerous AST node type in any SQL query. A simple `SELECT a, b FROM t WHERE c = 1` contains 4+ identifiers. More complex queries with qualified names (`schema.table.column`), aliases, joins, and subqueries easily contain 50-100+ identifiers.
+
+The savings compound in multiple ways:
+- **Direct inline savings**: Every struct with an `Ident` field saves 8 bytes (e.g., `TableAlias`, `ColumnDef`, 26+ `Statement` variants)
+- **Vec element savings**: Each element in `Vec<Ident>` saves 8 bytes. Qualified names like `UnresolvedItemName(Vec<Ident>)` save 8 bytes per path component (e.g., `db.schema.table` = 24 bytes saved)
+- **Option savings**: `Option<Ident>` shrinks from 24 to 16 bytes (e.g., `SelectItem::Expr { alias: Option<Ident> }`)
+- **No runtime cost**: `Box<str>` eliminates wasted capacity that `String` may allocate; there's no extra indirection since both are heap-allocated
+
+### Benchmark results
+
+All query types work correctly with no regression:
+
+| Query Type | Avg (ms) |
+|-----------|----------|
+| Simple SELECT (4 columns) | 3.70 |
+| Column aliases | 3.78 |
+| Qualified names | 4.96 |
+| Subquery with aliases | 5.34 |
+| UNION with aliases | 6.00 |
+| Self-join (many idents) | 10.38 |
+| CASE expression | 4.23 |
+| ORDER BY + LIMIT | 4.41 |
+| GROUP BY | 5.87 |
+
+### Files changed (4 files)
+
+- `src/sql-parser/src/ast/defs/name.rs` — Ident type + all factory methods + size test
+- `src/sql-parser/src/ast/defs/value.rs` — From<Ident> conversion
+- `src/walkabout/src/ir.rs` — Added "str" to primitive types
+- `src/walkabout/src/generated.rs` — Handle Box<primitive> in fold/visit codegen
+
+### Cumulative savings across all sessions (after session 19)
+
+| Type | Original | After all sessions | Total savings |
+|------|----------|-------------------|---------------|
+| Ident | 24 | 16 | 8 bytes (33%) |
+| Plan | ~1888 | 184 | ~1704 bytes (90%) |
+| MirScalarExpr | 88 | 48 | 40 bytes (45%) |
+| MirRelationExpr | 176 | 88 | 88 bytes (50%) |
+| HirScalarExpr | 192 | 80 | 112 bytes (58%) |
+| HirRelationExpr | 456 | 72 | 384 bytes (84%) |
+| AggregateFunc | 88 | 48 | 40 bytes (45%) |
+| AggregateExpr | 184 | 104 | 80 bytes (43%) |
+| UnaryFunc | 72 | 32 | 40 bytes (56%) |
+| BinaryFunc | 48 | 24 | 24 bytes (50%) |
+| VariadicFunc | 40 | 24 | 16 bytes (40%) |
+| TableFunc | 80 | 40 | 40 bytes (50%) |
+| EvalError | 56 | 40 | 16 bytes (29%) |
+| JoinImplementation | 120 | 64 | 56 bytes (47%) |
+| SqlScalarType | 32 | 24 | 8 bytes (25%) |
+| SqlColumnType | 40 | 32 | 8 bytes (20%) |
+| Matcher | 72 | 64 | 8 bytes (11%) |
+| ReprRelationType | 48 | 40 | 8 bytes (17%) |
+| ColumnOrder | 16 | 8 | 8 bytes (50%) |
