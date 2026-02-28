@@ -1769,3 +1769,91 @@ Note: Live Materialize benchmarks could not be run due to a pre-existing panic i
 | ReprRelationType | 48 | 40 | 8 bytes (17%) |
 | ColumnOrder | 16 | 8 | 8 bytes (50%) |
 | Op | 48 | 32 | 16 bytes (33%) |
+
+## Session 24: Shrink RowSetFinishing from 72 to 56 bytes via Vec→Box<[T]>
+
+**Date:** 2026-02-28
+
+### Changes
+
+Convert two `Vec<T>` fields in `RowSetFinishing` to `Box<[T]>`, eliminating the unused capacity field. These fields are constructed once during planning and never grown afterward.
+
+1. **`order_by: Vec<ColumnOrder>` → `Box<[ColumnOrder]>`** (saves 8 bytes: 24→16)
+   - Order-by columns are set during planning and never modified after construction
+   - `Box<[T]>` stores `(ptr, len)` vs `Vec<T>`'s `(ptr, len, capacity)`
+
+2. **`project: Vec<usize>` → `Box<[usize]>`** (saves 8 bytes: 24→16)
+   - Projection columns are set during planning and never modified after construction
+   - Same `Vec→Box<[T]>` pattern used successfully in sessions 7, 9, 13, 14, 17
+
+### Key insight: cascading effect on Plan enum
+
+`RowSetFinishing` is stored inline in `SelectPlan`, which was the largest unboxed variant of the `Plan` enum at 184 bytes. Shrinking RowSetFinishing by 16 bytes shrinks SelectPlan from 184 to 168 bytes. However, `CreateClusterPlan` (176 bytes, also unboxed) is now the largest variant, so the Plan enum settles at 176 bytes instead of 168.
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| RowSetFinishing | 72 | 56 | 16 bytes (22%) |
+| SelectPlan | 184 | 168 | 16 bytes (9%) |
+| Plan (sql) | 184 | 176 | 8 bytes (4%) |
+
+### Implementation note: preserving try_push_projection_order_by
+
+The `try_push_projection_order_by` function mutates `project` and `order_by` fields via `&mut Vec<T>`. Rather than changing its signature (which would also affect an internal query planner call site with local `Vec<T>` variables), the RowSetFinishing construction was restructured: `try_push_projection_order_by` is now called *before* constructing the finishing, while the `project` and `order_by` variables are still `Vec<T>`. The results are then converted to `Box<[T]>` via `.into_boxed_slice()` when constructing the finishing.
+
+### Cascading effects
+
+- **SelectPlan** shrinks from 184 to 168 bytes — every `SELECT` statement uses less stack space
+- **Plan enum** shrinks from 184 to 176 bytes — every SQL statement uses 8 fewer bytes
+- Every `RowSetFinishing` instance (in optimizer, coordinator, compute workers) saves 16 bytes
+- `RowSetFinishing` is stored in `PeekContext`, `ReadThenWritePlan`, and passed to compute workers — all benefit
+
+### Tests
+
+All unit tests pass:
+- `mz-expr` lib tests: 50/50 passed (including `type_size_assertions` with RowSetFinishing=56)
+- `mz-sql` lib tests: 7/7 passed (including `type_size_assertions` with Plan=176, SelectPlan=168)
+- Full compilation: `mz-expr`, `mz-sql`, `mz-adapter`, `mz-compute`, `mz-environmentd` all compile cleanly
+
+Note: Live Materialize benchmarks could not be run due to CockroachDB not being available (same infrastructure issue as sessions 22-23).
+
+### Files changed (7 files)
+
+- `src/expr/src/relation.rs` — `order_by: Vec<ColumnOrder>` → `Box<[ColumnOrder]>`, `project: Vec<usize>` → `Box<[usize]>`, trivial() constructor, `.to_vec()` for with_projection, size assertion
+- `src/sql/src/plan.rs` — Plan size assertion 184→176, added SelectPlan=168 assertion
+- `src/sql/src/plan/query.rs` — Restructured plan_root_query/plan_ct_query to call try_push_projection_order_by before constructing finishing, `.into_boxed_slice()` at 3 construction sites
+- `src/sql/src/plan/hir.rs` — trivial_row_set_finishing_hir Box::default()/into_boxed_slice(), `.into_vec()` for top_k/project consumption
+- `src/adapter/src/coord/sequencer.rs` — Box::default()/into_boxed_slice() at construction site
+- `src/adapter/src/coord/sequencer/inner.rs` — Box::default()/into_boxed_slice() at construction site
+- `src/adapter/src/coord/peek.rs` — `.into_vec()` for RowSetFinishingIncremental::new
+
+### Cumulative savings across all sessions (after session 24)
+
+| Type | Original | After all sessions | Total savings |
+|------|----------|-------------------|---------------|
+| Expr\<Raw\> | 240 | 56 | 184 bytes (77%) |
+| Value | 48 | 40 | 8 bytes (17%) |
+| PlanNode | 384 | 104 | 280 bytes (73%) |
+| Ident | 24 | 16 | 8 bytes (33%) |
+| Plan (sql) | ~1888 | 176 | ~1712 bytes (91%) |
+| SelectPlan | 184 | 168 | 16 bytes (9%) |
+| RowSetFinishing | 72 | 56 | 16 bytes (22%) |
+| MirScalarExpr | 88 | 48 | 40 bytes (45%) |
+| MirRelationExpr | 176 | 88 | 88 bytes (50%) |
+| HirScalarExpr | 192 | 80 | 112 bytes (58%) |
+| HirRelationExpr | 456 | 72 | 384 bytes (84%) |
+| AggregateFunc | 88 | 48 | 40 bytes (45%) |
+| AggregateExpr | 184 | 104 | 80 bytes (43%) |
+| UnaryFunc | 72 | 32 | 40 bytes (56%) |
+| BinaryFunc | 48 | 24 | 24 bytes (50%) |
+| VariadicFunc | 40 | 24 | 16 bytes (40%) |
+| TableFunc | 80 | 40 | 40 bytes (50%) |
+| EvalError | 56 | 40 | 16 bytes (29%) |
+| JoinImplementation | 120 | 64 | 56 bytes (47%) |
+| SqlScalarType | 32 | 24 | 8 bytes (25%) |
+| SqlColumnType | 40 | 32 | 8 bytes (20%) |
+| Matcher | 72 | 64 | 8 bytes (11%) |
+| ReprRelationType | 48 | 40 | 8 bytes (17%) |
+| ColumnOrder | 16 | 8 | 8 bytes (50%) |
+| Op | 48 | 32 | 16 bytes (33%) |

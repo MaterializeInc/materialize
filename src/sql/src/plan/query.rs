@@ -138,26 +138,26 @@ pub fn plan_root_query(
     let PlannedQuery {
         mut expr,
         scope,
-        order_by,
+        mut order_by,
         limit,
         offset,
-        project,
+        mut project,
         group_size_hints,
     } = plan_query(&mut qcx, &query)?;
-
-    let mut finishing = RowSetFinishing {
-        limit,
-        offset,
-        project,
-        order_by,
-    };
 
     // Attempt to push the finishing's ordering past its projection. This allows
     // data to be projected down on the workers rather than the coordinator. It
     // also improves the optimizer's demand analysis, as the optimizer can only
     // reason about demand information in `expr` (i.e., it can't see
     // `finishing.project`).
-    try_push_projection_order_by(&mut expr, &mut finishing.project, &mut finishing.order_by);
+    try_push_projection_order_by(&mut expr, &mut project, &mut order_by);
+
+    let mut finishing = RowSetFinishing {
+        limit,
+        offset,
+        project: project.into_boxed_slice(),
+        order_by: order_by.into_boxed_slice(),
+    };
 
     if lifetime.is_maintained() {
         expr.finish_maintained(&mut finishing, group_size_hints);
@@ -191,26 +191,26 @@ pub fn plan_ct_query(
     let PlannedQuery {
         mut expr,
         scope,
-        order_by,
+        mut order_by,
         limit,
         offset,
-        project,
+        mut project,
         group_size_hints,
     } = plan_query(qcx, &query)?;
-
-    let mut finishing = RowSetFinishing {
-        limit,
-        offset,
-        project,
-        order_by,
-    };
 
     // Attempt to push the finishing's ordering past its projection. This allows
     // data to be projected down on the workers rather than the coordinator. It
     // also improves the optimizer's demand analysis, as the optimizer can only
     // reason about demand information in `expr` (i.e., it can't see
     // `finishing.project`).
-    try_push_projection_order_by(&mut expr, &mut finishing.project, &mut finishing.order_by);
+    try_push_projection_order_by(&mut expr, &mut project, &mut order_by);
+
+    let mut finishing = RowSetFinishing {
+        limit,
+        offset,
+        project: project.into_boxed_slice(),
+        order_by: order_by.into_boxed_slice(),
+    };
 
     expr.finish_maintained(&mut finishing, group_size_hints);
 
@@ -871,10 +871,10 @@ pub fn plan_mutation_query_inner(
     }
 
     let finishing = RowSetFinishing {
-        order_by: vec![],
+        order_by: Box::default(),
         limit: None,
         offset: 0,
-        project: (0..desc.arity()).collect(),
+        project: (0..desc.arity()).collect::<Vec<_>>().into_boxed_slice(),
     };
 
     Ok(ReadThenWritePlan {

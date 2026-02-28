@@ -2564,10 +2564,10 @@ impl Coordinator {
                 };
 
                 let finishing = RowSetFinishing {
-                    order_by: vec![],
+                    order_by: Box::default(),
                     limit: None,
                     offset: 0,
-                    project: (0..desc_arity).collect(),
+                    project: (0..desc_arity).collect::<Vec<_>>().into_boxed_slice(),
                 };
 
                 let read_then_write_plan = plan::ReadThenWritePlan {

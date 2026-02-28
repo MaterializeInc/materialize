@@ -2326,12 +2326,12 @@ impl HirRelationExpr {
                     },
                 ),
                 vec![],
-                old_finishing.order_by,
+                old_finishing.order_by.into_vec(),
                 old_finishing.limit,
                 old_finishing.offset,
                 group_size_hints.limit_input_group_size,
             )
-            .project(old_finishing.project);
+            .project(old_finishing.project.into_vec());
         }
     }
 
@@ -2343,10 +2343,10 @@ impl HirRelationExpr {
         arity: usize,
     ) -> RowSetFinishing<HirScalarExpr, HirScalarExpr> {
         RowSetFinishing {
-            order_by: Vec::new(),
+            order_by: Box::default(),
             limit: None,
             offset: HirScalarExpr::literal(Datum::Int64(0), SqlScalarType::Int64),
-            project: (0..arity).collect(),
+            project: (0..arity).collect::<Vec<_>>().into_boxed_slice(),
         }
     }
 

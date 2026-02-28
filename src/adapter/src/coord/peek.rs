@@ -1084,7 +1084,7 @@ impl crate::coord::Coordinator {
                     let mut incremental_finishing = RowSetFinishingIncremental::new(
                         finishing.offset,
                         finishing.limit,
-                        finishing.project,
+                        finishing.project.into_vec(),
                         max_returned_query_size,
                     );
 

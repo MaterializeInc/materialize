@@ -2199,7 +2199,8 @@ mod tests {
     /// now dominated by `SelectPlan` (the hot-path variant, kept unboxed).
     #[mz_ore::test]
     fn type_size_assertions() {
-        assert_eq!(size_of::<Plan>(), 184);
+        assert_eq!(size_of::<Plan>(), 176);
+        assert_eq!(size_of::<SelectPlan>(), 168);
         assert_eq!(size_of::<PreparePlan>(), 160);
         assert_eq!(size_of::<DeclarePlan>(), 128);
     }

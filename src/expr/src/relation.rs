@@ -3498,23 +3498,23 @@ impl JoinInputCharacteristicsV1 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RowSetFinishing<L = NonNeg<i64>, O = usize> {
     /// Order rows by the given columns.
-    pub order_by: Vec<ColumnOrder>,
+    pub order_by: Box<[ColumnOrder]>,
     /// Include only as many rows (after offset).
     pub limit: Option<L>,
     /// Omit as many rows.
     pub offset: O,
     /// Include only given columns.
-    pub project: Vec<usize>,
+    pub project: Box<[usize]>,
 }
 
 impl<L> RowSetFinishing<L> {
     /// Returns a trivial finishing, i.e., that does nothing to the result set.
     pub fn trivial(arity: usize) -> RowSetFinishing<L> {
         RowSetFinishing {
-            order_by: Vec::new(),
+            order_by: Box::default(),
             limit: None,
             offset: 0,
-            project: (0..arity).collect(),
+            project: (0..arity).collect::<Vec<_>>().into_boxed_slice(),
         }
     }
     /// True if the finishing does nothing to any result set.
@@ -3589,7 +3589,7 @@ impl RowSetFinishing {
         let mut iter = sorted_view
             .into_row_iter()
             .apply_offset(self.offset)
-            .with_projection(self.project.clone());
+            .with_projection(self.project.to_vec());
 
         if let Some(limit) = self.limit {
             let limit = u64::from(limit);
@@ -3704,7 +3704,7 @@ impl RowSetFinishingIncremental {
         let mut iter = sorted_view
             .into_row_iter()
             .apply_offset(self.remaining_offset)
-            .with_projection(self.project.clone());
+            .with_projection(self.project.to_vec());
 
         if let Some(limit) = self.remaining_limit {
             iter = iter.with_limit(limit);
@@ -4039,6 +4039,7 @@ mod tests {
         assert_eq!(size_of::<JoinImplementation>(), 64);
         assert_eq!(size_of::<TableFunc>(), 40);
         assert_eq!(size_of::<mz_repr::ReprRelationType>(), 40);
+        assert_eq!(size_of::<RowSetFinishing>(), 56);
     }
 
     #[mz_ore::test]
@@ -4048,10 +4049,10 @@ mod tests {
                 column: 4,
                 desc: true,
                 nulls_last: true,
-            }],
+            }].into_boxed_slice(),
             limit: Some(NonNeg::try_from(7).unwrap()),
             offset: Default::default(),
-            project: vec![1, 3, 4, 5],
+            project: vec![1, 3, 4, 5].into_boxed_slice(),
         };
 
         let mode = HumanizedExplain::new(false);

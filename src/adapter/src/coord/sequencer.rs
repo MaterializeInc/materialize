@@ -916,10 +916,10 @@ impl Coordinator {
         }]))?;
         if !plan.returning.is_empty() {
             let finishing = RowSetFinishing {
-                order_by: Vec::new(),
+                order_by: Box::default(),
                 limit: None,
                 offset: 0,
-                project: (0..plan.returning[0].0.iter().count()).collect(),
+                project: (0..plan.returning[0].0.iter().count()).collect::<Vec<_>>().into_boxed_slice(),
             };
             let max_returned_query_size = session.vars().max_query_result_size();
             let duration_histogram = session.metrics().row_set_finishing_seconds();
