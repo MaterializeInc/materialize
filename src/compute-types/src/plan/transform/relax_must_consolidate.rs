@@ -52,31 +52,26 @@ impl<T> BottomUpTransform<T> for RelaxMustConsolidate<T> {
         // Look at `input_infos` and type of `Plan` node and refine the `must_consolidate` flag.
         // Note that the LIR nodes we care about have a single input.
         match (&mut plan.node, input_infos) {
-            (
-                PlanNode::Reduce {
-                    plan:
-                        ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(MonotonicPlan {
-                            must_consolidate,
-                            ..
-                        })),
+            (PlanNode::Reduce { plan, .. }, [PhysicallyMonotonic(true)]) => {
+                if let ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(MonotonicPlan {
+                    must_consolidate,
                     ..
+                })) = plan.as_mut()
+                {
+                    *must_consolidate = false;
                 }
-                | PlanNode::TopK {
-                    top_k_plan:
-                        TopKPlan::MonotonicTop1(MonotonicTop1Plan {
-                            must_consolidate, ..
-                        }),
-                    ..
+            }
+            (PlanNode::TopK { top_k_plan, .. }, [PhysicallyMonotonic(true)]) => {
+                match top_k_plan.as_mut() {
+                    TopKPlan::MonotonicTop1(MonotonicTop1Plan {
+                        must_consolidate, ..
+                    })
+                    | TopKPlan::MonotonicTopK(MonotonicTopKPlan {
+                        must_consolidate, ..
+                    }) => *must_consolidate = false,
+                    _ => {}
                 }
-                | PlanNode::TopK {
-                    top_k_plan:
-                        TopKPlan::MonotonicTopK(MonotonicTopKPlan {
-                            must_consolidate, ..
-                        }),
-                    ..
-                },
-                [PhysicallyMonotonic(true)],
-            ) => *must_consolidate = false,
+            }
             _ => (),
         }
     }

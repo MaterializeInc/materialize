@@ -1372,3 +1372,70 @@ All query types work correctly with no regression:
 | Matcher | 72 | 64 | 8 bytes (11%) |
 | ReprRelationType | 48 | 40 | 8 bytes (17%) |
 | ColumnOrder | 16 | 8 | 8 bytes (50%) |
+
+---
+
+## Session 20: Shrink PlanNode (compute LIR) via boxing large sub-types
+
+**Date:** 2026-02-28
+
+### Changes
+
+Boxed 9 large inline fields in `PlanNode<T>` (the compute LIR plan enum). These fields are constructed once during plan lowering and read during dataflow rendering/explain. The extra Box indirection is negligible since these are not on hot eval paths.
+
+Fields boxed:
+1. `Get { plan: Box<GetPlan> }` — GetPlan is 136 bytes
+2. `Mfp { mfp: Box<MapFilterProject> }` — MapFilterProject is 80 bytes
+3. `FlatMap { mfp_after: Box<MapFilterProject> }` — 80 bytes
+4. `Join { plan: Box<JoinPlan> }` — JoinPlan is 264 bytes (largest sub-type)
+5. `Reduce { key_val_plan: Box<KeyValPlan> }` — KeyValPlan is 160 bytes
+6. `Reduce { plan: Box<ReducePlan> }` — ReducePlan is 112 bytes
+7. `Reduce { mfp_after: Box<MapFilterProject> }` — 80 bytes
+8. `TopK { top_k_plan: Box<TopKPlan> }` — TopKPlan is 136 bytes
+9. `ArrangeBy { input_mfp: Box<MapFilterProject> }` — 80 bytes
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| PlanNode\<Timestamp\> | 384 | 104 | 280 bytes (73%) |
+| Plan\<Timestamp\> | 392 | 112 | 280 bytes (71%) |
+
+### Why this is high-impact
+
+`PlanNode` is the LIR (Low-level IR) stored per-dataflow on every compute worker. Each dataflow's plan tree consists of many PlanNode instances that persist in memory for the lifetime of the dataflow. With many dataflows active, the cumulative savings are significant.
+
+The FlatMap variant (104 bytes with 3 Vecs + TableFunc + Box<MapFilterProject>) is now the largest variant, determining the overall enum size.
+
+### Files changed (5 files)
+
+- `src/compute-types/src/plan.rs` — Field type changes + size assertion test
+- `src/compute-types/src/plan/lowering.rs` — Box::new() at ~12 construction sites
+- `src/compute-types/src/plan/render_plan.rs` — Dereference boxed fields in PlanNode→RenderPlanNode conversion
+- `src/compute-types/src/explain/text.rs` — Dereference in pattern matches and mode.expr() calls
+- `src/compute-types/src/plan/transform/relax_must_consolidate.rs` — Restructured match to use nested if-let for boxed enums
+
+### Cumulative savings across all sessions (after session 20)
+
+| Type | Original | After all sessions | Total savings |
+|------|----------|-------------------|---------------|
+| PlanNode | 384 | 104 | 280 bytes (73%) |
+| Ident | 24 | 16 | 8 bytes (33%) |
+| Plan (sql) | ~1888 | 184 | ~1704 bytes (90%) |
+| MirScalarExpr | 88 | 48 | 40 bytes (45%) |
+| MirRelationExpr | 176 | 88 | 88 bytes (50%) |
+| HirScalarExpr | 192 | 80 | 112 bytes (58%) |
+| HirRelationExpr | 456 | 72 | 384 bytes (84%) |
+| AggregateFunc | 88 | 48 | 40 bytes (45%) |
+| AggregateExpr | 184 | 104 | 80 bytes (43%) |
+| UnaryFunc | 72 | 32 | 40 bytes (56%) |
+| BinaryFunc | 48 | 24 | 24 bytes (50%) |
+| VariadicFunc | 40 | 24 | 16 bytes (40%) |
+| TableFunc | 80 | 40 | 40 bytes (50%) |
+| EvalError | 56 | 40 | 16 bytes (29%) |
+| JoinImplementation | 120 | 64 | 56 bytes (47%) |
+| SqlScalarType | 32 | 24 | 8 bytes (25%) |
+| SqlColumnType | 40 | 32 | 8 bytes (20%) |
+| Matcher | 72 | 64 | 8 bytes (11%) |
+| ReprRelationType | 48 | 40 | 8 bytes (17%) |
+| ColumnOrder | 16 | 8 | 8 bytes (50%) |

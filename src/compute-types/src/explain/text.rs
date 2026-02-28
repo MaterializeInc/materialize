@@ -107,7 +107,7 @@ impl Plan {
                 };
                 // Render plan-specific fields.
                 use crate::plan::GetPlan;
-                match plan {
+                match &**plan {
                     GetPlan::PassArrangements => {
                         if keys.raw && keys.arranged.is_empty() {
                             writeln!(f, "{}→Stream {id}{annotations}", ctx.indent)?;
@@ -213,7 +213,7 @@ impl Plan {
                 ctx.indent.set();
 
                 ctx.indent += 1;
-                mode.expr(mfp, None).fmt_default_text(f, ctx)?;
+                mode.expr(&**mfp, None).fmt_default_text(f, ctx)?;
 
                 // one more nesting level if we showed anything for the MFP
                 if !mfp.is_identity() {
@@ -233,7 +233,7 @@ impl Plan {
                 if !mfp_after.expressions.is_empty() || !mfp_after.predicates.is_empty() {
                     writeln!(f, "{}→Fused with Child Map/Filter/Project", ctx.indent)?;
                     ctx.indent += 1;
-                    mode.expr(mfp_after, None).fmt_default_text(f, ctx)?;
+                    mode.expr(&**mfp_after, None).fmt_default_text(f, ctx)?;
                     ctx.indent += 1;
                 }
 
@@ -252,7 +252,7 @@ impl Plan {
             }
             Join { inputs, plan } => {
                 use crate::plan::join::JoinPlan;
-                match plan {
+                match &**plan {
                     JoinPlan::Linear(plan) => {
                         write!(f, "{}→Differential Join", ctx.indent)?;
                         write!(f, " %{}", plan.source_relation)?;
@@ -295,12 +295,12 @@ impl Plan {
                 if !mfp_after.expressions.is_empty() || !mfp_after.predicates.is_empty() {
                     writeln!(f, "{}→Fused with Child Map/Filter/Project", ctx.indent)?;
                     ctx.indent += 1;
-                    mode.expr(mfp_after, None).fmt_default_text(f, ctx)?;
+                    mode.expr(&**mfp_after, None).fmt_default_text(f, ctx)?;
                     ctx.indent += 1;
                 }
 
                 use crate::plan::reduce::ReducePlan;
-                match plan {
+                match &**plan {
                     ReducePlan::Distinct => {
                         writeln!(f, "{}→Distinct GroupAggregate{annotations}", ctx.indent)?;
                     }
@@ -376,7 +376,7 @@ impl Plan {
             }
             TopK { input, top_k_plan } => {
                 use crate::plan::top_k::TopKPlan;
-                match top_k_plan {
+                match &**top_k_plan {
                     TopKPlan::MonotonicTop1(plan) => {
                         write!(f, "{}→", ctx.indent)?;
                         if plan.must_consolidate {
@@ -514,7 +514,7 @@ impl Plan {
                 if !input_mfp.is_identity() {
                     ctx.indent += 1;
                     writeln!(f, "{}→Fused with Parent Map/Filter/Project", ctx.indent)?;
-                    ctx.indented(|ctx| mode.expr(input_mfp, None).fmt_default_text(f, ctx))?;
+                    ctx.indented(|ctx| mode.expr(&**input_mfp, None).fmt_default_text(f, ctx))?;
                 }
 
                 ctx.indent += 1;
@@ -583,7 +583,7 @@ impl Plan {
                 };
                 // Render plan-specific fields.
                 use crate::plan::GetPlan;
-                match plan {
+                match &**plan {
                     GetPlan::PassArrangements => {
                         writeln!(
                             f,
@@ -671,7 +671,7 @@ impl Plan {
             } => {
                 writeln!(f, "{}Mfp{}", ctx.indent, annotations)?;
                 ctx.indented(|ctx| {
-                    mode.expr(mfp, None).fmt_text(f, ctx)?;
+                    mode.expr(&**mfp, None).fmt_text(f, ctx)?;
                     if let Some((key, val)) = input_key_val {
                         {
                             let key = mode.seq(key, None);
@@ -708,14 +708,14 @@ impl Plan {
                     }
                     if !mfp_after.is_identity() {
                         writeln!(f, "{}mfp_after", ctx.indent)?;
-                        ctx.indented(|ctx| mode.expr(mfp_after, None).fmt_text(f, ctx))?;
+                        ctx.indented(|ctx| mode.expr(&**mfp_after, None).fmt_text(f, ctx))?;
                     }
                     input.fmt_text(f, ctx)
                 })?;
             }
             Join { inputs, plan } => {
                 use crate::plan::join::JoinPlan;
-                match plan {
+                match &**plan {
                     JoinPlan::Linear(plan) => {
                         writeln!(f, "{}Join::Linear{}", ctx.indent, annotations)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
@@ -740,7 +740,7 @@ impl Plan {
                 mfp_after,
             } => {
                 use crate::plan::reduce::ReducePlan;
-                match plan {
+                match &**plan {
                     ReducePlan::Distinct => {
                         writeln!(f, "{}Reduce::Distinct{}", ctx.indent, annotations)?;
                     }
@@ -783,7 +783,7 @@ impl Plan {
                     }
                     if !mfp_after.is_identity() {
                         writeln!(f, "{}mfp_after", ctx.indent)?;
-                        ctx.indented(|ctx| mode.expr(mfp_after, None).fmt_text(f, ctx))?;
+                        ctx.indented(|ctx| mode.expr(&**mfp_after, None).fmt_text(f, ctx))?;
                     }
 
                     input.fmt_text(f, ctx)
@@ -791,7 +791,7 @@ impl Plan {
             }
             TopK { input, top_k_plan } => {
                 use crate::plan::top_k::TopKPlan;
-                match top_k_plan {
+                match &**top_k_plan {
                     TopKPlan::MonotonicTop1(plan) => {
                         write!(f, "{}TopK::MonotonicTop1", ctx.indent)?;
                         if plan.group_key.len() > 0 {
@@ -905,7 +905,7 @@ impl Plan {
                         let key = CompactScalars(key);
                         writeln!(f, "{}input_key=[{}]", ctx.indent, key)?;
                     }
-                    mode.expr(input_mfp, None).fmt_text(f, ctx)?;
+                    mode.expr(&**input_mfp, None).fmt_text(f, ctx)?;
                     forms.fmt_text(f, ctx)?;
                     // Render input
                     input.fmt_text(f, ctx)

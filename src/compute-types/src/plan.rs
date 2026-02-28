@@ -173,7 +173,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         // rows, by using `mfp` first on borrowed data).
         keys: AvailableCollections,
         /// The actions to take when introducing the collection.
-        plan: GetPlan,
+        plan: Box<GetPlan>,
     },
     /// Binds `value` to `id`, and then results in `body` with that binding.
     ///
@@ -217,7 +217,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// The input collection.
         input: Box<Plan<T>>,
         /// Linear operator to apply to each record.
-        mfp: MapFilterProject,
+        mfp: Box<MapFilterProject>,
         /// Whether the input is from an arrangement, and if so,
         /// whether we can seek to a specific value therein
         input_key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
@@ -245,7 +245,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// The variable-record emitting function.
         func: TableFunc,
         /// Linear operator to apply to each record produced by `func`.
-        mfp_after: MapFilterProject,
+        mfp_after: Box<MapFilterProject>,
     },
     /// A multiway relational equijoin, with fused map, filter, and projection.
     ///
@@ -260,7 +260,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// This includes information about the implementation strategy, but also
         /// any map, filter, project work that we might follow the join with, but
         /// potentially pushed down into the implementation of the join.
-        plan: JoinPlan,
+        plan: Box<JoinPlan>,
     },
     /// Aggregation by key.
     Reduce {
@@ -270,19 +270,19 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// The input collection.
         input: Box<Plan<T>>,
         /// A plan for changing input records into key, value pairs.
-        key_val_plan: KeyValPlan,
+        key_val_plan: Box<KeyValPlan>,
         /// A plan for performing the reduce.
         ///
         /// The implementation of reduction has several different strategies based
         /// on the properties of the reduction, and the input itself. Please check
         /// out the documentation for this type for more detail.
-        plan: ReducePlan,
+        plan: Box<ReducePlan>,
         /// An MFP that must be applied to results. The projection part of this
         /// MFP must preserve the key for the reduction; otherwise, the results
         /// become undefined. Additionally, the MFP must be free from temporal
         /// predicates so that it can be readily evaluated.
         /// TODO(ggevay): should we wrap this in [`mz_expr::SafeMfpPlan`]?
-        mfp_after: MapFilterProject,
+        mfp_after: Box<MapFilterProject>,
     },
     /// Key-based "Top K" operator, retaining the first K records in each group.
     TopK {
@@ -293,7 +293,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// The implementation of reduction has several different strategies based
         /// on the properties of the reduction, and the input itself. Please check
         /// out the documentation for this type for more detail.
-        top_k_plan: TopKPlan,
+        top_k_plan: Box<TopKPlan>,
     },
     /// Inverts the sign of each update.
     Negate {
@@ -338,7 +338,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// The input collection.
         input: Box<Plan<T>>,
         /// The MFP that must be applied to the input.
-        input_mfp: MapFilterProject,
+        input_mfp: Box<MapFilterProject>,
         /// A list of arrangement keys, and possibly a raw collection,
         /// that will be added to those of the input. Does not include
         /// any other existing arrangements.
@@ -568,7 +568,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     let node = &mut expression.node;
                     if let PlanNode::Get { id, plan, .. } = node {
                         if *id == mz_expr::Id::Global(*source_id) {
-                            match plan {
+                            match &mut **plan {
                                 GetPlan::Collection(mfp) => mfps.push(mfp),
                                 GetPlan::PassArrangements => {
                                     identity_present = true;
@@ -660,7 +660,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 match node {
                     PlanNode::Reduce { plan, .. } => {
                         // Upgrade non-monotonic hierarchical plans to monotonic with mandatory consolidation.
-                        match plan {
+                        match &mut **plan {
                             ReducePlan::Hierarchical(hierarchical) => {
                                 hierarchical.as_monotonic(true);
                             }
@@ -819,4 +819,22 @@ fn bucketing_of_expected_group_size(expected_group_size: Option<u64>) -> Vec<u64
 
     buckets.reverse();
     buckets
+}
+
+#[cfg(test)]
+mod tests {
+    use std::mem::size_of;
+
+    use super::*;
+
+    /// Guard against regressions in PlanNode size.
+    #[test]
+    fn type_size_assertions() {
+        // PlanNode was 384 bytes before boxing large sub-types.
+        // After boxing GetPlan, JoinPlan, KeyValPlan, ReducePlan, TopKPlan,
+        // and MapFilterProject (in 4 positions), it should be much smaller.
+        assert_eq!(size_of::<PlanNode>(), 104);
+        // Plan wraps PlanNode with a LirId (u64).
+        assert_eq!(size_of::<Plan>(), 112);
+    }
 }

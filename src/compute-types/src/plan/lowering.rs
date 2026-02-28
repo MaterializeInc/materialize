@@ -265,7 +265,7 @@ impl Context {
                 let node = PlanNode::Get {
                     id: id.clone(),
                     keys: in_keys,
-                    plan,
+                    plan: Box::new(plan),
                 };
                 // Return the plan, and any keys if an identity `mfp`.
                 (node.as_plan(lir_id), out_keys)
@@ -348,7 +348,7 @@ impl Context {
                                         PlanNode::ArrangeBy {
                                             input_key,
                                             input: body,
-                                            input_mfp,
+                                            input_mfp: Box::new(input_mfp),
                                             forms,
                                         }
                                         .as_plan(inner_lir_id),
@@ -361,7 +361,7 @@ impl Context {
                                 PlanNode::ArrangeBy {
                                     input_key,
                                     input: Box::new(lir_value),
-                                    input_mfp,
+                                    input_mfp: Box::new(input_mfp),
                                     forms,
                                 }
                                 .as_plan(lir_id)
@@ -537,7 +537,7 @@ impl Context {
                             input: Box::new(input),
                             exprs: exprs.clone(),
                             func: (**func).clone(),
-                            mfp_after: mfp,
+                            mfp_after: Box::new(mfp),
                         }
                         .as_plan(lir_id),
                         AvailableCollections::new_raw(),
@@ -676,7 +676,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 (
                     PlanNode::Join {
                         inputs: plans,
-                        plan,
+                        plan: Box::new(plan),
                     }
                     .as_plan(lir_id),
                     AvailableCollections::new_raw(),
@@ -744,7 +744,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 (
                     PlanNode::TopK {
                         input: Box::new(input),
-                        top_k_plan,
+                        top_k_plan: Box::new(top_k_plan),
                     }
                     .as_plan(lir_id),
                     AvailableCollections::new_raw(),
@@ -879,7 +879,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         PlanNode::ArrangeBy {
                             input_key,
                             input: Box::new(input),
-                            input_mfp,
+                            input_mfp: Box::new(input_mfp),
                             forms,
                         }
                         .as_plan(lir_id),
@@ -958,7 +958,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 if val.is_some() {
                     plan = PlanNode::Mfp {
                         input: Box::new(plan),
-                        mfp,
+                        mfp: Box::new(mfp),
                         input_key_val: Some((key, val)),
                     }
                     .as_plan(lir_id)
@@ -967,7 +967,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 let lir_id = self.allocate_lir_id();
                 plan = PlanNode::Mfp {
                     input: Box::new(plan),
-                    mfp,
+                    mfp: Box::new(mfp),
                     input_key_val,
                 }
                 .as_plan(lir_id);
@@ -1038,9 +1038,9 @@ This is not expected to cause incorrect results, but could indicate a performanc
             PlanNode::Reduce {
                 input_key,
                 input: Box::new(input),
-                key_val_plan,
-                plan: reduce_plan,
-                mfp_after,
+                key_val_plan: Box::new(key_val_plan),
+                plan: Box::new(reduce_plan),
+                mfp_after: Box::new(mfp_after),
             }
             .as_plan(lir_id),
             output_keys,
@@ -1093,7 +1093,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             PlanNode::ArrangeBy {
                 input_key,
                 input: Box::new(plan),
-                input_mfp,
+                input_mfp: Box::new(input_mfp),
                 forms: collections,
             }
             .as_plan(lir_id)
