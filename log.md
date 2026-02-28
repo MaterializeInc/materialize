@@ -987,7 +987,7 @@ All query types work correctly with no performance regression:
 | MirScalarExpr | 88 | 48 | 40 bytes (45%) |
 | AggregateExpr | 184 | 104 | 80 bytes (43%) |
 
-### Cumulative savings across all sessions
+### Cumulative savings across all sessions (after session 15)
 
 | Type | Original | After all sessions | Total savings |
 |------|----------|-------------------|---------------|
@@ -1007,3 +1007,94 @@ All query types work correctly with no performance regression:
 | SqlColumnType | 40 | 32 | 8 bytes (20%) |
 | Matcher | 72 | 64 | 8 bytes (11%) |
 | ReprRelationType | 48 | 40 | 8 bytes (17%) |
+
+## Session 16: Shrink ColumnOrder from 16 to 8 bytes via usize→u32
+
+**Date:** 2026-02-28
+
+### Changes
+
+Changed `ColumnOrder::column` from `usize` (8 bytes) to `u32` (4 bytes):
+
+- `ColumnOrder` previously contained `column: usize` (8 bytes) + `desc: bool` (1 byte) + `nulls_last: bool` (1 byte) + padding = 16 bytes
+- With `column: u32` (4 bytes) + `desc: bool` (1 byte) + `nulls_last: bool` (1 byte) + padding = 8 bytes
+- No table can have more than ~4 billion columns, so `u32` is more than sufficient
+- Unlike boxing, this has **zero overhead** — no extra indirection, no extra allocation
+
+### Key insight: non-boxing size reduction
+
+This is a rare opportunity to shrink a type *without* boxing. Most previous sessions achieved savings by boxing large fields behind `Box<T>`, which adds indirection. Here, we simply use a smaller integer type for a field that never needs 64 bits. The savings are "pure" — every `ColumnOrder` in memory is half the size with no tradeoffs.
+
+### Previous attempt (Session 4)
+
+This optimization was first attempted in Session 4 but abandoned because the `mz_lowertest` test framework failed: it generates invalid JSON (`#0` instead of `0`) when deserializing column references, and the tokenizer happened to work with `usize` but not `u32`. The fix was a one-line change in `src/expr-test-util/src/lib.rs` to handle both `"usize"` and `"u32"` type names in the deserialization context.
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| ColumnOrder | 16 | 8 | 8 bytes (50%) |
+
+### Cascading effects
+
+`ColumnOrder` is stored in arrays/slices throughout the system. Every element in every `Vec<ColumnOrder>` or `Box<[ColumnOrder]>` saves 8 bytes:
+
+- **AggregateFunc**: 15+ variants have `order_by: Box<[ColumnOrder]>` fields — each element saves 8 bytes
+- **MirRelationExpr::TopK**: `order_key: Vec<ColumnOrder>` — each element saves 8 bytes
+- **HirRelationExpr::TopK**: `order_key: Box<[ColumnOrder]>` — each element saves 8 bytes
+- **JoinImplementation::DeltaQuery**: inner `Vec<ColumnOrder>` elements — each saves 8 bytes
+- **Finishing::order_by**: `Vec<ColumnOrder>` — each element saves 8 bytes (affects every query with ORDER BY)
+
+For a query with `ORDER BY a, b, c`, this saves 24 bytes per TopK/Finishing node. For window functions with `PARTITION BY ... ORDER BY ...`, the per-aggregate savings multiply.
+
+### Benchmark results
+
+All query types work correctly with no regression (200 iterations, 3 trials averaged):
+
+| Query Type | Avg Time (200 iter) | Notes |
+|-----------|---------------------|-------|
+| ORDER BY multi-column TopK | ~22ms | Exercises TopK with 3 ColumnOrder elements |
+| TopK with OFFSET | ~21ms | Exercises TopK with LIMIT + OFFSET |
+| row_number OVER (ORDER BY) | ~23ms | Exercises window functions with ColumnOrder |
+| string_agg ORDER BY | ~24ms | Exercises AggregateFunc with order_by |
+| first_value OVER (ORDER BY) | ~23ms | Exercises window aggregate with ColumnOrder |
+
+### Files changed (15 files)
+
+- `src/expr/src/relation.rs` — `ColumnOrder::column: usize` → `u32`, display and comparison adjustments
+- `src/expr/src/scalar.rs` — Size assertion for ColumnOrder (8 bytes)
+- `src/expr-parser/src/parser.rs` — Parse `column` as `u32` instead of `usize`
+- `src/expr-test-util/src/lib.rs` — Handle `"u32"` type name in deserializer (the fix for the Session 4 failure)
+- `src/adapter/src/active_compute_sink.rs` — 8 `column as usize` casts for array indexing
+- `src/adapter/src/coord/peek.rs` — `column as usize` for projection indexing
+- `src/sql/src/plan/query.rs` — `column as usize` / `as u32` casts at 6+ sites
+- `src/sql/src/plan/explain/text.rs` — `column as usize` for comparison
+- `src/sql/src/plan/lowering.rs` — `arity() as u32` for arithmetic
+- `src/transform/src/demand.rs` — `column as usize` for column set extension
+- `src/transform/src/fold_constants.rs` — `*column as u32` for ColumnOrder construction
+- `src/transform/src/literal_lifting.rs` — `column as usize` for comparison
+- `src/transform/src/movement/projection_lifting.rs` — `as u32` / `as usize` for permutation
+- `src/transform/src/movement/projection_pushdown.rs` — Separate reverse permutation for u32 column field
+- `src/transform/src/typecheck.rs` — `column as usize` for bounds check
+
+### Cumulative savings across all sessions (after session 16)
+
+| Type | Original | After all sessions | Total savings |
+|------|----------|-------------------|---------------|
+| MirScalarExpr | 88 | 48 | 40 bytes (45%) |
+| MirRelationExpr | 176 | 96 | 80 bytes (45%) |
+| HirScalarExpr | 192 | 80 | 112 bytes (58%) |
+| HirRelationExpr | 456 | 72 | 384 bytes (84%) |
+| AggregateFunc | 88 | 48 | 40 bytes (45%) |
+| AggregateExpr | 184 | 104 | 80 bytes (43%) |
+| UnaryFunc | 72 | 32 | 40 bytes (56%) |
+| BinaryFunc | 48 | 24 | 24 bytes (50%) |
+| VariadicFunc | 40 | 24 | 16 bytes (40%) |
+| TableFunc | 80 | 40 | 40 bytes (50%) |
+| EvalError | 56 | 40 | 16 bytes (29%) |
+| JoinImplementation | 120 | 64 | 56 bytes (47%) |
+| SqlScalarType | 32 | 24 | 8 bytes (25%) |
+| SqlColumnType | 40 | 32 | 8 bytes (20%) |
+| Matcher | 72 | 64 | 8 bytes (11%) |
+| ReprRelationType | 48 | 40 | 8 bytes (17%) |
+| ColumnOrder | 16 | 8 | 8 bytes (50%) |
