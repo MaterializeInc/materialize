@@ -31,10 +31,10 @@ pub fn plan_validate_connection(
 
     // Validate the target of the validate statement.
     match item.connection() {
-        Ok(connection) => Ok(Plan::ValidateConnection(ValidateConnectionPlan {
+        Ok(connection) => Ok(Plan::ValidateConnection(Box::new(ValidateConnectionPlan {
             id: item.id(),
             connection,
-        })),
+        }))),
         Err(_) => {
             sql_bail!(
                 "cannot validate {} '{}'",

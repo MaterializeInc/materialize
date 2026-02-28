@@ -76,7 +76,7 @@ use mz_sql::names::{
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{
-    CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
+    CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
     Plan, PlanContext,
 };
@@ -1111,7 +1111,8 @@ impl CatalogState {
         let mut uncached_expr = None;
 
         let item = match plan {
-            Plan::CreateTable(CreateTablePlan { table, .. }) => {
+            Plan::CreateTable(plan) => {
+                let CreateTablePlan { table, .. } = *plan;
                 let collections = extra_versions
                     .iter()
                     .map(|(version, gid)| (*version, *gid))
@@ -1176,12 +1177,14 @@ impl CatalogState {
                     },
                 })
             }
-            Plan::CreateSource(CreateSourcePlan {
-                source,
-                timeline,
-                in_cluster,
-                ..
-            }) => CatalogItem::Source(Source {
+            Plan::CreateSource(plan) => {
+                let CreateSourcePlan {
+                    source,
+                    timeline,
+                    in_cluster,
+                    ..
+                } = *plan;
+                CatalogItem::Source(Source {
                 create_sql: Some(source.create_sql),
                 data_source: match source.data_source {
                     mz_sql::plan::DataSourceDesc::Ingestion(desc) => DataSourceDesc::Ingestion {
@@ -1259,8 +1262,10 @@ impl CatalogState {
                     .compaction_window
                     .or(custom_logical_compaction_window),
                 is_retained_metrics_object,
-            }),
-            Plan::CreateView(CreateViewPlan { view, .. }) => {
+            })
+            }
+            Plan::CreateView(plan) => {
+                let CreateViewPlan { view, .. } = *plan;
                 // Collect optimizer parameters.
                 let optimizer_config =
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
@@ -1317,9 +1322,10 @@ impl CatalogState {
                     dependencies: DependencyIds(dependencies),
                 })
             }
-            Plan::CreateMaterializedView(CreateMaterializedViewPlan {
-                materialized_view, ..
-            }) => {
+            Plan::CreateMaterializedView(plan) => {
+                let CreateMaterializedViewPlan {
+                    materialized_view, ..
+                } = *plan;
                 let collections = extra_versions
                     .iter()
                     .map(|(version, gid)| (*version, *gid))
@@ -1408,7 +1414,7 @@ impl CatalogState {
             }
             Plan::CreateContinualTask(plan) => {
                 let ct =
-                    match crate::continual_task::ct_item_from_plan(plan, global_id, resolved_ids) {
+                    match crate::continual_task::ct_item_from_plan(*plan, global_id, resolved_ids) {
                         Ok(ct) => ct,
                         Err(err) => return Err((err, cached_expr)),
                     };
@@ -1426,23 +1432,26 @@ impl CatalogState {
                     .or(index.compaction_window),
                 is_retained_metrics_object,
             }),
-            Plan::CreateSink(CreateSinkPlan {
-                sink,
-                with_snapshot,
-                in_cluster,
-                ..
-            }) => CatalogItem::Sink(Sink {
-                create_sql: sink.create_sql,
-                global_id,
-                from: sink.from,
-                connection: sink.connection,
-                envelope: sink.envelope,
-                version: sink.version,
-                with_snapshot,
-                resolved_ids,
-                cluster_id: in_cluster,
-                commit_interval: sink.commit_interval,
-            }),
+            Plan::CreateSink(plan) => {
+                let CreateSinkPlan {
+                    sink,
+                    with_snapshot,
+                    in_cluster,
+                    ..
+                } = *plan;
+                CatalogItem::Sink(Sink {
+                    create_sql: sink.create_sql,
+                    global_id,
+                    from: sink.from,
+                    connection: sink.connection,
+                    envelope: sink.envelope,
+                    version: sink.version,
+                    with_snapshot,
+                    resolved_ids,
+                    cluster_id: in_cluster,
+                    commit_interval: sink.commit_interval,
+                })
+            }
             Plan::CreateType(CreateTypePlan { typ, .. }) => {
                 // Even if we don't need the `RelationDesc` here, error out
                 // early and eagerly, as a kind of soft assertion that we _can_
@@ -1465,19 +1474,18 @@ impl CatalogState {
                 create_sql: secret.create_sql,
                 global_id,
             }),
-            Plan::CreateConnection(CreateConnectionPlan {
-                connection:
-                    mz_sql::plan::Connection {
-                        create_sql,
-                        details,
-                    },
-                ..
-            }) => CatalogItem::Connection(Connection {
-                create_sql,
-                global_id,
-                details,
-                resolved_ids,
-            }),
+            Plan::CreateConnection(plan) => {
+                let mz_sql::plan::Connection {
+                    create_sql,
+                    details,
+                } = plan.connection;
+                CatalogItem::Connection(Connection {
+                    create_sql,
+                    global_id,
+                    details,
+                    resolved_ids,
+                })
+            }
             _ => {
                 return Err((
                     Error::new(ErrorKind::Corruption {

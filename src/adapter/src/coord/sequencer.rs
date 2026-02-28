@@ -217,7 +217,7 @@ impl Coordinator {
                             vec![CreateSourcePlanBundle {
                                 item_id,
                                 global_id,
-                                plan,
+                                plan: *plan,
                                 resolved_ids,
                                 available_source_references: None,
                             }],
@@ -234,7 +234,7 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::CreateConnection(plan) => {
-                    self.sequence_create_connection(ctx, plan, resolved_ids)
+                    self.sequence_create_connection(ctx, *plan, resolved_ids)
                         .await;
                 }
                 Plan::CreateDatabase(plan) => {
@@ -266,7 +266,7 @@ impl Coordinator {
                 }
                 Plan::CreateTable(plan) => {
                     let result = self
-                        .sequence_create_table(&mut ctx, plan, resolved_ids)
+                        .sequence_create_table(&mut ctx, *plan, resolved_ids)
                         .await;
                     ctx.retire(result);
                 }
@@ -274,18 +274,18 @@ impl Coordinator {
                     self.sequence_create_secret(ctx, plan).await;
                 }
                 Plan::CreateSink(plan) => {
-                    self.sequence_create_sink(ctx, plan, resolved_ids).await;
+                    self.sequence_create_sink(ctx, *plan, resolved_ids).await;
                 }
                 Plan::CreateView(plan) => {
-                    self.sequence_create_view(ctx, plan, resolved_ids).await;
+                    self.sequence_create_view(ctx, *plan, resolved_ids).await;
                 }
                 Plan::CreateMaterializedView(plan) => {
-                    self.sequence_create_materialized_view(ctx, plan, resolved_ids)
+                    self.sequence_create_materialized_view(ctx, *plan, resolved_ids)
                         .await;
                 }
                 Plan::CreateContinualTask(plan) => {
                     let res = self
-                        .sequence_create_continual_task(&mut ctx, plan, resolved_ids)
+                        .sequence_create_continual_task(&mut ctx, *plan, resolved_ids)
                         .await;
                     ctx.retire(res);
                 }
@@ -309,7 +309,7 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::CopyTo(plan) => {
-                    self.sequence_copy_to(ctx, plan, target_cluster).await;
+                    self.sequence_copy_to(ctx, *plan, target_cluster).await;
                 }
                 Plan::DropObjects(plan) => {
                     let result = self.sequence_drop_objects(&mut ctx, plan).await;
@@ -413,7 +413,7 @@ impl Coordinator {
                     self.sequence_peek(ctx, plan, target_cluster, max).await;
                 }
                 Plan::Subscribe(plan) => {
-                    self.sequence_subscribe(ctx, plan, target_cluster).await;
+                    self.sequence_subscribe(ctx, *plan, target_cluster).await;
                 }
                 Plan::SideEffectingFunc(plan) => {
                     self.sequence_side_effecting_func(ctx, plan).await;
@@ -423,32 +423,34 @@ impl Coordinator {
                 }
                 Plan::ShowColumns(show_columns_plan) => {
                     let max = Some(ctx.session().vars().max_query_result_size());
-                    self.sequence_peek(ctx, show_columns_plan.select_plan, target_cluster, max)
-                        .await;
+                    self.sequence_peek(ctx, show_columns_plan.select_plan, target_cluster, max).await;
                 }
-                Plan::CopyFrom(plan) => match plan.source {
-                    CopyFromSource::Stdin => {
-                        let (tx, _, session, ctx_extra) = ctx.into_parts();
-                        tx.send(
-                            Ok(ExecuteResponse::CopyFrom {
-                                target_id: plan.target_id,
-                                target_name: plan.target_name,
-                                columns: plan.columns,
-                                params: plan.params,
-                                ctx_extra,
-                            }),
-                            session,
-                        );
+                Plan::CopyFrom(plan) => {
+                    let plan = *plan;
+                    match plan.source {
+                        CopyFromSource::Stdin => {
+                            let (tx, _, session, ctx_extra) = ctx.into_parts();
+                            tx.send(
+                                Ok(ExecuteResponse::CopyFrom {
+                                    target_id: plan.target_id,
+                                    target_name: plan.target_name,
+                                    columns: plan.columns,
+                                    params: plan.params,
+                                    ctx_extra,
+                                }),
+                                session,
+                            );
+                        }
+                        CopyFromSource::Url(_) | CopyFromSource::AwsS3 { .. } => {
+                            self.sequence_copy_from(ctx, plan, target_cluster).await;
+                        }
                     }
-                    CopyFromSource::Url(_) | CopyFromSource::AwsS3 { .. } => {
-                        self.sequence_copy_from(ctx, plan, target_cluster).await;
-                    }
-                },
+                }
                 Plan::ExplainPlan(plan) => {
-                    self.sequence_explain_plan(ctx, plan, target_cluster).await;
+                    self.sequence_explain_plan(ctx, *plan, target_cluster).await;
                 }
                 Plan::ExplainPushdown(plan) => {
-                    self.sequence_explain_pushdown(ctx, plan, target_cluster)
+                    self.sequence_explain_pushdown(ctx, *plan, target_cluster)
                         .await;
                 }
                 Plan::ExplainSinkSchema(plan) => {
@@ -463,13 +465,13 @@ impl Coordinator {
                     self.sequence_insert(ctx, plan).await;
                 }
                 Plan::ReadThenWrite(plan) => {
-                    self.sequence_read_then_write(ctx, plan).await;
+                    self.sequence_read_then_write(ctx, *plan).await;
                 }
                 Plan::AlterNoop(plan) => {
                     ctx.retire(Ok(ExecuteResponse::AlteredObject(plan.object_type)));
                 }
                 Plan::AlterCluster(plan) => {
-                    self.sequence_alter_cluster_staged(ctx, plan).await;
+                    self.sequence_alter_cluster_staged(ctx, *plan).await;
                 }
                 Plan::AlterClusterRename(plan) => {
                     let result = self.sequence_alter_cluster_rename(&mut ctx, plan).await;
@@ -522,7 +524,7 @@ impl Coordinator {
                     self.sequence_alter_secret(ctx, plan).await;
                 }
                 Plan::AlterSink(plan) => {
-                    self.sequence_alter_sink_prepare(ctx, plan).await;
+                    self.sequence_alter_sink_prepare(ctx, *plan).await;
                 }
                 Plan::AlterSource(plan) => {
                     let result = self.sequence_alter_source(ctx.session_mut(), plan).await;
@@ -574,7 +576,7 @@ impl Coordinator {
                     ctx.retire(ret);
                 }
                 Plan::Declare(plan) => {
-                    self.declare(ctx, plan.name, plan.stmt, plan.sql, plan.params);
+                    self.declare(ctx, plan.name, *plan.stmt, plan.sql, plan.params);
                 }
                 Plan::Fetch(FetchPlan {
                     name,
@@ -610,7 +612,7 @@ impl Coordinator {
                         };
                         ctx.session_mut().set_prepared_statement(
                             plan.name,
-                            Some(plan.stmt),
+                            Some(*plan.stmt),
                             plan.sql,
                             plan.desc,
                             state_revision,
@@ -691,6 +693,7 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::ValidateConnection(plan) => {
+                    let plan = *plan;
                     let connection = plan
                         .connection
                         .into_inline_connection(self.catalog().state());

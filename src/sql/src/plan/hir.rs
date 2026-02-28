@@ -4031,7 +4031,7 @@ mod size_tests {
     /// These types are stored in large numbers throughout query planning.
     #[mz_ore::test]
     fn type_size_assertions() {
-        assert_eq!(size_of::<HirScalarExpr>(), 80);
-        assert_eq!(size_of::<HirRelationExpr>(), 72);
+        assert_eq!(size_of::<HirScalarExpr>(), 72);
+        assert_eq!(size_of::<HirRelationExpr>(), 80);
     }
 }

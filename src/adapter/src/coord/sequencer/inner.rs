@@ -413,7 +413,7 @@ impl Coordinator {
             &resolved_ids,
         )?;
         let plan = match plan {
-            Plan::CreateSource(plan) => plan,
+            Plan::CreateSource(plan) => *plan,
             _ => unreachable!(),
         };
         Ok(CreateSourcePlanBundle {
@@ -572,7 +572,7 @@ impl Coordinator {
             &params,
             &resolved_ids,
         )? {
-            Plan::CreateSource(plan) => plan,
+            Plan::CreateSource(plan) => *plan,
             p => unreachable!("s must be CreateSourcePlan but got {:?}", p),
         };
 
@@ -2624,7 +2624,7 @@ impl Coordinator {
                     let acquire_future = self.grant_object_write_lock(missing).map(Option::Some);
                     let plan = DeferredPlan {
                         ctx,
-                        plan: Plan::ReadThenWrite(plan),
+                        plan: Plan::ReadThenWrite(Box::new(plan)),
                         validity: PlanValidity::new(
                             self.catalog.transient_revision(),
                             source_ids.clone(),
@@ -4052,7 +4052,7 @@ impl Coordinator {
                 )
                 .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?
                 {
-                    Plan::CreateSource(plan) => plan,
+                    Plan::CreateSource(plan) => *plan,
                     _ => unreachable!("create source plan is only valid response"),
                 };
 

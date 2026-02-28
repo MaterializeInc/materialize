@@ -57,13 +57,20 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
                 SubscribeFrom::Query { expr, desc: _ } => expr.could_run_expensive_function(),
             },
         ),
-        Plan::ExplainPlan(ExplainPlanPlan {
-            explainee: Explainee::Statement(ExplaineeStatement::Select { plan, .. }),
-            ..
-        }) => (
-            plan.source.depends_on(),
-            plan.source.could_run_expensive_function(),
-        ),
+        Plan::ExplainPlan(ep) => {
+            if let ExplainPlanPlan {
+                explainee: Explainee::Statement(ExplaineeStatement::Select { plan, .. }),
+                ..
+            } = ep.as_ref()
+            {
+                (
+                    plan.source.depends_on(),
+                    plan.source.could_run_expensive_function(),
+                )
+            } else {
+                return TargetCluster::Active;
+            }
+        }
         Plan::ExplainTimestamp(ExplainTimestampPlan { raw_plan, .. }) => (
             raw_plan.depends_on(),
             raw_plan.could_run_expensive_function(),
@@ -103,7 +110,6 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::AbortTransaction(_)
         | Plan::CopyFrom(_)
         | Plan::CopyTo(_)
-        | Plan::ExplainPlan(_)
         | Plan::ExplainPushdown(_)
         | Plan::ExplainSinkSchema(_)
         | Plan::Insert(_)

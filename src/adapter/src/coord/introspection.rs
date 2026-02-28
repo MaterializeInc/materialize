@@ -523,7 +523,7 @@ impl SubscribeSpec {
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, parsed.ast)?;
         let plan = mz_sql::plan::plan(None, catalog, stmt, &Params::empty(), &resolved_ids)?;
         match plan {
-            Plan::Subscribe(plan) => Ok(plan),
+            Plan::Subscribe(plan) => Ok(*plan),
             _ => bail!("unexpected plan type: {plan:?}"),
         }
     }

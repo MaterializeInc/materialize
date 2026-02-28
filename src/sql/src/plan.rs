@@ -131,20 +131,20 @@ use self::with_options::TryFromValue;
 #[derive(Debug, EnumKind)]
 #[enum_kind(PlanKind)]
 pub enum Plan {
-    CreateConnection(CreateConnectionPlan),
+    CreateConnection(Box<CreateConnectionPlan>),
     CreateDatabase(CreateDatabasePlan),
     CreateSchema(CreateSchemaPlan),
     CreateRole(CreateRolePlan),
     CreateCluster(CreateClusterPlan),
     CreateClusterReplica(CreateClusterReplicaPlan),
-    CreateSource(CreateSourcePlan),
+    CreateSource(Box<CreateSourcePlan>),
     CreateSources(Vec<CreateSourcePlanBundle>),
     CreateSecret(CreateSecretPlan),
-    CreateSink(CreateSinkPlan),
-    CreateTable(CreateTablePlan),
-    CreateView(CreateViewPlan),
-    CreateMaterializedView(CreateMaterializedViewPlan),
-    CreateContinualTask(CreateContinualTaskPlan),
+    CreateSink(Box<CreateSinkPlan>),
+    CreateTable(Box<CreateTablePlan>),
+    CreateView(Box<CreateViewPlan>),
+    CreateMaterializedView(Box<CreateMaterializedViewPlan>),
+    CreateContinualTask(Box<CreateContinualTaskPlan>),
     CreateNetworkPolicy(CreateNetworkPolicyPlan),
     CreateIndex(CreateIndexPlan),
     CreateType(CreateTypePlan),
@@ -156,7 +156,7 @@ pub enum Plan {
     EmptyQuery,
     ShowAllVariables,
     ShowCreate(ShowCreatePlan),
-    ShowColumns(ShowColumnsPlan),
+    ShowColumns(Box<ShowColumnsPlan>),
     ShowVariable(ShowVariablePlan),
     InspectShard(InspectShardPlan),
     SetVariable(SetVariablePlan),
@@ -166,15 +166,15 @@ pub enum Plan {
     CommitTransaction(CommitTransactionPlan),
     AbortTransaction(AbortTransactionPlan),
     Select(SelectPlan),
-    Subscribe(SubscribePlan),
-    CopyFrom(CopyFromPlan),
-    CopyTo(CopyToPlan),
-    ExplainPlan(ExplainPlanPlan),
-    ExplainPushdown(ExplainPushdownPlan),
+    Subscribe(Box<SubscribePlan>),
+    CopyFrom(Box<CopyFromPlan>),
+    CopyTo(Box<CopyToPlan>),
+    ExplainPlan(Box<ExplainPlanPlan>),
+    ExplainPushdown(Box<ExplainPushdownPlan>),
     ExplainTimestamp(ExplainTimestampPlan),
     ExplainSinkSchema(ExplainSinkSchemaPlan),
     Insert(InsertPlan),
-    AlterCluster(AlterClusterPlan),
+    AlterCluster(Box<AlterClusterPlan>),
     AlterClusterSwap(AlterClusterSwapPlan),
     AlterNoop(AlterNoopPlan),
     AlterSetCluster(AlterSetClusterPlan),
@@ -186,7 +186,7 @@ pub enum Plan {
     AlterSchemaRename(AlterSchemaRenamePlan),
     AlterSchemaSwap(AlterSchemaSwapPlan),
     AlterSecret(AlterSecretPlan),
-    AlterSink(AlterSinkPlan),
+    AlterSink(Box<AlterSinkPlan>),
     AlterSystemSet(AlterSystemSetPlan),
     AlterSystemReset(AlterSystemResetPlan),
     AlterSystemResetAll(AlterSystemResetAllPlan),
@@ -198,7 +198,7 @@ pub enum Plan {
     Declare(DeclarePlan),
     Fetch(FetchPlan),
     Close(ClosePlan),
-    ReadThenWrite(ReadThenWritePlan),
+    ReadThenWrite(Box<ReadThenWritePlan>),
     Prepare(PreparePlan),
     Execute(ExecutePlan),
     Deallocate(DeallocatePlan),
@@ -210,7 +210,7 @@ pub enum Plan {
     AlterDefaultPrivileges(AlterDefaultPrivilegesPlan),
     ReassignOwned(ReassignOwnedPlan),
     SideEffectingFunc(SideEffectingFunc),
-    ValidateConnection(ValidateConnectionPlan),
+    ValidateConnection(Box<ValidateConnectionPlan>),
     AlterRetainHistory(AlterRetainHistoryPlan),
     AlterSourceTimestampInterval(AlterSourceTimestampIntervalPlan),
 }
@@ -1377,7 +1377,7 @@ pub struct AlterMaterializedViewApplyReplacementPlan {
 #[derive(Debug)]
 pub struct DeclarePlan {
     pub name: String,
-    pub stmt: Statement<Raw>,
+    pub stmt: Box<Statement<Raw>>,
     pub sql: String,
     pub params: Params,
 }
@@ -1397,7 +1397,7 @@ pub struct ClosePlan {
 #[derive(Debug)]
 pub struct PreparePlan {
     pub name: String,
-    pub stmt: Statement<Raw>,
+    pub stmt: Box<Statement<Raw>>,
     pub sql: String,
     pub desc: StatementDesc,
 }
@@ -2183,5 +2183,112 @@ impl PlanContext {
     pub fn with_ignore_if_exists_errors(mut self, value: bool) -> Self {
         self.ignore_if_exists_errors = value;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::mem::size_of;
+    use super::*;
+
+    /// Guard against regressions in the size of the Plan enum.
+    ///
+    /// The Plan enum was 1888 bytes originally. Boxing `Statement<Raw>` in
+    /// `PreparePlan` and `DeclarePlan` brought it to 992 bytes. Boxing 17
+    /// additional large variants (>200 bytes) brought it down to 184 bytes,
+    /// now dominated by `SelectPlan` (the hot-path variant, kept unboxed).
+    #[mz_ore::test]
+    fn type_size_assertions() {
+        assert_eq!(size_of::<Plan>(), 184);
+        assert_eq!(size_of::<PreparePlan>(), 160);
+        assert_eq!(size_of::<DeclarePlan>(), 128);
+    }
+
+    #[mz_ore::test]
+    fn print_plan_variant_sizes() {
+        let mut sizes: Vec<(&str, usize)> = vec![
+            ("CreateConnectionPlan", size_of::<CreateConnectionPlan>()),
+            ("CreateDatabasePlan", size_of::<CreateDatabasePlan>()),
+            ("CreateSchemaPlan", size_of::<CreateSchemaPlan>()),
+            ("CreateRolePlan", size_of::<CreateRolePlan>()),
+            ("CreateClusterPlan", size_of::<CreateClusterPlan>()),
+            ("CreateClusterReplicaPlan", size_of::<CreateClusterReplicaPlan>()),
+            ("CreateSourcePlan", size_of::<CreateSourcePlan>()),
+            ("CreateSourcePlanBundle", size_of::<CreateSourcePlanBundle>()),
+            ("CreateSecretPlan", size_of::<CreateSecretPlan>()),
+            ("CreateSinkPlan", size_of::<CreateSinkPlan>()),
+            ("CreateTablePlan", size_of::<CreateTablePlan>()),
+            ("CreateViewPlan", size_of::<CreateViewPlan>()),
+            ("CreateMaterializedViewPlan", size_of::<CreateMaterializedViewPlan>()),
+            ("CreateContinualTaskPlan", size_of::<CreateContinualTaskPlan>()),
+            ("CreateNetworkPolicyPlan", size_of::<CreateNetworkPolicyPlan>()),
+            ("CreateIndexPlan", size_of::<CreateIndexPlan>()),
+            ("CreateTypePlan", size_of::<CreateTypePlan>()),
+            ("CommentPlan", size_of::<CommentPlan>()),
+            ("DropObjectsPlan", size_of::<DropObjectsPlan>()),
+            ("DropOwnedPlan", size_of::<DropOwnedPlan>()),
+            ("ShowCreatePlan", size_of::<ShowCreatePlan>()),
+            ("ShowColumnsPlan", size_of::<ShowColumnsPlan>()),
+            ("ShowVariablePlan", size_of::<ShowVariablePlan>()),
+            ("InspectShardPlan", size_of::<InspectShardPlan>()),
+            ("SetVariablePlan", size_of::<SetVariablePlan>()),
+            ("ResetVariablePlan", size_of::<ResetVariablePlan>()),
+            ("SetTransactionPlan", size_of::<SetTransactionPlan>()),
+            ("StartTransactionPlan", size_of::<StartTransactionPlan>()),
+            ("CommitTransactionPlan", size_of::<CommitTransactionPlan>()),
+            ("AbortTransactionPlan", size_of::<AbortTransactionPlan>()),
+            ("SelectPlan", size_of::<SelectPlan>()),
+            ("SubscribePlan", size_of::<SubscribePlan>()),
+            ("CopyFromPlan", size_of::<CopyFromPlan>()),
+            ("CopyToPlan", size_of::<CopyToPlan>()),
+            ("ExplainPlanPlan", size_of::<ExplainPlanPlan>()),
+            ("ExplainPushdownPlan", size_of::<ExplainPushdownPlan>()),
+            ("ExplainTimestampPlan", size_of::<ExplainTimestampPlan>()),
+            ("ExplainSinkSchemaPlan", size_of::<ExplainSinkSchemaPlan>()),
+            ("InsertPlan", size_of::<InsertPlan>()),
+            ("AlterClusterPlan", size_of::<AlterClusterPlan>()),
+            ("AlterClusterSwapPlan", size_of::<AlterClusterSwapPlan>()),
+            ("AlterNoopPlan", size_of::<AlterNoopPlan>()),
+            ("AlterSetClusterPlan", size_of::<AlterSetClusterPlan>()),
+            ("AlterConnectionPlan", size_of::<AlterConnectionPlan>()),
+            ("AlterSourcePlan", size_of::<AlterSourcePlan>()),
+            ("AlterClusterRenamePlan", size_of::<AlterClusterRenamePlan>()),
+            ("AlterClusterReplicaRenamePlan", size_of::<AlterClusterReplicaRenamePlan>()),
+            ("AlterItemRenamePlan", size_of::<AlterItemRenamePlan>()),
+            ("AlterSchemaRenamePlan", size_of::<AlterSchemaRenamePlan>()),
+            ("AlterSchemaSwapPlan", size_of::<AlterSchemaSwapPlan>()),
+            ("AlterSecretPlan", size_of::<AlterSecretPlan>()),
+            ("AlterSinkPlan", size_of::<AlterSinkPlan>()),
+            ("AlterSystemSetPlan", size_of::<AlterSystemSetPlan>()),
+            ("AlterSystemResetPlan", size_of::<AlterSystemResetPlan>()),
+            ("AlterRolePlan", size_of::<AlterRolePlan>()),
+            ("AlterOwnerPlan", size_of::<AlterOwnerPlan>()),
+            ("AlterTablePlan", size_of::<AlterTablePlan>()),
+            ("AlterMaterializedViewApplyReplacementPlan", size_of::<AlterMaterializedViewApplyReplacementPlan>()),
+            ("AlterNetworkPolicyPlan", size_of::<AlterNetworkPolicyPlan>()),
+            ("DeclarePlan", size_of::<DeclarePlan>()),
+            ("FetchPlan", size_of::<FetchPlan>()),
+            ("ClosePlan", size_of::<ClosePlan>()),
+            ("ReadThenWritePlan", size_of::<ReadThenWritePlan>()),
+            ("PreparePlan", size_of::<PreparePlan>()),
+            ("ExecutePlan", size_of::<ExecutePlan>()),
+            ("DeallocatePlan", size_of::<DeallocatePlan>()),
+            ("RaisePlan", size_of::<RaisePlan>()),
+            ("GrantRolePlan", size_of::<GrantRolePlan>()),
+            ("RevokeRolePlan", size_of::<RevokeRolePlan>()),
+            ("GrantPrivilegesPlan", size_of::<GrantPrivilegesPlan>()),
+            ("RevokePrivilegesPlan", size_of::<RevokePrivilegesPlan>()),
+            ("AlterDefaultPrivilegesPlan", size_of::<AlterDefaultPrivilegesPlan>()),
+            ("ReassignOwnedPlan", size_of::<ReassignOwnedPlan>()),
+            ("ValidateConnectionPlan", size_of::<ValidateConnectionPlan>()),
+            ("AlterRetainHistoryPlan", size_of::<AlterRetainHistoryPlan>()),
+            ("AlterSourceTimestampIntervalPlan", size_of::<AlterSourceTimestampIntervalPlan>()),
+        ];
+        sizes.sort_by(|a, b| b.1.cmp(&a.1));
+        println!("\nPlan variant sizes (sorted by size desc):");
+        for (name, size) in &sizes {
+            println!("  {name}: {size} bytes");
+        }
+        println!("\nPlan enum size: {} bytes", size_of::<Plan>());
     }
 }
