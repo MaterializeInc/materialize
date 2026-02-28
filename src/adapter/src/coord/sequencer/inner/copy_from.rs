@@ -83,8 +83,14 @@ impl Coordinator {
         };
 
         // We check in planning that we're copying into a Table, but be defensive.
-        let Some(dest_table) = self.catalog().get_entry(&target_id).table() else {
-            let typ = self.catalog().get_entry(&target_id).item().typ();
+        let Some(entry) = self.catalog().try_get_entry(&target_id) else {
+            return ctx.retire(Err(AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "table",
+                dependency_id: target_id.to_string(),
+            }));
+        };
+        let Some(dest_table) = entry.table() else {
+            let typ = entry.item().typ();
             let msg = format!("programming error: expected a Table found {typ:?}");
             return ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(msg))));
         };
@@ -279,8 +285,14 @@ impl Coordinator {
         params: CopyFormatParams<'static>,
     ) -> Result<CopyFromStdinWriter, AdapterError> {
         // Look up the table and its persist shard metadata.
-        let Some(dest_table) = self.catalog().get_entry(&target_id).table() else {
-            let typ = self.catalog().get_entry(&target_id).item().typ();
+        let Some(entry) = self.catalog().try_get_entry(&target_id) else {
+            return Err(AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "table",
+                dependency_id: target_id.to_string(),
+            });
+        };
+        let Some(dest_table) = entry.table() else {
+            let typ = entry.item().typ();
             return Err(AdapterError::Unstructured(anyhow::anyhow!(
                 "programming error: expected a Table found {typ:?}"
             )));
