@@ -716,9 +716,8 @@ impl HirRelationExpr {
                             // call above.
                             let on_subquery_types = product
                                 .typ()
-                                .column_types
-                                .drain(oa + la + ra..)
-                                .collect_vec();
+                                .column_types[oa + la + ra..]
+                                .to_vec();
                             // Remember if `on` had any subqueries.
                             let on_has_subqueries = !on_subquery_types.is_empty();
 

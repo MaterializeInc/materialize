@@ -755,3 +755,146 @@ All query types work correctly with no regression:
 | SqlScalarType | 32 | 24 | 8 bytes (25%) |
 | SqlColumnType | 40 | 32 | 8 bytes (20%) |
 | Matcher | 72 | 64 | 8 bytes (11%) |
+
+## Session 13: Shrink HirRelationExpr from 88 to 72 bytes via Vec→Box<[T]> and boxing SqlRelationType
+
+**Date:** 2026-02-27
+
+### Changes
+
+Five field type changes that combine to reduce HirRelationExpr from 88 to 72 bytes:
+
+1. **`Constant::typ: SqlRelationType` → `Box<SqlRelationType>`** (Constant variant: 72→32 bytes)
+   - SqlRelationType is 48 bytes (contains two Vecs); boxing reduces inline to 8 bytes
+   - Constant values are constructed once during planning and immutable
+
+2. **`Get::typ: SqlRelationType` → `Box<SqlRelationType>`** (Get variant: 64→24 bytes)
+   - Same reasoning — Get nodes are constructed once and the typ is read-only
+
+3. **`TopK::group_key: Vec<usize>` → `Box<[usize]>`** (saves 8 bytes)
+   - Group keys are set during planning and never grown
+   - Box<[T]> eliminates the unused capacity field
+
+4. **`TopK::order_key: Vec<ColumnOrder>` → `Box<[ColumnOrder]>`** (saves 8 bytes; TopK: 88→72 bytes)
+   - Order keys are set during planning and never grown
+
+5. **`CallTable::exprs: Vec<HirScalarExpr>` → `Box<[HirScalarExpr]>`** (CallTable: 64→56 bytes)
+   - Table function arguments are set during planning and never grown
+
+### Key insight: niche optimization preservation
+
+The critical constraint is that `Option<u64>` (in TopK::expected_group_size and Reduce::expected_group_size) provides a niche value at byte offset 56 that the compiler uses to store the enum discriminant. For this to work, all variants must have either a niche-bearing field or padding at byte offset 56.
+
+Boxing SqlRelationType in Constant/Get ensures those variants are small enough (≤32 and ≤24 bytes respectively) that byte 56 is pure padding. Converting CallTable's Vec to Box<[T]> reduces it to 56 bytes, so byte 56 is again padding. The TopK Vec→Box<[T]> changes shrink TopK from 88→72 bytes, which becomes the new maximum. The niche at offset 56 in TopK/Reduce stores the discriminant, so no explicit discriminant field is needed.
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| HirRelationExpr | 88 | 72 | 16 bytes (18%) |
+
+### Variant size breakdown (after)
+
+- TopK: 72 bytes (input:8 + group_key:16 + order_key:16 + limit:8 + offset:8 + expected_group_size:16)
+- Reduce: 72 bytes (input:8 + group_key:24 + aggregates:24 + expected_group_size:16)
+- Constant: 32 bytes (rows:24 + typ:8)
+- Get: 24 bytes (id:16 + typ:8)
+- CallTable: 56 bytes (func:40 + exprs:16)
+
+### Benchmark results
+
+All query types work correctly with no regression:
+
+| Query Type | Avg Time (200 iter) | Notes |
+|-----------|---------------------|-------|
+| Multi-CTE join (5 CTEs) | ~33ms/query | Exercises Get + Constant nodes |
+| Window function (row_number) | ~30ms/query | Exercises Reduce-like planning |
+| Triple TopK join | ~34ms/query | Exercises TopK with Box<[T]> fields |
+| generate_series CallTable | ~37ms/query | Exercises CallTable with Box<[T]> exprs |
+| VALUES Constant | ~65ms/query | Exercises Constant with Box<SqlRelationType> |
+| Union TopK | ~52ms/query | Exercises multiple TopK nodes |
+
+### Files changed (5 files)
+
+- `src/sql/src/plan/hir.rs` — Field type changes in Constant, Get, TopK, CallTable + constructor updates + typ()/as_const() deref adjustments + size assertion 88→72
+- `src/sql/src/plan/query.rs` — Construction sites: Box::new() for Constant/Get typ, .into_boxed_slice() for CallTable exprs (7 sites)
+- `src/sql/src/plan/lowering.rs` — `ReprRelationType::from(&typ)` → `from(&*typ)` for boxed typ fields (3 sites)
+- `src/sql/src/plan/explain.rs` — Box::new() for Get typ construction (1 site)
+- `src/sql/src/plan.rs` — Box::new() for SelectPlan::immediate Constant typ
+
+### Cumulative savings across all sessions
+
+| Type | Original | After all sessions | Total savings |
+|------|----------|-------------------|---------------|
+| MirScalarExpr | 88 | 56 | 32 bytes (36%) |
+| MirRelationExpr | 176 | 96 | 80 bytes (45%) |
+| HirScalarExpr | 192 | 80 | 112 bytes (58%) |
+| HirRelationExpr | 456 | 72 | 384 bytes (84%) |
+| AggregateFunc | 88 | 48 | 40 bytes (45%) |
+| AggregateExpr | 184 | 112 | 72 bytes (39%) |
+| UnaryFunc | 72 | 48 | 24 bytes (33%) |
+| BinaryFunc | 48 | 24 | 24 bytes (50%) |
+| VariadicFunc | 40 | 24 | 16 bytes (40%) |
+| TableFunc | 80 | 40 | 40 bytes (50%) |
+| EvalError | 56 | 40 | 16 bytes (29%) |
+| JoinImplementation | 120 | 64 | 56 bytes (47%) |
+| SqlScalarType | 32 | 24 | 8 bytes (25%) |
+| SqlColumnType | 40 | 32 | 8 bytes (20%) |
+| Matcher | 72 | 64 | 8 bytes (11%) |
+| ReprRelationType | 48 | 40 | 8 bytes (17%) |
+
+## Session 14: Shrink ReprRelationType via Vec→Box<[T]>
+
+**Date:** 2026-02-28
+
+### Changes
+
+Changed `ReprRelationType::column_types` from `Vec<ReprColumnType>` to `Box<[ReprColumnType]>`:
+- `Vec<T>` is 24 bytes (ptr + len + capacity); `Box<[T]>` is 16 bytes (ptr + len)
+- `column_types` is constructed once and never mutated in `ReprRelationType` (unlike `SqlRelationType` which uses `.push()`, `.retain()`, etc.)
+- The `Box<[T]>` still supports iteration, indexing, `.len()`, `.clone()`, Serialize/Deserialize
+- A few mutation sites in `literal_lifting.rs` use `std::mem::take().into_vec()` pattern for temporary mutation
+
+**ReprRelationType: 48 → 40 bytes (17% reduction)**
+
+### Size measurements
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| ReprRelationType | 48 | 40 | 8 bytes (17%) |
+
+### Cascading effects
+
+- `ReprRelationType` is embedded inline in `MirRelationExpr::Get` and `MirRelationExpr::Constant` variants
+- Every MIR plan node that references table types benefits from reduced memory per `ReprRelationType` instance
+- `MirRelationExpr` remains at 96 bytes (the Get variant at 88 bytes is below the 96-byte threshold set by other variants)
+
+### Benchmark
+
+Query planning latency (200 iterations each, 3 trials averaged):
+
+| Query | Avg per query |
+|-------|--------------|
+| Simple SELECT | 0.107 ms |
+| 5-table JOIN | 0.129 ms |
+| EXPLAIN JOIN | 0.122 ms |
+| UNION ALL (5 tables) | 0.126 ms |
+| View chain | 0.110 ms |
+
+The optimization is structural — it saves 8 bytes per `ReprRelationType` instance in memory, benefiting workloads with many concurrent plans or large catalogs. Per-query latency is already sub-millisecond so timing improvements are not measurable at this scale.
+
+### Files changed
+
+- `src/repr/src/relation.rs` — Field type change + constructor updates
+- `src/expr/src/relation.rs` — `col_with_input_cols` and `try_col_with_input_cols` signatures + callers
+- `src/expr/src/relation/canonicalize.rs` — `canonicalize_equivalences` signature
+- `src/transform/src/literal_constraints.rs` — Direct construction
+- `src/transform/src/literal_lifting.rs` — Mutation sites (pop, assign)
+- `src/transform/src/column_knowledge.rs` — Type conversions
+- `src/transform/src/typecheck.rs` — Type conversion
+- `src/transform/src/join_implementation.rs` — Deref for canonicalize call
+- `src/transform/src/predicate_pushdown.rs` — Deref for canonicalize calls
+- `src/transform/src/redundant_join.rs` — Deref for canonicalize call
+- `src/transform/src/analysis.rs` — Slice conversion for try_col_with_input_cols call
+- `src/sql/src/plan/lowering.rs` — `.drain()` → slice + `.to_vec()`
+- `src/expr/tests/test_runner.rs` — Test adaptation

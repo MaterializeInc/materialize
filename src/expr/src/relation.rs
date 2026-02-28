@@ -387,7 +387,7 @@ impl MirRelationExpr {
 
     /// Reports the repr schema of the relation given the repr schema of the input relations.
     pub fn typ_with_input_types(&self, input_types: &[ReprRelationType]) -> ReprRelationType {
-        let column_types = self.col_with_input_cols(input_types.iter().map(|i| &i.column_types));
+        let column_types = self.col_with_input_cols(input_types.iter().map(|i| &*i.column_types));
         let unique_keys = self.keys_with_input_keys(
             input_types.iter().map(|i| i.arity()),
             input_types.iter().map(|i| &i.keys),
@@ -402,7 +402,7 @@ impl MirRelationExpr {
     /// variant is returned.
     pub fn col_with_input_cols<'a, I>(&self, input_types: I) -> Vec<ReprColumnType>
     where
-        I: Iterator<Item = &'a Vec<ReprColumnType>>,
+        I: Iterator<Item = &'a [ReprColumnType]>,
     {
         match self.try_col_with_input_cols(input_types) {
             Ok(col_types) => col_types,
@@ -426,13 +426,13 @@ impl MirRelationExpr {
         mut input_types: I,
     ) -> Result<Vec<ReprColumnType>, String>
     where
-        I: Iterator<Item = &'a Vec<ReprColumnType>>,
+        I: Iterator<Item = &'a [ReprColumnType]>,
     {
         use MirRelationExpr::*;
 
         let col_types = match self {
             Constant { rows, typ } => {
-                let mut col_types = typ.column_types.clone();
+                let mut col_types = typ.column_types.to_vec();
                 let mut seen_null = vec![false; typ.arity()];
                 if let Ok(rows) = rows {
                     for (row, _diff) in rows {
@@ -452,20 +452,20 @@ impl MirRelationExpr {
                 }
                 col_types
             }
-            Get { typ, .. } => typ.column_types.clone(),
+            Get { typ, .. } => typ.column_types.to_vec(),
             Project { outputs, .. } => {
                 let input = input_types.next().unwrap();
                 outputs.iter().map(|&i| input[i].clone()).collect()
             }
             Map { scalars, .. } => {
-                let mut result = input_types.next().unwrap().clone();
+                let mut result = input_types.next().unwrap().to_vec();
                 for scalar in scalars.iter() {
                     result.push(scalar.typ(&result))
                 }
                 result
             }
             FlatMap { func, .. } => {
-                let mut result = input_types.next().unwrap().clone();
+                let mut result = input_types.next().unwrap().to_vec();
                 result.extend(
                     func.output_sql_type()
                         .column_types
@@ -475,7 +475,7 @@ impl MirRelationExpr {
                 result
             }
             Filter { predicates, .. } => {
-                let mut result = input_types.next().unwrap().clone();
+                let mut result = input_types.next().unwrap().to_vec();
 
                 // Set as nonnull any columns where null values would cause
                 // any predicate to evaluate to null.
@@ -517,18 +517,18 @@ impl MirRelationExpr {
                     .collect()
             }
             TopK { .. } | Negate { .. } | Threshold { .. } | ArrangeBy { .. } => {
-                input_types.next().unwrap().clone()
+                input_types.next().unwrap().to_vec()
             }
             Let { .. } => {
                 // skip over the input types for `value`.
-                input_types.nth(1).unwrap().clone()
+                input_types.nth(1).unwrap().to_vec()
             }
             LetRec { values, .. } => {
                 // skip over the input types for `values`.
-                input_types.nth(values.len()).unwrap().clone()
+                input_types.nth(values.len()).unwrap().to_vec()
             }
             Union { .. } => {
-                let mut result = input_types.next().unwrap().clone();
+                let mut result = input_types.next().unwrap().to_vec();
                 for input_col_types in input_types {
                     for (base_col, col) in result.iter_mut().zip_eq(input_col_types) {
                         *base_col = base_col
@@ -4038,6 +4038,7 @@ mod tests {
         assert_eq!(size_of::<MirRelationExpr>(), 96);
         assert_eq!(size_of::<JoinImplementation>(), 64);
         assert_eq!(size_of::<TableFunc>(), 40);
+        assert_eq!(size_of::<mz_repr::ReprRelationType>(), 40);
     }
 
     #[mz_ore::test]

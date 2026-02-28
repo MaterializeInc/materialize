@@ -283,7 +283,7 @@ impl PredicatePushdown {
 
                             mz_expr::canonicalize::canonicalize_equivalences(
                                 equivalences,
-                                std::iter::once(&input_type.column_types),
+                                std::iter::once(&*input_type.column_types),
                             );
 
                             let (retain, push_downs) = Self::push_filters_through_join(
@@ -583,7 +583,7 @@ impl PredicatePushdown {
                     let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
                     mz_expr::canonicalize::canonicalize_equivalences(
                         equivalences,
-                        input_types.iter().map(|t| &t.column_types),
+                        input_types.iter().map(|t| &*t.column_types),
                     );
 
                     let input_mapper = mz_expr::JoinInputMapper::new_from_input_types(&input_types);
@@ -778,7 +778,7 @@ impl PredicatePushdown {
 
                     mz_expr::canonicalize::canonicalize_equivalences(
                         equivalences,
-                        input_types.iter().map(|t| &t.column_types),
+                        input_types.iter().map(|t| &*t.column_types),
                     );
 
                     Self::update_join_inputs_with_push_downs(inputs, push_downs);

@@ -40,10 +40,10 @@ pub fn canonicalize_equivalences<'a, I>(
     equivalences: &mut Vec<Vec<MirScalarExpr>>,
     input_column_types: I,
 ) where
-    I: Iterator<Item = &'a Vec<ReprColumnType>>,
+    I: Iterator<Item = &'a [ReprColumnType]>,
 {
     let repr_column_types = input_column_types
-        .flat_map(|f| f.clone())
+        .flat_map(|f| f.iter().cloned())
         .collect::<Vec<_>>();
     // Calculate the number of non-leaves for each expression.
     let mut to_reduce = equivalences

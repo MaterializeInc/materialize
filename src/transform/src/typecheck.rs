@@ -995,7 +995,7 @@ impl Typecheck {
                 // TODO(mgree) check t_exprs agrees with `func`'s input type
 
                 let t_out: Vec<ReprColumnType> = func
-                    .output_type().column_types;
+                    .output_type().column_types.into_vec();
 
                 // FlatMap extends the existing columns
                 t_in.extend(t_out);

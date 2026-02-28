@@ -411,7 +411,7 @@ impl RustType<ProtoKey> for Vec<usize> {
 )]
 pub struct ReprRelationType {
     /// The type for each column, in order.
-    pub column_types: Vec<ReprColumnType>,
+    pub column_types: Box<[ReprColumnType]>,
     /// Sets of indices that are "keys" for the collection.
     ///
     /// Each element in this list is a set of column indices, each with the
@@ -437,7 +437,7 @@ impl ReprRelationType {
     /// The `ReprRelationType` will have no keys.
     pub fn new(column_types: Vec<ReprColumnType>) -> Self {
         ReprRelationType {
-            column_types,
+            column_types: column_types.into_boxed_slice(),
             keys: Vec::new(),
         }
     }
@@ -489,7 +489,8 @@ impl From<&SqlRelationType> for ReprRelationType {
                 .column_types
                 .iter()
                 .map(ReprColumnType::from)
-                .collect(),
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
             keys: sql_relation_type.keys.clone(),
         }
     }

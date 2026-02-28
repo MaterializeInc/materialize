@@ -180,7 +180,7 @@ impl JoinImplementation {
                 // the case.
                 mz_expr::canonicalize::canonicalize_equivalences(
                     equivalences,
-                    input_types.iter().map(|t| &t.column_types),
+                    input_types.iter().map(|t| &*t.column_types),
                 );
             }
 

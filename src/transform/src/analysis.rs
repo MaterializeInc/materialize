@@ -624,6 +624,7 @@ mod repr_types {
                     let input_cols = offsets.into_iter().rev().map(|o| {
                         o.as_ref()
                             .expect("ReprRelationType analysis discovered type-less expression")
+                            .as_slice()
                     });
 
                     let repr_typ = expr.try_col_with_input_cols(input_cols).unwrap();

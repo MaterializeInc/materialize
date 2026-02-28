@@ -114,7 +114,7 @@ mod test {
             deserialize(&mut input_stream, "Vec<SqlColumnType>", &mut ctx)?;
         let input_repr_type: Vec<ReprColumnType> =
             input_type.iter().map(ReprColumnType::from).collect();
-        canonicalize_equivalences(&mut equivalences, std::iter::once(&input_repr_type));
+        canonicalize_equivalences(&mut equivalences, std::iter::once(input_repr_type.as_slice()));
         Ok(equivalences)
     }
 

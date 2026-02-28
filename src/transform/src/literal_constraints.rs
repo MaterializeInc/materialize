@@ -155,7 +155,8 @@ impl LiteralConstraints {
                             column_types: key
                                 .iter()
                                 .map(|e| e.typ(&inp_typ.column_types).scalar_type.nullable(false))
-                                .collect(),
+                                .collect::<Vec<_>>()
+                                .into_boxed_slice(),
                             // (Note that the key inference for `MirRelationExpr::Constant` inspects
                             // the constant values to detect keys not listed within the node, but it
                             // can only detect a single-column key this way. A multi-column key is

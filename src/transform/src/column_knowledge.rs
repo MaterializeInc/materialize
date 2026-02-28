@@ -220,7 +220,7 @@ impl ColumnKnowledge {
                 }
                 MirRelationExpr::Map { input, scalars } => {
                     let mut input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
-                    let mut column_types: Vec<ReprColumnType> = input.typ().column_types;
+                    let mut column_types: Vec<ReprColumnType> = input.typ().column_types.into_vec();
                     for scalar in scalars.iter_mut() {
                         input_knowledge.push(optimize(
                             scalar,
@@ -234,7 +234,7 @@ impl ColumnKnowledge {
                 }
                 MirRelationExpr::FlatMap { input, func, exprs } => {
                     let mut input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
-                    let input_col_types: Vec<ReprColumnType> = input.typ().column_types;
+                    let input_col_types: Vec<ReprColumnType> = input.typ().column_types.into_vec();
                     for expr in exprs {
                         optimize(
                             expr,
@@ -249,7 +249,7 @@ impl ColumnKnowledge {
                 }
                 MirRelationExpr::Filter { input, predicates } => {
                     let mut input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
-                    let input_col_types: Vec<ReprColumnType> = input.typ().column_types;
+                    let input_col_types: Vec<ReprColumnType> = input.typ().column_types.into_vec();
                     for predicate in predicates.iter_mut() {
                         optimize(
                             predicate,
@@ -377,7 +377,7 @@ impl ColumnKnowledge {
                     expected_group_size: _,
                 } => {
                     let input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
-                    let input_col_types: Vec<ReprColumnType> = input.typ().column_types;
+                    let input_col_types: Vec<ReprColumnType> = input.typ().column_types.into_vec();
                     let mut output = group_key
                         .iter_mut()
                         .map(|k| {
@@ -444,7 +444,7 @@ impl ColumnKnowledge {
                 MirRelationExpr::TopK { input, limit, .. } => {
                     let input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
                     if let Some(limit) = limit.as_mut() {
-                        let input_col_types: Vec<ReprColumnType> = input.typ().column_types;
+                        let input_col_types: Vec<ReprColumnType> = input.typ().column_types.into_vec();
                         optimize(
                             limit,
                             &input_col_types,

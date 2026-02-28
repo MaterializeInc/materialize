@@ -152,12 +152,14 @@ impl LiteralLifting {
                             }
                         }
                         let mut literals = Vec::new();
+                        let mut col_types = std::mem::take(&mut typ.column_types).into_vec();
                         while the_same.last() == Some(&true) {
                             the_same.pop();
                             let datum = data.pop().unwrap();
-                            let typum = typ.column_types.pop().unwrap();
+                            let typum = col_types.pop().unwrap();
                             literals.push(MirScalarExpr::literal_ok(datum, typum.scalar_type));
                         }
+                        typ.column_types = col_types.into_boxed_slice();
                         literals.reverse();
 
                         // Any subset of constant values can be extracted with a permute.
@@ -179,7 +181,7 @@ impl LiteralLifting {
                                     new_column_types.push(typ.column_types[i].clone());
                                 }
                             }
-                            typ.column_types = new_column_types;
+                            typ.column_types = new_column_types.into_boxed_slice();
 
                             // Tidy up the type information of `relation`.
                             for key in typ.keys.iter_mut() {
@@ -240,9 +242,8 @@ impl LiteralLifting {
                         // and not the same fields in its keys. It is ok to remove
                         // any columns from the keys, as them being literals meant
                         // that their distinctness was not what made anything a key.
-                        for _ in 0..literals.len() {
-                            typ.column_types.pop();
-                        }
+                        let new_len = typ.column_types.len() - literals.len();
+                        typ.column_types = typ.column_types[..new_len].to_vec().into_boxed_slice();
                         let columns = typ.column_types.len();
                         for key in typ.keys.iter_mut() {
                             key.retain(|k| k < &columns);
