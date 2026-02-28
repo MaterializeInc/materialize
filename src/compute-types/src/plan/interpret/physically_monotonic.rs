@@ -131,7 +131,7 @@ impl<T> Interpreter<T> for SingleTimeMonotonic<'_, T> {
         _ctx: &Context<Self::Domain>,
         input: Self::Domain,
         _mfp: &MapFilterProject,
-        _input_key_val: &Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        _input_key_val: &Option<(Box<[MirScalarExpr]>, Option<Row>)>,
     ) -> Self::Domain {
         // In a single-time context, we just propagate the monotonicity
         // status of the input
@@ -141,9 +141,9 @@ impl<T> Interpreter<T> for SingleTimeMonotonic<'_, T> {
     fn flat_map(
         &self,
         _ctx: &Context<Self::Domain>,
-        _input_key: &Option<Vec<MirScalarExpr>>,
+        _input_key: &Option<Box<[MirScalarExpr]>>,
         input: Self::Domain,
-        _exprs: &Vec<MirScalarExpr>,
+        _exprs: &[MirScalarExpr],
         _func: &TableFunc,
         _mfp: &MapFilterProject,
     ) -> Self::Domain {
@@ -169,7 +169,7 @@ impl<T> Interpreter<T> for SingleTimeMonotonic<'_, T> {
     fn reduce(
         &self,
         ctx: &Context<Self::Domain>,
-        _input_key: &Option<Vec<MirScalarExpr>>,
+        _input_key: &Option<Box<[MirScalarExpr]>>,
         _input: Self::Domain,
         _key_val_plan: &KeyValPlan,
         _plan: &ReducePlan,
@@ -232,7 +232,7 @@ impl<T> Interpreter<T> for SingleTimeMonotonic<'_, T> {
         _ctx: &Context<Self::Domain>,
         input: Self::Domain,
         _forms: &AvailableCollections,
-        _input_key: &Option<Vec<MirScalarExpr>>,
+        _input_key: &Option<Box<[MirScalarExpr]>>,
         _input_mfp: &MapFilterProject,
     ) -> Self::Domain {
         // `Plan::ArrangeBy` is better thought of as `ensure_collections`, i.e., it

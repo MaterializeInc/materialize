@@ -318,7 +318,7 @@ impl Context {
                             v_keys.arbitrary_arrangement().unwrap();
                         let mut input_mfp = MapFilterProject::new(value.arity());
                         input_mfp.permute_fn(|c| permutation[c], thinning.len() + input_key.len());
-                        let input_key = Some(input_key.clone());
+                        let input_key = Some(input_key.to_vec().into_boxed_slice());
 
                         let forms = AvailableCollections::new_raw();
 
@@ -524,7 +524,7 @@ impl Context {
                             expr.permute_map(&permutation);
                         }
 
-                        Some(k.clone())
+                        Some(k.to_vec().into_boxed_slice())
                     } else {
                         None
                     };
@@ -535,7 +535,7 @@ impl Context {
                         PlanNode::FlatMap {
                             input_key,
                             input: Box::new(input),
-                            exprs: exprs.clone(),
+                            exprs: exprs.clone().into_boxed_slice(),
                             func: (**func).clone(),
                             mfp_after: Box::new(mfp),
                         }
@@ -866,7 +866,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     {
                         let mut mfp = MapFilterProject::new(arity);
                         mfp.permute_fn(|c| permutation[c], thinning.len() + input_key.len());
-                        (Some(input_key.clone()), mfp)
+                        (Some(input_key.to_vec().into_boxed_slice()), mfp)
                     } else {
                         (None, MapFilterProject::new(arity))
                     };
@@ -913,7 +913,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             let input_key_val = if let Some((key, permutation, thinning, val)) = key_val {
                 mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
 
-                Some((key, Some(val)))
+                Some((key.into_boxed_slice(), Some(val)))
             } else if let Some((key, permutation, thinning)) =
                 keys.arranged.iter().find(|(key, permutation, thinning)| {
                     let mut mfp = mfp.clone();
@@ -922,10 +922,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 })
             {
                 mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
-                Some((key.clone(), None))
+                Some((key.to_vec().into_boxed_slice(), None))
             } else if let Some((key, permutation, thinning)) = keys.arbitrary_arrangement() {
                 mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
-                Some((key.clone(), None))
+                Some((key.to_vec().into_boxed_slice(), None))
             } else {
                 None
             };
@@ -940,7 +940,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 let (_old_key, old_permutation, old_thinning) = keys
                     .arranged
                     .iter_mut()
-                    .find(|(key2, _, _)| key2 == &key)
+                    .find(|(key2, _, _)| key2.as_slice() == &*key)
                     .unwrap();
                 *old_permutation = (0..mfp.input_arity).collect();
                 let old_thinned_arity = old_thinning.len();
@@ -948,7 +948,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 // Get rid of all other forms, as this is now the only one known to be valid.
                 // TODO[btv] we can probably save the other arrangements too, if we adjust their permutations.
                 // This is not hard to do, but leaving it for a quick follow-up to avoid making the present diff too unwieldy.
-                keys.arranged.retain(|(key2, _, _)| key2 == &key);
+                keys.arranged.retain(|(key2, _, _)| key2.as_slice() == &*key);
                 keys.raw = false;
 
                 // Creating a Plan::Mfp node is now logically unnecessary, but we
@@ -997,7 +997,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
         let (input_key, permutation_and_new_arity) =
             if let Some((input_key, permutation, thinning)) = keys.arbitrary_arrangement() {
                 (
-                    Some(input_key.clone()),
+                    Some(input_key.to_vec().into_boxed_slice()),
                     Some((permutation.clone(), thinning.len() + input_key.len())),
                 )
             } else {
@@ -1084,7 +1084,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             {
                 let mut mfp = MapFilterProject::new(arity);
                 mfp.permute_fn(|c| permutation[c], thinning.len() + input_key.len());
-                (Some(input_key.clone()), mfp)
+                (Some(input_key.to_vec().into_boxed_slice()), mfp)
             } else {
                 (None, MapFilterProject::new(arity))
             };

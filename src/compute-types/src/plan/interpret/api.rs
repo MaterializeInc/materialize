@@ -73,16 +73,16 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         ctx: &Context<Self::Domain>,
         input: Self::Domain,
         mfp: &MapFilterProject,
-        input_key_val: &Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        input_key_val: &Option<(Box<[MirScalarExpr]>, Option<Row>)>,
     ) -> Self::Domain;
 
     /// TODO(database-issues#7533): Add documentation.
     fn flat_map(
         &self,
         ctx: &Context<Self::Domain>,
-        input_key: &Option<Vec<MirScalarExpr>>,
+        input_key: &Option<Box<[MirScalarExpr]>>,
         input: Self::Domain,
-        exprs: &Vec<MirScalarExpr>,
+        exprs: &[MirScalarExpr],
         func: &TableFunc,
         mfp: &MapFilterProject,
     ) -> Self::Domain;
@@ -99,7 +99,7 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
     fn reduce(
         &self,
         ctx: &Context<Self::Domain>,
-        input_key: &Option<Vec<MirScalarExpr>>,
+        input_key: &Option<Box<[MirScalarExpr]>>,
         input: Self::Domain,
         key_val_plan: &KeyValPlan,
         plan: &ReducePlan,
@@ -139,7 +139,7 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         ctx: &Context<Self::Domain>,
         input: Self::Domain,
         forms: &AvailableCollections,
-        input_key: &Option<Vec<MirScalarExpr>>,
+        input_key: &Option<Box<[MirScalarExpr]>>,
         input_mfp: &MapFilterProject,
     ) -> Self::Domain;
 }

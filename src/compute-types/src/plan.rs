@@ -220,7 +220,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         mfp: Box<MapFilterProject>,
         /// Whether the input is from an arrangement, and if so,
         /// whether we can seek to a specific value therein
-        input_key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        input_key_val: Option<(Box<[MirScalarExpr]>, Option<Row>)>,
     },
     /// A variable number of output records for each input record.
     ///
@@ -237,11 +237,11 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     FlatMap {
         /// The particular arrangement of the input we expect to use,
         /// if any
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Box<[MirScalarExpr]>>,
         /// The input collection.
         input: Box<Plan<T>>,
         /// Expressions that for each row prepare the arguments to `func`.
-        exprs: Vec<MirScalarExpr>,
+        exprs: Box<[MirScalarExpr]>,
         /// The variable-record emitting function.
         func: TableFunc,
         /// Linear operator to apply to each record produced by `func`.
@@ -266,7 +266,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     Reduce {
         /// The particular arrangement of the input we expect to use,
         /// if any
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Box<[MirScalarExpr]>>,
         /// The input collection.
         input: Box<Plan<T>>,
         /// A plan for changing input records into key, value pairs.
@@ -334,7 +334,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     /// or to cap a `Plan` so that indexes can be exported.
     ArrangeBy {
         /// The key that must be used to access the input.
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Box<[MirScalarExpr]>>,
         /// The input collection.
         input: Box<Plan<T>>,
         /// The MFP that must be applied to the input.
@@ -830,11 +830,12 @@ mod tests {
     /// Guard against regressions in PlanNode size.
     #[test]
     fn type_size_assertions() {
-        // PlanNode was 384 bytes before boxing large sub-types.
-        // After boxing GetPlan, JoinPlan, KeyValPlan, ReducePlan, TopKPlan,
-        // and MapFilterProject (in 4 positions), it should be much smaller.
-        assert_eq!(size_of::<PlanNode>(), 104);
+        // PlanNode was 384 bytes before boxing large sub-types (session 20),
+        // then 104 bytes after boxing. Converting Vec<MirScalarExpr> fields
+        // in FlatMap, Reduce, ArrangeBy, and Mfp to Box<[MirScalarExpr]>
+        // shrinks FlatMap (the largest variant) from 104 to 88 bytes.
+        assert_eq!(size_of::<PlanNode>(), 88);
         // Plan wraps PlanNode with a LirId (u64).
-        assert_eq!(size_of::<Plan>(), 112);
+        assert_eq!(size_of::<Plan>(), 96);
     }
 }

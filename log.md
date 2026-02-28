@@ -1958,3 +1958,80 @@ All tests pass:
 | ReprRelationType | 48 | 40 | 8 bytes (17%) |
 | ColumnOrder | 16 | 8 | 8 bytes (50%) |
 | Op | 48 | 32 | 16 bytes (33%) |
+
+---
+
+## Session 26: Shrink PlanNode from 104 to 88 bytes via Vec→Box<[T]> in FlatMap, Mfp, Reduce, ArrangeBy
+
+**Target**: `PlanNode<T>` in `src/compute-types/src/plan.rs` — the compute LIR plan node enum.
+
+**Approach**: Convert `Vec<MirScalarExpr>` fields to `Box<[MirScalarExpr]>` in the four variants that carry them. These fields are immutable after construction (built during lowering, consumed during rendering), so the Vec capacity word is wasted. Each Vec→Box<[T]> conversion saves 8 bytes (eliminates the capacity field).
+
+### Changes
+
+5 fields across 4 PlanNode variants converted:
+- `FlatMap::input_key`: `Option<Vec<MirScalarExpr>>` → `Option<Box<[MirScalarExpr]>>`
+- `FlatMap::exprs`: `Vec<MirScalarExpr>` → `Box<[MirScalarExpr]>`
+- `Reduce::input_key`: `Option<Vec<MirScalarExpr>>` → `Option<Box<[MirScalarExpr]>>`
+- `ArrangeBy::input_key`: `Option<Vec<MirScalarExpr>>` → `Option<Box<[MirScalarExpr]>>`
+- `Mfp::input_key_val`: `Option<(Vec<MirScalarExpr>, Option<Row>)>` → `Option<(Box<[MirScalarExpr]>, Option<Row>)>`
+
+FlatMap was the largest variant at 104 bytes, driving the enum size. Removing 16 bytes (2 Vec capacity words) shrinks it to 88 bytes.
+
+### Results
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| PlanNode | 104 | 88 | 16 bytes (15%) |
+| Plan (compute LIR) | 112 | 96 | 16 bytes (14%) |
+
+### Files changed (5 files)
+
+- `src/compute-types/src/plan.rs` — Field type changes + size assertion update (104→88, 112→96)
+- `src/compute-types/src/plan/lowering.rs` — Construction sites: `.into_boxed_slice()` at 6 sites, slice comparison fix
+- `src/compute-types/src/plan/render_plan.rs` — Convert Box<[T]>→Vec at PlanNode→RenderPlanNode boundary via `.into_vec()`
+- `src/compute-types/src/plan/interpret/api.rs` — Interpreter trait method signatures updated
+- `src/compute-types/src/plan/interpret/physically_monotonic.rs` — Trait implementation signatures updated
+
+### Design notes
+
+- `RenderPlanNode` keeps `Vec<MirScalarExpr>` to avoid cascading changes into the render code
+- Conversion at the PlanNode→RenderPlanNode boundary uses `.into_vec()` which is O(1) (just adds a capacity = length)
+- The explain/text.rs code works unchanged because `.seq(key, None)` takes `&[T]` which auto-derefs from both Vec and Box<[T]>
+
+### Cumulative PlanNode savings (sessions 20 + 26)
+
+| Type | Original | After session 20 | After session 26 | Total savings |
+|------|----------|------------------|------------------|---------------|
+| PlanNode | 384 | 104 | 88 | 296 bytes (77%) |
+
+### Cumulative savings across all sessions (after session 26)
+
+| Type | Original | After all sessions | Total savings |
+|------|----------|-------------------|---------------|
+| Expr\<Raw\> | 240 | 48 | 192 bytes (80%) |
+| Value | 48 | 40 | 8 bytes (17%) |
+| PlanNode | 384 | 88 | 296 bytes (77%) |
+| Plan (compute LIR) | 392 | 96 | 296 bytes (76%) |
+| Ident | 24 | 16 | 8 bytes (33%) |
+| Plan (sql) | ~1888 | 176 | ~1712 bytes (91%) |
+| SelectPlan | 184 | 168 | 16 bytes (9%) |
+| RowSetFinishing | 72 | 56 | 16 bytes (22%) |
+| MirScalarExpr | 88 | 48 | 40 bytes (45%) |
+| MirRelationExpr | 176 | 88 | 88 bytes (50%) |
+| HirScalarExpr | 192 | 80 | 112 bytes (58%) |
+| HirRelationExpr | 456 | 72 | 384 bytes (84%) |
+| AggregateFunc | 88 | 48 | 40 bytes (45%) |
+| AggregateExpr | 184 | 104 | 80 bytes (43%) |
+| UnaryFunc | 72 | 32 | 40 bytes (56%) |
+| BinaryFunc | 48 | 24 | 24 bytes (50%) |
+| VariadicFunc | 40 | 24 | 16 bytes (40%) |
+| TableFunc | 80 | 40 | 40 bytes (50%) |
+| EvalError | 56 | 40 | 16 bytes (29%) |
+| JoinImplementation | 120 | 64 | 56 bytes (47%) |
+| SqlScalarType | 32 | 24 | 8 bytes (25%) |
+| SqlColumnType | 40 | 32 | 8 bytes (20%) |
+| Matcher | 72 | 64 | 8 bytes (11%) |
+| ReprRelationType | 48 | 40 | 8 bytes (17%) |
+| ColumnOrder | 16 | 8 | 8 bytes (50%) |
+| Op | 48 | 32 | 16 bytes (33%) |

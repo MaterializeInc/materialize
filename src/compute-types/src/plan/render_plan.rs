@@ -393,7 +393,8 @@ impl<T> TryFrom<Plan<T>> for LetFreePlan<T> {
                     let expr = Mfp {
                         input: input.lir_id,
                         mfp: *mfp,
-                        input_key_val,
+                        input_key_val: input_key_val
+                            .map(|(k, v)| (k.into_vec(), v)),
                     };
                     insert_node(lir_id, parent, expr, nesting);
 
@@ -407,9 +408,9 @@ impl<T> TryFrom<Plan<T>> for LetFreePlan<T> {
                     mfp_after,
                 } => {
                     let expr = FlatMap {
-                        input_key,
+                        input_key: input_key.map(|k| k.into_vec()),
                         input: input.lir_id,
-                        exprs,
+                        exprs: exprs.into_vec(),
                         func,
                         mfp_after: *mfp_after,
                     };
@@ -438,7 +439,7 @@ impl<T> TryFrom<Plan<T>> for LetFreePlan<T> {
                     mfp_after,
                 } => {
                     let expr = Reduce {
-                        input_key,
+                        input_key: input_key.map(|k| k.into_vec()),
                         input: input.lir_id,
                         key_val_plan: *key_val_plan,
                         plan: *plan,
@@ -500,7 +501,7 @@ impl<T> TryFrom<Plan<T>> for LetFreePlan<T> {
                     forms,
                 } => {
                     let expr = ArrangeBy {
-                        input_key,
+                        input_key: input_key.map(|k| k.into_vec()),
                         input: input.lir_id,
                         input_mfp: *input_mfp,
                         forms,
