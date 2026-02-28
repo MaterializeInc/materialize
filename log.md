@@ -1439,3 +1439,126 @@ The FlatMap variant (104 bytes with 3 Vecs + TableFunc + Box<MapFilterProject>) 
 | Matcher | 72 | 64 | 8 bytes (11%) |
 | ReprRelationType | 48 | 40 | 8 bytes (17%) |
 | ColumnOrder | 16 | 8 | 8 bytes (50%) |
+
+## Session 21: Shrink Value from 48 to 40 bytes and Expr<Raw> from 240 to 72 bytes
+
+**Date:** 2026-02-28
+
+### Changes
+
+Three complementary optimizations that shrink the core AST types used during SQL parsing:
+
+1. **`Value::Number(String)` → `Number(Box<str>)`, `Value::String(String)` → `String(Box<str>)`, `Value::HexString(String)` → `HexString(Box<str>)`** (Value: 48 → 40 bytes)
+   - String literals, numeric literals, and hex strings are parsed once and never modified
+   - `Box<str>` stores `(ptr, len)` vs `String`'s `(ptr, len, capacity)` — eliminates the wasted capacity field
+   - `IntervalValue::value: String` → `Box<str>` as well (IntervalValue: 48 → 40 bytes)
+
+2. **`Expr::Function(Function<T>)` → `Function(Box<Function<T>>)`** (Expr<Raw>: 240 → 72 bytes)
+   - `Function<Raw>` is 240 bytes (contains `name`, `args: FunctionArgs<T>`, `filter: Option<Box<Expr<T>>>`, `over: Option<WindowSpec<T>>`, `distinct: bool`)
+   - This was the single largest Expr variant, inflating the entire enum to 240 bytes
+   - Boxing reduces the inline footprint from 240 to 8 bytes
+   - Function calls are constructed once during parsing and read during planning — boxing has negligible cost
+
+3. **`Expr::Cast { data_type: T::DataType }` → `Cast { data_type: Box<T::DataType> }`**
+   - `RawDataType` can be up to ~48 bytes (the `Other` variant contains `RawItemName` + `Vec<i64>`)
+   - Boxing reduces the inline footprint from ~48 to 8 bytes
+   - Cast expressions are constructed once during parsing and read during planning
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| Value | 48 | 40 | 8 bytes (17%) |
+| IntervalValue | 48 | 40 | 8 bytes (17%) |
+| Expr\<Raw\> | 240 | 72 | 168 bytes (70%) |
+
+### Why Expr<Raw> shrank so dramatically
+
+Before: `Function<Raw>` (240 bytes) was the sole driver of the enum size — it's a large struct with multiple fields including `FunctionArgs<T>` and `Option<WindowSpec<T>>`.
+
+After: The largest remaining variants are:
+- `Case { operand(8) + conditions(24) + results(24) + else_result(8) }` = 64 bytes
+- `Op { op(48) + expr1(8) + expr2(8) }` = 64 bytes (Op contains `namespace: Option<Vec<Ident>>` + `op: String`)
+
+With discriminant and alignment, the enum settles at 72 bytes.
+
+### Why this is high-impact
+
+`Expr<T>` is the most numerous AST node type. Every expression in every SQL query — columns, literals, function calls, operators, casts — is represented as an `Expr<T>`. A moderately complex query like `SELECT upper(name), id + 1, val::text FROM t WHERE id > 0` contains 8+ `Expr` nodes.
+
+The savings compound massively because:
+- `Expr<T>` is stored recursively: every `Vec<Expr<T>>` element saves 168 bytes (in function args, CASE conditions/results, IN lists, etc.)
+- Every `Box<Expr<T>>` allocation saves 168 bytes (in unary/binary ops, subquery arms, etc.)
+- `Value` appears inside `Expr::Value(Value)` — shrinking Value from 48→40 bytes contributes to the smaller Expr
+
+### Cascading effects
+
+- **Statement\<Raw\>** embeds `Expr<Raw>` in many variants via Vec/Box — all statement types that contain expressions benefit from smaller heap allocations
+- **SelectStatement**, **InsertStatement**, **CreateTableStatement**, etc. all contain `Expr<Raw>` in WHERE, GROUP BY, HAVING, ORDER BY, DEFAULT, CHECK constraints
+- Every SQL query parsed allocates fewer bytes for its AST representation
+- The parser allocates less total memory per query
+
+### Benchmark results
+
+All query types work correctly with no regression (200K rows, 3 trials averaged):
+
+| Query Type | Avg Time | Notes |
+|-----------|----------|-------|
+| String literals (3 per row) | ~8ms | Exercises Value::String with Box<str> |
+| Numeric literals + math | ~8ms | Exercises Value::Number with Box<str> |
+| Function calls (5 per row) | ~8.5ms | Exercises boxed Function<T> |
+| CAST expressions (5 per row) | ~7.9ms | Exercises boxed data_type |
+| Complex mixed query | ~10.6ms | Exercises all optimized paths |
+| INTERVAL literals | ~8.2ms | Exercises IntervalValue with Box<str> |
+| CREATE/DROP TABLE cycle | ~38ms | Exercises Statement through parser |
+
+### Files changed (21 files)
+
+- `src/sql-parser/src/ast/defs/value.rs` — String→Box<str> for Number, String, HexString, IntervalValue::value + size assertions
+- `src/sql-parser/src/ast/defs/expr.rs` — Box Function<T>, Box data_type in Cast + size assertion + helper method updates
+- `src/sql-parser/src/ast/defs/statement.rs` — Pattern matching adjustment for Value::String
+- `src/sql-parser/src/parser.rs` — `.into()` conversions at ~30 Value construction sites, Box::new for Function/Cast
+- `src/sql/src/plan/with_options.rs` — `.into()` conversions for Value construction/extraction
+- `src/sql/src/plan/literal.rs` — Value::String extraction
+- `src/sql/src/plan/query.rs` — Value construction + Function pattern matching
+- `src/sql/src/plan/side_effecting_func.rs` — Restructured Function pattern matching for boxed Function
+- `src/sql/src/plan/statement/ddl.rs` — Value construction
+- `src/sql/src/plan/statement/show.rs` — Value construction
+- `src/sql/src/plan/transform_ast.rs` — Value/Function pattern matching
+- `src/sql/src/kafka_util.rs` — Value construction
+- `src/sql/src/pure.rs` — Value construction at ~10 sites
+- `src/sql/src/pure/mysql.rs` — Value construction
+- `src/sql/src/pure/postgres.rs` — Value construction
+- `src/sql/src/pure/sql_server.rs` — Value construction
+- `src/adapter/src/catalog/migrate.rs` — Value construction/matching
+- `src/adapter/src/coord/sequencer/inner.rs` — Value construction
+- `src/adapter/src/coord/sequencer/inner/secret.rs` — Value construction
+- `src/adapter/src/util.rs` — Value extraction
+- `src/sqllogictest/src/runner.rs` — Value construction
+
+### Cumulative savings across all sessions (after session 21)
+
+| Type | Original | After all sessions | Total savings |
+|------|----------|-------------------|---------------|
+| Expr\<Raw\> | 240 | 72 | 168 bytes (70%) |
+| Value | 48 | 40 | 8 bytes (17%) |
+| PlanNode | 384 | 104 | 280 bytes (73%) |
+| Ident | 24 | 16 | 8 bytes (33%) |
+| Plan (sql) | ~1888 | 184 | ~1704 bytes (90%) |
+| MirScalarExpr | 88 | 48 | 40 bytes (45%) |
+| MirRelationExpr | 176 | 88 | 88 bytes (50%) |
+| HirScalarExpr | 192 | 80 | 112 bytes (58%) |
+| HirRelationExpr | 456 | 72 | 384 bytes (84%) |
+| AggregateFunc | 88 | 48 | 40 bytes (45%) |
+| AggregateExpr | 184 | 104 | 80 bytes (43%) |
+| UnaryFunc | 72 | 32 | 40 bytes (56%) |
+| BinaryFunc | 48 | 24 | 24 bytes (50%) |
+| VariadicFunc | 40 | 24 | 16 bytes (40%) |
+| TableFunc | 80 | 40 | 40 bytes (50%) |
+| EvalError | 56 | 40 | 16 bytes (29%) |
+| JoinImplementation | 120 | 64 | 56 bytes (47%) |
+| SqlScalarType | 32 | 24 | 8 bytes (25%) |
+| SqlColumnType | 40 | 32 | 8 bytes (20%) |
+| Matcher | 72 | 64 | 8 bytes (11%) |
+| ReprRelationType | 48 | 40 | 8 bytes (17%) |
+| ColumnOrder | 16 | 8 | 8 bytes (50%) |
