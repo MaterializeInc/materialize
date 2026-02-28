@@ -382,7 +382,7 @@ impl<T> TryFrom<Plan<T>> for LetFreePlan<T> {
                     insert_node(lir_id, parent, expr, nesting);
                 }
                 PlanNode::Get { id, keys, plan } => {
-                    let expr = Get { id, keys, plan };
+                    let expr = Get { id, keys, plan: *plan };
                     insert_node(lir_id, parent, expr, nesting);
                 }
                 PlanNode::Mfp {
@@ -392,7 +392,7 @@ impl<T> TryFrom<Plan<T>> for LetFreePlan<T> {
                 } => {
                     let expr = Mfp {
                         input: input.lir_id,
-                        mfp,
+                        mfp: *mfp,
                         input_key_val,
                     };
                     insert_node(lir_id, parent, expr, nesting);
@@ -411,7 +411,7 @@ impl<T> TryFrom<Plan<T>> for LetFreePlan<T> {
                         input: input.lir_id,
                         exprs,
                         func,
-                        mfp_after,
+                        mfp_after: *mfp_after,
                     };
                     insert_node(lir_id, parent, expr, nesting);
 
@@ -420,7 +420,7 @@ impl<T> TryFrom<Plan<T>> for LetFreePlan<T> {
                 PlanNode::Join { inputs, plan } => {
                     let expr = Join {
                         inputs: inputs.iter().map(|i| i.lir_id).collect(),
-                        plan,
+                        plan: *plan,
                     };
                     insert_node(lir_id, parent, expr, nesting);
 
@@ -440,9 +440,9 @@ impl<T> TryFrom<Plan<T>> for LetFreePlan<T> {
                     let expr = Reduce {
                         input_key,
                         input: input.lir_id,
-                        key_val_plan,
-                        plan,
-                        mfp_after,
+                        key_val_plan: *key_val_plan,
+                        plan: *plan,
+                        mfp_after: *mfp_after,
                     };
                     insert_node(lir_id, parent, expr, nesting);
 
@@ -451,7 +451,7 @@ impl<T> TryFrom<Plan<T>> for LetFreePlan<T> {
                 PlanNode::TopK { input, top_k_plan } => {
                     let expr = TopK {
                         input: input.lir_id,
-                        top_k_plan,
+                        top_k_plan: *top_k_plan,
                     };
                     insert_node(lir_id, parent, expr, nesting);
 
@@ -502,7 +502,7 @@ impl<T> TryFrom<Plan<T>> for LetFreePlan<T> {
                     let expr = ArrangeBy {
                         input_key,
                         input: input.lir_id,
-                        input_mfp,
+                        input_mfp: *input_mfp,
                         forms,
                     };
                     insert_node(lir_id, parent, expr, nesting);
