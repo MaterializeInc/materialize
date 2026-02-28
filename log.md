@@ -1183,3 +1183,106 @@ All TopK query types work correctly with no regression (5000 rows):
 | Matcher | 72 | 64 | 8 bytes (11%) |
 | ReprRelationType | 48 | 40 | 8 bytes (17%) |
 | ColumnOrder | 16 | 8 | 8 bytes (50%) |
+
+## Session 18: Shrink Plan enum from ~1888 to 184 bytes via boxing large variants and Statement<Raw>
+
+**Date:** 2026-02-28
+
+### Changes
+
+Two complementary optimizations that dramatically shrink the `Plan` enum:
+
+1. **Box `Statement<Raw>` in `DeclarePlan` and `PreparePlan`** (Plan: ~1888 → 992 bytes)
+   - `Statement<Raw>` is ~832 bytes — it's the AST representation of an entire SQL statement
+   - `PreparePlan` was ~888 bytes; after boxing `stmt`: 160 bytes
+   - `DeclarePlan` was ~880 bytes; after boxing `stmt`: 128 bytes
+   - These are the `PREPARE` and `DECLARE CURSOR` statements — the Statement is constructed once during parsing and only read during execution
+
+2. **Box 17 large Plan variants (>200 bytes)** (Plan: 992 → 184 bytes)
+   - Boxed variants: `CreateConnection`(992), `CreateSource`(792), `CreateTable`(784), `CopyTo`(712), `CreateSink`(672), `AlterSink`(648), `CopyFrom`(488), `ExplainPlan`(464), `CreateContinualTask`(456), `ExplainPushdown`(400), `CreateMaterializedView`(392), `ValidateConnection`(336), `CreateView`(264), `Subscribe`(232), `ShowColumns`(224), `ReadThenWrite`(224), `AlterCluster`(208)
+   - Kept `SelectPlan`(184) unboxed as the hot-path variant (every SELECT query)
+   - `InsertPlan` and other smaller variants also kept unboxed
+
+### Key insight: Plan is one of the largest enums in the codebase
+
+The `Plan` enum represents every possible SQL statement as a single type. Before optimization, its size was dominated by DDL plan variants (which carry full AST nodes, type information, and connection details). Since the enum must be as large as its largest variant, even a simple `SELECT 1` allocated ~1888 bytes for the `Plan` enum on the stack.
+
+After optimization, `SelectPlan`(184 bytes) is the largest remaining unboxed variant, so the enum is 184 bytes. DDL/EXPLAIN/SUBSCRIBE operations pay one extra Box allocation, but these are inherently heavyweight operations where a single heap allocation is negligible.
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| Plan | ~1888 | 184 | ~1704 bytes (90%) |
+| PreparePlan | ~888 | 160 | ~728 bytes (82%) |
+| DeclarePlan | ~880 | 128 | ~752 bytes (86%) |
+
+### Why this matters
+
+- **Every SQL statement** flows through the `Plan` enum — it's created by the planner and consumed by the coordinator/sequencer
+- Shrinking it from ~1888 to 184 bytes means every statement uses ~1700 fewer bytes on the stack
+- For high-throughput SELECT workloads, the `SelectPlan` variant is unboxed, so there's zero overhead
+- For DDL operations, the extra Box allocation is negligible compared to the catalog transaction cost
+
+### Cascading effects
+
+- The `Plan` enum is matched in `rbac.rs` (permissions checking), `sequencer.rs` (execution), and `catalog_serving.rs` — all these code paths now work with a much smaller enum on the stack
+- Function calls that pass `Plan` by value move fewer bytes
+- Less stack pressure for deeply nested async call chains in the coordinator
+
+### Benchmark results
+
+All query types work correctly with no regression:
+
+| Query Type | Avg Time (200 iter) | Notes |
+|-----------|---------------------|-------|
+| Simple SELECT | ~5.4ms/query | SelectPlan (unboxed, hot path) |
+| SELECT with JOIN | ~8.0ms/query | SelectPlan (unboxed) |
+| EXPLAIN | ~2.1ms/query | ExplainPlanPlan (boxed) |
+| INSERT | ~2.4ms/query | InsertPlan (unboxed) |
+| SHOW COLUMNS | ~1.3ms/query | ShowColumnsPlan (boxed) |
+| CREATE+DROP VIEW cycle | ~85ms/cycle | CreateViewPlan (boxed) |
+| CREATE+DROP TABLE cycle | ~92ms/cycle | CreateTablePlan (boxed) |
+
+### Files changed (17 files)
+
+- `src/sql/src/plan.rs` — Box 17 Plan variants, Box `Statement<Raw>` in DeclarePlan/PreparePlan, size assertion tests
+- `src/sql/src/plan/hir.rs` — Adjusted top_k construction
+- `src/sql/src/plan/statement/ddl.rs` — Box::new() at 8+ DDL plan construction sites
+- `src/sql/src/plan/statement/dml.rs` — Box::new() at DML plan construction sites
+- `src/sql/src/plan/statement/scl.rs` — Box::new() at ShowColumns construction
+- `src/sql/src/plan/statement/show.rs` — Box::new() at ShowColumns construction
+- `src/sql/src/plan/statement/validate.rs` — Box::new() at ValidateConnection construction
+- `src/sql/src/rbac.rs` — Pattern matching simplified for boxed variants
+- `src/adapter/src/catalog/state.rs` — Deref adjustments for boxed Plan variants
+- `src/adapter/src/coord/appends.rs` — Deref adjustments for boxed Plan variants
+- `src/adapter/src/coord/catalog_serving.rs` — Deref adjustments for boxed Plan variants
+- `src/adapter/src/coord/introspection.rs` — Deref adjustment
+- `src/adapter/src/coord/sequencer.rs` — Deref adjustments in sequencer dispatch
+- `src/adapter/src/coord/sequencer/inner.rs` — Deref adjustments in inner sequencer
+- `src/adapter/src/coord/sequencer/inner/create_materialized_view.rs` — Deref adjustment
+- `src/adapter/src/coord/sequencer/inner/create_view.rs` — Deref adjustment
+- `src/adapter/src/frontend_peek.rs` — Deref adjustments in frontend peek path
+
+### Cumulative savings across all sessions (after session 18)
+
+| Type | Original | After all sessions | Total savings |
+|------|----------|-------------------|---------------|
+| Plan | ~1888 | 184 | ~1704 bytes (90%) |
+| MirScalarExpr | 88 | 48 | 40 bytes (45%) |
+| MirRelationExpr | 176 | 88 | 88 bytes (50%) |
+| HirScalarExpr | 192 | 80 | 112 bytes (58%) |
+| HirRelationExpr | 456 | 72 | 384 bytes (84%) |
+| AggregateFunc | 88 | 48 | 40 bytes (45%) |
+| AggregateExpr | 184 | 104 | 80 bytes (43%) |
+| UnaryFunc | 72 | 32 | 40 bytes (56%) |
+| BinaryFunc | 48 | 24 | 24 bytes (50%) |
+| VariadicFunc | 40 | 24 | 16 bytes (40%) |
+| TableFunc | 80 | 40 | 40 bytes (50%) |
+| EvalError | 56 | 40 | 16 bytes (29%) |
+| JoinImplementation | 120 | 64 | 56 bytes (47%) |
+| SqlScalarType | 32 | 24 | 8 bytes (25%) |
+| SqlColumnType | 40 | 32 | 8 bytes (20%) |
+| Matcher | 72 | 64 | 8 bytes (11%) |
+| ReprRelationType | 48 | 40 | 8 bytes (17%) |
+| ColumnOrder | 16 | 8 | 8 bytes (50%) |
