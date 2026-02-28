@@ -609,8 +609,8 @@ impl PeekClient {
     /// oracle timestamp BUT then actually applying the write will bump the
     /// oracle read timestamp to the timestamp of the write so at that time it
     /// will be true that `chosen_ts <= oracle_ts`. Returns `(retry_count,
-    /// write_submitted, result)` so the caller can record OCC retry metrics
-    /// regardless of whether the operation succeeded or failed.
+    /// result)` so the caller can record OCC retry metrics regardless of
+    /// whether the operation succeeded or failed.
     async fn run_occ_loop(
         &self,
         mut subscribe_handle: SubscribeHandle,
@@ -955,7 +955,6 @@ impl PeekClient {
                         .await;
                     match result {
                         WriteResult::Success { .. } => {
-                            state.write_submitted = true;
                             break self.build_success_response(kind, returning, &state.all_diffs);
                         }
                         WriteResult::Cancelled => {

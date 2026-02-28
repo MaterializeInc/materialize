@@ -490,13 +490,16 @@ impl Coordinator {
                     self.handle_frontend_statement_logging_event(event);
                 }
                 Command::RegisterConnectionCancelWatch { conn_id, tx } => {
-                    let rx = self
-                        .connection_cancel_watches
-                        .entry(conn_id)
-                        .or_insert_with(|| watch::channel(false))
-                        .1
-                        .clone();
-                    let _ = tx.send(rx);
+                    // Always create a fresh channel. Using
+                    // `entry().or_insert_with()` would reuse a channel from a
+                    // previous operation whose fire-and-forget
+                    // UnregisterConnectionCancelWatch hasn't been processed yet,
+                    // causing a race where the stale unregister drops the sender
+                    // and spuriously cancels the new operation.
+                    let (watch_tx, watch_rx) = watch::channel(false);
+                    self.connection_cancel_watches
+                        .insert(conn_id, (watch_tx, watch_rx.clone()));
+                    let _ = tx.send(watch_rx);
                 }
                 Command::UnregisterConnectionCancelWatch { conn_id } => {
                     self.connection_cancel_watches.remove(&conn_id);

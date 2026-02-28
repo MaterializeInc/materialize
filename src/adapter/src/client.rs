@@ -66,7 +66,7 @@ use crate::statement_logging::{StatementEndedExecutionReason, StatementExecution
 use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
 use crate::{
-    AdapterNotice, AppendWebhookError, PeekClient, PeekResponseUnary, StartupResponse, optimize,
+    AdapterNotice, AppendWebhookError, PeekClient, PeekResponseUnary, StartupResponse,
 };
 
 /// A handle to a running coordinator.
@@ -1246,7 +1246,16 @@ impl SessionClient {
             return Err(AdapterError::Canceled);
         }
         let connection_cancel = async move {
-            let _ = connection_cancel_rx.wait_for(|v| *v).await;
+            let was_cancelled = connection_cancel_rx.wait_for(|v| *v).await.is_ok();
+            if !was_cancelled {
+                // The watch sender was dropped without signaling
+                // cancellation. This can happen due to a race between a
+                // fire-and-forget UnregisterConnectionCancelWatch from a
+                // previous operation and our RegisterConnectionCancelWatch.
+                // This is not a real cancellation, so wait forever (letting
+                // the other select! branches handle completion/cancel).
+                futures::future::pending::<()>().await;
+            }
         };
         tokio::pin!(connection_cancel);
 
