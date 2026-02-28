@@ -1562,3 +1562,102 @@ All query types work correctly with no regression (200K rows, 3 trials averaged)
 | Matcher | 72 | 64 | 8 bytes (11%) |
 | ReprRelationType | 48 | 40 | 8 bytes (17%) |
 | ColumnOrder | 16 | 8 | 8 bytes (50%) |
+
+## Session 22: Shrink Expr\<Raw\> from 72 to 64 bytes via boxing Case and Op::op String→Box\<str\>
+
+**Date:** 2026-02-28
+
+### Changes
+
+Two complementary optimizations that shrink `Expr<Raw>` from 72 to 64 bytes:
+
+1. **Box `Case` variant into `CaseExpr<T>` struct** (Case variant: 64 → 8 bytes inline)
+   - Introduced `CaseExpr<T>` struct with `operand`, `conditions`, `results`, `else_result`
+   - `Case { operand: Option<Box<Expr<T>>>, conditions: Vec<Expr<T>>, results: Vec<Expr<T>>, else_result: Option<Box<Expr<T>>> }` was 64 bytes inline
+   - Boxing reduces to `Case(Box<CaseExpr<T>>)` = 8 bytes
+   - CASE expressions are constructed once during parsing and read during planning — boxing has negligible cost
+
+2. **`Op::op: String` → `Box<str>`** (Op: 48 → 40 bytes)
+   - Operator strings ("+", "-", "=", etc.) are parsed once and never modified
+   - `Box<str>` stores `(ptr, len)` vs `String`'s `(ptr, len, capacity)` — eliminates the wasted capacity field
+   - Op shrinks from 48 bytes (`Option<Vec<Ident>>(24) + String(24)`) to 40 bytes (`Option<Vec<Ident>>(24) + Box<str>(16)`)
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| Expr\<Raw\> | 72 | 64 | 8 bytes (11%) |
+| Op | 48 | 40 | 8 bytes (17%) |
+
+### Why Expr\<Raw\> shrank to 64 bytes
+
+Before: the two largest variants were:
+- `Case { operand(8) + conditions(24) + results(24) + else_result(8) }` = 64 bytes
+- `Op { op: Op(48) + expr1: Box(8) + expr2: Option<Box>(8) }` = 64 bytes
+
+After:
+- `Case(Box<CaseExpr<T>>)` = 8 bytes
+- `Op { op: Op(40) + expr1: Box(8) + expr2: Option<Box>(8) }` = 56 bytes (now the largest variant)
+
+With discriminant and alignment, the enum settles at 64 bytes.
+
+### Why this is valuable
+
+`Expr<T>` is the most numerous AST node type. Every expression in every SQL query is represented as an `Expr<T>`. The savings compound because:
+- `Expr<T>` is stored recursively: every `Vec<Expr<T>>` element saves 8 bytes
+- Every `Box<Expr<T>>` allocation saves 8 bytes
+- CASE expressions are relatively uncommon compared to column refs, function calls, and operators — boxing the rare variant while keeping common variants unboxed is the right tradeoff
+- Op's `String→Box<str>` is strictly better: no new indirection, just eliminates the unused capacity field
+
+### Tests
+
+All unit tests pass:
+- `mz-sql-parser` lib tests: 3/3 passed (including `ast_expr_sizes` size assertion)
+- `mz-sql-parser` integration tests (`sqlparser_common`): 5/5 passed
+- `mz-sql-pretty` parser tests: 1/1 passed
+- Full compilation: `mz-sql-parser`, `mz-sql`, `mz-sql-pretty`, `mz-adapter`, `mz-environmentd` all compile cleanly
+
+Note: Live Materialize benchmarks could not be run due to a pre-existing stack overflow in `persist_cdc::UnopenedPersistCatalogState::open_inner` during startup (reproduces on stashed code as well). This is an infrastructure issue unrelated to our AST changes.
+
+### Files changed (6 files)
+
+- `src/sql-parser/src/ast/defs/expr.rs` — Introduced `CaseExpr<T>` struct, boxed Case variant, `Op::op: String` → `Box<str>`, size assertions (Op 40, Expr\<Raw\> 64)
+- `src/sql-parser/src/parser.rs` — `Expr::Case(Box::new(CaseExpr { ... }))` construction, `Op::bare` takes `Into<Box<str>>`, operator string conversion
+- `src/sql-parser/tests/testdata/scalar` — Updated expected test output for boxed Case debug format
+- `src/sql-pretty/src/doc.rs` — Pattern matching adjustment for `Expr::Case(case)`
+- `src/sql/src/plan/query.rs` — Pattern matching adjustments for boxed Case (2 sites)
+- `src/sql/src/plan/transform_ast.rs` — `Expr::Case(Box::new(CaseExpr { ... }))` construction (3 sites)
+
+### Cumulative Expr\<Raw\> savings (sessions 21 + 22)
+
+| Type | Original | After session 21 | After session 22 | Total savings |
+|------|----------|------------------|------------------|---------------|
+| Expr\<Raw\> | 240 | 72 | 64 | 176 bytes (73%) |
+
+### Cumulative savings across all sessions (after session 22)
+
+| Type | Original | After all sessions | Total savings |
+|------|----------|-------------------|---------------|
+| Expr\<Raw\> | 240 | 64 | 176 bytes (73%) |
+| Value | 48 | 40 | 8 bytes (17%) |
+| PlanNode | 384 | 104 | 280 bytes (73%) |
+| Ident | 24 | 16 | 8 bytes (33%) |
+| Plan (sql) | ~1888 | 184 | ~1704 bytes (90%) |
+| MirScalarExpr | 88 | 48 | 40 bytes (45%) |
+| MirRelationExpr | 176 | 88 | 88 bytes (50%) |
+| HirScalarExpr | 192 | 80 | 112 bytes (58%) |
+| HirRelationExpr | 456 | 72 | 384 bytes (84%) |
+| AggregateFunc | 88 | 48 | 40 bytes (45%) |
+| AggregateExpr | 184 | 104 | 80 bytes (43%) |
+| UnaryFunc | 72 | 32 | 40 bytes (56%) |
+| BinaryFunc | 48 | 24 | 24 bytes (50%) |
+| VariadicFunc | 40 | 24 | 16 bytes (40%) |
+| TableFunc | 80 | 40 | 40 bytes (50%) |
+| EvalError | 56 | 40 | 16 bytes (29%) |
+| JoinImplementation | 120 | 64 | 56 bytes (47%) |
+| SqlScalarType | 32 | 24 | 8 bytes (25%) |
+| SqlColumnType | 40 | 32 | 8 bytes (20%) |
+| Matcher | 72 | 64 | 8 bytes (11%) |
+| ReprRelationType | 48 | 40 | 8 bytes (17%) |
+| ColumnOrder | 16 | 8 | 8 bytes (50%) |
+| Op | 48 | 40 | 8 bytes (17%) |
