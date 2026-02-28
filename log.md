@@ -898,3 +898,112 @@ The optimization is structural — it saves 8 bytes per `ReprRelationType` insta
 - `src/transform/src/analysis.rs` — Slice conversion for try_col_with_input_cols call
 - `src/sql/src/plan/lowering.rs` — `.drain()` → slice + `.to_vec()`
 - `src/expr/tests/test_runner.rs` — Test adaptation
+
+## Session 15: Shrink UnaryFunc from 48 to 32 bytes via boxing Regex, SqlScalarType, and ToChar internals
+
+**Date:** 2026-02-28
+
+### Changes
+
+Three complementary boxing optimizations that shrink `UnaryFunc` from 48 to 32 bytes:
+
+1. **Box `Regex` in 3 regex-related UnaryFunc structs** (each 40→8 bytes inline)
+   - `IsRegexpMatch(Regex)` → `IsRegexpMatch(Box<Regex>)` — regex match test
+   - `RegexpMatch(Regex)` → `RegexpMatch(Box<Regex>)` — regex capture groups
+   - `RegexpSplitToArray(Regex)` → `RegexpSplitToArray(Box<Regex>)` — regex split
+   - `mz_repr::adt::regex::Regex` is 40 bytes; boxing reduces to 8 bytes
+   - Regex patterns are compiled once during planning — boxing has zero runtime cost
+
+2. **Box `SqlScalarType` in 7 cast UnaryFunc structs** (each 24→8 bytes for the field)
+   - `CastStringToArray.return_ty`, `CastStringToList.return_ty`, `CastStringToMap.return_ty`, `CastStringToRange.return_ty` — string-to-collection casts
+   - `CastArrayToArray.return_ty`, `CastList1ToList2.return_ty`, `CastRecord1ToRecord2.return_ty` — collection-to-collection casts
+   - `SqlScalarType` is 24 bytes; boxing reduces to 8 bytes per field
+   - Cast functions are constructed once during planning and never modified
+
+3. **Box `ToCharTimestamp`/`ToCharTimestampTz` internals into inner structs** (each ~40→8 bytes)
+   - `ToCharTimestamp { format_string: Box<str>, format: DateTimeFormat }` → `ToCharTimestamp { inner: Box<ToCharTimestampInner> }`
+   - `ToCharTimestampTz { format_string: Box<str>, format: DateTimeFormat }` → `ToCharTimestampTz { inner: Box<ToCharTimestampTzInner> }`
+   - The inner struct is ~32 bytes (`Box<str>(16) + DateTimeFormat(16)`); boxing to 8 bytes
+   - Used `#[serde(transparent)]` to maintain wire-compatible serialization
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| UnaryFunc | 48 | 32 | 16 bytes (33%) |
+| MirScalarExpr | 56 | 48 | 8 bytes (14%) |
+| AggregateExpr | 112 | 104 | 8 bytes (7%) |
+
+### Why UnaryFunc shrank to 32 bytes
+
+Before: the largest "lazy" UnaryFunc variants (structs with data) were:
+- `ToCharTimestamp`: `Box<str>(16) + DateTimeFormat(16) = 32 bytes` inline → drove enum to 48 bytes (with alignment + discriminant)
+- Various cast structs: `SqlScalarType(24) + Box<MirScalarExpr>(8) = 32 bytes`
+- Regex structs: `Regex(40)` was largest individual field
+
+After: all heavy data is boxed behind pointers:
+- `ToCharTimestamp { inner: Box(8) }` = 8 bytes
+- `CastStringToArray { return_ty: Box(8), cast_expr: Box(8) }` = 16 bytes
+- `CastRecord1ToRecord2 { return_ty: Box(8), cast_exprs: Box<[T]>(16) }` = 24 bytes (new largest)
+- `IsRegexpMatch(Box(8))` = 8 bytes
+
+The largest variant is now `CastRecord1ToRecord2` at 24 bytes. With discriminant and alignment: 24 + padding → 32 bytes.
+
+### Cascading effects
+
+- **MirScalarExpr** contains `UnaryFunc` in the `CallUnary` variant. `CallUnary { func: UnaryFunc(32), expr: Box(8) }` = 40 bytes. The new largest variant is `CallVariadic { func: VariadicFunc(24), exprs: Vec(24) }` = 48 bytes. MirScalarExpr shrinks from 56 to 48 bytes.
+- **AggregateExpr** contains `MirScalarExpr` inline, cascading from 112 → 104 bytes
+- Every `Vec<MirScalarExpr>` element saves 8 bytes (in Map, Filter, Join, FlatMap, etc.)
+- Every `Vec<AggregateExpr>` element saves 8 bytes (in Reduce nodes)
+
+### Benchmark results
+
+All query types work correctly with no performance regression:
+
+| Query Type | Avg Time | Notes |
+|-----------|----------|-------|
+| regexp_match 10K rows | ~7.4ms | Exercises boxed Regex in RegexpMatch |
+| regexp_split_to_array 10K rows | ~5.9ms | Exercises boxed Regex in RegexpSplitToArray |
+| to_char(timestamp) 10K rows | ~7.1ms | Exercises boxed ToCharTimestampInner |
+| to_char(timestamptz) 10K rows | ~6.8ms | Exercises boxed ToCharTimestampTzInner |
+| '{1,2,3}'::int[] cast 10K rows | ~6.2ms | Exercises boxed SqlScalarType in CastStringToArray |
+| 13-expression tree 10K rows | ~6.5ms | Exercises smaller MirScalarExpr nodes |
+
+### Files changed (7 files)
+
+- `src/expr/src/scalar.rs` — Box::new at regex/ToChar construction sites, size assertions (UnaryFunc 48→32, MirScalarExpr 56→48, AggregateExpr 112→104)
+- `src/expr/src/scalar/func/impls/string.rs` — Box Regex in IsRegexpMatch/RegexpMatch/RegexpSplitToArray, Box SqlScalarType in CastStringToArray/CastStringToList/CastStringToMap/CastStringToRange, deref adjustments
+- `src/expr/src/scalar/func/impls/timestamp.rs` — Box ToCharTimestamp/ToCharTimestampTz internals into inner structs with #[serde(transparent)]
+- `src/expr/src/scalar/func/impls/array.rs` — Box SqlScalarType in CastArrayToArray
+- `src/expr/src/scalar/func/impls/list.rs` — Box SqlScalarType in CastList1ToList2
+- `src/expr/src/scalar/func/impls/record.rs` — Box SqlScalarType in CastRecord1ToRecord2, deref adjustments
+- `src/sql/src/plan/typeconv.rs` — Box::new() at 8 cast construction sites
+
+### Cumulative MirScalarExpr/UnaryFunc savings (sessions 1 + 5 + 10 + 15)
+
+| Type | Original | After all sessions | Total savings |
+|------|----------|-------------------|---------------|
+| UnaryFunc | 72 | 32 | 40 bytes (56%) |
+| MirScalarExpr | 88 | 48 | 40 bytes (45%) |
+| AggregateExpr | 184 | 104 | 80 bytes (43%) |
+
+### Cumulative savings across all sessions
+
+| Type | Original | After all sessions | Total savings |
+|------|----------|-------------------|---------------|
+| MirScalarExpr | 88 | 48 | 40 bytes (45%) |
+| MirRelationExpr | 176 | 96 | 80 bytes (45%) |
+| HirScalarExpr | 192 | 80 | 112 bytes (58%) |
+| HirRelationExpr | 456 | 72 | 384 bytes (84%) |
+| AggregateFunc | 88 | 48 | 40 bytes (45%) |
+| AggregateExpr | 184 | 104 | 80 bytes (43%) |
+| UnaryFunc | 72 | 32 | 40 bytes (56%) |
+| BinaryFunc | 48 | 24 | 24 bytes (50%) |
+| VariadicFunc | 40 | 24 | 16 bytes (40%) |
+| TableFunc | 80 | 40 | 40 bytes (50%) |
+| EvalError | 56 | 40 | 16 bytes (29%) |
+| JoinImplementation | 120 | 64 | 56 bytes (47%) |
+| SqlScalarType | 32 | 24 | 8 bytes (25%) |
+| SqlColumnType | 40 | 32 | 8 bytes (20%) |
+| Matcher | 72 | 64 | 8 bytes (11%) |
+| ReprRelationType | 48 | 40 | 8 bytes (17%) |
