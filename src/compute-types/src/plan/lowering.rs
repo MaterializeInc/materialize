@@ -723,8 +723,8 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 let (input, keys) = self.lower_mir_expr(input)?;
 
                 let top_k_plan = TopKPlan::create_from(
-                    group_key.clone(),
-                    order_key.clone(),
+                    group_key.to_vec(),
+                    order_key.to_vec(),
                     *offset,
                     limit.as_deref().cloned(),
                     arity,

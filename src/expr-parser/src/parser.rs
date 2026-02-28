@@ -576,8 +576,8 @@ mod relation {
 
         Ok(MirRelationExpr::TopK {
             input,
-            group_key,
-            order_key,
+            group_key: group_key.into_boxed_slice(),
+            order_key: order_key.into_boxed_slice(),
             limit: limit.map(Box::new),
             offset,
             monotonic,

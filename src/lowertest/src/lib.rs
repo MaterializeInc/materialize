@@ -722,6 +722,12 @@ where
                         .iter()
                         .map(|v| from_json(v, &type_name[4..(type_name.len() - 1)], rti, ctx))
                         .collect::<Vec<_>>()
+                } else if type_name.starts_with('[') && type_name.ends_with(']') {
+                    // This is a [something] (boxed slice after Box<> stripping).
+                    members
+                        .iter()
+                        .map(|v| from_json(v, &type_name[1..(type_name.len() - 1)], rti, ctx))
+                        .collect::<Vec<_>>()
                 } else {
                     // This is a tuple.
                     let mut result = Vec::new();

@@ -681,8 +681,12 @@ impl LiteralLifting {
                         // grouping nor ordering. We should discard grouping and ordering
                         // that references the columns, though.
                         let input_arity = input.arity();
-                        group_key.retain(|c| *c < input_arity);
-                        order_key.retain(|o| (o.column as usize) < input_arity);
+                        let mut gk = std::mem::take(group_key).into_vec();
+                        gk.retain(|c| *c < input_arity);
+                        *group_key = gk.into_boxed_slice();
+                        let mut ok = std::mem::take(order_key).into_vec();
+                        ok.retain(|o| (o.column as usize) < input_arity);
+                        *order_key = ok.into_boxed_slice();
                         // Inline literals into the limit expression.
                         if let Some(limit) = limit {
                             limit.visit_mut_post(&mut |e| {

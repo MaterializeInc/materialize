@@ -260,9 +260,9 @@ pub enum MirRelationExpr {
         /// The source collection.
         input: Box<MirRelationExpr>,
         /// Column indices used to form groups.
-        group_key: Vec<usize>,
+        group_key: Box<[usize]>,
         /// Column indices used to order rows within groups.
-        order_key: Vec<ColumnOrder>,
+        order_key: Box<[ColumnOrder]>,
         /// Number of records to retain (boxed to reduce MirRelationExpr size)
         #[serde(default)]
         limit: Option<Box<MirScalarExpr>>,
@@ -861,7 +861,7 @@ impl MirRelationExpr {
                 // a unique key, as there will be only one record with that key.
                 let mut result = input_keys.next().unwrap().clone();
                 if limit.as_ref().and_then(|x| x.as_literal_int64()) == Some(1) {
-                    result.push(group_key.clone())
+                    result.push(group_key.to_vec())
                 }
                 result
             }
@@ -1355,8 +1355,8 @@ impl MirRelationExpr {
     ) -> Self {
         MirRelationExpr::TopK {
             input: Box::new(self),
-            group_key,
-            order_key,
+            group_key: group_key.into_boxed_slice(),
+            order_key: order_key.into_boxed_slice(),
             limit: limit.map(Box::new),
             offset,
             expected_group_size,
@@ -4035,7 +4035,7 @@ mod tests {
     #[mz_ore::test]
     fn type_size_assertions() {
         use std::mem::size_of;
-        assert_eq!(size_of::<MirRelationExpr>(), 96);
+        assert_eq!(size_of::<MirRelationExpr>(), 88);
         assert_eq!(size_of::<JoinImplementation>(), 64);
         assert_eq!(size_of::<TableFunc>(), 40);
         assert_eq!(size_of::<mz_repr::ReprRelationType>(), 40);

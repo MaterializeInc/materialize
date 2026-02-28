@@ -464,7 +464,10 @@ pub fn create_fast_path_plan<T: Timestamp>(
             } = mir
             {
                 if let Some(finishing) = finishing {
-                    if group_key.is_empty() && *order_key == finishing.order_by && *offset == 0 {
+                    if group_key.is_empty()
+                        && **order_key == *finishing.order_by
+                        && *offset == 0
+                    {
                         // The following is roughly `limit >= finishing.limit`, but with Options.
                         let finishing_limits_at_least_as_topk = match (limit, finishing.limit) {
                             (None, _) => true,

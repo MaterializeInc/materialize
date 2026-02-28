@@ -1814,7 +1814,7 @@ mod cardinality {
 
         fn topk(
             &self,
-            group_key: &Vec<usize>,
+            group_key: &[usize],
             limit: &Option<MirScalarExpr>,
             expected_group_size: &Option<u64>,
             input: CardinalityEstimate,

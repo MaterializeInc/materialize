@@ -305,8 +305,8 @@ impl ProjectionLifting {
                         *relation = inner
                             .take_dangerous()
                             .top_k(
-                                group_key.clone(),
-                                order_key.clone(),
+                                group_key.to_vec(),
+                                order_key.to_vec(),
                                 limit.as_deref().cloned(),
                                 offset.clone(),
                                 expected_group_size.clone(),
