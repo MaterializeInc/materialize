@@ -625,18 +625,18 @@ impl<'a> Parser<'a> {
                 }
 
                 Ok(Expr::Op {
-                    op: Op::bare(op),
+                    op: Box::new(Op::bare(op)),
                     expr1: Box::new(self.parse_subexpr(Precedence::PrefixPlusMinus)?),
                     expr2: None,
                 })
             }
             (Token::Op(op), _) if op == "+" => Ok(Expr::Op {
-                op: Op::bare(op),
+                op: Box::new(Op::bare(op)),
                 expr1: Box::new(self.parse_subexpr(Precedence::PrefixPlusMinus)?),
                 expr2: None,
             }),
             (Token::Op(op), _) if op == "~" => Ok(Expr::Op {
-                op: Op::bare(op),
+                op: Box::new(Op::bare(op)),
                 expr1: Box::new(self.parse_subexpr(Precedence::Other)?),
                 expr2: None,
             }),
@@ -1203,7 +1203,7 @@ impl<'a> Parser<'a> {
                 self.parse_any_all(expr, op, kw)
             } else {
                 Ok(Expr::Op {
-                    op,
+                    op: Box::new(op),
                     expr1: Box::new(expr),
                     expr2: Some(Box::new(self.parse_subexpr(precedence)?)),
                 })
@@ -1466,13 +1466,13 @@ impl<'a> Parser<'a> {
                 if kw == ALL {
                     Expr::AllExpr {
                         left: Box::new(left),
-                        op,
+                        op: Box::new(op),
                         right: Box::new(right),
                     }
                 } else {
                     Expr::AnyExpr {
                         left: Box::new(left),
-                        op,
+                        op: Box::new(op),
                         right: Box::new(right),
                     }
                 }
@@ -1481,13 +1481,13 @@ impl<'a> Parser<'a> {
                 if kw == ALL {
                     Expr::AllSubquery {
                         left: Box::new(left),
-                        op,
+                        op: Box::new(op),
                         right: Box::new(subquery),
                     }
                 } else {
                     Expr::AnySubquery {
                         left: Box::new(left),
-                        op,
+                        op: Box::new(op),
                         right: Box::new(subquery),
                     }
                 }

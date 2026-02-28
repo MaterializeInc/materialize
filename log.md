@@ -1857,3 +1857,104 @@ Note: Live Materialize benchmarks could not be run due to CockroachDB not being 
 | ReprRelationType | 48 | 40 | 8 bytes (17%) |
 | ColumnOrder | 16 | 8 | 8 bytes (50%) |
 | Op | 48 | 32 | 16 bytes (33%) |
+
+## Session 25: Shrink Expr\<Raw\> from 56 to 48 bytes via boxing Op in all 5 operator variants
+
+**Date:** 2026-02-28
+
+### Changes
+
+Box the `Op` field (32 bytes) in all 5 `Expr` variants where it appears inline:
+
+1. **`Expr::Op { op: Op }` → `op: Box<Op>`** — standard unary/binary operator expressions
+2. **`Expr::AnySubquery { op: Op }` → `op: Box<Op>`** — `<expr> <op> ANY (<query>)`
+3. **`Expr::AnyExpr { op: Op }` → `op: Box<Op>`** — `<expr> <op> ANY (<array>)`
+4. **`Expr::AllSubquery { op: Op }` → `op: Box<Op>`** — `<expr> <op> ALL (<query>)`
+5. **`Expr::AllExpr { op: Op }` → `op: Box<Op>`** — `<expr> <op> ALL (<array>)`
+
+Each variant saves 24 bytes inline (32 → 8). Operators are parsed once during SQL parsing and only read during planning — the extra Box indirection is negligible.
+
+### Key insight: no other code changes needed
+
+Because Rust's auto-deref through `Box<T>` handles method calls, `AstDisplay` implementations, and pattern matching transparently, only 3 files needed changes: the type definition, the parser (construction sites), and the AST transform (construction sites). All consumer code (query planning, display, visit/fold) works unchanged.
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| Expr\<Raw\> | 56 | 48 | 8 bytes (14%) |
+
+### Why Expr\<Raw\> shrank to 48 bytes
+
+Before: the largest variants were Op-based at 56 bytes:
+- `Op { op: Op(32), expr1: Box(8), expr2: Option<Box>(8) }` = 48 bytes inline → 56 with discriminant
+- `AnySubquery { left: Box(8), op: Op(32), right: Box(8) }` = 48 bytes inline → 56 with discriminant
+
+After: all Op-based variants shrink to 24 bytes:
+- `Op { op: Box<Op>(8), expr1: Box(8), expr2: Option<Box>(8) }` = 24 bytes
+- `AnySubquery { left: Box(8), op: Box<Op>(8), right: Box(8) }` = 24 bytes
+
+The largest remaining variant is `Value(Value(40))` at 40 bytes. With discriminant and alignment, the enum settles at 48 bytes.
+
+### Benchmark results
+
+All query types work correctly with no regression (3 trials averaged):
+
+| Query Type | Avg Time | Notes |
+|-----------|----------|-------|
+| Multi-operator WHERE (6 ops, 200 iter) | ~21.6ms | Exercises boxed Op in Expr::Op |
+| Arithmetic operators (6 ops, 200 iter) | ~16.3ms | Exercises boxed Op in expressions |
+| Comparison operators (CASE, 200 iter) | ~16.3ms | Exercises boxed Op in comparisons |
+| Mixed operators (BETWEEN/AND/OR, 200 iter) | ~17.7ms | Exercises multiple boxed Op paths |
+| ANY expression (200 iter) | ~32.0ms | Exercises boxed Op in AnyExpr |
+
+### Tests
+
+All tests pass:
+- `mz-sql-parser` lib tests: 3/3 passed (including `ast_expr_sizes`: Op=32, Expr\<Raw\>=48)
+- `mz-sql-parser` integration tests: 5/5 passed
+- `mz-sql-parser` doc tests: 15/15 passed (fold, visit, visit_mut)
+- `mz-sql-pretty` tests: 1/1 passed
+- `mz-sql` lib tests: 7/7 passed (including HIR/Plan size assertions)
+
+### Files changed (3 files)
+
+- `src/sql-parser/src/ast/defs/expr.rs` — Box Op in 5 variants (Op, AnySubquery, AnyExpr, AllSubquery, AllExpr), size assertion 56→48, binop() helper uses Box::new(op)
+- `src/sql-parser/src/parser.rs` — Box::new(op) at 8 construction sites (parse_prefix, parse_infix, parse_any_all)
+- `src/sql/src/plan/transform_ast.rs` — Box::new(Op::bare(...)) at 2 construction sites, *op.clone() deref at 3 consumption sites
+
+### Cumulative Expr\<Raw\> savings (sessions 21 + 22 + 23 + 25)
+
+| Type | Original | After session 21 | After session 22 | After session 23 | After session 25 | Total savings |
+|------|----------|------------------|------------------|------------------|------------------|---------------|
+| Expr\<Raw\> | 240 | 72 | 64 | 56 | 48 | 192 bytes (80%) |
+
+### Cumulative savings across all sessions (after session 25)
+
+| Type | Original | After all sessions | Total savings |
+|------|----------|-------------------|---------------|
+| Expr\<Raw\> | 240 | 48 | 192 bytes (80%) |
+| Value | 48 | 40 | 8 bytes (17%) |
+| PlanNode | 384 | 104 | 280 bytes (73%) |
+| Ident | 24 | 16 | 8 bytes (33%) |
+| Plan (sql) | ~1888 | 176 | ~1712 bytes (91%) |
+| SelectPlan | 184 | 168 | 16 bytes (9%) |
+| RowSetFinishing | 72 | 56 | 16 bytes (22%) |
+| MirScalarExpr | 88 | 48 | 40 bytes (45%) |
+| MirRelationExpr | 176 | 88 | 88 bytes (50%) |
+| HirScalarExpr | 192 | 80 | 112 bytes (58%) |
+| HirRelationExpr | 456 | 72 | 384 bytes (84%) |
+| AggregateFunc | 88 | 48 | 40 bytes (45%) |
+| AggregateExpr | 184 | 104 | 80 bytes (43%) |
+| UnaryFunc | 72 | 32 | 40 bytes (56%) |
+| BinaryFunc | 48 | 24 | 24 bytes (50%) |
+| VariadicFunc | 40 | 24 | 16 bytes (40%) |
+| TableFunc | 80 | 40 | 40 bytes (50%) |
+| EvalError | 56 | 40 | 16 bytes (29%) |
+| JoinImplementation | 120 | 64 | 56 bytes (47%) |
+| SqlScalarType | 32 | 24 | 8 bytes (25%) |
+| SqlColumnType | 40 | 32 | 8 bytes (20%) |
+| Matcher | 72 | 64 | 8 bytes (11%) |
+| ReprRelationType | 48 | 40 | 8 bytes (17%) |
+| ColumnOrder | 16 | 8 | 8 bytes (50%) |
+| Op | 48 | 32 | 16 bytes (33%) |

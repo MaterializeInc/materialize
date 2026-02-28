@@ -659,13 +659,13 @@ impl<'a> Desugarer<'a> {
             if *negated {
                 *expr = Expr::AllSubquery {
                     left: Box::new(e.take()),
-                    op: Op::bare("<>"),
+                    op: Box::new(Op::bare("<>")),
                     right: Box::new(subquery.take()),
                 };
             } else {
                 *expr = Expr::AnySubquery {
                     left: Box::new(e.take()),
-                    op: Op::bare("="),
+                    op: Box::new(Op::bare("=")),
                     right: Box::new(subquery.take()),
                 };
             }
@@ -769,7 +769,7 @@ impl<'a> Desugarer<'a> {
                 .project(SelectItem::Expr {
                     expr: left
                         .binop(
-                            op.clone(),
+                            *op.clone(),
                             Expr::Row {
                                 exprs: bindings
                                     .into_iter()
@@ -843,7 +843,7 @@ impl<'a> Desugarer<'a> {
                             _ => unreachable!(),
                         };
                         let (l, r) = (left.last_mut().unwrap(), right.last_mut().unwrap());
-                        let mut new = l.take().binop(op.clone(), r.take());
+                        let mut new = l.take().binop(*op.clone(), r.take());
                         for (l, r) in left
                             .iter_mut()
                             .rev()
@@ -860,7 +860,7 @@ impl<'a> Desugarer<'a> {
                     _ if left.len() == 1 && right.len() == 1 => {
                         let left = left.remove(0);
                         let right = right.remove(0);
-                        *expr = left.binop(op.clone(), right);
+                        *expr = left.binop(*op.clone(), right);
                     }
                     _ => (),
                 }

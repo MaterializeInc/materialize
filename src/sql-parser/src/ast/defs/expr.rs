@@ -101,7 +101,7 @@ pub enum Expr<T: AstInfo> {
     },
     /// Unary or binary operator
     Op {
-        op: Op,
+        op: Box<Op>,
         expr1: Box<Expr<T>>,
         expr2: Option<Box<Expr<T>>>,
     },
@@ -157,25 +157,25 @@ pub enum Expr<T: AstInfo> {
     /// `<expr> <op> ANY/SOME (<query>)`
     AnySubquery {
         left: Box<Expr<T>>,
-        op: Op,
+        op: Box<Op>,
         right: Box<Query<T>>,
     },
     /// `<expr> <op> ANY (<array_expr>)`
     AnyExpr {
         left: Box<Expr<T>>,
-        op: Op,
+        op: Box<Op>,
         right: Box<Expr<T>>,
     },
     /// `<expr> <op> ALL (<query>)`
     AllSubquery {
         left: Box<Expr<T>>,
-        op: Op,
+        op: Box<Op>,
         right: Box<Query<T>>,
     },
     /// `<expr> <op> ALL (<array_expr>)`
     AllExpr {
         left: Box<Expr<T>>,
-        op: Op,
+        op: Box<Op>,
         right: Box<Expr<T>>,
     },
     /// `ARRAY[<expr>*]`
@@ -510,7 +510,7 @@ impl<T: AstInfo> Expr<T> {
 
     pub fn binop(self, op: Op, right: Expr<T>) -> Expr<T> {
         Expr::Op {
-            op,
+            op: Box::new(op),
             expr1: Box::new(self),
             expr2: Some(Box::new(right)),
         }
@@ -967,9 +967,9 @@ mod tests {
     #[test]
     fn ast_expr_sizes() {
         // Op: 32 bytes (Option<Box<[Ident]>>(16) + Box<str>(16))
-        // Case: boxed to 8 bytes (was 64 inline)
-        // Largest variants are now Op { op: Op(32), expr1: Box(8), expr2: Option<Box>(8) } = 48 bytes
+        // Op field boxed in all 5 variants: Op, AnySubquery, AnyExpr, AllSubquery, AllExpr
+        // Largest variants are now Value(Value(40)) and InList(~40 bytes)
         assert_eq!(std::mem::size_of::<Op>(), 32);
-        assert_eq!(std::mem::size_of::<Expr<Raw>>(), 56);
+        assert_eq!(std::mem::size_of::<Expr<Raw>>(), 48);
     }
 }
