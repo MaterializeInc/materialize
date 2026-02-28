@@ -3591,8 +3591,9 @@ fn invent_column_name(
                 Some((name, NameQuality::High)) => Some((name, NameQuality::High)),
                 _ => Some((data_type.unqualified_item_name().into(), NameQuality::Low)),
             },
-            Expr::Case { else_result, .. } => {
-                match else_result
+            Expr::Case(case) => {
+                match case
+                    .else_result
                     .as_ref()
                     .and_then(|else_result| invent(ecx, else_result, table_func_names))
                 {
@@ -4079,12 +4080,7 @@ fn plan_expr_inner<'a>(
             construct,
             negated,
         } => Ok(plan_is_expr(ecx, expr, construct, *negated)?.into()),
-        Expr::Case {
-            operand,
-            conditions,
-            results,
-            else_result,
-        } => Ok(plan_case(ecx, operand, conditions, results, else_result)?.into()),
+        Expr::Case(case) => Ok(plan_case(ecx, &case.operand, &case.conditions, &case.results, &case.else_result)?.into()),
         Expr::HomogenizingFunction { function, exprs } => {
             plan_homogenizing_function(ecx, function, exprs)
         }
@@ -6378,7 +6374,7 @@ impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
 
     fn visit_expr_mut(&mut self, expr: &mut Expr<Aug>) {
         let (disallowed_context, func) = match expr {
-            Expr::Case { .. } => (Some("CASE"), None),
+            Expr::Case(_) => (Some("CASE"), None),
             Expr::HomogenizingFunction {
                 function: HomogenizingFunction::Coalesce,
                 ..

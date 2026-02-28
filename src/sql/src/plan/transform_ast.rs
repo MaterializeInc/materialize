@@ -19,8 +19,9 @@ use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::namespaces::{MZ_CATALOG_SCHEMA, MZ_UNSAFE_SCHEMA, PG_CATALOG_SCHEMA};
 use mz_sql_parser::ast::visit_mut::{self, VisitMut, VisitMutNode};
 use mz_sql_parser::ast::{
-    Expr, Function, FunctionArgs, HomogenizingFunction, Ident, IsExprConstruct, Op, OrderByExpr,
-    Query, Select, SelectItem, TableAlias, TableFactor, TableWithJoins, Value, WindowSpec,
+    CaseExpr, Expr, Function, FunctionArgs, HomogenizingFunction, Ident, IsExprConstruct, Op,
+    OrderByExpr, Query, Select, SelectItem, TableAlias, TableFactor, TableWithJoins, Value,
+    WindowSpec,
 };
 use mz_sql_parser::ident;
 
@@ -103,12 +104,12 @@ impl<'a> FuncRewriter<'a> {
     // Divides `lhs` by `rhs` but replaces division-by-zero errors with NULL;
     // note that this is semantically equivalent to `NULLIF(rhs, 0)`.
     fn plan_divide(lhs: Expr<Aug>, rhs: Expr<Aug>) -> Expr<Aug> {
-        lhs.divide(Expr::Case {
+        lhs.divide(Expr::Case(Box::new(CaseExpr {
             operand: None,
             conditions: vec![rhs.clone().equals(Expr::number("0"))],
             results: vec![Expr::null()],
             else_result: Some(Box::new(rhs)),
-        })
+        })))
     }
 
     fn plan_agg(
@@ -286,7 +287,7 @@ impl<'a> FuncRewriter<'a> {
             construct: IsExprConstruct::Null,
             negated: false,
         };
-        Expr::Case {
+        Expr::Case(Box::new(CaseExpr {
             operand: None,
             conditions: vec![result_is_null],
             results: vec![Expr::Value(Value::Null)],
@@ -294,7 +295,7 @@ impl<'a> FuncRewriter<'a> {
                 function: HomogenizingFunction::Greatest,
                 exprs: vec![result, Expr::number("0")],
             })),
-        }
+        }))
     }
 
     fn plan_stddev(

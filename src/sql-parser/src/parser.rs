@@ -879,12 +879,12 @@ impl<'a> Parser<'a> {
             None
         };
         self.expect_keyword(END)?;
-        Ok(Expr::Case {
+        Ok(Expr::Case(Box::new(CaseExpr {
             operand,
             conditions,
             results,
             else_result,
-        })
+        })))
     }
 
     /// Parse a SQL CAST function e.g. `CAST(expr AS FLOAT)`
@@ -1186,7 +1186,7 @@ impl<'a> Parser<'a> {
         let tok = self.next_token().unwrap(); // safe as EOF's precedence is the lowest
 
         let regular_binary_operator = match &tok {
-            Token::Op(s) => Some(Op::bare(s)),
+            Token::Op(s) => Some(Op::bare(s.as_str())),
             Token::Eq => Some(Op::bare("=")),
             Token::Star => Some(Op::bare("*")),
             Token::Keyword(OPERATOR) => {
@@ -1439,7 +1439,7 @@ impl<'a> Parser<'a> {
         };
         Ok(Op {
             namespace: Some(namespace),
-            op,
+            op: op.into(),
         })
     }
 

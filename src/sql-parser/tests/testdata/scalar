@@ -586,7 +586,7 @@ CASE 67 WHEN 67 THEN 'FOO' WHEN 13 THEN 'BAR' ELSE 'other' END
 parse-scalar
 CASE foo WHEN 1 THEN 'Y' ELSE 'N' END
 ----
-Case { operand: Some(Identifier([Ident("foo")])), conditions: [Value(Number("1"))], results: [Value(String("Y"))], else_result: Some(Value(String("N"))) }
+Case(CaseExpr { operand: Some(Identifier([Ident("foo")])), conditions: [Value(Number("1"))], results: [Value(String("Y"))], else_result: Some(Value(String("N"))) })
 
 parse-scalar
 (SELECT 1) + (SELECT 2)

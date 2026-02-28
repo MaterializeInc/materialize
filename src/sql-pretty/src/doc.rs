@@ -1100,22 +1100,17 @@ impl Pretty {
                     RcDoc::concat([RcDoc::text(format!("{} ", op)), self.doc_expr(expr1)])
                 }
             }
-            Expr::Case {
-                operand,
-                conditions,
-                results,
-                else_result,
-            } => {
+            Expr::Case(case) => {
                 let mut docs = Vec::new();
-                if let Some(operand) = operand {
+                if let Some(operand) = &case.operand {
                     docs.push(self.doc_expr(operand));
                 }
-                for (c, r) in conditions.iter().zip_eq(results) {
+                for (c, r) in case.conditions.iter().zip_eq(&case.results) {
                     let when = nest_title("WHEN", self.doc_expr(c));
                     let then = nest_title("THEN", self.doc_expr(r));
                     docs.push(nest(when, then));
                 }
-                if let Some(else_result) = else_result {
+                if let Some(else_result) = &case.else_result {
                     docs.push(nest_title("ELSE", self.doc_expr(else_result)));
                 }
                 let doc = intersperse_line_nest(docs);

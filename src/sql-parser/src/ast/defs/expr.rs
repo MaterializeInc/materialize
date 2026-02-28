@@ -147,12 +147,7 @@ pub enum Expr<T: AstInfo> {
     /// Note we only recognize a complete single expression as `<condition>`,
     /// not `< 0` nor `1, 2, 3` as allowed in a `<simple when clause>` per
     /// <https://jakewheat.github.io/sql-overview/sql-2011-foundation-grammar.html#simple-when-clause>
-    Case {
-        operand: Option<Box<Expr<T>>>,
-        conditions: Vec<Expr<T>>,
-        results: Vec<Expr<T>>,
-        else_result: Option<Box<Expr<T>>>,
-    },
+    Case(Box<CaseExpr<T>>),
     /// An exists expression `EXISTS(SELECT ...)`, used in expressions like
     /// `WHERE EXISTS (SELECT ...)`.
     Exists(Box<Query<T>>),
@@ -197,6 +192,15 @@ pub enum Expr<T: AstInfo> {
         expr: Box<Expr<T>>,
         positions: Vec<SubscriptPosition<T>>,
     },
+}
+
+/// The internals of a `CASE` expression, boxed to reduce `Expr` enum size.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct CaseExpr<T: AstInfo> {
+    pub operand: Option<Box<Expr<T>>>,
+    pub conditions: Vec<Expr<T>>,
+    pub results: Vec<Expr<T>>,
+    pub else_result: Option<Box<Expr<T>>>,
 }
 
 impl<T: AstInfo> AstDisplay for Expr<T> {
@@ -358,25 +362,20 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
             Expr::Function(fun) => {
                 f.write_node(fun);
             }
-            Expr::Case {
-                operand,
-                conditions,
-                results,
-                else_result,
-            } => {
+            Expr::Case(case) => {
                 f.write_str("CASE");
-                if let Some(operand) = operand {
+                if let Some(operand) = &case.operand {
                     f.write_str(" ");
                     f.write_node(&operand);
                 }
-                for (c, r) in conditions.iter().zip_eq(results) {
+                for (c, r) in case.conditions.iter().zip_eq(&case.results) {
                     f.write_str(" WHEN ");
                     f.write_node(c);
                     f.write_str(" THEN ");
                     f.write_node(r);
                 }
 
-                if let Some(else_result) = else_result {
+                if let Some(else_result) = &case.else_result {
                     f.write_str(" ELSE ");
                     f.write_node(&else_result);
                 }
@@ -593,14 +592,14 @@ pub struct Op {
     /// Any namespaces that preceded the operator.
     pub namespace: Option<Vec<Ident>>,
     /// The operator itself.
-    pub op: String,
+    pub op: Box<str>,
 }
 
 impl AstDisplay for Op {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         if let Some(namespace) = &self.namespace {
             f.write_str("OPERATOR(");
-            for name in namespace {
+            for name in namespace.iter() {
                 f.write_node(name);
                 f.write_str(".");
             }
@@ -611,13 +610,14 @@ impl AstDisplay for Op {
         }
     }
 }
+
 impl_display!(Op);
 
 impl Op {
     /// Constructs a new unqualified operator reference.
     pub fn bare<S>(op: S) -> Op
     where
-        S: Into<String>,
+        S: Into<Box<str>>,
     {
         Op {
             namespace: None,
@@ -961,6 +961,10 @@ mod tests {
 
     #[test]
     fn ast_expr_sizes() {
-        assert_eq!(std::mem::size_of::<Expr<Raw>>(), 72);
+        // Op: 40 bytes (Option<Vec<Ident>>(24) + Box<str>(16))
+        // Case: boxed to 8 bytes (was 64 inline)
+        // Largest variants are now Op { op: Op(40), expr1: Box(8), expr2: Option<Box>(8) } = 56 bytes
+        assert_eq!(std::mem::size_of::<Op>(), 40);
+        assert_eq!(std::mem::size_of::<Expr<Raw>>(), 64);
     }
 }
