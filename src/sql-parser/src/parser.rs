@@ -1438,7 +1438,7 @@ impl<'a> Parser<'a> {
             self.expect_token(&Token::Dot)?;
         };
         Ok(Op {
-            namespace: Some(namespace),
+            namespace: Some(namespace.into_boxed_slice()),
             op: op.into(),
         })
     }

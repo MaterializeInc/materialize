@@ -191,12 +191,24 @@ fn gen_fold_element(buf: &mut CodegenBuf, binding: &str, ty: &Type) {
         Type::Box(ty) => match ty.as_ref() {
             // Box<primitive> (e.g., Box<str>) passes through unchanged—nothing to fold.
             Type::Primitive => buf.write(binding),
+            // Box<[T]>: convert to Vec, fold each element, convert back to boxed slice.
+            Type::Slice(inner) => {
+                buf.write(format!("{binding}.into_vec().into_iter().map(|v| "));
+                gen_fold_element(buf, "v", inner);
+                buf.write(").collect::<Vec<_>>().into_boxed_slice()");
+            }
             _ => {
                 buf.write("Box::new(");
                 gen_fold_element(buf, &format!("*{binding}"), ty);
                 buf.write(")");
             }
         },
+        Type::Slice(ty) => {
+            // [T] inside a container: fold each element like Vec.
+            buf.write(format!("{binding}.into_iter().map(|v| "));
+            gen_fold_element(buf, "v", ty);
+            buf.write(").collect()");
+        }
         Type::Local(s) => {
             let fn_name = fold_fn_name(s);
             buf.write(format!("folder.{fn_name}({binding})"));
@@ -321,6 +333,13 @@ fn gen_visit_element(c: &VisitConfig, buf: &mut CodegenBuf, binding: &str, ty: &
         Type::Box(ty) => match ty.as_ref() {
             // Box<primitive> (e.g., Box<str>) has nothing to visit.
             Type::Primitive => (),
+            // Box<[T]>: iterate the boxed slice elements.
+            Type::Slice(inner) => {
+                let iter_fn = if c.mutable { "iter_mut" } else { "iter" };
+                buf.write_block(format!("for v in {binding}.{iter_fn}()"), |buf| {
+                    gen_visit_element(c, buf, "v", inner)
+                });
+            }
             _ => {
                 let binding = match c.mutable {
                     true => format!("&mut *{binding}"),
@@ -329,6 +348,13 @@ fn gen_visit_element(c: &VisitConfig, buf: &mut CodegenBuf, binding: &str, ty: &
                 gen_visit_element(c, buf, &binding, ty);
             }
         },
+        Type::Slice(ty) => {
+            // [T] inside a container: visit each element like Vec.
+            let iter_fn = if c.mutable { "iter_mut" } else { "iter" };
+            buf.write_block(format!("for v in {binding}.{iter_fn}()"), |buf| {
+                gen_visit_element(c, buf, "v", ty)
+            });
+        }
         Type::Local(s) => {
             let fn_name = visit_fn_name(c, s);
             buf.writeln(format!("visitor.{fn_name}({binding});"));

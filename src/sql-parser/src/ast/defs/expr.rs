@@ -590,7 +590,12 @@ impl<T: AstInfo> Expr<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Op {
     /// Any namespaces that preceded the operator.
-    pub namespace: Option<Vec<Ident>>,
+    /// Boxed slice because namespace is almost always `None` (only used for
+    /// `OPERATOR(schema.op)` syntax). `Box<[Ident]>` is 16 bytes vs
+    /// `Vec<Ident>`'s 24 bytes, and `Option<Box<[Ident]>>` is just 16 bytes
+    /// (niche-optimized), saving 8 bytes per Op and shrinking the 5
+    /// `Expr` variants that embed `Op` inline.
+    pub namespace: Option<Box<[Ident]>>,
     /// The operator itself.
     pub op: Box<str>,
 }
@@ -961,10 +966,10 @@ mod tests {
 
     #[test]
     fn ast_expr_sizes() {
-        // Op: 40 bytes (Option<Vec<Ident>>(24) + Box<str>(16))
+        // Op: 32 bytes (Option<Box<[Ident]>>(16) + Box<str>(16))
         // Case: boxed to 8 bytes (was 64 inline)
-        // Largest variants are now Op { op: Op(40), expr1: Box(8), expr2: Option<Box>(8) } = 56 bytes
-        assert_eq!(std::mem::size_of::<Op>(), 40);
-        assert_eq!(std::mem::size_of::<Expr<Raw>>(), 64);
+        // Largest variants are now Op { op: Op(32), expr1: Box(8), expr2: Option<Box>(8) } = 48 bytes
+        assert_eq!(std::mem::size_of::<Op>(), 32);
+        assert_eq!(std::mem::size_of::<Expr<Raw>>(), 56);
     }
 }

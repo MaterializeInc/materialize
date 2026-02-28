@@ -1660,4 +1660,112 @@ Note: Live Materialize benchmarks could not be run due to a pre-existing stack o
 | Matcher | 72 | 64 | 8 bytes (11%) |
 | ReprRelationType | 48 | 40 | 8 bytes (17%) |
 | ColumnOrder | 16 | 8 | 8 bytes (50%) |
-| Op | 48 | 40 | 8 bytes (17%) |
+| Op | 48 | 32 | 16 bytes (33%) |
+
+## Session 23: Shrink Op from 40 to 32 bytes and Expr\<Raw\> from 64 to 56 bytes via boxed slice namespace + walkabout slice support
+
+**Date:** 2026-02-28
+
+### Changes
+
+Two complementary changes:
+
+1. **`Op::namespace: Option<Vec<Ident>>` → `Option<Box<[Ident]>>`** (Op: 40 → 32 bytes)
+   - `Vec<Ident>` is 24 bytes (ptr + len + capacity); `Box<[Ident]>` is 16 bytes (ptr + len)
+   - `Option<Vec<Ident>>` uses the null pointer niche: 24 bytes; `Option<Box<[Ident]>>` uses the null pointer niche: 16 bytes
+   - Op shrinks from 40 bytes (`Option<Vec<Ident>>(24) + Box<str>(16)`) to 32 bytes (`Option<Box<[Ident]>>(16) + Box<str>(16)`)
+   - `namespace` is almost always `None` (only used for `OPERATOR(schema.op)` syntax) and never modified after construction
+
+2. **Added `Box<[T]>` (boxed slice) support to the walkabout AST code generator**
+   - Added `Type::Slice(Box<Type>)` variant to the walkabout IR
+   - Added `syn::Type::Slice` handling in `analyze_type` to recognize `[T]` types
+   - Updated fold codegen: `Box<[T]>` folds via `.into_vec().into_iter().map(fold).collect::<Vec<_>>().into_boxed_slice()`
+   - Updated visit/visit_mut codegen: `Box<[T]>` iterates via `.iter()` / `.iter_mut()`
+   - This is a one-time investment that enables `Box<[T]>` in any future AST type optimizations
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| Op | 40 | 32 | 8 bytes (20%) |
+| Expr\<Raw\> | 64 | 56 | 8 bytes (12.5%) |
+
+### Why Expr\<Raw\> shrank to 56 bytes
+
+Before: 5 variants embedded `Op(40)` inline, making them 56 bytes each (the largest):
+- `Op { op: Op(40), expr1: Box(8), expr2: Option<Box>(8) }` = 56 bytes
+- `AnySubquery { left: Box(8), op: Op(40), right: Box(8) }` = 56 bytes
+- `AnyExpr`, `AllSubquery`, `AllExpr` — same pattern
+
+After: All 5 variants shrink to 48 bytes:
+- `Op { op: Op(32), expr1: Box(8), expr2: Option<Box>(8) }` = 48 bytes
+- `AnySubquery { left: Box(8), op: Op(32), right: Box(8) }` = 48 bytes
+
+With discriminant and alignment, the enum settles at 56 bytes.
+
+### Why this is high-impact
+
+`Expr<T>` is the most numerous AST node type — every expression in every SQL query. The savings compound because:
+- `Expr<T>` is stored recursively: every `Vec<Expr<T>>` element saves 8 bytes (function args, IN lists, CASE conditions/results, etc.)
+- Every `Box<Expr<T>>` allocation saves 8 bytes (unary/binary ops, subquery arms, etc.)
+- A moderately complex query contains 10-50+ Expr nodes, saving 80-400+ bytes per query
+
+### Cascading effects
+
+- **Statement\<Raw\>** embeds `Expr<Raw>` in many variants — all statement types that contain expressions benefit
+- **SelectStatement**, **InsertStatement**, **CreateTableStatement**, etc. all benefit
+- Every SQL query parsed allocates fewer bytes for its AST
+- The walkabout `Box<[T]>` support enables future AST type optimizations without additional codegen changes
+
+### Tests
+
+All tests pass:
+- `mz-sql-parser` lib tests: all 3 passed (including `ast_expr_sizes` size assertion: Op=32, Expr\<Raw\>=56)
+- `mz-sql-parser` integration tests: 5/5 passed
+- `mz-sql-parser` doc tests: 13/13 passed (including fold, visit, visit_mut — exercises walkabout-generated code)
+- `mz-sql-pretty` tests: 1/1 passed
+- `mz-sql` lib tests: 7/7 passed (including `type_size_assertions` and HIR size tests)
+- Full compilation: `mz-sql-parser`, `mz-sql`, `mz-sql-pretty`, `mz-adapter`, `mz-environmentd` all compile cleanly
+
+Note: Live Materialize benchmarks could not be run due to a pre-existing panic in `persist_cdc` during startup (reproduces on stashed code as well). This is an infrastructure issue unrelated to our AST changes.
+
+### Files changed (4 files)
+
+- `src/sql-parser/src/ast/defs/expr.rs` — `Op::namespace: Option<Vec<Ident>>` → `Option<Box<[Ident]>>`, size assertions updated (Op 40→32, Expr\<Raw\> 64→56)
+- `src/sql-parser/src/parser.rs` — `namespace.into_boxed_slice()` at `parse_operator` construction site
+- `src/walkabout/src/ir.rs` — Added `Type::Slice(Box<Type>)` variant, `syn::Type::Slice` handling in `analyze_type`, added `Slice` to the container unwrap chain
+- `src/walkabout/src/generated.rs` — Fold/visit/visit_mut codegen for `Type::Slice` and `Type::Box(Type::Slice(...))`: fold via `.into_vec().into_iter().map(fold).collect().into_boxed_slice()`, visit via `.iter()`/`.iter_mut()`
+
+### Cumulative Expr\<Raw\> savings (sessions 21 + 22 + 23)
+
+| Type | Original | After session 21 | After session 22 | After session 23 | Total savings |
+|------|----------|------------------|------------------|------------------|---------------|
+| Expr\<Raw\> | 240 | 72 | 64 | 56 | 184 bytes (77%) |
+
+### Cumulative savings across all sessions (after session 23)
+
+| Type | Original | After all sessions | Total savings |
+|------|----------|-------------------|---------------|
+| Expr\<Raw\> | 240 | 56 | 184 bytes (77%) |
+| Value | 48 | 40 | 8 bytes (17%) |
+| PlanNode | 384 | 104 | 280 bytes (73%) |
+| Ident | 24 | 16 | 8 bytes (33%) |
+| Plan (sql) | ~1888 | 184 | ~1704 bytes (90%) |
+| MirScalarExpr | 88 | 48 | 40 bytes (45%) |
+| MirRelationExpr | 176 | 88 | 88 bytes (50%) |
+| HirScalarExpr | 192 | 80 | 112 bytes (58%) |
+| HirRelationExpr | 456 | 72 | 384 bytes (84%) |
+| AggregateFunc | 88 | 48 | 40 bytes (45%) |
+| AggregateExpr | 184 | 104 | 80 bytes (43%) |
+| UnaryFunc | 72 | 32 | 40 bytes (56%) |
+| BinaryFunc | 48 | 24 | 24 bytes (50%) |
+| VariadicFunc | 40 | 24 | 16 bytes (40%) |
+| TableFunc | 80 | 40 | 40 bytes (50%) |
+| EvalError | 56 | 40 | 16 bytes (29%) |
+| JoinImplementation | 120 | 64 | 56 bytes (47%) |
+| SqlScalarType | 32 | 24 | 8 bytes (25%) |
+| SqlColumnType | 40 | 32 | 8 bytes (20%) |
+| Matcher | 72 | 64 | 8 bytes (11%) |
+| ReprRelationType | 48 | 40 | 8 bytes (17%) |
+| ColumnOrder | 16 | 8 | 8 bytes (50%) |
+| Op | 48 | 32 | 16 bytes (33%) |

@@ -129,6 +129,10 @@ pub enum Type {
     ///
     /// The value inside the box will need to be visited.
     Box(Box<Type>),
+    /// A slice type `[T]`.
+    ///
+    /// Only meaningful inside `Box<[T]>`. Each value will need to be visited.
+    Slice(Box<Type>),
     /// A type local to the AST.
     ///
     /// The value will need to be visited by calling the appropriate `Visit`
@@ -169,7 +173,7 @@ pub(crate) fn analyze(syn_items: &[syn::DeriveInput]) -> Result<Ir> {
         };
         for field in item.fields() {
             let mut field_ty = &field.ty;
-            while let Type::Box(ty) | Type::Vec(ty) | Type::Option(ty) = field_ty {
+            while let Type::Box(ty) | Type::Vec(ty) | Type::Option(ty) | Type::Slice(ty) = field_ty {
                 field_ty = ty;
             }
             if let Type::Abstract(name) = field_ty {
@@ -359,6 +363,10 @@ fn analyze_type(ty: &syn::Type) -> Result<Type> {
                 )
             }
         },
+        syn::Type::Slice(syn::TypeSlice { elem, .. }) => {
+            let inner = Box::new(analyze_type(elem)?);
+            Ok(Type::Slice(inner))
+        }
         _ => bail!(
             "Unable to analyze non-struct, non-enum type: {}",
             ty.into_token_stream()
