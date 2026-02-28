@@ -1098,3 +1098,88 @@ All query types work correctly with no regression (200 iterations, 3 trials aver
 | Matcher | 72 | 64 | 8 bytes (11%) |
 | ReprRelationType | 48 | 40 | 8 bytes (17%) |
 | ColumnOrder | 16 | 8 | 8 bytes (50%) |
+
+## Session 17: Shrink MirRelationExpr from 96 to 88 bytes via TopK Vec→Box<[T]>
+
+**Date:** 2026-02-28
+
+### Changes
+
+Convert two `Vec<T>` fields in `MirRelationExpr::TopK` to `Box<[T]>`, eliminating the unused capacity field. These fields are constructed once during planning and never grown afterward.
+
+1. **`TopK::group_key: Vec<usize>` → `Box<[usize]>`** (saves 8 bytes: 24→16)
+   - Group keys are set during planning and never modified
+   - `Box<[T]>` eliminates the unused capacity field
+
+2. **`TopK::order_key: Vec<ColumnOrder>` → `Box<[ColumnOrder]>`** (saves 8 bytes: 24→16)
+   - Order keys are set during planning and never modified
+   - Same `Vec→Box<[T]>` pattern used in sessions 7, 9, 13, 14
+
+### Key insight
+
+TopK was the dominant variant in `MirRelationExpr` at 96 bytes. After shrinking both Vec fields by 8 bytes each, TopK drops to ~80 bytes (matching the Reduce variant), and the enum shrinks from 96 to 88 bytes. The `expected_group_size: Option<u64>` field provides a niche value that the compiler uses to store the enum discriminant, avoiding an explicit 8-byte discriminant.
+
+A few mutation sites in `literal_lifting.rs` use the `std::mem::take().into_vec()` → mutate → `.into_boxed_slice()` pattern for temporary mutation (`.retain()` on group_key and order_key).
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| MirRelationExpr | 96 | 88 | 8 bytes (8%) |
+
+### Cascading effects
+
+- `MirRelationExpr` is the core MIR type — stored recursively in trees. Every `Box<MirRelationExpr>` allocation shrinks from 96 to 88 bytes.
+- All optimizer passes, planning, and serialization benefit from reduced node size
+- Better cache locality due to smaller node size
+- Every element in `Vec<MirRelationExpr>` (e.g., in Union inputs, Join inputs) saves 8 bytes
+
+### Benchmark results
+
+All TopK query types work correctly with no regression (5000 rows):
+
+| Query Type | Avg Time | Notes |
+|-----------|----------|-------|
+| Simple ORDER BY LIMIT 10 | ~9ms | Basic TopK |
+| Multi-column ORDER BY (3 cols) LIMIT 20 | ~9ms | Exercises order_key with 3 ColumnOrder elements |
+| DISTINCT ON (100 groups) | ~9ms | Exercises group_key |
+| ORDER BY LIMIT 10 OFFSET 100 | ~13ms | TopK with offset |
+
+### Files changed (8 files)
+
+- `src/expr/src/relation.rs` — `group_key: Vec<usize>` → `Box<[usize]>`, `order_key: Vec<ColumnOrder>` → `Box<[ColumnOrder]>`, `.into_boxed_slice()` at construction, `.to_vec()` for cloning, size assertion 96→88
+- `src/adapter/src/coord/peek.rs` — Deref adjustment for `order_key` comparison (`**order_key == *finishing.order_by`)
+- `src/compute-types/src/plan/lowering.rs` — `.clone()` → `.to_vec()` for group_key/order_key
+- `src/expr-parser/src/parser.rs` — `.into_boxed_slice()` at TopK construction
+- `src/lowertest/src/lib.rs` — Handle boxed slice types (`[T]`) in deserialization framework
+- `src/transform/src/analysis.rs` — `&Vec<usize>` → `&[usize]` in topk method signature
+- `src/transform/src/literal_lifting.rs` — Mutation via `take().into_vec()` → mutate → `.into_boxed_slice()` pattern
+- `src/transform/src/movement/projection_lifting.rs` — `.to_vec()` for TopK reconstruction
+
+### Cumulative MirRelationExpr savings (sessions 3 + 6 + 17)
+
+| Type | Original | After session 3 | After session 6 | After session 17 | Total savings |
+|------|----------|-----------------|-----------------|------------------|---------------|
+| MirRelationExpr | 176 | 104 | 96 | 88 | 88 bytes (50%) |
+
+### Cumulative savings across all sessions (after session 17)
+
+| Type | Original | After all sessions | Total savings |
+|------|----------|-------------------|---------------|
+| MirScalarExpr | 88 | 48 | 40 bytes (45%) |
+| MirRelationExpr | 176 | 88 | 88 bytes (50%) |
+| HirScalarExpr | 192 | 80 | 112 bytes (58%) |
+| HirRelationExpr | 456 | 72 | 384 bytes (84%) |
+| AggregateFunc | 88 | 48 | 40 bytes (45%) |
+| AggregateExpr | 184 | 104 | 80 bytes (43%) |
+| UnaryFunc | 72 | 32 | 40 bytes (56%) |
+| BinaryFunc | 48 | 24 | 24 bytes (50%) |
+| VariadicFunc | 40 | 24 | 16 bytes (40%) |
+| TableFunc | 80 | 40 | 40 bytes (50%) |
+| EvalError | 56 | 40 | 16 bytes (29%) |
+| JoinImplementation | 120 | 64 | 56 bytes (47%) |
+| SqlScalarType | 32 | 24 | 8 bytes (25%) |
+| SqlColumnType | 40 | 32 | 8 bytes (20%) |
+| Matcher | 72 | 64 | 8 bytes (11%) |
+| ReprRelationType | 48 | 40 | 8 bytes (17%) |
+| ColumnOrder | 16 | 8 | 8 bytes (50%) |
