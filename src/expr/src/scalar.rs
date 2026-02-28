@@ -866,7 +866,7 @@ impl MirScalarExpr {
                                     case_insensitive,
                                 ) {
                                     Ok(regex) => expr1.take().call_unary(UnaryFunc::IsRegexpMatch(
-                                        func::IsRegexpMatch(regex),
+                                        func::IsRegexpMatch(Box::new(regex)),
                                     )),
                                     Err(err) => MirScalarExpr::literal(
                                         Err(err.into()),
@@ -1080,10 +1080,10 @@ impl MirScalarExpr {
                         {
                             let format_str = expr2.as_literal_str().unwrap();
                             *e = MirScalarExpr::CallUnary {
-                                func: UnaryFunc::ToCharTimestamp(func::ToCharTimestamp {
-                                    format_string: format_str.into(),
-                                    format: DateTimeFormat::compile(format_str),
-                                }),
+                                func: UnaryFunc::ToCharTimestamp(func::ToCharTimestamp::new(
+                                    format_str.into(),
+                                    DateTimeFormat::compile(format_str),
+                                )),
                                 expr: Box::new(expr1.take()),
                             };
                         } else if let BinaryFunc::ToCharTimestampTz(_) = *func
@@ -1091,10 +1091,10 @@ impl MirScalarExpr {
                         {
                             let format_str = expr2.as_literal_str().unwrap();
                             *e = MirScalarExpr::CallUnary {
-                                func: UnaryFunc::ToCharTimestampTz(func::ToCharTimestampTz {
-                                    format_string: format_str.into(),
-                                    format: DateTimeFormat::compile(format_str),
-                                }),
+                                func: UnaryFunc::ToCharTimestampTz(func::ToCharTimestampTz::new(
+                                    format_str.into(),
+                                    DateTimeFormat::compile(format_str),
+                                )),
                                 expr: Box::new(expr1.take()),
                             };
                         } else if matches!(*func, BinaryFunc::Eq(_) | BinaryFunc::NotEq(_))
@@ -1245,7 +1245,7 @@ impl MirScalarExpr {
                             *e = match func::build_regex(needle, flags) {
                                 Ok(regex) => mem::take(exprs)
                                     .into_first()
-                                    .call_unary(UnaryFunc::RegexpMatch(func::RegexpMatch(regex))),
+                                    .call_unary(UnaryFunc::RegexpMatch(func::RegexpMatch(Box::new(regex)))),
                                 Err(err) => MirScalarExpr::literal(
                                     Err(err),
                                     e.typ(column_types).scalar_type,
@@ -1301,7 +1301,7 @@ impl MirScalarExpr {
                             };
                             *e = match func::build_regex(needle, flags) {
                                 Ok(regex) => mem::take(exprs).into_first().call_unary(
-                                    UnaryFunc::RegexpSplitToArray(func::RegexpSplitToArray(regex)),
+                                    UnaryFunc::RegexpSplitToArray(func::RegexpSplitToArray(Box::new(regex))),
                                 ),
                                 Err(err) => MirScalarExpr::literal(
                                     Err(err),
@@ -3424,14 +3424,15 @@ mod tests {
     fn type_size_assertions() {
         use std::mem::size_of;
 
-        assert_eq!(size_of::<MirScalarExpr>(), 56);
-        assert_eq!(size_of::<crate::UnaryFunc>(), 48);
+        assert_eq!(size_of::<MirScalarExpr>(), 48);
+        assert_eq!(size_of::<crate::UnaryFunc>(), 32);
         assert_eq!(size_of::<crate::BinaryFunc>(), 24);
         assert_eq!(size_of::<crate::VariadicFunc>(), 24);
 
         assert_eq!(size_of::<crate::AggregateFunc>(), 48);
-        assert_eq!(size_of::<crate::AggregateExpr>(), 112);
+        assert_eq!(size_of::<crate::AggregateExpr>(), 104);
         assert_eq!(size_of::<EvalError>(), 40);
         assert_eq!(size_of::<crate::like_pattern::Matcher>(), 64);
     }
+
 }

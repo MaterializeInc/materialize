@@ -96,7 +96,7 @@ impl fmt::Display for CastRecordToString {
     MzReflect
 )]
 pub struct CastRecord1ToRecord2 {
-    pub return_ty: SqlScalarType,
+    pub return_ty: Box<SqlScalarType>,
     pub cast_exprs: Box<[MirScalarExpr]>,
 }
 
@@ -119,7 +119,7 @@ impl LazyUnaryFunc for CastRecord1ToRecord2 {
     }
 
     fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        self.return_ty
+        (*self.return_ty)
             .without_modifiers()
             .nullable(input_type.nullable)
     }

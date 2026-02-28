@@ -172,7 +172,7 @@ impl fmt::Display for CastListToJsonb {
 )]
 pub struct CastList1ToList2 {
     /// List2's type
-    pub return_ty: SqlScalarType,
+    pub return_ty: Box<SqlScalarType>,
     /// The expression to cast List1's elements to List2's elements' type
     pub cast_expr: Box<MirScalarExpr>,
 }

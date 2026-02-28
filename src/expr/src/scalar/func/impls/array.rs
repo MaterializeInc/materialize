@@ -226,7 +226,7 @@ impl fmt::Display for CastArrayToJsonb {
     MzReflect
 )]
 pub struct CastArrayToArray {
-    pub return_ty: SqlScalarType,
+    pub return_ty: Box<SqlScalarType>,
     pub cast_expr: Box<MirScalarExpr>,
 }
 
@@ -255,7 +255,7 @@ impl LazyUnaryFunc for CastArrayToArray {
     }
 
     fn output_sql_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
-        self.return_ty.clone().nullable(true)
+        (*self.return_ty).clone().nullable(true)
     }
 
     fn propagates_nulls(&self) -> bool {

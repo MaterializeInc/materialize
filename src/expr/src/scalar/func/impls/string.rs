@@ -341,7 +341,7 @@ fn cast_string_to_uuid<'a>(a: &'a str) -> Result<Uuid, EvalError> {
 )]
 pub struct CastStringToArray {
     // Target array's type.
-    pub return_ty: SqlScalarType,
+    pub return_ty: Box<SqlScalarType>,
     // The expression to cast the discovered array elements to the array's
     // element type.
     pub cast_expr: Box<MirScalarExpr>,
@@ -376,7 +376,7 @@ impl LazyUnaryFunc for CastStringToArray {
 
     /// The output SqlColumnType of this function
     fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        self.return_ty.clone().nullable(input_type.nullable)
+        (*self.return_ty).clone().nullable(input_type.nullable)
     }
 
     /// Whether this function will produce NULL on NULL input
@@ -396,7 +396,7 @@ impl LazyUnaryFunc for CastStringToArray {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastArrayToString {
-            ty: self.return_ty.clone(),
+            ty: (*self.return_ty).clone(),
         })
     }
 
@@ -425,7 +425,7 @@ impl fmt::Display for CastStringToArray {
 )]
 pub struct CastStringToList {
     // Target list's type
-    pub return_ty: SqlScalarType,
+    pub return_ty: Box<SqlScalarType>,
     // The expression to cast the discovered list elements to the list's
     // element type.
     pub cast_expr: Box<MirScalarExpr>,
@@ -486,7 +486,7 @@ impl LazyUnaryFunc for CastStringToList {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastListToString {
-            ty: self.return_ty.clone(),
+            ty: (*self.return_ty).clone(),
         })
     }
 
@@ -515,7 +515,7 @@ impl fmt::Display for CastStringToList {
 )]
 pub struct CastStringToMap {
     // Target map's value type
-    pub return_ty: SqlScalarType,
+    pub return_ty: Box<SqlScalarType>,
     // The expression used to cast the discovered values to the map's value
     // type.
     pub cast_expr: Box<MirScalarExpr>,
@@ -562,7 +562,7 @@ impl LazyUnaryFunc for CastStringToMap {
 
     /// The output SqlColumnType of this function
     fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        self.return_ty.clone().nullable(input_type.nullable)
+        (*self.return_ty).clone().nullable(input_type.nullable)
     }
 
     /// Whether this function will produce NULL on NULL input
@@ -582,7 +582,7 @@ impl LazyUnaryFunc for CastStringToMap {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastMapToString {
-            ty: self.return_ty.clone(),
+            ty: (*self.return_ty).clone(),
         })
     }
 
@@ -676,7 +676,7 @@ impl fmt::Display for CastStringToChar {
 )]
 pub struct CastStringToRange {
     // Target range's type
-    pub return_ty: SqlScalarType,
+    pub return_ty: Box<SqlScalarType>,
     // The expression to cast the discovered range elements to the range's
     // element type.
     pub cast_expr: Box<MirScalarExpr>,
@@ -735,7 +735,7 @@ impl LazyUnaryFunc for CastStringToRange {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastRangeToString {
-            ty: self.return_ty.clone(),
+            ty: (*self.return_ty).clone(),
         })
     }
 
@@ -1039,7 +1039,7 @@ impl fmt::Display for IsLikeMatch {
     Hash,
     MzReflect
 )]
-pub struct IsRegexpMatch(pub Regex);
+pub struct IsRegexpMatch(pub Box<Regex>);
 
 impl EagerUnaryFunc for IsRegexpMatch {
     type Input<'a> = &'a str;
@@ -1077,7 +1077,7 @@ impl fmt::Display for IsRegexpMatch {
     Hash,
     MzReflect
 )]
-pub struct RegexpMatch(pub Regex);
+pub struct RegexpMatch(pub Box<Regex>);
 
 impl LazyUnaryFunc for RegexpMatch {
     fn eval<'a>(
@@ -1146,7 +1146,7 @@ impl fmt::Display for RegexpMatch {
     Hash,
     MzReflect
 )]
-pub struct RegexpSplitToArray(pub Regex);
+pub struct RegexpSplitToArray(pub Box<Regex>);
 
 impl LazyUnaryFunc for RegexpSplitToArray {
     fn eval<'a>(

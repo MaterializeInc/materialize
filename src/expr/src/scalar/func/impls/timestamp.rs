@@ -835,9 +835,26 @@ impl fmt::Display for TimezoneTimestampTz {
     Deserialize,
     MzReflect
 )]
+#[serde(transparent)]
 pub struct ToCharTimestamp {
-    pub format_string: Box<str>,
-    pub format: DateTimeFormat,
+    inner: Box<ToCharTimestampInner>,
+}
+
+impl ToCharTimestamp {
+    pub fn new(format_string: Box<str>, format: DateTimeFormat) -> Self {
+        Self {
+            inner: Box::new(ToCharTimestampInner {
+                format_string,
+                format,
+            }),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
+struct ToCharTimestampInner {
+    format_string: Box<str>,
+    format: DateTimeFormat,
 }
 
 impl EagerUnaryFunc for ToCharTimestamp {
@@ -845,7 +862,7 @@ impl EagerUnaryFunc for ToCharTimestamp {
     type Output<'a> = String;
 
     fn call<'a>(&self, input: Self::Input<'a>) -> Self::Output<'a> {
-        self.format.render(&*input)
+        self.inner.format.render(&*input)
     }
 
     fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
@@ -855,7 +872,7 @@ impl EagerUnaryFunc for ToCharTimestamp {
 
 impl fmt::Display for ToCharTimestamp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "tocharts[{}]", self.format_string)
+        write!(f, "tocharts[{}]", self.inner.format_string)
     }
 }
 
@@ -871,9 +888,26 @@ impl fmt::Display for ToCharTimestamp {
     Deserialize,
     MzReflect
 )]
+#[serde(transparent)]
 pub struct ToCharTimestampTz {
-    pub format_string: Box<str>,
-    pub format: DateTimeFormat,
+    inner: Box<ToCharTimestampTzInner>,
+}
+
+impl ToCharTimestampTz {
+    pub fn new(format_string: Box<str>, format: DateTimeFormat) -> Self {
+        Self {
+            inner: Box::new(ToCharTimestampTzInner {
+                format_string,
+                format,
+            }),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
+struct ToCharTimestampTzInner {
+    format_string: Box<str>,
+    format: DateTimeFormat,
 }
 
 impl EagerUnaryFunc for ToCharTimestampTz {
@@ -881,7 +915,7 @@ impl EagerUnaryFunc for ToCharTimestampTz {
     type Output<'a> = String;
 
     fn call<'a>(&self, input: Self::Input<'a>) -> Self::Output<'a> {
-        self.format.render(&*input)
+        self.inner.format.render(&*input)
     }
 
     fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
@@ -891,7 +925,7 @@ impl EagerUnaryFunc for ToCharTimestampTz {
 
 impl fmt::Display for ToCharTimestampTz {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "tochartstz[{}]", self.format_string)
+        write!(f, "tochartstz[{}]", self.inner.format_string)
     }
 }
 

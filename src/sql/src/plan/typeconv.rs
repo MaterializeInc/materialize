@@ -662,7 +662,7 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
                 Some(|e: HirScalarExpr| {
                     e.call_unary(UnaryFunc::CastStringToArray(
                         func::CastStringToArray {
-                            return_ty,
+                            return_ty: Box::new(return_ty),
                             cast_expr: Box::new(cast_expr),
                         },
                     ))
@@ -675,7 +675,7 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
                 Some(|e: HirScalarExpr| {
                     e.call_unary(UnaryFunc::CastStringToList(
                         func::CastStringToList {
-                            return_ty,
+                            return_ty: Box::new(return_ty),
                             cast_expr: Box::new(cast_expr),
                         },
                     ))
@@ -688,7 +688,7 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
                 Some(|e: HirScalarExpr| {
                     e.call_unary(UnaryFunc::CastStringToMap(
                         func::CastStringToMap {
-                            return_ty,
+                            return_ty: Box::new(return_ty),
                             cast_expr: Box::new(cast_expr),
                         },
                     ))
@@ -701,7 +701,7 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
                 Some(|e: HirScalarExpr| {
                     e.call_unary(UnaryFunc::CastStringToRange(
                         func::CastStringToRange {
-                            return_ty,
+                            return_ty: Box::new(return_ty),
                             cast_expr: Box::new(cast_expr),
                         },
                     ))
@@ -847,7 +847,7 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
                 Some(|e: HirScalarExpr| {
                     e.call_unary(CastRecord1ToRecord2(
                         func::CastRecord1ToRecord2 {
-                            return_ty: to,
+                            return_ty: Box::new(to),
                             cast_exprs,
                         },
                     ))
@@ -874,7 +874,7 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
 
                 Some(move |e: HirScalarExpr| {
                     e.call_unary(CastArrayToArray(func::CastArrayToArray {
-                        return_ty,
+                        return_ty: Box::new(return_ty),
                         cast_expr: Box::new(cast_expr),
                     }))
                 })
@@ -901,7 +901,7 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
                     match element_cast {
                         Some((return_ty, cast_expr)) => {
                             arr.call_unary(CastArrayToArray(
-                                func::CastArrayToArray { return_ty, cast_expr: Box::new(cast_expr) }
+                                func::CastArrayToArray { return_ty: Box::new(return_ty), cast_expr: Box::new(cast_expr) }
                             ))
                         }
                         None => arr,
@@ -944,7 +944,7 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
                 Some(|e: HirScalarExpr| {
                     e.call_unary(UnaryFunc::CastList1ToList2(
                         func::CastList1ToList2 {
-                            return_ty,
+                            return_ty: Box::new(return_ty),
                             cast_expr: Box::new(cast_expr),
                         },
                     ))
