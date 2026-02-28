@@ -886,7 +886,7 @@ impl HirRelationExpr {
                     let applied_order_key = order_key
                         .iter()
                         .map(|column_order| ColumnOrder {
-                            column: column_order.column + get_outer.arity(),
+                            column: column_order.column + get_outer.arity() as u32,
                             desc: column_order.desc,
                             nulls_last: column_order.nulls_last,
                         })

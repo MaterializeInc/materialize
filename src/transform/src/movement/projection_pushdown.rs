@@ -414,7 +414,7 @@ impl ProjectionPushdown {
                     let mut columns_to_pushdown =
                         desired_projection.iter().cloned().collect::<BTreeSet<_>>();
                     columns_to_pushdown.extend(group_key.iter().cloned());
-                    columns_to_pushdown.extend(order_key.iter().map(|o| o.column));
+                    columns_to_pushdown.extend(order_key.iter().map(|o| o.column as usize));
                     if let Some(limit) = limit.as_ref() {
                         // Strictly speaking not needed because the
                         // `limit` support should be a subset of the
@@ -432,12 +432,19 @@ impl ProjectionPushdown {
                             columns_to_pushdown.into_iter().collect::<Vec<_>>()
                         };
                     reverse_permute_columns(
-                        itertools::chain!(
-                            group_key.iter_mut(),
-                            order_key.iter_mut().map(|o| &mut o.column),
-                        ),
+                        group_key.iter_mut(),
                         columns_to_pushdown.iter(),
                     );
+                    {
+                        let reverse_col_map: BTreeMap<_, _> = columns_to_pushdown
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, c)| (*c, idx as u32))
+                            .collect();
+                        for o in order_key.iter_mut() {
+                            o.column = reverse_col_map[&(o.column as usize)];
+                        }
+                    }
                     reverse_permute(limit.iter_mut().map(|l| &mut **l), columns_to_pushdown.iter());
                     self.action(input, &columns_to_pushdown, gets)?;
                     columns_to_pushdown

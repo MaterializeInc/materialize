@@ -682,7 +682,7 @@ impl LiteralLifting {
                         // that references the columns, though.
                         let input_arity = input.arity();
                         group_key.retain(|c| *c < input_arity);
-                        order_key.retain(|o| o.column < input_arity);
+                        order_key.retain(|o| (o.column as usize) < input_arity);
                         // Inline literals into the limit expression.
                         if let Some(limit) = limit {
                             limit.visit_mut_post(&mut |e| {

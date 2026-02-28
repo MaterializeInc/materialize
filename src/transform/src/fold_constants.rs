@@ -537,7 +537,7 @@ impl FoldConstants {
             let group_key = group_key
                 .iter()
                 .map(|column| ColumnOrder {
-                    column: *column,
+                    column: *column as u32,
                     // desc and nulls_last don't matter: the sorting by cmp_group_key is just to
                     // make the elements of each group appear next to each other, but the order of
                     // groups doesn't matter.

@@ -562,7 +562,7 @@ pub fn create_fast_path_plan<T: Timestamp>(
                                     order_by.iter().enumerate().all(|(idx, order)| {
                                         // Map the ordering column back to the column in the source data.
                                         // (If it's not one of the input columns, we can't make any guarantees.)
-                                        let column_idx = projection[order.column];
+                                        let column_idx = projection[order.column as usize];
                                         if column_idx >= safe_mfp.input_arity {
                                             return false;
                                         }

@@ -329,7 +329,7 @@ impl Demand {
                     // Group and order keys and limit must be retained, as they
                     // define which rows are retained.
                     columns.extend(group_key.iter().cloned());
-                    columns.extend(order_key.iter().map(|o| o.column));
+                    columns.extend(order_key.iter().map(|o| o.column as usize));
                     if let Some(limit) = limit {
                         // Strictly speaking not needed because the
                         // `limit` support should be a subset of the

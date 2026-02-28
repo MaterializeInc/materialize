@@ -253,12 +253,12 @@ fn try_push_projection_order_by(
     }
     if order_by
         .iter()
-        .all(|ob| ob.column < unproject.len() && unproject[ob.column].is_some())
+        .all(|ob| (ob.column as usize) < unproject.len() && unproject[ob.column as usize].is_some())
     {
         let trivial_project = (0..project.len()).collect();
         *expr = expr.take().project(mem::replace(project, trivial_project));
         for ob in order_by {
-            ob.column = unproject[ob.column].unwrap();
+            ob.column = unproject[ob.column as usize].unwrap() as u32;
         }
         true
     } else {
@@ -2725,9 +2725,10 @@ fn plan_select_from_where(
                 for ord in order_by.iter().take(distinct_exprs.len()) {
                     // The unusual construction of `expr` here is to ensure the
                     // temporary column expression lives long enough.
-                    let mut expr = &HirScalarExpr::column(ord.column);
-                    if ord.column >= arity {
-                        expr = &map_exprs[ord.column - arity];
+                    let col = ord.column as usize;
+                    let mut expr = &HirScalarExpr::column(col);
+                    if col >= arity {
+                        expr = &map_exprs[col - arity];
                     };
                     match distinct_exprs.iter().position(move |e| e == expr) {
                         None => sql_bail!(
@@ -2737,7 +2738,7 @@ fn plan_select_from_where(
                             distinct_exprs.remove(pos);
                         }
                     }
-                    distinct_key.push(ord.column);
+                    distinct_key.push(col);
                 }
 
                 // Add any remaining `DISTINCT ON` expressions to the key.
@@ -4743,7 +4744,7 @@ where
         planned_query
             .order_by
             .iter()
-            .map(|co| HirScalarExpr::column(co.column)),
+            .map(|co| HirScalarExpr::column(co.column as usize)),
     )
     .collect();
 
@@ -4755,7 +4756,7 @@ where
         .order_by
         .into_iter()
         .enumerate()
-        .map(|(i, order)| ColumnOrder { column: i, ..order })
+        .map(|(i, order)| ColumnOrder { column: i as u32, ..order })
         .collect();
 
     let reduced_expr = planned_query
@@ -4841,7 +4842,7 @@ fn plan_map_subquery(
         query
             .order_by
             .iter()
-            .map(|co| HirScalarExpr::column(co.column)),
+            .map(|co| HirScalarExpr::column(co.column as usize)),
     )
     .collect();
 
@@ -4855,7 +4856,7 @@ fn plan_map_subquery(
                         .order_by
                         .into_iter()
                         .enumerate()
-                        .map(|(i, order)| ColumnOrder { column: i, ..order })
+                        .map(|(i, order)| ColumnOrder { column: i as u32, ..order })
                         .collect(),
                     value_type: value_type.clone(),
                 },
@@ -5154,7 +5155,7 @@ pub(crate) fn resolve_desc_and_nulls_last<T: AstInfo>(
 ) -> ColumnOrder {
     let desc = !obe.asc.unwrap_or(true);
     ColumnOrder {
-        column,
+        column: column as u32,
         desc,
         // https://www.postgresql.org/docs/14/queries-order.html
         //   "NULLS FIRST is the default for DESC order, and NULLS LAST otherwise"

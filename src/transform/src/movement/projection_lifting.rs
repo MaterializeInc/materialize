@@ -297,7 +297,7 @@ impl ProjectionLifting {
                             *key = outputs[*key];
                         }
                         for key in order_key.iter_mut() {
-                            key.column = outputs[key.column];
+                            key.column = outputs[key.column as usize] as u32;
                         }
                         if let Some(limit) = limit.as_mut() {
                             limit.permute(outputs);

@@ -1229,7 +1229,7 @@ impl Typecheck {
                 }
 
                 for order in order_key {
-                    if order.column >= t_in.len() {
+                    if order.column as usize >= t_in.len() {
                         return Err(TypeError::BadTopKOrdering {
                             source: expr,
                             order: order.clone(),

@@ -2419,7 +2419,7 @@ impl VisitChildren<Self> for MirRelationExpr {
 )]
 pub struct ColumnOrder {
     /// The column index.
-    pub column: usize,
+    pub column: u32,
     /// Whether to sort in descending order.
     #[serde(default)]
     pub desc: bool,
@@ -2441,7 +2441,7 @@ where
         write!(
             f,
             "{} {} {}",
-            self.child(&self.expr.column),
+            self.child(&(self.expr.column as usize)),
             if self.expr.desc { "desc" } else { "asc" },
             if self.expr.nulls_last {
                 "nulls_last"
@@ -3748,7 +3748,7 @@ where
     F: Fn() -> Ordering,
 {
     for order in order {
-        let cmp = match (&left[order.column], &right[order.column]) {
+        let cmp = match (&left[order.column as usize], &right[order.column as usize]) {
             (Datum::Null, Datum::Null) => Ordering::Equal,
             (Datum::Null, _) => {
                 if order.nulls_last {

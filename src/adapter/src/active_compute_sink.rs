@@ -246,7 +246,7 @@ impl ActiveSubscribe {
                             });
                             let datums = datum_vec.borrow_with(row);
                             for column_order in order_by_keys {
-                                packer.push(datums[column_order.column]);
+                                packer.push(datums[column_order.column as usize]);
                             }
                             if debezium {
                                 for _ in 0..value_columns {
@@ -254,7 +254,7 @@ impl ActiveSubscribe {
                                 }
                             }
                             for idx in 0..self.arity {
-                                if !order_by_keys.iter().any(|co| co.column == idx) {
+                                if !order_by_keys.iter().any(|co| co.column as usize == idx) {
                                     packer.push(datums[idx]);
                                 }
                             }
@@ -264,11 +264,11 @@ impl ActiveSubscribe {
                             packer.push(Datum::String("delete"));
                             let datums = datum_vec.borrow_with(&start.1);
                             for column_order in order_by_keys {
-                                packer.push(datums[column_order.column]);
+                                packer.push(datums[column_order.column as usize]);
                             }
                             if debezium {
                                 for idx in 0..self.arity {
-                                    if !order_by_keys.iter().any(|co| co.column == idx) {
+                                    if !order_by_keys.iter().any(|co| co.column as usize == idx) {
                                         packer.push(datums[idx]);
                                     }
                                 }
@@ -284,17 +284,17 @@ impl ActiveSubscribe {
                             let old_datums = old_datum_vec.borrow_with(old_row);
 
                             for column_order in order_by_keys {
-                                packer.push(datums[column_order.column]);
+                                packer.push(datums[column_order.column as usize]);
                             }
                             if debezium {
                                 for idx in 0..self.arity {
-                                    if !order_by_keys.iter().any(|co| co.column == idx) {
+                                    if !order_by_keys.iter().any(|co| co.column as usize == idx) {
                                         packer.push(old_datums[idx]);
                                     }
                                 }
                             }
                             for idx in 0..self.arity {
-                                if !order_by_keys.iter().any(|co| co.column == idx) {
+                                if !order_by_keys.iter().any(|co| co.column as usize == idx) {
                                     packer.push(datums[idx]);
                                 }
                             }
@@ -304,7 +304,7 @@ impl ActiveSubscribe {
                             packer.push(Datum::String("key_violation"));
                             let datums = datum_vec.borrow_with(&start.1);
                             for column_order in order_by_keys {
-                                packer.push(datums[column_order.column]);
+                                packer.push(datums[column_order.column as usize]);
                             }
                             if debezium {
                                 for _ in 0..(self.arity - order_by_keys.len()) {

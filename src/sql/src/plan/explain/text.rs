@@ -407,7 +407,7 @@ impl fmt::Display for HirScalarExpr {
                     column_orders
                         .iter()
                         .enumerate()
-                        .all(|(i, column_order)| i == column_order.column)
+                        .all(|(i, column_order)| i == column_order.column as usize)
                 );
                 let order_by = column_orders
                     .iter()

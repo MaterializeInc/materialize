@@ -995,7 +995,7 @@ mod scalar {
 
     pub fn parse_column_order(input: ParseStream) -> syn::Result<ColumnOrder> {
         input.parse::<syn::Token![#]>()?;
-        let column = input.parse::<syn::LitInt>()?.base10_parse::<usize>()?;
+        let column = input.parse::<syn::LitInt>()?.base10_parse::<u32>()?;
         let desc = input.eat(kw::desc) || !input.eat(kw::asc);
         let nulls_last = input.eat(kw::nulls_last) || !input.eat(kw::nulls_first);
         Ok(ColumnOrder {

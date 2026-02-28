@@ -583,7 +583,7 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                             serde_json::to_string(&result).map_err_to_string_with_causes()?,
                         ));
                     }
-                } else if type_name == "usize" {
+                } else if type_name == "usize" || type_name == "u32" {
                     if let TokenTree::Punct(punct) = first_arg {
                         if punct.as_char() == '#' {
                             match rest_of_stream.next() {
