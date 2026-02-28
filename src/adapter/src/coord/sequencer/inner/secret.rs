@@ -337,13 +337,13 @@ impl Coordinator {
                         stmt.values.push(ConnectionOption {
                             name: ConnectionOptionName::PublicKey1,
                             value: Some(WithOptionValue::Value(Value::String(
-                                new_key_set.primary().ssh_public_key(),
+                                new_key_set.primary().ssh_public_key().into(),
                             ))),
                         });
                         stmt.values.push(ConnectionOption {
                             name: ConnectionOptionName::PublicKey2,
                             value: Some(WithOptionValue::Value(Value::String(
-                                new_key_set.secondary().ssh_public_key(),
+                                new_key_set.secondary().ssh_public_key().into(),
                             ))),
                         });
 

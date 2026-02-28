@@ -2493,7 +2493,7 @@ fn plan_select_from_where(
             agg_exprs.push(plan_aggregate_common(ecx, &sql_function)?);
             group_scope
                 .items
-                .push(ScopeItem::from_expr(Expr::Function(sql_function.clone())));
+                .push(ScopeItem::from_expr(Expr::Function(Box::new(sql_function.clone()))));
         }
         if !agg_exprs.is_empty() || !group_key.is_empty() || s.having.is_some() {
             // apply GROUP BY / aggregates
@@ -5785,7 +5785,7 @@ fn plan_case<'a>(
 fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, PlanError> {
     let (datum, scalar_type) = match l {
         Value::Number(s) => {
-            let d = strconv::parse_numeric(s.as_str())?;
+            let d = strconv::parse_numeric(s)?;
             if !s.contains(&['E', '.'][..]) {
                 // Maybe representable as an int?
                 if let Ok(n) = d.0.try_into() {
@@ -5814,7 +5814,7 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, PlanError> {
             let i = literal::plan_interval(i)?;
             (Datum::Interval(i), SqlScalarType::Interval)
         }
-        Value::String(s) => return Ok(CoercibleScalarExpr::LiteralString(s.clone())),
+        Value::String(s) => return Ok(CoercibleScalarExpr::LiteralString(s.to_string())),
         Value::Null => return Ok(CoercibleScalarExpr::LiteralNull),
     };
     let expr = HirScalarExpr::literal(datum, scalar_type);
@@ -6397,7 +6397,7 @@ impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
                             ));
                             return;
                         }
-                        table_func = Some(func.clone());
+                        table_func = Some((**func).clone());
                     }
                 }
                 // Since we will descend into the table func below, don't add its own disallow

@@ -41,7 +41,7 @@ pub fn plan_interval(iv: &IntervalValue) -> Result<Interval, PlanError> {
 /// The reverse of [`plan_interval`].
 pub fn unplan_interval(i: &Interval) -> IntervalValue {
     let mut iv = IntervalValue::default();
-    iv.value = i.to_string();
+    iv.value = i.to_string().into();
     iv
 }
 

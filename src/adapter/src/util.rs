@@ -213,7 +213,7 @@ pub fn index_sql(
             keys.iter()
                 .map(|i| match view_desc.get_unambiguous_name(*i) {
                     Some(n) => Expr::Identifier(vec![Ident::new_unchecked(n.to_string())]),
-                    _ => Expr::Value(Value::Number((i + 1).to_string())),
+                    _ => Expr::Value(Value::Number((i + 1).to_string().into())),
                 })
                 .collect(),
         ),

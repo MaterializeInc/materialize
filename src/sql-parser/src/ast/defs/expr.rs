@@ -108,7 +108,7 @@ pub enum Expr<T: AstInfo> {
     /// CAST an expression to a different data type e.g. `CAST(foo AS VARCHAR(123))`
     Cast {
         expr: Box<Expr<T>>,
-        data_type: T::DataType,
+        data_type: Box<T::DataType>,
     },
     /// `expr COLLATE collation`
     Collate {
@@ -141,7 +141,7 @@ pub enum Expr<T: AstInfo> {
     /// A literal value, such as string, number, date or NULL
     Value(Value),
     /// Scalar function call e.g. `LEFT(foo, 5)`
-    Function(Function<T>),
+    Function(Box<Function<T>>),
     /// `CASE [<operand>] WHEN <condition> THEN <result> ... [ELSE <result>] END`
     ///
     /// Note we only recognize a complete single expression as `<condition>`,
@@ -485,7 +485,8 @@ impl<T: AstInfo> Expr<T> {
     where
         S: Into<String>,
     {
-        Expr::Value(Value::Number(n.into()))
+        let s: String = n.into();
+        Expr::Value(Value::Number(s.into()))
     }
 
     pub fn negate(self) -> Expr<T> {
@@ -559,18 +560,18 @@ impl<T: AstInfo> Expr<T> {
     pub fn cast(self, data_type: T::DataType) -> Expr<T> {
         Expr::Cast {
             expr: Box::new(self),
-            data_type,
+            data_type: Box::new(data_type),
         }
     }
 
     pub fn call(name: T::ItemName, args: Vec<Expr<T>>) -> Expr<T> {
-        Expr::Function(Function {
+        Expr::Function(Box::new(Function {
             name,
             args: FunctionArgs::args(args),
             filter: None,
             over: None,
             distinct: false,
-        })
+        }))
     }
 
     pub fn call_nullary(name: T::ItemName) -> Expr<T> {
@@ -952,3 +953,14 @@ impl<T: AstInfo> AstDisplay for IsExprConstruct<T> {
     }
 }
 impl_display_t!(IsExprConstruct);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::Raw;
+
+    #[test]
+    fn ast_expr_sizes() {
+        assert_eq!(std::mem::size_of::<Expr<Raw>>(), 72);
+    }
+}

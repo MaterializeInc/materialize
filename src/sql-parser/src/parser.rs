@@ -551,8 +551,8 @@ impl<'a> Parser<'a> {
                 Ok(Expr::Value(Value::Interval(parser.parse_interval_value()?)))
             } else {
                 Ok(Expr::Cast {
-                    expr: Box::new(Expr::Value(Value::String(parser.parse_literal_string()?))),
-                    data_type,
+                    expr: Box::new(Expr::Value(Value::String(parser.parse_literal_string()?.into()))),
+                    data_type: Box::new(data_type),
                 })
             }
         }));
@@ -564,7 +564,7 @@ impl<'a> Parser<'a> {
             (Token::LBracket, _) => {
                 self.prev_token();
                 let function = self.parse_named_function()?;
-                Ok(Expr::Function(function))
+                Ok(Expr::Function(Box::new(function)))
             }
             (Token::Keyword(TRUE) | Token::Keyword(FALSE) | Token::Keyword(NULL), _) => {
                 self.prev_token();
@@ -920,12 +920,12 @@ impl<'a> Parser<'a> {
         ) {
             Ok(Expr::Cast {
                 expr: Box::new(Expr::Nested(Box::new(expr))),
-                data_type,
+                data_type: Box::new(data_type),
             })
         } else {
             Ok(Expr::Cast {
                 expr: Box::new(expr),
-                data_type,
+                data_type: Box::new(data_type),
             })
         }
     }
@@ -970,13 +970,13 @@ impl<'a> Parser<'a> {
         self.expect_keyword(FROM)?;
         let expr = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
-        Ok(Expr::Function(Function {
+        Ok(Expr::Function(Box::new(Function {
             name: RawItemName::Name(UnresolvedItemName::unqualified(ident!("extract"))),
-            args: FunctionArgs::args(vec![Expr::Value(Value::String(field)), expr]),
+            args: FunctionArgs::args(vec![Expr::Value(Value::String(field.into())), expr]),
             filter: None,
             over: None,
             distinct: false,
-        }))
+        })))
     }
 
     fn parse_row_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
@@ -1033,13 +1033,13 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect_token(&Token::RParen)?;
-        Ok(Expr::Function(Function {
+        Ok(Expr::Function(Box::new(Function {
             name: RawItemName::Name(UnresolvedItemName::unqualified(name)),
             args: FunctionArgs::args(exprs),
             filter: None,
             over: None,
             distinct: false,
-        }))
+        })))
     }
 
     // Parse calls to position(), which has the special form position('string' in 'string').
@@ -1051,13 +1051,13 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::Keyword(IN))?;
         let haystack = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
-        Ok(Expr::Function(Function {
+        Ok(Expr::Function(Box::new(Function {
             name: RawItemName::Name(UnresolvedItemName::unqualified(ident!("position"))),
             args: FunctionArgs::args(vec![needle, haystack]),
             filter: None,
             over: None,
             distinct: false,
-        }))
+        })))
     }
 
     /// Parse calls to normalize(), which can take the form:
@@ -1074,19 +1074,19 @@ impl<'a> Parser<'a> {
             let form = self
                 .expect_one_of_keywords(&[NFC, NFD, NFKC, NFKD])?
                 .as_str();
-            vec![expr, Expr::Value(Value::String(form.to_owned()))]
+            vec![expr, Expr::Value(Value::String(form.into()))]
         } else {
-            vec![expr, Expr::Value(Value::String("NFC".to_owned()))]
+            vec![expr, Expr::Value(Value::String("NFC".into()))]
         };
 
         self.expect_token(&Token::RParen)?;
-        Ok(Expr::Function(Function {
+        Ok(Expr::Function(Box::new(Function {
             name: RawItemName::Name(UnresolvedItemName::unqualified(ident!("normalize"))),
             args: FunctionArgs::args(args),
             filter: None,
             over: None,
             distinct: false,
-        }))
+        })))
     }
 
     /// Parse an INTERVAL literal.
@@ -1170,7 +1170,7 @@ impl<'a> Parser<'a> {
                 Err(_) => (DateTimeField::Year, DateTimeField::Second, None),
             };
         Ok(IntervalValue {
-            value,
+            value: value.into(),
             precision_high,
             precision_low,
             fsec_max_precision,
@@ -1273,7 +1273,7 @@ impl<'a> Parser<'a> {
                 }),
                 AT => {
                     self.expect_keywords(&[TIME, ZONE])?;
-                    Ok(Expr::Function(Function {
+                    Ok(Expr::Function(Box::new(Function {
                         name: RawItemName::Name(UnresolvedItemName::unqualified(ident!(
                             "timezone"
                         ))),
@@ -1281,7 +1281,7 @@ impl<'a> Parser<'a> {
                         filter: None,
                         over: None,
                         distinct: false,
-                    }))
+                    })))
                 }
                 COLLATE => Ok(Expr::Collate {
                     expr: Box::new(expr),
@@ -1399,7 +1399,7 @@ impl<'a> Parser<'a> {
             }
         } else if self.parse_keyword(FOR) {
             // 'string' FOR 'int'
-            exprs.push(Expr::Value(Value::Number(String::from("1"))));
+            exprs.push(Expr::Value(Value::Number("1".into())));
             exprs.push(self.parse_expr()?);
         } else {
             // 'string', 'int'
@@ -1410,13 +1410,13 @@ impl<'a> Parser<'a> {
         }
 
         self.expect_token(&Token::RParen)?;
-        Ok(Expr::Function(Function {
+        Ok(Expr::Function(Box::new(Function {
             name: RawItemName::Name(UnresolvedItemName::unqualified(ident!("substring"))),
             args: FunctionArgs::args(exprs),
             filter: None,
             over: None,
             distinct: false,
-        }))
+        })))
     }
 
     /// Parse an operator reference.
@@ -1568,7 +1568,7 @@ impl<'a> Parser<'a> {
     fn parse_pg_cast(&mut self, expr: Expr<Raw>) -> Result<Expr<Raw>, ParserError> {
         Ok(Expr::Cast {
             expr: Box::new(expr),
-            data_type: self.parse_data_type()?,
+            data_type: Box::new(self.parse_data_type()?),
         })
     }
 
@@ -6834,12 +6834,12 @@ impl<'a> Parser<'a> {
                     )
                 }
                 Token::Op(ref op) if op == "-" => match self.next_token() {
-                    Some(Token::Number(n)) => Ok(Value::Number(format!("-{}", n))),
+                    Some(Token::Number(n)) => Ok(Value::Number(format!("-{}", n).into())),
                     other => self.expected(self.peek_prev_pos(), "literal int", other),
                 },
-                Token::Number(ref n) => Ok(Value::Number(n.to_string())),
-                Token::String(ref s) => Ok(Value::String(s.to_string())),
-                Token::HexString(ref s) => Ok(Value::HexString(s.to_string())),
+                Token::Number(ref n) => Ok(Value::Number(n.as_str().into())),
+                Token::String(ref s) => Ok(Value::String(s.as_str().into())),
+                Token::HexString(ref s) => Ok(Value::HexString(s.as_str().into())),
                 _ => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -7407,7 +7407,7 @@ impl<'a> Parser<'a> {
                 } else if self.peek_token() == Some(Token::LParen) {
                     let function =
                         self.parse_function(RawItemName::Name(UnresolvedItemName(id_parts)))?;
-                    Ok(Expr::Function(function))
+                    Ok(Expr::Function(Box::new(function)))
                 } else {
                     Ok(Expr::Identifier(id_parts))
                 }
@@ -7637,7 +7637,7 @@ impl<'a> Parser<'a> {
                     }
                     self.expect_one_of_keywords(&[FIRST, NEXT])?;
                     let quantity = if self.parse_one_of_keywords(&[ROW, ROWS]).is_some() {
-                        Expr::Value(Value::Number('1'.into()))
+                        Expr::Value(Value::Number("1".into()))
                     } else {
                         let quantity = self.parse_expr()?;
                         self.expect_one_of_keywords(&[ROW, ROWS])?;

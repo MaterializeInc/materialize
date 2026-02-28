@@ -390,7 +390,7 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
                         options.push(CsrConfigOption {
                             name: CsrConfigOptionName::AvroDocOn(doc_on_item_key),
                             value: Some(mz_sql_parser::ast::WithOptionValue::Value(Value::String(
-                                root_comment.clone(),
+                                root_comment.clone().into(),
                             ))),
                         });
                     }
@@ -421,7 +421,7 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
                                 options.push(CsrConfigOption {
                                     name: CsrConfigOptionName::AvroDocOn(doc_on_column_key),
                                     value: Some(mz_sql_parser::ast::WithOptionValue::Value(
-                                        Value::String(comment_str.clone()),
+                                        Value::String(comment_str.clone().into()),
                                     )),
                                 });
                             }
@@ -869,7 +869,7 @@ async fn purify_create_source(
                             start_offsets
                                 .iter()
                                 .map(|offset| {
-                                    WithOptionValue::Value(Value::Number(offset.to_string()))
+                                    WithOptionValue::Value(Value::Number(offset.to_string().into()))
                                 })
                                 .collect(),
                         )),
@@ -961,7 +961,7 @@ async fn purify_create_source(
                 name: PgConfigOptionName::Details,
                 value: Some(WithOptionValue::Value(Value::String(hex::encode(
                     details.into_proto().encode_to_vec(),
-                )))),
+                ).into()))),
             })
         }
         CreateSourceConnection::SqlServer {
@@ -1043,7 +1043,7 @@ async fn purify_create_source(
                 name: SqlServerConfigOptionName::Details,
                 value: Some(WithOptionValue::Value(Value::String(hex::encode(
                     details.into_proto().encode_to_vec(),
-                )))),
+                ).into()))),
             });
 
             // Update our 'TEXT' and 'EXCLUDE' column options with the purified and normalized set.
@@ -1128,7 +1128,7 @@ async fn purify_create_source(
                 name: MySqlConfigOptionName::Details,
                 value: Some(WithOptionValue::Value(Value::String(hex::encode(
                     details.into_proto().encode_to_vec(),
-                )))),
+                ).into()))),
             });
 
             if let Some(text_cols_option) = options
@@ -1223,7 +1223,7 @@ async fn purify_create_source(
                     let now = catalog.now();
                     options.push(LoadGeneratorOption {
                         name: LoadGeneratorOptionName::AsOf,
-                        value: Some(WithOptionValue::Value(Value::Number(now.to_string()))),
+                        value: Some(WithOptionValue::Value(Value::Number(now.to_string().into()))),
                     });
                 }
             }
@@ -2049,7 +2049,7 @@ async fn purify_create_table_from_source(
                 name: TableFromSourceOptionName::Details,
                 value: Some(WithOptionValue::Value(Value::String(hex::encode(
                     gen_details.into_proto().encode_to_vec(),
-                )))),
+                ).into()))),
             })
         }
         PurifiedExportDetails::MySql { .. } => {
@@ -2103,7 +2103,7 @@ async fn purify_create_table_from_source(
                 name: TableFromSourceOptionName::Details,
                 value: Some(WithOptionValue::Value(Value::String(hex::encode(
                     gen_details.into_proto().encode_to_vec(),
-                )))),
+                ).into()))),
             })
         }
         PurifiedExportDetails::SqlServer { .. } => {
@@ -2159,7 +2159,7 @@ async fn purify_create_table_from_source(
                 name: TableFromSourceOptionName::Details,
                 value: Some(WithOptionValue::Value(Value::String(hex::encode(
                     gen_details.into_proto().encode_to_vec(),
-                )))),
+                ).into()))),
             })
         }
         PurifiedExportDetails::LoadGenerator { .. } => {
@@ -2189,7 +2189,7 @@ async fn purify_create_table_from_source(
                 name: TableFromSourceOptionName::Details,
                 value: Some(WithOptionValue::Value(Value::String(hex::encode(
                     details.into_proto().encode_to_vec(),
-                )))),
+                ).into()))),
             })
         }
         PurifiedExportDetails::Kafka {} => {
@@ -2201,7 +2201,7 @@ async fn purify_create_table_from_source(
                 name: TableFromSourceOptionName::Details,
                 value: Some(WithOptionValue::Value(Value::String(hex::encode(
                     details.into_proto().encode_to_vec(),
-                )))),
+                ).into()))),
             })
         }
     };
@@ -2353,7 +2353,7 @@ pub fn generate_subsource_statements(
                             name: CreateSubsourceOptionName::Details,
                             value: Some(WithOptionValue::Value(Value::String(hex::encode(
                                 details.into_proto().encode_to_vec(),
-                            )))),
+                            ).into()))),
                         },
                     ],
                 };
@@ -2644,7 +2644,7 @@ pub fn purify_create_materialized_view_options(
             .expect("we should be able to resolve mz_now");
         (
             item.id(),
-            Expr::Function(Function {
+            Expr::Function(Box::new(Function {
                 name: ResolvedItemName::Item {
                     id: item.id(),
                     qualifiers: item.name().qualifiers.clone(),
@@ -2659,7 +2659,7 @@ pub fn purify_create_materialized_view_options(
                 filter: None,
                 over: None,
                 distinct: false,
-            }),
+            })),
         )
     };
     // Prepare the `mz_timestamp` type.
@@ -2834,22 +2834,21 @@ impl MzNowPurifierVisitor {
 impl VisitMut<'_, Aug> for MzNowPurifierVisitor {
     fn visit_expr_mut(&mut self, expr: &'_ mut Expr<Aug>) {
         match expr {
-            Expr::Function(Function {
-                name:
-                    ResolvedItemName::Item {
-                        full_name: FullItemName { item, .. },
-                        ..
-                    },
-                ..
-            }) if item == &MZ_NOW_NAME.to_string() => {
+            Expr::Function(func)
+                if matches!(
+                    &func.name,
+                    ResolvedItemName::Item { full_name: FullItemName { item, .. }, .. }
+                    if item.as_str() == MZ_NOW_NAME
+                ) =>
+            {
                 let mz_now = self.mz_now.expect(
                     "we should have chosen a timestamp if the expression contains mz_now()",
                 );
                 // We substitute `mz_now()` with number + a cast to `mz_timestamp`. The cast is to
                 // not alter the type of the expression.
                 *expr = Expr::Cast {
-                    expr: Box::new(Expr::Value(Value::Number(mz_now.to_string()))),
-                    data_type: self.mz_timestamp_type.clone(),
+                    expr: Box::new(Expr::Value(Value::Number(mz_now.to_string().into()))),
+                    data_type: Box::new(self.mz_timestamp_type.clone()),
                 };
                 self.introduced_mz_timestamp = true;
             }

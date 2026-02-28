@@ -85,11 +85,11 @@ impl TryFromValue<Value> for KafkaSinkCompressionType {
 
     fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
         Some(Value::String(match self {
-            KafkaSinkCompressionType::None => "none".to_string(),
-            KafkaSinkCompressionType::Gzip => "gzip".to_string(),
-            KafkaSinkCompressionType::Snappy => "snappy".to_string(),
-            KafkaSinkCompressionType::Lz4 => "lz4".to_string(),
-            KafkaSinkCompressionType::Zstd => "zstd".to_string(),
+            KafkaSinkCompressionType::None => "none".into(),
+            KafkaSinkCompressionType::Gzip => "gzip".into(),
+            KafkaSinkCompressionType::Snappy => "snappy".into(),
+            KafkaSinkCompressionType::Lz4 => "lz4".into(),
+            KafkaSinkCompressionType::Zstd => "zstd".into(),
         }))
     }
 

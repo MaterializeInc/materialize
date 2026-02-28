@@ -3506,7 +3506,7 @@ impl Coordinator {
         stmt.with_options.push(CreateSinkOption {
             name: CreateSinkOptionName::Version,
             value: Some(WithOptionValue::Value(mz_sql::ast::Value::Number(
-                sink_plan.version.to_string(),
+                sink_plan.version.to_string().into(),
             ))),
         });
 

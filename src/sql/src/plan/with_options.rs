@@ -51,8 +51,8 @@ impl TryFromValue<WithOptionValue<Aug>> for IcebergCatalogType {
 
     fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
         Some(WithOptionValue::Value(Value::String(match self {
-            IcebergCatalogType::Rest => "rest".to_string(),
-            IcebergCatalogType::S3TablesRest => "s3tablesrest".to_string(),
+            IcebergCatalogType::Rest => "rest".into(),
+            IcebergCatalogType::S3TablesRest => "s3tablesrest".into(),
         })))
     }
 
@@ -314,7 +314,7 @@ impl TryFromValue<Value> for ByteSize {
     }
 
     fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
-        Some(Value::String(self.to_string()))
+        Some(Value::String(self.to_string().into()))
     }
 
     fn name() -> String {
@@ -433,13 +433,13 @@ impl ImpliedValue for OptionalDuration {
 impl TryFromValue<Value> for String {
     fn try_from_value(v: Value) -> Result<Self, PlanError> {
         match v {
-            Value::String(v) => Ok(v),
+            Value::String(v) => Ok(v.into()),
             _ => sql_bail!("cannot use value as string"),
         }
     }
 
     fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
-        Some(Value::String(self))
+        Some(Value::String(self.into()))
     }
 
     fn name() -> String {
@@ -487,7 +487,7 @@ impl TryFromValue<Value> for f64 {
     }
 
     fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
-        Some(Value::Number(self.to_string()))
+        Some(Value::Number(self.to_string().into()))
     }
 
     fn name() -> String {
@@ -512,7 +512,7 @@ impl TryFromValue<Value> for i32 {
     }
 
     fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
-        Some(Value::Number(self.to_string()))
+        Some(Value::Number(self.to_string().into()))
     }
 
     fn name() -> String {
@@ -536,7 +536,7 @@ impl TryFromValue<Value> for i64 {
         }
     }
     fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
-        Some(Value::Number(self.to_string()))
+        Some(Value::Number(self.to_string().into()))
     }
     fn name() -> String {
         "int8".to_string()
@@ -559,7 +559,7 @@ impl TryFromValue<Value> for u16 {
         }
     }
     fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
-        Some(Value::Number(self.to_string()))
+        Some(Value::Number(self.to_string().into()))
     }
     fn name() -> String {
         "uint2".to_string()
@@ -582,7 +582,7 @@ impl TryFromValue<Value> for u32 {
         }
     }
     fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
-        Some(Value::Number(self.to_string()))
+        Some(Value::Number(self.to_string().into()))
     }
     fn name() -> String {
         "uint4".to_string()
@@ -605,7 +605,7 @@ impl TryFromValue<Value> for u64 {
         }
     }
     fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
-        Some(Value::Number(self.to_string()))
+        Some(Value::Number(self.to_string().into()))
     }
     fn name() -> String {
         "uint8".to_string()
@@ -686,9 +686,9 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             WithOptionValue::UnresolvedItemName(UnresolvedItemName(mut inner))
                 if inner.len() == 1 =>
             {
-                V::try_from_value(Value::String(inner.remove(0).into_string()))
+                V::try_from_value(Value::String(inner.remove(0).into_string().into()))
             }
-            WithOptionValue::Ident(v) => V::try_from_value(Value::String(v.into_string())),
+            WithOptionValue::Ident(v) => V::try_from_value(Value::String(v.into_string().into())),
             WithOptionValue::RetainHistoryFor(v) => V::try_from_value(v),
             WithOptionValue::Sequence(_)
             | WithOptionValue::Map(_)

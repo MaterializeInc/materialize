@@ -51,11 +51,11 @@ impl fmt::Display for ValueError {
 )]
 pub enum Value {
     /// Numeric value.
-    Number(String),
+    Number(Box<str>),
     /// String value.
-    String(String),
+    String(Box<str>),
     /// Hex string value.
-    HexString(String),
+    HexString(Box<str>),
     /// Boolean value.
     Boolean(bool),
     /// INTERVAL literals, roughly in the following format:
@@ -158,7 +158,7 @@ impl AstDisplay for IntervalValue {
 
 impl From<Ident> for Value {
     fn from(ident: Ident) -> Self {
-        Self::String(ident.0.into())
+        Self::String(ident.0)
     }
 }
 
@@ -244,7 +244,7 @@ impl FromStr for DateTimeField {
 )]
 pub struct IntervalValue {
     /// The raw `[value]` that was present in `INTERVAL '[value]'`
-    pub value: String,
+    pub value: Box<str>,
     /// The most significant DateTimeField to propagate to Interval in
     /// compute_interval.
     pub precision_high: DateTimeField,
@@ -262,7 +262,7 @@ pub struct IntervalValue {
 impl Default for IntervalValue {
     fn default() -> Self {
         Self {
-            value: String::default(),
+            value: Box::default(),
             precision_high: DateTimeField::Year,
             precision_low: DateTimeField::Second,
             fsec_max_precision: None,
@@ -292,3 +292,14 @@ impl AstDisplay for Version {
     }
 }
 impl_display!(Version);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn value_size() {
+        assert_eq!(std::mem::size_of::<Value>(), 40);
+        assert_eq!(std::mem::size_of::<IntervalValue>(), 40);
+    }
+}

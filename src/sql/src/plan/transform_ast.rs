@@ -125,7 +125,7 @@ impl<'a> FuncRewriter<'a> {
                 "aggregate functions are not supported in functions in FROM".to_string(),
             ))
         }
-        Expr::Function(Function {
+        Expr::Function(Box::new(Function {
             name,
             args: FunctionArgs::Args {
                 args: vec![expr],
@@ -134,7 +134,7 @@ impl<'a> FuncRewriter<'a> {
             filter,
             over,
             distinct,
-        })
+        }))
     }
 
     fn plan_avg(
@@ -339,7 +339,7 @@ impl<'a> FuncRewriter<'a> {
             distinct,
             over,
         );
-        sum.equals(Expr::Value(Value::Number(0.to_string())))
+        sum.equals(Expr::Value(Value::Number(0.to_string().into())))
     }
 
     fn plan_bool_or(
@@ -370,7 +370,7 @@ impl<'a> FuncRewriter<'a> {
             distinct,
             over,
         );
-        sum.gt(Expr::Value(Value::Number(0.to_string())))
+        sum.gt(Expr::Value(Value::Number(0.to_string().into())))
     }
 
     fn rewrite_function(&mut self, func: &Function<Aug>) -> Option<(Ident, Expr<Aug>)> {

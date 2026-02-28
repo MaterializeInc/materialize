@@ -2797,7 +2797,7 @@ fn derive_order_by_from_projection(
                     }
                     SelectItem::Wildcard => false,
                 }) {
-                    Expr::Value(mz_sql_parser::ast::Value::Number((i + 1).to_string()))
+                    Expr::Value(mz_sql_parser::ast::Value::Number((i + 1).to_string().into()))
                 } else {
                     // If the expression is not found in the
                     // projection, add extra column.

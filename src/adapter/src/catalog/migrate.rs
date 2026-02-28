@@ -530,7 +530,7 @@ fn rewrite_sources_to_tables(
                         name: TableFromSourceOptionName::Details,
                         value: Some(WithOptionValue::Value(Value::String(hex::encode(
                             details.into_proto().encode_to_vec(),
-                        )))),
+                        ).into()))),
                     }];
                     // The external reference for a kafka source is the just the topic name
                     let topic_option = options
@@ -541,7 +541,7 @@ fn rewrite_sources_to_tables(
                         Some(WithOptionValue::Value(Value::String(topic))) => topic,
                         _ => unreachable!("topic must be a string"),
                     };
-                    let external_reference = UnresolvedItemName::qualified(&[Ident::new(topic)?]);
+                    let external_reference = UnresolvedItemName::qualified(&[Ident::new(&**topic)?]);
 
                     let new_source_stmt =
                         Statement::CreateTableFromSource(CreateTableFromSourceStatement {
@@ -611,7 +611,7 @@ fn rewrite_sources_to_tables(
                         name: TableFromSourceOptionName::Details,
                         value: Some(WithOptionValue::Value(Value::String(hex::encode(
                             details.into_proto().encode_to_vec(),
-                        )))),
+                        ).into()))),
                     }];
                     // Since these load generators are single-output the external reference
                     // uses the schema-name for both namespace and name.
@@ -868,7 +868,7 @@ fn ast_rewrite_sql_server_constraints(stmt: &mut Statement<Raw>) -> Result<(), a
     use mz_storage_types::sources::ProtoSourceExportStatementDetails;
     use mz_storage_types::sources::proto_source_export_statement_details::Kind;
 
-    let deets: Option<&mut String> = match stmt {
+    let deets: Option<&mut Box<str>> = match stmt {
         Statement::CreateSubsource(stmt) => stmt.with_options.iter_mut().find_map(|option| {
             if matches!(option.name, CreateSubsourceOptionName::Details)
                 && let Some(WithOptionValue::Value(Value::String(ref mut details))) = option.value
@@ -893,7 +893,7 @@ fn ast_rewrite_sql_server_constraints(stmt: &mut Statement<Raw>) -> Result<(), a
         return Ok(());
     };
 
-    let current_value = hex::decode(&mut *deets)?;
+    let current_value = hex::decode(&**deets)?;
     let current_value = ProtoSourceExportStatementDetails::decode(&*current_value)?;
 
     // avoid further work if this isn't SQL Server
@@ -941,7 +941,7 @@ fn ast_rewrite_sql_server_constraints(stmt: &mut Statement<Raw>) -> Result<(), a
         capture_instance,
         initial_lsn,
     };
-    *deets = hex::encode(new_value.into_proto().encode_to_vec());
+    *deets = hex::encode(new_value.into_proto().encode_to_vec()).into();
 
     Ok(())
 }

@@ -4243,7 +4243,7 @@ pub fn plan_create_index(
             key.iter()
                 .map(|i| match on_desc.get_unambiguous_name(*i) {
                     Some(n) => Expr::Identifier(vec![n.clone().into()]),
-                    _ => Expr::Value(Value::Number((i + 1).to_string())),
+                    _ => Expr::Value(Value::Number((i + 1).to_string().into())),
                 })
                 .collect()
         }
@@ -5389,7 +5389,7 @@ pub fn plan_create_secret(
 
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?;
     let mut create_sql_statement = stmt.clone();
-    create_sql_statement.value = Expr::Value(Value::String("********".to_string()));
+    create_sql_statement.value = Expr::Value(Value::String("********".into()));
     let create_sql =
         normalize::create_statement(scx, Statement::CreateSecret(create_sql_statement))?;
     let secret_as = query::plan_secret_as(scx, value.clone())?;
@@ -5462,11 +5462,11 @@ pub fn plan_create_connection(
         });
         stmt.values.push(ConnectionOption {
             name: ConnectionOptionName::PublicKey1,
-            value: Some(WithOptionValue::Value(Value::String(key_1.public_key()))),
+            value: Some(WithOptionValue::Value(Value::String(key_1.public_key().into()))),
         });
         stmt.values.push(ConnectionOption {
             name: ConnectionOptionName::PublicKey2,
-            value: Some(WithOptionValue::Value(Value::String(key_2.public_key()))),
+            value: Some(WithOptionValue::Value(Value::String(key_2.public_key().into()))),
         });
     }
     let create_sql = normalize::create_statement(scx, Statement::CreateConnection(stmt))?;

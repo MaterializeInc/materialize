@@ -4671,7 +4671,7 @@ impl SetVariableValue {
         match self {
             // `lit.to_string` will quote a `Value::String`, so get the unquoted
             // version.
-            SetVariableValue::Literal(Value::String(s)) => s,
+            SetVariableValue::Literal(Value::String(s)) => s.into(),
             SetVariableValue::Literal(lit) => lit.to_string(),
             SetVariableValue::Ident(ident) => ident.into_string(),
         }

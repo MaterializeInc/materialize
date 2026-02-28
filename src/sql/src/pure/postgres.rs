@@ -165,7 +165,7 @@ pub fn generate_create_subsource_statements(
                 name: CreateSubsourceOptionName::Details,
                 value: Some(WithOptionValue::Value(Value::String(hex::encode(
                     details.into_proto().encode_to_vec(),
-                )))),
+                ).into()))),
             },
         ];
 

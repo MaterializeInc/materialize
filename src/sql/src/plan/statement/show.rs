@@ -985,7 +985,7 @@ impl<'a> ShowSelect<'a> {
         projection: Option<&[&str]>,
     ) -> Result<(ShowSelect<'a>, ResolvedIds), PlanError> {
         let filter = match filter {
-            Some(ShowStatementFilter::Like(like)) => format!("name LIKE {}", Value::String(like)),
+            Some(ShowStatementFilter::Like(like)) => format!("name LIKE {}", Value::String(like.into())),
             Some(ShowStatementFilter::Where(expr)) => expr.to_string(),
             None => "true".to_string(),
         };

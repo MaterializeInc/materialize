@@ -160,17 +160,20 @@ fn extract_sef_call(
     }
     let [
         SelectItem::Expr {
-            expr:
-                Expr::Function(Function {
-                    name,
-                    args: FunctionArgs::Args { args, order_by },
-                    filter: None,
-                    over: None,
-                    distinct: false,
-                }),
+            expr: Expr::Function(func),
             alias: None,
         },
     ] = &projection[..]
+    else {
+        return Ok(None);
+    };
+    let Function {
+        name,
+        args: FunctionArgs::Args { args, order_by },
+        filter: None,
+        over: None,
+        distinct: false,
+    } = &**func
     else {
         return Ok(None);
     };
