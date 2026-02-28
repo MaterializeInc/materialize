@@ -2309,7 +2309,7 @@ fn get_encoding_inner(
                 value_reference_schemas,
                 csr_connection,
                 confluent_wire_format,
-            } = match schema {
+            } = match schema.as_ref() {
                 // TODO(jldlaughlin): we need a way to pass in primary key information
                 // when building a source from a string or file.
                 AvroSchema::InlineSchema {
@@ -2392,7 +2392,7 @@ fn get_encoding_inner(
                 })
             }
         }
-        Format::Protobuf(schema) => match schema {
+        Format::Protobuf(schema) => match schema.as_ref() {
             ProtobufSchema::Csr {
                 csr_connection:
                     CsrConnectionProtobuf {
@@ -4056,7 +4056,8 @@ fn kafka_sink_builder(
             bail_unsupported!("BYTES or TEXT format with multiple columns")
         }
         Format::Json { array: true } => bail_unsupported!("JSON ARRAY format in sinks"),
-        Format::Avro(AvroSchema::Csr { csr_connection }) => {
+        Format::Avro(schema) => match *schema {
+            AvroSchema::Csr { csr_connection } => {
             let (csr_connection, options) = gen_avro_schema_options(csr_connection)?;
             let schema = if is_key {
                 AvroSchemaGenerator::new(
@@ -4092,7 +4093,9 @@ fn kafka_sink_builder(
                 },
                 csr_connection,
             })
-        }
+            }
+            other => bail_unsupported!(format!("sink format Avro({:?})", other)),
+        },
         format => bail_unsupported!(format!("sink format {:?}", format)),
     };
 

@@ -2042,9 +2042,9 @@ impl<'a> Parser<'a> {
     fn parse_format(&mut self) -> Result<Format<Raw>, ParserError> {
         let format = if self.parse_keyword(AVRO) {
             self.expect_keyword(USING)?;
-            Format::Avro(self.parse_avro_schema()?)
+            Format::Avro(Box::new(self.parse_avro_schema()?))
         } else if self.parse_keyword(PROTOBUF) {
-            Format::Protobuf(self.parse_protobuf_schema()?)
+            Format::Protobuf(Box::new(self.parse_protobuf_schema()?))
         } else if self.parse_keyword(REGEX) {
             let regex = self.parse_literal_string()?;
             Format::Regex(regex)

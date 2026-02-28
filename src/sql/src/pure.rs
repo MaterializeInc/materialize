@@ -336,18 +336,20 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
     // all identifiers named in user-provided `DOC ON` options.
     let mut avro_format_options = vec![];
     for_each_format(format, |doc_on_schema, fmt| match fmt {
-        Format::Avro(AvroSchema::InlineSchema { .. })
-        | Format::Bytes
+        Format::Avro(schema) => match schema.as_mut() {
+            AvroSchema::Csr {
+                csr_connection: CsrConnectionAvro { connection, .. },
+            } => {
+                avro_format_options.push((doc_on_schema, &mut connection.options));
+            }
+            AvroSchema::InlineSchema { .. } => (),
+        },
+        Format::Bytes
         | Format::Csv { .. }
         | Format::Json { .. }
         | Format::Protobuf(..)
         | Format::Regex(..)
         | Format::Text => (),
-        Format::Avro(AvroSchema::Csr {
-            csr_connection: CsrConnectionAvro { connection, .. },
-        }) => {
-            avro_format_options.push((doc_on_schema, &mut connection.options));
-        }
     });
 
     // For each Avro format in the sink, inject the appropriate `DOC ON` options
@@ -615,21 +617,27 @@ async fn purify_create_sink(
 
     let mut csr_connection_ids = BTreeSet::new();
     for_each_format(format, |_, fmt| match fmt {
-        Format::Avro(AvroSchema::InlineSchema { .. })
-        | Format::Bytes
+        Format::Avro(schema) => match schema.as_ref() {
+            AvroSchema::Csr {
+                csr_connection: CsrConnectionAvro { connection, .. },
+            } => {
+                csr_connection_ids.insert(*connection.connection.item_id());
+            }
+            AvroSchema::InlineSchema { .. } => (),
+        },
+        Format::Protobuf(schema) => match schema.as_ref() {
+            ProtobufSchema::Csr {
+                csr_connection: CsrConnectionProtobuf { connection, .. },
+            } => {
+                csr_connection_ids.insert(*connection.connection.item_id());
+            }
+            ProtobufSchema::InlineSchema { .. } => (),
+        },
+        Format::Bytes
         | Format::Csv { .. }
         | Format::Json { .. }
-        | Format::Protobuf(ProtobufSchema::InlineSchema { .. })
         | Format::Regex(..)
         | Format::Text => (),
-        Format::Avro(AvroSchema::Csr {
-            csr_connection: CsrConnectionAvro { connection, .. },
-        })
-        | Format::Protobuf(ProtobufSchema::Csr {
-            csr_connection: CsrConnectionProtobuf { connection, .. },
-        }) => {
-            csr_connection_ids.insert(*connection.connection.item_id());
-        }
     });
 
     let scx = StatementContext::new(None, &catalog);
@@ -2255,7 +2263,7 @@ async fn purify_source_format_single(
     storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
     match format {
-        Format::Avro(schema) => match schema {
+        Format::Avro(schema) => match schema.as_mut() {
             AvroSchema::Csr { csr_connection } => {
                 purify_csr_connection_avro(
                     catalog,
@@ -2268,7 +2276,7 @@ async fn purify_source_format_single(
             }
             AvroSchema::InlineSchema { .. } => {}
         },
-        Format::Protobuf(schema) => match schema {
+        Format::Protobuf(schema) => match schema.as_mut() {
             ProtobufSchema::Csr { csr_connection } => {
                 purify_csr_connection_proto(
                     catalog,

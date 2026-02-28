@@ -2005,7 +2005,7 @@ FlatMap was the largest variant at 104 bytes, driving the enum size. Removing 16
 |------|----------|------------------|------------------|---------------|
 | PlanNode | 384 | 104 | 88 | 296 bytes (77%) |
 
-### Cumulative savings across all sessions (after session 26)
+### Cumulative savings across all sessions (after session 27)
 
 | Type | Original | After all sessions | Total savings |
 |------|----------|-------------------|---------------|
@@ -2035,3 +2035,46 @@ FlatMap was the largest variant at 104 bytes, driving the enum size. Removing 16
 | ReprRelationType | 48 | 40 | 8 bytes (17%) |
 | ColumnOrder | 16 | 8 | 8 bytes (50%) |
 | Op | 48 | 32 | 16 bytes (33%) |
+| Format\<Raw\> | 232 | 32 | 200 bytes (86%) |
+| Statement\<Raw\> | 832 | 584 | 248 bytes (30%) |
+
+---
+
+## Session 27: Box Format\<T\> Avro/Protobuf variants to shrink Statement\<Raw\>
+
+**Date**: 2026-02-28
+
+### Investigation
+
+Statement\<Raw\> was 832 bytes — the largest AST enum in the parser. Traced the root cause:
+- CreateSourceStatement (832 bytes) contained FormatSpecifier\<Raw\> (464 bytes)
+- FormatSpecifier contains 1-2 Format\<T\> values (232 bytes each)
+- Format\<Raw\> was 232 bytes, driven by AvroSchema\<Raw\> (232) and ProtobufSchema\<Raw\> (184)
+
+### Change
+
+Boxed the two large variants in `Format<T>`:
+- `Format::Avro(AvroSchema<T>)` → `Format::Avro(Box<AvroSchema<T>>)`
+- `Format::Protobuf(ProtobufSchema<T>)` → `Format::Protobuf(Box<ProtobufSchema<T>>)`
+
+Files changed:
+- `src/sql-parser/src/ast/defs/ddl.rs`: enum definition (2 fields boxed)
+- `src/sql-parser/src/parser.rs`: 2 construction sites wrapped with Box::new()
+- `src/sql/src/pure.rs`: 3 match sites refactored to two-step matches (match through `.as_ref()`/`.as_mut()`)
+- `src/sql/src/plan/statement/ddl.rs`: 3 match sites refactored similarly
+
+### Results
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| Format\<Raw\> | 232 | 32 | 200 bytes (86%) |
+| Statement\<Raw\> | 832 | 584 | 248 bytes (30%) |
+| CreateSourceStatement | 832 | ~440 | ~392 bytes (47%) |
+| CreateSinkStatement | 792 | 392 | 400 bytes (51%) |
+
+Statement\<Raw\> is now driven by CopyStatement (576) and CreateContinualTaskStatement (576).
+
+### Notes
+- The walkabout-generated fold/visit code already handles Box\<T\> variants automatically
+- Avro/Protobuf formats are only used in source/sink DDL, not hot query paths
+- The box allocation only happens at parse time for CREATE SOURCE/SINK statements

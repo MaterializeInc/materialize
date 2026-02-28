@@ -498,8 +498,8 @@ impl_display_t!(FormatSpecifier);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Format<T: AstInfo> {
     Bytes,
-    Avro(AvroSchema<T>),
-    Protobuf(ProtobufSchema<T>),
+    Avro(Box<AvroSchema<T>>),
+    Protobuf(Box<ProtobufSchema<T>>),
     Regex(String),
     Csv {
         columns: CsvColumns,
