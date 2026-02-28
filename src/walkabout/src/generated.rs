@@ -188,11 +188,15 @@ fn gen_fold_element(buf: &mut CodegenBuf, binding: &str, ty: &Type) {
             gen_fold_element(buf, "v", ty);
             buf.write(").collect()");
         }
-        Type::Box(ty) => {
-            buf.write("Box::new(");
-            gen_fold_element(buf, &format!("*{binding}"), ty);
-            buf.write(")");
-        }
+        Type::Box(ty) => match ty.as_ref() {
+            // Box<primitive> (e.g., Box<str>) passes through unchanged—nothing to fold.
+            Type::Primitive => buf.write(binding),
+            _ => {
+                buf.write("Box::new(");
+                gen_fold_element(buf, &format!("*{binding}"), ty);
+                buf.write(")");
+            }
+        },
         Type::Local(s) => {
             let fn_name = fold_fn_name(s);
             buf.write(format!("folder.{fn_name}({binding})"));
@@ -314,13 +318,17 @@ fn gen_visit_element(c: &VisitConfig, buf: &mut CodegenBuf, binding: &str, ty: &
                 gen_visit_element(c, buf, "v", ty)
             });
         }
-        Type::Box(ty) => {
-            let binding = match c.mutable {
-                true => format!("&mut *{binding}"),
-                false => format!("&*{binding}"),
-            };
-            gen_visit_element(c, buf, &binding, ty);
-        }
+        Type::Box(ty) => match ty.as_ref() {
+            // Box<primitive> (e.g., Box<str>) has nothing to visit.
+            Type::Primitive => (),
+            _ => {
+                let binding = match c.mutable {
+                    true => format!("&mut *{binding}"),
+                    false => format!("&*{binding}"),
+                };
+                gen_visit_element(c, buf, &binding, ty);
+            }
+        },
         Type::Local(s) => {
             let fn_name = visit_fn_name(c, s);
             buf.writeln(format!("visitor.{fn_name}({binding});"));

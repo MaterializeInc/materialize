@@ -158,7 +158,7 @@ impl AstDisplay for IntervalValue {
 
 impl From<Ident> for Value {
     fn from(ident: Ident) -> Self {
-        Self::String(ident.0)
+        Self::String(ident.0.into())
     }
 }
 

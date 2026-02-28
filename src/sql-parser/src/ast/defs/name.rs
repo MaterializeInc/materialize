@@ -39,7 +39,7 @@ use crate::ast::{AstInfo, QualifiedReplica};
     Serialize,
     Deserialize
 )]
-pub struct Ident(pub(crate) String);
+pub struct Ident(pub(crate) Box<str>);
 
 impl Ident {
     /// Maximum length of an identifier in Materialize.
@@ -82,7 +82,7 @@ impl Ident {
             return Err(IdentError::Invalid(s.into_inner()));
         }
 
-        Ok(Ident(s.into_inner()))
+        Ok(Ident(s.into_inner().into_boxed_str()))
     }
 
     /// Create a new [`Ident`] modifying the given value as necessary to meet our invariants.
@@ -105,11 +105,11 @@ impl Ident {
     pub fn new_lossy<S: Into<String>>(value: S) -> Self {
         let s: String = value.into();
         if s.len() <= Self::MAX_LENGTH {
-            return Ident(s);
+            return Ident(s.into_boxed_str());
         }
 
         let mut byte_length = 0;
-        let s_truncated = s
+        let s_truncated: String = s
             .chars()
             .take_while(|c| {
                 byte_length += c.len_utf8();
@@ -117,7 +117,7 @@ impl Ident {
             })
             .collect();
 
-        Ident(s_truncated)
+        Ident(s_truncated.into_boxed_str())
     }
 
     /// Create a new [`Ident`] _without checking any of our invariants_.
@@ -131,7 +131,7 @@ impl Ident {
         let s = value.into();
         mz_ore::soft_assert_no_log!(s.len() <= Self::MAX_LENGTH);
 
-        Ident(s)
+        Ident(s.into_boxed_str())
     }
 
     /// Generate a valid [`Ident`] with the provided `prefix` and `suffix`.
@@ -173,7 +173,7 @@ impl Ident {
         let suffix: String = suffix.into();
 
         // First just append the prefix and suffix.
-        let mut candidate = Ident(prefix.clone());
+        let mut candidate = Ident(prefix.clone().into_boxed_str());
         candidate.append_lossy(suffix.clone());
         if is_valid(&candidate)? {
             return Ok(candidate);
@@ -181,7 +181,7 @@ impl Ident {
 
         // Otherwise, append a number to the back.
         for i in 1..MAX_ATTEMPTS {
-            let mut candidate = Ident(prefix.clone());
+            let mut candidate = Ident(prefix.clone().into_boxed_str());
             candidate.append_lossy(format!("{suffix}_{i}"));
 
             if is_valid(&candidate)? {
@@ -266,22 +266,24 @@ impl Ident {
                 .collect();
         }
 
-        // Truncate ourselves as necessary.
+        // Build the result, truncating the stem as necessary.
         let available_length = Ident::MAX_LENGTH - suffix.len();
-        if self.0.len() > available_length {
+        let mut result = if self.0.len() > available_length {
             let mut byte_length = 0;
-            self.0 = self
-                .0
+            self.0
                 .chars()
                 .take_while(|c| {
                     byte_length += c.len_utf8();
                     byte_length <= available_length
                 })
-                .collect();
-        }
+                .collect::<String>()
+        } else {
+            String::from(&*self.0)
+        };
 
         // Append the suffix.
-        self.0.push_str(&suffix);
+        result.push_str(&suffix);
+        self.0 = result.into_boxed_str();
     }
 
     /// An identifier can be printed in bare mode if
@@ -309,7 +311,7 @@ impl Ident {
     }
 
     pub fn into_string(self) -> String {
-        self.0
+        self.0.into()
     }
 }
 
@@ -468,3 +470,14 @@ impl AstDisplay for UnresolvedObjectName {
     }
 }
 impl_display!(UnresolvedObjectName);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ident_size() {
+        assert_eq!(std::mem::size_of::<Ident>(), 16);
+        assert_eq!(std::mem::size_of::<UnresolvedDatabaseName>(), 16);
+    }
+}
