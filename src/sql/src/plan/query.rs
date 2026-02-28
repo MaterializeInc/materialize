@@ -697,7 +697,7 @@ pub fn plan_copy_from_rows(
     let typ = SqlRelationType::new(column_types);
     let expr = HirRelationExpr::Constant {
         rows,
-        typ: typ.clone(),
+        typ: Box::new(typ.clone()),
     };
 
     // Exit early with just the raw constant if we know that all columns are present
@@ -2178,7 +2178,7 @@ fn plan_values(
             width: ncols,
             types: col_types,
         },
-        exprs,
+        exprs: exprs.into_boxed_slice(),
     };
 
     // Build column names.
@@ -2257,7 +2257,7 @@ fn plan_values_insert(
             width: values[0].len(),
             types,
         },
-        exprs,
+        exprs: exprs.into_boxed_slice(),
     })
 }
 
@@ -3356,7 +3356,7 @@ fn plan_table_function_internal(
                             },
                         )?;
                     }
-                    HirRelationExpr::CallTable { func, exprs }
+                    HirRelationExpr::CallTable { func, exprs: exprs.into_boxed_slice() }
                 }
                 TableFuncImpl::Expr(expr) => {
                     if !with_ordinality {
@@ -3424,7 +3424,7 @@ fn plan_table_function_internal(
             (
                 HirRelationExpr::CallTable {
                     func,
-                    exprs: vec![expr],
+                    exprs: vec![expr].into_boxed_slice(),
                 },
                 scope,
             )
@@ -6648,7 +6648,7 @@ impl<'a> QueryContext<'a> {
                 };
                 let expr = HirRelationExpr::Get {
                     id: Id::Global(item.global_id()),
-                    typ: desc.typ().clone(),
+                    typ: Box::new(desc.typ().clone()),
                 };
 
                 let name = full_name.into();
@@ -6661,7 +6661,7 @@ impl<'a> QueryContext<'a> {
                 let cte = self.ctes.get(&id).unwrap();
                 let expr = HirRelationExpr::Get {
                     id: Id::Local(id),
-                    typ: cte.desc.typ().clone(),
+                    typ: Box::new(cte.desc.typ().clone()),
                 };
 
                 let scope = Scope::from_source(Some(name), cte.desc.iter_names());
@@ -6672,7 +6672,7 @@ impl<'a> QueryContext<'a> {
                 let cte = self.ctes.get(&id).unwrap();
                 let expr = HirRelationExpr::Get {
                     id: Id::Local(id),
-                    typ: cte.desc.typ().clone(),
+                    typ: Box::new(cte.desc.typ().clone()),
                 };
 
                 let scope = Scope::from_source(Some(name), cte.desc.iter_names());

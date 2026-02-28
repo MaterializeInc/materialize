@@ -885,7 +885,7 @@ impl SelectPlan {
         let arity = typ.arity();
         SelectPlan {
             select: None,
-            source: HirRelationExpr::Constant { rows, typ },
+            source: HirRelationExpr::Constant { rows, typ: Box::new(typ) },
             when: QueryWhen::Immediately,
             finishing: RowSetFinishing::trivial(arity),
             copy_to: None,

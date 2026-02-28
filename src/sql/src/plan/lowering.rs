@@ -197,7 +197,7 @@ impl HirRelationExpr {
                 let rows: Vec<_> = rows.into_iter().map(|row| (row, Diff::ONE)).collect();
                 MirRelationExpr::Constant {
                     rows: Ok(rows),
-                    typ: ReprRelationType::from(&typ),
+                    typ: ReprRelationType::from(&*typ),
                 }
             }
             mut other => {
@@ -263,7 +263,7 @@ impl HirRelationExpr {
                     // Constant expressions are not correlated with `get_outer`, and should be cross-products.
                     get_outer.product(SR::Constant {
                         rows: Ok(rows.into_iter().map(|row| (row, Diff::ONE)).collect()),
-                        typ: ReprRelationType::from(&typ),
+                        typ: ReprRelationType::from(&*typ),
                     })
                 }
                 Get { id, typ } => match id {
@@ -324,7 +324,7 @@ impl HirRelationExpr {
                         // Get statements are only to external sources, and are not correlated with `get_outer`.
                         get_outer.product(SR::Get {
                             id,
-                            typ: ReprRelationType::from(&typ),
+                            typ: ReprRelationType::from(&*typ),
                             access_strategy: AccessStrategy::UnknownOrLocal,
                         })
                     }

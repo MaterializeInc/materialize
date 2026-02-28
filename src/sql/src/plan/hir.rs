@@ -108,11 +108,13 @@ impl AlgExcept for Hir {
 pub enum HirRelationExpr {
     Constant {
         rows: Vec<Row>,
-        typ: SqlRelationType,
+        /// Boxed to reduce HirRelationExpr size.
+        typ: Box<SqlRelationType>,
     },
     Get {
         id: mz_expr::Id,
-        typ: SqlRelationType,
+        /// Boxed to reduce HirRelationExpr size.
+        typ: Box<SqlRelationType>,
     },
     /// Mutually recursive CTE
     LetRec {
@@ -143,7 +145,8 @@ pub enum HirRelationExpr {
     },
     CallTable {
         func: TableFunc,
-        exprs: Vec<HirScalarExpr>,
+        /// Box<[T]> to reduce HirRelationExpr size (exprs never grow after construction).
+        exprs: Box<[HirScalarExpr]>,
     },
     Filter {
         input: Box<HirRelationExpr>,
@@ -173,10 +176,10 @@ pub enum HirRelationExpr {
     TopK {
         /// The source collection.
         input: Box<HirRelationExpr>,
-        /// Column indices used to form groups.
-        group_key: Vec<usize>,
-        /// Column indices used to order rows within groups.
-        order_key: Vec<ColumnOrder>,
+        /// Column indices used to form groups (Box<[T]> to reduce HirRelationExpr size).
+        group_key: Box<[usize]>,
+        /// Column indices used to order rows within groups (Box<[T]> to reduce HirRelationExpr size).
+        order_key: Box<[ColumnOrder]>,
         /// Number of records to retain.
         /// It is of SqlScalarType::Int64.
         /// (UInt64 would make sense in theory: Then we wouldn't need to manually check
@@ -1620,8 +1623,8 @@ impl HirRelationExpr {
         params: &BTreeMap<usize, SqlScalarType>,
     ) -> SqlRelationType {
         stack::maybe_grow(|| match self {
-            HirRelationExpr::Constant { typ, .. } => typ.clone(),
-            HirRelationExpr::Get { typ, .. } => typ.clone(),
+            HirRelationExpr::Constant { typ, .. } => (**typ).clone(),
+            HirRelationExpr::Get { typ, .. } => (**typ).clone(),
             HirRelationExpr::Let { body, .. } => body.typ(outers, params),
             HirRelationExpr::LetRec { body, .. } => body.typ(outers, params),
             HirRelationExpr::Project { input, outputs } => {
@@ -1729,7 +1732,7 @@ impl HirRelationExpr {
     /// If self is a constant, return the value and the type, otherwise `None`.
     pub fn as_const(&self) -> Option<(&Vec<Row>, &SqlRelationType)> {
         match self {
-            Self::Constant { rows, typ } => Some((rows, typ)),
+            Self::Constant { rows, typ } => Some((rows, &**typ)),
             _ => None,
         }
     }
@@ -1830,8 +1833,8 @@ impl HirRelationExpr {
     ) -> Self {
         HirRelationExpr::TopK {
             input: Box::new(self),
-            group_key,
-            order_key,
+            group_key: group_key.into_boxed_slice(),
+            order_key: order_key.into_boxed_slice(),
             limit: limit.map(Box::new),
             offset: Box::new(offset),
             expected_group_size,
@@ -2296,7 +2299,7 @@ impl HirRelationExpr {
             .into_iter()
             .map(move |datums| Row::pack_slice(&datums))
             .collect();
-        HirRelationExpr::Constant { rows, typ }
+        HirRelationExpr::Constant { rows, typ: Box::new(typ) }
     }
 
     /// A `RowSetFinishing` can only be directly applied to the result of a one-shot select.
@@ -2319,7 +2322,7 @@ impl HirRelationExpr {
                     self,
                     HirRelationExpr::Constant {
                         rows: vec![],
-                        typ: SqlRelationType::new(Vec::new()),
+                        typ: Box::new(SqlRelationType::new(Vec::new())),
                     },
                 ),
                 vec![],
@@ -4029,6 +4032,6 @@ mod size_tests {
     #[mz_ore::test]
     fn type_size_assertions() {
         assert_eq!(size_of::<HirScalarExpr>(), 80);
-        assert_eq!(size_of::<HirRelationExpr>(), 88);
+        assert_eq!(size_of::<HirRelationExpr>(), 72);
     }
 }
