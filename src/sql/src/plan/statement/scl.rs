@@ -201,7 +201,7 @@ pub fn plan_declare(
 ) -> Result<Plan, PlanError> {
     Ok(Plan::Declare(DeclarePlan {
         name: name.to_string(),
-        stmt: *stmt,
+        stmt,
         sql,
         params: params.clone(),
     }))
@@ -291,7 +291,7 @@ pub fn plan_prepare(
     let desc = describe(scx.pcx()?, scx.catalog, stmt_resolved, &param_types)?;
     Ok(Plan::Prepare(PreparePlan {
         name: name.to_string(),
-        stmt: *stmt,
+        stmt,
         desc,
         sql,
     }))

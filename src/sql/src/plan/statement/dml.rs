@@ -175,14 +175,14 @@ pub fn plan_read_then_write(
         assignments_outer.insert(idx, set);
     }
 
-    Ok(Plan::ReadThenWrite(ReadThenWritePlan {
+    Ok(Plan::ReadThenWrite(Box::new(ReadThenWritePlan {
         id,
         selection,
         finishing,
         assignments: assignments_outer,
         kind,
         returning: Vec::new(),
-    }))
+    })))
 }
 
 pub fn describe_select(
@@ -711,7 +711,7 @@ fn plan_explainee(
                 sql_bail!("expected CreateViewPlan plan");
             };
 
-            crate::plan::Explainee::Statement(ExplaineeStatement::CreateView { broken, plan })
+            crate::plan::Explainee::Statement(ExplaineeStatement::CreateView { broken, plan: *plan })
         }
         Explainee::CreateMaterializedView(mut stmt, broken) => {
             if stmt.if_exists != IfExistsBehavior::Skip {
@@ -735,7 +735,7 @@ fn plan_explainee(
 
             crate::plan::Explainee::Statement(ExplaineeStatement::CreateMaterializedView {
                 broken,
-                plan,
+                plan: *plan,
             })
         }
         Explainee::CreateIndex(mut stmt, broken) => {
@@ -760,7 +760,7 @@ fn plan_explainee(
             let Plan::Subscribe(plan) = plan_subscribe(scx, *stmt, params, None)? else {
                 sql_bail!("expected SubscribePlan");
             };
-            crate::plan::Explainee::Statement(ExplaineeStatement::Subscribe { broken, plan })
+            crate::plan::Explainee::Statement(ExplaineeStatement::Subscribe { broken, plan: *plan })
         }
     };
 
@@ -795,12 +795,12 @@ pub fn plan_explain_plan(
 
     let explainee = plan_explainee(scx, explain.explainee, params)?;
 
-    Ok(Plan::ExplainPlan(ExplainPlanPlan {
+    Ok(Plan::ExplainPlan(Box::new(ExplainPlanPlan {
         stage,
         format,
         config,
         explainee,
-    }))
+    })))
 }
 
 pub fn plan_explain_schema(
@@ -829,7 +829,9 @@ pub fn plan_explain_schema(
     )?;
 
     match ddl::plan_create_sink(scx, statement)? {
-        Plan::CreateSink(CreateSinkPlan { sink, .. }) => match sink.connection {
+        Plan::CreateSink(plan) => {
+            let CreateSinkPlan { sink, .. } = *plan;
+            match sink.connection {
             StorageSinkConnection::Kafka(KafkaSinkConnection {
                 format:
                     KafkaSinkFormat {
@@ -861,7 +863,8 @@ pub fn plan_explain_schema(
             _ => bail_unsupported!(
                 "EXPLAIN SCHEMA is only available for Kafka sinks with Avro schemas"
             ),
-        },
+        }
+        }
         _ => unreachable!("plan_create_sink returns a CreateSinkPlan"),
     }
 }
@@ -873,7 +876,7 @@ pub fn plan_explain_pushdown(
 ) -> Result<Plan, PlanError> {
     scx.require_feature_flag(&vars::ENABLE_EXPLAIN_PUSHDOWN)?;
     let explainee = plan_explainee(scx, statement.explainee, params)?;
-    Ok(Plan::ExplainPushdown(ExplainPushdownPlan { explainee }))
+    Ok(Plan::ExplainPushdown(Box::new(ExplainPushdownPlan { explainee })))
 }
 
 pub fn plan_explain_analyze_object(
@@ -1783,7 +1786,7 @@ pub fn plan_subscribe(
     let SubscribeOptionExtracted {
         progress, snapshot, ..
     } = options.try_into()?;
-    Ok(Plan::Subscribe(SubscribePlan {
+    Ok(Plan::Subscribe(Box::new(SubscribePlan {
         from,
         when,
         up_to,
@@ -1791,7 +1794,7 @@ pub fn plan_subscribe(
         copy_to,
         emit_progress: progress.unwrap_or(false),
         output,
-    }))
+    })))
 }
 
 pub fn describe_copy_from_table(
@@ -1907,7 +1910,7 @@ fn plan_copy_to_expr(
         );
     }
 
-    Ok(Plan::CopyTo(CopyToPlan {
+    Ok(Plan::CopyTo(Box::new(CopyToPlan {
         select_plan,
         desc,
         to,
@@ -1915,7 +1918,7 @@ fn plan_copy_to_expr(
         connection_id: conn_id,
         format,
         max_file_size: options.max_file_size.as_bytes(),
-    }))
+    })))
 }
 
 fn plan_copy_from(
@@ -2027,7 +2030,7 @@ fn plan_copy_from(
         sql_bail!("[internal error] COPY FROM ... expects an MFP to be produced");
     };
 
-    Ok(Plan::CopyFrom(CopyFromPlan {
+    Ok(Plan::CopyFrom(Box::new(CopyFromPlan {
         target_id: id,
         target_name: table_name_string,
         source,
@@ -2036,7 +2039,7 @@ fn plan_copy_from(
         mfp,
         params,
         filter,
-    }))
+    })))
 }
 
 fn extract_byte_param_value(v: Option<String>, param_name: &str) -> Result<Option<u8>, PlanError> {

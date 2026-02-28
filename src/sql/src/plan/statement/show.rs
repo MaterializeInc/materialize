@@ -1046,11 +1046,11 @@ impl<'a> ShowColumnsSelect<'a> {
     pub fn plan(self) -> Result<Plan, PlanError> {
         let select_plan = self.show_select.plan()?;
         match select_plan {
-            Plan::Select(select_plan) => Ok(Plan::ShowColumns(ShowColumnsPlan {
+            Plan::Select(select_plan) => Ok(Plan::ShowColumns(Box::new(ShowColumnsPlan {
                 id: self.id,
                 select_plan,
                 new_resolved_ids: self.new_resolved_ids,
-            })),
+            }))),
             _ => {
                 tracing::error!(
                     "SHOW COLUMNS produced a non select plan. plan: {:?}",

@@ -189,6 +189,7 @@ impl Coordinator {
         let plan::Plan::CreateMaterializedView(plan) = plan else {
             unreachable!() // We are parsing the `create_sql` of a `MaterializedView` item.
         };
+        let plan = *plan;
 
         // It is safe to assume that query optimization will always succeed, so
         // for now we statically assume `broken = false`.

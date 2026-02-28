@@ -491,11 +491,11 @@ pub fn plan_create_table(
         compaction_window,
         data_source: TableDataSource::TableWrites { defaults },
     };
-    Ok(Plan::CreateTable(CreateTablePlan {
+    Ok(Plan::CreateTable(Box::new(CreateTablePlan {
         name,
         table,
         if_not_exists: *if_not_exists,
-    }))
+    })))
 }
 
 pub fn describe_create_table_from_source(
@@ -716,7 +716,7 @@ pub fn plan_create_webhook_source(
             desc: data_source,
             timeline,
         };
-        Plan::CreateTable(CreateTablePlan {
+        Plan::CreateTable(Box::new(CreateTablePlan {
             name,
             if_not_exists,
             table: Table {
@@ -726,7 +726,7 @@ pub fn plan_create_webhook_source(
                 compaction_window: None,
                 data_source,
             },
-        })
+        }))
     } else {
         let data_source = DataSourceDesc::Webhook {
             validate_using,
@@ -735,7 +735,7 @@ pub fn plan_create_webhook_source(
             // Important: The cluster is set at the `Source` level.
             cluster_id: None,
         };
-        Plan::CreateSource(CreateSourcePlan {
+        Plan::CreateSource(Box::new(CreateSourcePlan {
             name,
             source: Source {
                 create_sql,
@@ -746,7 +746,7 @@ pub fn plan_create_webhook_source(
             if_not_exists,
             timeline,
             in_cluster: Some(in_cluster.id()),
-        })
+        }))
     };
 
     Ok(plan)
@@ -1012,13 +1012,13 @@ pub fn plan_create_source(
         compaction_window,
     };
 
-    Ok(Plan::CreateSource(CreateSourcePlan {
+    Ok(Plan::CreateSource(Box::new(CreateSourcePlan {
         name,
         source,
         if_not_exists,
         timeline,
         in_cluster: Some(in_cluster.id()),
-    }))
+    })))
 }
 
 pub fn plan_generic_source_connection(
@@ -1720,13 +1720,13 @@ pub fn plan_create_subsource(
         compaction_window,
     };
 
-    Ok(Plan::CreateSource(CreateSourcePlan {
+    Ok(Plan::CreateSource(Box::new(CreateSourcePlan {
         name,
         source,
         if_not_exists,
         timeline: Timeline::EpochMilliseconds,
         in_cluster: None,
-    }))
+    })))
 }
 
 generate_extracted_config!(
@@ -1995,11 +1995,11 @@ pub fn plan_create_table_from_source(
         },
     };
 
-    Ok(Plan::CreateTable(CreateTablePlan {
+    Ok(Plan::CreateTable(Box::new(CreateTablePlan {
         name,
         table,
         if_not_exists,
-    }))
+    })))
 }
 
 generate_extracted_config!(
@@ -2699,14 +2699,14 @@ pub fn plan_create_view(
         });
     }
 
-    Ok(Plan::CreateView(CreateViewPlan {
+    Ok(Plan::CreateView(Box::new(CreateViewPlan {
         name,
         view,
         replace,
         drop_ids,
         if_not_exists: *if_exists == IfExistsBehavior::Skip,
         ambiguous_columns: *scx.ambiguous_columns.borrow(),
-    }))
+    })))
 }
 
 /// Validate the dependencies of a (materialized) view.
@@ -3073,7 +3073,7 @@ pub fn plan_create_materialized_view(
         });
     }
 
-    Ok(Plan::CreateMaterializedView(CreateMaterializedViewPlan {
+    Ok(Plan::CreateMaterializedView(Box::new(CreateMaterializedViewPlan {
         name,
         materialized_view: MaterializedView {
             create_sql,
@@ -3091,7 +3091,7 @@ pub fn plan_create_materialized_view(
         drop_ids,
         if_not_exists,
         ambiguous_columns: *scx.ambiguous_columns.borrow(),
-    }))
+    })))
 }
 
 generate_extracted_config!(
@@ -3319,7 +3319,7 @@ pub fn plan_create_continual_task(
     };
 
     let as_of = stmt.as_of.map(Timestamp::from);
-    Ok(Plan::CreateContinualTask(CreateContinualTaskPlan {
+    Ok(Plan::CreateContinualTask(Box::new(CreateContinualTaskPlan {
         name,
         placeholder_id,
         desc,
@@ -3337,7 +3337,7 @@ pub fn plan_create_continual_task(
             refresh_schedule: None,
             as_of,
         },
-    }))
+    })))
 }
 
 fn continual_task_query<'a>(
@@ -3691,7 +3691,7 @@ fn plan_sink(
     let in_cluster = source_sink_cluster_config(scx, &mut stmt.in_cluster)?;
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt))?;
 
-    Ok(Plan::CreateSink(CreateSinkPlan {
+    Ok(Plan::CreateSink(Box::new(CreateSinkPlan {
         name,
         sink: Sink {
             create_sql,
@@ -3704,7 +3704,7 @@ fn plan_sink(
         with_snapshot,
         if_not_exists,
         in_cluster: in_cluster.id(),
-    }))
+    })))
 }
 
 fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> PlanError {
@@ -5480,7 +5480,7 @@ pub fn plan_create_connection(
         },
         validate,
     };
-    Ok(Plan::CreateConnection(plan))
+    Ok(Plan::CreateConnection(Box::new(plan)))
 }
 
 fn plan_drop_database(
@@ -6445,12 +6445,12 @@ pub fn plan_alter_cluster(
             }
         }
     }
-    Ok(Plan::AlterCluster(AlterClusterPlan {
+    Ok(Plan::AlterCluster(Box::new(AlterClusterPlan {
         id: cluster.id(),
         name: cluster.name().to_string(),
         options,
         strategy: alter_strategy,
-    }))
+    })))
 }
 
 pub fn describe_alter_set_cluster(
@@ -7319,13 +7319,13 @@ pub fn plan_alter_sink(
 
             plan.sink.version += 1;
 
-            Ok(Plan::AlterSink(AlterSinkPlan {
+            Ok(Plan::AlterSink(Box::new(AlterSinkPlan {
                 item_id: item.id(),
                 global_id: item.global_id(),
                 sink: plan.sink,
                 with_snapshot: plan.with_snapshot,
                 in_cluster: plan.in_cluster,
-            }))
+            })))
         }
         AlterSinkAction::SetOptions(_) => bail_unsupported!("ALTER SINK SET options"),
         AlterSinkAction::ResetOptions(_) => bail_unsupported!("ALTER SINK RESET option"),

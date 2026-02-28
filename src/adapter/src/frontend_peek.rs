@@ -328,12 +328,25 @@ impl PeekClient {
                 // ShowColumns wraps a SelectPlan, extract it and proceed as normal.
                 (&show_columns_plan.select_plan, ExplainContext::None, None)
             }
-            Plan::ExplainPlan(plan::ExplainPlanPlan {
-                stage,
-                format,
-                config,
-                explainee: Explainee::Statement(ExplaineeStatement::Select { broken, plan, desc }),
-            }) => {
+            Plan::ExplainPlan(ep)
+                if matches!(
+                    ep.as_ref(),
+                    plan::ExplainPlanPlan {
+                        explainee: Explainee::Statement(ExplaineeStatement::Select { .. }),
+                        ..
+                    }
+                ) =>
+            {
+                let plan::ExplainPlanPlan {
+                    stage,
+                    format,
+                    config,
+                    explainee:
+                        Explainee::Statement(ExplaineeStatement::Select { broken, plan, desc }),
+                } = ep.as_ref()
+                else {
+                    unreachable!()
+                };
                 // Create OptimizerTrace to collect optimizer plans
                 let optimizer_trace = OptimizerTrace::new(stage.paths());
                 let explain_ctx = ExplainContext::Plan(ExplainPlanContext {
@@ -348,15 +361,16 @@ impl PeekClient {
                 (plan, explain_ctx, None)
             }
             // COPY TO S3
-            Plan::CopyTo(plan::CopyToPlan {
-                select_plan,
-                desc,
-                to,
-                connection,
-                connection_id,
-                format,
-                max_file_size,
-            }) => {
+            Plan::CopyTo(copy_to_plan) => {
+                let plan::CopyToPlan {
+                    select_plan,
+                    desc,
+                    to,
+                    connection,
+                    connection_id,
+                    format,
+                    max_file_size,
+                } = copy_to_plan.as_ref();
                 let uri = eval_copy_to_uri(to.clone(), session, catalog.state())?;
 
                 // (output_batch_count will be set later)
@@ -372,7 +386,8 @@ impl PeekClient {
 
                 (select_plan, ExplainContext::None, Some(copy_to_ctx))
             }
-            Plan::ExplainPushdown(plan::ExplainPushdownPlan { explainee }) => {
+            Plan::ExplainPushdown(ep_plan) => {
+                let plan::ExplainPushdownPlan { explainee } = ep_plan.as_ref();
                 // Only handle EXPLAIN FILTER PUSHDOWN for SELECT statements
                 match explainee {
                     plan::Explainee::Statement(plan::ExplaineeStatement::Select {

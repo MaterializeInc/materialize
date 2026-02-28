@@ -952,10 +952,17 @@ pub(crate) fn waiting_on_startup_appends(
         Plan::ReadThenWrite(plan) => plan.selection.depends_on(),
         Plan::ShowColumns(plan) => plan.select_plan.source.depends_on(),
         Plan::Subscribe(plan) => plan.from.depends_on(),
-        Plan::ExplainPlan(ExplainPlanPlan {
-            explainee: Explainee::Statement(ExplaineeStatement::Select { plan, .. }),
-            ..
-        }) => plan.source.depends_on(),
+        Plan::ExplainPlan(ep) => {
+            if let ExplainPlanPlan {
+                explainee: Explainee::Statement(ExplaineeStatement::Select { plan, .. }),
+                ..
+            } = ep.as_ref()
+            {
+                plan.source.depends_on()
+            } else {
+                BTreeSet::default()
+            }
+        }
         Plan::ExplainTimestamp(ExplainTimestampPlan { raw_plan, .. }) => raw_plan.depends_on(),
         Plan::CreateConnection(_)
         | Plan::CreateDatabase(_)
@@ -992,7 +999,6 @@ pub(crate) fn waiting_on_startup_appends(
         | Plan::AbortTransaction(_)
         | Plan::CopyFrom(_)
         | Plan::CopyTo(_)
-        | Plan::ExplainPlan(_)
         | Plan::ExplainPushdown(_)
         | Plan::ExplainSinkSchema(_)
         | Plan::Insert(_)
