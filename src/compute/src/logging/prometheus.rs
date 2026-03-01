@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use mz_compute_types::dyncfgs::PROMETHEUS_SCRAPE_INTERVAL;
 use mz_dyncfg::ConfigSet;
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::{Datum, Diff, Timestamp};
@@ -65,6 +65,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
     }
 
     let worker_id = scope.index();
+    let enable = scope.index() % scope.peers() == 0;
 
     // Build a source operator that periodically gathers Prometheus metrics.
     let mut builder = OperatorBuilder::new("PrometheusMetrics".to_string(), scope.clone());
@@ -74,13 +75,18 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
 
     let operator_info = builder.operator_info();
     builder.build(move |capabilities| {
-        let mut cap = capabilities.into_element();
+        // Metrics are per-process, so only one worker per process needs to
+        // scrape. Drop the capability for disabled workers so the frontier
+        // can advance without this operator holding it back.
+        let mut cap = enable.then_some(capabilities.into_element());
         let activator = scope.activator_for(operator_info.address);
 
         let mut prev_snapshot: BTreeMap<SnapshotKey, SnapshotValue> = BTreeMap::new();
         let mut next_scrape = Instant::now();
 
         move |_frontiers| {
+            let Some(cap) = &mut cap else { return };
+
             let elapsed = now.elapsed();
             let elapsed_ms = elapsed.as_millis();
             let time_ms: u128 =
@@ -89,7 +95,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
 
             // Downgrade capability to the current timestamp.
             cap.downgrade(&ts);
-            if Instant::now() > next_scrape {
+            if Instant::now() < next_scrape {
                 return;
             }
             let scrape_interval = PROMETHEUS_SCRAPE_INTERVAL.get(&worker_config);
@@ -238,7 +244,7 @@ fn flatten_metrics(
                             &mut snapshot,
                             &format!("{base_name}_bucket"),
                             &labels,
-                            bucket.cumulative_count() as f64,
+                            f64::cast_lossy(bucket.cumulative_count()),
                             type_str,
                             help,
                         );
@@ -259,7 +265,7 @@ fn flatten_metrics(
                         &mut snapshot,
                         &format!("{base_name}_count"),
                         &base_labels,
-                        histogram.get_sample_count() as f64,
+                        f64::cast_lossy(histogram.get_sample_count()),
                         type_str,
                         help,
                     );
@@ -298,7 +304,7 @@ fn flatten_metrics(
                         &mut snapshot,
                         &format!("{base_name}_count"),
                         &base_labels,
-                        summary.sample_count() as f64,
+                        f64::cast_lossy(summary.sample_count()),
                         type_str,
                         help,
                     );
