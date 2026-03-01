@@ -2292,3 +2292,216 @@ All aggregation query types work correctly with no regression (5000 rows, 3 tria
 - `src/compute-types/src/plan/reduce.rs` — 8 Vec→Box<[T]> field type changes, `.into_boxed_slice()` at 5 construction sites
 - `src/compute/src/render/reduce.rs` — `&Vec<AggregateFunc>` → `&[AggregateFunc]` parameter, `.to_vec()` at 2 call sites, `.into_vec()` at 1 match site
 - `src/compute-types/src/plan.rs` — Size assertions for AccumulablePlan (48), MonotonicPlan (24), BucketedPlan (32), HierarchicalPlan (32), CollationPlan (216)
+
+## Session 31: Shrink SetExpr\<Raw\> from 160 to 64 bytes via boxing ShowStatement
+
+**Date:** 2026-03-01
+
+### Changes
+
+Box `ShowStatement<T>` in the `SetExpr::Show` variant:
+
+- **`SetExpr::Show(ShowStatement<T>)` → `Show(Box<ShowStatement<T>>)`**
+  - `ShowStatement<Raw>` is 160 bytes (a 13-variant enum containing `ShowObjectsStatement` with its large `ShowObjectType` sub-enum)
+  - This was the largest `SetExpr` variant, inflating the enum from 64 to 160 bytes
+  - SHOW statements are relatively rare compared to SELECT/VALUES/SET operations
+  - Boxing has negligible cost since SHOW is not on the hot SELECT path
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| SetExpr\<Raw\> | 160 | 64 | 96 bytes (60%) |
+| Query\<Raw\> | 336 | 240 | 96 bytes (29%) |
+| Statement\<Raw\> | 584 | 488 | 96 bytes (16%) |
+
+### Why SetExpr\<Raw\> shrank to 64 bytes
+
+Before: `Show(ShowStatement<T>)` at 160 bytes dwarfed all other variants.
+
+After: The largest remaining variant is `SetOperation` with 4 fields:
+- `op: SetOperator` (1 byte) + `all: bool` (1 byte) + `left: Box<SetExpr<T>>` (8 bytes) + `right: Box<SetExpr<T>>` (8 bytes) ≈ 56 bytes with alignment
+
+With discriminant and alignment, the enum settles at 64 bytes.
+
+### Cascading effects
+
+- **Query\<Raw\>** embeds `SetExpr<Raw>` inline (in the `body` field), so it shrinks by 96 bytes (336→240)
+- **Statement\<Raw\>** embeds `Query<Raw>` in several variants (SelectStatement, InsertStatement, etc.), cascading the savings further (584→488)
+- Every SQL query parsed allocates 96 fewer bytes for its `SetExpr` node
+- `Query<Raw>` is stored in CTEs, subqueries, and INSERT/CREATE AS statements — all benefit
+
+### Benchmark results
+
+All query types work correctly with no regression (200 iterations, 3 trials averaged):
+
+| Query Type | Avg Time (200 iter) | Notes |
+|-----------|---------------------|-------|
+| SHOW TABLES | ~308ms | Exercises boxed ShowStatement path |
+| SHOW COLUMNS FROM bench_data | ~274ms | Exercises boxed ShowStatement path |
+| Simple SELECT | ~1832ms | Confirms no regression on hot path |
+| JOIN | ~2387ms | Exercises Query\<Raw\> parsing |
+| Complex expressions | ~2136ms | Exercises Statement\<Raw\> parsing |
+
+### Tests
+
+All tests pass:
+- `mz-sql-parser` lib tests: all passed (including `ast_expr_sizes`: SetExpr=64, Query=240, Statement=488)
+- `mz-sql-parser` integration tests: 5/5 passed
+- `mz-sql-parser` doc tests: 13/13 passed
+- `mz-sql` lib tests: all passed (Plan=176, SelectPlan=168)
+- Full compilation: `mz-sql-parser`, `mz-sql`, `mz-adapter` all compile cleanly
+
+### Files changed (3 files)
+
+- `src/sql-parser/src/ast/defs/query.rs` — `Show(ShowStatement<T>)` → `Show(Box<ShowStatement<T>>)`
+- `src/sql-parser/src/parser.rs` — `Box::new(self.parse_show()?)` at construction site
+- `src/sql/src/plan/query.rs` — `*stmt.clone()` to dereference boxed ShowStatement at match site
+- `src/sql-parser/src/ast/defs/expr.rs` — Size assertions for SetExpr\<Raw\> (64), Query\<Raw\> (240), Statement\<Raw\> (488)
+
+### Cumulative savings across all sessions (after session 31)
+
+| Type | Original | After all sessions | Total savings |
+|------|----------|-------------------|---------------|
+| Expr\<Raw\> | 240 | 48 | 192 bytes (80%) |
+| SetExpr\<Raw\> | 160 | 64 | 96 bytes (60%) |
+| Query\<Raw\> | 336 | 240 | 96 bytes (29%) |
+| Value | 48 | 40 | 8 bytes (17%) |
+| PlanNode | 384 | 88 | 296 bytes (77%) |
+| Plan (compute LIR) | 392 | 96 | 296 bytes (76%) |
+| TopKPlan | 136 | 112 | 24 bytes (18%) |
+| Ident | 24 | 16 | 8 bytes (33%) |
+| Plan (sql) | ~1888 | 176 | ~1712 bytes (91%) |
+| SelectPlan | 184 | 168 | 16 bytes (9%) |
+| RowSetFinishing | 72 | 56 | 16 bytes (22%) |
+| MirScalarExpr | 88 | 48 | 40 bytes (45%) |
+| MirRelationExpr | 176 | 88 | 88 bytes (50%) |
+| HirScalarExpr | 192 | 80 | 112 bytes (58%) |
+| HirRelationExpr | 456 | 72 | 384 bytes (84%) |
+| AggregateFunc | 88 | 48 | 40 bytes (45%) |
+| AggregateExpr | 184 | 104 | 80 bytes (43%) |
+| UnaryFunc | 72 | 32 | 40 bytes (56%) |
+| BinaryFunc | 48 | 24 | 24 bytes (50%) |
+| VariadicFunc | 40 | 24 | 16 bytes (40%) |
+| TableFunc | 80 | 40 | 40 bytes (50%) |
+| EvalError | 56 | 40 | 16 bytes (29%) |
+| JoinImplementation | 120 | 64 | 56 bytes (47%) |
+| SqlScalarType | 32 | 24 | 8 bytes (25%) |
+| SqlColumnType | 40 | 32 | 8 bytes (20%) |
+| Matcher | 72 | 64 | 8 bytes (11%) |
+| ReprRelationType | 48 | 40 | 8 bytes (17%) |
+| ColumnOrder | 16 | 8 | 8 bytes (50%) |
+| Op | 48 | 32 | 16 bytes (33%) |
+| Format\<Raw\> | 232 | 32 | 200 bytes (86%) |
+| Statement\<Raw\> | 832 | 488 | 344 bytes (41%) |
+
+## Session 32: Shrink SafeMfpPlan from 80 to 56 bytes via Vec→Box<[T]>
+
+**Date:** 2026-03-01
+
+### Changes
+
+Refactored `SafeMfpPlan` from a newtype wrapper around `MapFilterProject` (which uses `Vec<T>` fields) to its own struct with `Box<[T]>` fields, saving 24 bytes (3 × 8 bytes for eliminated Vec capacity words).
+
+**Before:** `SafeMfpPlan` was `struct SafeMfpPlan { mfp: MapFilterProject }` with a `Deref` impl, inheriting `MapFilterProject`'s 80-byte size (3 `Vec<T>` fields × 24 bytes + 8 byte `input_arity`).
+
+**After:** `SafeMfpPlan` has its own fields:
+- `expressions: Box<[MirScalarExpr]>` (16 bytes, was `Vec<MirScalarExpr>` at 24)
+- `predicates: Box<[(usize, MirScalarExpr)]>` (16 bytes, was `Vec<(usize, MirScalarExpr)>` at 24)
+- `projection: Box<[usize]>` (16 bytes, was `Vec<usize>` at 24)
+- `input_arity: usize` (8 bytes)
+- Total: 56 bytes (was 80)
+
+This is appropriate because `SafeMfpPlan` is a *frozen* plan — once constructed from `MapFilterProject::into_plan()`, its fields are never mutated (only read during evaluation). The `Deref` impl was removed; methods that previously delegated to `MapFilterProject` were reimplemented directly on `SafeMfpPlan` (e.g., `is_identity`, `could_error`, `demand`, `as_map_filter_project`). For the rare `permute_fn` mutation, the plan temporarily converts to `MapFilterProject`, mutates, and converts back (O(1) via `into_vec()`/`into_boxed_slice()`).
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| SafeMfpPlan | 80 | 56 | 24 bytes (30%) |
+| KeyValPlan | 160 | 112 | 48 bytes (30%) |
+| JoinClosure | 96 | 72 | 24 bytes (25%) |
+| LinearStagePlan | 152 | 128 | 24 bytes (16%) |
+| LinearJoinPlan | 232 | 184 | 48 bytes (21%) |
+| DeltaStagePlan | 152 | 128 | 24 bytes (16%) |
+| DeltaPathPlan | 232 | 184 | 48 bytes (21%) |
+| JoinPlan | 232 | 184 | 48 bytes (21%) |
+
+### Cascading effects
+
+`SafeMfpPlan` is embedded in many compute LIR plan types:
+- **KeyValPlan** contains 2 `SafeMfpPlan`s (key_plan + val_plan), saving 48 bytes per reduce arrangement
+- **JoinClosure** contains 1 `SafeMfpPlan` (before), saving 24 bytes per join closure
+- **LinearStagePlan/DeltaStagePlan** contain `JoinClosure`, cascading 24 bytes
+- **LinearJoinPlan/DeltaPathPlan** contain a `SafeMfpPlan` (closure) + stages with `JoinClosure`, saving 48 bytes total
+- Every query plan with joins, reduces, or arrangements benefits
+
+### Benchmark results
+
+All query types work correctly with no regression (200 iterations, 3 trials averaged):
+
+| Query Type | Trial 1 | Trial 2 | Trial 3 | Notes |
+|-----------|---------|---------|---------|-------|
+| Filter+Project | 5490ms | 5392ms | 5617ms | Exercises SafeMfpPlan predicates+projection |
+| Map+Filter+Project | 5636ms | 5624ms | 5827ms | Full MFP with map expressions |
+| Join+closure | 5924ms | 5900ms | 6094ms | Exercises JoinClosure with SafeMfpPlan |
+| Aggregate+KeyValPlan | 5632ms | 5677ms | 5886ms | Exercises KeyValPlan with 2 SafeMfpPlans |
+| Complex multi-MFP | 5634ms | 5830ms | 5978ms | Subquery with filter+aggregate+filter |
+
+### Tests
+
+All tests pass:
+- `mz-compute-types` size assertions: SafeMfpPlan=56, KeyValPlan=112, JoinClosure=72, etc.
+- `mz-expr` and `mz-compute-types` lib tests all pass
+- Full compilation clean for mz-expr, mz-compute-types, mz-adapter, mz-storage-operators
+
+### Files changed (6 files)
+
+- `src/expr/src/linear.rs` — `SafeMfpPlan` struct refactored: own Box<[T]> fields, removed Deref, added `from_mfp()`, `to_mfp()`, `is_identity()`, `could_error()`, `demand()`, `as_map_filter_project()` methods
+- `src/expr/src/explain/text.rs` — Added `DisplayText` impl for `HumanizedExpr<SafeMfpPlan>` (previously inherited via Deref to MapFilterProject)
+- `src/compute-types/src/explain/text.rs` — Replaced `.deref()` calls with direct field access (`&key_val_plan.key_plan` instead of `key_val_plan.key_plan.deref()`)
+- `src/compute-types/src/plan.rs` — Updated size assertions for SafeMfpPlan (56), KeyValPlan (112), JoinClosure (72), and all join plan types
+- `src/adapter/src/coord/peek.rs` — Replaced `mfp.deref()` with `mfp` (direct reference, Deref no longer needed)
+- `src/storage-operators/src/stats.rs` — Use `mfp_plan.to_mfp()` since `may_match_mfp` takes `&MapFilterProject`
+
+### Cumulative savings across all sessions (after session 32)
+
+| Type | Original | After all sessions | Total savings |
+|------|----------|-------------------|---------------|
+| Expr\<Raw\> | 240 | 48 | 192 bytes (80%) |
+| SetExpr\<Raw\> | 160 | 64 | 96 bytes (60%) |
+| Query\<Raw\> | 336 | 240 | 96 bytes (29%) |
+| Value | 48 | 40 | 8 bytes (17%) |
+| PlanNode | 384 | 88 | 296 bytes (77%) |
+| Plan (compute LIR) | 392 | 96 | 296 bytes (76%) |
+| TopKPlan | 136 | 112 | 24 bytes (18%) |
+| Ident | 24 | 16 | 8 bytes (33%) |
+| Plan (sql) | ~1888 | 176 | ~1712 bytes (91%) |
+| SelectPlan | 184 | 168 | 16 bytes (9%) |
+| RowSetFinishing | 72 | 56 | 16 bytes (22%) |
+| MirScalarExpr | 88 | 48 | 40 bytes (45%) |
+| MirRelationExpr | 176 | 88 | 88 bytes (50%) |
+| HirScalarExpr | 192 | 80 | 112 bytes (58%) |
+| HirRelationExpr | 456 | 72 | 384 bytes (84%) |
+| AggregateFunc | 88 | 48 | 40 bytes (45%) |
+| AggregateExpr | 184 | 104 | 80 bytes (43%) |
+| UnaryFunc | 72 | 32 | 40 bytes (56%) |
+| BinaryFunc | 48 | 24 | 24 bytes (50%) |
+| VariadicFunc | 40 | 24 | 16 bytes (40%) |
+| TableFunc | 80 | 40 | 40 bytes (50%) |
+| EvalError | 56 | 40 | 16 bytes (29%) |
+| JoinImplementation | 120 | 64 | 56 bytes (47%) |
+| SqlScalarType | 32 | 24 | 8 bytes (25%) |
+| SqlColumnType | 40 | 32 | 8 bytes (20%) |
+| Matcher | 72 | 64 | 8 bytes (11%) |
+| ReprRelationType | 48 | 40 | 8 bytes (17%) |
+| ColumnOrder | 16 | 8 | 8 bytes (50%) |
+| Op | 48 | 32 | 16 bytes (33%) |
+| Format\<Raw\> | 232 | 32 | 200 bytes (86%) |
+| Statement\<Raw\> | 832 | 488 | 344 bytes (41%) |
+| SafeMfpPlan | 80 | 56 | 24 bytes (30%) |
+| KeyValPlan | 160 | 112 | 48 bytes (30%) |
+| JoinClosure | 96 | 72 | 24 bytes (25%) |
+| LinearJoinPlan | 232 | 184 | 48 bytes (21%) |
+| DeltaPathPlan | 232 | 184 | 48 bytes (21%) |
+| JoinPlan | 232 | 184 | 48 bytes (21%) |

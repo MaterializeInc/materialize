@@ -981,6 +981,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<Query<Raw>>(), 240);
         // Statement cascades: 584→488 (-96)
         assert_eq!(std::mem::size_of::<crate::ast::Statement<Raw>>(), 488);
+
     }
 
 }
