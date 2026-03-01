@@ -152,7 +152,7 @@ impl PeekNotification {
         match peek_response {
             PeekResponse::Rows(rows) => {
                 let num_rows = u64::cast_from(RowCollection::offset_limit(
-                    rows.iter().map(|r| r.count()).sum(),
+                    rows.iter().map(|r| r.count().unwrap_or(0)).sum(),
                     offset,
                     limit,
                 ));

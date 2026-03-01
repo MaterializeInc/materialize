@@ -910,6 +910,18 @@ pub enum SubscribeOutput {
     },
 }
 
+impl SubscribeOutput {
+    pub fn row_order(&self) -> &[ColumnOrder] {
+        match self {
+            SubscribeOutput::Diffs => &[],
+            // This ordering prepends the diff, so its `order_by` field cannot be applied to rows.
+            SubscribeOutput::WithinTimestampOrderBy { .. } => &[],
+            SubscribeOutput::EnvelopeUpsert { order_by_keys } => order_by_keys,
+            SubscribeOutput::EnvelopeDebezium { order_by_keys } => order_by_keys,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SubscribePlan {
     pub from: SubscribeFrom,
@@ -1915,8 +1927,6 @@ pub enum QueryWhen {
     FreshestTableWrite,
     /// The peek should occur at the timestamp described by the specified
     /// expression.
-    ///
-    /// The expression may have any type.
     AtTimestamp(Timestamp),
     /// Same as Immediately, but will also advance to at least the specified
     /// expression.

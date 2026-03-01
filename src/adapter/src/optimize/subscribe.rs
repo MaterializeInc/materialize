@@ -21,7 +21,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
-use mz_sql::plan::SubscribeFrom;
+use mz_sql::plan::{SubscribeFrom, SubscribePlan};
 use mz_transform::TransformCtx;
 use mz_transform::dataflow::{DataflowMetainfo, optimize_dataflow_snapshot};
 use mz_transform::normalize_lets::normalize_lets;
@@ -183,10 +183,12 @@ pub struct Unresolved;
 #[derive(Clone, Debug)]
 pub struct Resolved;
 
-impl Optimize<SubscribeFrom> for Optimizer {
+impl Optimize<SubscribePlan> for Optimizer {
     type To = GlobalMirPlan<Unresolved>;
 
-    fn optimize(&mut self, plan: SubscribeFrom) -> Result<Self::To, OptimizerError> {
+    fn optimize(&mut self, plan: SubscribePlan) -> Result<Self::To, OptimizerError> {
+        let output = plan.output;
+        let plan = plan.from;
         let time = Instant::now();
 
         let mut df_builder = {
@@ -208,11 +210,12 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
                 // Make SinkDesc
-                let subscribe_conn = SubscribeSinkConnection::default();
                 let sink_description = ComputeSinkDesc {
                     from: from_id,
                     from_desc,
-                    connection: ComputeSinkConnection::Subscribe(subscribe_conn),
+                    connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection {
+                        output: output.row_order().to_vec(),
+                    }),
                     with_snapshot: self.with_snapshot,
                     up_to: self.up_to.map(Antichain::from_elem).unwrap_or_default(),
                     // No `FORCE NOT NULL` for subscribes
@@ -249,11 +252,12 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
                 // Make SinkDesc
-                let subscribe_conn = SubscribeSinkConnection::default();
                 let sink_description = ComputeSinkDesc {
                     from: self.view_id,
                     from_desc: desc.clone(),
-                    connection: ComputeSinkConnection::Subscribe(subscribe_conn),
+                    connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection {
+                        output: output.row_order().to_vec(),
+                    }),
                     with_snapshot: self.with_snapshot,
                     up_to: self.up_to.map(Antichain::from_elem).unwrap_or_default(),
                     // No `FORCE NOT NULL` for subscribes

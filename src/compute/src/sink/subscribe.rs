@@ -16,7 +16,9 @@ use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeResponse};
 use mz_compute_types::sinks::{ComputeSinkDesc, SubscribeSinkConnection};
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_expr::{ColumnOrder, compare_columns};
+use mz_ore::iter;
+use mz_repr::{Diff, GlobalId, Row, Timestamp, UpdateCollection};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::probe::{Handle, ProbeNotify};
@@ -54,6 +56,7 @@ where
             sink_as_of: as_of.clone(),
             subscribe_response_buffer: Some(Rc::clone(&compute_state.subscribe_response_buffer)),
             prev_upper: Antichain::from_elem(Timestamp::minimum()),
+            output: self.output.clone(),
             poison: None,
         })));
         let subscribe_protocol_weak = Rc::downgrade(&subscribe_protocol_handle);
@@ -177,6 +180,7 @@ struct SubscribeProtocol {
     pub sink_as_of: Antichain<Timestamp>,
     pub subscribe_response_buffer: Option<Rc<RefCell<Vec<(GlobalId, SubscribeResponse)>>>>,
     pub prev_upper: Antichain<Timestamp>,
+    pub output: Vec<ColumnOrder>,
     /// The error poisoning this subscribe, if any.
     ///
     /// As soon as a subscribe has encountered an error, it is poisoned: It will only return the
@@ -212,12 +216,32 @@ impl SubscribeProtocol {
         }
 
         // The compute protocol requires us to only send out consolidated batches.
-        consolidate_updates(rows);
+        let order = self.output.as_slice();
+        let mut left_datum_vec = mz_repr::DatumVec::new();
+        let mut right_datum_vec = mz_repr::DatumVec::new();
+        rows.sort_by(|(t0, r0, _), (t1, r1, _)| {
+            // NB: sort in reverse, so it's cheaper to peek off the tail.
+            t0.cmp(t1)
+                .then_with(|| {
+                    let dv0 = left_datum_vec.borrow_with(r0.as_row_ref());
+                    let dv1 = right_datum_vec.borrow_with(r1.as_row_ref());
+                    compare_columns(order, &dv0, &dv1, || r0.cmp(r1))
+                })
+                .reverse()
+        });
         consolidate_updates(errors);
 
-        let (keep_rows, ship_rows) = rows.drain(..).partition(|u| upper.less_equal(&u.0));
+        let ship_rows = {
+            let split_at = rows.partition_point(|(t, _, _)| upper.less_equal(t));
+            let ship_updates = rows[split_at..]
+                .iter()
+                .rev()
+                .map(|(t, r, d)| (r.as_row_ref(), t, *d));
+            let ship_rows: UpdateCollection = iter::consolidate_update_iter(ship_updates).collect();
+            rows.truncate(split_at);
+            ship_rows
+        };
         let (keep_errors, ship_errors) = errors.drain(..).partition(|u| upper.less_equal(&u.0));
-        *rows = keep_rows;
         *errors = keep_errors;
 
         let updates = match (&self.poison, ship_errors.first()) {
@@ -233,7 +257,7 @@ impl SubscribeProtocol {
             }
             (None, None) => {
                 // No error encountered so for; ship the rows we have!
-                Ok(ship_rows)
+                Ok(vec![ship_rows])
             }
         };
 

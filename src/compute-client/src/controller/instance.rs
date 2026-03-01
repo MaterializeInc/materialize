@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
+use std::mem;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -36,7 +37,7 @@ use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_persist_types::PersistLocation;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, WallclockLag, WallclockLagHistogramPeriod};
 use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
@@ -1608,6 +1609,7 @@ where
         let peek = Peek {
             literal_constraints,
             uuid,
+            until: TimestampManipulation::try_step_forward(&timestamp),
             timestamp,
             finishing,
             map_filter_project,
@@ -2067,7 +2069,15 @@ where
                     }
 
                     if let Ok(updates) = updates.as_mut() {
-                        updates.retain(|(time, _data, _diff)| lower.less_equal(time));
+                        for updates in updates {
+                            let offset = updates.times().partition_point(|t| {
+                                // True for times that are strictly less than lower (and should be skipped)
+                                // and false otherwise.
+                                !lower.less_equal(t)
+                            });
+                            let (_, past_lower) = mem::take(updates).split_at(offset);
+                            *updates = past_lower;
+                        }
                     }
                     self.deliver_response(ComputeControllerResponse::SubscribeResponse(
                         subscribe_id,

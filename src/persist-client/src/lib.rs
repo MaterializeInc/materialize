@@ -39,7 +39,7 @@ use crate::cache::{PersistClientCache, StateCache};
 use crate::cfg::PersistConfig;
 use crate::critical::{CriticalReaderId, SinceHandle};
 use crate::error::InvalidUsage;
-use crate::fetch::{BatchFetcher, BatchFetcherConfig};
+use crate::fetch::{BatchFetcher, BatchFetcherConfig, FetchBatchFilter};
 use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::parse_id;
 use crate::internal::gc::GarbageCollector;
@@ -656,7 +656,7 @@ impl PersistClient {
             self.metrics.read.snapshot.clone(),
             Arc::clone(&self.blob),
             shard_id,
-            as_of,
+            FetchBatchFilter::Compaction { since: as_of },
             read_schemas,
             &hollow_batches,
             batches,

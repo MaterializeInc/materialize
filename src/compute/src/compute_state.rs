@@ -33,10 +33,10 @@ use mz_compute_types::dyncfgs::{
 };
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigSet;
-use mz_expr::SafeMfpPlan;
-use mz_expr::row::RowCollection;
+use mz_expr::{SafeMfpPlan, compare_columns};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::iter::consolidate_update_iter;
 use mz_ore::metrics::UIntGauge;
 use mz_ore::now::EpochMillis;
 use mz_ore::soft_panic_or_log;
@@ -49,7 +49,7 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_types::PersistLocation;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::fixed_length::ToDatumIter;
-use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
+use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp, UpdateCollection};
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
@@ -61,7 +61,7 @@ use mz_txn_wal::txn_cache::TxnsCache;
 use timely::communication::Allocate;
 use timely::dataflow::operators::probe;
 use timely::order::PartialOrder;
-use timely::progress::frontier::Antichain;
+use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::scheduling::Scheduler;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{oneshot, watch};
@@ -1162,7 +1162,7 @@ impl PendingPeek {
             .limit
             .map(|l| usize::cast_from(u64::from(l)))
             .unwrap_or(usize::MAX)
-            + peek.finishing.offset;
+            .saturating_add(peek.finishing.offset);
         let order_by = peek.finishing.order_by.clone();
 
         // Persist peeks can include at most one literal constraint.
@@ -1188,7 +1188,21 @@ impl PendingPeek {
                 Ok(vec![])
             };
             let result = match result {
-                Ok(rows) => PeekResponse::Rows(vec![RowCollection::new(rows, &order_by)]),
+                Ok(mut rows) => {
+                    let mut v0 = DatumVec::new();
+                    let mut v1 = DatumVec::new();
+                    rows.sort_by(|(r0, t0, _), (r1, t1, _)| {
+                        t0.cmp(t1).then_with(|| {
+                            let dv0 = v0.borrow_with(r0.as_row_ref());
+                            let dv1 = v1.borrow_with(r1.as_row_ref());
+                            compare_columns(&order_by, &dv0, &dv1, || r0.cmp(r1))
+                        })
+                    });
+                    let collection = UpdateCollection::from_iter(consolidate_update_iter(
+                        rows.iter().map(|(r, t, d)| (r.as_row_ref(), t, *d)),
+                    ));
+                    PeekResponse::Rows(vec![collection])
+                }
                 Err(e) => PeekResponse::Error(e.to_string()),
             };
             match result_tx.send((result, start.elapsed())) {
@@ -1253,7 +1267,7 @@ impl PersistPeek {
         mfp_plan: SafeMfpPlan,
         max_result_size: usize,
         mut limit_remaining: usize,
-    ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
+    ) -> Result<Vec<(Row, Timestamp, Diff)>, String> {
         let client = persist_clients
             .open(metadata.persist_location)
             .await
@@ -1313,7 +1327,7 @@ impl PersistPeek {
             let Some(batch) = cursor.next().await else {
                 break;
             };
-            for (data, _, d) in batch {
+            for (data, time, diff) in batch {
                 let row = data.map_err(|e| e.to_string())?;
 
                 if let Some(literal) = &literal_constraint {
@@ -1324,20 +1338,6 @@ impl PersistPeek {
                     }
                 }
 
-                let count: usize = d.try_into().map_err(|_| {
-                    tracing::error!(
-                        shard = %metadata.data_shard, diff = d, ?row,
-                        "persist peek encountered negative multiplicities",
-                    );
-                    format!(
-                        "Invalid data in source, \
-                         saw retractions ({}) for row that does not exist: {:?}",
-                        -d, row,
-                    )
-                })?;
-                let Some(count) = NonZeroUsize::new(count) else {
-                    continue;
-                };
                 let mut datum_local = datum_vec.borrow_with(&row);
                 let eval_result = mfp_plan
                     .evaluate_into(&mut datum_local, &arena, &mut row_builder)
@@ -1353,8 +1353,9 @@ impl PersistPeek {
                             ByteSize::b(u64::cast_from(max_result_size))
                         ));
                     }
-                    result.push((row, count));
-                    limit_remaining = limit_remaining.saturating_sub(count.get());
+                    result.push((row, time, diff.into()));
+                    // FIXME: how to apply limit????
+                    limit_remaining = limit_remaining.saturating_sub(diff.try_into().unwrap_or(0));
                     if limit_remaining == 0 {
                         break;
                     }
@@ -1413,11 +1414,12 @@ impl IndexPeek {
         let method_start = Instant::now();
 
         self.trace_bundle.oks_mut().read_upper(upper);
-        if upper.less_equal(&self.peek.timestamp) {
+        let until = AntichainRef::new(self.peek.until.as_slice());
+        if PartialOrder::less_than(&upper.borrow(), &until) {
             return PeekStatus::NotReady;
         }
         self.trace_bundle.errs_mut().read_upper(upper);
-        if upper.less_equal(&self.peek.timestamp) {
+        if PartialOrder::less_than(&upper.borrow(), &until) {
             return PeekStatus::NotReady;
         }
 
@@ -1465,7 +1467,7 @@ impl IndexPeek {
         while cursor.key_valid(&storage) {
             let mut copies = Diff::ZERO;
             cursor.map_times(&storage, |time, diff| {
-                if time.less_equal(&self.peek.timestamp) {
+                if self.peek.until.map_or(true, |t| time.less_than(&t)) {
                     copies += diff;
                 }
             });
@@ -1515,7 +1517,7 @@ impl IndexPeek {
                 Key<'a>: ToDatumIter + Eq,
                 KeyOwn = Row,
                 Val<'a>: ToDatumIter,
-                TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
+                TimeGat<'a> = &'a mz_repr::Timestamp,
                 DiffGat<'a> = &'a Diff,
             >,
     {
@@ -1531,6 +1533,7 @@ impl IndexPeek {
             peek.target.id().clone(),
             peek.map_filter_project.clone(),
             peek.timestamp,
+            peek.until,
             peek.literal_constraints.clone().as_deref_mut(),
             oks_handle,
         );
@@ -1562,9 +1565,7 @@ impl IndexPeek {
                 Ok(row) => row,
                 Err(err) => return PeekStatus::Ready(PeekResponse::Error(err)),
             };
-            let (row, copies) = row;
-            let copies: NonZeroUsize = NonZeroUsize::try_from(copies).expect("fits into usize");
-
+            let (row, timestamp, copies) = row;
             total_size = total_size
                 .saturating_add(row.byte_len())
                 .saturating_add(count_byte_size);
@@ -1578,7 +1579,7 @@ impl IndexPeek {
                 )));
             }
 
-            results.push((row, copies));
+            results.push((row, timestamp, copies.into()));
 
             // If we hold many more than `max_results` records, we can thin down
             // `results` using `self.finishing.ordering`.
@@ -1596,7 +1597,17 @@ impl IndexPeek {
                             .result_sort_seconds
                             .observe(sort_time_accum.as_secs_f64());
                         let row_collection_start = Instant::now();
-                        let collection = RowCollection::new(results, &peek.finishing.order_by);
+                        results.sort_by(|(r0, t0, _), (r1, t1, _)| {
+                            t0.cmp(t1).then_with(|| {
+                                let dv0 = l_datum_vec.borrow_with(r0.as_row_ref());
+                                let dv1 = r_datum_vec.borrow_with(r1.as_row_ref());
+                                compare_columns(&peek.finishing.order_by, &dv0, &dv1, || r0.cmp(r1))
+                            })
+                        });
+                        let collection = UpdateCollection::from_iter(consolidate_update_iter(
+                            results.iter().map(|(r, t, d)| (r.as_row_ref(), t, *d)),
+                        ));
+                        results.clear();
                         metrics
                             .row_collection_seconds
                             .observe(row_collection_start.elapsed().as_secs_f64());
@@ -1624,9 +1635,13 @@ impl IndexPeek {
                         sort_time_accum += sort_start.elapsed();
                         let dropped = results.drain(max_results..);
                         let dropped_size =
-                            dropped.into_iter().fold(0, |acc: usize, (row, _count)| {
-                                acc.saturating_add(row.byte_len().saturating_add(count_byte_size))
-                            });
+                            dropped
+                                .into_iter()
+                                .fold(0, |acc: usize, (row, _time, _count)| {
+                                    acc.saturating_add(
+                                        row.byte_len().saturating_add(count_byte_size),
+                                    )
+                                });
                         total_size = total_size.saturating_sub(dropped_size);
                     }
                 }
@@ -1641,7 +1656,20 @@ impl IndexPeek {
             .observe(sort_time_accum.as_secs_f64());
 
         let row_collection_start = Instant::now();
-        let collection = RowCollection::new(results, &peek.finishing.order_by);
+        results.sort_by(|left, right| {
+            let left_datums = l_datum_vec.borrow_with(&left.0);
+            let right_datums = r_datum_vec.borrow_with(&right.0);
+            mz_expr::compare_columns(
+                &peek.finishing.order_by,
+                &left_datums,
+                &right_datums,
+                || left.0.cmp(&right.0),
+            )
+        });
+        let collection = UpdateCollection::from_iter(mz_ore::iter::consolidate_update_iter(
+            results.iter().map(|(r, t, d)| (r.as_row_ref(), t, *d)),
+        ));
+        results.clear();
         metrics
             .row_collection_seconds
             .observe(row_collection_start.elapsed().as_secs_f64());

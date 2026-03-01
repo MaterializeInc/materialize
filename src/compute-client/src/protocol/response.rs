@@ -14,7 +14,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_types::ShardId;
-use mz_repr::{Diff, GlobalId, RelationDesc, Row};
+use mz_repr::{GlobalId, RelationDesc, UpdateCollection};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use uuid::Uuid;
@@ -190,7 +190,7 @@ impl<T> FrontiersResponse<T> {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PeekResponse {
     /// Returned rows of a successful peek.
-    Rows(Vec<RowCollection>),
+    Rows(Vec<UpdateCollection>),
     /// Results of the peek were stashed in persist batches.
     Stashed(Box<StashedPeekResponse>),
     /// Error of an unsuccessful peek.
@@ -232,15 +232,19 @@ pub struct StashedPeekResponse {
     ///
     /// We will have a mix of stashed responses and inline responses because the
     /// result sizes across different workers can and will vary.
-    pub inline_rows: Vec<RowCollection>,
+    pub inline_rows: Vec<UpdateCollection>,
 }
 
 impl StashedPeekResponse {
-    /// Total count of [`Row`]s represented by this collection, considering a
+    /// Total count of [mz_repr::Row]s represented by this collection, considering a
     /// possible `OFFSET` and `LIMIT`.
     pub fn num_rows(&self, offset: usize, limit: Option<usize>) -> usize {
         let num_stashed_rows: usize = usize::cast_from(self.num_rows_batches);
-        let num_inline_rows: usize = self.inline_rows.iter().map(|r| r.count()).sum();
+        let num_inline_rows: usize = self
+            .inline_rows
+            .iter()
+            .map(|r| r.count().unwrap_or(0))
+            .sum();
         RowCollection::offset_limit(num_stashed_rows + num_inline_rows, offset, limit)
     }
 
@@ -291,7 +295,7 @@ pub struct SubscribeBatch<T = mz_repr::Timestamp> {
     /// All updates greater than `lower` and not greater than `upper`.
     ///
     /// An `Err` variant can be used to indicate e.g. that the size of the updates exceeds internal limits.
-    pub updates: Result<Vec<(T, Row, Diff)>, String>,
+    pub updates: Result<Vec<UpdateCollection<T>>, String>,
 }
 
 impl<T> SubscribeBatch<T> {
@@ -299,10 +303,7 @@ impl<T> SubscribeBatch<T> {
     fn to_error_if_exceeds(&mut self, max_result_size: usize) {
         use bytesize::ByteSize;
         if let Ok(updates) = &self.updates {
-            let total_size: usize = updates
-                .iter()
-                .map(|(_time, row, _diff)| row.byte_len())
-                .sum();
+            let total_size: usize = updates.iter().map(|updates| updates.byte_len()).sum();
             if total_size > max_result_size {
                 self.updates = Err(format!(
                     "result exceeds max size of {}",

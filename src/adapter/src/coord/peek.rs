@@ -19,7 +19,6 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate;
-use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_cluster_client::ReplicaId;
@@ -45,7 +44,7 @@ use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
 use mz_repr::{
     Diff, GlobalId, IntoRowIterator, RelationDesc, Row, RowIterator, SqlRelationType,
-    preserves_order,
+    UpdateCollection, preserves_order,
 };
 use mz_storage_types::sources::SourceData;
 use serde::{Deserialize, Serialize};
@@ -932,7 +931,17 @@ impl crate::coord::Coordinator {
 
             match rows {
                 PeekResponse::Rows(rows) => {
-                    let rows = RowCollection::merge_sorted(&rows, &finishing.order_by);
+                    let rows: Result<Vec<_>, _> = rows
+                        .into_iter()
+                        .map(|r| RowCollection::from_updates(r))
+                        .collect();
+                    let rows = match rows {
+                        Ok(ref rows) => RowCollection::merge_sorted(&rows, &finishing.order_by),
+                        Err(e) => {
+                            yield PeekResponseUnary::Error(e.to_string());
+                            return;
+                        }
+                    };
                     match finishing.finish(
                         rows,
                         max_result_size,
@@ -1012,25 +1021,18 @@ impl crate::coord::Coordinator {
                             }
                         }
 
-                        let mut current_batch = Vec::new();
+                        let mut current_batch = UpdateCollection::builder(0, 0);
                         let mut current_batch_size: usize = 0;
 
                         'outer: while let Some(rows) = row_cursor.next().await {
-                            for ((source_data, _val), _ts, diff) in rows {
+                            for ((source_data, _val), ts, diff) in rows {
                                 let row = source_data
                                     .0
                                     .expect("we are not sending errors on this code path");
 
-                                let diff = usize::try_from(diff)
-                                    .expect("peek responses cannot have negative diffs");
-
-                                if diff > 0 {
-                                    let diff =
-                                        NonZeroUsize::new(diff).expect("checked to be non-zero");
-                                    current_batch_size =
-                                        current_batch_size.saturating_add(row.byte_len());
-                                    current_batch.push((row, diff));
-                                }
+                                current_batch_size =
+                                    current_batch_size.saturating_add(row.byte_len());
+                                current_batch.push((row.as_row_ref(), &ts, Diff::from(diff)));
 
                                 if current_batch_size > peek_stash_read_batch_size_bytes {
                                     // We're re-encoding the rows as a RowCollection
@@ -1038,12 +1040,8 @@ impl crate::coord::Coordinator {
                                     // slow path already, since we're returning a big
                                     // stashed result so this is worth the convenience
                                     // of that for now.
-                                    let result = tx
-                                        .send(RowCollection::new(
-                                            current_batch.drain(..).collect_vec(),
-                                            &[],
-                                        ))
-                                        .await;
+                                    let result = tx.send(current_batch.build()).await;
+                                    current_batch = UpdateCollection::builder(0, 0);
                                     if result.is_err() {
                                         tracing::debug!("receiver went away");
                                         // Don't return but break so we fall out to the
@@ -1056,8 +1054,9 @@ impl crate::coord::Coordinator {
                             }
                         }
 
+                        let current_batch = current_batch.build();
                         if current_batch.len() > 0 {
-                            let result = tx.send(RowCollection::new(current_batch, &[])).await;
+                            let result = tx.send(current_batch).await;
                             if result.is_err() {
                                 tracing::debug!("receiver went away");
                             }
@@ -1088,7 +1087,13 @@ impl crate::coord::Coordinator {
                     let mut got_zero_rows = true;
                     while let Some(rows) = rx.recv().await {
                         got_zero_rows = false;
-
+                        let rows = match RowCollection::from_updates(rows) {
+                            Ok(rows) => rows,
+                            Err(e) => {
+                                yield PeekResponseUnary::Error(e);
+                                return;
+                            }
+                        };
                         let result_rows = incremental_finishing.finish_incremental(
                             rows,
                             max_result_size,
