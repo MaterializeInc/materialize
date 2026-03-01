@@ -28,7 +28,7 @@ name = "benches"
 harness = false
 
 [dependencies]
-anyhow = "1.0.101"
+anyhow = "1.0.102"
 arrayvec = "0.7.6"
 arrow = { version = "57", default-features = false }
 async-stream = "0.3.6"
@@ -36,7 +36,7 @@ async-trait = "0.1.89"
 bytes = { version = "1.11.1", features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive"] }
 differential-dataflow = "0.19.1"
-futures = "0.3.31"
+futures = "0.3.32"
 futures-util = "0.3"
 hex = "0.4.3"
 itertools = "0.14.0"

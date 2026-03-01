@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.101"
+anyhow = "1.0.102"
 arrow = { version = "57", default-features = false }
 async-stream = "0.3.6"
 async-trait = "0.1.89"
@@ -23,7 +23,7 @@ derivative = "2.2.0"
 differential-dataflow = "0.19.1"
 enum-kinds = "0.5.1"
 fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.31"
+futures = "0.3.32"
 governor = "0.10.1"
 hex = "0.4.3"
 imbl = { version = "7.0.0", features = ["serde"] }
