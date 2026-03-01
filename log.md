@@ -2464,7 +2464,56 @@ All tests pass:
 - `src/adapter/src/coord/peek.rs` — Replaced `mfp.deref()` with `mfp` (direct reference, Deref no longer needed)
 - `src/storage-operators/src/stats.rs` — Use `mfp_plan.to_mfp()` since `may_match_mfp` takes `&MapFilterProject`
 
-### Cumulative savings across all sessions (after session 32)
+## Session 33: Shrink BasicPlan from 112 to 16 bytes via boxing SingleBasicPlan
+
+**Date:** 2026-03-01
+
+### Changes
+
+Boxed `SingleBasicPlan` (112 bytes) in the `BasicPlan::Single` variant. `SingleBasicPlan` contains an `AggregateExpr` (104 bytes) + `fused_unnest_list: bool` (1 byte) + padding = 112 bytes. This was the largest variant of `BasicPlan`, forcing the enum to 112 bytes. The `Multiple` variant only holds a `Box<[AggregateExpr]>` (16 bytes), so boxing `SingleBasicPlan` allows the enum to shrink to 16 bytes.
+
+This is a safe optimization because `SingleBasicPlan` is constructed once during planning and only read during rendering. The extra indirection has no measurable performance impact.
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| SingleBasicPlan | 112 | 112 (unchanged, just boxed) | — |
+| BasicPlan | 112 | 16 | 96 bytes (86%) |
+| ReducePlan | 112 | 56 | 56 bytes (50%) |
+| CollationPlan | 216 | 128 | 88 bytes (41%) |
+
+### Cascading effects
+
+- `ReducePlan` contains `BasicPlan` as a variant, shrinking from 112 to 56 bytes
+- `CollationPlan` contains `Option<BasicPlan>`, shrinking from 216 to 128 bytes
+- Every dataflow plan with aggregations (GROUP BY, DISTINCT, etc.) uses less memory
+
+### Benchmark results
+
+All aggregate query types work correctly with no regression (200 iterations, 3 trials averaged):
+
+| Query Type | Trial 1 | Trial 2 | Trial 3 | Notes |
+|-----------|---------|---------|---------|-------|
+| Single basic agg (GROUP BY sum) | 6137ms | 6079ms | 6158ms | Exercises BasicPlan::Single |
+| Multiple basic aggs (sum/count/min/max) | 7142ms | 7178ms | 7218ms | Exercises BasicPlan::Multiple |
+| Aggregate with filter+HAVING | 6344ms | 6401ms | 6433ms | Exercises ReducePlan paths |
+| Subquery with aggregate | 6233ms | 6245ms | 6246ms | Nested aggregate plans |
+
+### Tests
+
+All tests pass:
+- `mz-compute-types` size assertions: BasicPlan=16, ReducePlan=56, CollationPlan=128
+- Full compilation clean for mz-compute-types, mz-compute
+
+### Files changed (4 files)
+
+- `src/compute-types/src/plan/reduce.rs` — Changed `BasicPlan::Single(SingleBasicPlan)` to `BasicPlan::Single(Box<SingleBasicPlan>)`
+- `src/compute-types/src/plan.rs` — Updated size assertions for BasicPlan (16), ReducePlan (56), CollationPlan (128)
+- `src/compute-types/src/explain/text.rs` — Updated pattern matching for `BasicPlan::Single(single)` (3 sites)
+- `src/compute/src/render/reduce.rs` — Updated pattern matching for `BasicPlan::Single(single)` (1 site)
+
+### Cumulative savings across all sessions (after session 33)
 
 | Type | Original | After all sessions | Total savings |
 |------|----------|-------------------|---------------|
@@ -2505,3 +2554,6 @@ All tests pass:
 | LinearJoinPlan | 232 | 184 | 48 bytes (21%) |
 | DeltaPathPlan | 232 | 184 | 48 bytes (21%) |
 | JoinPlan | 232 | 184 | 48 bytes (21%) |
+| BasicPlan | 112 | 16 | 96 bytes (86%) |
+| ReducePlan | 112 | 56 | 56 bytes (50%) |
+| CollationPlan | 216 | 128 | 88 bytes (41%) |
