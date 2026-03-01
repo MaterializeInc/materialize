@@ -265,7 +265,7 @@ impl BucketedPlan {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum BasicPlan {
     /// Plan for rendering a single basic aggregation.
-    Single(SingleBasicPlan),
+    Single(Box<SingleBasicPlan>),
     /// Plan for rendering multiple basic aggregations.
     /// These need to then be collated together in an additional
     /// reduction. Each element represents the:
@@ -426,10 +426,10 @@ impl ReducePlan {
                 }
             }
             ReductionType::Basic => match <_ as TryInto<[_; 1]>>::try_into(aggregates_list) {
-                Ok([expr]) => ReducePlan::Basic(BasicPlan::Single(SingleBasicPlan {
+                Ok([expr]) => ReducePlan::Basic(BasicPlan::Single(Box::new(SingleBasicPlan {
                     expr,
                     fused_unnest_list,
-                })),
+                }))),
                 Err(aggregates_list) => ReducePlan::Basic(BasicPlan::Multiple(aggregates_list.into_boxed_slice())),
             },
         }

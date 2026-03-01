@@ -862,12 +862,16 @@ mod tests {
         assert_eq!(size_of::<TopKPlan>(), 112);
 
         // Reduce plan types — Vec→Box<[T]> conversions eliminate unused capacity fields.
-        use reduce::{AccumulablePlan, BasicPlan, BucketedPlan, CollationPlan, HierarchicalPlan, MonotonicPlan, ReducePlan};
+        // Boxing SingleBasicPlan in BasicPlan::Single shrinks BasicPlan from 112 to 16,
+        // ReducePlan from 112 to 56, and CollationPlan from 216 to 120.
+        use reduce::{AccumulablePlan, BasicPlan, BucketedPlan, CollationPlan, HierarchicalPlan, MonotonicPlan, ReducePlan, SingleBasicPlan};
         assert_eq!(size_of::<AccumulablePlan>(), 48);
         assert_eq!(size_of::<MonotonicPlan>(), 24);
         assert_eq!(size_of::<BucketedPlan>(), 32);
         assert_eq!(size_of::<HierarchicalPlan>(), 32);
-        assert_eq!(size_of::<ReducePlan>(), 112);
-        assert_eq!(size_of::<CollationPlan>(), 216);
+        assert_eq!(size_of::<SingleBasicPlan>(), 112);
+        assert_eq!(size_of::<BasicPlan>(), 16);
+        assert_eq!(size_of::<ReducePlan>(), 56);
+        assert_eq!(size_of::<CollationPlan>(), 128);
     }
 }

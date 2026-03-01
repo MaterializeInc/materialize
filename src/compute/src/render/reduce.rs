@@ -28,7 +28,7 @@ use differential_dataflow::{Data, VecCollection};
 use itertools::Itertools;
 use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
-    ReducePlan, ReductionType, SingleBasicPlan, reduction_type,
+    ReducePlan, ReductionType, reduction_type,
 };
 use mz_expr::{
     AggregateExpr, AggregateFunc, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan,
@@ -231,22 +231,19 @@ where
                 errors.push(errs);
                 output
             }
-            ReducePlan::Basic(BasicPlan::Single(SingleBasicPlan {
-                expr,
-                fused_unnest_list,
-            })) => {
+            ReducePlan::Basic(BasicPlan::Single(single)) => {
                 // Note that we skip validating for negative diffs when we have a fused unnest list,
                 // because this is already a CPU-intensive situation due to the non-incrementalness
                 // of window functions.
-                let validating = !fused_unnest_list;
+                let validating = !single.fused_unnest_list;
                 let (output, errs) = self.build_basic_aggregate(
                     collection,
                     0,
-                    &expr,
+                    &single.expr,
                     validating,
                     key_arity,
                     mfp_after,
-                    fused_unnest_list,
+                    single.fused_unnest_list,
                 );
                 if validating {
                     errors.push(errs.expect("validation should have occurred as it was requested"));

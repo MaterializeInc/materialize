@@ -36,7 +36,7 @@ use crate::plan::join::delta_join::{DeltaPathPlan, DeltaStagePlan};
 use crate::plan::join::linear_join::LinearStagePlan;
 use crate::plan::join::{DeltaJoinPlan, JoinClosure, LinearJoinPlan};
 use crate::plan::reduce::{
-    AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, MonotonicPlan, SingleBasicPlan,
+    AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, MonotonicPlan,
 };
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::{AvailableCollections, LirId, Plan, PlanNode};
@@ -335,11 +335,8 @@ impl Plan {
                     }
                     ReducePlan::Basic(plan) => {
                         ctx.indent.set();
-                        if let BasicPlan::Single(SingleBasicPlan {
-                            fused_unnest_list, ..
-                        }) = &plan
-                        {
-                            if *fused_unnest_list {
+                        if let BasicPlan::Single(single) = &plan {
+                            if single.fused_unnest_list {
                                 writeln!(
                                     f,
                                     "{}→Fused with Child Table Function unnest_list",
@@ -1538,11 +1535,8 @@ impl BasicPlan {
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         match self {
-            BasicPlan::Single(SingleBasicPlan {
-                expr,
-                fused_unnest_list: _,
-            }) => {
-                let agg = mode.expr(expr, None);
+            BasicPlan::Single(single) => {
+                let agg = mode.expr(&single.expr, None);
                 writeln!(f, "{}Aggregation: {agg}", ctx.indent)?;
             }
             BasicPlan::Multiple(aggs) => {
@@ -1567,12 +1561,9 @@ impl BasicPlan {
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         match self {
-            BasicPlan::Single(SingleBasicPlan {
-                expr,
-                fused_unnest_list,
-            }) => {
-                let agg = mode.expr(expr, None);
-                let fused_unnest_list = if *fused_unnest_list {
+            BasicPlan::Single(single) => {
+                let agg = mode.expr(&single.expr, None);
+                let fused_unnest_list = if single.fused_unnest_list {
                     ", fused_unnest_list=true"
                 } else {
                     ""
