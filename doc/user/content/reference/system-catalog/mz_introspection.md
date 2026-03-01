@@ -153,6 +153,22 @@ The `mz_compute_operator_durations_histogram` view describes a histogram of the 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_operator_durations_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_operator_durations_histogram_raw -->
 
+## `mz_compute_prometheus_metrics_per_worker`
+
+The `mz_compute_prometheus_metrics_per_worker` source exposes Prometheus metrics collected from each compute replica's internal metrics registry.
+Metrics are scraped periodically and presented as rows.
+Histograms are flattened into separate bucket, sum, and count rows.
+
+<!-- RELATION_SPEC mz_introspection.mz_compute_prometheus_metrics_per_worker -->
+| Field         | Type                   | Meaning                                                              |
+|---------------|------------------------|----------------------------------------------------------------------|
+| `metric_name` | [`text`]               | The name of the Prometheus metric.                                   |
+| `metric_type` | [`text`]               | The type of the metric: `counter`, `gauge`, `histogram`, `summary`, or `untyped`. |
+| `labels`      | [`map`]                | The label key-value pairs associated with the metric.                |
+| `value`       | [`double precision`]   | The numeric value of the metric.                                     |
+| `help`        | [`text`]               | The help string describing the metric.                               |
+| `worker_id`   | [`uint8`]              | The ID of the worker that collected the metric.                      |
+
 ## `mz_dataflows`
 
 The `mz_dataflows` view describes the [dataflows][dataflow] in the system.
@@ -431,6 +447,7 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list
 [`double precision`]: /sql/types/double-precision
+[`map`]: /sql/types/map
 [`mz_timestamp`]: /sql/types/mz_timestamp
 [`numeric`]: /sql/types/numeric
 [`text`]: /sql/types/text
