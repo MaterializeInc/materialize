@@ -15,7 +15,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::NonZeroUsize;
-use std::ops::Deref;
 use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate;
@@ -185,7 +184,7 @@ impl FastPathPlan {
 
                 ctx.indent += 1;
 
-                mode.expr(mfp.deref(), None).fmt_default_text(f, ctx)?;
+                mode.expr(mfp, None).fmt_default_text(f, ctx)?;
                 let printed = !mfp.expressions.is_empty() || !mfp.predicates.is_empty();
 
                 if printed {
@@ -212,7 +211,7 @@ impl FastPathPlan {
 
                 ctx.indent += 1;
 
-                mode.expr(mfp.deref(), None).fmt_default_text(f, ctx)?;
+                mode.expr(mfp, None).fmt_default_text(f, ctx)?;
                 let printed = !mfp.expressions.is_empty() || !mfp.predicates.is_empty();
 
                 if printed {

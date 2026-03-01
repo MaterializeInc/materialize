@@ -1599,13 +1599,35 @@ pub mod plan {
 
     use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, UnaryFunc, func};
 
-    /// A wrapper type which indicates it is safe to simply evaluate all expressions.
+    /// A frozen, safe-to-evaluate version of [`MapFilterProject`].
+    ///
+    /// Unlike `MapFilterProject`, which is a mutable builder, `SafeMfpPlan` uses
+    /// `Box<[T]>` instead of `Vec<T>` for its collection fields, saving 8 bytes
+    /// per field (24 bytes total) by eliminating the unused capacity word.
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
     pub struct SafeMfpPlan {
-        pub(crate) mfp: MapFilterProject,
+        /// A sequence of expressions that should be appended to the row.
+        pub expressions: Box<[MirScalarExpr]>,
+        /// Expressions that must evaluate to `Datum::True` for the output
+        /// row to be produced, each prepended with a column identifier.
+        pub predicates: Box<[(usize, MirScalarExpr)]>,
+        /// A sequence of column identifiers whose data form the output row.
+        pub projection: Box<[usize]>,
+        /// The expected number of input columns.
+        pub input_arity: usize,
     }
 
     impl SafeMfpPlan {
+        /// Create a `SafeMfpPlan` from a finalized `MapFilterProject`.
+        pub(crate) fn from_mfp(mfp: MapFilterProject) -> Self {
+            Self {
+                expressions: mfp.expressions.into_boxed_slice(),
+                predicates: mfp.predicates.into_boxed_slice(),
+                projection: mfp.projection.into_boxed_slice(),
+                input_arity: mfp.input_arity,
+            }
+        }
+
         /// Remaps references to input columns according to `remap`.
         ///
         /// Leaves other column references, e.g. to newly mapped columns, unchanged.
@@ -1613,8 +1635,18 @@ pub mod plan {
         where
             F: Fn(usize) -> usize,
         {
-            self.mfp.permute_fn(remap, new_arity);
+            // Convert to MFP, permute, convert back. The into_vec/into_boxed_slice
+            // round-trip is O(1) in each direction.
+            let mut mfp = MapFilterProject {
+                expressions: std::mem::take(&mut self.expressions).into_vec(),
+                predicates: std::mem::take(&mut self.predicates).into_vec(),
+                projection: std::mem::take(&mut self.projection).into_vec(),
+                input_arity: self.input_arity,
+            };
+            mfp.permute_fn(remap, new_arity);
+            *self = Self::from_mfp(mfp);
         }
+
         /// Evaluates the linear operator on a supplied list of datums.
         ///
         /// The arguments are the initial datums associated with the row,
@@ -1643,7 +1675,7 @@ pub mod plan {
             } else {
                 row_buf
                     .packer()
-                    .extend(self.mfp.projection.iter().map(|c| datums[*c]));
+                    .extend(self.projection.iter().map(|c| datums[*c]));
                 Ok(Some(row_buf))
             }
         }
@@ -1663,7 +1695,7 @@ pub mod plan {
             if !passed_predicates {
                 Ok(None)
             } else {
-                Ok(Some(self.mfp.projection.iter().map(move |i| datums[*i])))
+                Ok(Some(self.projection.iter().map(move |i| datums[*i])))
             }
         }
 
@@ -1676,17 +1708,17 @@ pub mod plan {
             arena: &'a RowArena,
         ) -> Result<bool, EvalError> {
             let mut expression = 0;
-            for (support, predicate) in self.mfp.predicates.iter() {
-                while self.mfp.input_arity + expression < *support {
-                    datums.push(self.mfp.expressions[expression].eval(&datums[..], arena)?);
+            for (support, predicate) in self.predicates.iter() {
+                while self.input_arity + expression < *support {
+                    datums.push(self.expressions[expression].eval(&datums[..], arena)?);
                     expression += 1;
                 }
                 if predicate.eval(&datums[..], arena)? != Datum::True {
                     return Ok(false);
                 }
             }
-            while expression < self.mfp.expressions.len() {
-                datums.push(self.mfp.expressions[expression].eval(&datums[..], arena)?);
+            while expression < self.expressions.len() {
+                datums.push(self.expressions[expression].eval(&datums[..], arena)?);
                 expression += 1;
             }
             Ok(true)
@@ -1694,20 +1726,63 @@ pub mod plan {
 
         /// Returns true if evaluation could introduce an error on non-error inputs.
         pub fn could_error(&self) -> bool {
-            self.mfp.predicates.iter().any(|(_pos, e)| e.could_error())
-                || self.mfp.expressions.iter().any(|e| e.could_error())
+            self.predicates.iter().any(|(_pos, e)| e.could_error())
+                || self.expressions.iter().any(|e| e.could_error())
         }
 
         /// Returns true when `Self` is the identity.
         pub fn is_identity(&self) -> bool {
-            self.mfp.is_identity()
+            self.expressions.is_empty()
+                && self.predicates.is_empty()
+                && self.projection.len() == self.input_arity
+                && self.projection.iter().enumerate().all(|(i, p)| i == *p)
         }
-    }
 
-    impl std::ops::Deref for SafeMfpPlan {
-        type Target = MapFilterProject;
-        fn deref(&self) -> &Self::Target {
-            &self.mfp
+        /// Convert back to a `MapFilterProject` (allocates).
+        ///
+        /// This is useful for interoperability with code that expects `&MapFilterProject`.
+        pub fn to_mfp(&self) -> MapFilterProject {
+            MapFilterProject {
+                expressions: self.expressions.to_vec(),
+                predicates: self.predicates.to_vec(),
+                projection: self.projection.to_vec(),
+                input_arity: self.input_arity,
+            }
+        }
+
+        /// As the arguments to `Map`, `Filter`, and `Project` operators.
+        ///
+        /// In principle, this operator can be implemented as a sequence of
+        /// more elemental operators, likely less efficiently.
+        pub fn as_map_filter_project(
+            &self,
+        ) -> (Vec<MirScalarExpr>, Vec<MirScalarExpr>, Vec<usize>) {
+            let predicates = self
+                .predicates
+                .iter()
+                .map(|(_pos, predicate)| predicate.clone())
+                .collect();
+            (
+                self.expressions.to_vec(),
+                predicates,
+                self.projection.to_vec(),
+            )
+        }
+
+        /// The input columns that are used by this plan.
+        pub fn demand(&self) -> std::collections::BTreeSet<usize> {
+            let mut demanded = std::collections::BTreeSet::new();
+            for (_index, pred) in self.predicates.iter() {
+                demanded.extend(pred.support());
+            }
+            demanded.extend(self.projection.iter().cloned());
+            for index in (0..self.expressions.len()).rev() {
+                if demanded.contains(&(self.input_arity + index)) {
+                    demanded.extend(self.expressions[index].support());
+                }
+            }
+            demanded.retain(|col| col < &self.input_arity);
+            demanded
         }
     }
 
@@ -1797,7 +1872,7 @@ pub mod plan {
             }
 
             Ok(Self {
-                mfp: SafeMfpPlan { mfp },
+                mfp: SafeMfpPlan::from_mfp(mfp),
                 lower_bounds,
                 upper_bounds,
             })
@@ -1805,17 +1880,16 @@ pub mod plan {
 
         /// Indicates if the planned `MapFilterProject` emits exactly its inputs as outputs.
         pub fn is_identity(&self) -> bool {
-            self.mfp.mfp.is_identity()
+            self.mfp.is_identity()
                 && self.lower_bounds.is_empty()
                 && self.upper_bounds.is_empty()
         }
 
         /// Returns `self`, and leaves behind an identity operator that acts on its output.
         pub fn take(&mut self) -> Self {
+            let input_arity = self.mfp.projection.len();
             let mut identity = Self {
-                mfp: SafeMfpPlan {
-                    mfp: MapFilterProject::new(self.mfp.projection.len()),
-                },
+                mfp: SafeMfpPlan::from_mfp(MapFilterProject::new(input_arity)),
                 lower_bounds: Default::default(),
                 upper_bounds: Default::default(),
             };
@@ -1841,8 +1915,8 @@ pub mod plan {
         /// The order of iteration is unspecified.
         pub fn iter_nontemporal_exprs(&mut self) -> impl Iterator<Item = &mut MirScalarExpr> {
             iter::empty()
-                .chain(self.mfp.mfp.predicates.iter_mut().map(|(_, expr)| expr))
-                .chain(&mut self.mfp.mfp.expressions)
+                .chain(self.mfp.predicates.iter_mut().map(|(_, expr)| expr))
+                .chain(self.mfp.expressions.iter_mut())
                 .chain(&mut self.lower_bounds)
                 .chain(&mut self.upper_bounds)
         }
@@ -1957,7 +2031,7 @@ pub mod plan {
             if Some(lower_bound) != upper_bound && !null_eval {
                 row_builder
                     .packer()
-                    .extend(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
+                    .extend(self.mfp.projection.iter().map(|c| datums[*c]));
                 let upper_opt =
                     upper_bound.map(|upper_bound| Ok((row_builder.clone(), upper_bound, -diff)));
                 let lower = Some(Ok((row_builder.clone(), lower_bound, diff)));
@@ -1981,8 +2055,8 @@ pub mod plan {
         pub fn ignores_input(&self) -> bool {
             self.lower_bounds.is_empty()
                 && self.upper_bounds.is_empty()
-                && self.mfp.mfp.projection.is_empty()
-                && self.mfp.mfp.predicates.is_empty()
+                && self.mfp.projection.is_empty()
+                && self.mfp.predicates.is_empty()
         }
     }
 }

@@ -54,7 +54,8 @@ impl StatsCursor {
                 if errors {
                     relation_stats.err_count().map_or(true, |e| e > 0)
                 } else {
-                    relation_stats.may_match_mfp(ResultSpec::value_all(), mfp_plan)
+                    let mfp = mfp_plan.to_mfp();
+                    relation_stats.may_match_mfp(ResultSpec::value_all(), &mfp)
                 }
             }
         };

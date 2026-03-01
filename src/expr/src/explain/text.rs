@@ -28,7 +28,7 @@ use mz_sql_parser::ast::Ident;
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
 use crate::{
     AccessStrategy, AggregateExpr, EvalError, Id, JoinImplementation, JoinInputCharacteristics,
-    LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
+    LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing, SafeMfpPlan,
 };
 
 impl<'a, T: 'a> DisplayText for ExplainSinglePlan<'a, T>
@@ -288,6 +288,76 @@ impl<'a, M: HumanizerMode> HumanizedExpr<'a, MapFilterProject, M> {
             writeln!(f, "{}Filter: {predicates}", ctx.indent)?;
         }
         // render `map` field iff scalars are present
+        if !self.expr.expressions.is_empty() {
+            let scalars = self.expr.expressions.iter().map(|s| self.child(s));
+            let scalars = separated(", ", scalars);
+            writeln!(f, "{}Map: {scalars}", ctx.indent)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl<'a, C, M> DisplayText<C> for HumanizedExpr<'a, SafeMfpPlan, M>
+where
+    C: AsMut<Indent>,
+    M: HumanizerMode,
+{
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        let (scalars, predicates, outputs, input_arity) = (
+            &self.expr.expressions,
+            &self.expr.predicates,
+            &self.expr.projection,
+            &self.expr.input_arity,
+        );
+
+        if &outputs.len() != input_arity || outputs.iter().enumerate().any(|(i, p)| i != *p) {
+            let outputs = Indices(outputs);
+            writeln!(f, "{}project=({})", ctx.as_mut(), outputs)?;
+        }
+        if !predicates.is_empty() {
+            let predicates = predicates.iter().map(|(_, p)| self.child(p));
+            let predicates = separated(" AND ", predicates);
+            writeln!(f, "{}filter=({})", ctx.as_mut(), predicates)?;
+        }
+        if !scalars.is_empty() {
+            let scalars = scalars.iter().map(|s| self.child(s));
+            let scalars = separated(", ", scalars);
+            writeln!(f, "{}map=({})", ctx.as_mut(), scalars)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl<'a, M: HumanizerMode> HumanizedExpr<'a, SafeMfpPlan, M> {
+    /// Render a SafeMfpPlan using the default (concise) syntax.
+    pub fn fmt_default_text<T>(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, T>,
+    ) -> fmt::Result {
+        if self.expr.projection.len() != self.expr.input_arity
+            || self
+                .expr
+                .projection
+                .iter()
+                .enumerate()
+                .any(|(i, p)| i != *p)
+        {
+            if self.expr.projection.len() == 0 {
+                writeln!(f, "{}Project: ()", ctx.indent)?;
+            } else {
+                let outputs = Indices(&self.expr.projection);
+                writeln!(f, "{}Project: {outputs}", ctx.indent)?;
+            }
+        }
+
+        if !self.expr.predicates.is_empty() {
+            let predicates = self.expr.predicates.iter().map(|(_, p)| self.child(p));
+            let predicates = separated(" AND ", predicates);
+            writeln!(f, "{}Filter: {predicates}", ctx.indent)?;
+        }
         if !self.expr.expressions.is_empty() {
             let scalars = self.expr.expressions.iter().map(|s| self.child(s));
             let scalars = separated(", ", scalars);

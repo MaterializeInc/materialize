@@ -838,17 +838,24 @@ mod tests {
         // Plan wraps PlanNode with a LirId (u64).
         assert_eq!(size_of::<Plan>(), 96);
 
-        // Join plan types — Vec→Box<[T]> conversions eliminate unused capacity fields.
+        // SafeMfpPlan uses Box<[T]> instead of Vec<T>, saving 24 bytes (3 × 8).
+        assert_eq!(size_of::<mz_expr::SafeMfpPlan>(), 56);
+
+        // KeyValPlan contains two SafeMfpPlans — cascading savings.
+        use reduce::KeyValPlan;
+        assert_eq!(size_of::<KeyValPlan>(), 112);
+
+        // Join plan types — SafeMfpPlan Vec→Box<[T]> conversions cascade through JoinClosure.
         use join::{JoinClosure, JoinPlan};
         use join::linear_join::{LinearJoinPlan, LinearStagePlan};
         use join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
-        assert_eq!(size_of::<JoinClosure>(), 96);
-        assert_eq!(size_of::<LinearStagePlan>(), 152);
-        assert_eq!(size_of::<LinearJoinPlan>(), 232);
-        assert_eq!(size_of::<DeltaStagePlan>(), 152);
-        assert_eq!(size_of::<DeltaPathPlan>(), 232);
+        assert_eq!(size_of::<JoinClosure>(), 72);
+        assert_eq!(size_of::<LinearStagePlan>(), 128);
+        assert_eq!(size_of::<LinearJoinPlan>(), 184);
+        assert_eq!(size_of::<DeltaStagePlan>(), 128);
+        assert_eq!(size_of::<DeltaPathPlan>(), 184);
         assert_eq!(size_of::<DeltaJoinPlan>(), 16);
-        assert_eq!(size_of::<JoinPlan>(), 232);
+        assert_eq!(size_of::<JoinPlan>(), 184);
 
         // TopK plan types — Vec→Box<[T]> conversions eliminate unused capacity fields.
         use top_k::TopKPlan;

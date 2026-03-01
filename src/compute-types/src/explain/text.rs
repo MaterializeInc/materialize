@@ -21,7 +21,6 @@
 //! 5. A single non-recursive parameter can be written just as `$val`.
 
 use std::fmt;
-use std::ops::Deref;
 
 use itertools::Itertools;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
@@ -360,7 +359,7 @@ impl Plan {
                 }
 
                 ctx.indented(|ctx| {
-                    let kvp = key_val_plan.key_plan.deref();
+                    let kvp = &key_val_plan.key_plan;
                     if !kvp.is_identity() {
                         writeln!(f, "{}Key:", ctx.indent)?;
                         ctx.indented(|ctx| {
@@ -763,21 +762,21 @@ impl Plan {
                         let key = CompactScalars(key);
                         writeln!(f, "{}input_key={}", ctx.indent, key)?;
                     }
-                    if key_val_plan.key_plan.deref().is_identity() {
+                    if key_val_plan.key_plan.is_identity() {
                         writeln!(f, "{}key_plan=id", ctx.indent)?;
                     } else {
                         writeln!(f, "{}key_plan", ctx.indent)?;
                         ctx.indented(|ctx| {
-                            let key_plan = mode.expr(key_val_plan.key_plan.deref(), None);
+                            let key_plan = mode.expr(&key_val_plan.key_plan, None);
                             key_plan.fmt_text(f, ctx)
                         })?;
                     }
-                    if key_val_plan.val_plan.deref().is_identity() {
+                    if key_val_plan.val_plan.is_identity() {
                         writeln!(f, "{}val_plan=id", ctx.indent)?;
                     } else {
                         writeln!(f, "{}val_plan", ctx.indent)?;
                         ctx.indented(|ctx| {
-                            let val_plan = mode.expr(key_val_plan.val_plan.deref(), None);
+                            let val_plan = mode.expr(&key_val_plan.val_plan, None);
                             val_plan.fmt_text(f, ctx)
                         })?;
                     }
@@ -1357,7 +1356,7 @@ impl JoinClosure {
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         if !self.before.expressions.is_empty() || !self.before.predicates.is_empty() {
-            mode.expr(self.before.deref(), None).fmt_text(f, ctx)?;
+            mode.expr(&self.before, None).fmt_text(f, ctx)?;
         }
         if !self.ready_equivalences.is_empty() {
             let equivalences = separated(
@@ -1377,7 +1376,7 @@ impl JoinClosure {
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
-        mode.expr(self.before.deref(), None).fmt_text(f, ctx)?;
+        mode.expr(&self.before, None).fmt_text(f, ctx)?;
         if !self.ready_equivalences.is_empty() {
             let equivalences = separated(
                 " AND ",
