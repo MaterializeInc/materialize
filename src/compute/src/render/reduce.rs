@@ -255,7 +255,7 @@ where
             }
             ReducePlan::Basic(BasicPlan::Multiple(aggrs)) => {
                 let (output, errs) =
-                    self.build_basic_aggregates(collection, aggrs, key_arity, mfp_after);
+                    self.build_basic_aggregates(collection, aggrs.into_vec(), key_arity, mfp_after);
                 errors.push(errs);
                 output
             }
@@ -992,7 +992,7 @@ where
     /// stages can skip validation.
     fn build_bucketed_stage<S>(
         &self,
-        aggr_funcs: &Vec<AggregateFunc>,
+        aggr_funcs: &[AggregateFunc],
         input: &VecCollection<S, (Row, Row), Diff>,
         validating: bool,
     ) -> (
@@ -1010,7 +1010,7 @@ where
                     RowValSpine<Result<Row, Row>, _, _>,
                 >(
                     input,
-                    aggr_funcs.clone(),
+                    aggr_funcs.to_vec(),
                 );
             let (oks, errs) = reduced
                 .as_collection(|k, v| (k.to_row(), v.clone()))
@@ -1035,7 +1035,7 @@ where
             let (input, reduced) = self
                 .build_bucketed_negated_output::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                     input,
-                    aggr_funcs.clone(),
+                    aggr_funcs.to_vec(),
                 );
             // TODO: Here is a good moment where we could apply the next `mod` calculation. Note
             // that we need to apply the mod on both input and oks.

@@ -2141,3 +2141,154 @@ All join query types work correctly with no regression (200 iterations, 3 trials
 - `src/compute-types/src/plan/join/delta_join.rs` — `DeltaJoinPlan`: path_plans; `DeltaPathPlan`: source_key, stage_plans; `DeltaStagePlan`: stream_key, stream_thinning, lookup_key — all `Vec→Box<[T]>`, `.into_boxed_slice()` at construction sites
 - `src/compute/src/render/join/delta_join.rs` — `build_halfjoin` parameter types: `Vec<MirScalarExpr>` → `Box<[MirScalarExpr]>`, `Vec<usize>` → `Box<[usize]>`
 - `src/compute-types/src/plan.rs` — Added size assertions for all join plan types
+
+## Session 29: Shrink TopKPlan from 136 to 112 bytes via Vec→Box<[T]>
+
+**Date:** 2026-03-01
+
+### Changes
+
+Convert `Vec<T>` fields in all 3 `TopKPlan` sub-types to `Box<[T]>`, eliminating unused capacity fields. These fields are constructed once during plan lowering and never mutated afterward.
+
+**Fields converted:**
+
+1. **MonotonicTop1Plan**: `group_key: Vec<usize>` → `Box<[usize]>`, `order_key: Vec<ColumnOrder>` → `Box<[ColumnOrder]>` (saves 16 bytes)
+2. **MonotonicTopKPlan**: `group_key: Vec<usize>` → `Box<[usize]>`, `order_key: Vec<ColumnOrder>` → `Box<[ColumnOrder]>` (saves 16 bytes)
+3. **BasicTopKPlan**: `group_key: Vec<usize>` → `Box<[usize]>`, `order_key: Vec<ColumnOrder>` → `Box<[ColumnOrder]>`, `buckets: Vec<u64>` → `Box<[u64]>` (saves 24 bytes)
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| MonotonicTop1Plan | 56 | 40 | 16 bytes (29%) |
+| MonotonicTopKPlan | 112 | 96 | 16 bytes (14%) |
+| BasicTopKPlan | 136 | 112 | 24 bytes (18%) |
+| TopKPlan | 136 | 112 | 24 bytes (18%) |
+
+### Why this matters
+
+`TopKPlan` is stored as `Box<TopKPlan>` inside `PlanNode::TopK`. The boxed allocation shrinks from 136 to 112 bytes. These plan types persist in memory for the entire lifetime of a dataflow on every compute worker, so the savings accumulate across all active dataflows that use TopK (ORDER BY LIMIT, DISTINCT ON, etc.).
+
+The render code in `src/compute/src/render/top_k.rs` consumes the plan by destructuring it, so the fields need to be converted back to `Vec` at the render boundary via `.into_vec()` (which is O(1) — just adds capacity = length).
+
+### Benchmark results
+
+All TopK query types work correctly with no regression (5000 rows, 3 trials averaged):
+
+| Query Type | Avg Time | Notes |
+|-----------|----------|-------|
+| Simple ORDER BY LIMIT 10 | ~13ms | Exercises BasicTopK |
+| Multi-column ORDER BY (3 cols) LIMIT 20 | ~14.5ms | Exercises order_key with 3 ColumnOrder elements |
+| DISTINCT ON (100 groups) | ~12.4ms | Exercises MonotonicTop1 (group_key + order_key) |
+| ORDER BY LIMIT 10 OFFSET 100 | ~16.7ms | Exercises BasicTopK with offset |
+| TopK per group (row_number window) | ~22.6ms | Exercises group_key + order_key in window context |
+
+### Files changed (3 files)
+
+- `src/compute-types/src/plan/top_k.rs` — `group_key: Vec<usize>` → `Box<[usize]>`, `order_key: Vec<ColumnOrder>` → `Box<[ColumnOrder]>`, `buckets: Vec<u64>` → `Box<[u64]>` in all 3 plan structs, `.into_boxed_slice()` at construction sites
+- `src/compute/src/render/top_k.rs` — `.into_vec()` at 3 render consumption sites (MonotonicTop1, MonotonicTopK, BasicTopK)
+- `src/compute-types/src/plan.rs` — Added size assertion for TopKPlan (112 bytes)
+
+### Cumulative savings across all sessions (after session 29)
+
+| Type | Original | After all sessions | Total savings |
+|------|----------|-------------------|---------------|
+| Expr\<Raw\> | 240 | 48 | 192 bytes (80%) |
+| Value | 48 | 40 | 8 bytes (17%) |
+| PlanNode | 384 | 88 | 296 bytes (77%) |
+| Plan (compute LIR) | 392 | 96 | 296 bytes (76%) |
+| TopKPlan | 136 | 112 | 24 bytes (18%) |
+| Ident | 24 | 16 | 8 bytes (33%) |
+| Plan (sql) | ~1888 | 176 | ~1712 bytes (91%) |
+| SelectPlan | 184 | 168 | 16 bytes (9%) |
+| RowSetFinishing | 72 | 56 | 16 bytes (22%) |
+| MirScalarExpr | 88 | 48 | 40 bytes (45%) |
+| MirRelationExpr | 176 | 88 | 88 bytes (50%) |
+| HirScalarExpr | 192 | 80 | 112 bytes (58%) |
+| HirRelationExpr | 456 | 72 | 384 bytes (84%) |
+| AggregateFunc | 88 | 48 | 40 bytes (45%) |
+| AggregateExpr | 184 | 104 | 80 bytes (43%) |
+| UnaryFunc | 72 | 32 | 40 bytes (56%) |
+| BinaryFunc | 48 | 24 | 24 bytes (50%) |
+| VariadicFunc | 40 | 24 | 16 bytes (40%) |
+| TableFunc | 80 | 40 | 40 bytes (50%) |
+| EvalError | 56 | 40 | 16 bytes (29%) |
+| JoinImplementation | 120 | 64 | 56 bytes (47%) |
+| SqlScalarType | 32 | 24 | 8 bytes (25%) |
+| SqlColumnType | 40 | 32 | 8 bytes (20%) |
+| Matcher | 72 | 64 | 8 bytes (11%) |
+| ReprRelationType | 48 | 40 | 8 bytes (17%) |
+| ColumnOrder | 16 | 8 | 8 bytes (50%) |
+| Op | 48 | 32 | 16 bytes (33%) |
+| Format\<Raw\> | 232 | 32 | 200 bytes (86%) |
+| Statement\<Raw\> | 832 | 584 | 248 bytes (30%) |
+
+## Session 30: Shrink ReducePlan sub-types via Vec→Box<[T]>
+
+**Date:** 2026-03-01
+
+### Changes
+
+Convert 8 `Vec<T>` fields across 5 ReducePlan sub-types to `Box<[T]>`, eliminating unused capacity fields. These fields are constructed once during plan lowering and never mutated afterward — the capacity word is wasted memory.
+
+**Fields converted:**
+
+1. **AccumulablePlan** (3 fields, saves 24 bytes: 72→48):
+   - `full_aggrs: Vec<AggregateExpr>` → `Box<[AggregateExpr]>`
+   - `simple_aggrs: Vec<(usize, AggregateExpr)>` → `Box<[(usize, AggregateExpr)]>`
+   - `distinct_aggrs: Vec<(usize, AggregateExpr)>` → `Box<[(usize, AggregateExpr)]>`
+
+2. **MonotonicPlan** (1 field, saves 8 bytes: 32→24):
+   - `aggr_funcs: Vec<AggregateFunc>` → `Box<[AggregateFunc]>`
+
+3. **BucketedPlan** (2 fields, saves 16 bytes: 48→32):
+   - `aggr_funcs: Vec<AggregateFunc>` → `Box<[AggregateFunc]>`
+   - `buckets: Vec<u64>` → `Box<[u64]>`
+
+4. **BasicPlan::Multiple** (1 field, saves 8 bytes):
+   - `Multiple(Vec<AggregateExpr>)` → `Multiple(Box<[AggregateExpr]>)`
+
+5. **CollationPlan** (1 field, saves 8 bytes; total 256→216 from cascading):
+   - `aggregate_types: Vec<ReductionType>` → `Box<[ReductionType]>`
+
+### Size measurements (before → after)
+
+| Type | Before | After | Savings |
+|------|--------|-------|---------|
+| AccumulablePlan | 72 | 48 | 24 bytes (33%) |
+| MonotonicPlan | 32 | 24 | 8 bytes (25%) |
+| BucketedPlan | 48 | 32 | 16 bytes (33%) |
+| HierarchicalPlan | 48 | 32 | 16 bytes (33%) |
+| CollationPlan | 256 | 216 | 40 bytes (16%) |
+
+### Why this matters
+
+These types are stored inside `Box<ReducePlan>` in `PlanNode::Reduce`. While `ReducePlan` itself stays at 112 bytes (driven by `BasicPlan::Single(SingleBasicPlan)` which embeds a 104-byte `AggregateExpr`), the individual struct allocations that compose the enum variants are smaller. For accumulable aggregations, the `AccumulablePlan` allocation saves 24 bytes. These plan types persist in memory for the entire lifetime of a dataflow on every compute worker, so the savings accumulate across all active dataflows that use reductions.
+
+Additionally, `BucketedPlan.into_monotonic()` moves the `aggr_funcs` field to `MonotonicPlan` — since both are now `Box<[AggregateFunc]>`, the move is zero-copy.
+
+### Render code boundary
+
+The render code in `src/compute/src/render/reduce.rs` consumes these plans by destructuring:
+- `build_bucketed_stage` parameter changed from `&Vec<AggregateFunc>` to `&[AggregateFunc]` (more idiomatic)
+- `build_bucketed_negated_output` receives `.to_vec()` at call sites
+- `build_basic_aggregates` receives `.into_vec()` at the match site (O(1) conversion)
+
+### Benchmark results
+
+All aggregation query types work correctly with no regression (5000 rows, 3 trials averaged):
+
+| Query Type | Avg Time | Notes |
+|-----------|----------|-------|
+| Accumulable (SUM/COUNT/AVG) | ~10.9ms | Exercises AccumulablePlan |
+| Hierarchical (MIN/MAX) | ~11.4ms | Exercises BucketedPlan/MonotonicPlan |
+| DISTINCT | ~6.4ms | Exercises ReducePlan::Distinct |
+| Basic (string_agg ORDER BY) | ~549ms | Exercises BasicPlan |
+| Mixed (SUM+MIN+MAX+COUNT) | ~14.5ms | Exercises collation of multiple types |
+| COUNT DISTINCT | ~10.0ms | Exercises AccumulablePlan with distinct_aggrs |
+
+### Files changed (3 files)
+
+- `src/compute-types/src/plan/reduce.rs` — 8 Vec→Box<[T]> field type changes, `.into_boxed_slice()` at 5 construction sites
+- `src/compute/src/render/reduce.rs` — `&Vec<AggregateFunc>` → `&[AggregateFunc]` parameter, `.to_vec()` at 2 call sites, `.into_vec()` at 1 match site
+- `src/compute-types/src/plan.rs` — Size assertions for AccumulablePlan (48), MonotonicPlan (24), BucketedPlan (32), HierarchicalPlan (32), CollationPlan (216)

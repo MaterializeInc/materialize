@@ -853,5 +853,14 @@ mod tests {
         // TopK plan types — Vec→Box<[T]> conversions eliminate unused capacity fields.
         use top_k::TopKPlan;
         assert_eq!(size_of::<TopKPlan>(), 112);
+
+        // Reduce plan types — Vec→Box<[T]> conversions eliminate unused capacity fields.
+        use reduce::{AccumulablePlan, BasicPlan, BucketedPlan, CollationPlan, HierarchicalPlan, MonotonicPlan, ReducePlan};
+        assert_eq!(size_of::<AccumulablePlan>(), 48);
+        assert_eq!(size_of::<MonotonicPlan>(), 24);
+        assert_eq!(size_of::<BucketedPlan>(), 32);
+        assert_eq!(size_of::<HierarchicalPlan>(), 32);
+        assert_eq!(size_of::<ReducePlan>(), 112);
+        assert_eq!(size_of::<CollationPlan>(), 216);
     }
 }

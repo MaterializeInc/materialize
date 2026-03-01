@@ -146,14 +146,14 @@ pub enum ReducePlan {
 pub struct AccumulablePlan {
     /// All of the aggregations we were asked to compute, stored
     /// in order.
-    pub full_aggrs: Vec<AggregateExpr>,
+    pub full_aggrs: Box<[AggregateExpr]>,
     /// All of the non-distinct accumulable aggregates.
     /// Each element represents:
     /// (index of the datum among inputs, aggregation expr)
     /// These will all be rendered together in one dataflow fragment.
-    pub simple_aggrs: Vec<(usize, AggregateExpr)>,
+    pub simple_aggrs: Box<[(usize, AggregateExpr)]>,
     /// Same as above but for all of the `DISTINCT` accumulable aggregations.
-    pub distinct_aggrs: Vec<(usize, AggregateExpr)>,
+    pub distinct_aggrs: Box<[(usize, AggregateExpr)]>,
 }
 
 /// Plan for computing a set of hierarchical aggregations.
@@ -207,7 +207,7 @@ impl HierarchicalPlan {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct MonotonicPlan {
     /// All of the aggregations we were asked to compute.
-    pub aggr_funcs: Vec<AggregateFunc>,
+    pub aggr_funcs: Box<[AggregateFunc]>,
     /// True if the input is not physically monotonic, and the operator must perform
     /// consolidation to remove potential negations. The operator implementation is
     /// free to consolidate as late as possible while ensuring correctness, so it is
@@ -231,11 +231,11 @@ pub struct MonotonicPlan {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct BucketedPlan {
     /// All of the aggregations we were asked to compute.
-    pub aggr_funcs: Vec<AggregateFunc>,
+    pub aggr_funcs: Box<[AggregateFunc]>,
     /// The number of buckets in each layer of the reduction tree. Should
     /// be decreasing, and ideally, a power of two so that we can easily
     /// distribute values to buckets with `value.hashed() % buckets[layer]`.
-    pub buckets: Vec<u64>,
+    pub buckets: Box<[u64]>,
 }
 
 impl BucketedPlan {
@@ -243,7 +243,7 @@ impl BucketedPlan {
     /// consolidation to its input.
     fn into_monotonic(self, must_consolidate: bool) -> MonotonicPlan {
         MonotonicPlan {
-            aggr_funcs: self.aggr_funcs,
+            aggr_funcs: self.aggr_funcs, // Box<[T]> moves cleanly
             must_consolidate,
         }
     }
@@ -271,7 +271,7 @@ pub enum BasicPlan {
     /// reduction. Each element represents the:
     /// `(index of the set of the input we are aggregating over,
     ///   the aggregation function)`
-    Multiple(Vec<AggregateExpr>),
+    Multiple(Box<[AggregateExpr]>),
 }
 
 /// Plan for rendering a single basic aggregation, with possibly fusing a `FlatMap UnnestList` with
@@ -311,7 +311,7 @@ pub struct CollationPlan {
     /// the sequence aggregations in the original reduce expression.
     /// We keep a map from output position -> reduction type
     /// to easily merge results back into the requested order.
-    pub aggregate_types: Vec<ReductionType>,
+    pub aggregate_types: Box<[ReductionType]>,
 }
 
 impl CollationPlan {
@@ -397,16 +397,17 @@ impl ReducePlan {
                     };
                 }
                 ReducePlan::Accumulable(AccumulablePlan {
-                    full_aggrs,
-                    simple_aggrs,
-                    distinct_aggrs,
+                    full_aggrs: full_aggrs.into_boxed_slice(),
+                    simple_aggrs: simple_aggrs.into_boxed_slice(),
+                    distinct_aggrs: distinct_aggrs.into_boxed_slice(),
                 })
             }
             ReductionType::Hierarchical => {
-                let aggr_funcs = aggregates_list
+                let aggr_funcs: Box<[AggregateFunc]> = aggregates_list
                     .iter()
                     .map(|aggr| aggr.func.clone())
-                    .collect();
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
 
                 if monotonic {
                     let monotonic = MonotonicPlan {
@@ -418,7 +419,7 @@ impl ReducePlan {
                     let buckets = bucketing_of_expected_group_size(expected_group_size);
                     let bucketed = BucketedPlan {
                         aggr_funcs,
-                        buckets,
+                        buckets: buckets.into_boxed_slice(),
                     };
 
                     ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(bucketed))
@@ -429,7 +430,7 @@ impl ReducePlan {
                     expr,
                     fused_unnest_list,
                 })),
-                Err(aggregates_list) => ReducePlan::Basic(BasicPlan::Multiple(aggregates_list)),
+                Err(aggregates_list) => ReducePlan::Basic(BasicPlan::Multiple(aggregates_list.into_boxed_slice())),
             },
         }
     }
