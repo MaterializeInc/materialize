@@ -7,7 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { executeSqlHttp } from "~/test/sql/materializeSqlClient";
+import {
+  executeSqlHttp,
+  getMaterializeClient,
+} from "~/test/sql/materializeSqlClient";
 import { testdrive } from "~/test/sql/mzcompose";
 
 import { buildClustersQuery } from "./clusterList";
@@ -87,5 +90,64 @@ describe("buildClusterSubscribe", () => {
         latestStatusUpdate: expect.any(Date),
       },
     ]);
+  });
+
+  it("correctly associates statuses with multiple replicas", async () => {
+    const client = await getMaterializeClient();
+
+    await testdrive(
+      `> CREATE CLUSTER test_multi (SIZE 'scale=1,workers=1', REPLICATION FACTOR 2);`,
+    );
+
+    try {
+      const {
+        rows: [cluster],
+      } = await client.query<{ id: string }>(
+        "SELECT id FROM mz_clusters WHERE name = 'test_multi'",
+      );
+      const { rows: replicas } = await client.query<{
+        id: string;
+        name: string;
+      }>(
+        `SELECT id, name FROM mz_cluster_replicas WHERE cluster_id = '${cluster.id}' ORDER BY name`,
+      );
+      const [r1, r2] = replicas;
+
+      // Wait for both replicas to have statuses
+      const waitForStatuses = async () => {
+        for (let i = 0; i < 30; i++) {
+          const { rows } = await client.query<{ count: string }>(
+            `SELECT COUNT(DISTINCT replica_id)::text as count FROM mz_cluster_replica_statuses WHERE replica_id IN ('${r1.id}', '${r2.id}')`,
+          );
+          if (rows[0].count === "2") return;
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+        throw new Error("Timed out waiting for replica statuses");
+      };
+      await waitForStatuses();
+
+      const query = buildClustersQuery({
+        queryOwnership: false,
+        includeSystemObjects: false,
+      }).compile();
+      const result = await executeSqlHttp(query);
+
+      const testCluster = result.rows.find((r) => r.name === "test_multi");
+      expect(testCluster).toBeDefined();
+      expect(testCluster!.replicas).toHaveLength(2);
+
+      const replicaR1 = testCluster!.replicas.find((r) => r.name === "r1");
+      const replicaR2 = testCluster!.replicas.find((r) => r.name === "r2");
+
+      // Each replica's statuses should only contain its own replica_id
+      expect(replicaR1!.statuses).toEqual([
+        expect.objectContaining({ replica_id: r1.id }),
+      ]);
+      expect(replicaR2!.statuses).toEqual([
+        expect.objectContaining({ replica_id: r2.id }),
+      ]);
+    } finally {
+      await testdrive(`> DROP CLUSTER IF EXISTS test_multi;`);
+    }
   });
 });
