@@ -45,7 +45,7 @@ use tokio::sync::{Semaphore, mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
-use crate::coord::appends::{BuiltinTableAppendNotify, TimestampedWriteResult};
+use crate::coord::appends::{BuiltinTableAppendNotify, WriteResult};
 use crate::coord::consistency::CoordinatorInconsistencies;
 use crate::coord::peek::{PeekDataflowPlan, PeekResponseUnary};
 use crate::coord::timestamp_selection::TimestampDetermination;
@@ -344,13 +344,22 @@ pub enum Command {
         tx: oneshot::Sender<Result<mpsc::UnboundedReceiver<PeekResponseUnary>, AdapterError>>,
     },
 
-    /// Attempts a timestamped write for OCC (optimistic concurrency control).
-    /// Used by frontend read-then-write to submit accumulated diffs.
-    AttemptTimestampedWrite {
+    /// Submits a write from the frontend OCC (optimistic concurrency control)
+    /// read-then-write loop. Carries the accumulated diffs to write.
+    ///
+    /// `write_ts` selects between two modes:
+    /// - `Some(ts)`: timestamped write at a specific timestamp, used when the
+    ///   SELECT depends on tables and OCC must target the subscribe's progress
+    ///   frontier.
+    /// - `None`: blind write where the coordinator picks the timestamp via the
+    ///   oracle during group commit, used for constant expressions (e.g.
+    ///   `INSERT INTO t SELECT generate_series(...)`) whose results don't
+    ///   depend on any table state.
+    AttemptWrite {
         target_id: CatalogItemId,
         diffs: Vec<(Row, Diff)>,
-        write_ts: mz_repr::Timestamp,
-        tx: oneshot::Sender<TimestampedWriteResult>,
+        write_ts: Option<mz_repr::Timestamp>,
+        tx: oneshot::Sender<WriteResult>,
     },
 
     /// Drops an internal subscribe.
@@ -396,7 +405,7 @@ impl Command {
             | Command::ExplainTimestamp { .. }
             | Command::FrontendStatementLogging(..)
             | Command::CreateInternalSubscribe { .. }
-            | Command::AttemptTimestampedWrite { .. }
+            | Command::AttemptWrite { .. }
             | Command::DropInternalSubscribe { .. } => None,
         }
     }
@@ -434,7 +443,7 @@ impl Command {
             | Command::ExplainTimestamp { .. }
             | Command::FrontendStatementLogging(..)
             | Command::CreateInternalSubscribe { .. }
-            | Command::AttemptTimestampedWrite { .. }
+            | Command::AttemptWrite { .. }
             | Command::DropInternalSubscribe { .. } => None,
         }
     }

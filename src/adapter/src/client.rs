@@ -51,7 +51,6 @@ use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
-use crate::optimize::{self, Optimize};
 use crate::command::{
     CatalogDump, CatalogSnapshot, Command, CopyFromStdinWriter, ExecuteResponse, Response,
     SASLChallengeResponse, SASLVerifyProofResponse, SuperuserAttribute,
@@ -59,6 +58,7 @@ use crate::command::{
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
+use crate::optimize::{self, Optimize};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
 };
@@ -1070,7 +1070,7 @@ impl SessionClient {
                 | Command::ExplainTimestamp { .. }
                 | Command::FrontendStatementLogging(..)
                 | Command::CreateInternalSubscribe { .. }
-                | Command::AttemptTimestampedWrite { .. }
+                | Command::AttemptWrite { .. }
                 | Command::DropInternalSubscribe { .. } => {}
             };
             cmd

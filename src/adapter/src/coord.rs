@@ -456,7 +456,7 @@ impl Message {
                 Command::FrontendStatementLogging(..) => "frontend-statement-logging",
                 Command::StartCopyFromStdin { .. } => "start-copy-from-stdin",
                 Command::CreateInternalSubscribe { .. } => "create-internal-subscribe",
-                Command::AttemptTimestampedWrite { .. } => "attempt-timestamped-write",
+                Command::AttemptWrite { .. } => "attempt-write",
                 Command::DropInternalSubscribe { .. } => "drop-internal-subscribe",
             },
             Message::ControllerReady {
@@ -3670,9 +3670,10 @@ impl Coordinator {
                         // and make it follow from all the Spans in the pending
                         // writes.
                         let user_write_spans = self.pending_writes.iter().flat_map(|x| match x {
-                            PendingWriteTxn::User{span, ..} => Some(span),
-                            PendingWriteTxn::InternalTimestamped{span, ..} => Some(span),
-                            PendingWriteTxn::System{..} => None,
+                            PendingWriteTxn::User { span, .. }
+                            | PendingWriteTxn::InternalTimestamped { span, .. }
+                            | PendingWriteTxn::InternalBlindWrite { span, .. } => Some(span),
+                            PendingWriteTxn::System { .. } => None,
                         });
                         let span = match user_write_spans.exactly_one() {
                             Ok(span) => span.clone(),

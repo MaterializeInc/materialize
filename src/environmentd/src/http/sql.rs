@@ -646,6 +646,7 @@ impl SqlResult {
                 PeekResponseUnary::Canceled => {
                     return Ok(SqlResult::err(client, AdapterError::Canceled));
                 }
+                PeekResponseUnary::SubscribeFinished => break,
             };
 
             if let Err(err) = verify_datum_desc(desc, &mut sql_rows) {
@@ -1070,7 +1071,7 @@ impl ResultSender for WebSocket {
                                 Some((StatementEndedExecutionReason::Canceled, ctx_extra)),
                             );
                         }
-                        None => {
+                        Some(PeekResponseUnary::SubscribeFinished) | None => {
                             break (
                                 false,
                                 vec![WebSocketResponse::CommandComplete(tag)],

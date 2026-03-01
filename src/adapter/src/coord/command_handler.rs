@@ -519,16 +519,14 @@ impl Coordinator {
                     )
                     .await;
                 }
-                Command::AttemptTimestampedWrite {
+                Command::AttemptWrite {
                     target_id,
                     diffs,
                     write_ts,
                     tx,
                 } => {
-                    self.handle_attempt_timestamped_write(
-                        target_id, diffs, write_ts, tx,
-                    )
-                    .await;
+                    self.handle_attempt_write(target_id, diffs, write_ts, tx)
+                        .await;
                 }
                 Command::DropInternalSubscribe { sink_id, tx } => {
                     self.drop_internal_subscribe(sink_id).await;

@@ -358,11 +358,17 @@ impl ActiveSubscribe {
 
         self.send(PeekResponseUnary::Rows(rows));
 
-        // Emit progress message if requested. Don't emit progress for the first
-        // batch if the upper is exactly `as_of` (we're guaranteed it is not
-        // less than `as_of`, but it might be exactly `as_of`) as we've already
-        // emitted that progress message in `initialize`.
-        if !batch.upper.less_equal(&self.as_of) {
+        if batch.upper.is_empty() {
+            // The subscribe's upper frontier is the empty antichain — compute
+            // will never produce more data. Signal this explicitly so consumers
+            // (like the RTW OCC loop) can distinguish "subscribe finished
+            // normally" from "channel closed unexpectedly."
+            self.send(PeekResponseUnary::SubscribeFinished);
+        } else if !batch.upper.less_equal(&self.as_of) {
+            // Emit progress message if requested. Don't emit progress for the
+            // first batch if the upper is exactly `as_of` (we're guaranteed it
+            // is not less than `as_of`, but it might be exactly `as_of`) as
+            // we've already emitted that progress message in `initialize`.
             self.send_progress_message(&batch.upper);
         }
 

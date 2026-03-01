@@ -23,7 +23,7 @@ use tokio::sync::mpsc;
 use crate::PeekResponseUnary;
 use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
 use crate::coord::Coordinator;
-use crate::coord::appends::TimestampedWriteResult;
+use crate::coord::appends::WriteResult;
 use crate::error::AdapterError;
 
 impl Coordinator {
@@ -105,13 +105,17 @@ impl Coordinator {
         drop(read_holds);
     }
 
-    /// Handle the write attempt from the OCC loop.
-    pub(crate) async fn handle_attempt_timestamped_write(
+    /// Handle a write attempt from the frontend OCC read-then-write loop.
+    ///
+    /// Dispatches to either a timestamped write (`InternalTimestamped`) or a
+    /// blind write (`InternalBlindWrite`) depending on whether `write_ts` is
+    /// provided.
+    pub(crate) async fn handle_attempt_write(
         &mut self,
         target_id: mz_repr::CatalogItemId,
         diffs: Vec<(Row, Diff)>,
-        write_ts: Timestamp,
-        result_tx: tokio::sync::oneshot::Sender<TimestampedWriteResult>,
+        write_ts: Option<Timestamp>,
+        result_tx: tokio::sync::oneshot::Sender<WriteResult>,
     ) {
         use crate::coord::appends::PendingWriteTxn;
         use mz_storage_client::client::TableData;
@@ -121,35 +125,52 @@ impl Coordinator {
 
         if self.controller.read_only() {
             panic!(
-                "attempting OCC read-then-write in read-only mode: write_ts={}, target_id={:?}",
+                "attempting OCC read-then-write in read-only mode: write_ts={:?}, target_id={:?}",
                 write_ts, target_id
             );
-        }
-
-        // Early check if timestamp already passed
-        let next_eligible_write_ts = self.peek_local_write_ts().await.step_forward();
-        if write_ts < next_eligible_write_ts {
-            let _ = result_tx.send(TimestampedWriteResult::TimestampPassed {
-                target_timestamp: write_ts,
-                current_write_ts: next_eligible_write_ts,
-            });
-            return;
         }
 
         // Create TableData from accumulated diffs
         let table_data = TableData::Rows(diffs);
         let writes = BTreeMap::from([(target_id, smallvec![table_data])]);
 
-        tracing::trace!(?writes, ?write_ts, "about to attempt read-then-write");
+        match write_ts {
+            Some(write_ts) => {
+                // Timestamped write: target a specific timestamp.
+                // Early check if timestamp already passed.
+                let next_eligible_write_ts = self.peek_local_write_ts().await.step_forward();
+                if write_ts < next_eligible_write_ts {
+                    let _ = result_tx.send(WriteResult::TimestampPassed {
+                        target_timestamp: write_ts,
+                        current_write_ts: next_eligible_write_ts,
+                    });
+                    return;
+                }
 
-        // Push internal timestamped write directly to pending_writes
-        self.pending_writes
-            .push(PendingWriteTxn::InternalTimestamped {
-                span: Span::current(),
-                writes,
-                target_timestamp: write_ts,
-                result_tx,
-            });
+                tracing::trace!(?writes, ?write_ts, "about to attempt read-then-write");
+
+                self.pending_writes
+                    .push(PendingWriteTxn::InternalTimestamped {
+                        span: Span::current(),
+                        writes,
+                        target_timestamp: write_ts,
+                        result_tx,
+                    });
+            }
+            None => {
+                // Blind write: coordinator picks timestamp via oracle during
+                // group commit. Used for constant expressions where the read
+                // has no timestamp dependency.
+                tracing::trace!(?writes, "about to attempt blind read-then-write");
+
+                self.pending_writes
+                    .push(PendingWriteTxn::InternalBlindWrite {
+                        span: Span::current(),
+                        writes,
+                        result_tx,
+                    });
+            }
+        }
         self.trigger_group_commit();
     }
 

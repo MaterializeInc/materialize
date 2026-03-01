@@ -27,11 +27,12 @@
 //!
 //! The `FRONTEND_READ_THEN_WRITE` dyncfg is read once at process startup and
 //! fixed for the lifetime of the `environmentd` process. This avoids a
-//! mixed-mode window where both the old lock-based coordinator path and this
-//! OCC path are active concurrently — the old path acquires write locks to
+//! mixed-mode window where both the lock-based coordinator path and this OCC
+//! path are active concurrently — the coordinator path acquires write locks to
 //! prevent concurrent writes between its read and write phases, but this OCC
 //! path does not use write locks, so concurrent operation of both paths could
-//! allow an OCC write to slip between an old-path reader's read and write.
+//! allow an OCC write to slip between a coordinator-path reader's read and
+//! write.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -47,8 +48,8 @@ use mz_expr::{CollectionPlan, Id, LocalId, MirRelationExpr, MirScalarExpr};
 use mz_ore::cast::CastFrom;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::{
-    CatalogItemId, Diff, GlobalId, IntoRowIterator, RelationDesc, Row, RowArena,
-    SqlRelationType, Timestamp,
+    CatalogItemId, Diff, GlobalId, IntoRowIterator, RelationDesc, Row, RowArena, SqlRelationType,
+    Timestamp,
 };
 use mz_sql::plan::{self, MutationKind, Params, QueryWhen};
 use mz_sql::session::metadata::SessionMetadata;
@@ -59,7 +60,7 @@ use uuid::Uuid;
 
 use crate::catalog::Catalog;
 use crate::command::{Command, ExecuteResponse};
-use crate::coord::appends::TimestampedWriteResult;
+use crate::coord::appends::WriteResult;
 use crate::coord::sequencer::validate_read_dependencies;
 use crate::coord::{ExecuteContextGuard, TargetCluster};
 use crate::error::AdapterError;
@@ -222,11 +223,11 @@ impl PeekClient {
         // Read-then-write is rejected in explicit transaction blocks (checked
         // in SessionClient::try_frontend_read_then_write), so we're always in
         // an implicit (autocommit) transaction here. The actual data is written
-        // directly via AttemptTimestampedWrite / InternalTimestamped, bypassing
-        // session transaction ops. The empty Writes(vec![]) just marks this as
-        // a write transaction in the session state machine so auto-commit
-        // handles it correctly. This is safe because there's no ROLLBACK
-        // opportunity in an implicit transaction.
+        // via the coordinator's group commit path, bypassing session transaction
+        // ops. The empty Writes(vec![]) just marks this as a write transaction
+        // in the session state machine so auto-commit handles it correctly.
+        // This is safe because there's no ROLLBACK opportunity in an implicit
+        // transaction.
         debug_assert!(
             session.transaction().is_implicit(),
             "read-then-write should be rejected in explicit transactions"
@@ -252,13 +253,13 @@ impl PeekClient {
         let (optimizer, global_mir_plan) =
             self.optimize_mir_read_then_write(catalog, &plan, cluster_id)?;
 
-        // Determine timestamp and acquire read holds
+        // Determine timestamp and acquire read holds.
         let oracle_read_ts = self.oracle_read_ts(&timeline).await;
-        let bundle = &global_mir_plan.id_bundle(cluster_id);
+        let bundle = global_mir_plan.id_bundle(cluster_id);
         let (determination, read_holds) = self
             .frontend_determine_timestamp(
                 session,
-                bundle,
+                &bundle,
                 &QueryWhen::FreshestTableWrite,
                 cluster_id,
                 &timeline,
@@ -402,7 +403,6 @@ impl PeekClient {
             })
             .transpose()?;
 
-        // Determine timeline
         let depends_on = plan.selection.depends_on();
         let timeline = catalog.validate_timeline_context(depends_on.iter().copied())?;
 
@@ -480,7 +480,10 @@ impl PeekClient {
         let column_names: Vec<String> = (0..sql_typ.column_types.len())
             .map(|i| format!("column{}", i))
             .collect();
-        let relation_desc = RelationDesc::new(SqlRelationType::from_repr(&expr_typ), column_names.iter().map(|s| s.as_str()));
+        let relation_desc = RelationDesc::new(
+            sql_typ,
+            column_names.iter().map(|s| s.as_str()),
+        );
 
         // Create the subscribe from the query
         let from = mz_sql::plan::SubscribeFrom::Query {
@@ -676,8 +679,13 @@ impl PeekClient {
 
         /// Result of processing a subscribe message
         enum ProcessResult {
-            Continue { ready_to_write: bool },
+            Continue {
+                ready_to_write: bool,
+            },
             NoRowsMatched,
+            /// The subscribe finished (upper = empty antichain). All data has
+            /// been delivered. Used for constant SELECT expressions.
+            SubscribeFinished,
             Error(AdapterError),
         }
 
@@ -771,6 +779,13 @@ impl PeekClient {
                 }
                 PeekResponseUnary::Error(e) => ProcessResult::Error(AdapterError::Internal(e)),
                 PeekResponseUnary::Canceled => ProcessResult::Error(AdapterError::Canceled),
+                PeekResponseUnary::SubscribeFinished => {
+                    state.consolidate();
+                    if state.all_diffs.is_empty() {
+                        return ProcessResult::NoRowsMatched;
+                    }
+                    return ProcessResult::SubscribeFinished;
+                }
             }
         }
 
@@ -844,17 +859,22 @@ impl PeekClient {
                                     ProcessResult::NoRowsMatched => {
                                         break Some(build_no_rows_response(&kind, &returning));
                                     }
+                                    ProcessResult::SubscribeFinished => {
+                                        // Let the outer match handle the blind write.
+                                        break None;
+                                    }
                                     ProcessResult::Error(e) => {
                                         break Some(Err(e));
                                     }
                                 }
                             }
                             Err(mpsc::error::TryRecvError::Empty) => break None,
-                            Err(mpsc::error::TryRecvError::Disconnected) => {
-                                break Some(Err(AdapterError::Internal(
-                                    "subscribe channel closed".into(),
-                                )));
-                            }
+                            // The subscribe can finish (coordinator drops the
+                            // sender after `process_response` returns true)
+                            // between our last recv() and this drain. This is
+                            // benign — all buffered messages have already been
+                            // consumed via the Ok(msg) arm above.
+                            Err(mpsc::error::TryRecvError::Disconnected) => break None,
                         }
                     };
                     if let Some(result) = drain_err {
@@ -871,26 +891,26 @@ impl PeekClient {
 
                     // Submit write
                     let result = self
-                        .call_coordinator(|tx| Command::AttemptTimestampedWrite {
+                        .call_coordinator(|tx| Command::AttemptWrite {
                             target_id,
                             diffs: state
                                 .all_diffs
                                 .iter()
                                 .map(|(row, _ts, diff)| (row.clone(), *diff))
                                 .collect_vec(),
-                            write_ts,
+                            write_ts: Some(write_ts),
                             tx,
                         })
                         .await;
 
                     match result {
-                        TimestampedWriteResult::Success { .. } => {
+                        WriteResult::Success { .. } => {
                             // N.B. subscribe_handle is dropped here, which
                             // fires off the cleanup message.
                             state.write_submitted = true;
                             break self.build_success_response(kind, returning, &state.all_diffs);
                         }
-                        TimestampedWriteResult::TimestampPassed {
+                        WriteResult::TimestampPassed {
                             current_write_ts, ..
                         } => {
                             // Do not advance `state.current_upper` (and
@@ -916,8 +936,42 @@ impl PeekClient {
                             );
                             continue;
                         }
-                        TimestampedWriteResult::Cancelled => {
+                        WriteResult::Cancelled => {
                             break Err(AdapterError::Canceled);
+                        }
+                    }
+                }
+                ProcessResult::SubscribeFinished => {
+                    // The subscribe finished (upper = empty antichain). This happens
+                    // for constant SELECT expressions (e.g., generate_series) where
+                    // the result doesn't depend on any table. Submit accumulated
+                    // diffs as a blind write — there is no read timestamp to anchor
+                    // to, so the coordinator picks the write timestamp via the oracle.
+                    let diffs = state
+                        .all_diffs
+                        .iter()
+                        .map(|(row, _ts, diff)| (row.clone(), *diff))
+                        .collect_vec();
+                    let result = self
+                        .call_coordinator(|tx| Command::AttemptWrite {
+                            target_id,
+                            diffs,
+                            write_ts: None,
+                            tx,
+                        })
+                        .await;
+                    match result {
+                        WriteResult::Success { .. } => {
+                            state.write_submitted = true;
+                            break self.build_success_response(kind, returning, &state.all_diffs);
+                        }
+                        WriteResult::Cancelled => {
+                            break Err(AdapterError::Canceled);
+                        }
+                        WriteResult::TimestampPassed { .. } => {
+                            break Err(AdapterError::Internal(
+                                "blind write unexpectedly got TimestampPassed".into(),
+                            ));
                         }
                     }
                 }

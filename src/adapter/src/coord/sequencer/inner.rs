@@ -2930,6 +2930,7 @@ impl Coordinator {
                                 PeekResponseUnary::Error(e) => {
                                     break Err(AdapterError::Unstructured(anyhow!(e)));
                                 }
+                                PeekResponseUnary::SubscribeFinished => break Ok(diffs),
                             },
                             Ok(None) => break Ok(diffs),
                             Err(_) => {

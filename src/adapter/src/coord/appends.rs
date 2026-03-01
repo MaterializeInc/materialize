@@ -132,13 +132,14 @@ pub(crate) enum BuiltinTableUpdateSource {
     Background(oneshot::Sender<()>),
 }
 
-/// Result of a timestamped write attempt.
+/// Result of a write attempt from the frontend OCC read-then-write loop.
 ///
-/// A timestamped write is a write that must occur at a specific timestamp. This
-/// is used for read-then-write patterns where a read happens at timestamp T and
-/// the write must happen at exactly T+1 to maintain serializability.
+/// In the OCC (optimistic concurrency control) pattern, the SELECT phase reads
+/// at some timestamp T and the write targets T+1. If another write lands at
+/// T+1 first, the attempt fails with `TimestampPassed` and the OCC loop
+/// retries with an updated snapshot.
 #[derive(Debug, Clone)]
-pub enum TimestampedWriteResult {
+pub enum WriteResult {
     /// The write was committed at the target timestamp.
     Success {
         /// The timestamp at which the write was committed.
@@ -196,7 +197,21 @@ pub(crate) enum PendingWriteTxn {
         span: Span,
         writes: BTreeMap<CatalogItemId, SmallVec<[TableData; 1]>>,
         target_timestamp: Timestamp,
-        result_tx: oneshot::Sender<TimestampedWriteResult>,
+        result_tx: oneshot::Sender<WriteResult>,
+    },
+    /// Blind write from a read-then-write with a constant SELECT expression
+    /// (e.g., `INSERT INTO t SELECT generate_series(...)`).
+    ///
+    /// The SELECT result doesn't depend on any table state, so there is no
+    /// read timestamp to anchor the write to. The coordinator picks the write
+    /// timestamp via the oracle during group commit, just like `User` writes.
+    ///
+    /// Write locks are acquired during group commit (not upfront), since
+    /// blind writes don't come from a session that could hold locks.
+    InternalBlindWrite {
+        span: Span,
+        writes: BTreeMap<CatalogItemId, SmallVec<[TableData; 1]>>,
+        result_tx: oneshot::Sender<WriteResult>,
     },
 }
 
@@ -207,7 +222,13 @@ impl PendingWriteTxn {
                 source: BuiltinTableUpdateSource::Internal(_),
                 ..
             } => true,
-            _ => false,
+            PendingWriteTxn::System {
+                source: BuiltinTableUpdateSource::Background(_),
+                ..
+            }
+            | PendingWriteTxn::User { .. }
+            | PendingWriteTxn::InternalTimestamped { .. }
+            | PendingWriteTxn::InternalBlindWrite { .. } => false,
         }
     }
 }
@@ -390,6 +411,59 @@ impl Coordinator {
                 PendingWriteTxn::System { .. } => validated_writes.push(pending_write),
                 // Internal timestamped writes don't need locks (OCC handles conflicts).
                 PendingWriteTxn::InternalTimestamped { .. } => validated_writes.push(pending_write),
+                // Blind writes need locks just like User writes — other
+                // components depend on write locks for serializability (see
+                // the doc comment on `GroupCommitWriteLocks`). Since blind
+                // writes don't come from a session, we acquire locks here.
+                PendingWriteTxn::InternalBlindWrite {
+                    span,
+                    writes,
+                    result_tx,
+                } => {
+                    let missing = group_write_locks.missing_locks(writes.keys().copied());
+                    if missing.is_empty() {
+                        validated_writes.push(PendingWriteTxn::InternalBlindWrite {
+                            span,
+                            writes,
+                            result_tx,
+                        });
+                    } else {
+                        let mut acquired_all = true;
+                        let mut acquired_locks = Vec::new();
+                        for collection in &missing {
+                            if let Some(lock) = self.try_grant_object_write_lock(*collection) {
+                                acquired_locks.push((*collection, lock));
+                            } else {
+                                acquired_all = false;
+                                break;
+                            }
+                        }
+
+                        if acquired_all {
+                            for (id, lock) in acquired_locks {
+                                group_write_locks.insert_lock(id, lock);
+                            }
+                            validated_writes.push(PendingWriteTxn::InternalBlindWrite {
+                                span,
+                                writes,
+                                result_tx,
+                            });
+                        } else {
+                            // Could not acquire locks right now. Push back
+                            // to pending_writes; the caller is waiting on
+                            // result_tx so they'll pick it up in the next
+                            // group commit round.
+                            drop(acquired_locks);
+                            self.pending_writes
+                                .push(PendingWriteTxn::InternalBlindWrite {
+                                    span,
+                                    writes,
+                                    result_tx,
+                                });
+                            self.trigger_group_commit();
+                        }
+                    }
+                }
                 // We have a set of locks! Validate they're correct (expected).
                 PendingWriteTxn::User {
                     span,
@@ -556,7 +630,7 @@ impl Coordinator {
         let mut appends: BTreeMap<CatalogItemId, SmallVec<[TableData; 1]>> = BTreeMap::new();
         let mut responses = Vec::with_capacity(validated_writes.len());
         let mut notifies = Vec::new();
-        let mut timestamped_result_txs = Vec::new();
+        let mut write_result_txs = Vec::new();
 
         for validated_write_txn in validated_writes {
             match validated_write_txn {
@@ -609,7 +683,19 @@ impl Coordinator {
                             appends.entry(id).or_default().extend(table_data);
                         }
                     }
-                    timestamped_result_txs.push(result_tx);
+                    write_result_txs.push(result_tx);
+                }
+                PendingWriteTxn::InternalBlindWrite {
+                    span: _,
+                    writes,
+                    result_tx,
+                } => {
+                    for (id, table_data) in writes {
+                        if self.catalog().try_get_entry(&id).is_some() {
+                            appends.entry(id).or_default().extend(table_data);
+                        }
+                    }
+                    write_result_txs.push(result_tx);
                 }
             }
         }
@@ -725,9 +811,9 @@ impl Coordinator {
                     let _ = notify.send(());
                 }
 
-                // Notify timestamped write callers of success.
-                for result_tx in timestamped_result_txs {
-                    let _ = result_tx.send(TimestampedWriteResult::Success { timestamp });
+                // Notify internal write callers of success.
+                for result_tx in write_result_txs {
+                    let _ = result_tx.send(WriteResult::Success { timestamp });
                 }
             }
             .instrument(span),
@@ -779,7 +865,7 @@ impl Coordinator {
                     ..
                 } = write
                 {
-                    let _ = result_tx.send(TimestampedWriteResult::TimestampPassed {
+                    let _ = result_tx.send(WriteResult::TimestampPassed {
                         target_timestamp,
                         current_write_ts: next_eligible_write_ts,
                     });
@@ -806,7 +892,7 @@ impl Coordinator {
                         ..
                     } = write
                     {
-                        let _ = result_tx.send(TimestampedWriteResult::TimestampPassed {
+                        let _ = result_tx.send(WriteResult::TimestampPassed {
                             target_timestamp,
                             current_write_ts: next_eligible_write_ts,
                         });
@@ -828,7 +914,7 @@ impl Coordinator {
                         ..
                     } = write
                     {
-                        let _ = result_tx.send(TimestampedWriteResult::TimestampPassed {
+                        let _ = result_tx.send(WriteResult::TimestampPassed {
                             target_timestamp,
                             current_write_ts: target_ts.step_forward(),
                         });
