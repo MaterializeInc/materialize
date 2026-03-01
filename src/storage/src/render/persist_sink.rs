@@ -560,7 +560,16 @@ where
 
     let mut descriptions_input =
         write_op.new_input_for(&batch_descriptions.broadcast(), Pipeline, &output);
-    let mut desired_input = write_op.new_disconnected_input(&desired_collection.inner, Pipeline);
+    let chunk_size = dyncfgs::STORAGE_PERSIST_SINK_CHUNK_SIZE
+        .get(storage_state.storage_configuration.config_set());
+    let mut desired_input = if chunk_size > 0 {
+        write_op.new_disconnected_input(
+            &desired_collection.inner,
+            mz_timely_util::pact::chunked_exchange(chunk_size, collection_id.hashed()),
+        )
+    } else {
+        write_op.new_disconnected_input(&desired_collection.inner, Pipeline)
+    };
 
     // This operator accepts the current and desired update streams for a `persist` shard.
     // It attempts to write out updates, starting from the current's upper frontier, that

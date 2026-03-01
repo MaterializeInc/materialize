@@ -317,6 +317,17 @@ pub const STATISTICS_RETENTION_DURATION: Config<Duration> = Config::new(
     "The time after which we delete per replica statistics (for sources and sinks) after there have been no updates.",
 );
 
+/// The number of full containers each worker sends to one target before rotating
+/// to the next in the storage persist sink exchange. Each container holds many
+/// rows, so even a value of 1 already concentrates updates onto fewer workers.
+/// Set to 0 to disable the chunked exchange and use Pipeline instead.
+pub const STORAGE_PERSIST_SINK_CHUNK_SIZE: Config<usize> = Config::new(
+    "storage_persist_sink_chunk_size",
+    1,
+    "The number of full containers each worker sends to one target before rotating \
+     to the next in the storage persist sink exchange. Set to 0 to disable.",
+);
+
 /// Adds the full set of all storage `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -341,6 +352,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&SINK_PROGRESS_SEARCH)
         .add(&SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY)
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
+        .add(&STORAGE_PERSIST_SINK_CHUNK_SIZE)
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
         .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
         .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
