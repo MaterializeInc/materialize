@@ -58,8 +58,8 @@ impl TopKPlan {
 
         if monotonic && offset == 0 && limit_as_int64 == Some(1) {
             TopKPlan::MonotonicTop1(MonotonicTop1Plan {
-                group_key,
-                order_key,
+                group_key: group_key.into_boxed_slice(),
+                order_key: order_key.into_boxed_slice(),
                 must_consolidate: false,
             })
         } else if monotonic && offset == 0 {
@@ -72,8 +72,8 @@ impl TopKPlan {
             // of `offset` and `limit`, discarding only the records not produced in the intermediate
             // stage.
             TopKPlan::MonotonicTopK(MonotonicTopKPlan {
-                group_key,
-                order_key,
+                group_key: group_key.into_boxed_slice(),
+                order_key: order_key.into_boxed_slice(),
                 limit,
                 arity,
                 must_consolidate: false,
@@ -81,12 +81,12 @@ impl TopKPlan {
         } else {
             // A plan for all other inputs
             TopKPlan::Basic(BasicTopKPlan {
-                group_key,
-                order_key,
+                group_key: group_key.into_boxed_slice(),
+                order_key: order_key.into_boxed_slice(),
                 offset,
                 limit,
                 arity,
-                buckets: bucketing_of_expected_group_size(expected_group_size),
+                buckets: bucketing_of_expected_group_size(expected_group_size).into_boxed_slice(),
             })
         }
     }
@@ -168,9 +168,9 @@ impl TopKPlan {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct MonotonicTop1Plan {
     /// The columns that form the key for each group.
-    pub group_key: Vec<usize>,
+    pub group_key: Box<[usize]>,
     /// Ordering that is used within each group.
-    pub order_key: Vec<mz_expr::ColumnOrder>,
+    pub order_key: Box<[mz_expr::ColumnOrder]>,
     /// True if the input is not physically monotonic, and the operator must perform
     /// consolidation to remove potential negations. The operator implementation is
     /// free to consolidate as late as possible while ensuring correctness, so it is
@@ -185,9 +185,9 @@ pub struct MonotonicTop1Plan {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct MonotonicTopKPlan {
     /// The columns that form the key for each group.
-    pub group_key: Vec<usize>,
+    pub group_key: Box<[usize]>,
     /// Ordering that is used within each group.
-    pub order_key: Vec<mz_expr::ColumnOrder>,
+    pub order_key: Box<[mz_expr::ColumnOrder]>,
     /// Optionally, an upper bound on the per-group ordinal position of the
     /// records to produce from each group.
     pub limit: Option<mz_expr::MirScalarExpr>,
@@ -207,9 +207,9 @@ pub struct MonotonicTopKPlan {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct BasicTopKPlan {
     /// The columns that form the key for each group.
-    pub group_key: Vec<usize>,
+    pub group_key: Box<[usize]>,
     /// Ordering that is used within each group.
-    pub order_key: Vec<mz_expr::ColumnOrder>,
+    pub order_key: Box<[mz_expr::ColumnOrder]>,
     /// Optionally, an upper bound on the per-group ordinal position of the
     /// records to produce from each group.
     pub limit: Option<mz_expr::MirScalarExpr>,
@@ -221,5 +221,5 @@ pub struct BasicTopKPlan {
     /// The number of columns in the input and output.
     pub arity: usize,
     /// Bucket sizes for hierarchical stages of TopK.  Should be decreasing.
-    pub buckets: Vec<u64>,
+    pub buckets: Box<[u64]>,
 }

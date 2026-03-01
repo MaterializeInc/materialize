@@ -849,5 +849,9 @@ mod tests {
         assert_eq!(size_of::<DeltaPathPlan>(), 232);
         assert_eq!(size_of::<DeltaJoinPlan>(), 16);
         assert_eq!(size_of::<JoinPlan>(), 232);
+
+        // TopK plan types — Vec→Box<[T]> conversions eliminate unused capacity fields.
+        use top_k::TopKPlan;
+        assert_eq!(size_of::<TopKPlan>(), 112);
     }
 }

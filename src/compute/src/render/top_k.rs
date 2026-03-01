@@ -109,8 +109,8 @@ where
                 }) => {
                     let (oks, errs) = self.render_top1_monotonic(
                         ok_input,
-                        group_key,
-                        order_key,
+                        group_key.into_vec(),
+                        order_key.into_vec(),
                         must_consolidate,
                     );
                     err_collection = err_collection.concat(&errs);
@@ -123,6 +123,7 @@ where
                     mut limit,
                     must_consolidate,
                 }) => {
+                    let order_key = order_key.into_vec();
                     // Must permute `limit` to reference `group_key` elements as if in order.
                     if let Some(expr) = limit.as_mut() {
                         let mut map = BTreeMap::new();
@@ -221,6 +222,9 @@ where
                     arity,
                     buckets,
                 }) => {
+                    let group_key = group_key.into_vec();
+                    let order_key = order_key.into_vec();
+                    let buckets = buckets.into_vec();
                     // Must permute `limit` to reference `group_key` elements as if in order.
                     if let Some(expr) = limit.as_mut() {
                         let mut map = BTreeMap::new();
