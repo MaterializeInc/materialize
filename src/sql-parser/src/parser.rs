@@ -7738,7 +7738,7 @@ impl<'a> Parser<'a> {
         } else if self.parse_keyword(VALUES) {
             SetExpr::Values(self.parse_values()?)
         } else if self.parse_keyword(SHOW) {
-            SetExpr::Show(self.parse_show()?)
+            SetExpr::Show(Box::new(self.parse_show()?))
         } else if self.parse_keyword(TABLE) {
             SetExpr::Table(self.parse_raw_name()?)
         } else {

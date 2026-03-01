@@ -966,11 +966,21 @@ mod tests {
 
     #[test]
     fn ast_expr_sizes() {
+        use crate::ast::defs::query::*;
+
         // Op: 32 bytes (Option<Box<[Ident]>>(16) + Box<str>(16))
         // Op field boxed in all 5 variants: Op, AnySubquery, AnyExpr, AllSubquery, AllExpr
         // Largest variants are now Value(Value(40)) and InList(~40 bytes)
         assert_eq!(std::mem::size_of::<Op>(), 32);
         assert_eq!(std::mem::size_of::<Expr<Raw>>(), 48);
+
+        // SetExpr: Show(Box<ShowStatement>) reduces from 160 to 64 bytes (-96 bytes)
+        // Now driven by SetOperation variant (~56 bytes + tag/alignment = 64)
+        assert_eq!(std::mem::size_of::<SetExpr<Raw>>(), 64);
+        // Query cascades: 336→240 (-96)
+        assert_eq!(std::mem::size_of::<Query<Raw>>(), 240);
+        // Statement cascades: 584→488 (-96)
+        assert_eq!(std::mem::size_of::<crate::ast::Statement<Raw>>(), 488);
     }
 
 }

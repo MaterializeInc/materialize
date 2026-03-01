@@ -2066,7 +2066,7 @@ fn plan_set_expr(
                 Ok((expr, scope))
             }
 
-            match stmt.clone() {
+            match *stmt.clone() {
                 ShowStatement::ShowColumns(stmt) => {
                     show::show_columns(qcx.scx, stmt)?.plan_hir(qcx)
                 }
