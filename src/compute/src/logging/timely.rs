@@ -48,6 +48,8 @@ use crate::typedefs::{KeyBatcher, KeyValBatcher, RowRowSpine};
 pub(super) struct Return {
     /// Collections to export.
     pub collections: BTreeMap<LogVariant, LogCollection>,
+    /// Tokens keeping persist sinks alive.
+    pub persist_tokens: Vec<Rc<dyn std::any::Any>>,
 }
 
 /// Constructs the logging dataflow fragment for timely logs.
@@ -61,6 +63,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
     config: &LoggingConfig,
     event_queue: EventQueue<Vec<(Duration, TimelyEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
+    compute_state: &mut crate::compute_state::ComputeState,
 ) -> Return {
     scope.scoped("timely logging", move |scope| {
         let enable_logging = config.enable_logging;
@@ -349,15 +352,16 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             ]
         };
 
-        // Build the output arrangements.
+        // Build the output arrangements and persist sinks.
         let mut collections = BTreeMap::new();
-        for (variant, collection) in logs {
-            let variant = LogVariant::Timely(variant);
+        let mut persist_tokens: Vec<Rc<dyn std::any::Any>> = Vec::new();
+        for (variant, kv_stream) in &logs {
+            let variant = LogVariant::Timely(*variant);
             if config.index_logs.contains_key(&variant) {
                 // Extract types to make rustfmt happy.
                 type Batcher<K, V, T, R> = Col2ValBatcher<K, V, T, R>;
                 type Builder<T, R> = RowRowBuilder<T, R>;
-                let trace = collection
+                let trace = kv_stream
                     .mz_arrange_core::<_, Batcher<_, _, _, _>, Builder<_, _>, RowRowSpine<_, _>>(
                         ExchangeCore::<ColumnBuilder<_>, _>::new_core(
                             columnar_exchange::<mz_repr::Row, mz_repr::Row, Timestamp, Diff>,
@@ -365,15 +369,28 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                         &format!("Arrange {variant:?}"),
                     )
                     .trace;
-                let collection = LogCollection {
+                let log_collection = LogCollection {
                     trace,
                     token: Rc::clone(&token),
                 };
-                collections.insert(variant, collection);
+                collections.insert(variant, log_collection);
+            }
+            if let Some((sink_id, meta)) = config.sink_logs.get(&variant) {
+                let token = super::persist::render_arranged(
+                    kv_stream,
+                    variant,
+                    *sink_id,
+                    meta,
+                    compute_state,
+                );
+                persist_tokens.push(token);
             }
         }
 
-        Return { collections }
+        Return {
+            collections,
+            persist_tokens,
+        }
     })
 }
 

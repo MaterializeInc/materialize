@@ -409,6 +409,7 @@ impl Cluster {
                 replication_factor,
                 optimizer_feature_overrides,
                 schedule,
+                persist_introspection,
             }) => {
                 let introspection = match logging {
                     ReplicaLogging {
@@ -431,6 +432,7 @@ impl Cluster {
                     compute,
                     optimizer_feature_overrides: optimizer_feature_overrides.clone(),
                     schedule: schedule.clone(),
+                    persist_introspection: *persist_introspection,
                 })
             }
             ClusterVariant::Unmanaged => {
@@ -980,6 +982,10 @@ pub enum DataSourceDesc {
     },
     /// Receives introspection data from an internal system
     Introspection(IntrospectionType),
+    /// Receives data from a persist shard written by a compute replica's
+    /// introspection logging. Unlike `Introspection`, these sources are
+    /// per-replica, durable, and queryable via SQL.
+    PersistedIntrospection(LogVariant),
     /// Receives data from the source's reclocking/remapping operations.
     Progress,
     /// Receives data from HTTP requests.
@@ -1017,6 +1023,7 @@ impl DataSourceDesc {
                 None => (None, None),
             },
             DataSourceDesc::Introspection(_)
+            | DataSourceDesc::PersistedIntrospection(_)
             | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Progress => (None, None),
         }
@@ -1064,6 +1071,7 @@ impl DataSourceDesc {
                 Some(envelope_string(&data_config.envelope))
             }
             DataSourceDesc::Introspection(_)
+            | DataSourceDesc::PersistedIntrospection(_)
             | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Progress => None,
         }
@@ -1194,7 +1202,9 @@ impl Source {
             | DataSourceDesc::OldSyntaxIngestion { desc, .. } => desc.connection.name(),
             DataSourceDesc::Progress => "progress",
             DataSourceDesc::IngestionExport { .. } => "subsource",
-            DataSourceDesc::Introspection(_) => "source",
+            DataSourceDesc::Introspection(_) | DataSourceDesc::PersistedIntrospection(_) => {
+                "source"
+            }
             DataSourceDesc::Webhook { .. } => "webhook",
         }
     }
@@ -1206,6 +1216,7 @@ impl Source {
             | DataSourceDesc::OldSyntaxIngestion { desc, .. } => desc.connection.connection_id(),
             DataSourceDesc::IngestionExport { .. }
             | DataSourceDesc::Introspection(_)
+            | DataSourceDesc::PersistedIntrospection(_)
             | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Progress => None,
         }
@@ -1253,7 +1264,9 @@ impl Source {
             DataSourceDesc::Webhook { .. } => 1,
             // Introspection and progress subsources are not under the user's control, so shouldn't
             // count toward their quota.
-            DataSourceDesc::Introspection(_) | DataSourceDesc::Progress => 0,
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::PersistedIntrospection(_)
+            | DataSourceDesc::Progress => 0,
         }
     }
 }
@@ -1823,6 +1836,7 @@ impl CatalogItem {
                 | DataSourceDesc::OldSyntaxIngestion { desc, .. } => Ok(Some(desc)),
                 DataSourceDesc::IngestionExport { .. }
                 | DataSourceDesc::Introspection(_)
+                | DataSourceDesc::PersistedIntrospection(_)
                 | DataSourceDesc::Webhook { .. }
                 | DataSourceDesc::Progress => Ok(None),
             },
@@ -2382,7 +2396,9 @@ impl CatalogItem {
                 // cross-referencing the items
                 DataSourceDesc::IngestionExport { .. } => None,
                 DataSourceDesc::Webhook { cluster_id, .. } => Some(*cluster_id),
-                DataSourceDesc::Introspection(_) | DataSourceDesc::Progress => None,
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::PersistedIntrospection(_)
+                | DataSourceDesc::Progress => None,
             },
             CatalogItem::Sink(sink) => Some(sink.cluster_id),
             CatalogItem::ContinualTask(ct) => Some(ct.cluster_id),
@@ -2795,6 +2811,7 @@ impl CatalogEntry {
                 } => Some(*progress_subsource),
                 DataSourceDesc::IngestionExport { .. }
                 | DataSourceDesc::Introspection(_)
+                | DataSourceDesc::PersistedIntrospection(_)
                 | DataSourceDesc::Progress
                 | DataSourceDesc::Webhook { .. } => None,
             },
@@ -3250,6 +3267,7 @@ pub struct ClusterVariantManaged {
     pub size: String,
     pub availability_zones: Vec<String>,
     pub logging: ReplicaLogging,
+    pub persist_introspection: bool,
     pub replication_factor: u32,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
     pub schedule: ClusterSchedule,
@@ -3261,6 +3279,7 @@ impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
             size: managed.size,
             availability_zones: managed.availability_zones,
             logging: managed.logging,
+            persist_introspection: managed.persist_introspection,
             replication_factor: managed.replication_factor,
             optimizer_feature_overrides: managed.optimizer_feature_overrides.into(),
             schedule: managed.schedule,
@@ -3274,6 +3293,7 @@ impl From<durable::ClusterVariantManaged> for ClusterVariantManaged {
             size: managed.size,
             availability_zones: managed.availability_zones,
             logging: managed.logging,
+            persist_introspection: managed.persist_introspection,
             replication_factor: managed.replication_factor,
             optimizer_feature_overrides: managed.optimizer_feature_overrides.into(),
             schedule: managed.schedule,
@@ -3684,7 +3704,10 @@ pub enum StateUpdateKind {
     Cluster(durable::objects::Cluster),
     NetworkPolicy(durable::objects::NetworkPolicy),
     IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
+    // ClusterReplica must come before PersistedIntrospectionSource because
+    // the latter depends on the replica existing during catalog apply.
     ClusterReplica(durable::objects::ClusterReplica),
+    PersistedIntrospectionSource(durable::objects::PersistedIntrospectionSource),
     SourceReferences(durable::objects::SourceReferences),
     SystemObjectMapping(durable::objects::SystemObjectMapping),
     // Temporary items are not actually updated via the durable catalog, but
@@ -3780,7 +3803,10 @@ pub enum BootstrapStateUpdateKind {
     Cluster(durable::objects::Cluster),
     NetworkPolicy(durable::objects::NetworkPolicy),
     IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
+    // ClusterReplica must come before PersistedIntrospectionSource because
+    // the latter depends on the replica existing during catalog apply.
     ClusterReplica(durable::objects::ClusterReplica),
+    PersistedIntrospectionSource(durable::objects::PersistedIntrospectionSource),
     SourceReferences(durable::objects::SourceReferences),
     SystemObjectMapping(durable::objects::SystemObjectMapping),
     Item(durable::objects::Item),
@@ -3814,6 +3840,9 @@ impl From<BootstrapStateUpdateKind> for StateUpdateKind {
             BootstrapStateUpdateKind::NetworkPolicy(kind) => StateUpdateKind::NetworkPolicy(kind),
             BootstrapStateUpdateKind::IntrospectionSourceIndex(kind) => {
                 StateUpdateKind::IntrospectionSourceIndex(kind)
+            }
+            BootstrapStateUpdateKind::PersistedIntrospectionSource(kind) => {
+                StateUpdateKind::PersistedIntrospectionSource(kind)
             }
             BootstrapStateUpdateKind::ClusterReplica(kind) => StateUpdateKind::ClusterReplica(kind),
             BootstrapStateUpdateKind::SystemObjectMapping(kind) => {
@@ -3856,6 +3885,9 @@ impl TryFrom<StateUpdateKind> for BootstrapStateUpdateKind {
             }
             StateUpdateKind::IntrospectionSourceIndex(kind) => {
                 Ok(BootstrapStateUpdateKind::IntrospectionSourceIndex(kind))
+            }
+            StateUpdateKind::PersistedIntrospectionSource(kind) => {
+                Ok(BootstrapStateUpdateKind::PersistedIntrospectionSource(kind))
             }
             StateUpdateKind::ClusterReplica(kind) => {
                 Ok(BootstrapStateUpdateKind::ClusterReplica(kind))

@@ -142,6 +142,7 @@ impl StateUpdate {
             cluster_replicas,
             network_policies,
             introspection_sources,
+            persisted_introspection_sources,
             id_allocator,
             configs,
             settings,
@@ -168,6 +169,10 @@ impl StateUpdate {
         let introspection_sources = from_batch(
             introspection_sources,
             StateUpdateKind::IntrospectionSourceIndex,
+        );
+        let persisted_introspection_sources = from_batch(
+            persisted_introspection_sources,
+            StateUpdateKind::PersistedIntrospectionSource,
         );
         let id_allocators = from_batch(id_allocator, StateUpdateKind::IdAllocator);
         let configs = from_batch(configs, StateUpdateKind::Config);
@@ -197,6 +202,7 @@ impl StateUpdate {
             .chain(cluster_replicas)
             .chain(network_policies)
             .chain(introspection_sources)
+            .chain(persisted_introspection_sources)
             .chain(id_allocators)
             .chain(configs)
             .chain(settings)
@@ -233,6 +239,10 @@ pub enum StateUpdateKind {
     ),
     Item(proto::ItemKey, proto::ItemValue),
     NetworkPolicy(proto::NetworkPolicyKey, proto::NetworkPolicyValue),
+    PersistedIntrospectionSource(
+        proto::PersistedIntrospectionSourceKey,
+        proto::PersistedIntrospectionSourceValue,
+    ),
     Role(proto::RoleKey, proto::RoleValue),
     RoleAuth(proto::RoleAuthKey, proto::RoleAuthValue),
     Schema(proto::SchemaKey, proto::SchemaValue),
@@ -269,6 +279,9 @@ impl StateUpdateKind {
             }
             StateUpdateKind::Item(_, _) => Some(CollectionType::Item),
             StateUpdateKind::NetworkPolicy(_, _) => Some(CollectionType::NetworkPolicy),
+            StateUpdateKind::PersistedIntrospectionSource(_, _) => {
+                Some(CollectionType::PersistedIntrospectionSource)
+            }
             StateUpdateKind::Role(_, _) => Some(CollectionType::Role),
             StateUpdateKind::RoleAuth(_, _) => Some(CollectionType::RoleAuth),
             StateUpdateKind::Schema(_, _) => Some(CollectionType::Schema),
@@ -496,6 +509,10 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                 let policy = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::NetworkPolicy(policy))
             }
+            StateUpdateKind::PersistedIntrospectionSource(key, value) => {
+                let source = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::PersistedIntrospectionSource(source))
+            }
             StateUpdateKind::Role(key, value) => {
                 let role = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::Role(role))
@@ -643,6 +660,11 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             StateUpdateKind::NetworkPolicy(key, value) => {
                 proto::StateUpdateKind::NetworkPolicy(proto::NetworkPolicy { key, value })
             }
+            StateUpdateKind::PersistedIntrospectionSource(key, value) => {
+                proto::StateUpdateKind::PersistedIntrospectionSource(
+                    proto::PersistedIntrospectionSource { key, value },
+                )
+            }
             StateUpdateKind::Role(key, value) => {
                 proto::StateUpdateKind::Role(proto::Role { key, value })
             }
@@ -725,6 +747,9 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             proto::StateUpdateKind::Item(proto::Item { key, value }) => {
                 StateUpdateKind::Item(key, value)
             }
+            proto::StateUpdateKind::PersistedIntrospectionSource(
+                proto::PersistedIntrospectionSource { key, value },
+            ) => StateUpdateKind::PersistedIntrospectionSource(key, value),
             proto::StateUpdateKind::Role(proto::Role { key, value }) => {
                 StateUpdateKind::Role(key, value)
             }

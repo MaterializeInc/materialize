@@ -1,9 +1,5 @@
 [
   {
-    "name": "objects.rs",
-    "md5": "4a133ca169b83cd4fd762aba9b556dc4"
-  },
-  {
     "name": "objects_v74.rs",
     "md5": "e7b522bf1c6d86e6045bbe3e9a3d4726"
   },
@@ -30,5 +26,13 @@
   {
     "name": "objects_v80.rs",
     "md5": "4a133ca169b83cd4fd762aba9b556dc4"
+  },
+  {
+    "name": "objects_v81.rs",
+    "md5": "12ea97403053fa3a1f21c84a9eedd9b1"
+  },
+  {
+    "name": "objects.rs",
+    "md5": "12ea97403053fa3a1f21c84a9eedd9b1"
   }
 ]

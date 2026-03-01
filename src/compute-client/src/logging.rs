@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use mz_repr::{GlobalId, RelationDesc, SqlScalarType};
+use mz_storage_types::controller::CollectionMetadata;
 use serde::{Deserialize, Serialize};
 
 /// Logging configuration.
@@ -32,6 +33,9 @@ pub struct LoggingConfig {
     pub log_logging: bool,
     /// Logs to keep in an arrangement
     pub index_logs: BTreeMap<LogVariant, GlobalId>,
+    /// Logs to write to persist shards.
+    /// Maps each log variant to a (GlobalId, CollectionMetadata) identifying the target persist shard.
+    pub sink_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
 }
 
 /// TODO(database-issues#7533): Add documentation.

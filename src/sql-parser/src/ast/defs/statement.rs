@@ -2222,6 +2222,8 @@ pub enum ClusterOptionName {
     ReplicationFactor,
     /// The `SIZE` option.
     Size,
+    /// The `PERSIST INTROSPECTION [[=] <enabled>]` option.
+    PersistIntrospection,
     /// The `SCHEDULE` option.
     Schedule,
     /// The `WORKLOAD CLASS` option.
@@ -2236,6 +2238,7 @@ impl AstDisplay for ClusterOptionName {
             ClusterOptionName::IntrospectionDebugging => f.write_str("INTROSPECTION DEBUGGING"),
             ClusterOptionName::IntrospectionInterval => f.write_str("INTROSPECTION INTERVAL"),
             ClusterOptionName::Managed => f.write_str("MANAGED"),
+            ClusterOptionName::PersistIntrospection => f.write_str("PERSIST INTROSPECTION"),
             ClusterOptionName::Replicas => f.write_str("REPLICAS"),
             ClusterOptionName::ReplicationFactor => f.write_str("REPLICATION FACTOR"),
             ClusterOptionName::Size => f.write_str("SIZE"),
@@ -2258,6 +2261,7 @@ impl WithOptionName for ClusterOptionName {
             | ClusterOptionName::IntrospectionDebugging
             | ClusterOptionName::IntrospectionInterval
             | ClusterOptionName::Managed
+            | ClusterOptionName::PersistIntrospection
             | ClusterOptionName::Replicas
             | ClusterOptionName::ReplicationFactor
             | ClusterOptionName::Size

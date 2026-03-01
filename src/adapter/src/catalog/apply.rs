@@ -45,15 +45,17 @@ use mz_ore::{instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion, Timestamp, VersionedRelationDesc};
+use mz_repr::{
+    CatalogItemId, Diff, GlobalId, RelationDesc, RelationVersion, Timestamp, VersionedRelationDesc,
+};
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema, CatalogType};
 use mz_sql::names::{
     FullItemName, ItemQualifiers, QualifiedItemName, RawDatabaseSpecifier,
-    ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier,
+    ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
 };
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-use mz_sql::session::vars::{VarError, VarInput};
+use mz_sql::session::vars::{DEFAULT_DATABASE_NAME, VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::Expr;
 use mz_storage_types::sources::Timeline;
@@ -87,6 +89,7 @@ struct InProgressRetractions {
     items: BTreeMap<ItemKey, CatalogEntry>,
     temp_items: BTreeMap<CatalogItemId, CatalogEntry>,
     introspection_source_indexes: BTreeMap<CatalogItemId, CatalogEntry>,
+    persisted_introspection_sources: BTreeMap<CatalogItemId, CatalogEntry>,
     system_object_mappings: BTreeMap<CatalogItemId, CatalogEntry>,
 }
 
@@ -306,6 +309,9 @@ impl CatalogState {
                     diff,
                     retractions,
                 );
+            }
+            StateUpdateKind::PersistedIntrospectionSource(source) => {
+                self.apply_persisted_introspection_source_update(source, diff, retractions);
             }
             StateUpdateKind::ClusterReplica(cluster_replica) => {
                 self.apply_cluster_replica_update(cluster_replica, diff, retractions);
@@ -595,6 +601,49 @@ impl CatalogState {
                 let entry = self.drop_item(introspection_source_index.item_id);
                 retractions
                     .introspection_source_indexes
+                    .insert(entry.id, entry);
+            }
+        }
+    }
+
+    #[instrument(level = "debug")]
+    fn apply_persisted_introspection_source_update(
+        &mut self,
+        source: mz_catalog::durable::PersistedIntrospectionSource,
+        diff: StateDiff,
+        retractions: &mut InProgressRetractions,
+    ) {
+        match diff {
+            StateDiff::Addition => {
+                if let Some(mut entry) = retractions
+                    .persisted_introspection_sources
+                    .remove(&source.item_id)
+                {
+                    // This should only happen during startup as a result of builtin migrations.
+                    let (name, catalog_item) = self.create_persisted_introspection_source(
+                        &source.name,
+                        source.schema_id,
+                        source.global_id,
+                    );
+                    assert_eq!(entry.id, source.item_id);
+                    assert_eq!(entry.oid, source.oid);
+                    assert_eq!(entry.name, name);
+                    entry.item = catalog_item;
+                    self.insert_entry(entry);
+                } else {
+                    self.insert_persisted_introspection_source(
+                        &source.name,
+                        source.schema_id,
+                        source.item_id,
+                        source.global_id,
+                        source.oid,
+                    );
+                }
+            }
+            StateDiff::Retraction => {
+                let entry = self.drop_item(source.item_id);
+                retractions
+                    .persisted_introspection_sources
                     .insert(entry.id, entry);
             }
         }
@@ -1379,6 +1428,9 @@ impl CatalogState {
             StateUpdateKind::IntrospectionSourceIndex(introspection_source_index) => {
                 self.pack_item_update(introspection_source_index.item_id, diff)
             }
+            StateUpdateKind::PersistedIntrospectionSource(source) => {
+                self.pack_item_update(source.item_id, diff)
+            }
             StateUpdateKind::ClusterReplica(cluster_replica) => self.pack_cluster_replica_update(
                 cluster_replica.cluster_id,
                 &cluster_replica.name,
@@ -1917,6 +1969,77 @@ impl CatalogState {
         (index_name, index)
     }
 
+    fn insert_persisted_introspection_source(
+        &mut self,
+        log_name: &str,
+        schema_id: SchemaId,
+        item_id: CatalogItemId,
+        global_id: GlobalId,
+        oid: u32,
+    ) {
+        let (name, catalog_item) =
+            self.create_persisted_introspection_source(log_name, schema_id, global_id);
+        self.insert_item(
+            item_id,
+            oid,
+            name,
+            catalog_item,
+            MZ_SYSTEM_ROLE_ID,
+            PrivilegeMap::from_mz_acl_items(vec![
+                rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Source),
+                rbac::owner_privilege(mz_sql::catalog::ObjectType::Source, MZ_SYSTEM_ROLE_ID),
+            ]),
+        );
+    }
+
+    fn create_persisted_introspection_source(
+        &self,
+        log_name: &str,
+        schema_id: SchemaId,
+        global_id: GlobalId,
+    ) -> (QualifiedItemName, CatalogItem) {
+        let log = BUILTIN_LOG_LOOKUP
+            .get(log_name)
+            .expect("missing builtin log");
+        let log_variant = log.variant;
+
+        let database_id = *self
+            .database_by_name
+            .get(DEFAULT_DATABASE_NAME)
+            .expect("materialize database must exist");
+        let database = &self.database_by_id[&database_id];
+        let schema = &database.schemas_by_id[&schema_id];
+
+        let name = QualifiedItemName {
+            qualifiers: ItemQualifiers {
+                database_spec: ResolvedDatabaseSpecifier::Id(database_id),
+                schema_spec: SchemaSpecifier::Id(schema_id),
+            },
+            item: log_name.to_string(),
+        };
+
+        let full_name = FullItemName {
+            database: RawDatabaseSpecifier::Name(database.name.clone()),
+            schema: schema.name.schema.clone(),
+            item: log_name.to_string(),
+        };
+        let create_sql =
+            persisted_introspection_source_sql(full_name, log_name, &log_variant.desc());
+
+        let catalog_item = CatalogItem::Source(Source {
+            create_sql: Some(create_sql),
+            global_id,
+            data_source: DataSourceDesc::PersistedIntrospection(log_variant),
+            desc: log_variant.desc(),
+            timeline: Timeline::EpochMilliseconds,
+            resolved_ids: ResolvedIds::empty(),
+            custom_logical_compaction_window: None,
+            is_retained_metrics_object: false,
+        });
+
+        (name, catalog_item)
+    }
+
     /// Insert system configuration `name` with `value`.
     ///
     /// Return a `bool` value indicating whether the configuration was modified
@@ -1932,6 +2055,31 @@ impl CatalogState {
     fn remove_system_configuration(&mut self, name: &str) -> Result<bool, Error> {
         Ok(Arc::make_mut(&mut self.system_configuration).reset(name)?)
     }
+}
+
+/// Generate a valid `CREATE MATERIALIZED VIEW` SQL string for a persisted
+/// introspection source. The SQL is used for the `create_sql` field so
+/// the catalog consistency checker can verify the item name.
+fn persisted_introspection_source_sql(
+    name: FullItemName,
+    log_name: &str,
+    desc: &RelationDesc,
+) -> String {
+    use mz_sql_parser::ast::Ident;
+    use mz_sql_parser::ast::display::AstDisplay;
+
+    let unresolved = mz_sql::normalize::unresolve(name);
+    let columns = desc
+        .iter_names()
+        .map(|col| Ident::new_unchecked(col.as_str()).to_ast_string_stable())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "CREATE MATERIALIZED VIEW {} AS SELECT {} FROM mz_introspection.{}",
+        unresolved.to_ast_string_stable(),
+        columns,
+        Ident::new_unchecked(log_name).to_ast_string_stable(),
+    )
 }
 
 /// Sort [`StateUpdate`]s in dependency order.
@@ -1996,6 +2144,7 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             ),
             StateUpdateKind::Cluster(_)
             | StateUpdateKind::IntrospectionSourceIndex(_)
+            | StateUpdateKind::PersistedIntrospectionSource(_)
             | StateUpdateKind::ClusterReplica(_) => push_update(
                 update,
                 diff,
@@ -2347,9 +2496,11 @@ impl ApplyState {
                 Self::BuiltinViewAdditions(vec![view_addition])
             }
 
-            IntrospectionSourceIndex(_) | SystemObjectMapping(_) | TemporaryItem(_) | Item(_) => {
-                Self::Items(vec![update])
-            }
+            IntrospectionSourceIndex(_)
+            | PersistedIntrospectionSource(_)
+            | SystemObjectMapping(_)
+            | TemporaryItem(_)
+            | Item(_) => Self::Items(vec![update]),
 
             Role(_)
             | RoleAuth(_)

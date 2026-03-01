@@ -2004,6 +2004,7 @@ impl Coordinator {
             )?;
             for replica in instance.replicas() {
                 let role = instance.role();
+                let sink_logs = self.build_log_sink_configs(instance.id, &replica.replica_id);
                 self.controller.create_replica(
                     instance.id,
                     replica.replica_id,
@@ -2012,6 +2013,7 @@ impl Coordinator {
                     role,
                     replica.config.clone(),
                     enable_worker_core_affinity,
+                    sink_logs,
                 )?;
             }
         }
@@ -2477,6 +2479,7 @@ impl Coordinator {
                                 CatalogItemId::System(id) => *id >= next_system_item_id,
                                 CatalogItemId::User(id) => *id >= next_user_item_id,
                                 CatalogItemId::IntrospectionSourceIndex(_)
+                                | CatalogItemId::PersistedIntrospectionSource(_)
                                 | CatalogItemId::Transient(_) => false,
                             };
                             if id_too_large {
@@ -2824,6 +2827,7 @@ impl Coordinator {
                 DataSourceDesc::Introspection(introspection) => {
                     DataSource::Introspection(introspection)
                 }
+                DataSourceDesc::PersistedIntrospection(_) => DataSource::Other,
             };
             CollectionDescription {
                 desc: desc.clone(),

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use itertools::Itertools;
@@ -17,6 +17,7 @@ use mz_catalog::builtin::BUILTINS;
 use mz_catalog::memory::objects::{
     ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged,
 };
+use mz_compute_client::logging::LogVariant;
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{
     ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaConfig, ReplicaLocation,
@@ -25,6 +26,7 @@ use mz_controller::clusters::{
 use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
+use mz_repr::GlobalId;
 use mz_repr::role_id::RoleId;
 use mz_sql::ast::{Ident, QualifiedReplica};
 use mz_sql::catalog::{CatalogCluster, CatalogClusterReplica, ObjectType};
@@ -37,6 +39,7 @@ use mz_sql::plan::{
 use mz_sql::plan::{AlterClusterPlan, OnTimeoutAction};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{MAX_REPLICAS_PER_CLUSTER, SystemVars, Var};
+use mz_storage_types::controller::CollectionMetadata;
 use tracing::{Instrument, Span, debug};
 
 use super::return_if_err;
@@ -182,6 +185,7 @@ impl Coordinator {
                     replication_factor: 1,
                     optimizer_feature_overrides: Default::default(),
                     schedule: Default::default(),
+                    persist_introspection: false,
                 });
             }
         }
@@ -194,6 +198,7 @@ impl Coordinator {
                 replication_factor,
                 optimizer_feature_overrides: _,
                 schedule,
+                persist_introspection,
             }) => {
                 match &options.size {
                     Set(s) => size.clone_from(s),
@@ -230,6 +235,11 @@ impl Coordinator {
                         *schedule = new_schedule.clone();
                     }
                     Reset => *schedule = Default::default(),
+                    Unchanged => {}
+                }
+                match &options.persist_introspection {
+                    Set(pi) => *persist_introspection = *pi,
+                    Reset => *persist_introspection = false,
                     Unchanged => {}
                 }
                 if !matches!(options.replicas, Unchanged) {
@@ -625,6 +635,7 @@ impl Coordinator {
                     replication_factor: plan.replication_factor,
                     optimizer_feature_overrides: plan.optimizer_feature_overrides.clone(),
                     schedule: plan.schedule.clone(),
+                    persist_introspection: plan.persist_introspection,
                 })
             }
             CreateClusterVariant::Unmanaged(_) => ClusterVariant::Unmanaged,
@@ -664,6 +675,7 @@ impl Coordinator {
             size,
             optimizer_feature_overrides: _,
             schedule: _,
+            persist_introspection: _,
         }: CreateClusterManagedPlan,
         cluster_id: ClusterId,
         mut ops: Vec<catalog::Op>,
@@ -1073,6 +1085,8 @@ impl Coordinator {
         let enable_worker_core_affinity =
             self.catalog().system_config().enable_worker_core_affinity();
 
+        let sink_logs = self.build_log_sink_configs(cluster_id, &replica_id);
+
         self.controller
             .create_replica(
                 cluster_id,
@@ -1082,11 +1096,70 @@ impl Coordinator {
                 role,
                 replica_config,
                 enable_worker_core_affinity,
+                sink_logs,
             )
             .expect("creating replicas must not fail");
 
         self.install_introspection_subscribes(cluster_id, replica_id)
             .await;
+    }
+
+    /// Build the `sink_logs` map for a replica, if persist-backed introspection is enabled
+    /// for the cluster.
+    ///
+    /// Returns an empty map if the cluster does not have `PERSIST INTROSPECTION = true`
+    /// or the global dyncfg kill switch is disabled.
+    ///
+    /// Shard IDs are looked up from `StorageMetadata` where they were registered
+    /// during the catalog transaction (`Op::CreateClusterReplica`).
+    pub(crate) fn build_log_sink_configs(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: &ReplicaId,
+    ) -> BTreeMap<LogVariant, (GlobalId, CollectionMetadata)> {
+        use mz_catalog::durable::Transaction;
+        use mz_compute_types::dyncfgs::ENABLE_PERSIST_INTROSPECTION;
+
+        let cluster = self.catalog().get_cluster(cluster_id);
+
+        // Check if persist introspection is enabled for this cluster.
+        let persist_introspection_enabled = match &cluster.config.variant {
+            ClusterVariant::Managed(managed) => managed.persist_introspection,
+            ClusterVariant::Unmanaged => false,
+        };
+        if !persist_introspection_enabled {
+            return BTreeMap::new();
+        }
+
+        // Check the global dyncfg kill switch.
+        if !ENABLE_PERSIST_INTROSPECTION.get(self.controller.compute.dyncfg()) {
+            return BTreeMap::new();
+        }
+
+        let persist_location = self.controller.compute.persist_location().clone();
+        let storage_metadata = self.catalog().state().storage_metadata();
+
+        // Create a sink entry for each log variant that has an introspection index.
+        // Shard IDs were registered in `StorageCollectionMetadata` during the
+        // catalog transaction and survive restarts.
+        cluster
+            .log_indexes
+            .keys()
+            .map(|variant| {
+                let (_, global_id) =
+                    Transaction::allocate_persisted_introspection_source_id(replica_id, *variant);
+                let data_shard = storage_metadata
+                    .get_collection_shard::<mz_repr::Timestamp>(global_id)
+                    .expect("shard registered during catalog transaction");
+                let metadata = CollectionMetadata {
+                    persist_location: persist_location.clone(),
+                    data_shard,
+                    relation_desc: variant.desc(),
+                    txns_shard: None,
+                };
+                (*variant, (global_id, metadata))
+            })
+            .collect()
     }
 
     /// When this is called by the automated cluster scheduling, `scheduling_decision_reason` should
@@ -1120,6 +1193,7 @@ impl Coordinator {
             replication_factor,
             optimizer_feature_overrides: _,
             schedule: _,
+            persist_introspection: _,
         }) = &cluster.config.variant
         else {
             panic!("expected existing managed cluster config");
@@ -1131,6 +1205,7 @@ impl Coordinator {
             logging: new_logging,
             optimizer_feature_overrides: _,
             schedule: _,
+            persist_introspection: _,
         }) = &new_config.variant
         else {
             panic!("expected new managed cluster config");
@@ -1309,6 +1384,7 @@ impl Coordinator {
             logging: _,
             optimizer_feature_overrides: _,
             schedule: _,
+            persist_introspection: _,
         }) = &mut new_config.variant
         else {
             panic!("expected new managed cluster config");

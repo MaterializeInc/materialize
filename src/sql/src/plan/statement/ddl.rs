@@ -4765,6 +4765,7 @@ generate_extracted_config!(
     (IntrospectionDebugging, bool),
     (IntrospectionInterval, OptionalDuration),
     (Managed, bool),
+    (PersistIntrospection, bool),
     (Replicas, Vec<ReplicaDefinition<Aug>>),
     (ReplicationFactor, u32),
     (Size, String),
@@ -4860,6 +4861,7 @@ pub fn plan_create_cluster_inner(
         introspection_debugging,
         introspection_interval,
         managed,
+        persist_introspection,
         replicas,
         replication_factor,
         seen: _,
@@ -4965,6 +4967,7 @@ pub fn plan_create_cluster_inner(
                 size,
                 availability_zones,
                 compute,
+                persist_introspection: persist_introspection.unwrap_or(false),
                 optimizer_feature_overrides,
                 schedule,
             }),
@@ -4985,6 +4988,9 @@ pub fn plan_create_cluster_inner(
         }
         if introspection_interval.is_some() {
             sql_bail!("INTROSPECTION INTERVAL not supported for unmanaged clusters");
+        }
+        if persist_introspection.is_some() {
+            sql_bail!("PERSIST INTROSPECTION not supported for unmanaged clusters");
         }
         if size.is_some() {
             sql_bail!("SIZE not supported for unmanaged clusters");
@@ -5031,6 +5037,7 @@ pub fn unplan_create_cluster(
             size,
             availability_zones,
             compute,
+            persist_introspection,
             optimizer_feature_overrides,
             schedule,
         }) => {
@@ -5095,6 +5102,11 @@ pub fn unplan_create_cluster(
                 introspection_debugging: Some(introspection_debugging),
                 introspection_interval,
                 managed: Some(true),
+                persist_introspection: if persist_introspection {
+                    Some(true)
+                } else {
+                    None
+                },
                 replicas: None,
                 replication_factor,
                 size: Some(size),
@@ -6235,6 +6247,7 @@ pub fn plan_alter_cluster(
                 introspection_debugging,
                 introspection_interval,
                 managed,
+                persist_introspection,
                 replicas: replica_defs,
                 replication_factor,
                 seen: _,
@@ -6338,6 +6351,9 @@ pub fn plan_alter_cluster(
                     if introspection_interval.is_some() {
                         sql_bail!("INTROSPECTION INTERVAL not supported for unmanaged clusters");
                     }
+                    if persist_introspection.is_some() {
+                        sql_bail!("PERSIST INTROSPECTION not supported for unmanaged clusters");
+                    }
                     if size.is_some() {
                         sql_bail!("SIZE not supported for unmanaged clusters");
                     }
@@ -6391,6 +6407,9 @@ pub fn plan_alter_cluster(
             if let Some(introspection_interval) = introspection_interval {
                 options.introspection_interval = AlterOptionParameter::Set(introspection_interval);
             }
+            if let Some(persist_introspection) = persist_introspection {
+                options.persist_introspection = AlterOptionParameter::Set(persist_introspection);
+            }
             if disk.is_some() {
                 // The `DISK` option is a no-op for legacy cluster sizes and was never allowed for
                 // `cc` sizes. The long term plan is to phase out the legacy sizes, at which point
@@ -6436,6 +6455,7 @@ pub fn plan_alter_cluster(
                     IntrospectionInterval => options.introspection_interval = Reset,
                     IntrospectionDebugging => options.introspection_debugging = Reset,
                     Managed => options.managed = Reset,
+                    PersistIntrospection => options.persist_introspection = Reset,
                     Replicas => options.replicas = Reset,
                     ReplicationFactor => options.replication_factor = Reset,
                     Size => options.size = Reset,

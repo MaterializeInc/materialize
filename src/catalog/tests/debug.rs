@@ -99,6 +99,7 @@ impl Debug for StableTrace<'_> {
             id_allocator,
             items,
             network_policies,
+            persisted_introspection_sources,
             roles,
             role_auth,
             schemas,
@@ -143,6 +144,10 @@ impl Debug for StableTrace<'_> {
             .field("id_allocator", id_allocator)
             .field("items", items)
             .field("network_policies", network_policies)
+            .field(
+                "persisted_introspection_sources",
+                persisted_introspection_sources,
+            )
             .field("roles", roles)
             .field("role_auth", role_auth)
             .field("schemas", schemas)

@@ -87,6 +87,9 @@ pub fn parse_state_update(
         StateUpdateKind::ClusterReplica(replica) => {
             Some(parse_cluster_replica_update(catalog, replica))
         }
+        StateUpdateKind::PersistedIntrospectionSource(source) => {
+            Some(parse_persisted_introspection_source_update(catalog, source))
+        }
         _ => {
             // The controllers are currently not interested in other kinds of
             // changes to the catalog.
@@ -124,6 +127,44 @@ fn parse_temporary_item_update(
         parse_item_update_common(catalog, &durable_item.id);
 
     ParsedStateUpdateKind::TemporaryItem {
+        durable_item,
+        parsed_item,
+        connection,
+        parsed_full_name,
+    }
+}
+
+/// Convert a `PersistedIntrospectionSource` update into a [`ParsedStateUpdateKind::Item`].
+///
+/// Persisted introspection sources are not stored in the `items` durable collection,
+/// so we synthesize a durable `Item` to reuse the existing Item implications path.
+/// This ensures a storage collection is created for the source, which is required
+/// for reads via `PeekTarget::Persist` (to provide `CollectionMetadata` and read holds).
+fn parse_persisted_introspection_source_update(
+    catalog: &CatalogState,
+    source: durable::objects::PersistedIntrospectionSource,
+) -> ParsedStateUpdateKind {
+    use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+    use std::collections::BTreeMap;
+
+    let (parsed_item, connection, parsed_full_name) =
+        parse_item_update_common(catalog, &source.item_id);
+
+    // Synthesize a durable Item so we can reuse the existing
+    // ParsedStateUpdateKind::Item path.
+    let durable_item = durable::objects::Item {
+        id: source.item_id,
+        oid: source.oid,
+        global_id: source.global_id,
+        schema_id: source.schema_id,
+        name: source.name,
+        create_sql: String::new(),
+        owner_id: MZ_SYSTEM_ROLE_ID,
+        privileges: vec![],
+        extra_versions: BTreeMap::new(),
+    };
+
+    ParsedStateUpdateKind::Item {
         durable_item,
         parsed_item,
         connection,

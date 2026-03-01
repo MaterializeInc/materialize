@@ -1,6 +1,5 @@
 ---
 source: src/catalog/tests/debug.rs
-assertion_line: 233
 expression: test_trace
 ---
 Trace {
@@ -447,6 +446,7 @@ Trace {
                                     },
                                     optimizer_feature_overrides: [],
                                     schedule: Manual,
+                                    persist_introspection: false,
                                 },
                             ),
                         },
@@ -909,6 +909,9 @@ Trace {
                 ),
             ),
         ],
+    },
+    persisted_introspection_sources: CollectionTrace {
+        values: [],
     },
     roles: CollectionTrace {
         values: [

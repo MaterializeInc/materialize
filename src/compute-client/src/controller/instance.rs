@@ -38,6 +38,7 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::controller::{IntrospectionType, WallclockLag, WallclockLagHistogramPeriod};
+use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
 use thiserror::Error;
@@ -939,6 +940,7 @@ where
 
         let instance_config = InstanceConfig {
             peek_stash_persist_location: self.peek_stash_persist_location.clone(),
+            read_only: self.read_only,
             // The remaining fields are replica-specific and will be set in
             // `ReplicaTask::specialize_command`.
             logging: Default::default(),
@@ -1120,8 +1122,12 @@ where
 
     /// Remove an existing instance replica, by ID.
     #[mz_ore::instrument(level = "debug")]
-    pub fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ReplicaMissing> {
-        self.replicas.remove(&id).ok_or(ReplicaMissing(id))?;
+    pub fn remove_replica(
+        &mut self,
+        id: ReplicaId,
+    ) -> Result<BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>, ReplicaMissing> {
+        let replica = self.replicas.remove(&id).ok_or(ReplicaMissing(id))?;
+        let sink_logs = replica.config.logging.sink_logs.clone();
 
         // Subscribes targeting this replica either won't be served anymore (if the replica is
         // dropped) or might produce inconsistent output (if the target collection is an
@@ -1166,7 +1172,7 @@ where
         // up the next replica, if the dropped replica was the only one in the cluster.
         self.forward_implied_capabilities();
 
-        Ok(())
+        Ok(sink_logs)
     }
 
     /// Rehydrate the given instance replica.
@@ -1862,6 +1868,11 @@ where
         frontiers: FrontiersResponse<T>,
         replica_id: ReplicaId,
     ) {
+        // Persisted introspection sinks are managed by the compute replica
+        // directly. The controller does not track their frontiers.
+        if matches!(id, GlobalId::PersistedIntrospectionSource(_)) {
+            return;
+        }
         if !self.collections.contains_key(&id) {
             soft_panic_or_log!(
                 "frontiers update for an unknown collection \

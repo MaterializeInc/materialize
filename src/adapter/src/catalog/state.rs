@@ -538,10 +538,34 @@ impl CatalogState {
         replica_id: ReplicaId,
         seen: &mut BTreeSet<ObjectId>,
     ) -> Vec<ObjectId> {
+        use mz_catalog::memory::objects::ClusterVariant;
+
         let mut dependents = Vec::new();
         let object_id = ObjectId::ClusterReplica((cluster_id, replica_id));
         if !seen.contains(&object_id) {
             seen.insert(object_id.clone());
+
+            // If persist introspection is enabled, include the per-replica
+            // schema and its items as dependents so the generic drop machinery
+            // handles them.
+            let cluster = self.get_cluster(cluster_id);
+            let persist_introspection = match &cluster.config.variant {
+                ClusterVariant::Managed(managed) => managed.persist_introspection,
+                ClusterVariant::Unmanaged => false,
+            };
+            if persist_introspection {
+                let (_schema_name, database_id, schema_id) =
+                    self.get_persisted_introspection_schema(cluster_id, replica_id);
+                if let Some(schema_id) = schema_id {
+                    dependents.extend_from_slice(&self.schema_dependents(
+                        ResolvedDatabaseSpecifier::Id(database_id),
+                        SchemaSpecifier::Id(schema_id),
+                        &SYSTEM_CONN_ID,
+                        seen,
+                    ));
+                }
+            }
+
             dependents.push(object_id);
         }
         dependents
@@ -1660,6 +1684,24 @@ impl CatalogState {
             .expect("schema must exist")
     }
 
+    /// Look up the per-replica introspection schema for the given cluster and
+    /// replica. Returns the schema name, database ID, and optionally the
+    /// schema ID if the schema already exists.
+    pub(super) fn get_persisted_introspection_schema(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    ) -> (String, DatabaseId, Option<SchemaId>) {
+        let schema_name = format!("mz_introspection_{}_{}", cluster_id, replica_id);
+        let database_id = *self
+            .database_by_name
+            .get(DEFAULT_DATABASE_NAME)
+            .expect("materialize database must exist");
+        let database = &self.database_by_id[&database_id];
+        let schema_id = database.schemas_by_name.get(&schema_name).copied();
+        (schema_name, database_id, schema_id)
+    }
+
     pub(super) fn find_non_temp_schema(&self, schema_id: &SchemaId) -> &Schema {
         self.database_by_id
             .values()
@@ -2604,6 +2646,7 @@ impl CatalogState {
                             cws.entry(source_cw).or_default().insert(item_id);
                         }
                         DataSourceDesc::Introspection(_)
+                        | DataSourceDesc::PersistedIntrospection(_)
                         | DataSourceDesc::Progress
                         | DataSourceDesc::Webhook { .. } => {
                             cws.entry(source_cw).or_default().insert(item_id);

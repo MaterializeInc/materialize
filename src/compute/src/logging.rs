@@ -12,6 +12,7 @@
 pub mod compute;
 mod differential;
 pub(super) mod initialize;
+pub(super) mod persist;
 mod reachability;
 mod timely;
 

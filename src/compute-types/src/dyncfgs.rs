@@ -327,6 +327,17 @@ pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
     "The size, as number of rows, of each batch pumped from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
 );
 
+/// Global kill switch for persist-backed introspection sources.
+///
+/// When disabled, compute replicas will not write introspection data to persist,
+/// even if the cluster has `PERSIST INTROSPECTION = true`.
+pub const ENABLE_PERSIST_INTROSPECTION: Config<bool> = Config::new(
+    "enable_persist_introspection",
+    true,
+    "Global kill switch for persist-backed introspection sources. When disabled, compute \
+     replicas will not write introspection data to persist shards.",
+);
+
 /// If set, skip fetching or processing the snapshot data for subscribes when possible.
 pub const SUBSCRIBE_SNAPSHOT_OPTIMIZATION: Config<bool> = Config::new(
     "compute_subscribe_snapshot_optimization",
@@ -376,5 +387,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES)
         .add(&PEEK_STASH_NUM_BATCHES)
         .add(&PEEK_STASH_BATCH_SIZE)
+        .add(&ENABLE_PERSIST_INTROSPECTION)
         .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
 }

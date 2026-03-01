@@ -529,6 +529,9 @@ impl RustType<crate::objects::CatalogItemId> for CatalogItemId {
             CatalogItemId::IntrospectionSourceIndex(x) => {
                 crate::objects::CatalogItemId::IntrospectionSourceIndex(*x)
             }
+            CatalogItemId::PersistedIntrospectionSource(x) => {
+                crate::objects::CatalogItemId::PersistedIntrospectionSource(*x)
+            }
             CatalogItemId::User(x) => crate::objects::CatalogItemId::User(*x),
             CatalogItemId::Transient(x) => crate::objects::CatalogItemId::Transient(*x),
         }
@@ -539,6 +542,9 @@ impl RustType<crate::objects::CatalogItemId> for CatalogItemId {
             crate::objects::CatalogItemId::System(x) => Ok(CatalogItemId::System(x)),
             crate::objects::CatalogItemId::IntrospectionSourceIndex(x) => {
                 Ok(CatalogItemId::IntrospectionSourceIndex(x))
+            }
+            crate::objects::CatalogItemId::PersistedIntrospectionSource(x) => {
+                Ok(CatalogItemId::PersistedIntrospectionSource(x))
             }
             crate::objects::CatalogItemId::User(x) => Ok(CatalogItemId::User(x)),
             crate::objects::CatalogItemId::Transient(x) => Ok(CatalogItemId::Transient(x)),
@@ -553,6 +559,9 @@ impl RustType<crate::objects::GlobalId> for GlobalId {
             GlobalId::IntrospectionSourceIndex(x) => {
                 crate::objects::GlobalId::IntrospectionSourceIndex(*x)
             }
+            GlobalId::PersistedIntrospectionSource(x) => {
+                crate::objects::GlobalId::PersistedIntrospectionSource(*x)
+            }
             GlobalId::User(x) => crate::objects::GlobalId::User(*x),
             GlobalId::Transient(x) => crate::objects::GlobalId::Transient(*x),
             GlobalId::Explain => crate::objects::GlobalId::Explain,
@@ -564,6 +573,9 @@ impl RustType<crate::objects::GlobalId> for GlobalId {
             crate::objects::GlobalId::System(x) => Ok(GlobalId::System(x)),
             crate::objects::GlobalId::IntrospectionSourceIndex(x) => {
                 Ok(GlobalId::IntrospectionSourceIndex(x))
+            }
+            crate::objects::GlobalId::PersistedIntrospectionSource(x) => {
+                Ok(GlobalId::PersistedIntrospectionSource(x))
             }
             crate::objects::GlobalId::User(x) => Ok(GlobalId::User(x)),
             crate::objects::GlobalId::Transient(x) => Ok(GlobalId::Transient(x)),

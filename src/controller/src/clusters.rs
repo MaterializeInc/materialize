@@ -40,6 +40,7 @@ use mz_ore::task::{self, AbortOnDropHandle};
 use mz_ore::{halt, instrument};
 use mz_repr::GlobalId;
 use mz_repr::adt::numeric::Numeric;
+use mz_storage_types::controller::CollectionMetadata;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::time;
@@ -394,6 +395,9 @@ where
 
     /// Creates a replica of the specified cluster with the specified identifier
     /// and configuration.
+    ///
+    /// `sink_logs` specifies the persist shards to write logging data to.
+    /// If empty, no persist-backed introspection sinks are created.
     pub fn create_replica(
         &mut self,
         cluster_id: ClusterId,
@@ -403,6 +407,7 @@ where
         role: ClusterRole,
         config: ReplicaConfig,
         enable_worker_core_affinity: bool,
+        sink_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
     ) -> Result<(), anyhow::Error> {
         let storage_location: ClusterReplicaLocation;
         let compute_location: ClusterReplicaLocation;
@@ -453,6 +458,7 @@ where
             replica_id,
             compute_location,
             config.compute,
+            sink_logs,
         )?;
 
         if let Some(task) = metrics_task {
@@ -463,6 +469,9 @@ where
     }
 
     /// Drops the specified replica of the specified cluster.
+    ///
+    /// Shard cleanup for persist-backed introspection is handled by the catalog
+    /// transaction, not by the caller.
     pub fn drop_replica(
         &mut self,
         cluster_id: ClusterId,

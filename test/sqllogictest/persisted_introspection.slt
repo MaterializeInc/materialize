@@ -1,0 +1,31 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for persist-backed introspection sources.
+
+mode cockroach
+
+reset-server
+
+# Creating a cluster with PERSIST INTROSPECTION should succeed without
+# panicking. Regression test for a catalog ordering bug where persisted
+# introspection source updates were applied before the cluster replica
+# existed.
+statement ok
+CREATE CLUSTER pi_test (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1, PERSIST INTROSPECTION = true)
+
+# Verify the cluster and its replica were created.
+query T
+SELECT name FROM mz_cluster_replicas WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'pi_test')
+----
+r1
+
+# Clean up.
+statement ok
+DROP CLUSTER pi_test CASCADE

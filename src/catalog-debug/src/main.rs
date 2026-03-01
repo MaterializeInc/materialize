@@ -34,11 +34,11 @@ use mz_catalog::durable::debug::{
     AuditLogCollection, ClusterCollection, ClusterIntrospectionSourceIndexCollection,
     ClusterReplicaCollection, Collection, CollectionTrace, CollectionType, CommentCollection,
     ConfigCollection, DatabaseCollection, DebugCatalogState, DefaultPrivilegeCollection,
-    IdAllocatorCollection, ItemCollection, NetworkPolicyCollection, RoleAuthCollection,
-    RoleCollection, SchemaCollection, SettingCollection, SourceReferencesCollection,
-    StorageCollectionMetadataCollection, SystemConfigurationCollection,
-    SystemItemMappingCollection, SystemPrivilegeCollection, Trace, TxnWalShardCollection,
-    UnfinalizedShardsCollection,
+    IdAllocatorCollection, ItemCollection, NetworkPolicyCollection,
+    PersistedIntrospectionSourceCollection, RoleAuthCollection, RoleCollection, SchemaCollection,
+    SettingCollection, SourceReferencesCollection, StorageCollectionMetadataCollection,
+    SystemConfigurationCollection, SystemItemMappingCollection, SystemPrivilegeCollection, Trace,
+    TxnWalShardCollection, UnfinalizedShardsCollection,
 };
 use mz_catalog::durable::{
     BootstrapArgs, OpenableDurableCatalogState, persist_backed_catalog_state,
@@ -315,6 +315,9 @@ macro_rules! for_collection {
                 $fn::<UnfinalizedShardsCollection>($($arg),*).await?
             }
             CollectionType::TxnWalShard => $fn::<TxnWalShardCollection>($($arg),*).await?,
+            CollectionType::PersistedIntrospectionSource => {
+                $fn::<PersistedIntrospectionSourceCollection>($($arg),*).await?
+            }
         }
     };
 }
@@ -450,6 +453,7 @@ async fn dump(
         id_allocator,
         items,
         network_policies,
+        persisted_introspection_sources,
         roles,
         role_auth,
         schemas,
@@ -551,6 +555,13 @@ async fn dump(
         consolidate,
     );
     dump_col(&mut data, txn_wal_shard, &ignore, stats_only, consolidate);
+    dump_col(
+        &mut data,
+        persisted_introspection_sources,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
 
     writeln!(&mut target, "{data:#?}")?;
     Ok(())

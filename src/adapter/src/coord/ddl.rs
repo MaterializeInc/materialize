@@ -578,6 +578,11 @@ impl Coordinator {
         self.controller
             .drop_replica(cluster_id, replica_id)
             .expect("dropping replica must not fail");
+
+        // Shard finalization for persist-backed introspection is now handled
+        // by the catalog transaction: `Op::DropObjects` adds the GlobalIds to
+        // `storage_collections_to_drop`, and `prepare_state` moves the shards
+        // to `unfinalized_shards` for background finalization.
     }
 
     /// A convenience method for dropping sources.

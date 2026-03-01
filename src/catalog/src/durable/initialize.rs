@@ -793,6 +793,7 @@ fn default_cluster_config(args: &BootstrapArgs) -> Result<ClusterConfig, Catalog
             },
             optimizer_feature_overrides: Default::default(),
             schedule: Default::default(),
+            persist_introspection: false,
         }),
         workload_class: None,
     })

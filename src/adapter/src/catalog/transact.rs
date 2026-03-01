@@ -26,7 +26,7 @@ use mz_audit_log::{
     ObjectType, SchedulingDecisionsWithReasonsV2, VersionedEvent, VersionedStorageUsage,
 };
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_catalog::builtin::BuiltinLog;
+use mz_catalog::builtin::{BUILTINS, BuiltinLog, BuiltinView};
 use mz_catalog::durable::{NetworkPolicy, Transaction};
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
@@ -121,6 +121,9 @@ pub enum Op {
         database_id: ResolvedDatabaseSpecifier,
         schema_name: String,
         owner_id: RoleId,
+        /// If true, skip the reserved name check. Used for system-created
+        /// schemas (e.g., per-replica introspection schemas).
+        system: bool,
     },
     CreateRole {
         name: String,
@@ -1051,8 +1054,9 @@ impl Catalog {
                 database_id,
                 schema_name,
                 owner_id,
+                system,
             } => {
-                if is_reserved_name(&schema_name) {
+                if !system && is_reserved_name(&schema_name) {
                     return Err(AdapterError::Catalog(Error::new(
                         ErrorKind::ReservedSchemaName(schema_name),
                     )));
@@ -1216,6 +1220,89 @@ impl Catalog {
                 let cluster = state.get_cluster(cluster_id);
                 let id =
                     tx.insert_cluster_replica(cluster_id, &name, config.clone().into(), owner_id)?;
+
+                // If persist introspection is enabled for this cluster,
+                // register shard IDs, create a per-replica schema, and
+                // create source catalog items for each log variant.
+                {
+                    use mz_catalog::builtin::BUILTIN_LOG_BY_VARIANT;
+                    use mz_catalog::memory::objects::ClusterVariant;
+                    use mz_compute_types::dyncfgs::ENABLE_PERSIST_INTROSPECTION;
+
+                    let persist_introspection = match &cluster.config.variant {
+                        ClusterVariant::Managed(managed) => managed.persist_introspection,
+                        ClusterVariant::Unmanaged => false,
+                    };
+                    if persist_introspection
+                        && ENABLE_PERSIST_INTROSPECTION.get(state.system_configuration.dyncfgs())
+                    {
+                        // Register shard IDs so they survive restarts.
+                        for variant in cluster.log_indexes.keys() {
+                            let (_, global_id) =
+                                Transaction::allocate_persisted_introspection_source_id(
+                                    &id, *variant,
+                                );
+                            storage_collections_to_register.insert(global_id, ShardId::new());
+                        }
+
+                        // Create a per-replica schema in the materialize database.
+                        let (schema_name, database_id, _) =
+                            state.get_persisted_introspection_schema(cluster_id, id);
+                        let temporary_oids = state.get_temporary_oids().collect();
+                        let (schema_id, _schema_oid) = tx.insert_user_schema(
+                            database_id,
+                            &schema_name,
+                            MZ_SYSTEM_ROLE_ID,
+                            vec![
+                                rbac::default_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::Schema,
+                                ),
+                                rbac::owner_privilege(
+                                    mz_sql::catalog::ObjectType::Schema,
+                                    MZ_SYSTEM_ROLE_ID,
+                                ),
+                            ],
+                            &temporary_oids,
+                        )?;
+
+                        // Create a source catalog item for each log variant.
+                        let sources: Vec<_> = cluster
+                            .log_indexes
+                            .keys()
+                            .map(|variant| {
+                                let builtin_log = BUILTIN_LOG_BY_VARIANT
+                                    .get(variant)
+                                    .expect("every log variant has a builtin log");
+                                let (item_id, global_id) =
+                                    Transaction::allocate_persisted_introspection_source_id(
+                                        &id, *variant,
+                                    );
+                                (
+                                    cluster_id,
+                                    id,
+                                    builtin_log.name.to_string(),
+                                    item_id,
+                                    global_id,
+                                    schema_id,
+                                )
+                            })
+                            .collect();
+                        tx.insert_persisted_introspection_sources(sources, &temporary_oids)?;
+
+                        // Create per-replica views by rewriting builtin
+                        // introspection views to reference items in the
+                        // per-replica schema.
+                        create_persisted_introspection_views(
+                            tx,
+                            cluster,
+                            &id,
+                            schema_id,
+                            &schema_name,
+                            &temporary_oids,
+                        )?;
+                    }
+                }
+
                 if let ReplicaLocation::Managed(ManagedReplicaLocation {
                     size,
                     billed_as,
@@ -1264,7 +1351,14 @@ impl Catalog {
                         storage_collections_to_create.extend(gids);
                     }
                     CatalogItem::Source(source) => {
-                        storage_collections_to_create.insert(source.global_id());
+                        // Don't add to storage_collections_to_create if the
+                        // shard was already pre-registered (e.g., persist
+                        // introspection sources registered during
+                        // Op::CreateClusterReplica).
+                        let gid = source.global_id();
+                        if !storage_collections_to_register.contains_key(&gid) {
+                            storage_collections_to_create.insert(gid);
+                        }
                     }
                     CatalogItem::MaterializedView(mv) => {
                         let mv_gid = mv.global_id_writes();
@@ -1602,7 +1696,15 @@ impl Catalog {
                         .iter()
                         .map(|id| id)
                         .partition(|id| !state.get_entry(*id).item().is_temporary());
-                tx.remove_items(&durable_items_to_drop)?;
+                // Persisted introspection sources live in a dedicated durable
+                // collection, not the regular items collection. Partition them
+                // out so they are removed separately via
+                // `remove_persisted_introspection_sources`.
+                let (regular_items, _persisted_introspection_items): (BTreeSet<_>, BTreeSet<_>) =
+                    durable_items_to_drop.into_iter().partition(|id| {
+                        !matches!(id, CatalogItemId::PersistedIntrospectionSource(_))
+                    });
+                tx.remove_items(&regular_items)?;
                 temporary_item_updates.extend(temporary_items_to_drop.into_iter().map(|id| {
                     let entry = state.get_entry(&id);
                     (entry.clone().into(), StateDiff::Retraction)
@@ -1765,6 +1867,39 @@ impl Catalog {
                 // Drop any replicas.
                 let replicas = delta.replicas.keys().copied().collect();
                 tx.remove_cluster_replicas(&replicas)?;
+
+                // Remove persisted introspection sources from their
+                // dedicated durable collection. Schemas, views, and storage
+                // collections are already handled by the dependency system
+                // via `cluster_replica_dependents` → `schema_dependents`.
+                {
+                    use mz_catalog::builtin::BUILTIN_LOG_BY_VARIANT;
+                    use mz_catalog::memory::objects::ClusterVariant;
+
+                    let mut sources_to_drop = BTreeSet::new();
+                    for (replica_id, (cluster_id, _reason)) in &delta.replicas {
+                        let cluster = state.get_cluster(*cluster_id);
+                        let persist_introspection = match &cluster.config.variant {
+                            ClusterVariant::Managed(managed) => managed.persist_introspection,
+                            ClusterVariant::Unmanaged => false,
+                        };
+                        if persist_introspection {
+                            let (_schema_name, _database_id, schema_id) =
+                                state.get_persisted_introspection_schema(*cluster_id, *replica_id);
+                            if schema_id.is_some() {
+                                sources_to_drop.extend(cluster.log_indexes.keys().map(|variant| {
+                                    let builtin_log = BUILTIN_LOG_BY_VARIANT
+                                        .get(variant)
+                                        .expect("every log variant has a builtin log");
+                                    (cluster.id, *replica_id, builtin_log.name.to_string())
+                                }));
+                            }
+                        }
+                    }
+                    if !sources_to_drop.is_empty() {
+                        tx.remove_persisted_introspection_sources(sources_to_drop)?;
+                    }
+                }
 
                 for (replica_id, (cluster_id, reason)) in delta.replicas {
                     let cluster = state.get_cluster(cluster_id);
@@ -2895,7 +3030,11 @@ impl ObjectsToDrop {
             }
             DropObjectInfo::Item(item_id) => {
                 let entry = state.get_entry(&item_id);
-                if item_id.is_system() {
+                // Persisted introspection sources are system-managed but
+                // droppable when their parent replica is dropped.
+                if item_id.is_system()
+                    && !matches!(item_id, CatalogItemId::PersistedIntrospectionSource(_))
+                {
                     let name = entry.name();
                     let full_name =
                         state.resolve_full_name(name, session.map(|session| session.conn_id()));
@@ -2921,6 +3060,90 @@ impl ObjectsToDrop {
 
         Ok(())
     }
+}
+
+/// Create per-replica views by rewriting each builtin `mz_introspection` view
+/// to reference items in the per-replica schema, using ID-based references so
+/// the catalog apply pipeline's topological sort can order them correctly.
+fn create_persisted_introspection_views(
+    tx: &mut Transaction<'_>,
+    cluster: &mz_catalog::memory::objects::Cluster,
+    replica_id: &ReplicaId,
+    schema_id: SchemaId,
+    schema_name: &str,
+    temporary_oids: &HashSet<u32>,
+) -> Result<(), AdapterError> {
+    use itertools::Itertools;
+    use mz_catalog::builtin::BUILTIN_LOG_BY_VARIANT;
+    use mz_ore::cast::CastFrom;
+    use mz_repr::namespaces::MZ_INTROSPECTION_SCHEMA;
+
+    // Build name → CatalogItemId map for all items in the per-replica schema.
+    let mut name_to_id: BTreeMap<String, CatalogItemId> = BTreeMap::new();
+
+    // Add persisted introspection sources.
+    for variant in cluster.log_indexes.keys() {
+        let builtin_log = BUILTIN_LOG_BY_VARIANT
+            .get(variant)
+            .expect("every log variant has a builtin log");
+        let (item_id, _global_id) =
+            Transaction::allocate_persisted_introspection_source_id(replica_id, *variant);
+        name_to_id.insert(builtin_log.name.to_string(), item_id);
+    }
+
+    // Collect mz_introspection views.
+    let introspection_views: Vec<&BuiltinView> = BUILTINS::views()
+        .filter(|v| v.schema == MZ_INTROSPECTION_SCHEMA)
+        .collect();
+
+    // Allocate IDs for all views upfront so we can use them in cross-references.
+    let view_ids = tx.allocate_user_item_ids(u64::cast_from(introspection_views.len()))?;
+    for ((item_id, _global_id), view) in view_ids.iter().zip_eq(introspection_views.iter()) {
+        name_to_id.insert(view.name.to_string(), *item_id);
+    }
+
+    // Create and insert each view.
+    for ((item_id, global_id), view) in view_ids.into_iter().zip_eq(introspection_views.iter()) {
+        let create_sql = rewrite_introspection_view_sql(view, schema_name, &name_to_id);
+        tx.insert_user_item(
+            item_id,
+            global_id,
+            schema_id,
+            view.name,
+            create_sql,
+            MZ_SYSTEM_ROLE_ID,
+            vec![
+                rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::View),
+                rbac::owner_privilege(mz_sql::catalog::ObjectType::View, MZ_SYSTEM_ROLE_ID),
+            ],
+            temporary_oids,
+            BTreeMap::new(),
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Produce CREATE VIEW SQL for a per-replica introspection view by rewriting
+/// schema references from `mz_introspection` to `target_schema` and converting
+/// item references to ID-based refs.
+fn rewrite_introspection_view_sql(
+    view: &BuiltinView,
+    target_schema: &str,
+    name_to_id: &BTreeMap<String, CatalogItemId>,
+) -> String {
+    use mz_ore::collections::CollectionExt;
+    use mz_sql::ast::transform::rewrite_introspection_schema_refs;
+    use mz_sql_parser::ast::display::AstDisplay;
+
+    let create_sql = format!(
+        "CREATE VIEW {}.{} AS {}",
+        target_schema, view.name, view.sql
+    );
+    let stmts = mz_sql::parse::parse(&create_sql).expect("builtin view SQL must parse");
+    let mut stmt = stmts.into_element().ast;
+    rewrite_introspection_schema_refs(&mut stmt, target_schema, Some(name_to_id));
+    stmt.to_ast_string_stable()
 }
 
 #[cfg(test)]

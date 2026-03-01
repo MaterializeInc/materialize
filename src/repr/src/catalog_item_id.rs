@@ -38,6 +38,8 @@ pub enum CatalogItemId {
     System(u64),
     /// Introspection Source Index namespace.
     IntrospectionSourceIndex(u64),
+    /// Persisted introspection source namespace (per-replica persist shards).
+    PersistedIntrospectionSource(u64),
     /// User namespace.
     User(u64),
     /// Transient item.
@@ -49,7 +51,9 @@ impl CatalogItemId {
     pub fn is_system(&self) -> bool {
         matches!(
             self,
-            CatalogItemId::System(_) | CatalogItemId::IntrospectionSourceIndex(_)
+            CatalogItemId::System(_)
+                | CatalogItemId::IntrospectionSourceIndex(_)
+                | CatalogItemId::PersistedIntrospectionSource(_)
         )
     }
 
@@ -75,7 +79,10 @@ impl FromStr for CatalogItemId {
         s = &s[1..];
         let variant = match tag {
             's' => {
-                if Some('i') == s.chars().next() {
+                if s.starts_with("ip") {
+                    s = &s[2..];
+                    CatalogItemId::PersistedIntrospectionSource
+                } else if s.starts_with('i') {
                     s = &s[1..];
                     CatalogItemId::IntrospectionSourceIndex
                 } else {
@@ -96,6 +103,7 @@ impl fmt::Display for CatalogItemId {
         match self {
             CatalogItemId::System(id) => write!(f, "s{}", id),
             CatalogItemId::IntrospectionSourceIndex(id) => write!(f, "si{}", id),
+            CatalogItemId::PersistedIntrospectionSource(id) => write!(f, "sip{}", id),
             CatalogItemId::User(id) => write!(f, "u{}", id),
             CatalogItemId::Transient(id) => write!(f, "t{}", id),
         }
@@ -109,6 +117,7 @@ impl RustType<ProtoCatalogItemId> for CatalogItemId {
             kind: Some(match self {
                 CatalogItemId::System(x) => System(*x),
                 CatalogItemId::IntrospectionSourceIndex(x) => IntrospectionSourceIndex(*x),
+                CatalogItemId::PersistedIntrospectionSource(x) => PersistedIntrospectionSource(*x),
                 CatalogItemId::User(x) => User(*x),
                 CatalogItemId::Transient(x) => Transient(*x),
             }),
@@ -120,6 +129,9 @@ impl RustType<ProtoCatalogItemId> for CatalogItemId {
         match proto.kind {
             Some(System(x)) => Ok(CatalogItemId::System(x)),
             Some(IntrospectionSourceIndex(x)) => Ok(CatalogItemId::IntrospectionSourceIndex(x)),
+            Some(PersistedIntrospectionSource(x)) => {
+                Ok(CatalogItemId::PersistedIntrospectionSource(x))
+            }
             Some(User(x)) => Ok(CatalogItemId::User(x)),
             Some(Transient(x)) => Ok(CatalogItemId::Transient(x)),
             None => Err(TryFromProtoError::missing_field("ProtoCatalogItemId::kind")),

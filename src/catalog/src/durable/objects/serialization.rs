@@ -19,7 +19,9 @@ use crate::durable::objects::{
     ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
     DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey, ItemValue,
-    NetworkPolicyKey, NetworkPolicyValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
+    NetworkPolicyKey, NetworkPolicyValue, PersistedIntrospectionSourceCatalogItemId,
+    PersistedIntrospectionSourceGlobalId, PersistedIntrospectionSourceKey,
+    PersistedIntrospectionSourceValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
     ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
     SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
     StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
@@ -75,6 +77,7 @@ impl RustType<proto::ClusterVariant> for ClusterVariant {
                 replication_factor,
                 optimizer_feature_overrides,
                 schedule,
+                persist_introspection,
             }) => proto::ClusterVariant::Managed(proto::ManagedCluster {
                 size: size.to_string(),
                 availability_zones: availability_zones.clone(),
@@ -82,6 +85,7 @@ impl RustType<proto::ClusterVariant> for ClusterVariant {
                 replication_factor: *replication_factor,
                 optimizer_feature_overrides: optimizer_feature_overrides.into_proto(),
                 schedule: schedule.into_proto(),
+                persist_introspection: *persist_introspection,
             }),
             ClusterVariant::Unmanaged => proto::ClusterVariant::Unmanaged,
         }
@@ -97,6 +101,7 @@ impl RustType<proto::ClusterVariant> for ClusterVariant {
                 replication_factor: managed.replication_factor,
                 optimizer_feature_overrides: managed.optimizer_feature_overrides.into_rust()?,
                 schedule: managed.schedule.into_rust()?,
+                persist_introspection: managed.persist_introspection,
             })),
         }
     }
@@ -913,6 +918,76 @@ impl RustType<proto::IntrospectionSourceIndexGlobalId> for IntrospectionSourceIn
         proto: proto::IntrospectionSourceIndexGlobalId,
     ) -> Result<Self, TryFromProtoError> {
         Ok(IntrospectionSourceIndexGlobalId(proto.0))
+    }
+}
+
+impl RustType<proto::PersistedIntrospectionSourceCatalogItemId>
+    for PersistedIntrospectionSourceCatalogItemId
+{
+    fn into_proto(&self) -> proto::PersistedIntrospectionSourceCatalogItemId {
+        proto::PersistedIntrospectionSourceCatalogItemId(self.0)
+    }
+
+    fn from_proto(
+        proto: proto::PersistedIntrospectionSourceCatalogItemId,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(PersistedIntrospectionSourceCatalogItemId(proto.0))
+    }
+}
+
+impl RustType<proto::PersistedIntrospectionSourceGlobalId>
+    for PersistedIntrospectionSourceGlobalId
+{
+    fn into_proto(&self) -> proto::PersistedIntrospectionSourceGlobalId {
+        proto::PersistedIntrospectionSourceGlobalId(self.0)
+    }
+
+    fn from_proto(
+        proto: proto::PersistedIntrospectionSourceGlobalId,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(PersistedIntrospectionSourceGlobalId(proto.0))
+    }
+}
+
+impl RustType<proto::PersistedIntrospectionSourceKey> for PersistedIntrospectionSourceKey {
+    fn into_proto(&self) -> proto::PersistedIntrospectionSourceKey {
+        proto::PersistedIntrospectionSourceKey {
+            cluster_id: self.cluster_id.into_proto(),
+            replica_id: self.replica_id.into_proto(),
+            name: self.name.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::PersistedIntrospectionSourceKey,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(PersistedIntrospectionSourceKey {
+            cluster_id: proto.cluster_id.into_rust()?,
+            replica_id: proto.replica_id.into_rust()?,
+            name: proto.name,
+        })
+    }
+}
+
+impl RustType<proto::PersistedIntrospectionSourceValue> for PersistedIntrospectionSourceValue {
+    fn into_proto(&self) -> proto::PersistedIntrospectionSourceValue {
+        proto::PersistedIntrospectionSourceValue {
+            catalog_id: self.catalog_id.into_proto(),
+            global_id: self.global_id.into_proto(),
+            oid: self.oid,
+            schema_id: self.schema_id.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::PersistedIntrospectionSourceValue,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(PersistedIntrospectionSourceValue {
+            catalog_id: proto.catalog_id.into_rust()?,
+            global_id: proto.global_id.into_rust()?,
+            oid: proto.oid,
+            schema_id: proto.schema_id.into_rust()?,
+        })
     }
 }
 
