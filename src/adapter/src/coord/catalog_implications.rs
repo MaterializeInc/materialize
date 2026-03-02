@@ -950,6 +950,9 @@ impl Coordinator {
             .await
             .unwrap_or_terminate("cannot fail to create collections");
 
+        // FIXME: Do we need to bump the catalog frontier here as well? If we don't, querying
+        // `mz_catalog_raw` after a `CREATE TABLE` hangs for up to a second (until the next tick of
+        // `group_commit`).
         self.apply_local_write(register_ts).await;
 
         Ok(())

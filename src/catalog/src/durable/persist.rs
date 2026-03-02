@@ -382,6 +382,34 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         }
     }
 
+    /// Advance the upper of the catalog shard to `new_upper`.
+    ///
+    /// If the catalog's upper is already >= `new_upper`, this is a no-op.
+    #[mz_ore::instrument(level = "debug")]
+    pub(crate) async fn advance_upper(
+        &mut self,
+        new_upper: Timestamp,
+    ) -> Result<(), CatalogError> {
+        assert_eq!(self.mode, Mode::Writable);
+
+        if self.upper >= new_upper {
+            return Ok(());
+        }
+
+        self.compare_and_append_inner(
+            std::iter::empty::<((SourceData, ()), Timestamp, StorageDiff)>(),
+            new_upper,
+        )
+        .await
+        .map_err(|e| e.unwrap_fence_error())?;
+
+        // No sync needed since no data was written, but we must update our
+        // cached upper to reflect the advancement.
+        self.upper = new_upper;
+
+        Ok(())
+    }
+
     /// Appends `updates` iff the current global upper of the catalog is `self.upper`.
     ///
     /// Returns the next upper used to commit the transaction.
@@ -399,12 +427,9 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             self.upper
         );
 
-        // This awkward code allows us to perform an expensive soft assert that requires cloning
-        // `updates` twice, after `updates` has been consumed.
         let contains_fence = if mz_ore::assert::soft_assertions_enabled() {
             let updates: Vec<_> = updates.clone();
             let parsed_updates: Vec<_> = updates
-                .clone()
                 .into_iter()
                 .map(|(update, diff)| {
                     let update: StateUpdateKindJson = update.into();
@@ -422,10 +447,9 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             let contains_addition = parsed_updates.iter().any(|(update, diff)| {
                 matches!(update, StateUpdateKind::FenceToken(..)) && *diff == Diff::ONE
             });
-            let contains_fence = contains_retraction && contains_addition;
-            Some((contains_fence, updates))
+            contains_retraction && contains_addition
         } else {
-            None
+            false
         };
 
         let updates = updates.into_iter().map(|(kind, diff)| {
@@ -437,6 +461,37 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             )
         });
         let next_upper = commit_ts.step_forward();
+        self.compare_and_append_inner(updates, next_upper)
+            .await
+            .map_err(|e| {
+                // There was an upper mismatch which means something else must have written to the
+                // catalog. Syncing to the current upper should result in a fence error since
+                // writing to the catalog without fencing other catalogs should be impossible. The
+                // one exception is if we are trying to fence other catalogs with this write, in
+                // which case we won't see a fence error.
+                assert!(
+                    contains_fence,
+                    "encountered an upper mismatch on a non-fencing write"
+                );
+                e
+            })?;
+        self.sync(next_upper).await?;
+        Ok(next_upper)
+    }
+
+    /// Compare-and-append `updates` to the catalog shard, advancing the upper to `next_upper`.
+    ///
+    /// On success, downgrades the since handle but does NOT update `self.upper` or call `sync`.
+    /// Callers that wrote data must call `sync` to process listen events (which also updates
+    /// `self.upper`). Callers that wrote no data must update `self.upper` directly.
+    ///
+    /// On upper mismatch, syncs to the current upper (which may detect fencing) and returns an
+    /// error. Callers are responsible for asserting the appropriate fencing invariants.
+    async fn compare_and_append_inner(
+        &mut self,
+        updates: impl IntoIterator<Item = ((SourceData, ()), Timestamp, StorageDiff)>,
+        next_upper: Timestamp,
+    ) -> Result<(), CompareAndAppendError> {
         let res = self
             .write_handle
             .compare_and_append(
@@ -447,22 +502,12 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             .await
             .expect("invalid usage");
 
-        // There was an upper mismatch which means something else must have written to the catalog.
-        // Syncing to the current upper should result in a fence error since writing to the catalog
-        // without fencing other catalogs should be impossible. The one exception is if we are
-        // trying to fence other catalogs with this write, in which case we won't see a fence error.
         if let Err(e @ UpperMismatch { .. }) = res {
             self.sync_to_current_upper().await?;
-            if let Some((contains_fence, updates)) = contains_fence {
-                assert!(
-                    contains_fence,
-                    "updates were neither fenced nor fencing and encountered an upper mismatch: {updates:#?}"
-                )
-            }
             return Err(e.into());
         }
 
-        // Lag the shard's upper by 1 to keep it readable.
+        // Lag the shard's since by 1 to keep it readable.
         let downgrade_to = Antichain::from_elem(next_upper.saturating_sub(1));
 
         // The since handle gives us the ability to fence out other downgraders using an opaque token.
@@ -483,8 +528,8 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                 "updated bound should match expected"
             ),
         }
-        self.sync(next_upper).await?;
-        Ok(next_upper)
+
+        Ok(())
     }
 
     /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
@@ -1790,6 +1835,15 @@ impl DurableCatalogState for PersistCatalogState {
         }
         self.sync_to_current_upper().await?;
         Ok(())
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn advance_upper(&mut self, advance_to: Timestamp) -> Result<(), CatalogError> {
+        // Read-only and savepoint catalogs cannot advance the upper.
+        if self.is_read_only() || self.is_savepoint() {
+            return Ok(());
+        }
+        self.advance_upper(advance_to).await
     }
 
     fn shard_id(&self) -> ShardId {

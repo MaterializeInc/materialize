@@ -445,22 +445,17 @@ impl Coordinator {
             advance_to,
         } = self.get_local_write_ts().await;
 
-        // While we're flipping on the feature flags for txn-wal tables and
-        // the separated Postgres timestamp oracle, we also need to confirm
-        // leadership on writes _after_ getting the timestamp and _before_
-        // writing anything to table shards.
-        //
-        // TODO: Remove this after both (either?) of the above features are on
-        // for good and no possibility of running the old code.
-        let confirm_leadership_start = Instant::now();
-        let () = self
-            .catalog
-            .confirm_leadership()
+        // Advance the catalog shard's upper to keep it in sync with the oracle
+        // timestamp. This ensures that reads of mz_catalog_raw at the oracle's
+        // read_ts do not block waiting for the catalog shard's upper to advance.
+        let catalog_upper_start = Instant::now();
+        self.catalog
+            .advance_upper(advance_to)
             .await
-            .unwrap_or_terminate("unable to confirm leadership");
+            .unwrap_or_terminate("unable to advance catalog upper");
         self.metrics
-            .group_commit_confirm_leadership_seconds
-            .observe(confirm_leadership_start.elapsed().as_secs_f64());
+            .group_commit_catalog_upper_seconds
+            .observe(catalog_upper_start.elapsed().as_secs_f64());
 
         let mut appends: BTreeMap<CatalogItemId, SmallVec<[TableData; 1]>> = BTreeMap::new();
         let mut responses = Vec::with_capacity(validated_writes.len());

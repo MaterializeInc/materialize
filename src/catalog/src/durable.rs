@@ -317,6 +317,12 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// NB: We may remove this in later iterations of Pv2.
     async fn confirm_leadership(&mut self) -> Result<(), CatalogError>;
 
+    /// Advances the catalog shard's upper to `advance_to` without writing any data.
+    ///
+    /// This keeps the catalog shard's frontier in sync with the oracle timestamp
+    /// so that reads of `mz_catalog_raw` at the oracle's `read_ts` do not block.
+    async fn advance_upper(&mut self, advance_to: Timestamp) -> Result<(), CatalogError>;
+
     /// Allocates and returns `amount` IDs of `id_type`.
     ///
     /// See [`Self::commit_transaction`] for details on `commit_ts`.
