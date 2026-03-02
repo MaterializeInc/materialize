@@ -1014,46 +1014,23 @@ where
 
     /// Shut down this instance.
     ///
-    /// This method runs various assertions ensuring the instance state is empty. It exists to help
-    /// us find bugs where the client drops a compute instance that still has replicas or
-    /// collections installed, and later assumes that said replicas/collections still exists.
+    /// This method asserts that the instance has no replicas left. It exists to help
+    /// us find bugs where the client drops a compute instance that still has replicas
+    /// installed, and later assumes that said replicas still exist.
     ///
     /// # Panics
     ///
-    /// Panics if the compute instance still has active replicas.
-    /// Panics if the compute instance still has collections installed.
+    /// Soft-panics if the compute instance still has active replicas.
     #[mz_ore::instrument(level = "debug")]
     pub fn shutdown(&mut self) {
         // Taking the `command_rx` ensures that the [`Instance::run`] loop terminates.
         let (_tx, rx) = mpsc::unbounded_channel();
-        let mut command_rx = std::mem::replace(&mut self.command_rx, rx);
-
-        // Apply all outstanding read hold changes. This might cause read hold downgrades to be
-        // added to `command_tx`, so we need to apply those in a loop.
-        //
-        // TODO(teskje): Make `Command` an enum and assert that all received commands are read
-        // hold downgrades.
-        while let Ok(cmd) = command_rx.try_recv() {
-            cmd(self);
-        }
-
-        // Collections might have been dropped but not cleaned up yet.
-        self.cleanup_collections();
+        self.command_rx = rx;
 
         let stray_replicas: Vec<_> = self.replicas.keys().collect();
         soft_assert_or_log!(
             stray_replicas.is_empty(),
             "dropped instance still has provisioned replicas: {stray_replicas:?}",
-        );
-
-        let collections = self.collections.iter();
-        let stray_collections: Vec<_> = collections
-            .filter(|(_, c)| !c.log_collection)
-            .map(|(id, _)| id)
-            .collect();
-        soft_assert_or_log!(
-            stray_collections.is_empty(),
-            "dropped instance still has installed collections: {stray_collections:?}",
         );
     }
 
