@@ -62,21 +62,20 @@ export const RoleFilter = ({
       }}
       options={options}
       value={selected}
-      styles={{
-        ...buildReactSelectFilterStyles<RoleFilterOption, false>({
-          colors,
-          shadows,
-        }),
-        container: (base) => ({
-          ...base,
-          width: containerWidth,
-        }),
-        menu: (base) => ({
-          ...base,
-          right: 0,
-          left: "auto",
-        }),
-      }}
+      styles={buildReactSelectFilterStyles<RoleFilterOption, false>(
+        { colors, shadows },
+        {
+          container: (base) => ({
+            ...base,
+            width: containerWidth,
+          }),
+          menu: (base) => ({
+            ...base,
+            right: 0,
+            left: "auto",
+          }),
+        },
+      )}
     />
   );
 };
