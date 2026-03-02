@@ -40,8 +40,6 @@ class Scenario(Enum):
 ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
     # Uses a lot of memory, hard to predict how much
     "memory_limiter_interval": "0",
-    # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9660 is fixed
-    "log_filter": "warn",
     # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9656 is fixed
     "persist_stats_filter_enabled": "false",
     # See https://materializeinc.slack.com/archives/CTESPM7FU/p1758195280629909, should reenable when it performs better
