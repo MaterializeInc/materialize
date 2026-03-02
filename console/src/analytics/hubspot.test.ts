@@ -102,7 +102,7 @@ describe("trackSignupInHubspot", () => {
 
   it("fails after 3 tries", async () => {
     server.use(trackSignupErrorHandler);
-    expect(() =>
+    await expect(() =>
       trackSignupInHubspot(
         {
           name: "Some User",
@@ -164,7 +164,7 @@ describe("submitOnboardingSurvey", () => {
 
   it("fails after 3 tries", async () => {
     server.use(onboardingSurveyErrorHandler);
-    expect(() =>
+    await expect(() =>
       submitOnboardingSurvey(
         {
           email: "someuser@example.com",

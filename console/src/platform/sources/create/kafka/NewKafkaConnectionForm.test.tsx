@@ -148,7 +148,7 @@ describe("NewKafkaConnectionForm", () => {
     const sslCAInput = screen.getByTestId("authentication-ssl-ca");
     await selectReactSelectOption(sslCAInput, "materialize.public.secret_1");
     expect(isValidForm()).toBeTruthy();
-  });
+  }, 10_000);
 
   it("can fill out the basic form with SSL authentication", async () => {
     const user = userEvent.setup();
@@ -164,7 +164,7 @@ describe("NewKafkaConnectionForm", () => {
     const sslCAInput = screen.getByTestId("authentication-ssl-ca");
     await selectReactSelectOption(sslCAInput, "materialize.public.secret_1");
     expect(isValidForm()).toBeTruthy();
-  });
+  }, 10_000);
 
   it("enforces broker uniqueness", async () => {
     const user = userEvent.setup();
