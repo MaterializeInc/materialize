@@ -287,7 +287,7 @@ pub mod v1alpha1 {
                     environmentd_image_ref: value.spec.environmentd_image_ref,
                     environmentd_extra_args: value.spec.environmentd_extra_args,
                     environmentd_extra_env: value.spec.environmentd_extra_env,
-                    environmentd_iam_role_arn: value.spec.environmentd_iam_role_arn,
+                    environmentd_iam_role_arn: None,
                     environmentd_connection_role_arn: value.spec.environmentd_connection_role_arn,
                     environmentd_resource_requirements: value
                         .spec
@@ -374,16 +374,6 @@ pub mod v1alpha2 {
         pub environmentd_extra_args: Option<Vec<String>>,
         /// Extra environment variables to pass to the environmentd binary.
         pub environmentd_extra_env: Option<Vec<EnvVar>>,
-        /// {{<warning>}}
-        /// Deprecated.
-        ///
-        /// Use `service_account_annotations` to set "eks.amazonaws.com/role-arn" instead.
-        /// {{</warning>}}
-        ///
-        /// If running in AWS, override the IAM role to use to give
-        /// environmentd access to the persist S3 bucket.
-        #[kube(deprecated)]
-        pub environmentd_iam_role_arn: Option<String>,
         /// If running in AWS, override the IAM role to use to support
         /// the CREATE CONNECTION feature.
         pub environmentd_connection_role_arn: Option<String>,
@@ -505,7 +495,6 @@ pub mod v1alpha2 {
                 environmentd_image_ref: self.spec.environmentd_image_ref.clone(),
                 environmentd_extra_args: self.spec.environmentd_extra_args.clone(),
                 environmentd_extra_env: self.spec.environmentd_extra_env.clone(),
-                environmentd_iam_role_arn: self.spec.environmentd_iam_role_arn.clone(),
                 environmentd_connection_role_arn: self
                     .spec
                     .environmentd_connection_role_arn
@@ -965,13 +954,23 @@ pub mod v1alpha2 {
     impl From<v1alpha1::Materialize> for Materialize {
         fn from(value: v1alpha1::Materialize) -> Self {
             let is_promoting = value.is_promoting();
+            let service_account_annotations = if let Some(environmentd_iam_role_arn) =
+                value.spec.environmentd_iam_role_arn
+            {
+                let mut annotations = value.spec.service_account_annotations.unwrap_or_default();
+                annotations
+                    .entry("eks.amazonaws.com/role-arn".to_owned())
+                    .or_insert(environmentd_iam_role_arn);
+                Some(annotations)
+            } else {
+                value.spec.service_account_annotations
+            };
             let mut mz = Materialize {
                 metadata: value.metadata,
                 spec: MaterializeSpec {
                     environmentd_image_ref: value.spec.environmentd_image_ref,
                     environmentd_extra_args: value.spec.environmentd_extra_args,
                     environmentd_extra_env: value.spec.environmentd_extra_env,
-                    environmentd_iam_role_arn: value.spec.environmentd_iam_role_arn,
                     environmentd_connection_role_arn: value.spec.environmentd_connection_role_arn,
                     environmentd_resource_requirements: value
                         .spec
@@ -984,7 +983,7 @@ pub mod v1alpha2 {
                     balancerd_replicas: value.spec.balancerd_replicas,
                     console_replicas: value.spec.console_replicas,
                     service_account_name: value.spec.service_account_name,
-                    service_account_annotations: value.spec.service_account_annotations,
+                    service_account_annotations,
                     service_account_labels: value.spec.service_account_labels,
                     pod_annotations: value.spec.pod_annotations,
                     pod_labels: value.spec.pod_labels,
