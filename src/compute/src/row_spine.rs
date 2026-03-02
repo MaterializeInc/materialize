@@ -537,83 +537,19 @@ mod offset_opt {
     use differential_dataflow::trace::implementations::OffsetList;
     use timely::container::PushInto;
 
-    enum OffsetStride {
-        Empty,
-        Zero,
-        Striding(usize, usize),
-        Saturated(usize, usize, usize),
-    }
-
-    impl OffsetStride {
-        /// Accepts or rejects a newly pushed element.
-        #[inline]
-        fn push(&mut self, item: usize) -> bool {
-            match self {
-                OffsetStride::Empty => {
-                    if item == 0 {
-                        *self = OffsetStride::Zero;
-                        true
-                    } else {
-                        false
-                    }
-                }
-                OffsetStride::Zero => {
-                    *self = OffsetStride::Striding(item, 2);
-                    true
-                }
-                OffsetStride::Striding(stride, count) => {
-                    if item == *stride * *count {
-                        *count += 1;
-                        true
-                    } else if item == *stride * (*count - 1) {
-                        *self = OffsetStride::Saturated(*stride, *count, 1);
-                        true
-                    } else {
-                        false
-                    }
-                }
-                OffsetStride::Saturated(stride, count, reps) => {
-                    if item == *stride * (*count - 1) {
-                        *reps += 1;
-                        true
-                    } else {
-                        false
-                    }
-                }
-            }
-        }
-
-        #[inline]
-        fn index(&self, index: usize) -> usize {
-            match self {
-                OffsetStride::Empty => {
-                    panic!("Empty OffsetStride")
-                }
-                OffsetStride::Zero => 0,
-                OffsetStride::Striding(stride, _steps) => *stride * index,
-                OffsetStride::Saturated(stride, steps, _reps) => {
-                    if index < *steps {
-                        *stride * index
-                    } else {
-                        *stride * (*steps - 1)
-                    }
-                }
-            }
-        }
-
-        #[inline]
-        fn len(&self) -> usize {
-            match self {
-                OffsetStride::Empty => 0,
-                OffsetStride::Zero => 1,
-                OffsetStride::Striding(_stride, steps) => *steps,
-                OffsetStride::Saturated(_stride, steps, reps) => *steps + *reps,
-            }
-        }
-    }
-
+    /// Offset container that compresses uniform-stride offsets into three integers.
+    ///
+    /// Replaces an enum-based design with flat fields to eliminate match dispatch
+    /// on the hot index path. The common case (all rows same length) becomes a
+    /// single branch + multiply + branchless min.
     pub struct OffsetOptimized {
-        strided: OffsetStride,
+        /// The stride value (byte length of each row when uniform).
+        stride: usize,
+        /// Number of strictly-increasing strided elements where offset[i] = stride * i.
+        steps: usize,
+        /// Number of additional saturated elements where offset = stride * (steps - 1).
+        reps: usize,
+        /// Fallback for elements that break the stride pattern.
         spilled: OffsetList,
     }
 
@@ -637,20 +573,26 @@ mod offset_opt {
         }
 
         fn clear(&mut self) {
-            self.strided = OffsetStride::Empty;
+            self.stride = 0;
+            self.steps = 0;
+            self.reps = 0;
             self.spilled.clear();
         }
 
         fn with_capacity(_size: usize) -> Self {
             Self {
-                strided: OffsetStride::Empty,
+                stride: 0,
+                steps: 0,
+                reps: 0,
                 spilled: OffsetList::with_capacity(0),
             }
         }
 
         fn merge_capacity(_cont1: &Self, _cont2: &Self) -> Self {
             Self {
-                strided: OffsetStride::Empty,
+                stride: 0,
+                steps: 0,
+                reps: 0,
                 spilled: OffsetList::with_capacity(0),
             }
         }
@@ -660,18 +602,24 @@ mod offset_opt {
             item
         }
 
-        #[inline]
+        #[inline(always)]
         fn index(&self, index: usize) -> Self::ReadItem<'_> {
-            if index < self.strided.len() {
-                self.strided.index(index)
+            let strided_len = self.steps + self.reps;
+            if index < strided_len {
+                // Branchless: min(index, steps - 1) handles both Striding and
+                // Saturated cases. For Striding (reps == 0), index < steps always
+                // holds so min is a no-op. For Saturated, indices >= steps clamp
+                // to steps - 1.
+                let clamped = index.min(self.steps.wrapping_sub(1));
+                self.stride * clamped
             } else {
-                self.spilled.index(index - self.strided.len())
+                self.spilled.index(index - strided_len)
             }
         }
 
-        #[inline]
+        #[inline(always)]
         fn len(&self) -> usize {
-            self.strided.len() + self.spilled.len()
+            self.steps + self.reps + self.spilled.len()
         }
     }
 
@@ -680,11 +628,44 @@ mod offset_opt {
         fn push_into(&mut self, item: usize) {
             if !self.spilled.is_empty() {
                 self.spilled.push(item);
-            } else {
-                let inserted = self.strided.push(item);
-                if !inserted {
-                    self.spilled.push(item);
+                return;
+            }
+            let total = self.steps + self.reps;
+            let accepted = if total == 0 {
+                // First element must be 0.
+                if item == 0 {
+                    self.steps = 1;
+                    true
+                } else {
+                    false
                 }
+            } else if self.steps == 1 && self.reps == 0 {
+                // Second element sets the stride.
+                self.stride = item;
+                self.steps = 2;
+                true
+            } else if self.reps == 0 {
+                // Striding: accept next stride step, or transition to saturated.
+                if item == self.stride * self.steps {
+                    self.steps += 1;
+                    true
+                } else if item == self.stride * (self.steps - 1) {
+                    self.reps = 1;
+                    true
+                } else {
+                    false
+                }
+            } else {
+                // Saturated: only accept repeated max value.
+                if item == self.stride * (self.steps - 1) {
+                    self.reps += 1;
+                    true
+                } else {
+                    false
+                }
+            };
+            if !accepted {
+                self.spilled.push(item);
             }
         }
     }
