@@ -6724,12 +6724,11 @@ def workflow_test_prometheus_metrics(c: Composition) -> None:
             additional_system_parameter_defaults={
                 "unsafe_enable_unsafe_functions": "true",
                 "unsafe_enable_unorchestrated_cluster_replicas": "true",
-                "compute_prometheus_scrape_interval": "1s",
             },
             support_external_clusterd=True,
         ),
         Clusterd(name="clusterd1", workers=1),
-        Testdrive(no_reset=True, default_timeout="30s"),
+        Testdrive(no_reset=True, default_timeout="60s"),
     ):
         c.up("materialized", "clusterd1")
 

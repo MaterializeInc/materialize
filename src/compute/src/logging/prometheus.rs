@@ -9,12 +9,6 @@
 
 //! Logging dataflow for Prometheus metrics gathered from the metrics registry.
 
-use std::collections::BTreeMap;
-use std::rc::Rc;
-use std::time::{Duration, Instant};
-
-use mz_compute_types::dyncfgs::PROMETHEUS_SCRAPE_INTERVAL;
-use mz_dyncfg::ConfigSet;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -22,6 +16,9 @@ use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use prometheus::proto::MetricType;
+use std::collections::BTreeMap;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 use timely::container::DrainContainer;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
@@ -51,7 +48,6 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
     scope: G,
     config: &mz_compute_client::logging::LoggingConfig,
     metrics_registry: MetricsRegistry,
-    worker_config: Rc<ConfigSet>,
     now: Instant,
     start_offset: Duration,
 ) -> Return {
@@ -98,8 +94,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             if Instant::now() < next_scrape {
                 return;
             }
-            let scrape_interval = PROMETHEUS_SCRAPE_INTERVAL.get(&worker_config);
-            next_scrape = Instant::now() + scrape_interval;
+            next_scrape = Instant::now() + interval;
 
             // Gather current metrics and build new snapshot.
             let metric_families = metrics_registry.gather();
