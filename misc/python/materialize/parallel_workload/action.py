@@ -760,7 +760,7 @@ class UpdateAction(Action):
             ]
         )
 
-        if exe.db.complexity == Complexity.DDL:
+        if exe.db.complexity == Complexity.DDL or exe.db.scenario == Scenario.Rename:
             result.extend(
                 [
                     "does not exist",
@@ -792,9 +792,12 @@ class UpdateAction(Action):
 
 class DeleteAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
-        return [
+        errors = [
             "canceling statement due to statement timeout",
         ] + super().errors_to_ignore(exe)
+        if exe.db.scenario == Scenario.Rename:
+            errors += ["does not exist"]
+        return errors
 
     def run(self, exe: Executor) -> bool:
         table = self.rng.choice(exe.db.tables)
