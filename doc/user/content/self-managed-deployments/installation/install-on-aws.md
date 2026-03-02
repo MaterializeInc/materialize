@@ -120,6 +120,17 @@ An active AWS account with appropriate permissions to create:
 
 {{< /warning >}}
 
+{{< tip >}}
+
+The simple example used in this tutorial enables [Password
+authentication](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/main/aws/examples/simple/main.tf#L380)
+for the Materialize instance. To use a different authentication method, update
+[`authenticator_kind`](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/main/kubernetes/modules/materialize-instance/README.md#input_authenticator_kind).
+See [Authentication](/security/self-managed/authentication/) for the supported
+authentication mechanisms.
+
+{{< /tip >}}
+
 ### Step 1: Set Up the Environment
 
 1. Open a terminal window.
@@ -331,11 +342,12 @@ guide](/self-managed-deployments/deployment-guidelines/aws-deployment-guidelines
 
 See also:
 
+- [Configuring System
+  Parameters](/self-managed-deployments/configuration-system-parameters/)
 - [Materialize Operator
   Configuration](/self-managed-deployments/operator-configuration/)
 - [Materialize CRD Field
   Descriptions](/self-managed-deployments/materialize-crd-field-descriptions/)
-
 
 ## Cleanup
 
@@ -344,5 +356,5 @@ See also:
 
 ## See Also
 
-
 - [Troubleshooting](/self-managed-deployments/troubleshooting/)
+- [Security](/security/self-managed/)
