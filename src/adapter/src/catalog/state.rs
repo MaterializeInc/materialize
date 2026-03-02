@@ -76,9 +76,8 @@ use mz_sql::names::{
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{
-    CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext,
+    CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -1185,84 +1184,86 @@ impl CatalogState {
                     ..
                 } = *plan;
                 CatalogItem::Source(Source {
-                create_sql: Some(source.create_sql),
-                data_source: match source.data_source {
-                    mz_sql::plan::DataSourceDesc::Ingestion(desc) => DataSourceDesc::Ingestion {
-                        desc,
-                        cluster_id: match in_cluster {
-                            Some(id) => id,
-                            None => {
-                                return Err((
-                                    AdapterError::Unstructured(anyhow::anyhow!(
-                                        "ingestion-based sources must have cluster specified"
-                                    )),
-                                    cached_expr,
-                                ));
+                    create_sql: Some(source.create_sql),
+                    data_source: match source.data_source {
+                        mz_sql::plan::DataSourceDesc::Ingestion(desc) => {
+                            DataSourceDesc::Ingestion {
+                                desc,
+                                cluster_id: match in_cluster {
+                                    Some(id) => id,
+                                    None => {
+                                        return Err((
+                                            AdapterError::Unstructured(anyhow::anyhow!(
+                                                "ingestion-based sources must have cluster specified"
+                                            )),
+                                            cached_expr,
+                                        ));
+                                    }
+                                },
                             }
+                        }
+                        mz_sql::plan::DataSourceDesc::OldSyntaxIngestion {
+                            desc,
+                            progress_subsource,
+                            data_config,
+                            details,
+                        } => DataSourceDesc::OldSyntaxIngestion {
+                            desc,
+                            progress_subsource,
+                            data_config,
+                            details,
+                            cluster_id: match in_cluster {
+                                Some(id) => id,
+                                None => {
+                                    return Err((
+                                        AdapterError::Unstructured(anyhow::anyhow!(
+                                            "ingestion-based sources must have cluster specified"
+                                        )),
+                                        cached_expr,
+                                    ));
+                                }
+                            },
                         },
-                    },
-                    mz_sql::plan::DataSourceDesc::OldSyntaxIngestion {
-                        desc,
-                        progress_subsource,
-                        data_config,
-                        details,
-                    } => DataSourceDesc::OldSyntaxIngestion {
-                        desc,
-                        progress_subsource,
-                        data_config,
-                        details,
-                        cluster_id: match in_cluster {
-                            Some(id) => id,
-                            None => {
-                                return Err((
-                                    AdapterError::Unstructured(anyhow::anyhow!(
-                                        "ingestion-based sources must have cluster specified"
-                                    )),
-                                    cached_expr,
-                                ));
-                            }
+                        mz_sql::plan::DataSourceDesc::IngestionExport {
+                            ingestion_id,
+                            external_reference,
+                            details,
+                            data_config,
+                        } => DataSourceDesc::IngestionExport {
+                            ingestion_id,
+                            external_reference,
+                            details,
+                            data_config,
                         },
-                    },
-                    mz_sql::plan::DataSourceDesc::IngestionExport {
-                        ingestion_id,
-                        external_reference,
-                        details,
-                        data_config,
-                    } => DataSourceDesc::IngestionExport {
-                        ingestion_id,
-                        external_reference,
-                        details,
-                        data_config,
-                    },
-                    mz_sql::plan::DataSourceDesc::Progress => DataSourceDesc::Progress,
-                    mz_sql::plan::DataSourceDesc::Webhook {
-                        validate_using,
-                        body_format,
-                        headers,
-                        cluster_id,
-                    } => {
-                        mz_ore::soft_assert_or_log!(
-                            cluster_id.is_none(),
-                            "cluster_id set at Source level for Webhooks"
-                        );
-                        DataSourceDesc::Webhook {
+                        mz_sql::plan::DataSourceDesc::Progress => DataSourceDesc::Progress,
+                        mz_sql::plan::DataSourceDesc::Webhook {
                             validate_using,
                             body_format,
                             headers,
-                            cluster_id: in_cluster
-                                .expect("webhook sources must use an existing cluster"),
+                            cluster_id,
+                        } => {
+                            mz_ore::soft_assert_or_log!(
+                                cluster_id.is_none(),
+                                "cluster_id set at Source level for Webhooks"
+                            );
+                            DataSourceDesc::Webhook {
+                                validate_using,
+                                body_format,
+                                headers,
+                                cluster_id: in_cluster
+                                    .expect("webhook sources must use an existing cluster"),
+                            }
                         }
-                    }
-                },
-                desc: source.desc,
-                global_id,
-                timeline,
-                resolved_ids,
-                custom_logical_compaction_window: source
-                    .compaction_window
-                    .or(custom_logical_compaction_window),
-                is_retained_metrics_object,
-            })
+                    },
+                    desc: source.desc,
+                    global_id,
+                    timeline,
+                    resolved_ids,
+                    custom_logical_compaction_window: source
+                        .compaction_window
+                        .or(custom_logical_compaction_window),
+                    is_retained_metrics_object,
+                })
             }
             Plan::CreateView(plan) => {
                 let CreateViewPlan { view, .. } = *plan;
@@ -1413,11 +1414,14 @@ impl CatalogState {
                 })
             }
             Plan::CreateContinualTask(plan) => {
-                let ct =
-                    match crate::continual_task::ct_item_from_plan(*plan, global_id, resolved_ids) {
-                        Ok(ct) => ct,
-                        Err(err) => return Err((err, cached_expr)),
-                    };
+                let ct = match crate::continual_task::ct_item_from_plan(
+                    *plan,
+                    global_id,
+                    resolved_ids,
+                ) {
+                    Ok(ct) => ct,
+                    Err(err) => return Err((err, cached_expr)),
+                };
                 CatalogItem::ContinualTask(ct)
             }
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {

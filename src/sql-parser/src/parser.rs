@@ -552,7 +552,7 @@ impl<'a> Parser<'a> {
             } else {
                 Ok(Expr::Cast {
                     expr: Box::new(Expr::Value(Value::String(parser.parse_literal_string()?))),
-                    data_type,
+                    data_type: Box::new(data_type),
                 })
             }
         }));
@@ -564,7 +564,7 @@ impl<'a> Parser<'a> {
             (Token::LBracket, _) => {
                 self.prev_token();
                 let function = self.parse_named_function()?;
-                Ok(Expr::Function(function))
+                Ok(Expr::Function(Box::new(function)))
             }
             (Token::Keyword(TRUE) | Token::Keyword(FALSE) | Token::Keyword(NULL), _) => {
                 self.prev_token();
@@ -920,12 +920,12 @@ impl<'a> Parser<'a> {
         ) {
             Ok(Expr::Cast {
                 expr: Box::new(Expr::Nested(Box::new(expr))),
-                data_type,
+                data_type: Box::new(data_type),
             })
         } else {
             Ok(Expr::Cast {
                 expr: Box::new(expr),
-                data_type,
+                data_type: Box::new(data_type),
             })
         }
     }
@@ -970,13 +970,13 @@ impl<'a> Parser<'a> {
         self.expect_keyword(FROM)?;
         let expr = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
-        Ok(Expr::Function(Function {
+        Ok(Expr::Function(Box::new(Function {
             name: RawItemName::Name(UnresolvedItemName::unqualified(ident!("extract"))),
             args: FunctionArgs::args(vec![Expr::Value(Value::String(field)), expr]),
             filter: None,
             over: None,
             distinct: false,
-        }))
+        })))
     }
 
     fn parse_row_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
@@ -1033,13 +1033,13 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect_token(&Token::RParen)?;
-        Ok(Expr::Function(Function {
+        Ok(Expr::Function(Box::new(Function {
             name: RawItemName::Name(UnresolvedItemName::unqualified(name)),
             args: FunctionArgs::args(exprs),
             filter: None,
             over: None,
             distinct: false,
-        }))
+        })))
     }
 
     // Parse calls to position(), which has the special form position('string' in 'string').
@@ -1051,13 +1051,13 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::Keyword(IN))?;
         let haystack = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
-        Ok(Expr::Function(Function {
+        Ok(Expr::Function(Box::new(Function {
             name: RawItemName::Name(UnresolvedItemName::unqualified(ident!("position"))),
             args: FunctionArgs::args(vec![needle, haystack]),
             filter: None,
             over: None,
             distinct: false,
-        }))
+        })))
     }
 
     /// Parse calls to normalize(), which can take the form:
@@ -1080,13 +1080,13 @@ impl<'a> Parser<'a> {
         };
 
         self.expect_token(&Token::RParen)?;
-        Ok(Expr::Function(Function {
+        Ok(Expr::Function(Box::new(Function {
             name: RawItemName::Name(UnresolvedItemName::unqualified(ident!("normalize"))),
             args: FunctionArgs::args(args),
             filter: None,
             over: None,
             distinct: false,
-        }))
+        })))
     }
 
     /// Parse an INTERVAL literal.
@@ -1273,7 +1273,7 @@ impl<'a> Parser<'a> {
                 }),
                 AT => {
                     self.expect_keywords(&[TIME, ZONE])?;
-                    Ok(Expr::Function(Function {
+                    Ok(Expr::Function(Box::new(Function {
                         name: RawItemName::Name(UnresolvedItemName::unqualified(ident!(
                             "timezone"
                         ))),
@@ -1281,7 +1281,7 @@ impl<'a> Parser<'a> {
                         filter: None,
                         over: None,
                         distinct: false,
-                    }))
+                    })))
                 }
                 COLLATE => Ok(Expr::Collate {
                     expr: Box::new(expr),
@@ -1410,13 +1410,13 @@ impl<'a> Parser<'a> {
         }
 
         self.expect_token(&Token::RParen)?;
-        Ok(Expr::Function(Function {
+        Ok(Expr::Function(Box::new(Function {
             name: RawItemName::Name(UnresolvedItemName::unqualified(ident!("substring"))),
             args: FunctionArgs::args(exprs),
             filter: None,
             over: None,
             distinct: false,
-        }))
+        })))
     }
 
     /// Parse an operator reference.
@@ -1568,7 +1568,7 @@ impl<'a> Parser<'a> {
     fn parse_pg_cast(&mut self, expr: Expr<Raw>) -> Result<Expr<Raw>, ParserError> {
         Ok(Expr::Cast {
             expr: Box::new(expr),
-            data_type: self.parse_data_type()?,
+            data_type: Box::new(self.parse_data_type()?),
         })
     }
 
@@ -7407,7 +7407,7 @@ impl<'a> Parser<'a> {
                 } else if self.peek_token() == Some(Token::LParen) {
                     let function =
                         self.parse_function(RawItemName::Name(UnresolvedItemName(id_parts)))?;
-                    Ok(Expr::Function(function))
+                    Ok(Expr::Function(Box::new(function)))
                 } else {
                     Ok(Expr::Identifier(id_parts))
                 }

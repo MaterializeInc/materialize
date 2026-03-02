@@ -734,9 +734,7 @@ fn generate_rbac_requirements(
         }
         Plan::ShowColumns(plan) => {
             let mut privileges = vec![(
-                SystemObjectId::Object(
-                    catalog.get_item(&plan.id).name().qualifiers.clone().into(),
-                ),
+                SystemObjectId::Object(catalog.get_item(&plan.id).name().qualifiers.clone().into()),
                 AclMode::USAGE,
                 role_id,
             )];
@@ -1225,8 +1223,7 @@ fn generate_rbac_requirements(
                 MutationKind::Update => AclMode::UPDATE,
                 MutationKind::Delete => AclMode::DELETE,
             };
-            let schema_id: ObjectId =
-                catalog.get_item(&plan.id).name().qualifiers.clone().into();
+            let schema_id: ObjectId = catalog.get_item(&plan.id).name().qualifiers.clone().into();
             let mut privileges = vec![
                 (
                     SystemObjectId::Object(schema_id.clone()),
@@ -1427,8 +1424,7 @@ fn generate_rbac_requirements(
             }
         }
         Plan::ValidateConnection(plan) => {
-            let schema_id: ObjectId =
-                catalog.get_item(&plan.id).name().qualifiers.clone().into();
+            let schema_id: ObjectId = catalog.get_item(&plan.id).name().qualifiers.clone().into();
             RbacRequirements {
                 privileges: vec![
                     (SystemObjectId::Object(schema_id), AclMode::USAGE, role_id),

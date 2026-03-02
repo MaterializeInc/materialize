@@ -2493,7 +2493,9 @@ fn plan_select_from_where(
             agg_exprs.push(plan_aggregate_common(ecx, &sql_function)?);
             group_scope
                 .items
-                .push(ScopeItem::from_expr(Expr::Function(sql_function.clone())));
+                .push(ScopeItem::from_expr(Expr::Function(Box::new(
+                    sql_function.clone(),
+                ))));
         }
         if !agg_exprs.is_empty() || !group_key.is_empty() || s.having.is_some() {
             // apply GROUP BY / aggregates
@@ -6361,7 +6363,7 @@ impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
                             ));
                             return;
                         }
-                        table_func = Some(func.clone());
+                        table_func = Some((**func).clone());
                     }
                 }
                 // Since we will descend into the table func below, don't add its own disallow

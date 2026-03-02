@@ -382,7 +382,11 @@ impl<T> TryFrom<Plan<T>> for LetFreePlan<T> {
                     insert_node(lir_id, parent, expr, nesting);
                 }
                 PlanNode::Get { id, keys, plan } => {
-                    let expr = Get { id, keys, plan: *plan };
+                    let expr = Get {
+                        id,
+                        keys,
+                        plan: *plan,
+                    };
                     insert_node(lir_id, parent, expr, nesting);
                 }
                 PlanNode::Mfp {

@@ -2644,7 +2644,7 @@ pub fn purify_create_materialized_view_options(
             .expect("we should be able to resolve mz_now");
         (
             item.id(),
-            Expr::Function(Function {
+            Expr::Function(Box::new(Function {
                 name: ResolvedItemName::Item {
                     id: item.id(),
                     qualifiers: item.name().qualifiers.clone(),
@@ -2659,7 +2659,7 @@ pub fn purify_create_materialized_view_options(
                 filter: None,
                 over: None,
                 distinct: false,
-            }),
+            })),
         )
     };
     // Prepare the `mz_timestamp` type.
@@ -2834,14 +2834,13 @@ impl MzNowPurifierVisitor {
 impl VisitMut<'_, Aug> for MzNowPurifierVisitor {
     fn visit_expr_mut(&mut self, expr: &'_ mut Expr<Aug>) {
         match expr {
-            Expr::Function(Function {
-                name:
-                    ResolvedItemName::Item {
-                        full_name: FullItemName { item, .. },
-                        ..
-                    },
-                ..
-            }) if item == &MZ_NOW_NAME.to_string() => {
+            Expr::Function(func)
+                if matches!(
+                    &func.name,
+                    ResolvedItemName::Item { full_name: FullItemName { item, .. }, .. }
+                    if item.as_str() == MZ_NOW_NAME
+                ) =>
+            {
                 let mz_now = self.mz_now.expect(
                     "we should have chosen a timestamp if the expression contains mz_now()",
                 );
@@ -2849,7 +2848,7 @@ impl VisitMut<'_, Aug> for MzNowPurifierVisitor {
                 // not alter the type of the expression.
                 *expr = Expr::Cast {
                     expr: Box::new(Expr::Value(Value::Number(mz_now.to_string()))),
-                    data_type: self.mz_timestamp_type.clone(),
+                    data_type: Box::new(self.mz_timestamp_type.clone()),
                 };
                 self.introduced_mz_timestamp = true;
             }

@@ -711,7 +711,10 @@ fn plan_explainee(
                 sql_bail!("expected CreateViewPlan plan");
             };
 
-            crate::plan::Explainee::Statement(ExplaineeStatement::CreateView { broken, plan: *plan })
+            crate::plan::Explainee::Statement(ExplaineeStatement::CreateView {
+                broken,
+                plan: *plan,
+            })
         }
         Explainee::CreateMaterializedView(mut stmt, broken) => {
             if stmt.if_exists != IfExistsBehavior::Skip {
@@ -760,7 +763,10 @@ fn plan_explainee(
             let Plan::Subscribe(plan) = plan_subscribe(scx, *stmt, params, None)? else {
                 sql_bail!("expected SubscribePlan");
             };
-            crate::plan::Explainee::Statement(ExplaineeStatement::Subscribe { broken, plan: *plan })
+            crate::plan::Explainee::Statement(ExplaineeStatement::Subscribe {
+                broken,
+                plan: *plan,
+            })
         }
     };
 
@@ -832,38 +838,38 @@ pub fn plan_explain_schema(
         Plan::CreateSink(plan) => {
             let CreateSinkPlan { sink, .. } = *plan;
             match sink.connection {
-            StorageSinkConnection::Kafka(KafkaSinkConnection {
-                format:
-                    KafkaSinkFormat {
-                        key_format,
-                        value_format:
-                            KafkaSinkFormatType::Avro {
-                                schema: value_schema,
-                                ..
-                            },
-                        ..
-                    },
-                ..
-            }) => {
-                let schema = match schema_for {
-                    ExplainSinkSchemaFor::Key => key_format
-                        .and_then(|f| match f {
-                            KafkaSinkFormatType::Avro { schema, .. } => Some(schema),
-                            _ => None,
-                        })
-                        .ok_or_else(|| sql_err!("CREATE SINK does not have a key"))?,
-                    ExplainSinkSchemaFor::Value => value_schema,
-                };
+                StorageSinkConnection::Kafka(KafkaSinkConnection {
+                    format:
+                        KafkaSinkFormat {
+                            key_format,
+                            value_format:
+                                KafkaSinkFormatType::Avro {
+                                    schema: value_schema,
+                                    ..
+                                },
+                            ..
+                        },
+                    ..
+                }) => {
+                    let schema = match schema_for {
+                        ExplainSinkSchemaFor::Key => key_format
+                            .and_then(|f| match f {
+                                KafkaSinkFormatType::Avro { schema, .. } => Some(schema),
+                                _ => None,
+                            })
+                            .ok_or_else(|| sql_err!("CREATE SINK does not have a key"))?,
+                        ExplainSinkSchemaFor::Value => value_schema,
+                    };
 
-                Ok(Plan::ExplainSinkSchema(ExplainSinkSchemaPlan {
-                    sink_from: sink.from,
-                    json_schema: schema,
-                }))
+                    Ok(Plan::ExplainSinkSchema(ExplainSinkSchemaPlan {
+                        sink_from: sink.from,
+                        json_schema: schema,
+                    }))
+                }
+                _ => bail_unsupported!(
+                    "EXPLAIN SCHEMA is only available for Kafka sinks with Avro schemas"
+                ),
             }
-            _ => bail_unsupported!(
-                "EXPLAIN SCHEMA is only available for Kafka sinks with Avro schemas"
-            ),
-        }
         }
         _ => unreachable!("plan_create_sink returns a CreateSinkPlan"),
     }
@@ -876,7 +882,9 @@ pub fn plan_explain_pushdown(
 ) -> Result<Plan, PlanError> {
     scx.require_feature_flag(&vars::ENABLE_EXPLAIN_PUSHDOWN)?;
     let explainee = plan_explainee(scx, statement.explainee, params)?;
-    Ok(Plan::ExplainPushdown(Box::new(ExplainPushdownPlan { explainee })))
+    Ok(Plan::ExplainPushdown(Box::new(ExplainPushdownPlan {
+        explainee,
+    })))
 }
 
 pub fn plan_explain_analyze_object(

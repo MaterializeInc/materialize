@@ -125,7 +125,7 @@ impl<'a> FuncRewriter<'a> {
                 "aggregate functions are not supported in functions in FROM".to_string(),
             ))
         }
-        Expr::Function(Function {
+        Expr::Function(Box::new(Function {
             name,
             args: FunctionArgs::Args {
                 args: vec![expr],
@@ -134,7 +134,7 @@ impl<'a> FuncRewriter<'a> {
             filter,
             over,
             distinct,
-        })
+        }))
     }
 
     fn plan_avg(

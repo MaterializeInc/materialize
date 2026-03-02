@@ -3073,25 +3073,27 @@ pub fn plan_create_materialized_view(
         });
     }
 
-    Ok(Plan::CreateMaterializedView(Box::new(CreateMaterializedViewPlan {
-        name,
-        materialized_view: MaterializedView {
-            create_sql,
-            expr,
-            dependencies: DependencyIds(dependencies),
-            column_names,
-            replacement_target,
-            cluster_id,
-            non_null_assertions,
-            compaction_window,
-            refresh_schedule,
-            as_of,
+    Ok(Plan::CreateMaterializedView(Box::new(
+        CreateMaterializedViewPlan {
+            name,
+            materialized_view: MaterializedView {
+                create_sql,
+                expr,
+                dependencies: DependencyIds(dependencies),
+                column_names,
+                replacement_target,
+                cluster_id,
+                non_null_assertions,
+                compaction_window,
+                refresh_schedule,
+                as_of,
+            },
+            replace,
+            drop_ids,
+            if_not_exists,
+            ambiguous_columns: *scx.ambiguous_columns.borrow(),
         },
-        replace,
-        drop_ids,
-        if_not_exists,
-        ambiguous_columns: *scx.ambiguous_columns.borrow(),
-    })))
+    )))
 }
 
 generate_extracted_config!(
@@ -3319,25 +3321,27 @@ pub fn plan_create_continual_task(
     };
 
     let as_of = stmt.as_of.map(Timestamp::from);
-    Ok(Plan::CreateContinualTask(Box::new(CreateContinualTaskPlan {
-        name,
-        placeholder_id,
-        desc,
-        input_id: input.global_id(),
-        with_snapshot: snapshot.unwrap_or(true),
-        continual_task: MaterializedView {
-            create_sql,
-            expr,
-            dependencies,
-            column_names,
-            replacement_target: None,
-            cluster_id,
-            non_null_assertions: Vec::new(),
-            compaction_window: None,
-            refresh_schedule: None,
-            as_of,
+    Ok(Plan::CreateContinualTask(Box::new(
+        CreateContinualTaskPlan {
+            name,
+            placeholder_id,
+            desc,
+            input_id: input.global_id(),
+            with_snapshot: snapshot.unwrap_or(true),
+            continual_task: MaterializedView {
+                create_sql,
+                expr,
+                dependencies,
+                column_names,
+                replacement_target: None,
+                cluster_id,
+                non_null_assertions: Vec::new(),
+                compaction_window: None,
+                refresh_schedule: None,
+                as_of,
+            },
         },
-    })))
+    )))
 }
 
 fn continual_task_query<'a>(

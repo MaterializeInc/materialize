@@ -423,7 +423,8 @@ impl Coordinator {
                 }
                 Plan::ShowColumns(show_columns_plan) => {
                     let max = Some(ctx.session().vars().max_query_result_size());
-                    self.sequence_peek(ctx, show_columns_plan.select_plan, target_cluster, max).await;
+                    self.sequence_peek(ctx, show_columns_plan.select_plan, target_cluster, max)
+                        .await;
                 }
                 Plan::CopyFrom(plan) => {
                     let plan = *plan;
