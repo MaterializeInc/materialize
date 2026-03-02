@@ -1,4 +1,4 @@
 psycopg==3.3.3
 psycopg-binary==3.3.3
 psycopg2==2.9.11
-SQLAlchemy==2.0.46
+SQLAlchemy==2.0.47
