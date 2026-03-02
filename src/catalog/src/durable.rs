@@ -312,10 +312,11 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         commit_ts: Timestamp,
     ) -> Result<Timestamp, CatalogError>;
 
-    /// Confirms that this catalog is connected as the current leader.
+    /// Advances the upper of the catalog shard to `new_upper`.
     ///
-    /// NB: We may remove this in later iterations of Pv2.
-    async fn confirm_leadership(&mut self) -> Result<(), CatalogError>;
+    /// This implicitly confirms leadership, as attempting to advance the catalog frontier will
+    /// fail if the writer has been fenced out.
+    async fn advance_upper(&mut self, new_upper: Timestamp) -> Result<(), CatalogError>;
 
     /// Allocates and returns `amount` IDs of `id_type`.
     ///

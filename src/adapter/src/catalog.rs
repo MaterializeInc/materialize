@@ -1147,8 +1147,8 @@ impl Catalog {
     }
 
     #[mz_ore::instrument(level = "debug")]
-    pub async fn confirm_leadership(&self) -> Result<(), AdapterError> {
-        Ok(self.storage().await.confirm_leadership().await?)
+    pub async fn advance_upper(&self, new_upper: mz_repr::Timestamp) -> Result<(), AdapterError> {
+        Ok(self.storage().await.advance_upper(new_upper).await?)
     }
 
     /// Return the ids of all log sources the given object depends on.

@@ -921,18 +921,22 @@ impl Coordinator {
         execution_timestamps_to_set: BTreeSet<StatementLoggingId>,
     ) -> Result<(), AdapterError> {
         // If we have tables, determine the initial validity for the table.
-        let register_ts = self.get_local_write_ts().await.timestamp;
+        let write_ts = self.get_local_write_ts().await;
+        let register_ts = write_ts.timestamp;
 
         // After acquiring `register_ts` but before using it, we need to
         // be sure we're still the leader. Otherwise a new generation
         // may also be trying to use `register_ts` for a different
-        // purpose.
+        // purpose. See materialize#28216.
         //
-        // See #28216.
+        // We also should advance the upper of the catalog shard, to ensure it
+        // is readable at the oracle read ts after we bump it to the
+        // `register_ts` below. Both of these needs are served by calling
+        // `advance_upper`.
         self.catalog
-            .confirm_leadership()
+            .advance_upper(write_ts.advance_to)
             .await
-            .unwrap_or_terminate("unable to confirm leadership");
+            .unwrap_or_terminate("unable to advance catalog upper");
 
         for id in execution_timestamps_to_set {
             self.set_statement_execution_timestamp(id, register_ts);
@@ -1170,7 +1174,15 @@ impl Coordinator {
             .desc
             .at_version(RelationVersionSelector::Specific(new_version));
 
-        let register_ts = self.get_local_write_ts().await.timestamp;
+        let write_ts = self.get_local_write_ts().await;
+        let register_ts = write_ts.timestamp;
+
+        // Ensure the catalog will be immediately readable at the read ts we're
+        // about to bump.
+        self.catalog
+            .advance_upper(write_ts.advance_to)
+            .await
+            .unwrap_or_terminate("unable to advance catalog upper");
 
         // Alter the table description, creating a "new" collection.
         self.controller

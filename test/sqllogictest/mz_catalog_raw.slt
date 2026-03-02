@@ -19,10 +19,8 @@ SELECT * FROM mz_internal.mz_catalog_raw
 # The mz_system user can query it.
 
 simple conn=mz_system,user=mz_system
-SET transaction_isolation = serializable;
 SELECT count(*) > 0 FROM mz_internal.mz_catalog_raw;
 ----
-COMPLETE 0
 t
 COMPLETE 1
 
@@ -32,8 +30,9 @@ statement ok
 CREATE TABLE t (a INT, b TEXT)
 
 simple conn=mz_system,user=mz_system
-SET transaction_isolation = serializable;
-SELECT data->'value'->>'name' FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'Item' AND data->'value'->>'name' = 't';
+SELECT data->'value'->>'name'
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'Item' AND data->'value'->>'name' = 't';
 ----
-COMPLETE 0
-COMPLETE 0
+t
+COMPLETE 1
