@@ -46,6 +46,11 @@ def main():
         type=str,
         required=True,
     )
+    parser.add_argument(
+        "--dry-run",
+        help="Only bump versions and update docs, skip git commit/tag/push",
+        action="store_true",
+    )
 
     args = parser.parse_args()
     version = f"v{args.version}"
@@ -71,6 +76,9 @@ def main():
         )
         # Commit here instead of in bump-version so we have access to the correct git author
         spawn.runv(["git", "commit", "-am", f"release: bump to version {version}"])
+        if args.dry_run:
+            print("Dry run: skipping tag, and push")
+            return
         print("Tagging version")
         tag_annotated(version)
         print("Pushing tag to Materialize repo")
