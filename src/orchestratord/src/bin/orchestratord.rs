@@ -11,6 +11,7 @@ use std::{
     future,
     net::SocketAddr,
     sync::{Arc, LazyLock},
+    time::Duration,
 };
 
 use axum_server::tls_openssl::OpenSSLConfig;
@@ -281,13 +282,28 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let metrics = Arc::new(Metrics::register_into(&metrics_registry));
 
     {
+        let tls_cert = args.tls_cert;
+        let tls_key = args.tls_key;
+        let config = OpenSSLConfig::from_pem_file(&tls_cert, &tls_key).unwrap();
+        let reload_config = config.clone();
+        let webhook_listen_address = args.webhook_listen_address;
+
         mz_ore::task::spawn(|| "webhook server", async move {
-            let config = OpenSSLConfig::from_pem_file(args.tls_cert, args.tls_key).unwrap();
-            if let Err(e) = axum_server::bind_openssl(args.webhook_listen_address, config)
+            if let Err(e) = axum_server::bind_openssl(webhook_listen_address, config)
                 .serve(webhook::router().into_make_service())
                 .await
             {
                 panic!("webhook server failed: {}", e.display_with_causes());
+            }
+        });
+
+        mz_ore::task::spawn(|| "webhook certificate reload", async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60 * 60));
+            loop {
+                interval.tick().await;
+                if let Err(err) = reload_config.reload_from_pem_file(&tls_cert, &tls_key) {
+                    tracing::error!("failed to reload webhook TLS certificate: {err}");
+                }
             }
         });
     }
