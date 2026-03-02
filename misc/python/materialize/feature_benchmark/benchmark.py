@@ -65,6 +65,9 @@ class Benchmark:
             elif float(self._scale) > 0:
                 scale = float(self._scale)
 
+        if self._scenario_cls.MAX_SCALE is not None:
+            scale = min(scale, self._scenario_cls.MAX_SCALE)
+
         scenario_class = self._scenario_cls
         return scenario_class(
             scale=scale,

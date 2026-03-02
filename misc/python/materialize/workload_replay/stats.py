@@ -169,14 +169,14 @@ def upload_plots(
 
 
 class DockerSeries:
-    """Container for time series data from Docker stats."""
+    """Time series data for the materialized container."""
 
     def __init__(
         self,
         *,
         t: list[int],
-        cpu_percent: dict[str, list[float]],
-        mem_percent: dict[str, list[float]],
+        cpu_percent: list[float],
+        mem_percent: list[float],
     ) -> None:
         self.t = t
         self.cpu_percent = cpu_percent
@@ -186,34 +186,17 @@ class DockerSeries:
 def extract_docker_series(
     docker_stats: list[tuple[int, dict[str, dict[str, Any]]]]
 ) -> DockerSeries:
-    """Extract time series from Docker stats snapshots."""
+    """Extract materialized time series from Docker stats snapshots."""
     t0 = docker_stats[0][0]
-    times: list[int] = [ts - t0 for (ts, _snapshot) in docker_stats]
+    times: list[int] = []
+    cpu_percent: list[float] = []
+    mem_percent: list[float] = []
 
-    containers: set[str] = set()
-    for _ts, snapshot in docker_stats:
-        containers |= set(snapshot.keys())
-
-    def init_float() -> dict[str, list[float]]:
-        return {c: [] for c in sorted(containers)}
-
-    cpu_percent = init_float()
-    mem_percent = init_float()
-
-    for _ts, snapshot in docker_stats:
-        for c in sorted(containers):
-            m = snapshot.get(c)
-
-            def last_or(lst: list[Any], default: Any):
-                return default if not lst else lst[-1]
-
-            if m is None:
-                cpu_percent[c].append(last_or(cpu_percent[c], 0.0))
-                mem_percent[c].append(last_or(mem_percent[c], 0.0))
-                continue
-
-            cpu_percent[c].append(float(m["cpu_percent"]))
-            mem_percent[c].append(float(m["mem_percent"]))
+    for ts, snapshot in docker_stats:
+        m = snapshot.get("materialized")
+        times.append(ts - t0)
+        cpu_percent.append(float(m["cpu_percent"]) if m else 0.0)
+        mem_percent.append(float(m["mem_percent"]) if m else 0.0)
 
     return DockerSeries(
         t=times,
@@ -225,27 +208,37 @@ def extract_docker_series(
 YScale = TypeLiteral["linear", "log", "symlog", "logit"]
 
 
+_COLOR_OLD = "#1f77b4"  # blue
+_COLOR_NEW = "#ff7f0e"  # orange
+
+
 def plot_timeseries_compare(
     *,
     t_old: list[int],
-    ys_old: dict[str, list[float]],
+    ys_old: list[float],
     t_new: list[int],
-    ys_new: dict[str, list[float]],
+    ys_new: list[float],
     title: str,
     ylabel: str,
     out_path: Path,
     yscale: YScale | None = None,
+    vlines_old: dict[str, int] | None = None,
+    vlines_new: dict[str, int] | None = None,
 ):
     """Plot a comparison of two time series."""
     plt.figure(figsize=(10, 6))
 
-    containers = sorted(set(ys_old.keys()) | set(ys_new.keys()))
+    plt.plot(t_old, ys_old, linestyle="--", color=_COLOR_OLD, label="old")
+    plt.plot(t_new, ys_new, linestyle="-", color=_COLOR_NEW, label="new")
 
-    for c in containers:
-        if c in ys_old:
-            plt.plot(t_old, ys_old[c], linestyle="--", label=f"{c} (old)")
-        if c in ys_new:
-            plt.plot(t_new, ys_new[c], linestyle="-", label=f"{c} (new)")
+    for label, x in (vlines_old or {}).items():
+        plt.axvline(
+            x=x, linestyle="--", color=_COLOR_OLD, alpha=0.8, label=f"{label} (old)"
+        )
+    for label, x in (vlines_new or {}).items():
+        plt.axvline(
+            x=x, linestyle="-", color=_COLOR_NEW, alpha=0.8, label=f"{label} (new)"
+        )
 
     plt.xlabel("time [s]")
     plt.ylabel(ylabel)
@@ -277,6 +270,19 @@ def plot_docker_stats_compare(
         old = extract_docker_series(stats_old["initial_data"]["docker"])
         new = extract_docker_series(stats_new["initial_data"]["docker"])
 
+        def initial_vlines(stats: dict[str, Any]) -> dict[str, int]:
+            vlines: dict[str, int] = {}
+            docker = stats["initial_data"]["docker"]
+            if docker:
+                t0 = docker[0][0]
+                ts = stats["initial_data"].get("sources_created_at")
+                if ts is not None:
+                    vlines["sources created"] = int(ts - t0)
+            return vlines
+
+        vlines_old = initial_vlines(stats_old)
+        vlines_new = initial_vlines(stats_new)
+
         plot_path = Path("plots") / f"{file}_initial_cpu.png"
         plot_timeseries_compare(
             t_old=old.t,
@@ -286,6 +292,8 @@ def plot_docker_stats_compare(
             title=f"{file} - Initial Data Phase CPU\n{old_version} [old] vs {new_version} [new]",
             ylabel="CPU [%]",
             out_path=plot_path,
+            vlines_old=vlines_old,
+            vlines_new=vlines_new,
         )
         plot_paths.append(plot_path)
 
@@ -298,6 +306,8 @@ def plot_docker_stats_compare(
             title=f"{file} - Initial Data Phase Memory\n{old_version} [old] vs {new_version} [new]",
             ylabel="Memory [%]",
             out_path=plot_path,
+            vlines_old=vlines_old,
+            vlines_new=vlines_new,
         )
         plot_paths.append(plot_path)
 

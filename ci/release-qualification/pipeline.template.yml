@@ -195,7 +195,7 @@ steps:
                 - 1200
 
       - id: long-workload-replay
-        label: "Long Workload Replay (10% initial data)"
+        label: "Long Workload Replay (100% initial data)"
         depends_on: build-x86_64
         timeout_in_minutes: 1200
         parallelism: 3
@@ -204,7 +204,7 @@ steps:
               composition: workload-replay
               run: benchmark
               args:
-                - --factor-initial-data=0.1
+                - --factor-initial-data=1
                 - --runtime=3600
                 - --compare-against
                 - common-ancestor

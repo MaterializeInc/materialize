@@ -541,6 +541,8 @@ def run_create_objects_part_1(
                         flags=re.DOTALL | re.IGNORECASE,
                     )
 
+    return
+
 
 def run_create_objects_part_2(
     c: Composition, services: set[str], workload: dict[str, Any], verbose: bool

@@ -200,14 +200,9 @@ def update_captured_workloads_repo() -> None:
     """Clone or update the captured-workloads repository."""
     path = pathlib.Path(MZ_ROOT / "test" / "workload-replay" / "captured-workloads")
     if (path / ".git").is_dir():
-        if ui.env_is_truthy("CI"):
-            spawn.runv(["git", "-C", str(path), "pull"])
-        else:
-            spawn.runv(["git", "-C", str(path), "fetch"])
-            local = spawn.capture(["git", "-C", str(path), "rev-parse", "@"])
-            remote = spawn.capture(["git", "-C", str(path), "rev-parse", "@{upstream}"])
-            if local != remote:
-                spawn.runv(["git", "-C", str(path), "pull"])
+        commit = "598060c6cf4c2d69730a1313a46704f8663e24fa"
+        spawn.runv(["git", "-C", str(path), "fetch"])
+        spawn.runv(["git", "-C", str(path), "checkout", commit])
     else:
         path.mkdir(exist_ok=True)
         if ui.env_is_truthy("CI"):
