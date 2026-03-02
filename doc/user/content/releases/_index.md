@@ -51,14 +51,16 @@ For more information, refer to:
 
 ### Improvements
 - **Improved `SUBSCRIBE` Performance**: We've optimized `SUBSCRIBE` to skip initial snapshots in more cases. This can speed up `SUBSCRIBE` start times.
-- **Improved compatibility with external tools**: We've added `strpos` as a synonym for the `position` function, improving compatibility with tools such as PowerBI.
+- **Improved compatibility with external tools**: We've added `strpos` as a
+  synonym for the `position` function, improving compatibility with tools such
+  as PowerBI.
+- **Improved database concurrency**: We've reduced contention when a single
+  collection experiences a high volume of updates.
 
 ### Bug Fixes
 - Fixed a panic when constructing multi-dimensional arrays with null values,
   now treating null elements as zero-dimensional arrays consistent with
   PostgreSQL behavior.
-- Fixed a concurrency issue (futurelock) in persist that could cause data flow
-  stalls when multiple writers competed for update leases.
 - Fixed a bug where dropping a replacement materialized view (instead of
   applying the replacement) could seal the target materialized view for all
   times after an environmentd restart.
