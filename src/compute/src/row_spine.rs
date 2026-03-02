@@ -545,7 +545,7 @@ mod offset_opt {
     pub struct OffsetOptimized {
         /// The stride value (byte length of each row when uniform).
         stride: usize,
-        /// Number of strictly-increasing strided elements where offset[i] = stride * i.
+        /// Number of strictly-increasing strided elements where `offset[i] = stride * i`.
         steps: usize,
         /// Number of additional saturated elements where offset = stride * (steps - 1).
         reps: usize,
