@@ -111,7 +111,7 @@ mod term_graph {
     use crate::MirScalarExpr;
     use crate::{BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
     use mz_ore::treat_as_equal::TreatAsEqual;
-    use mz_repr::{ColumnType, Row};
+    use mz_repr::{ReprColumnType, Row};
     use smallvec::SmallVec;
     use std::collections::BTreeMap;
     use std::sync::Arc;
@@ -119,11 +119,21 @@ mod term_graph {
     pub type Id = usize;
     pub type Term<Op> = (Op, SmallVec<[Id; 2]>);
 
+    /// A map from terms to unique identifiers.
+    ///
+    /// Additionally, a collection of maintained indexes over structural information,
+    /// such as from identifiers back to their terms, from operators to identifiers
+    /// that reference terms
     pub struct TermGraph<Op> {
         /// Map from identifiers to terms.
         id_to_term: BTreeMap<Id, Term<Op>>,
         /// Map from terms to identifiers.
         term_to_id: BTreeMap<Term<Op>, Id>,
+        /// The next identifier to use, to avoid collision.
+        ///
+        /// This should strictly increment and not cleverly re-use identifiers,
+        /// so that users are not misled if an identifier they hold is reused.
+        next_id: Id,
     }
 
     impl<Op> Default for TermGraph<Op> {
@@ -131,14 +141,21 @@ mod term_graph {
             Self {
                 id_to_term: Default::default(),
                 term_to_id: Default::default(),
+                next_id: Default::default(),
             }
         }
     }
 
     impl<Op: Clone + Ord> TermGraph<Op> {
+        /// Allocates a new identifier, ensured distinct from all prior identifiers.
+        fn new_id(&mut self) -> usize {
+            self.next_id += 1;
+            self.next_id - 1
+        }
+        /// Ensures that a term is present in the term graph.
         pub fn insert(&mut self, term: Term<Op>) -> usize {
             if !self.term_to_id.contains_key(&term) {
-                let new_id = self.id_to_term.keys().last().map(|x| *x + 1).unwrap_or(0);
+                let new_id = self.new_id();
                 self.id_to_term.insert(new_id, term.clone());
                 self.term_to_id.insert(term, new_id);
                 new_id
@@ -151,7 +168,7 @@ mod term_graph {
     #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
     pub enum MseOp {
         Column(usize, TreatAsEqual<Option<Arc<str>>>),
-        Literal(Result<Row, EvalError>, ColumnType),
+        Literal(Result<Row, EvalError>, ReprColumnType),
         CallNullary { func: UnmaterializableFunc },
         CallUnary { func: UnaryFunc },
         CallBinary { func: BinaryFunc },
