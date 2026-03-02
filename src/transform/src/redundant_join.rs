@@ -190,94 +190,146 @@ impl RedundantJoin {
                     let mut input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
                     let old_input_mapper = JoinInputMapper::new_from_input_types(&input_types);
 
-                    // If we find an input that can be removed, we should do so!
-                    // We only do this once per invocation to keep our sanity, but we could
-                    // rewrite it to iterate. We can avoid looking for any relation that
-                    // does not have keys, as it cannot be redundant in that case.
-                    if let Some((remove_input_idx, mut bindings)) = (0..input_types.len())
-                        .rev()
-                        .filter(|i| !input_types[*i].keys.is_empty())
-                        .flat_map(|i| {
-                            find_redundancy(
-                                i,
-                                &input_types[i].keys,
-                                &old_input_mapper,
-                                equivalences,
-                                &input_prov[..],
-                            )
-                            .map(|b| (i, b))
-                        })
-                        .next()
-                    {
-                        // Clear uses from the removed input.
-                        ctx.remove_uses(&inputs[remove_input_idx]);
+                    // Remove all redundant join inputs in one pass, avoiding costly
+                    // fixpoint re-iterations for each removal.
+                    // We track original-to-current index mapping as inputs are removed.
+                    let mut current_to_original: Vec<usize> = (0..input_types.len()).collect();
+                    // Accumulated removed inputs: (original_index, bindings in final column space)
+                    let mut all_removed: Vec<(usize, Vec<MirScalarExpr>)> = Vec::new();
 
-                        inputs.remove(remove_input_idx);
-                        input_types.remove(remove_input_idx);
+                    loop {
+                        let current_input_mapper =
+                            JoinInputMapper::new_from_input_types(&input_types);
 
-                        // Update the column offsets in the binding expressions to catch
-                        // up with the removal of `remove_input_idx`.
-                        for expr in bindings.iter_mut() {
-                            expr.visit_pre_mut(|e| {
-                                if let MirScalarExpr::Column(c, _) = e {
-                                    let (_local_col, input_relation) =
-                                        old_input_mapper.map_column_to_local(*c);
-                                    if input_relation > remove_input_idx {
-                                        *c -= old_input_mapper.input_arity(remove_input_idx);
-                                    }
-                                }
-                            });
-                        }
+                        let found = (0..input_types.len())
+                            .rev()
+                            .filter(|i| !input_types[*i].keys.is_empty())
+                            .flat_map(|i| {
+                                find_redundancy(
+                                    i,
+                                    &input_types[i].keys,
+                                    &current_input_mapper,
+                                    equivalences,
+                                    &input_prov[..],
+                                )
+                                .map(|b| (i, b))
+                            })
+                            .next();
 
-                        // Replace column references from `remove_input_idx` with the corresponding
-                        // binding expression. Update the offsets of the column references
-                        // from inputs after `remove_input_idx`.
-                        for equivalence in equivalences.iter_mut() {
-                            for expr in equivalence.iter_mut() {
-                                expr.visit_mut_post(&mut |e| {
+                        if let Some((remove_idx, mut bindings)) = found {
+                            let orig_idx = current_to_original[remove_idx];
+                            let removed_arity = current_input_mapper.input_arity(remove_idx);
+
+                            // Clear uses from the removed input.
+                            ctx.remove_uses(&inputs[remove_idx]);
+
+                            inputs.remove(remove_idx);
+                            input_types.remove(remove_idx);
+                            input_prov.remove(remove_idx);
+                            current_to_original.remove(remove_idx);
+
+                            // Update the column offsets in the binding expressions.
+                            for expr in bindings.iter_mut() {
+                                expr.visit_pre_mut(|e| {
                                     if let MirScalarExpr::Column(c, _) = e {
-                                        let (local_col, input_relation) =
-                                            old_input_mapper.map_column_to_local(*c);
-                                        if input_relation == remove_input_idx {
-                                            *e = bindings[local_col].clone();
-                                        } else if input_relation > remove_input_idx {
-                                            *c -= old_input_mapper.input_arity(remove_input_idx);
+                                        let (_local_col, input_relation) =
+                                            current_input_mapper.map_column_to_local(*c);
+                                        if input_relation > remove_idx {
+                                            *c -= removed_arity;
                                         }
                                     }
-                                })?;
+                                });
                             }
+
+                            // Update previously accumulated bindings for the column shift.
+                            for (_orig, prev_bindings) in all_removed.iter_mut() {
+                                for expr in prev_bindings.iter_mut() {
+                                    expr.visit_pre_mut(|e| {
+                                        if let MirScalarExpr::Column(c, _) = e {
+                                            let (_local_col, input_relation) =
+                                                current_input_mapper.map_column_to_local(*c);
+                                            if input_relation > remove_idx {
+                                                *c -= removed_arity;
+                                            } else if input_relation == remove_idx {
+                                                // This previously-accumulated binding references
+                                                // a column from the input we're now removing.
+                                                // Substitute with the current binding.
+                                                let (local_col, _) =
+                                                    current_input_mapper.map_column_to_local(*c);
+                                                *e = bindings[local_col].clone();
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+
+                            // Replace column references from the removed input with bindings.
+                            for equivalence in equivalences.iter_mut() {
+                                for expr in equivalence.iter_mut() {
+                                    expr.visit_mut_post(&mut |e| {
+                                        if let MirScalarExpr::Column(c, _) = e {
+                                            let (local_col, input_relation) =
+                                                current_input_mapper.map_column_to_local(*c);
+                                            if input_relation == remove_idx {
+                                                *e = bindings[local_col].clone();
+                                            } else if input_relation > remove_idx {
+                                                *c -= removed_arity;
+                                            }
+                                        }
+                                    })?;
+                                }
+                            }
+
+                            mz_expr::canonicalize::canonicalize_equivalences(
+                                equivalences,
+                                input_types.iter().map(|t| &t.column_types),
+                            );
+
+                            all_removed.push((orig_idx, bindings));
+                        } else {
+                            break;
+                        }
+                    }
+
+                    if !all_removed.is_empty() {
+                        // Build a single Map+Project for all removed inputs.
+                        let new_input_mapper = JoinInputMapper::new_from_input_types(&input_types);
+                        let new_join_arity = new_input_mapper.total_columns();
+
+                        // Collect all bindings and track their Map column positions.
+                        let mut all_bindings = Vec::new();
+                        // For each original input, record whether it was removed and
+                        // where its binding columns start in the Map output.
+                        let mut removed_map: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
+                        for (orig_idx, bindings) in &all_removed {
+                            let start = new_join_arity + all_bindings.len();
+                            let len = bindings.len();
+                            removed_map.insert(*orig_idx, (start, len));
+                            all_bindings.extend(bindings.iter().cloned());
                         }
 
-                        mz_expr::canonicalize::canonicalize_equivalences(
-                            equivalences,
-                            input_types.iter().map(|t| &t.column_types),
-                        );
-
-                        // Build a projection that leaves the binding expressions in the same
-                        // position as the columns of the removed join input they are replacing.
-                        let new_input_mapper = JoinInputMapper::new_from_input_types(&input_types);
+                        // Build projection: for each original input in order, either
+                        // reference its join columns or its binding columns.
                         let mut projection = Vec::new();
-                        let new_join_arity = new_input_mapper.total_columns();
-                        for i in 0..old_input_mapper.total_inputs() {
-                            if i != remove_input_idx {
-                                projection.extend(
-                                    new_input_mapper.global_columns(if i < remove_input_idx {
-                                        i
-                                    } else {
-                                        i - 1
-                                    }),
-                                );
+                        let mut current_new_idx = 0usize;
+                        for orig_idx in 0..old_input_mapper.total_inputs() {
+                            if let Some((bind_start, bind_len)) = removed_map.get(&orig_idx) {
+                                projection.extend(*bind_start..(*bind_start + *bind_len));
                             } else {
-                                projection.extend(new_join_arity..new_join_arity + bindings.len());
+                                projection.extend(new_input_mapper.global_columns(current_new_idx));
+                                current_new_idx += 1;
                             }
                         }
 
                         // Unset implementation, as irrevocably hosed by this transformation.
                         *implementation = mz_expr::JoinImplementation::Unimplemented;
 
-                        *relation = relation.take_dangerous().map(bindings).project(projection);
-                        // The projection will gum up provenance reasoning anyhow, so don't work hard.
-                        // We will return to this expression again with the same analysis.
+                        *relation = relation
+                            .take_dangerous()
+                            .map(all_bindings)
+                            .project(projection);
+                        // The projection will gum up provenance reasoning anyhow, so don't
+                        // work hard. We will return to this expression again.
                         Ok(Vec::new())
                     } else {
                         // Provenance information should be the union of input provenance information,

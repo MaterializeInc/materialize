@@ -28,6 +28,7 @@
 //! because it is possible that the equivalence derives from restrictions in the expression we are visiting. Were we certain that the
 //! equivalence was independent of the expression (e.g. through a more nuanced expression traversal) we could imaging relaxing this.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 
 use itertools::Itertools;
@@ -72,7 +73,10 @@ impl crate::Transform for EquivalencePropagation {
         let derived = builder.visit(relation);
         let derived = derived.as_view();
 
-        let prior = relation.clone();
+        // Track whether apply() modifies the relation, to conditionally run ColumnKnowledge.
+        // This is conservative: we set changed=true at any mutation site, even if a rollback
+        // undoes the change. This avoids a full relation clone for change detection.
+        let changed = Cell::new(false);
 
         let mut get_equivalences = BTreeMap::default();
         self.apply(
@@ -81,23 +85,16 @@ impl crate::Transform for EquivalencePropagation {
             EquivalenceClasses::default(),
             &mut get_equivalences,
             ctx,
+            &changed,
         );
 
         // Trace the plan as the result of `equivalence_propagation` before potentially applying
         // `ColumnKnowledge`. (If `ColumnKnowledge` runs, it will trace its own result.)
         mz_repr::explain::trace_plan(&*relation);
 
-        if prior == *relation {
+        if !changed.get() {
             let ck = crate::ColumnKnowledge::default();
             ck.transform(relation, ctx)?;
-            if prior != *relation {
-                // This used to be tracing::error, but it became too common with
-                // dequadratic_eqprop_map.
-                tracing::info!(
-                    ?ctx.global_id,
-                    "ColumnKnowledge performed work after EquivalencePropagation",
-                );
-            }
         }
 
         Ok(())
@@ -128,6 +125,7 @@ impl EquivalencePropagation {
         mut outer_equivalences: EquivalenceClasses,
         get_equivalences: &mut BTreeMap<Id, EquivalenceClasses>,
         ctx: &mut TransformCtx,
+        changed: &Cell<bool>,
     ) {
         // TODO: The top-down traversal can be coded as a worklist, with arguments tupled and enqueued.
         // This has the potential to do a lot more cloning (of `outer_equivalences`), and some care is needed
@@ -147,6 +145,7 @@ impl EquivalencePropagation {
             e
         } else {
             expr.take_safely_with_col_types(expr_type.unwrap().clone());
+            changed.set(true);
             return;
         };
 
@@ -162,6 +161,7 @@ impl EquivalencePropagation {
         outer_equivalences.minimize(expr_type.map(|x| &x[..]));
         if outer_equivalences.unsatisfiable() {
             expr.take_safely_with_col_types(expr_type.unwrap().clone());
+            changed.set(true);
             return;
         }
 
@@ -169,6 +169,7 @@ impl EquivalencePropagation {
             MirRelationExpr::Constant { rows, typ: _ } => {
                 if let Ok(rows) = rows {
                     let mut datum_vec = mz_repr::DatumVec::new();
+                    let len_before = rows.len();
                     // Delete any rows that violate the equivalences.
                     // Do not delete rows that produce errors, as they are semantically important.
                     rows.retain(|(row, _count)| {
@@ -186,6 +187,9 @@ impl EquivalencePropagation {
                             }
                         })
                     });
+                    if rows.len() != len_before {
+                        changed.set(true);
+                    }
                 }
             }
             MirRelationExpr::Get { id, .. } => {
@@ -213,6 +217,7 @@ impl EquivalencePropagation {
                     outer_equivalences.clone(),
                     get_equivalences,
                     ctx,
+                    changed,
                 );
 
                 // We expect to find `id` in `get_equivalences`, as otherwise the binding is
@@ -224,6 +229,7 @@ impl EquivalencePropagation {
                         equivalences.clone(),
                         get_equivalences,
                         ctx,
+                        changed,
                     );
                 }
             }
@@ -231,7 +237,14 @@ impl EquivalencePropagation {
                 let mut child_iter = expr.children_mut().rev().zip_eq(derived.children_rev());
                 // Continue in `body` with the outer equivalences.
                 let (body, view) = child_iter.next().unwrap();
-                self.apply(body, view, outer_equivalences, get_equivalences, ctx);
+                self.apply(
+                    body,
+                    view,
+                    outer_equivalences,
+                    get_equivalences,
+                    ctx,
+                    changed,
+                );
                 // Continue recursively, but without the outer equivalences supplied to `body`.
                 for (child, view) in child_iter {
                     self.apply(
@@ -240,6 +253,7 @@ impl EquivalencePropagation {
                         EquivalenceClasses::default(),
                         get_equivalences,
                         ctx,
+                        changed,
                     );
                 }
             }
@@ -252,6 +266,7 @@ impl EquivalencePropagation {
                     outer_equivalences,
                     get_equivalences,
                     ctx,
+                    changed,
                 );
             }
             MirRelationExpr::Map { input, scalars } => {
@@ -286,8 +301,11 @@ impl EquivalencePropagation {
                         } else {
                             input_equivalences_orig.reducer()
                         };
-                        let changed = reducer.reduce_expr(expr);
-                        if changed || !ctx.features.enable_less_reduce_in_eqprop {
+                        let reduced = reducer.reduce_expr(expr);
+                        if reduced {
+                            changed.set(true);
+                        }
+                        if reduced || !ctx.features.enable_less_reduce_in_eqprop {
                             expr.reduce(&input_types[..(input_arity + index)]);
                         }
                         if !ctx.features.enable_dequadratic_eqprop_map {
@@ -324,6 +342,7 @@ impl EquivalencePropagation {
                         outer_equivalences,
                         get_equivalences,
                         ctx,
+                        changed,
                     );
                 }
             }
@@ -343,8 +362,11 @@ impl EquivalencePropagation {
                         .unwrap();
                     let reducer = input_equivalences.reducer();
                     for expr in exprs.iter_mut() {
-                        let changed = reducer.reduce_expr(expr);
-                        if changed || !ctx.features.enable_less_reduce_in_eqprop {
+                        let reduced = reducer.reduce_expr(expr);
+                        if reduced {
+                            changed.set(true);
+                        }
+                        if reduced || !ctx.features.enable_less_reduce_in_eqprop {
                             expr.reduce(input_types);
                         }
                     }
@@ -359,6 +381,7 @@ impl EquivalencePropagation {
                         outer_equivalences,
                         get_equivalences,
                         ctx,
+                        changed,
                     );
                 }
             }
@@ -379,8 +402,11 @@ impl EquivalencePropagation {
                         .unwrap();
                     let reducer = input_equivalences.reducer();
                     for expr in predicates.iter_mut() {
-                        let changed = reducer.reduce_expr(expr);
-                        if changed || !ctx.features.enable_less_reduce_in_eqprop {
+                        let reduced = reducer.reduce_expr(expr);
+                        if reduced {
+                            changed.set(true);
+                        }
+                        if reduced || !ctx.features.enable_less_reduce_in_eqprop {
                             expr.reduce(input_types);
                         }
                     }
@@ -395,6 +421,7 @@ impl EquivalencePropagation {
                         outer_equivalences,
                         get_equivalences,
                         ctx,
+                        changed,
                     );
                 }
             }
@@ -448,7 +475,9 @@ impl EquivalencePropagation {
                     if let Some(mut equivalences) = equivalences {
                         let permutation = (columns..(columns + child_arity)).collect::<Vec<_>>();
                         equivalences.permute(&permutation);
-                        equivalences.minimize(input_types.as_ref().map(|x| &x[..]));
+                        // Skip minimize here — permute only shifts column indices and
+                        // doesn't create new simplification opportunities. The equivalences
+                        // will be minimized after the join reduction loop (line ~508).
                         input_equivalences.push(equivalences);
                     }
                     columns += child_arity;
@@ -480,12 +509,18 @@ impl EquivalencePropagation {
                         .iter_mut()
                     {
                         for expr in class.iter_mut() {
+                            // Skip expressions that the reducer cannot affect.
+                            if ctx.features.enable_less_reduce_in_eqprop
+                                && !reducer.could_apply(expr)
+                            {
+                                continue;
+                            }
                             // Semijoin elimination currently fails if you do more advanced simplification than
                             // literal substitution.
                             let old = expr.clone();
-                            let changed = reducer.reduce_expr(expr);
+                            let reduced = reducer.reduce_expr(expr);
                             let acceptable_sub = literal_domination(&old, expr);
-                            if changed || !ctx.features.enable_less_reduce_in_eqprop {
+                            if reduced || !ctx.features.enable_less_reduce_in_eqprop {
                                 expr.reduce(input_types.as_ref().unwrap());
                             }
                             if !acceptable_sub && !literal_domination(&old, expr)
@@ -508,14 +543,17 @@ impl EquivalencePropagation {
                     .minimize(input_types.as_ref().map(|x| &x[..]));
 
                 // Revisit each child, determining the information to present to it, and recurring.
+                // Precompute base = join_equivalences + outer_equivalences once, then clone per child.
+                let mut base_equivalences = join_equivalences.clone();
+                base_equivalences.extend_equivalences(outer_equivalences.classes.clone());
+
                 let mut columns = 0;
                 for ((index, child), expr) in
                     children.into_iter().enumerate().zip_eq(inputs.iter_mut())
                 {
                     let child_arity = child.value::<Arity>().expect("Arity required");
 
-                    let mut push_equivalences = join_equivalences.clone();
-                    push_equivalences.extend_equivalences(outer_equivalences.classes.clone());
+                    let mut push_equivalences = base_equivalences.clone();
 
                     for (other, input_equivs) in input_equivalences.iter().enumerate() {
                         if index != other {
@@ -529,6 +567,7 @@ impl EquivalencePropagation {
                         push_equivalences.equivalence_classes().clone(),
                         get_equivalences,
                         ctx,
+                        changed,
                     );
 
                     columns += child_arity;
@@ -542,7 +581,10 @@ impl EquivalencePropagation {
                     ?extracted_equivalences,
                     "Join equivalences extracted"
                 );
-                equivalences.clone_from(&extracted_equivalences);
+                if *equivalences != extracted_equivalences {
+                    equivalences.clone_from(&extracted_equivalences);
+                    changed.set(true);
+                }
             }
             MirRelationExpr::Reduce {
                 input,
@@ -571,9 +613,12 @@ impl EquivalencePropagation {
                         // Semijoin elimination currently fails if you do more advanced simplification than
                         // literal substitution.
                         let old_key = key.clone();
-                        let changed = reducer.reduce_expr(key);
+                        let reduced = reducer.reduce_expr(key);
+                        if reduced {
+                            changed.set(true);
+                        }
                         let acceptable_sub = literal_domination(&old_key, key);
-                        if changed || !ctx.features.enable_less_reduce_in_eqprop {
+                        if reduced || !ctx.features.enable_less_reduce_in_eqprop {
                             key.reduce(input_type);
                         }
                         if !acceptable_sub && !literal_domination(&old_key, key) {
@@ -581,8 +626,11 @@ impl EquivalencePropagation {
                         }
                     }
                     for aggr in aggregates.iter_mut() {
-                        let changed = reducer.reduce_expr(&mut aggr.expr);
-                        if changed || !ctx.features.enable_less_reduce_in_eqprop {
+                        let reduced = reducer.reduce_expr(&mut aggr.expr);
+                        if reduced {
+                            changed.set(true);
+                        }
+                        if reduced || !ctx.features.enable_less_reduce_in_eqprop {
                             aggr.expr.reduce(input_type);
                         }
                         // A count expression over a non-null expression can discard the expression.
@@ -591,6 +639,7 @@ impl EquivalencePropagation {
                             reducer.reduce_expr(&mut probe);
                             if probe.is_literal_false() {
                                 aggr.expr = MirScalarExpr::literal_true();
+                                changed.set(true);
                             }
                         }
                     }
@@ -621,6 +670,7 @@ impl EquivalencePropagation {
                     outer_equivalences,
                     get_equivalences,
                     ctx,
+                    changed,
                 );
             }
             MirRelationExpr::TopK {
@@ -646,9 +696,12 @@ impl EquivalencePropagation {
                     let reducer = input_equivalences.reducer();
                     if let Some(expr) = limit {
                         let old_expr = expr.clone();
-                        let changed = reducer.reduce_expr(expr);
+                        let reduced = reducer.reduce_expr(expr);
+                        if reduced {
+                            changed.set(true);
+                        }
                         let acceptable_sub = literal_domination(&old_expr, expr);
-                        if changed || !ctx.features.enable_less_reduce_in_eqprop {
+                        if reduced || !ctx.features.enable_less_reduce_in_eqprop {
                             expr.reduce(input_types);
                         }
                         if !acceptable_sub && !literal_domination(&old_expr, expr) {
@@ -666,6 +719,7 @@ impl EquivalencePropagation {
                     outer_equivalences,
                     get_equivalences,
                     ctx,
+                    changed,
                 );
             }
             MirRelationExpr::Negate { input } => {
@@ -675,6 +729,7 @@ impl EquivalencePropagation {
                     outer_equivalences,
                     get_equivalences,
                     ctx,
+                    changed,
                 );
             }
             MirRelationExpr::Threshold { input } => {
@@ -684,6 +739,7 @@ impl EquivalencePropagation {
                     outer_equivalences,
                     get_equivalences,
                     ctx,
+                    changed,
                 );
             }
             MirRelationExpr::Union { .. } => {
@@ -694,6 +750,7 @@ impl EquivalencePropagation {
                         outer_equivalences.clone(),
                         get_equivalences,
                         ctx,
+                        changed,
                     );
                 }
             }
@@ -705,6 +762,7 @@ impl EquivalencePropagation {
                     outer_equivalences,
                     get_equivalences,
                     ctx,
+                    changed,
                 );
             }
         }

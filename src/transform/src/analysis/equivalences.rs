@@ -845,6 +845,10 @@ impl EquivalenceClasses {
             for expr in class.iter_mut() {
                 self.remap.reduce_child(expr);
                 if let Some(columns) = columns {
+                    // Skip clone + reduce for expressions already in reduced form.
+                    if expr.is_literal() || matches!(expr, MirScalarExpr::Column(..)) {
+                        continue;
+                    }
                     let orig_expr = expr.clone();
                     expr.reduce(columns);
                     if expr.contains_err() {
@@ -1136,6 +1140,12 @@ pub trait ExpressionReducer {
     /// Attempt to replace `expr` itself with another expression.
     /// Returns true if it does so.
     fn replace(&self, expr: &mut MirScalarExpr) -> bool;
+    /// Check if `reduce_expr` could potentially modify `expr`.
+    /// Returns true conservatively if uncertain. A false return guarantees
+    /// that `reduce_expr` would not change `expr`.
+    fn could_apply(&self, _expr: &MirScalarExpr) -> bool {
+        true
+    }
     /// Attempt to replace any subexpressions of `expr` with other expressions.
     /// Returns true if it does so.
     fn reduce_expr(&self, expr: &mut MirScalarExpr) -> bool {
@@ -1196,6 +1206,28 @@ impl ExpressionReducer for BTreeMap<MirScalarExpr, MirScalarExpr> {
             }
         }
         false
+    }
+    /// Check if `expr` or any of its subexpressions (matching `reduce_expr` traversal)
+    /// is a key in the BTreeMap. If not, `reduce_expr` would be a no-op.
+    fn could_apply(&self, expr: &MirScalarExpr) -> bool {
+        if self.is_empty() {
+            return false;
+        }
+        if self.contains_key(expr) {
+            return true;
+        }
+        match expr {
+            MirScalarExpr::CallBinary { expr1, expr2, .. } => {
+                self.could_apply(expr1) || self.could_apply(expr2)
+            }
+            MirScalarExpr::CallUnary { expr, .. } => self.could_apply(expr),
+            MirScalarExpr::CallVariadic { exprs, .. } => exprs.iter().any(|e| self.could_apply(e)),
+            MirScalarExpr::If { then, els, .. } => {
+                // cond is not reduced (matching reduce_child behavior)
+                self.could_apply(then) || self.could_apply(els)
+            }
+            _ => false,
+        }
     }
 }
 
