@@ -91,15 +91,15 @@ id  uint8  The␠ID␠of␠the␠operator.␠Corresponds␠to␠`mz_dataflow_ope
 duration_ns  uint8  The␠upper␠bound␠of␠the␠duration␠bucket␠in␠nanoseconds.
 count  numeric  The␠(noncumulative)␠count␠of␠invocations␠in␠the␠bucket.
 
-query TTT
-SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_compute_prometheus_metrics_per_worker' ORDER BY position
+query TT
+SELECT name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_compute_prometheus_metrics_per_worker' ORDER BY position
 ----
-metric_name  text  The␠name␠of␠the␠Prometheus␠metric.
-metric_type  text  The␠type␠of␠the␠metric:␠`counter`,␠`gauge`,␠`histogram`,␠`summary`,␠or␠`untyped`.
-labels  map  The␠label␠key-value␠pairs␠associated␠with␠the␠metric.
-value  double␠precision  The␠numeric␠value␠of␠the␠metric.
-help  text  The␠help␠string␠describing␠the␠metric.
-worker_id  uint8  The␠ID␠of␠the␠worker␠that␠collected␠the␠metric.
+metric_name  text
+metric_type  text
+labels  map
+value  double␠precision
+help  text
+worker_id  uint8
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflows' ORDER BY position

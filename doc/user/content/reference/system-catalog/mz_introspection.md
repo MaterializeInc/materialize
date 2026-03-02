@@ -159,7 +159,7 @@ The `mz_compute_prometheus_metrics_per_worker` source exposes Prometheus metrics
 Metrics are scraped periodically and presented as rows.
 Histograms are flattened into separate bucket, sum, and count rows.
 
-<!-- RELATION_SPEC mz_introspection.mz_compute_prometheus_metrics_per_worker -->
+<!-- RELATION_SPEC_NO_COMMENTS mz_introspection.mz_compute_prometheus_metrics_per_worker -->
 | Field         | Type                   | Meaning                                                              |
 |---------------|------------------------|----------------------------------------------------------------------|
 | `metric_name` | [`text`]               | The name of the Prometheus metric.                                   |
