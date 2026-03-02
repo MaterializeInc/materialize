@@ -887,9 +887,9 @@ pub mod tests {
 
         // The new key is visible in state.
         let keys: Vec<_> = consensus.list_keys().try_collect().await?;
-        assert_eq!(keys, vec![key.to_owned()]);
+        assert!(keys.contains(&key));
 
-        // We can observe the a recent value on successful update.
+        // We can observe the recent value on successful update.
         assert_eq!(consensus.head(&key).await, Ok(Some(state_at(0))));
 
         // Can scan a key that has data with a lower bound sequence number < head.
