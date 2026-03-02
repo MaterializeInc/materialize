@@ -43,6 +43,7 @@ enum Command {
     Inspect(mz_persist_client::cli::inspect::InspectArgs),
     Admin(mz_persist_client::cli::admin::AdminArgs),
     Bench(mz_persist_client::cli::bench::BenchArgs),
+    Export(mz_persist_client::cli::export::ExportArgs),
     Service(crate::service::Args),
 }
 
@@ -80,6 +81,7 @@ fn main() {
         }
         Command::Admin(command) => runtime.block_on(mz_persist_client::cli::admin::run(command)),
         Command::Bench(command) => runtime.block_on(mz_persist_client::cli::bench::run(command)),
+        Command::Export(args) => runtime.block_on(mz_persist_client::cli::export::run(args)),
         Command::Service(args) => runtime.block_on(crate::service::run(args)),
     };
 
