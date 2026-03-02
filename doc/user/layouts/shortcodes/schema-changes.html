@@ -13,6 +13,10 @@ Materialize supports schema changes in the upstream database as follows:
 - Adding or removing `NOT NULL` constraints to tables that were nullable when
   the source was created.
 
+Certain additional schema changes (such as dropping/altering existing columns)
+to Postgres and SQL Server source tables are supported when using the new [`CREATE SOURCE` syntax](/sql/create-source/)
+as detailed by the source versioning guides ([Postgres](/ingest-data/postgres/source-versioning/), [SQL Server](/ingest-data/sql-server/source-versioning/))
+
 #### Incompatible schema changes
 
 All other schema changes to upstream tables will set the corresponding subsource
