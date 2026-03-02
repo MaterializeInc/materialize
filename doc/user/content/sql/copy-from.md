@@ -9,35 +9,17 @@ menu:
 `COPY FROM` copies data into a table using the [Postgres `COPY` protocol][pg-copy-from].
 
 ## Syntax
+{{< tabs >}}
 
-{{< diagram "copy-from.svg" >}}
+{{< tab "Copy from STDIN" >}}
+{{% include-syntax file="examples/copy_from" example="syntax" %}}
+{{< /tab >}}
 
-Field | Use
-------|-----
-_table_name_ | Copy values to this table.
-**(**_column_...**)** | Correlate the inserted rows' columns to _table_name_'s columns by ordinal position, i.e. the first column of the row to insert is correlated to the first named column. <br/><br/>Without a column list, all columns must have data provided, and will be referenced using their order in the table. With a partial column list, all unreferenced columns will receive their default value.
-_s3_uri_ | The unique resource identifier (URI) of the Amazon S3 bucket (and prefix) to store the output results in.
-_http_url_ | The unique resource identifier (URI)  (and prefix) to store the output results in.
-_field_ | The name of the option you want to set.
-_val_ | The value for the option.
+{{< tab "Copy from S3 and S3 compatible services" >}}
+{{% include-syntax file="examples/copy_from_s3" example="syntax" %}}
+{{< /tab >}}
 
-### `WITH` options
-
-The following options are valid within the `WITH` clause.
-
-Name | Value type | Default value | Description
------|-----------------|---------------|------------
-`FORMAT` | `TEXT`, `CSV`, `PARQUET` | `TEXT` | Sets the input formatting method. For more information see [Text formatting](#text-formatting), [CSV formatting](#csv-formatting).
-`DELIMITER` | Single-quoted one-byte character | Format-dependent | Overrides the format's default column delimiter.
-`NULL` | Single-quoted strings | Format-dependent | Specifies the string that represents a _NULL_ value.
-`QUOTE` | Single-quoted one-byte character | `"` | Specifies the character to signal a quoted string, which may contain the `DELIMITER` value (without beginning new columns). To include the `QUOTE` character itself in column, wrap the column's value in the `QUOTE` character and prefix all instance of the value you want to literally interpret with the `ESCAPE` value. _`FORMAT CSV` only_
-`ESCAPE` | Single-quoted strings | `QUOTE`'s value | Specifies the character to allow instances of the `QUOTE` character to be parsed literally as part of a column's value. _`FORMAT CSV` only_
-`HEADER`  | `boolean`   | `boolean`  | Specifies that the file contains a header line with the names of each column in the file. The first line is ignored on input.  _`FORMAT CSV` only._
-`AWS CONNECTION` | _connection_name_ |  |  The name of the AWS connection to use in the `COPY FROM` command. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#aws) documentation page. _Only valid with an S3._
-`FILES`   | array | A list of files to be appended to the URI. Example: `[ "top.csv", "files/a.csv", "files/b.csv" ]`. _Only valid with S3 OR HTTP._
-`PATTERN` | string | A glob used to identify files at at the URI. Example: `"files/**"`. _Only valid with S3 OR HTTP._
-
-Note that `DELIMITER` and `QUOTE` must use distinct values.
+{{< /tabs >}}
 
 ## Details
 
@@ -72,18 +54,20 @@ except that:
 
 ### PARQUET formatting
 
-Supported PARQUET compression
+Supported PARQUET compression formats
 - snappy
 - gzip
 - brotli
 - zstd
 - lz4
 
+{{< comment >}}
 TODO:
-- Text can be imported as text or JSON/JSONB or a map.. do we document casting rules?
+- Text can be imported as text or JSON/JSONB or a map.. do we document casting rules/make a whole section for casting?
 - Parquet has an interval type - can materialize import it?
+{{< /comment >}}
 
-[Arrow type](https://github.com/apache/arrow/blob/main/format/Schema.fbs) | [Parquet primitive type](https://parquet.apache.org/docs/file-format/types/) | [Parquet logical type](https://github.com/apache/parquet-format/blob/master/LogicalTypes.md)    Materialize type
+[Arrow type](https://github.com/apache/arrow/blob/main/format/Schema.fbs) | [Parquet primitive type](https://parquet.apache.org/docs/file-format/types/) | [Parquet logical type](https://github.com/apache/parquet-format/blob/master/LogicalTypes.md) | Materialize type
 --------------------------------------------------------------------------|------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|----------------------------------
 `bool`                                                                    | `BOOLEAN`                                                                    |                                                                                              | [`boolean`](/sql/types/boolean/) 
 `date32`                                                                  | `INT32`                                                                      | `DATE`                                                                                       | [`date`](/sql/types/date/)
@@ -97,7 +81,6 @@ TODO:
 `large_binary`                                                            | `BYTE_ARRAY`                                                                 |                                                                                              | [`bytea`](/sql/types/bytea/) 
 `large_utf8`                                                              | `BYTE_ARRAY`                                                                 |                                                                                              | [`jsonb`](/sql/types/jsonb/)
 `list`                                                                    | Nested                                                                       |                                                                                              | [`list`](/sql/types/list/)
-TBD `map` (`struct` with fields `keys` and `values`)                          | Nested                                                                       | `MAP`                                                                                        | [`map`](/sql/types/map/)
 CUSTOM TYPE `struct`                                                                  | Nested                                                                       |                                                                                              | [Arrays](/sql/types/array/) (`[]`)
 `time64[microsecond]`                                                     | `INT64`                                                                      | `TIMESTAMP[isAdjustedToUTC = false, unit = MICROS]`                                          | [`timestamp`](/sql/types/timestamp/#timestamp-info)
 `time64[microsecond]`                                                     | `INT64`                                                                      | `TIMESTAMP[isAdjustedToUTC = true, unit = MICROS]`                                           | [`timestamp with time zone`](/sql/types/timestamp/#timestamp-with-time-zone-info)
@@ -106,17 +89,12 @@ CUSTOM TYPE `struct`                                                            
 `uint32`                                                                  | `INT32`                                                                      | `INT(32, false)`                                                                             | [`uint4`](/sql/types/uint/#uint4-info)
 `uint64`                                                                  | `INT64`                                                                      | `INT(64, false)`                                                                             | [`uint8`](/sql/types/uint/#uint8-info)
 `utf8` or `large_utf8`                                                    | `BYTE_ARRAY`                                                                 | `STRING`                                                                                     | [`text`](/sql/types/text/)
+(COMING SOON) `map` (`struct` with fields `keys` and `values`)                          | Nested                                                                       | `MAP`                                                                                        | [`map`](/sql/types/map/)
+| | | `interval` | unsupported
 
+## Examples
 
-
-
-We have to add a section about casting!
-
-
-
-
-## Example
-
+### From STDIN
 ```mzsql
 COPY t FROM STDIN WITH (DELIMITER '|');
 ```
@@ -129,6 +107,20 @@ COPY t FROM STDIN (FORMAT CSV);
 COPY t FROM STDIN (DELIMITER '|');
 ```
 
+### From s3
+#### Using AWS connection
+```mzsql
+COPY INTO csv_table FROM 's3://example_bucket' (FORMAT CSV, AWS CONNECTION = example_aws_conn, FILES = ['example_data.csv']);
+```
+
+```mzsql
+COPY INTO parquet_table FROM 's3://example_bucket' (FORMAT PARQUET, AWS CONNECTION = example_aws_conn, PATTERN = '*parquet*');
+```
+
+#### Using presigned URL
+```mzsql
+COPY INTO csv_table FROM '<s3 presigned URL>' (FORMAT CSV);
+```
 
 ## Privileges
 
@@ -140,4 +132,4 @@ The privileges required to execute this statement are:
 
 ## Limits
 
-You can only copy up to 1 GiB of data at a time. If you need this limit increased, please [chat with our team](http://materialize.com/convert-account/).
+You can copy up to 10 GiB of data at a time. If you need this limit increased, please [chat with our team](http://materialize.com/convert-account/).
