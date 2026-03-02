@@ -289,7 +289,7 @@ class MaterializedViewsRefresh(Check):
                 2
                 3
 
-                $ set-regex match=(s\\d+|\\d{13}|[ ]{12}0|u\\d{1,3}|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)|\\(\\d+\\)) replacement=<>
+                $ set-regex match=(s\\d+|\\d{13}|[ ]{12}0|u\\d+|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)|\\(\\d+\\)) replacement=<>
 
                 >[version<2601500] EXPLAIN TIMESTAMP FOR SELECT * FROM refresh_view_late_1
                 "                query timestamp: <> <>\\n          oracle read timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: false\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.refresh_view_late_1 (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (StorageInput([User<>])): [<> <>]\\n"

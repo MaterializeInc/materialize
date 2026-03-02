@@ -1504,6 +1504,12 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_validate_part_bounds_on_write"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["user_id_pool_batch_size"] = [
+            "1",
+            "5",
+            "512",
+            "1024",
+        ]
         self.flags_with_values["compute_apply_column_demands"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_compute_temporal_bucketing"] = (
             BOOLEAN_FLAG_VALUES
