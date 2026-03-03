@@ -10,13 +10,12 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use mz_dyncfg::ConfigSet;
-use mz_ore::metrics::MetricsRegistry;
-
 use differential_dataflow::VecCollection;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
+use mz_dyncfg::ConfigSet;
+use mz_ore::metrics::MetricsRegistry;
 use mz_repr::{Diff, Timestamp};
 use mz_storage_operators::persist_source::Subtime;
 use mz_storage_types::errors::DataflowError;
