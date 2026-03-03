@@ -1791,6 +1791,10 @@ class CreateViewAction(Action):
             # Columns could have been renamed, we don't lock the base objects
             # to get more interesting race conditions
             errors += ["does not exist"]
+        errors += [
+            "replica-targeted materialized views is not supported",
+            "unknown cluster replica",
+        ]
         return errors
 
     def run(self, exe: Executor) -> bool:
@@ -1839,6 +1843,19 @@ class CreateViewAction(Action):
                     base_object2,
                     schema,
                 )
+                # Randomly make materialized views replica-targeted
+                if (
+                    view.materialized
+                    and exe.db.flags.get(
+                        "enable_replica_targeted_materialized_views", "FALSE"
+                    )
+                    == "TRUE"
+                    and self.rng.choice([True, False])
+                ):
+                    clusters_with_replicas = [c for c in exe.db.clusters if c.replicas]
+                    if clusters_with_replicas:
+                        cluster = self.rng.choice(clusters_with_replicas)
+                        view.target_replica = self.rng.choice(cluster.replicas)
                 view.create(exe)
         exe.db.views.append(view)
         return True

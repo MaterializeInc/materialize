@@ -226,6 +226,7 @@ class View(DBObject):
     schema: Schema
     refresh: str | None
     temp: bool
+    target_replica: "ClusterReplica | None"
 
     def __init__(
         self,
@@ -243,6 +244,7 @@ class View(DBObject):
         self.base_object2 = base_object2
         self.schema = schema
         self.temp = temp
+        self.target_replica = None
         all_columns = list(base_object.columns) + (
             list(base_object2.columns) if base_object2 else []
         )
@@ -333,6 +335,10 @@ class View(DBObject):
         if self.materialized:
             query += "MATERIALIZED "
         query += f"VIEW {self}"
+
+        if self.target_replica is not None:
+            replica = self.target_replica
+            query += f" IN CLUSTER {replica.cluster} REPLICA {replica}"
 
         options = []
 
