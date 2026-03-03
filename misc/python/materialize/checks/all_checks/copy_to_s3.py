@@ -37,12 +37,17 @@ class CopyToS3(Check):
                 > CREATE CONNECTION aws_conn2 TO AWS (ENDPOINT '${arg.aws-endpoint}', REGION 'us-east-1', ACCESS KEY ID '${arg.aws-access-key-id}', SECRET ACCESS KEY SECRET minio)
                 > COPY (SELECT 11, 12, 13) TO 's3://copytos3/key11' WITH (AWS CONNECTION = aws_conn1, FORMAT = 'csv');
                 > COPY (SELECT 11, 12, 13) TO 's3://copytos3/key12' WITH (AWS CONNECTION = aws_conn2, FORMAT = 'csv');
+                > COPY INTO t1 FROM 's3://copytos3/key11' (FORMAT CSV, AWS CONNECTION = aws_conn1);
+                > COPY INTO t1 FROM 's3://copytos3/key12' (FORMAT CSV, AWS CONNECTION = aws_conn2);
                 """,
                 """
                 > CREATE CONNECTION aws_conn3 TO AWS (ENDPOINT '${arg.aws-endpoint}', REGION 'us-east-1', ACCESS KEY ID '${arg.aws-access-key-id}', SECRET ACCESS KEY SECRET minio)
                 > COPY (SELECT 21, 22, 23) TO 's3://copytos3/key21' WITH (AWS CONNECTION = aws_conn1, FORMAT = 'csv');
                 > COPY (SELECT 21, 22, 23) TO 's3://copytos3/key22' WITH (AWS CONNECTION = aws_conn2, FORMAT = 'csv');
                 > COPY (SELECT 21, 22, 23) TO 's3://copytos3/key23' WITH (AWS CONNECTION = aws_conn3, FORMAT = 'csv');
+                > COPY INTO t1 FROM 's3://copytos3/key21' (FORMAT CSV, AWS CONNECTION = aws_conn1);
+                > COPY INTO t1 FROM 's3://copytos3/key22' (FORMAT CSV, AWS CONNECTION = aws_conn2);
+                > COPY INTO t1 FROM 's3://copytos3/key23' (FORMAT CSV, AWS CONNECTION = aws_conn3);
                 """,
             ]
         ]
@@ -67,6 +72,14 @@ class CopyToS3(Check):
                 21,22,23
 
                 $ s3-verify-data bucket=copytos3 key=key23
+                21,22,23
+
+                > SELECT * FROM t1;
+                1,2,3
+                11,12,13
+                11,12,13
+                21,22,23
+                21,22,23
                 21,22,23
                 """
             )
