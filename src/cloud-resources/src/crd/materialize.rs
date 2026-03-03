@@ -974,7 +974,7 @@ pub mod v1 {
         /// operator cancels the rollout once this timeout is exceeded: the new
         /// generation is torn down and the previously-active generation
         /// continues serving. A new rollout can then be triggered by setting
-        /// `requestRollout` to a new value.
+        /// `forceRollout` to a new value.
         ///
         /// This does not apply to the `ImmediatelyPromoteCausingDowntime`
         /// rollout strategy or to force-promoted rollouts, since by the time

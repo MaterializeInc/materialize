@@ -183,7 +183,7 @@
     If you run into an error during the upgrade, refer to the
     [Troubleshooting](/self-managed-deployments/troubleshooting/).
 
-- name: upgrade-materialize-instance
+- name: upgrade-materialize-instance-v1alpha1
   content: |
 
     **After** you have upgraded your Materialize Operator, upgrade your
@@ -197,8 +197,8 @@
     - Second, rolling out the changes via a `requestRollout` flag.
 
     1. Find the name of the Materialize instance to upgrade. The sample example
-    deployment using the unified Terraform module deploys the Materialie
-    instance in the`materialize-environment` namespace.
+    deployment using the unified Terraform module deploys the Materialize
+    instance in the `materialize-environment` namespace.
 
        ```shell
        kubectl get materialize -n  materialize-environment
@@ -214,7 +214,7 @@
     1. Stage, but not rollout, the Materialize instance version upgrade.
 
        ```shell
-       kubectl patch materialize main\
+       kubectl patch materialize main \
          -n materialize-environment \
          --type='merge' \
          -p "{\"spec\": {\"environmentdImageRef\": \"docker.io/materialize/environmentd:{{< self-managed/versions/get-latest-version >}}\"}}"

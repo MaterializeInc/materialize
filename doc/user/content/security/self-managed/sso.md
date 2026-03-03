@@ -254,7 +254,7 @@ spec:
 ```
 
 Apply the updated manifest to your Kubernetes cluster. See
-[Upgrading](/self-managed-deployments/upgrading/#rollout-configuration) for
+[Upgrading](/self-managed-deployments/upgrading/materialize-instances/v1alpha1/#rollout-configuration) for
 details on rollout configuration.
 
 {{% include-headless
