@@ -49,6 +49,7 @@ pub fn initialize<A: Allocate + 'static>(
     config: &LoggingConfig,
     metrics_registry: MetricsRegistry,
     worker_config: Rc<ConfigSet>,
+    workers_per_process: usize,
 ) -> LoggingTraces {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
@@ -73,6 +74,7 @@ pub fn initialize<A: Allocate + 'static>(
         shared_state: Default::default(),
         metrics_registry,
         worker_config,
+        workers_per_process,
     };
 
     // Depending on whether we should log the creation of the logging dataflows, we register the
@@ -110,6 +112,7 @@ struct LoggingContext<'a, A: Allocate> {
     shared_state: Rc<RefCell<SharedLoggingState>>,
     metrics_registry: MetricsRegistry,
     worker_config: Rc<ConfigSet>,
+    workers_per_process: usize,
 }
 
 pub(crate) struct LoggingTraces {
@@ -177,6 +180,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                 self.now,
                 self.start_offset,
                 Rc::clone(&self.worker_config),
+                self.workers_per_process,
             );
             collections.extend(prometheus_collections);
 
