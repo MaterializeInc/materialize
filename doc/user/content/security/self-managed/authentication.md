@@ -50,6 +50,40 @@ following fields:
 The following example Kubernetes manifest includes configuration for
 SASL/SCRAM-SHA-256 authentication:
 
+{{< tabs >}}
+{{< tab "v1alpha2 (v26.17+)" >}}
+
+```hc {hl_lines="15 25"}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: materialize-environment
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: materialize-backend
+  namespace: materialize-environment
+stringData:
+  metadata_backend_url: "..."
+  persist_backend_url: "..."
+  license_key: "..."
+  external_login_password_mz_system: "enter_mz_system_password"
+---
+apiVersion: materialize.cloud/v1alpha2
+kind: Materialize
+metadata:
+  name: 12345678-1234-1234-1234-123456789012
+  namespace: materialize-environment
+spec:
+  environmentdImageRef: materialize/environmentd:v26.12.1
+  backendSecretName: materialize-backend
+  authenticatorKind: Sasl
+```
+
+{{< /tab >}}
+{{< tab "v1alpha1 (before v26.17)" >}}
+
 ```hc {hl_lines="15 25"}
 apiVersion: v1
 kind: Namespace
@@ -78,6 +112,9 @@ spec:
   authenticatorKind: Sasl
 ```
 
+{{< /tab >}}
+{{< /tabs >}}
+
 {{% include-headless
 "/headless/self-managed-deployments/enabled-auth-setting-warning" %}}
 
@@ -96,6 +133,40 @@ To configure Self-Managed Materialize for password authentication, update the fo
 
 The following example Kubernetes manifest includes configuration for password
 authentication:
+
+{{< tabs >}}
+{{< tab "v1alpha2 (v26.17+)" >}}
+
+```hc {hl_lines="15 25"}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: materialize-environment
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: materialize-backend
+  namespace: materialize-environment
+stringData:
+  metadata_backend_url: "..."
+  persist_backend_url: "..."
+  license_key: "..."
+  external_login_password_mz_system: "enter_mz_system_password"
+---
+apiVersion: materialize.cloud/v1alpha2
+kind: Materialize
+metadata:
+  name: 12345678-1234-1234-1234-123456789012
+  namespace: materialize-environment
+spec:
+  environmentdImageRef: materialize/environmentd:v26.12.1
+  backendSecretName: materialize-backend
+  authenticatorKind: Password
+```
+
+{{< /tab >}}
+{{< tab "v1alpha1 (before v26.17)" >}}
 
 ```hc {hl_lines="15 25"}
 apiVersion: v1
@@ -124,6 +195,9 @@ spec:
   backendSecretName: materialize-backend
   authenticatorKind: Password
 ```
+
+{{< /tab >}}
+{{< /tabs >}}
 
 {{% include-headless
 "/headless/self-managed-deployments/enabled-auth-setting-warning" %}}

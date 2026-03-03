@@ -1,10 +1,10 @@
 <!-- build a dict of type names -->
 {{ $types := dict }}
-{{ range $.Site.Data.self_managed.materialize_crd_descriptions }}
+{{ range $.Site.Data.self_managed.materialize_crd_descriptions_v1alpha2 }}
 {{ $types = merge $types (dict (index . 0) true) }}
 {{ end }}
 
-{{ range $.Site.Data.self_managed.materialize_crd_descriptions }}
+{{ range $.Site.Data.self_managed.materialize_crd_descriptions_v1alpha2 }}
 #### {{ index . 0 }}
 <table>
 <thead>

@@ -8,9 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp::Ordering;
+use std::env;
 
 use indexmap::{IndexMap, IndexSet};
-use mz_cloud_resources::crd::materialize::v1alpha1::MaterializeSpec;
+use mz_cloud_resources::crd::materialize::v1alpha1;
+use mz_cloud_resources::crd::materialize::v1alpha2;
 use schemars::schema_for;
 use serde::Serialize;
 
@@ -328,7 +330,14 @@ fn format_enum_variants_from_json(
 }
 
 fn main() {
-    let root_schema = schema_for!(MaterializeSpec);
+    let args: Vec<String> = env::args().collect();
+    let version = args.get(1).expect("usage: crd-writer <v1alpha1|v1alpha2>");
+
+    let root_schema = match version.as_str() {
+        "v1alpha1" => schema_for!(v1alpha1::MaterializeSpec),
+        "v1alpha2" => schema_for!(v1alpha2::MaterializeSpec),
+        other => panic!("unknown version: {other}, expected v1alpha1 or v1alpha2"),
+    };
     // Convert all to JSON for easier merging
     let schema_json = root_schema.to_value();
 

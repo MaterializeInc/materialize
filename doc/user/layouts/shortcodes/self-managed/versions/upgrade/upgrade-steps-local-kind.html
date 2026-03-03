@@ -63,6 +63,33 @@ deployment has not been configured with a license key:
 
 1. Create a new `upgrade-materialize.yaml` file, updating the following fields:
 
+   <div class="code-tabs">
+   <ul class="nav-tabs"></ul>
+   <div class="tab-content">
+   <div class="tab-pane" title="v1alpha2 (v26.17+)" id="local-kind-v1alpha2">
+
+   | Field | Description |
+   |-------|-------------|
+   | `environmentdImageRef` | Update the version to the new version. This should be the same as the operator version: `{{ $operator_version }}`. |
+   | `forceRollout`| Enter a new UUID. Can be generated with `uuidgen`. <br> <ul><li>`forceRollout` triggers a rollout even if no other changes exist.</li></ul> |
+
+
+   ```yaml
+   apiVersion: materialize.cloud/v1alpha2
+   kind: Materialize
+   metadata:
+     name: 12345678-1234-1234-1234-123456789012
+     namespace: materialize-environment
+   spec:
+     environmentdImageRef: materialize/environmentd:{{ $environmentd_version }} # Update version
+     # forceRollout: 33333333-3333-3333-3333-333333333333    # For forced rollouts
+     rolloutStrategy: WaitUntilReady                         # The mechanism to use when rolling out the new version.
+     backendSecretName: materialize-backend
+   ```
+
+   </div>
+   <div class="tab-pane" title="v1alpha1 (before v26.17)" id="local-kind-v1alpha1">
+
    | Field | Description |
    |-------|-------------|
    | `environmentdImageRef` | Update the version to the new version. This should be the same as the operator version: `{{ $operator_version }}`. |
@@ -82,6 +109,10 @@ deployment has not been configured with a license key:
      rolloutStrategy: WaitUntilReady                         # The mechanism to use when rolling out the new version.
      backendSecretName: materialize-backend
    ```
+
+   </div>
+   </div>
+   </div>
 
 1. Apply the upgrade-materialize.yaml file to your Materialize instance:
 
