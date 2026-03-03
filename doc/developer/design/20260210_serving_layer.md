@@ -290,6 +290,25 @@ A Materialize serving layer would occupy a distinct niche that no comparable pla
 
 ## Alternatives
 
+### Differential dataflow lateral join
+
+Differential dataflow is good at joining a stream of inputs with a maintained collection, and we could use this to achieve high-throughput low-latency queries without building a new data structure.
+A user would create a parameterized durable query, and when executed, bind the parameters to equality constraints.
+The system would maintain a dataflow that computes a lateral join of `(param_0, ..., param_N, session_id)` against the maintained query result keyed on `(param_0, ..., param_N)`, producing `(col_0, ..., col_M, session_id)`.
+The left side of the join is a stream of lookup requests, so we do not need to handle retractions---the implementation is a lateral/half join.
+Environmentd would multiplex and demultiplex based on the session ID.
+
+This approach reuses existing differential dataflow infrastructure---specifically, the `half_join` operator used in delta joins is exactly the primitive needed for joining a stream of lookups against an arrangement.
+The pattern is already achievable in user-space SQL today: insert parameter bindings into a table, lateral join against a maintained view, and observe results via SUBSCRIBE.
+The serving layer would internalize this pattern, managing the lookup stream and result demultiplexing automatically.
+
+For a first iteration, we would use a persist-backed table for the lookup stream: batch incoming queries as inserts, join against the maintained collection, ship results, and retract the batch.
+This requires no changes to compute at all---it reuses the existing dataflow infrastructure end-to-end.
+The persist write overhead is a concern (each batch requires a consensus round-trip), but batching amortizes the cost across many lookups.
+
+An optimization for later would be to inject an ephemeral query stream directly into the dataflow, bypassing persist entirely.
+This would require new infrastructure (a new input mechanism in the compute protocol, exposing timely's `InputHandle`), but would eliminate the persist overhead for lookups that do not need durability.
+
 ### Scale environmentd horizontally
 
 We have plans for unrelated reasons to scale environmentd horizontally, and this could get us to a point where we can support faster queries.
