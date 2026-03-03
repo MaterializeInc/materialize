@@ -68,7 +68,7 @@ Reference the ConfigMap in your Materialize custom resource by setting the
 `systemParameterConfigmapName` field to the name of your ConfigMap:
 
 ```yaml {hl_lines="9"}
-apiVersion: materialize.cloud/v1alpha1
+apiVersion: materialize.cloud/v1alpha2
 kind: Materialize
 metadata:
   name: 12345678-1234-1234-1234-123456789012
@@ -126,7 +126,7 @@ Materialize custom resource YAML and update it whenever you need to force a
 ConfigMap reload:
 
 ```yaml
-apiVersion: materialize.cloud/v1alpha1
+apiVersion: materialize.cloud/v1alpha2
 kind: Materialize
 metadata:
   name: 12345678-1234-1234-1234-123456789012

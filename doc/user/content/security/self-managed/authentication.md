@@ -67,7 +67,7 @@ stringData:
   license_key: "..."
   external_login_password_mz_system: "enter_mz_system_password"
 ---
-apiVersion: materialize.cloud/v1alpha1
+apiVersion: materialize.cloud/v1alpha2
 kind: Materialize
 metadata:
   name: 12345678-1234-1234-1234-123456789012
@@ -114,7 +114,7 @@ stringData:
   license_key: "..."
   external_login_password_mz_system: "enter_mz_system_password"
 ---
-apiVersion: materialize.cloud/v1alpha1
+apiVersion: materialize.cloud/v1alpha2
 kind: Materialize
 metadata:
   name: 12345678-1234-1234-1234-123456789012

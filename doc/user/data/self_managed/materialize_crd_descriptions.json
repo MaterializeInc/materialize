@@ -29,7 +29,7 @@
       {
         "name": "balancerdExternalCertificateSpec",
         "type": "MaterializeCertSpec",
-        "description": "The configuration for generating an x509 certificate using cert-manager for balancerd\nto present to incoming connections.\nThe `dnsNames` and `issuerRef` fields are required.",
+        "description": "The configuration for generating an x509 certificate using cert-manager for balancerd\nto present to incoming connections.\nThe `dnsNames` and `issuerRef` fields are required.\n\nThis field is excluded from the rollout hash and changes will not trigger a rollout.",
         "default": null,
         "required": false,
         "deprecated": false
@@ -37,7 +37,7 @@
       {
         "name": "balancerdReplicas",
         "type": "Integer",
-        "description": "Number of balancerd pods to create.",
+        "description": "Number of balancerd pods to create.\n\nThis field is excluded from the rollout hash and changes will not trigger a rollout.",
         "default": null,
         "required": false,
         "deprecated": false
@@ -45,7 +45,7 @@
       {
         "name": "balancerdResourceRequirements",
         "type": "io.k8s.api.core.v1.ResourceRequirements",
-        "description": "Resource requirements for the balancerd pod.",
+        "description": "Resource requirements for the balancerd pod.\n\nThis field is excluded from the rollout hash and changes will not trigger a rollout.",
         "default": null,
         "required": false,
         "deprecated": false
@@ -53,7 +53,7 @@
       {
         "name": "consoleExternalCertificateSpec",
         "type": "MaterializeCertSpec",
-        "description": "The configuration for generating an x509 certificate using cert-manager for the console\nto present to incoming connections.\nThe `dnsNames` and `issuerRef` fields are required.\nNot yet implemented.",
+        "description": "The configuration for generating an x509 certificate using cert-manager for the console\nto present to incoming connections.\nThe `dnsNames` and `issuerRef` fields are required.\nNot yet implemented.\n\nThis field is excluded from the rollout hash and changes will not trigger a rollout.",
         "default": null,
         "required": false,
         "deprecated": false
@@ -61,7 +61,7 @@
       {
         "name": "consoleReplicas",
         "type": "Integer",
-        "description": "Number of console pods to create.",
+        "description": "Number of console pods to create.\n\nThis field is excluded from the rollout hash and changes will not trigger a rollout.",
         "default": null,
         "required": false,
         "deprecated": false
@@ -69,7 +69,7 @@
       {
         "name": "consoleResourceRequirements",
         "type": "io.k8s.api.core.v1.ResourceRequirements",
-        "description": "Resource requirements for the console pod.",
+        "description": "Resource requirements for the console pod.\n\nThis field is excluded from the rollout hash and changes will not trigger a rollout.",
         "default": null,
         "required": false,
         "deprecated": false
@@ -132,16 +132,16 @@
       },
       {
         "name": "forcePromote",
-        "type": "Uuid",
-        "description": "If `forcePromote` is set to the same value as `requestRollout`, the\ncurrent rollout will skip waiting for clusters in the new\ngeneration to rehydrate before promoting the new environmentd to\nleader.",
-        "default": "00000000-0000-0000-0000-000000000000",
+        "type": "String",
+        "description": "If `forcePromote` is set to the same value as the `status.requestedRolloutHash`,\ncurrent rollout will skip waiting for clusters in the new\ngeneration to rehydrate before promoting the new environmentd to\nleader.\n\nThis field is excluded from the rollout hash and changes will not trigger a rollout.",
+        "default": null,
         "required": false,
         "deprecated": false
       },
       {
         "name": "forceRollout",
         "type": "Uuid",
-        "description": "This value will be written to an annotation in the generated\nenvironmentd statefulset, in order to force the controller to\ndetect the generated resources as changed even if no other changes\nhappened. This can be used to force a rollout to a new generation\neven without making any meaningful changes, by setting it to the\nsame value as `requestRollout`.",
+        "description": "This value will force the controller to detect the spec as changed\neven if no other changes happened. This can be used to force a rollout\nto a new generation even without making any meaningful changes.",
         "default": "00000000-0000-0000-0000-000000000000",
         "required": false,
         "deprecated": false
@@ -167,14 +167,6 @@
         "type": "Map<String, String>",
         "description": "Labels to apply to the pods.",
         "default": null,
-        "required": false,
-        "deprecated": false
-      },
-      {
-        "name": "requestRollout",
-        "type": "Uuid",
-        "description": "When changes are made to the environmentd resources (either via\nmodifying fields in the spec here or by deploying a new\norchestratord version which changes how resources are generated),\nexisting environmentd processes won't be automatically restarted.\nIn order to trigger a restart, the request_rollout field should be\nset to a new (random) value. Once the rollout completes, the value\nof `status.lastCompletedRolloutRequest` will be set to this value\nto indicate completion.\n\nDefaults to a random value in order to ensure that the first\ngeneration rollout is automatically triggered.",
-        "default": "00000000-0000-0000-0000-000000000000",
         "required": false,
         "deprecated": false
       },
@@ -217,22 +209,6 @@
         "default": null,
         "required": false,
         "deprecated": false
-      },
-      {
-        "name": "environmentdIamRoleArn",
-        "type": "String",
-        "description": "{{<warning>}}\nDeprecated.\n\nUse `service_account_annotations` to set \"eks.amazonaws.com/role-arn\" instead.\n{{</warning>}}\n\nIf running in AWS, override the IAM role to use to give\nenvironmentd access to the persist S3 bucket.",
-        "default": null,
-        "required": false,
-        "deprecated": true
-      },
-      {
-        "name": "inPlaceRollout",
-        "type": "Bool",
-        "description": "{{<warning>}}\nDeprecated and ignored. Use `rolloutStrategy` instead.\n{{</warning>}}",
-        "default": false,
-        "required": false,
-        "deprecated": true
       }
     ]
   ],
