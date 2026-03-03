@@ -2749,6 +2749,7 @@ def workflow_orchestratord_upgrade(
         print(f"running orchestratord {version}")
         definition["operator"]["operator"]["image"]["tag"] = str(version)
         helm_install_operator(definition["operator"], upgrade=True)
+        wait_for_crd_established()
         check_orchestratord_version(version)
 
         print(f"running environmentd {version}")
@@ -3370,7 +3371,8 @@ def run(definition: dict[str, Any], expect_fail: bool) -> None:
     print(f"Attempting to apply:\n{yaml_str}")
     # Retry to handle transient webhook unavailability (e.g. endpoint
     # propagation delay after pod restart during helm upgrade).
-    for attempt in range(30):
+    max_attempts = 120
+    for attempt in range(max_attempts):
         result = subprocess.run(
             ["kubectl", "apply", "-f", "-"],
             input=yaml_str.encode(),
@@ -3379,7 +3381,7 @@ def run(definition: dict[str, Any], expect_fail: bool) -> None:
         if result.returncode == 0:
             break
         stderr_str = result.stderr.decode(errors="replace")
-        if attempt < 29 and "connection refused" in stderr_str:
+        if attempt < max_attempts - 1 and "connection refused" in stderr_str:
             print(f"Webhook not yet reachable (attempt {attempt + 1}), retrying...")
             time.sleep(2)
             continue
