@@ -443,6 +443,24 @@ pub struct Peek<T = mz_repr::Timestamp> {
     pub otel_ctx: OpenTelemetryContext,
 }
 
+impl<T> ComputeCommand<T> {
+    /// Returns the collection ID targeted by this command, if any.
+    pub fn collection_id(&self) -> Option<GlobalId> {
+        match self {
+            ComputeCommand::Schedule(id)
+            | ComputeCommand::AllowWrites(id)
+            | ComputeCommand::AllowCompaction { id, .. } => Some(*id),
+            ComputeCommand::Peek(peek) => Some(peek.target.id()),
+            ComputeCommand::Hello { .. }
+            | ComputeCommand::CreateInstance(_)
+            | ComputeCommand::InitializationComplete
+            | ComputeCommand::UpdateConfiguration(_)
+            | ComputeCommand::CreateDataflow(_)
+            | ComputeCommand::CancelPeek { .. } => None,
+        }
+    }
+}
+
 impl TryIntoProtocolNonce for ComputeCommand {
     fn try_into_protocol_nonce(self) -> Result<Uuid, Self> {
         match self {

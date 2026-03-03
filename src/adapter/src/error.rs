@@ -812,6 +812,10 @@ impl AdapterError {
                 dependency_kind: "replica",
                 dependency_id: id.to_string(),
             },
+            ReplicaNotHosting(id) => AdapterError::Unstructured(anyhow::anyhow!(
+                "the requested replica {} does not host the target collection",
+                id,
+            )),
             InstanceShutDown => AdapterError::ConcurrentDependencyDrop {
                 dependency_kind: "cluster",
                 dependency_id: compute_instance.to_string(),
@@ -838,6 +842,10 @@ impl AdapterError {
                 dependency_kind: "replica",
                 dependency_id: id.to_string(),
             },
+            ReplicaNotHosting(id) => AdapterError::Unstructured(anyhow::anyhow!(
+                "the requested replica {} does not host the target collection",
+                id,
+            )),
             e @ SinceViolation(_) => AdapterError::internal("peek error", e),
         }
     }

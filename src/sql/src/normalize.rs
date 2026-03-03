@@ -405,6 +405,7 @@ pub fn create_statement(
             columns: _,
             replacement_for: _,
             in_cluster: _,
+            in_cluster_replica: _,
             query,
             with_options: _,
             as_of: _,

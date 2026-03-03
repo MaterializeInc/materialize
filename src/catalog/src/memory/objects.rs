@@ -1397,6 +1397,8 @@ pub struct MaterializedView {
     pub replacement_target: Option<CatalogItemId>,
     /// Cluster that this materialized view runs on.
     pub cluster_id: ClusterId,
+    /// If set, only install this materialized view's dataflow on the specified replica.
+    pub target_replica: Option<ReplicaId>,
     /// Column indexes that we assert are not `NULL`.
     ///
     /// TODO(parkmycar): Switch this to use the `ColumnIdx` type.
@@ -1476,6 +1478,7 @@ impl MaterializedView {
             columns: rpl_stmt.columns,
             replacement_for: None,
             in_cluster: rpl_stmt.in_cluster,
+            in_cluster_replica: rpl_stmt.in_cluster_replica,
             query: rpl_stmt.query,
             as_of: rpl_stmt.as_of,
             with_options: rpl_stmt.with_options,
@@ -1505,6 +1508,7 @@ impl MaterializedView {
             dependencies,
             replacement_target: None,
             cluster_id: replacement.cluster_id,
+            target_replica: replacement.target_replica,
             non_null_assertions: replacement.non_null_assertions,
             custom_logical_compaction_window: replacement.custom_logical_compaction_window,
             refresh_schedule: replacement.refresh_schedule,

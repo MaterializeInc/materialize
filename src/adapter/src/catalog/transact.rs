@@ -2892,6 +2892,23 @@ impl ObjectsToDrop {
 
                 self.replicas
                     .insert(replica.replica_id, (cluster.id, reason));
+
+                // Implicitly drop materialized views that target this replica.
+                // When the target replica is gone, no replica advances the
+                // persist shard's upper frontier, causing reads to hang.
+                for (_id, entry) in state.get_entries() {
+                    if let CatalogItem::MaterializedView(mv) = entry.item() {
+                        if mv.target_replica == Some(replica_id)
+                            && !self.items.contains(&entry.id())
+                        {
+                            tracing::warn!(
+                                "implicitly dropping materialized view {} because target replica was dropped",
+                                entry.name().item,
+                            );
+                            self.items.push(entry.id());
+                        }
+                    }
+                }
             }
             DropObjectInfo::Item(item_id) => {
                 let entry = state.get_entry(&item_id);

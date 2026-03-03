@@ -335,6 +335,17 @@ impl Coordinator {
             ..
         } = &plan;
 
+        // Replica-targeted materialized views require a feature flag.
+        if plan.materialized_view.target_replica.is_some()
+            && !mz_adapter_types::dyncfgs::ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS
+                .get(self.catalog().system_config().dyncfgs())
+        {
+            return Err(AdapterError::UnavailableFeature {
+                feature: "replica-targeted materialized views".to_string(),
+                docs: None,
+            });
+        }
+
         // Validate any references in the materialized view's expression. We do
         // this on the unoptimized plan to better reflect what the user typed.
         // We want to reject queries that depend on log sources, for example,
@@ -567,6 +578,7 @@ impl Coordinator {
                             dependencies,
                             replacement_target,
                             cluster_id,
+                            target_replica,
                             non_null_assertions,
                             compaction_window,
                             refresh_schedule,
@@ -674,6 +686,7 @@ impl Coordinator {
                     dependencies,
                     replacement_target,
                     cluster_id,
+                    target_replica,
                     non_null_assertions,
                     custom_logical_compaction_window: compaction_window,
                     refresh_schedule: refresh_schedule.clone(),
@@ -755,6 +768,7 @@ impl Coordinator {
                             df_desc,
                             cluster_id,
                             notice_builtin_updates_fut,
+                            target_replica,
                         )
                         .await;
 

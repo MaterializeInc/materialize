@@ -754,26 +754,15 @@ where
     }
 
     /// Creates the described dataflow and initializes state for its output.
-    ///
-    /// If a `subscribe_target_replica` is given, any subscribes exported by the dataflow are
-    /// configured to target that replica, i.e., only subscribe responses sent by that replica are
-    /// considered.
     pub fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
         mut dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
-        subscribe_target_replica: Option<ReplicaId>,
+        target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
         use DataflowCreationError::*;
 
         let instance = self.instance(instance_id)?;
-
-        // Validation: target replica
-        if let Some(replica_id) = subscribe_target_replica {
-            if !instance.replicas.contains(&replica_id) {
-                return Err(ReplicaMissing(replica_id));
-            }
-        }
 
         // Validation: as_of
         let as_of = dataflow.as_of.as_ref().ok_or(MissingAsOf)?;
@@ -817,6 +806,7 @@ where
                 compute_dependencies: dataflow.imported_index_ids().collect(),
                 shared: shared.clone(),
                 time_dependence: time_dependence.clone(),
+                target_replica,
             };
             instance.collections.insert(id, collection);
             shared_collection_state.insert(id, shared);
@@ -828,8 +818,8 @@ where
             i.create_dataflow(
                 dataflow,
                 import_read_holds,
-                subscribe_target_replica,
                 shared_collection_state,
+                target_replica,
             )
             .expect("validated")
         });
@@ -882,6 +872,12 @@ where
         if let Some(replica_id) = target_replica {
             if !instance.replicas.contains(&replica_id) {
                 return Err(ReplicaMissing(replica_id));
+            }
+            let collection = instance.collection(peek_target.id())?;
+            if let Some(collection_replica) = collection.target_replica {
+                if replica_id != collection_replica {
+                    return Err(ReplicaNotHosting(replica_id));
+                }
             }
         }
 
@@ -1182,6 +1178,8 @@ struct Collection<T> {
     /// The computed time dependence for this collection. None indicates no specific information,
     /// a value describes how the collection relates to wall-clock time.
     time_dependence: Option<TimeDependence>,
+    /// The single replica this collection is installed on, if any.
+    target_replica: Option<ReplicaId>,
 }
 
 impl<T: Timestamp> Collection<T> {
@@ -1192,6 +1190,7 @@ impl<T: Timestamp> Collection<T> {
             compute_dependencies: Default::default(),
             shared: SharedCollectionState::new(as_of),
             time_dependence: Some(TimeDependence::default()),
+            target_replica: None,
         }
     }
 

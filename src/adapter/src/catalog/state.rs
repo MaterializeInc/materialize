@@ -1400,6 +1400,7 @@ impl CatalogState {
                     dependencies,
                     replacement_target: materialized_view.replacement_target,
                     cluster_id: materialized_view.cluster_id,
+                    target_replica: materialized_view.target_replica,
                     non_null_assertions: materialized_view.non_null_assertions,
                     custom_logical_compaction_window: materialized_view.compaction_window,
                     refresh_schedule: materialized_view.refresh_schedule,

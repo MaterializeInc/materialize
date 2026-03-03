@@ -270,6 +270,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         storage_sink: bool,
         initial_as_of: Option<Antichain<T>>,
         refresh_schedule: Option<RefreshSchedule>,
+        target_replica: Option<ReplicaId>,
     ) {
         // Add global collection state.
         let dependency_ids: Vec<GlobalId> = compute_dependencies
@@ -295,6 +296,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             Arc::clone(&self.read_hold_tx),
             introspection,
         );
+        state.target_replica = target_replica;
         // If the collection is write-only, clear its read policy to reflect that.
         if write_only {
             state.read_policy = None;
@@ -306,6 +308,9 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
         // Add per-replica collection state.
         for replica in self.replicas.values_mut() {
+            if target_replica.is_some_and(|id| id != replica.id) {
+                continue;
+            }
             replica.add_collection(id, as_of.clone(), replica_input_read_holds.clone());
         }
     }
@@ -341,8 +346,11 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
         // Add per-replica collection state.
         for (collection_id, collection) in &self.collections {
-            // Skip log collections not maintained by this replica.
-            if collection.log_collection && !log_ids.contains(collection_id) {
+            // Skip log collections not maintained by this replica,
+            // and collections targeted at a different replica.
+            if (collection.log_collection && !log_ids.contains(collection_id))
+                || collection.target_replica.is_some_and(|rid| rid != id)
+            {
                 continue;
             }
 
@@ -1012,16 +1020,38 @@ where
         );
     }
 
-    /// Sends a command to all replicas of this instance.
+    /// Sends a command to replicas of this instance.
+    ///
+    /// For commands that target a specific collection (via [`ComputeCommand::collection_id`]),
+    /// the command is only sent to the replica maintaining that collection, if the collection
+    /// is targeted at a specific replica. Otherwise, the command is sent to all replicas.
     #[mz_ore::instrument(level = "debug")]
     fn send(&mut self, cmd: ComputeCommand<T>) {
         // Record the command so that new replicas can be brought up to speed.
         self.history.push(cmd.clone());
 
-        // Clone the command for each active replica.
-        for replica in self.replicas.values_mut() {
-            // Swallow error, we'll notice because the replica task has stopped.
-            let _ = replica.client.send(cmd.clone());
+        let target = cmd
+            .collection_id()
+            .and_then(|id| self.collections.get(&id))
+            .and_then(|c| c.target_replica);
+        if let Some(rid) = target {
+            if let Some(replica) = self.replicas.get_mut(&rid) {
+                let _ = replica.client.send(cmd);
+            }
+        } else {
+            for replica in self.replicas.values_mut() {
+                let _ = replica.client.send(cmd.clone());
+            }
+        }
+    }
+
+    /// Sends a command only to the specified replica, while recording it in the history.
+    ///
+    /// Used for `CreateDataflow` where collection state doesn't exist yet.
+    fn send_to_replica(&mut self, id: ReplicaId, cmd: ComputeCommand<T>) {
+        self.history.push(cmd.clone());
+        if let Some(replica) = self.replicas.get_mut(&id) {
+            let _ = replica.client.send(cmd);
         }
     }
 
@@ -1058,7 +1088,27 @@ where
         self.history.update_source_uppers(&self.storage_collections);
 
         // Replay the commands at the client, creating new dataflow identifiers.
+        // Skip dataflows targeted at other replicas, along with their dependent commands.
+        let mut skipped_ids = BTreeSet::new();
         for command in self.history.iter() {
+            if let ComputeCommand::CreateDataflow(dataflow) = &command {
+                let all_exports_skip = dataflow.export_ids().all(|eid| {
+                    self.collections
+                        .get(&eid)
+                        .and_then(|c| c.target_replica)
+                        .is_some_and(|rid| rid != id)
+                });
+                if all_exports_skip {
+                    skipped_ids.extend(dataflow.export_ids());
+                    continue;
+                }
+            }
+            if command
+                .collection_id()
+                .is_some_and(|cid| skipped_ids.contains(&cid))
+            {
+                continue;
+            }
             if client.send(command.clone()).is_err() {
                 // We swallow the error here. On the next send, we will fail again, and
                 // restart the connection as well as this rehydration.
@@ -1158,21 +1208,20 @@ where
     ///
     /// This method expects a `DataflowDescription` with an `as_of` frontier specified, as well as
     /// for each imported collection a read hold in `import_read_holds` at at least the `as_of`.
-    ///
-    /// If a `subscribe_target_replica` is given, any subscribes exported by the dataflow are
-    /// configured to target that replica, i.e., only subscribe responses sent by that replica are
-    /// considered.
     #[mz_ore::instrument(level = "debug")]
     pub fn create_dataflow(
         &mut self,
         dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
         import_read_holds: Vec<ReadHold<T>>,
-        subscribe_target_replica: Option<ReplicaId>,
         mut shared_collection_state: BTreeMap<GlobalId, SharedCollectionState<T>>,
+        target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
         use DataflowCreationError::*;
 
-        if let Some(replica_id) = subscribe_target_replica {
+        // Validate that the target replica, if specified, exists.
+        // A targeted dataflow is only installed on a single replica; if that
+        // replica doesn't exist, we can't create the dataflow.
+        if let Some(replica_id) = target_replica {
             if !self.replica_exists(replica_id) {
                 return Err(ReplicaMissing(replica_id));
             }
@@ -1243,6 +1292,7 @@ where
                 storage_sink,
                 dataflow.initial_storage_as_of.clone(),
                 dataflow.refresh_schedule.clone(),
+                target_replica,
             );
 
             // If the export is a storage sink, we can advance its write frontier to the write
@@ -1255,7 +1305,7 @@ where
         // Initialize tracking of subscribes.
         for subscribe_id in dataflow.subscribe_ids() {
             self.subscribes
-                .insert(subscribe_id, ActiveSubscribe::new(subscribe_target_replica));
+                .insert(subscribe_id, ActiveSubscribe::new(target_replica));
         }
 
         // Initialize tracking of copy tos.
@@ -1391,8 +1441,12 @@ where
             );
         } else {
             let collections: Vec<_> = augmented_dataflow.export_ids().collect();
-            let dataflow = Box::new(augmented_dataflow);
-            self.send(ComputeCommand::CreateDataflow(dataflow));
+            let cmd = ComputeCommand::CreateDataflow(Box::new(augmented_dataflow));
+            if let Some(rid) = target_replica {
+                self.send_to_replica(rid, cmd);
+            } else {
+                self.send(cmd);
+            }
 
             for id in collections {
                 self.maybe_schedule_collection(id);
@@ -1541,6 +1595,19 @@ where
         if let Some(target) = target_replica {
             if !self.replica_exists(target) {
                 return Err(ReplicaMissing(target));
+            }
+        }
+
+        // If the collection is targeted at a specific replica, the peek must
+        // go to that replica. Error if the user requested a different one.
+        let collection_target = self
+            .collections
+            .get(&target_id)
+            .and_then(|c| c.target_replica);
+        if let (Some(peek_replica), Some(collection_replica)) = (target_replica, collection_target)
+        {
+            if peek_replica != collection_replica {
+                return Err(ReplicaNotHosting(peek_replica));
             }
         }
 
@@ -2248,6 +2315,8 @@ where
 /// compute dataflow.
 #[derive(Debug)]
 struct CollectionState<T: ComputeControllerTimestamp> {
+    /// If set, this collection is only maintained by the specified replica.
+    target_replica: Option<ReplicaId>,
     /// Whether this collection is a log collection.
     ///
     /// Log collections are special in that they are only maintained by a subset of all replicas.
@@ -2361,6 +2430,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
         };
 
         Self {
+            target_replica: None,
             log_collection: false,
             dropped: false,
             scheduled: false,

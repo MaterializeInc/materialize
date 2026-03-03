@@ -60,6 +60,9 @@ pub enum PeekError {
     /// The read hold that was passed in is for a later time than the peek's timestamp.
     #[error("insufficient read hold provided: {0}")]
     ReadHoldInsufficient(GlobalId),
+    /// The target replica does not host the peeked collection.
+    #[error("replica {0} does not host the target collection")]
+    ReplicaNotHosting(ReplicaId),
     /// The peek's target instance has shut down.
     #[error("the instance has shut down")]
     InstanceShutDown,

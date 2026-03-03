@@ -503,6 +503,7 @@ impl Coordinator {
                             df_desc,
                             cluster_id,
                             notice_builtin_updates_fut,
+                            None,
                         )
                         .await;
                     // No `allow_writes` here because indexes do not modify external state.
