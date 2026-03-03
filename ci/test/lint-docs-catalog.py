@@ -31,8 +31,7 @@ FIELD_TYPE_RE = re.compile(r"\[?`(.*)`\]?")
 # text of [..](..) and [..][..] type links and keep only the link text.
 DOC_LINK_TYPE1_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
 DOC_LINK_TYPE2_RE = re.compile(r"\[([^\]]+)\]\[[^]]+\]")
-RELATION_MARKER_RE = re.compile(r"RELATION_SPEC (\w+)\.(\w+)")
-NO_COMMENTS_RELATION_MARKER_RE = re.compile(r"RELATION_SPEC_NO_COMMENTS (\w+)\.(\w+)")
+RELATION_MARKER_RE = re.compile(r"RELATION_SPEC (\w+)\.(\w+)(.*)")
 UNDOCUMENTED_RELATION_MARKER = re.compile(r"RELATION_SPEC_UNDOCUMENTED (\w+)\.(\w+)")
 
 HEADER = """
@@ -91,11 +90,10 @@ def main() -> None:
                 objects.append(object_name)
                 schemas.add(f"'{schema}'")
                 continue
-            no_comments_match = NO_COMMENTS_RELATION_MARKER_RE.search(line)
-            marker_match = RELATION_MARKER_RE.search(line)
-            match = no_comments_match or marker_match
+            match = RELATION_MARKER_RE.search(line)
             if match:
-                include_comments = no_comments_match is None
+                modifiers = match.group(3)
+                include_comments = "NO_COMMENTS" not in modifiers
                 schema = match.group(1)
                 object_name = match.group(2)
                 if include_comments:

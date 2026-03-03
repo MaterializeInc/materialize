@@ -9,6 +9,8 @@
 
 //! Logging dataflow for Prometheus metrics gathered from the metrics registry.
 
+use mz_compute_types::dyncfgs::ENABLE_COMPUTE_PROMETHEUS_METRICS;
+use mz_dyncfg::ConfigSet;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -50,6 +52,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
     metrics_registry: MetricsRegistry,
     now: Instant,
     start_offset: Duration,
+    worker_config: Rc<ConfigSet>,
 ) -> Return {
     let variant = LogVariant::Compute(ComputeLog::PrometheusMetrics);
     let mut collections = BTreeMap::new();
@@ -60,7 +63,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         return Return { collections };
     }
 
-    let worker_id = scope.index();
+    let process_id = scope.index() / scope.peers();
     let enable = scope.index() % scope.peers() == 0;
 
     // Build a source operator that periodically gathers Prometheus metrics.
@@ -95,6 +98,12 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                 return;
             }
             next_scrape = Instant::now() + interval;
+
+            if !ENABLE_COMPUTE_PROMETHEUS_METRICS.get(&worker_config) {
+                // Skip scraping, leave prev_snapshot intact so diffs are
+                // correct when re-enabled.
+                return;
+            }
 
             // Gather current metrics and build new snapshot.
             let metric_families = metrics_registry.gather();
@@ -153,7 +162,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                             &labels,
                             *value,
                             help,
-                            worker_id,
+                            process_id,
                         );
                         session.give(((key, val), ts, diff));
                     }
@@ -376,7 +385,7 @@ fn pack_row<'a>(
     labels: &[(&str, &str)],
     value: f64,
     help: &str,
-    worker_id: usize,
+    process_id: usize,
 ) -> (&'a mz_repr::RowRef, &'a mz_repr::RowRef) {
     packer.pack_by_index(|row_packer, index| match index {
         // metric_name
@@ -391,8 +400,8 @@ fn pack_row<'a>(
         3 => row_packer.push(Datum::Float64(value.into())),
         // help
         4 => row_packer.push(Datum::String(help)),
-        // worker_id
-        5 => row_packer.push(Datum::UInt64(u64::cast_from(worker_id))),
+        // process_id
+        5 => row_packer.push(Datum::UInt64(u64::cast_from(process_id))),
         _ => unreachable!("unexpected column index {index}"),
     })
 }

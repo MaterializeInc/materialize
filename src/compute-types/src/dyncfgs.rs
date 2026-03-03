@@ -327,6 +327,15 @@ pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
     "The size, as number of rows, of each batch pumped from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
 );
 
+/// Whether the Prometheus metrics introspection source is enabled.
+///
+/// When disabled, the source stops scraping and retracts any existing data.
+pub const ENABLE_COMPUTE_PROMETHEUS_METRICS: Config<bool> = Config::new(
+    "enable_compute_prometheus_metrics",
+    true,
+    "Whether the Prometheus metrics introspection source is enabled.",
+);
+
 /// If set, skip fetching or processing the snapshot data for subscribes when possible.
 pub const SUBSCRIBE_SNAPSHOT_OPTIMIZATION: Config<bool> = Config::new(
     "compute_subscribe_snapshot_optimization",
@@ -376,5 +385,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES)
         .add(&PEEK_STASH_NUM_BATCHES)
         .add(&PEEK_STASH_BATCH_SIZE)
+        .add(&ENABLE_COMPUTE_PROMETHEUS_METRICS)
         .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
 }

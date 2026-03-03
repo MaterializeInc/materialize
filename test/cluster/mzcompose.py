@@ -6754,20 +6754,29 @@ def workflow_test_prometheus_metrics(c: Composition) -> None:
             },
             support_external_clusterd=True,
         ),
-        Clusterd(name="clusterd1", workers=1),
+        Clusterd(
+            name="clusterd1",
+            workers=2,
+            process_names=["clusterd1", "clusterd2"],
+        ),
+        Clusterd(
+            name="clusterd2",
+            workers=2,
+            process_names=["clusterd1", "clusterd2"],
+        ),
         Testdrive(no_reset=True, default_timeout="60s"),
     ):
-        c.up("materialized", "clusterd1")
+        c.up("materialized", "clusterd1", "clusterd2")
 
         c.sql(
             """
             CREATE CLUSTER cluster1 REPLICAS (
                 replica1 (
-                    STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 1
+                    STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
+                    WORKERS 2
                 )
             );
             GRANT ALL ON CLUSTER cluster1 TO materialize;
@@ -6800,9 +6809,11 @@ def workflow_test_prometheus_metrics(c: Composition) -> None:
                 counter
                 gauge
 
-                > SELECT DISTINCT worker_id
+                > SELECT DISTINCT process_id
                   FROM mz_introspection.mz_compute_prometheus_metrics_per_worker
+                  ORDER BY process_id
                 0
+                1
                 """
             )
         )

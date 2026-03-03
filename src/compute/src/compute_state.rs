@@ -679,6 +679,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             self.timely_worker,
             &config,
             self.compute_state.metrics_registry.clone(),
+            Rc::clone(&self.compute_state.worker_config),
         );
 
         let dataflow_index = Rc::new(dataflow_index);
