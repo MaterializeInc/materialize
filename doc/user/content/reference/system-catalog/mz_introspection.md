@@ -170,6 +170,8 @@ Summaries are flattened into separate quantile, sum, and count rows.
 | `help`        | [`text`]               | The help string describing the metric.                               |
 | `process_id`  | [`uint8`]              | The ID of the process that collected the metric.                     |
 
+Metrics with the legacy Prometheus type `untyped` may also appear but are unlikely in practice.
+
 ## `mz_dataflows`
 
 The `mz_dataflows` view describes the [dataflows][dataflow] in the system.
