@@ -80,7 +80,6 @@ def main() -> None:
     position = 1
     objects = []
     schemas = set()
-    include_comments = True
     for line in fileinput.input(sys.argv):
         if state == ParserState.NONE:
             undocumented = UNDOCUMENTED_RELATION_MARKER.search(line)
