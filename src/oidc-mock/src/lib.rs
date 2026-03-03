@@ -13,6 +13,7 @@
 //! for validating JWT tokens in tests.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::future::IntoFuture;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -67,6 +68,8 @@ pub struct GenerateJwtOptions<'a> {
     pub issuer: Option<&'a str>,
     /// Audience claim. If None, uses empty vec.
     pub aud: Option<Vec<String>>,
+    /// Additional claims.
+    pub unknown_claims: Option<BTreeMap<String, String>>,
 }
 
 /// OIDC mock server for testing.
@@ -166,14 +169,22 @@ impl OidcMockServer {
     pub fn generate_jwt(&self, sub: &str, opts: GenerateJwtOptions<'_>) -> String {
         let now_ms = (self.now)();
         let now_secs = i64::try_from(now_ms / 1000).expect("timestamp must fit in i64");
+        let sub_claim_map = BTreeMap::from([("sub".to_string(), sub.to_string())]);
+
+        let unknown_claims = opts
+            .unknown_claims
+            .unwrap_or_default()
+            .into_iter()
+            .chain(sub_claim_map)
+            .map(|(k, v)| (k, serde_json::Value::String(v.to_string())))
+            .collect();
 
         let claims = OidcClaims {
-            sub: sub.to_string(),
             iss: opts.issuer.unwrap_or(&self.issuer).to_string(),
             exp: opts.exp.unwrap_or(now_secs + self.expires_in_secs),
             iat: Some(now_secs),
-            email: opts.email.map(|s| s.to_string()),
             aud: opts.aud.unwrap_or_default(),
+            unknown_claims,
         };
 
         let mut header = Header::new(jsonwebtoken::Algorithm::RS256);

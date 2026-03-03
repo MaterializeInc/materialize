@@ -261,7 +261,7 @@ where
                         SessionConfig {
                             conn_id: conn.conn_id().clone(),
                             uuid: conn_uuid,
-                            user: claims.username().into(),
+                            user: claims.user,
                             client_ip: conn.peer_addr().clone(),
                             external_metadata_rx: None,
                             helm_chart_version,

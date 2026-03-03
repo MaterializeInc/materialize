@@ -1724,6 +1724,7 @@ class FlipFlagsAction(Action):
             "sql_server_source_validate_restore_history",
             "oidc_issuer",
             "oidc_audience",
+            "oidc_authentication_claim",
         ]
 
     def run(self, exe: Executor) -> bool:
