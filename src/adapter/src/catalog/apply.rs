@@ -1356,8 +1356,9 @@ impl CatalogState {
             StateUpdateKind::RoleAuth(role_auth) => {
                 vec![self.pack_role_auth_update(role_auth.role_id, diff)]
             }
-            StateUpdateKind::Database(database) => {
-                vec![self.pack_database_update(&database.id, diff)]
+            StateUpdateKind::Database(_database) => {
+                // MZ_DATABASES is now a view over mz_catalog_raw; no builtin table updates needed.
+                vec![]
             }
             StateUpdateKind::Schema(schema) => {
                 let db_spec = schema.database_id.into();

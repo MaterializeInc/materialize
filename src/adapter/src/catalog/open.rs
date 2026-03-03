@@ -938,7 +938,33 @@ fn add_new_remove_old_builtin_items_migration(
     // using this object and that the upgrade checker does not show any issues.
     //
     // Objects can be removed from this set after one release.
-    let delete_exceptions: HashSet<SystemObjectDescription> = [].into();
+    let delete_exceptions: HashSet<SystemObjectDescription> = [
+        // MZ_DATABASES was converted from a table to a view over mz_catalog_raw.
+        SystemObjectDescription {
+            schema_name: "mz_catalog".to_string(),
+            object_type: CatalogItemType::Table,
+            object_name: "mz_databases".to_string(),
+        },
+        // MZ_CLUSTERS was converted from a table to a view over mz_catalog_raw.
+        SystemObjectDescription {
+            schema_name: "mz_catalog".to_string(),
+            object_type: CatalogItemType::Table,
+            object_name: "mz_clusters".to_string(),
+        },
+        // MZ_MATERIALIZED_VIEWS was converted from a table to a view over mz_catalog_raw.
+        SystemObjectDescription {
+            schema_name: "mz_catalog".to_string(),
+            object_type: CatalogItemType::Table,
+            object_name: "mz_materialized_views".to_string(),
+        },
+        // MZ_TABLES was converted from a table to a view over mz_catalog_raw.
+        SystemObjectDescription {
+            schema_name: "mz_catalog".to_string(),
+            object_type: CatalogItemType::Table,
+            object_name: "mz_tables".to_string(),
+        },
+    ]
+    .into();
     // TODO(jkosh44) Technically we could support changing the type of a builtin object outside
     // of unstable schemas (i.e. from a table to a view). However, builtin migrations don't currently
     // handle that scenario correctly.

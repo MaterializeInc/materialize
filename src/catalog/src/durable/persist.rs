@@ -386,10 +386,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     ///
     /// If the catalog's upper is already >= `new_upper`, this is a no-op.
     #[mz_ore::instrument(level = "debug")]
-    pub(crate) async fn advance_upper(
-        &mut self,
-        new_upper: Timestamp,
-    ) -> Result<(), CatalogError> {
+    pub(crate) async fn advance_upper(&mut self, new_upper: Timestamp) -> Result<(), CatalogError> {
         assert_eq!(self.mode, Mode::Writable);
 
         if self.upper >= new_upper {

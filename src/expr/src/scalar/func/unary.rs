@@ -520,7 +520,9 @@ derive_unary!(
     KafkaMurmur2String,
     SeahashBytes,
     SeahashString,
-    Reverse
+    Reverse,
+    MzRedactSql,
+    MzSqlExtractQuery
 );
 
 impl UnaryFunc {
