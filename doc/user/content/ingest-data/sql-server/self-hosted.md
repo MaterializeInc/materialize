@@ -6,6 +6,7 @@ menu:
     parent: "sql-server"
     name: "Self-hosted SQL Server"
     identifier: "sql-server-self-hosted"
+    weight: 80
 aliases:
   - /ingest-data/cdc-sql-server/
   - /self-managed/v25.1/ingest-data/cdc-sql-server/

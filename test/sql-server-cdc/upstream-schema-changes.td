@@ -78,6 +78,26 @@ contains:missing columns
 3 c cherry
 4 d date
 
+# To support the new column without downtime, we can create a new CDC capture instance for the table
+# in the upstream SQL server db that will contain the new column.
+
+$ sql-server-execute name=sql-server
+USE test;
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'foo', @role_name = 'SA', @capture_instance = 'dbo_foo2', @supports_net_changes = 0;
+
+> CREATE SOURCE sql_server_src2
+  FROM SQL SERVER CONNECTION sql_server_conn;
+
+> CREATE SCHEMA v2;
+
+> CREATE TABLE v2.foo2 FROM SOURCE sql_server_src2 (REFERENCE dbo.foo);
+
+> SELECT * FROM v2.foo2;
+1 a apple <null>
+2 b banana <null>
+3 c cherry wild
+4 d date ajwa
+
 $ sql-server-execute name=sql-server
 ALTER TABLE foo DROP COLUMN id;
 

@@ -60,6 +60,20 @@ For an example, see [Create a table (PostgreSQL
 source)](/sql/create-table/#create-a-table-postgresql-source).
 
 {{< /tab >}}
+{{< tab "SQL Server source table" >}}
+### SQL Server source table
+
+{{< private-preview />}}
+
+{{< note >}}
+{{% include-example file="examples/create_table_sql_server"
+example="syntax-version-requirement" %}}
+{{< /note >}}
+
+{{% include-syntax file="examples/create_table_sql_server"
+example="syntax" %}}
+
+{{< /tab >}}
 
 {{< /tabs >}}
 
@@ -82,7 +96,7 @@ Tables do not currently support:
 See also the known limitations for [`INSERT`](/sql/insert#known-limitations),
 [`UPDATE`](/sql/update#known-limitations), and [`DELETE`](/sql/delete#known-limitations).
 
-## PostgreSQL source tables
+## Source-populated tables
 
 {{< private-preview />}}
 
@@ -109,14 +123,39 @@ guidelines](/sql/identifiers/#naming-restrictions).
 
 ### Supported data types
 
+{{< tabs >}}
+{{< tab "PostgreSQL" >}}
+#### PostgreSQL types
+
 {{% include-from-yaml data="postgres_source_details" name="postgres-supported-types" %}}
 
 {{% include-from-yaml data="postgres_source_details" name="postgres-unsupported-types" %}}
 
+{{< /tab >}}
+{{< tab "SQL Server" >}}
+#### SQL Server types
+
+{{< include-md file="shared-content/sql-server-supported-types.md" >}}
+
+{{< include-md file="shared-content/sql-server-unsupported-type-handling.md" >}}
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
+
 ### Handling table schema changes
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-compatible-schema-changes" %}}
+The use of [`CREATE SOURCE`](/sql/create-source/postgres-v2/) with `CREATE
+TABLE FROM SOURCE` allows for the handling of the upstream DDL changes,
+specifically adding or dropping columns in the upstream tables, without
+downtime. For details, see:
+
+- [PostgreSQL: Handling upstream schema changes with zero
+downtime](/ingest-data/postgres/source-versioning/)
+
+- [SQL Server: Handling upstream schema changes with zero
+downtime](/ingest-data/sql-server/source-versioning/)
 
 #### Incompatible schema changes
 

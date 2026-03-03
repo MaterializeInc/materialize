@@ -5,71 +5,57 @@ pagerank: 40
 menu:
   main:
     parent: 'create-source'
-    identifier: cs_sql-server
-    name: SQL Server (Legacy Syntax)
-    weight: 23
+    identifier: cs_sql-server-v2
+    name: SQL Server (New Syntax)
+    weight: 24
 ---
+
+{{< private-preview />}}
+
+{{< source-versioning-disambiguation is_new=true
+other_ref="[old reference page](/sql/create-source/sql-server/)" include_blurb=true >}}
+
+## Prerequisites
 
 {{% create-source/intro %}}
 Materialize supports SQL Server (2016+) as a real-time data source. To connect to a
 SQL Server database, you first need to tweak its configuration to enable [Change Data
 Capture](https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/enable-and-disable-change-data-capture-sql-server)
 and [`SNAPSHOT` transaction isolation](https://learn.microsoft.com/en-us/dotnet/framework/data/adonet/sql/snapshot-isolation-in-sql-server)
-for the database that you would like to replicate. Then [create a connection](#creating-a-connection)
+for the database that you would like to replicate. Then [create a connection](#prerequisite-creating-a-connection-to-sql-server)
 in Materialize that specifies access and authentication parameters.
 {{% /create-source/intro %}}
 
 ## Syntax
 
-{{% include-syntax file="examples/create_source_sql_server_legacy" example="syntax" %}}
+{{% include-syntax file="examples/create_source_sql_server" example="syntax" %}}
 
-## Creating a source
+## Ingesting data
 
-Materialize ingests the CDC stream for all (or a specific set of) tables in your
+After a source is created, you can create tables from the source
 upstream SQL Server database that have [Change Data Capture enabled](https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/about-change-data-capture-sql-server).
+You can create multiple tables that reference the same table in the source.
 
-```mzsql
-CREATE SOURCE mz_source
-  FROM SQL SERVER CONNECTION sql_server_connection
-  FOR ALL TABLES;
-```
+See [`CREATE TABLE FROM SOURCE`](/sql/create-table/) for details.
 
-When you define a source, Materialize will automatically:
+#### Handling table schema changes
 
-1. Create a **subsource** for each capture instance upstream, and perform an
-   initial, snapshot-based sync of the associated tables before it starts
-   ingesting change events.
+The use of the `CREATE SOURCE` with the new [`CREATE TABLE FROM
+SOURCE`](/sql/create-table/) allows for the handling of certain upstream DDL
+changes without downtime.
 
-    ```mzsql
-    SHOW SOURCES;
-    ```
+See [Guide: Handle upstream schema changes with zero downtime](/ingest-data/sql-server/source-versioning/) for details.
 
-    ```nofmt
-             name         |   type     |  cluster  |
-    ----------------------+------------+------------
-     mz_source            | sql-server |
-     mz_source_progress   | progress   |
-     table_1              | subsource  |
-     table_2              | subsource  |
-    ```
+#### Supported types
 
-1. Incrementally update any materialized or indexed views that depend on the
-   source as change events stream in, as a result of `INSERT`, `UPDATE` and
-   `DELETE` operations in the upstream SQL Server database.
+With the new syntax, after a SQL Server source is created, you [`CREATE TABLE
+FROM SOURCE`](/sql/create-table/) to create a corresponding table in
+Matererialize and start ingesting data.
 
-##### SQL Server schemas
+{{< include-md file="shared-content/sql-server-supported-types.md" >}}
 
-`CREATE SOURCE` will attempt to create each upstream table in the same schema as
-the source. This may lead to naming collisions if, for example, you are
-replicating `schema1.table_1` and `schema2.table_1`. Use the `FOR TABLES`
-clause to provide aliases for each upstream table, in such cases, or to specify
-an alternative destination schema in Materialize.
-
-```mzsql
-CREATE SOURCE mz_source
-  FROM SQL SERVER CONNECTION sql_server_connection
-  FOR TABLES (schema1.table_1 AS s1_table_1, schema2.table_1 AS s2_table_1);
-```
+For more information, including strategies for handling unsupported types,
+see [`CREATE TABLE FROM SOURCE`](/sql/create-table/).
 
 ### Monitoring source progress
 
@@ -100,20 +86,18 @@ The reported `lsn` should increase as Materialize consumes **new** CDC events
 from the upstream SQL Server database. For more details on monitoring source
 ingestion progress and debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
 
-## Known limitations
-
-{{% include-headless "/headless/sql-server-considerations" %}}
-
-## Examples
+## Example
 
 {{< important >}}
 Before creating a SQL Server source, you must enable Change Data Capture and
 `SNAPSHOT` transaction isolation in the upstream database.
 {{</ important >}}
 
-### Creating a connection
+### Creating a source {#create-source-example}
 
-A connection describes how to connect and authenticate to an external system you
+#### Prerequisite: Creating a connection to SQL Server
+
+First, you must create a connection to your SQL Server database. A connection describes how to connect and authenticate to an external system you
 want Materialize to read data from.
 
 Once created, a connection is **reusable** across multiple `CREATE SOURCE`
@@ -162,62 +146,25 @@ an SSH bastion server to accept connections from Materialize, check
 {{< /tab >}}
 {{< /tabs >}}
 
-### Creating a source {#create-source-example}
+#### Creating the source in Materialize
 
 You **must** enable Change Data Capture, see [Enable Change Data Capture SQL Server Instructions](/ingest-data/sql-server/self-hosted/#a-configure-sql-server).
 
-Once CDC is enabled for all of the relevant tables, you can create a `SOURCE` in
+Once CDC is enabled for all of the tables you wish to create subsources for, you can create a `SOURCE` in
 Materialize to begin replicating data!
 
-_Create subsources for all tables in SQL Server_
+_Create source from the connection we just created_
 
 ```mzsql
 CREATE SOURCE mz_source
-    FROM SQL SERVER CONNECTION sqlserver_connection
-    FOR ALL TABLES;
+    FROM SQL SERVER CONNECTION sqlserver_connection;
 ```
 
-_Create subsources for specific tables in SQL Server_
+After a source is created, you can create a table from the source, referencing specific table(s).
 
+_Creates a table in Materialize from the upstream table dbo.items_
 ```mzsql
-CREATE SOURCE mz_source
-  FROM SQL SERVER CONNECTION sqlserver_connection
-  FOR TABLES (mydb.table_1, mydb.table_2 AS alias_table_2);
-```
-
-#### Handling unsupported types
-
-If you're replicating tables that use [data types unsupported](#supported-types)
-by SQL Server's CDC feature, use the `EXCLUDE COLUMNS` option to exclude them from
-replication. This option expects the upstream fully-qualified names of the
-replicated table and column (i.e. as defined in your SQL Server database).
-
-```mzsql
-CREATE SOURCE mz_source
-  FROM SQL SERVER CONNECTION sqlserver_connection (
-    EXCLUDE COLUMNS (mydb.table_1.column_of_unsupported_type)
-  )
-  FOR ALL TABLES;
-```
-
-### Handling errors and schema changes
-
-{{% include-headless "/headless/schema-changes-in-progress" %}}
-
-To handle upstream [schema changes](#schema-changes) or errored subsources, use
-the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
-subsource, and then [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to add
-the subsource back to the source.
-
-```mzsql
--- List all subsources in mz_source
-SHOW SUBSOURCES ON mz_source;
-
--- Get rid of an outdated or errored subsource
-DROP SOURCE table_1;
-
--- Start ingesting the table with the updated schema or fix
-ALTER SOURCE mz_source ADD SUBSOURCE table_1;
+CREATE TABLE items FROM SOURCE mz_source(REFERENCE dbo.items);
 ```
 
 ## Related pages
