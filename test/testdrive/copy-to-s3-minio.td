@@ -135,6 +135,18 @@ true
     HEADER = true
   );
 
+> CREATE TABLE t1 (a INT);
+
+> COPY INTO t1 FROM 's3://copytos3/test/2_5' WITH (
+    AWS CONNECTION = aws_conn,
+    FORMAT = CSV,
+    HEADER = true
+  );
+
+SELECT * FROM t1;
+1
+2
+
 > COPY (SELECT array[1,2]::int[], false::bool, 'Inf'::double, '{"s": "abc"}'::jsonb, 1::mz_timestamp, 32767::smallint, 2147483647::integer, 9223372036854775807::bigint, 12345678901234567890123.4567890123456789::numeric(39,16), '2010-10-10'::date, '10:10:10'::time, '2010-10-10 10:10:10+00'::timestamp, '2010-10-10 10:10:10+02'::timestamptz, '0 day'::interval, 'aaaa'::text, '\\xAAAA'::bytea, 'това е'::text, 'текст'::bytea) TO 's3://copytos3/test/3'
   WITH (
     AWS CONNECTION = aws_conn,
