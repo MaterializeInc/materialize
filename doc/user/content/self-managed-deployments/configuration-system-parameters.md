@@ -67,6 +67,24 @@ kubectl apply -f system-params-configmap.yaml
 Reference the ConfigMap in your Materialize custom resource by setting the
 `systemParameterConfigmapName` field to the name of your ConfigMap:
 
+{{< tabs >}}
+{{< tab "v1alpha2 (v26.17+)" >}}
+
+```yaml {hl_lines="9"}
+apiVersion: materialize.cloud/v1alpha2
+kind: Materialize
+metadata:
+  name: 12345678-1234-1234-1234-123456789012
+  namespace: materialize-environment
+spec:
+  environmentdImageRef: materialize/environmentd:v26.0.0
+  backendSecretName: materialize-backend
+  systemParameterConfigmapName: mz-system-params
+```
+
+{{< /tab >}}
+{{< tab "v1alpha1 (before v26.17)" >}}
+
 ```yaml {hl_lines="9"}
 apiVersion: materialize.cloud/v1alpha1
 kind: Materialize
@@ -78,6 +96,9 @@ spec:
   backendSecretName: materialize-backend
   systemParameterConfigmapName: mz-system-params
 ```
+
+{{< /tab >}}
+{{< /tabs >}}
 
 Apply the updated Materialize resource:
 
@@ -125,6 +146,24 @@ Alternatively, you can add the `configmap-reload-trigger` annotation to your
 Materialize custom resource YAML and update it whenever you need to force a
 ConfigMap reload:
 
+{{< tabs >}}
+{{< tab "v1alpha2 (v26.17+)" >}}
+
+```yaml
+apiVersion: materialize.cloud/v1alpha2
+kind: Materialize
+metadata:
+  name: 12345678-1234-1234-1234-123456789012
+  namespace: materialize-environment
+  annotations:
+    configmap-reload-trigger: "1234567890"  # Update this value to force reload
+spec:
+  # ... rest of spec
+```
+
+{{< /tab >}}
+{{< tab "v1alpha1 (before v26.17)" >}}
+
 ```yaml
 apiVersion: materialize.cloud/v1alpha1
 kind: Materialize
@@ -136,6 +175,9 @@ metadata:
 spec:
   # ... rest of spec
 ```
+
+{{< /tab >}}
+{{< /tabs >}}
 
 {{< note >}}
 Even after the ConfigMap is synced, some parameters may require a restart to

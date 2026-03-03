@@ -70,9 +70,11 @@ rm -f src/{clusterd,environmentd,materialized,persist-client,testdrive,catalog-d
 
 cargo update --workspace
 
-crd_descriptions_json=doc/user/data/self_managed/materialize_crd_descriptions.json
-cargo run -p mz-cloud-resources --bin crd-writer > "${crd_descriptions_json}"
-git add "${crd_descriptions_json}"
+for crd_version in v1alpha1 v1alpha2; do
+    crd_descriptions_json="doc/user/data/self_managed/materialize_crd_descriptions_${crd_version}.json"
+    cargo run -p mz-cloud-resources --bin crd-writer -- "${crd_version}" > "${crd_descriptions_json}"
+    git add "${crd_descriptions_json}"
+done
 
 bin/helm-chart-version-bump --bump-orchestratord-version "v$version"
 
