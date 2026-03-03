@@ -10,7 +10,7 @@
 use std::cmp::Ordering;
 
 use indexmap::{IndexMap, IndexSet};
-use mz_cloud_resources::crd::materialize::v1alpha1::MaterializeSpec;
+use mz_cloud_resources::crd::materialize::v1alpha2::MaterializeSpec;
 use schemars::schema_for;
 use serde::Serialize;
 
