@@ -272,6 +272,11 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         refresh_schedule: Option<RefreshSchedule>,
     ) {
         // Add global collection state.
+        let dependency_ids: Vec<GlobalId> = compute_dependencies
+            .keys()
+            .chain(storage_dependencies.keys())
+            .copied()
+            .collect();
         let introspection = CollectionIntrospection::new(
             id,
             self.introspection_tx.clone(),
@@ -279,6 +284,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             storage_sink,
             initial_as_of,
             refresh_schedule,
+            dependency_ids,
         );
         let mut state = CollectionState::new(
             id,
@@ -302,15 +308,9 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         for replica in self.replicas.values_mut() {
             replica.add_collection(id, as_of.clone(), replica_input_read_holds.clone());
         }
-
-        // Update introspection.
-        self.report_dependency_updates(id, Diff::ONE);
     }
 
     fn remove_collection(&mut self, id: GlobalId) {
-        // Update introspection.
-        self.report_dependency_updates(id, Diff::MINUS_ONE);
-
         // Remove per-replica collection state.
         for replica in self.replicas.values_mut() {
             replica.remove_collection(id);
@@ -639,28 +639,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         }
 
         self.wallclock_lag_last_recorded = now_trunc;
-    }
-
-    /// Report updates (inserts or retractions) to the identified collection's dependencies.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the identified collection does not exist.
-    fn report_dependency_updates(&self, id: GlobalId, diff: Diff) {
-        let collection = self.expect_collection(id);
-        let dependencies = collection.dependency_ids();
-
-        let updates = dependencies
-            .map(|dependency_id| {
-                let row = Row::pack_slice(&[
-                    Datum::String(&id.to_string()),
-                    Datum::String(&dependency_id.to_string()),
-                ]);
-                (row, diff)
-            })
-            .collect();
-
-        self.deliver_introspection_updates(IntrospectionType::ComputeDependencies, updates);
     }
 
     /// Returns `true` if the given collection is hydrated on at least one
@@ -1014,46 +992,23 @@ where
 
     /// Shut down this instance.
     ///
-    /// This method runs various assertions ensuring the instance state is empty. It exists to help
-    /// us find bugs where the client drops a compute instance that still has replicas or
-    /// collections installed, and later assumes that said replicas/collections still exists.
+    /// This method asserts that the instance has no replicas left. It exists to help
+    /// us find bugs where the client drops a compute instance that still has replicas
+    /// installed, and later assumes that said replicas still exist.
     ///
     /// # Panics
     ///
-    /// Panics if the compute instance still has active replicas.
-    /// Panics if the compute instance still has collections installed.
+    /// Soft-panics if the compute instance still has active replicas.
     #[mz_ore::instrument(level = "debug")]
     pub fn shutdown(&mut self) {
         // Taking the `command_rx` ensures that the [`Instance::run`] loop terminates.
         let (_tx, rx) = mpsc::unbounded_channel();
-        let mut command_rx = std::mem::replace(&mut self.command_rx, rx);
-
-        // Apply all outstanding read hold changes. This might cause read hold downgrades to be
-        // added to `command_tx`, so we need to apply those in a loop.
-        //
-        // TODO(teskje): Make `Command` an enum and assert that all received commands are read
-        // hold downgrades.
-        while let Ok(cmd) = command_rx.try_recv() {
-            cmd(self);
-        }
-
-        // Collections might have been dropped but not cleaned up yet.
-        self.cleanup_collections();
+        self.command_rx = rx;
 
         let stray_replicas: Vec<_> = self.replicas.keys().collect();
         soft_assert_or_log!(
             stray_replicas.is_empty(),
             "dropped instance still has provisioned replicas: {stray_replicas:?}",
-        );
-
-        let collections = self.collections.iter();
-        let stray_collections: Vec<_> = collections
-            .filter(|(_, c)| !c.log_collection)
-            .map(|(id, _)| id)
-            .collect();
-        soft_assert_or_log!(
-            stray_collections.is_empty(),
-            "dropped instance still has installed collections: {stray_collections:?}",
         );
     }
 
@@ -2429,8 +2384,15 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
         introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
     ) -> Self {
         let since = Antichain::from_elem(T::minimum());
-        let introspection =
-            CollectionIntrospection::new(id, introspection_tx, since.clone(), false, None, None);
+        let introspection = CollectionIntrospection::new(
+            id,
+            introspection_tx,
+            since.clone(),
+            false,
+            None,
+            None,
+            Vec::new(),
+        );
         let mut state = Self::new(
             id,
             since,
@@ -2463,12 +2425,6 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
 
     fn compute_dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
         self.compute_dependencies.keys().copied()
-    }
-
-    /// Reports the IDs of the dependencies of this collection.
-    fn dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.compute_dependency_ids()
-            .chain(self.storage_dependency_ids())
     }
 }
 
@@ -2539,8 +2495,6 @@ impl<T: Timestamp> SharedCollectionState<T> {
 
 /// Manages certain introspection relations associated with a collection. Upon creation, it adds
 /// rows to introspection relations. When dropped, it retracts its managed rows.
-///
-/// TODO: `ComputeDependencies` could be moved under this.
 #[derive(Debug)]
 struct CollectionIntrospection<T: ComputeControllerTimestamp> {
     /// The ID of the compute collection.
@@ -2556,6 +2510,8 @@ struct CollectionIntrospection<T: ComputeControllerTimestamp> {
     ///
     /// `Some` if the collection is a REFRESH MV.
     refresh: Option<RefreshIntrospectionState<T>>,
+    /// The IDs of the collection's dependencies, for `IntrospectionType::ComputeDependencies`.
+    dependency_ids: Vec<GlobalId>,
 }
 
 impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
@@ -2566,6 +2522,7 @@ impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
         storage_sink: bool,
         initial_as_of: Option<Antichain<T>>,
         refresh_schedule: Option<RefreshSchedule>,
+        dependency_ids: Vec<GlobalId>,
     ) -> Self {
         let refresh =
             match (refresh_schedule, initial_as_of) {
@@ -2589,6 +2546,7 @@ impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
             introspection_tx,
             frontiers,
             refresh,
+            dependency_ids,
         };
 
         self_.report_initial_state();
@@ -2608,6 +2566,25 @@ impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
             let updates = vec![(row, Diff::ONE)];
             self.send(IntrospectionType::ComputeMaterializedViewRefreshes, updates);
         }
+
+        if !self.dependency_ids.is_empty() {
+            let updates = self.dependency_rows(Diff::ONE);
+            self.send(IntrospectionType::ComputeDependencies, updates);
+        }
+    }
+
+    /// Produces rows for the `ComputeDependencies` introspection relation.
+    fn dependency_rows(&self, diff: Diff) -> Vec<(Row, Diff)> {
+        self.dependency_ids
+            .iter()
+            .map(|dependency_id| {
+                let row = Row::pack_slice(&[
+                    Datum::String(&self.collection_id.to_string()),
+                    Datum::String(&dependency_id.to_string()),
+                ]);
+                (row, diff)
+            })
+            .collect()
     }
 
     /// Observe the given current collection frontiers and update the introspection state as
@@ -2676,6 +2653,12 @@ impl<T: ComputeControllerTimestamp> Drop for CollectionIntrospection<T> {
             let retraction = refresh.row_for_collection(self.collection_id);
             let updates = vec![(retraction, Diff::MINUS_ONE)];
             self.send(IntrospectionType::ComputeMaterializedViewRefreshes, updates);
+        }
+
+        // Retract collection dependencies.
+        if !self.dependency_ids.is_empty() {
+            let updates = self.dependency_rows(Diff::MINUS_ONE);
+            self.send(IntrospectionType::ComputeDependencies, updates);
         }
     }
 }
