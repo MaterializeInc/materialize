@@ -476,6 +476,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "copy_to_s3_arrow_builder_buffer_ratio",
     "copy_to_s3_multipart_part_size_bytes",
     "enable_replica_targeted_materialized_views",
+    "enable_compute_prometheus_metrics",
     "enable_compute_replica_expiration",
     "enable_compute_render_fueled_as_specific_collection",
     "compute_logical_backpressure_max_retained_capabilities",
