@@ -235,18 +235,7 @@ examples. When the user attempts to read from either, Materialize will report an
 error that the source table schema has been altered.
 
 ## Optional
-### Swap schemas
 
-When you're ready to fully cut over to the new source version, you can
-optionally swap the schemas and drop the old objects. In our example, once you
-schema `v1` and `v3` only has table `t1`, once you are ready to cutover from
-`v1` to `v3`:
-
-```mzsql
-ALTER SCHEMA v1 SWAP WITH v3;
-
-DROP SCHEMA v3 CASCADE;
-```
 
 ### Disable unused capture instance
 

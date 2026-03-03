@@ -194,13 +194,3 @@ Dropping the column B will have no effect on `v3.T`. However, the drop affects
 `v2.T` and `v2.matview` from our earlier examples. When the user attempts to
 read from either, Materialize will report an error that the source table schema
 has been altered.
-
-## Optional: Swap schemas
-
-When you're ready to fully cut over to the new source version, you can optionally swap the schemas and drop the old objects.
-
-```sql
-ALTER SCHEMA v1 SWAP WITH v3;
-
-DROP SCHEMA v3 CASCADE;
-```
