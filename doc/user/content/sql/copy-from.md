@@ -72,7 +72,7 @@ TODO:
 `bool`                                                                    | `BOOLEAN`                                                                    |                                                                                              | [`boolean`](/sql/types/boolean/)
 `date32`                                                                  | `INT32`                                                                      | `DATE`                                                                                       | [`date`](/sql/types/date/)
 `decimal128[38, 10 or max-scale]`                                         | `FIXED_LEN_BYTE_ARRAY`                                                       | `DECIMAL`                                                                                    | [`numeric`](/sql/types/numeric/)
-`fixed_size_binary(16)`                                                   | `FIXED_LEN_BYTE_ARRAY`                                                       |                                                                                              | [`bytea`](/sql/types/bytea/) <--- what about using the UUID logical type?
+`fixed_size_binary(16)`                                                   | `FIXED_LEN_BYTE_ARRAY`                                                       |                                                                                              | [`bytea`](/sql/types/bytea/)
 `float32`                                                                 | `FLOAT`                                                                      |                                                                                              | [`real`](/sql/types/float/#real-info)
 `float64`                                                                 | `DOUBLE`                                                                     |                                                                                              | [`double precision`](/sql/types/float/#double-precision-info)
 `int16`                                                                   | `INT32`                                                                      | `INT(16, true)`                                                                              | [`smallint`](/sql/types/integer/#smallint-info)
@@ -81,7 +81,7 @@ TODO:
 `large_binary`                                                            | `BYTE_ARRAY`                                                                 |                                                                                              | [`bytea`](/sql/types/bytea/)
 `large_utf8`                                                              | `BYTE_ARRAY`                                                                 |                                                                                              | [`jsonb`](/sql/types/jsonb/)
 `list`                                                                    | Nested                                                                       |                                                                                              | [`list`](/sql/types/list/)
-CUSTOM TYPE `struct`                                                                  | Nested                                                                       |                                                                                              | [Arrays](/sql/types/array/) (`[]`)
+`struct`                                                                  | Nested                                                                       |                                                                                              | [Arrays](/sql/types/array/) (`[]`)
 `time64[microsecond]`                                                     | `INT64`                                                                      | `TIMESTAMP[isAdjustedToUTC = false, unit = MICROS]`                                          | [`timestamp`](/sql/types/timestamp/#timestamp-info)
 `time64[microsecond]`                                                     | `INT64`                                                                      | `TIMESTAMP[isAdjustedToUTC = true, unit = MICROS]`                                           | [`timestamp with time zone`](/sql/types/timestamp/#timestamp-with-time-zone-info)
 `time64[nanosecond]`                                                      | `INT64`                                                                      | `TIME[isAdjustedToUTC = false, unit = NANOS]`                                                | [`time`](/sql/types/time/)
@@ -89,7 +89,7 @@ CUSTOM TYPE `struct`                                                            
 `uint32`                                                                  | `INT32`                                                                      | `INT(32, false)`                                                                             | [`uint4`](/sql/types/uint/#uint4-info)
 `uint64`                                                                  | `INT64`                                                                      | `INT(64, false)`                                                                             | [`uint8`](/sql/types/uint/#uint8-info)
 `utf8` or `large_utf8`                                                    | `BYTE_ARRAY`                                                                 | `STRING`                                                                                     | [`text`](/sql/types/text/)
-(COMING SOON) `map` (`struct` with fields `keys` and `values`)                          | Nested                                                                       | `MAP`                                                                                        | [`map`](/sql/types/map/)
+| | | `map` | unsupported
 | | | `interval` | unsupported
 
 ## Examples
@@ -109,6 +109,18 @@ COPY t FROM STDIN (DELIMITER '|');
 
 ### From s3
 #### Using AWS connection
+##### Set up S3 bucket
+To prepare your S3 bucket for bulk import, follow the instructions in the [Amazon S3 Sink guide](/serve-results/sink/s3),
+but, in your IAM policy, instead allow these actions:
+
+Action type  | Action name                                                                            | Action description
+-------------|----------------------------------------------------------------------------------------|---------------
+Read         | [`s3:GetObject`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html)      | Grants permission to retrieve an object from a bucket.
+List         | [`s3:ListBucket`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html) | Grants permission to list some or all of the objects in a bucket.
+
+As we are not writing to the bucket, we do not need any write permissions, only read and list.
+
+##### Perform bulk import
 ```mzsql
 COPY INTO csv_table FROM 's3://example_bucket' (FORMAT CSV, AWS CONNECTION = example_aws_conn, FILES = ['example_data.csv']);
 ```
