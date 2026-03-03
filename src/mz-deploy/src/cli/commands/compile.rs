@@ -125,8 +125,7 @@ pub async fn run(
     // Type checking with Docker if enabled
     if args.typecheck {
         let typecheck_duration =
-            typecheck_with_docker(directory, &planned_project, args.docker_image, object_count)
-                .await?;
+            typecheck_with_docker(directory, &planned_project, args.docker_image).await?;
 
         if let Some(duration) = typecheck_duration {
             progress::stage_success(&format!("{} objects passed", object_count), duration);
@@ -150,7 +149,6 @@ async fn typecheck_with_docker(
     directory: &Path,
     planned_project: &project::planned::Project,
     docker_image: Option<String>,
-    _object_count: usize,
 ) -> Result<Option<Duration>, CliError> {
     use crate::types::{TypeCheckError, typecheck_with_client};
     use crate::utils::docker_runtime::DockerRuntime;

@@ -350,7 +350,11 @@ mod tests {
     #[test]
     fn test_deployment_kind_roundtrip() {
         // Verify that Display and FromStr are consistent
-        for kind in [DeploymentKind::Tables, DeploymentKind::Objects] {
+        for kind in [
+            DeploymentKind::Tables,
+            DeploymentKind::Objects,
+            DeploymentKind::Sinks,
+        ] {
             let s = kind.to_string();
             let parsed: DeploymentKind = s.parse().unwrap();
             assert_eq!(kind, parsed);

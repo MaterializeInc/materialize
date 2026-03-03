@@ -7,7 +7,7 @@ use crate::client::errors::ConnectionError;
 use crate::client::models::{Cluster, ClusterConfig, ClusterGrant, ClusterOptions, ClusterReplica};
 use crate::project::object_id::ObjectId;
 use crate::utils::sql_utils::quote_identifier;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use tokio_postgres::Client as PgClient;
 use tokio_postgres::types::ToSql;
 
@@ -309,17 +309,22 @@ pub async fn check_objects_exist(
     Ok(rows.iter().map(|row| row.get("fqn")).collect())
 }
 
-/// Check which tables from the given set exist in the database.
+/// Check which objects from the given set exist in a specific catalog table.
 ///
-/// Returns a HashSet of ObjectIds for tables that already exist.
-pub async fn check_tables_exist(
+/// Returns a BTreeSet of ObjectIds for objects that already exist.
+async fn check_catalog_objects_exist(
     client: &PgClient,
-    tables: &BTreeSet<ObjectId>,
+    objects: &BTreeSet<ObjectId>,
+    catalog_table: &str,
 ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
-    let fqns: Vec<String> = tables.iter().map(|o| o.to_string()).collect();
-    if fqns.is_empty() {
+    if objects.is_empty() {
         return Ok(BTreeSet::new());
     }
+
+    // Build a lookup map from FQN string -> ObjectId for O(1) matching
+    let fqn_map: BTreeMap<String, &ObjectId> =
+        objects.iter().map(|o| (o.to_string(), o)).collect();
+    let fqns: Vec<&String> = fqn_map.keys().collect();
 
     let placeholders: Vec<String> = (1..=fqns.len()).map(|i| format!("${}", i)).collect();
     let placeholders_str = placeholders.join(", ");
@@ -327,18 +332,18 @@ pub async fn check_tables_exist(
     let query = format!(
         r#"
         SELECT d.name || '.' || s.name || '.' || t.name as fqn
-        FROM mz_tables t
+        FROM {} t
         JOIN mz_schemas s ON t.schema_id = s.id
         JOIN mz_databases d ON s.database_id = d.id
         WHERE d.name || '.' || s.name || '.' || t.name IN ({})
         ORDER BY fqn
     "#,
-        placeholders_str
+        catalog_table, placeholders_str
     );
 
     let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
     for fqn in &fqns {
-        params.push(fqn);
+        params.push(*fqn);
     }
 
     let rows = client
@@ -346,17 +351,25 @@ pub async fn check_tables_exist(
         .await
         .map_err(ConnectionError::Query)?;
 
-    // Convert FQN strings back to ObjectIds
     let mut existing = BTreeSet::new();
     for row in rows {
         let fqn: String = row.get("fqn");
-        // Find the matching ObjectId from the input set
-        if let Some(obj_id) = tables.iter().find(|o| o.to_string() == fqn) {
-            existing.insert(obj_id.clone());
+        if let Some(obj_id) = fqn_map.get(&fqn) {
+            existing.insert((*obj_id).clone());
         }
     }
 
     Ok(existing)
+}
+
+/// Check which tables from the given set exist in the database.
+///
+/// Returns a BTreeSet of ObjectIds for tables that already exist.
+pub async fn check_tables_exist(
+    client: &PgClient,
+    tables: &BTreeSet<ObjectId>,
+) -> Result<BTreeSet<ObjectId>, ConnectionError> {
+    check_catalog_objects_exist(client, tables, "mz_tables").await
 }
 
 /// Check which sinks from the given set exist in the database.
@@ -367,47 +380,7 @@ pub async fn check_sinks_exist(
     client: &PgClient,
     sinks: &BTreeSet<ObjectId>,
 ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
-    let fqns: Vec<String> = sinks.iter().map(|o| o.to_string()).collect();
-    if fqns.is_empty() {
-        return Ok(BTreeSet::new());
-    }
-
-    let placeholders: Vec<String> = (1..=fqns.len()).map(|i| format!("${}", i)).collect();
-    let placeholders_str = placeholders.join(", ");
-
-    let query = format!(
-        r#"
-        SELECT d.name || '.' || s.name || '.' || k.name as fqn
-        FROM mz_sinks k
-        JOIN mz_schemas s ON k.schema_id = s.id
-        JOIN mz_databases d ON s.database_id = d.id
-        WHERE d.name || '.' || s.name || '.' || k.name IN ({})
-        ORDER BY fqn
-    "#,
-        placeholders_str
-    );
-
-    let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
-    for fqn in &fqns {
-        params.push(fqn);
-    }
-
-    let rows = client
-        .query(&query, &params)
-        .await
-        .map_err(ConnectionError::Query)?;
-
-    // Convert FQN strings back to ObjectIds
-    let mut existing = BTreeSet::new();
-    for row in rows {
-        let fqn: String = row.get("fqn");
-        // Find the matching ObjectId from the input set
-        if let Some(obj_id) = sinks.iter().find(|o| o.to_string() == fqn) {
-            existing.insert(obj_id.clone());
-        }
-    }
-
-    Ok(existing)
+    check_catalog_objects_exist(client, sinks, "mz_sinks").await
 }
 
 /// Find sinks that depend on objects in the specified schemas.
@@ -567,6 +540,18 @@ pub async fn get_staging_clusters(
     Ok(rows.iter().map(|row| row.get("name")).collect())
 }
 
+/// Map a Materialize object type string to its DROP keyword.
+fn mz_type_to_drop_keyword(obj_type: &str) -> Option<&'static str> {
+    match obj_type {
+        "table" => Some("TABLE"),
+        "view" => Some("VIEW"),
+        "materialized-view" => Some("MATERIALIZED VIEW"),
+        "source" => Some("SOURCE"),
+        "sink" => Some("SINK"),
+        _ => None,
+    }
+}
+
 /// Drop all objects in a schema.
 ///
 /// Returns the fully-qualified names of dropped objects.
@@ -601,13 +586,8 @@ pub async fn drop_schema_objects(
             quote_identifier(schema),
             quote_identifier(&name)
         );
-        let drop_type = match obj_type.as_str() {
-            "table" => "TABLE",
-            "view" => "VIEW",
-            "materialized-view" => "MATERIALIZED VIEW",
-            "source" => "SOURCE",
-            "sink" => "SINK",
-            _ => continue,
+        let Some(drop_type) = mz_type_to_drop_keyword(obj_type.as_str()) else {
+            continue;
         };
 
         let drop_sql = format!("DROP {} IF EXISTS {} CASCADE", drop_type, fqn);
@@ -674,13 +654,8 @@ pub async fn drop_objects(
             quote_identifier(&schema),
             quote_identifier(&name)
         );
-        let drop_type = match obj_type.as_str() {
-            "table" => "TABLE",
-            "view" => "VIEW",
-            "materialized-view" => "MATERIALIZED VIEW",
-            "source" => "SOURCE",
-            "sink" => "SINK",
-            _ => continue,
+        let Some(drop_type) = mz_type_to_drop_keyword(obj_type.as_str()) else {
+            continue;
         };
 
         let drop_sql = format!("DROP {} IF EXISTS {} CASCADE", drop_type, fqn);

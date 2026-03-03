@@ -39,23 +39,7 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
     project::deployment_snapshot::initialize_deployment_table(&client).await?;
 
     // Validate deployment exists and is not promoted
-    let metadata = client.get_deployment_metadata(deploy_id).await?;
-
-    match metadata {
-        Some(meta) if meta.promoted_at.is_some() => {
-            return Err(CliError::StagingAlreadyPromoted {
-                name: deploy_id.to_string(),
-            });
-        }
-        Some(_) => {
-            // Good to proceed
-        }
-        None => {
-            return Err(CliError::StagingEnvironmentNotFound {
-                name: deploy_id.to_string(),
-            });
-        }
-    }
+    crate::cli::helpers::validate_staging_deployment(&client, deploy_id).await?;
 
     // Check apply state for resume scenarios
     let apply_state = client.get_apply_state(deploy_id).await?;
@@ -500,7 +484,7 @@ async fn repoint_dependent_sinks(
 
         // Execute ALTER SINK ... SET FROM
         let alter_sql = format!(
-            r#"ALTER SINK "{}"."{}"."{}". SET FROM "{}"."{}"."{}""#,
+            r#"ALTER SINK "{}"."{}"."{}" SET FROM "{}"."{}"."{}""#,
             sink.sink_database,
             sink.sink_schema,
             sink.sink_name,

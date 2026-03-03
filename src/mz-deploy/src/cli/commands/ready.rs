@@ -52,20 +52,7 @@ pub async fn run(
         .await
         .map_err(CliError::Connection)?;
     // Validate staging deployment exists and is not promoted
-    let metadata = client.get_deployment_metadata(deploy_id).await?;
-    match metadata {
-        Some(meta) if meta.promoted_at.is_some() => {
-            return Err(CliError::StagingAlreadyPromoted {
-                name: deploy_id.to_string(),
-            });
-        }
-        Some(_) => {}
-        None => {
-            return Err(CliError::StagingEnvironmentNotFound {
-                name: deploy_id.to_string(),
-            });
-        }
-    }
+    crate::cli::helpers::validate_staging_deployment(&client, deploy_id).await?;
 
     if snapshot {
         // Snapshot mode: query once and display status
@@ -126,13 +113,6 @@ async fn run_snapshot(
 
 /// Print status for a single cluster with visual formatting.
 fn print_cluster_status(ctx: &ClusterStatusContext, allowed_lag_secs: i64) {
-    let (status_icon, status_label, status_color) = match &ctx.status {
-        ClusterDeploymentStatus::Ready => ("✓", "ready", "green"),
-        ClusterDeploymentStatus::Hydrating { .. } => ("◐", "hydrating", "yellow"),
-        ClusterDeploymentStatus::Lagging { .. } => ("⚠", "lagging", "yellow"),
-        ClusterDeploymentStatus::Failing { .. } => ("✗", "failing", "red"),
-    };
-
     // Cluster name header
     println!("  {}", ctx.cluster_name.as_str().bold());
 
@@ -141,11 +121,17 @@ fn print_cluster_status(ctx: &ClusterStatusContext, allowed_lag_secs: i64) {
     let progress_str = format!("{}/{} objects", ctx.hydrated_count, ctx.total_count);
 
     print!("  {} ", bar);
-    match status_color {
-        "green" => print!("{} {}", status_icon.green(), status_label.green()),
-        "yellow" => print!("{} {}", status_icon.yellow(), status_label.yellow()),
-        "red" => print!("{} {}", status_icon.red(), status_label.red()),
-        _ => print!("{} {}", status_icon, status_label),
+    match &ctx.status {
+        ClusterDeploymentStatus::Ready => print!("{} {}", "✓".green(), "ready".green()),
+        ClusterDeploymentStatus::Hydrating { .. } => {
+            print!("{} {}", "◐".yellow(), "hydrating".yellow())
+        }
+        ClusterDeploymentStatus::Lagging { .. } => {
+            print!("{} {}", "⚠".yellow(), "lagging".yellow())
+        }
+        ClusterDeploymentStatus::Failing { .. } => {
+            print!("{} {}", "✗".red(), "failing".red())
+        }
     }
     println!("  {}", progress_str.dimmed());
 
@@ -300,7 +286,6 @@ async fn monitor_hydration_live(
         deploy_id,
         &cluster_states,
         start_time,
-        false,
         allowed_lag_secs,
     )?;
 
@@ -397,7 +382,6 @@ fn render_dashboard(
     deploy_id: &str,
     cluster_states: &BTreeMap<String, ClusterStatusContext>,
     start_time: Instant,
-    _is_update: bool,
     allowed_lag_secs: i64,
 ) -> Result<(), CliError> {
     let elapsed = start_time.elapsed();

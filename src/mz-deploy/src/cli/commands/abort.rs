@@ -30,23 +30,7 @@ pub async fn run(profile: &Profile, deploy_id: &str) -> Result<(), CliError> {
         .await
         .map_err(CliError::Connection)?;
 
-    let metadata = client.get_deployment_metadata(deploy_id).await?;
-
-    match metadata {
-        Some(meta) if meta.promoted_at.is_some() => {
-            return Err(CliError::StagingAlreadyPromoted {
-                name: deploy_id.to_string(),
-            });
-        }
-        Some(_) => {
-            // Good to proceed
-        }
-        None => {
-            return Err(CliError::StagingEnvironmentNotFound {
-                name: deploy_id.to_string(),
-            });
-        }
-    }
+    crate::cli::helpers::validate_staging_deployment(&client, deploy_id).await?;
 
     // Get staging schemas and clusters
     let staging_schemas = client.get_staging_schemas(deploy_id).await?;

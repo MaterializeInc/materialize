@@ -9,6 +9,32 @@ use crate::project::{self, typed};
 use crate::utils::git::get_git_commit;
 use std::path::Path;
 
+/// Validate that a staging deployment exists and has not been promoted.
+///
+/// This encapsulates the common validation pattern used by apply, ready, and abort.
+///
+/// # Returns
+/// Ok(()) if the deployment exists and has not been promoted.
+///
+/// # Errors
+/// Returns `CliError::StagingEnvironmentNotFound` if deployment doesn't exist
+/// Returns `CliError::StagingAlreadyPromoted` if already promoted
+pub async fn validate_staging_deployment(
+    client: &Client,
+    deploy_id: &str,
+) -> Result<(), CliError> {
+    let metadata = client.get_deployment_metadata(deploy_id).await?;
+    match metadata {
+        Some(meta) if meta.promoted_at.is_some() => Err(CliError::StagingAlreadyPromoted {
+            name: deploy_id.to_string(),
+        }),
+        Some(_) => Ok(()),
+        None => Err(CliError::StagingEnvironmentNotFound {
+            name: deploy_id.to_string(),
+        }),
+    }
+}
+
 /// Collect deployment metadata (user and git commit).
 ///
 /// This function retrieves the current database user and git commit hash
