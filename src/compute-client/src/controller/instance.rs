@@ -917,11 +917,14 @@ where
     }
 
     pub(super) async fn run(mut self) {
-        self.send(ComputeCommand::Hello {
-            // The nonce is protocol iteration-specific and will be set in
-            // `ReplicaTask::specialize_command`.
-            nonce: Uuid::default(),
-        });
+        self.send(
+            ComputeCommand::Hello {
+                // The nonce is protocol iteration-specific and will be set in
+                // `ReplicaTask::specialize_command`.
+                nonce: Uuid::default(),
+            },
+            None,
+        );
 
         let instance_config = InstanceConfig {
             peek_stash_persist_location: self.peek_stash_persist_location.clone(),
@@ -931,7 +934,10 @@ where
             expiration_offset: Default::default(),
         };
 
-        self.send(ComputeCommand::CreateInstance(Box::new(instance_config)));
+        self.send(
+            ComputeCommand::CreateInstance(Box::new(instance_config)),
+            None,
+        );
 
         loop {
             tokio::select! {
@@ -955,7 +961,7 @@ where
         }
 
         let command = ComputeCommand::UpdateConfiguration(Box::new(config_params));
-        self.send(command);
+        self.send(command, None);
     }
 
     /// Marks the end of any initialization commands.
@@ -966,7 +972,7 @@ where
     pub fn initialization_complete(&mut self) {
         // The compute protocol requires that `InitializationComplete` is sent only once.
         if !self.initialized {
-            self.send(ComputeCommand::InitializationComplete);
+            self.send(ComputeCommand::InitializationComplete, None);
             self.initialized = true;
         }
     }
@@ -993,7 +999,7 @@ where
         }
 
         collection.read_only = false;
-        self.send(ComputeCommand::AllowWrites(collection_id));
+        self.send(ComputeCommand::AllowWrites(collection_id), None);
 
         Ok(())
     }
@@ -1022,18 +1028,20 @@ where
 
     /// Sends a command to replicas of this instance.
     ///
-    /// For commands that target a specific collection (via [`ComputeCommand::collection_id`]),
+    /// If `target_replica` is `Some`, the command is sent only to that replica. Otherwise,
+    /// for commands that target a specific collection (via [`ComputeCommand::collection_id`]),
     /// the command is only sent to the replica maintaining that collection, if the collection
     /// is targeted at a specific replica. Otherwise, the command is sent to all replicas.
     #[mz_ore::instrument(level = "debug")]
-    fn send(&mut self, cmd: ComputeCommand<T>) {
+    fn send(&mut self, cmd: ComputeCommand<T>, target_replica: Option<ReplicaId>) {
         // Record the command so that new replicas can be brought up to speed.
         self.history.push(cmd.clone());
 
-        let target = cmd
-            .collection_id()
-            .and_then(|id| self.collections.get(&id))
-            .and_then(|c| c.target_replica);
+        let target = target_replica.or_else(|| {
+            cmd.collection_id()
+                .and_then(|id| self.collections.get(&id))
+                .and_then(|c| c.target_replica)
+        });
         if let Some(rid) = target {
             if let Some(replica) = self.replicas.get_mut(&rid) {
                 let _ = replica.client.send(cmd);
@@ -1042,16 +1050,6 @@ where
             for replica in self.replicas.values_mut() {
                 let _ = replica.client.send(cmd.clone());
             }
-        }
-    }
-
-    /// Sends a command only to the specified replica, while recording it in the history.
-    ///
-    /// Used for `CreateDataflow` where collection state doesn't exist yet.
-    fn send_to_replica(&mut self, id: ReplicaId, cmd: ComputeCommand<T>) {
-        self.history.push(cmd.clone());
-        if let Some(replica) = self.replicas.get_mut(&id) {
-            let _ = replica.client.send(cmd);
         }
     }
 
@@ -1442,11 +1440,7 @@ where
         } else {
             let collections: Vec<_> = augmented_dataflow.export_ids().collect();
             let cmd = ComputeCommand::CreateDataflow(Box::new(augmented_dataflow));
-            if let Some(rid) = target_replica {
-                self.send_to_replica(rid, cmd);
-            } else {
-                self.send(cmd);
-            }
+            self.send(cmd, target_replica);
 
             for id in collections {
                 self.maybe_schedule_collection(id);
@@ -1523,7 +1517,7 @@ where
         };
 
         if ready {
-            self.send(ComputeCommand::Schedule(id));
+            self.send(ComputeCommand::Schedule(id), None);
             let collection = self.expect_collection_mut(id);
             collection.scheduled = true;
         }
@@ -1639,7 +1633,7 @@ where
             target: peek_target,
             result_desc,
         };
-        self.send(ComputeCommand::Peek(Box::new(peek)));
+        self.send(ComputeCommand::Peek(Box::new(peek)), None);
 
         Ok(())
     }
@@ -1813,10 +1807,13 @@ where
         }
 
         // Produce `AllowCompaction` command.
-        self.send(ComputeCommand::AllowCompaction {
-            id,
-            frontier: new_since,
-        });
+        self.send(
+            ComputeCommand::AllowCompaction {
+                id,
+                frontier: new_since,
+            },
+            None,
+        );
     }
 
     /// Fulfills a registered peek and cleans up associated state.
@@ -1837,7 +1834,7 @@ where
 
         // NOTE: We need to send the `CancelPeek` command _before_ we release the peek's read hold
         // (by dropping it), to avoid the edge case that caused database-issues#4812.
-        self.send(ComputeCommand::CancelPeek { uuid });
+        self.send(ComputeCommand::CancelPeek { uuid }, None);
 
         drop(peek.read_hold);
     }

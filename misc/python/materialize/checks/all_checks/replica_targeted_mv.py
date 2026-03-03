@@ -25,7 +25,7 @@ class ReplicaTargetedMaterializedViews(Check):
                 > CREATE TABLE replica_targeted_mv_t (x INT);
                 > INSERT INTO replica_targeted_mv_t SELECT generate_series FROM generate_series(1, 100);
 
-                > CREATE CLUSTER replica_targeted_mv_cluster REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'));
+                > CREATE CLUSTER replica_targeted_mv_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1'));
 
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_replica_targeted_materialized_views = true
