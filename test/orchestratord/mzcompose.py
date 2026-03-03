@@ -1661,7 +1661,7 @@ def operator_supports_v1alpha2(definition: dict[str, Any]):
     operator_version = Version.parse(
         definition["operator"]["operator"]["image"]["tag"].removeprefix("v")
     )
-    if operator_version >= Version.parse("26.13.0-dev.0"):
+    if operator_version >= Version.parse("26.15.0-dev.0"):
         return True
     return False
 
