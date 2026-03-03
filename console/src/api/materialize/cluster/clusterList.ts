@@ -74,13 +74,13 @@ export const buildClustersQuery = ({
       }>(
         eb
           .selectFrom("mz_cluster_replicas as cr")
-          .select([
+          .select((replicaEb) => [
             "cr.id",
             "cr.name",
             "cr.size",
             "cr.disk",
             jsonArrayFrom(
-              eb
+              replicaEb
                 .selectFrom("mz_cluster_replica_statuses as crs_inner")
                 .select([
                   "crs_inner.replica_id",
@@ -89,7 +89,7 @@ export const buildClustersQuery = ({
                   "crs_inner.reason",
                   "crs_inner.updated_at",
                 ])
-                .whereRef("crs_inner.replica_id", "=", "c.id"),
+                .whereRef("crs_inner.replica_id", "=", "cr.id"),
             ).as("statuses"),
           ])
           .whereRef("cr.cluster_id", "=", "c.id")
