@@ -62,6 +62,7 @@ use crate::error::AdapterError;
 use crate::metrics::{Metrics, SessionMetrics};
 use crate::statement_logging::PreparedStatementLoggingInfo;
 use crate::{AdapterNotice, ExecuteContext};
+use mz_catalog::durable::Snapshot;
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
 
@@ -1397,14 +1398,14 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                         revision: og_revision,
                         state: og_state,
                         side_effects,
-                        next_oid: og_next_oid,
+                        snapshot: og_snapshot,
                     } => match add_ops {
                         TransactionOps::DDL {
                             ops: new_ops,
                             revision: new_revision,
                             side_effects: mut net_new_side_effects,
                             state: new_state,
-                            next_oid: new_next_oid,
+                            snapshot: new_snapshot,
                         } => {
                             if *og_revision != new_revision {
                                 return Err(AdapterError::DDLTransactionRace);
@@ -1413,7 +1414,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                             if !new_ops.is_empty() {
                                 *og_ops = new_ops;
                                 *og_state = new_state;
-                                *og_next_oid = new_next_oid;
+                                *og_snapshot = new_snapshot;
                             }
                             side_effects.append(&mut net_new_side_effects);
                         }
@@ -1604,10 +1605,11 @@ pub enum TransactionOps<T> {
         >,
         /// Transient revision of the `Catalog` when this transaction started.
         revision: u64,
-        /// Tracks the OID allocator position after the last dry run, so that
-        /// incremental dry runs can advance past previously-allocated OIDs.
-        /// `None` for the first statement in the transaction (before any dry run).
-        next_oid: Option<u64>,
+        /// Snapshot of the durable transaction state after the last dry run.
+        /// Used to initialize the next dry run's transaction so it starts
+        /// in sync with the accumulated `state`. `None` for the first
+        /// statement in the transaction (before any dry run).
+        snapshot: Option<Snapshot>,
     },
 }
 

@@ -226,7 +226,7 @@ impl Coordinator {
                     ops: txn_ops,
                     revision: txn_revision,
                     state: txn_state,
-                    next_oid: txn_next_oid,
+                    snapshot: txn_snapshot,
                     side_effects: _,
                 },
             ..
@@ -254,7 +254,7 @@ impl Coordinator {
         // Clone what we need from the session before taking &mut below.
         let txn_ops_clone = txn_ops.clone();
         let txn_state_clone = txn_state.clone();
-        let prev_next_oid = *txn_next_oid;
+        let prev_snapshot = txn_snapshot.clone();
 
         // Validate resource limits with all accumulated + new ops (cheap O(N) counting).
         let mut combined_ops = txn_ops_clone;
@@ -268,14 +268,18 @@ impl Coordinator {
         // Get ConnMeta for the session.
         let conn = self.active_conns.get(ctx.session().conn_id());
 
-        // Incremental dry run: only process NEW ops against accumulated state.
-        let (new_state, new_next_oid) = self
+        // Incremental dry run: process only NEW ops against accumulated state.
+        // If we have a saved snapshot from a previous dry run, use it to
+        // initialize the transaction so it starts in sync with the accumulated
+        // state. Otherwise (first statement), the fresh durable transaction is
+        // already in sync with the real catalog state.
+        let (new_state, new_snapshot) = self
             .catalog()
             .transact_incremental_dry_run(
                 &txn_state_clone,
                 ops.clone(),
                 conn,
-                prev_next_oid,
+                prev_snapshot,
                 oracle_write_ts,
             )
             .await?;
@@ -289,7 +293,7 @@ impl Coordinator {
                 state: new_state,
                 side_effects: vec![Box::new(side_effect)],
                 revision: self.catalog().transient_revision(),
-                next_oid: Some(new_next_oid),
+                snapshot: Some(new_snapshot),
             });
 
         self.metrics

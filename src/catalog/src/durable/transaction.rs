@@ -1022,31 +1022,37 @@ impl<'a> Transaction<'a> {
             .map(|oids| oids.into_element())
     }
 
-    /// Returns the current next-OID value from the id allocator.
-    pub fn get_next_oid(&self) -> u64 {
-        self.id_allocator
-            .items()
-            .get(&IdAllocKey {
-                name: OID_ALLOC_KEY.to_string(),
-            })
-            .unwrap_or_else(|| panic!("{OID_ALLOC_KEY} id allocator missing"))
-            .next_id
-    }
-
-    /// Advances the OID allocator to `next_oid`. Used for incremental DDL
-    /// transaction dry runs where a fresh Transaction needs to skip past OIDs
-    /// already allocated in previous dry runs.
-    pub fn set_next_oid(&mut self, next_oid: u64) -> Result<(), CatalogError> {
-        self.id_allocator.set(
-            IdAllocKey {
-                name: OID_ALLOC_KEY.to_string(),
-            },
-            Some(IdAllocValue {
-                next_id: next_oid,
-            }),
-            self.op_id,
-        )?;
-        Ok(())
+    /// Exports the current state of this transaction as a [`Snapshot`].
+    ///
+    /// This merges each `TableTransaction`'s initial data with its pending
+    /// changes to produce the current view, then converts back to proto types.
+    /// Used to persist transaction state between incremental DDL dry runs so
+    /// the next dry run's fresh `Transaction` starts in sync with the
+    /// accumulated `CatalogState`.
+    pub fn current_snapshot(&self) -> Snapshot {
+        Snapshot {
+            databases: self.databases.current_items_proto(),
+            schemas: self.schemas.current_items_proto(),
+            roles: self.roles.current_items_proto(),
+            role_auth: self.role_auth.current_items_proto(),
+            items: self.items.current_items_proto(),
+            comments: self.comments.current_items_proto(),
+            clusters: self.clusters.current_items_proto(),
+            network_policies: self.network_policies.current_items_proto(),
+            cluster_replicas: self.cluster_replicas.current_items_proto(),
+            introspection_sources: self.introspection_sources.current_items_proto(),
+            id_allocator: self.id_allocator.current_items_proto(),
+            configs: self.configs.current_items_proto(),
+            settings: self.settings.current_items_proto(),
+            system_object_mappings: self.system_gid_mapping.current_items_proto(),
+            system_configurations: self.system_configurations.current_items_proto(),
+            default_privileges: self.default_privileges.current_items_proto(),
+            source_references: self.source_references.current_items_proto(),
+            system_privileges: self.system_privileges.current_items_proto(),
+            storage_collection_metadata: self.storage_collection_metadata.current_items_proto(),
+            unfinalized_shards: self.unfinalized_shards.current_items_proto(),
+            txn_wal_shard: self.txn_wal_shard.current_items_proto(),
+        }
     }
 
     pub(crate) fn insert_id_allocator(
@@ -3126,6 +3132,22 @@ where
         let mut items = BTreeMap::new();
         self.for_values(|k, v| {
             items.insert(k.clone(), v.clone());
+        });
+        items
+    }
+
+    /// Returns the current items as proto-typed key-value pairs, suitable for
+    /// constructing a [`Snapshot`]. This merges `initial` and `pending` to
+    /// produce the current view and converts back to proto types.
+    fn current_items_proto<KP, VP>(&self) -> BTreeMap<KP, VP>
+    where
+        K: RustType<KP>,
+        V: RustType<VP>,
+        KP: Ord,
+    {
+        let mut items = BTreeMap::new();
+        self.for_values(|k, v| {
+            items.insert(k.into_proto(), v.into_proto());
         });
         items
     }

@@ -2152,7 +2152,7 @@ impl Coordinator {
                         state: _,
                         side_effects,
                         revision,
-                        next_oid: _,
+                        snapshot: _,
                     } => {
                         // Make sure our catalog hasn't changed.
                         if *revision != self.catalog().transient_revision() {

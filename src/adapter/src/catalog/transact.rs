@@ -27,7 +27,7 @@ use mz_audit_log::{
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
-use mz_catalog::durable::{NetworkPolicy, Transaction};
+use mz_catalog::durable::{NetworkPolicy, Snapshot, Transaction};
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
@@ -504,17 +504,26 @@ impl Catalog {
 
     /// Performs an incremental dry-run catalog transaction: processes only the
     /// NEW ops against an accumulated `CatalogState` from previous dry runs.
-    /// This avoids the O(N^2) replay cost of `catalog_transact_with_ddl_transaction`.
+    /// This avoids the O(N^2) replay cost of replaying all accumulated ops.
     ///
-    /// Returns the new accumulated state and the OID allocator position.
+    /// The durable transaction is intentionally never committed and no storage
+    /// controller prepare-state side effects are run.
+    ///
+    /// If `prev_snapshot` is `Some`, the transaction is initialized from that
+    /// snapshot (which represents the tx state after the previous dry run),
+    /// ensuring it starts in sync with `base_state`. If `None` (first
+    /// statement), a fresh transaction is loaded from durable storage.
+    ///
+    /// Returns the new accumulated state and a snapshot of the transaction's
+    /// state for use in subsequent incremental dry runs.
     pub async fn transact_incremental_dry_run(
         &self,
         base_state: &CatalogState,
         ops: Vec<Op>,
         session: Option<&ConnMeta>,
-        prev_next_oid: Option<u64>,
+        prev_snapshot: Option<Snapshot>,
         oracle_write_ts: mz_repr::Timestamp,
-    ) -> Result<(CatalogState, u64), AdapterError> {
+    ) -> Result<(CatalogState, Snapshot), AdapterError> {
         // For DDL transactions, items are not temporary (CREATE TABLE FROM SOURCE, etc.)
         // but we still need to check for collisions.
         let temporary_ids = self.temporary_ids(&ops, BTreeSet::new())?;
@@ -523,15 +532,20 @@ impl Catalog {
         let mut catalog_updates = vec![];
         let mut audit_events = vec![];
         let mut storage = self.storage().await;
-        let mut tx = storage
-            .transaction()
-            .await
-            .unwrap_or_terminate("starting catalog transaction");
-
-        // Advance OID counter past previously-allocated OIDs from earlier dry runs.
-        if let Some(next_oid) = prev_next_oid {
-            tx.set_next_oid(next_oid)?;
-        }
+        let mut tx = if let Some(snapshot) = prev_snapshot {
+            // Restore transaction from saved snapshot so it starts in sync
+            // with the accumulated CatalogState from previous dry runs.
+            storage
+                .transaction_from_snapshot(snapshot)
+                .unwrap_or_terminate("starting catalog transaction from snapshot")
+        } else {
+            // First statement: fresh transaction from durable storage, which
+            // is in sync with the real catalog state.
+            storage
+                .transaction()
+                .await
+                .unwrap_or_terminate("starting catalog transaction")
+        };
 
         // Process only the new ops against the accumulated state in dry-run mode.
         let new_state = Self::transact_inner(
@@ -549,14 +563,16 @@ impl Catalog {
         )
         .await?;
 
-        let new_next_oid = tx.get_next_oid();
+        // Save the transaction's current state as a snapshot for the next
+        // incremental dry run.
+        let new_snapshot = tx.current_snapshot();
 
         // Transaction is NOT committed — drop it.
         drop(storage);
 
         // transact_inner returns Some(state) when ops produced changes.
         let state = new_state.unwrap_or_else(|| base_state.clone());
-        Ok((state, new_next_oid))
+        Ok((state, new_snapshot))
     }
 
     /// Extracts optimized expressions from `Op::CreateItem` operations for views
