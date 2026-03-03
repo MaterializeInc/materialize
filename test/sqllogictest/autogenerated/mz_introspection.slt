@@ -99,7 +99,7 @@ metric_type  text
 labels  map
 value  double␠precision
 help  text
-worker_id  uint8
+process_id  uint8
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflows' ORDER BY position

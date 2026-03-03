@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use mz_dyncfg::ConfigSet;
 use mz_ore::metrics::MetricsRegistry;
 
 use differential_dataflow::VecCollection;
@@ -47,6 +48,7 @@ pub fn initialize<A: Allocate + 'static>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
     metrics_registry: MetricsRegistry,
+    worker_config: Rc<ConfigSet>,
 ) -> LoggingTraces {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
@@ -70,6 +72,7 @@ pub fn initialize<A: Allocate + 'static>(
         c_event_queue: EventQueue::new("c"),
         shared_state: Default::default(),
         metrics_registry,
+        worker_config,
     };
 
     // Depending on whether we should log the creation of the logging dataflows, we register the
@@ -106,6 +109,7 @@ struct LoggingContext<'a, A: Allocate> {
     c_event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
     metrics_registry: MetricsRegistry,
+    worker_config: Rc<ConfigSet>,
 }
 
 pub(crate) struct LoggingTraces {
@@ -172,6 +176,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                 self.metrics_registry.clone(),
                 self.now,
                 self.start_offset,
+                Rc::clone(&self.worker_config),
             );
             collections.extend(prometheus_collections);
 
