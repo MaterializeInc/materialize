@@ -146,8 +146,16 @@ guidelines](/sql/identifiers/#naming-restrictions).
 
 ### Handling table schema changes
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-compatible-schema-changes" %}}
+The use of [`CREATE SOURCE`](/sql/create-source/postgres-v2/) with `CREATE
+TABLE FROM SOURCE` allows for the handling of the upstream DDL changes,
+specifically adding or dropping columns in the upstream tables, without
+downtime. For details, see:
+
+- [PostgreSQL: Handling upstream schema changes with zero
+downtime](/ingest-data/postgres/source-versioning/)
+
+- [SQL Server: Handling upstream schema changes with zero
+downtime](/ingest-data/sql-server/source-versioning/)
 
 #### Incompatible schema changes
 
