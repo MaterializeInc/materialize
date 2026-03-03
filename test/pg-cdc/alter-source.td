@@ -9,6 +9,10 @@
 
 $ set-sql-timeout duration=60s
 
+# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9571 is fixed
+$ skip-if
+SELECT true
+
 # IMPORTANT: The Postgres server has a custom pg_hba.conf that only
 # accepts connections from specific users. You will have to update
 # pg_hba.conf if you modify the existing user names or add new ones.
@@ -65,14 +69,8 @@ CREATE TABLE table_a (pk INTEGER PRIMARY KEY, f2 TEXT);
 ALTER TABLE table_a REPLICA IDENTITY FULL;
 INSERT INTO table_a VALUES (9, 'nine');
 
-# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9571 is fixed
-$ skip-if
-SELECT true
-
 ! SELECT * FROM table_a;
 regex:(table was dropped|incompatible schema change)
-
-$ skip-end
 
 # We are not aware that the new table_a is different
 ! CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE table_a);

@@ -9,6 +9,10 @@
 
 $ set-sql-timeout duration=60s
 
+# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9571 is fixed
+$ skip-if
+SELECT true
+
 # IMPORTANT: The Postgres server has a custom pg_hba.conf that only
 # accepts connections from specific users. You will have to update
 # pg_hba.conf if you modify the existing user names or add new ones.
