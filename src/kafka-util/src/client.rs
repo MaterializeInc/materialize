@@ -489,6 +489,10 @@ where
         }
     }
 
+    /// Look up the broker's address in our book of rewrites.
+    /// If we've already rewritten it before, reuse the existing rewrite.
+    /// Otherwise, use our "default tunnel" rewriting strategy to attempt to rewrite this broker's address
+    /// and record it in the book of rewrites.
     fn resolve_broker_addr(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, io::Error> {
         let return_rewrite = |rewrite: &BrokerRewriteHandle| -> Result<Vec<SocketAddr>, io::Error> {
             let rewrite = match rewrite {
@@ -525,8 +529,12 @@ where
         let rewrite = self.rewrites.lock().expect("poisoned").get(&addr).cloned();
 
         match rewrite {
+            // No (successful) broker address rewrite exists yet.
             None | Some(BrokerRewriteHandle::FailedDefaultSshTunnel(_)) => {
+                // "Default tunnel" is actually the configured rewriting strategy used for brokers we haven't already rewritten.
                 match &self.default_tunnel {
+                    // This "default tunnel" is actually a default tunnel.
+                    // Try connecting so we have a valid rewrite for thsi broker address.
                     TunnelConfig::Ssh(default_tunnel) => {
                         // Multiple users could all run `connect` at the same time; only one ssh
                         // tunnel will ever be connected, and only one will be inserted into the
@@ -543,6 +551,7 @@ where
                                 .await
                         });
                         match ssh_tunnel {
+                            // Use the tunnel we just created, but only if nobody beat us in the race.
                             Ok(ssh_tunnel) => {
                                 let mut rewrites = self.rewrites.lock().expect("poisoned");
                                 let rewrite = match rewrites.entry(addr.clone()) {
@@ -565,6 +574,7 @@ where
 
                                 return_rewrite(rewrite)
                             }
+                            // We couldn't connect. Someone else will have to try again.
                             Err(e) => {
                                 warn!(
                                     "failed to create ssh tunnel for {:?}: {}",
@@ -587,14 +597,17 @@ where
                             }
                         }
                     }
+                    // Our rewrite strategy is to use a specific host, e.g. a PrivateLink endpoint.
                     TunnelConfig::StaticHost(host) => (host.as_str(), port)
                         .to_socket_addrs()
                         .map(|addrs| addrs.collect()),
+                    // We leave the broker's address as it is.
                     TunnelConfig::None => {
                         (host, port).to_socket_addrs().map(|addrs| addrs.collect())
                     }
                 }
             }
+            // This broker's address was already rewritten. Reuse the existing rewrite.
             Some(rewrite) => return_rewrite(&rewrite),
         }
     }
