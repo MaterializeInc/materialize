@@ -4,17 +4,30 @@ The periodic storage usage collection (`storage_usage_update`) blocks the coordi
 
 ## What happens today
 
-Every collection interval, we:
-1. Fetch shard sizes off-thread (already async, not the problem)
-2. Back on the coord main thread, create one `Op::WeirdStorageUsageUpdates` per shard
-3. Run all ops through `catalog_transact_inner`, which:
-   - Opens a durable catalog transaction
-   - Loops over every op, and for each one: allocates a storage usage ID via the durable ID allocator, packs a builtin table row, and calls `apply_updates` on a COW clone of the full `CatalogState`
-   - Commits the transaction to persist (`compare_and_append`)
-   - Syncs updates back
-4. Spawns a background task to append the builtin table rows (this part is fine)
+Every collection interval, the coordinator processes `Message::StorageUsageUpdate` on the main thread (`message_handler.rs:239`). This calls `storage_usage_update`, which:
 
-For an environment with N shards, this is N iterations through the full catalog transact machinery, plus a persist round-trip to commit — all blocking the coordinator.
+1. **Fetches a write timestamp** from the oracle (`get_local_write_ts`) — one persist round-trip
+2. Creates one `Op::WeirdStorageUsageUpdates` per shard (N ops for N shards)
+3. Calls `catalog_transact_inner` (`ddl.rs:293`), which:
+   - **Fetches another write timestamp** from the oracle (`get_local_write_ts` at `ddl.rs:447`) — a second persist round-trip
+   - Opens a durable catalog `Transaction`
+   - Loops N times through `transact_op`, each calling `tx.allocate_storage_usage_ids()` → `get_and_increment_id(STORAGE_USAGE_ID_ALLOC_KEY)`, which bumps the in-memory id allocator counter in the transaction
+   - Each op returns its row as a `weird_builtin_table_update`. The `id_allocator` mutation is explicitly excluded from `get_op_updates()` (`transaction.rs:2315`), so `get_and_commit_op_updates()` returns empty — no per-op `apply_updates` calls happen on the COW catalog state
+   - **Persist write**: `tx.commit()` → `commit_internal` → consolidates all transaction tables and calls `commit_transaction` (compare_and_append to persist) — this durably writes the id allocator bump
+   - **Persist read**: `sync_updates` after commit
+   - `builtin_table_update().execute(builtin_table_updates)` submits rows to group commit and waits
+
+The shard-size fetch itself (step 1 of the overall flow in `storage_usage_fetch`) runs off-thread and is not the problem.
+
+### Cost breakdown on the coordinator main thread
+
+| Cost | Source | Notes |
+|------|--------|-------|
+| 2 oracle round-trips | `get_local_write_ts()` in both `storage_usage_update` and `catalog_transact_inner` | Redundant — only needed once |
+| N `transact_op` calls | Loop in `transact_inner` | Cheap per call (increment counter + pack row), but N can be hundreds/thousands |
+| Persist write | `commit_transaction` (compare_and_append) | Writes the id_allocator bump — the only durable change |
+| Persist read | `sync_updates` after commit | Drains updates from persist |
+| Group commit wait | `builtin_table_update().execute()` | Waits for builtin table append |
 
 ## Why does it go through `catalog_transact_inner` at all?
 
@@ -33,6 +46,12 @@ Stop routing storage usage updates through `catalog_transact_inner`. Instead:
 - Pack the builtin table rows directly and append them via `builtin_table_update().execute()` (the same path pruning uses)
 - Either drop the `id` column from `mz_storage_usage_by_shard` (it's unused), or populate it with a cheap local counter instead of a durable allocator
 
-This turns the coord-blocking work from "open catalog transaction, process N ops with per-op state cloning, commit to persist" into "pack N rows, submit to group commit" — which is what we already do for the pruning retractions.
+This eliminates:
+- The persist write (compare_and_append for the id allocator bump)
+- The persist read (sync_updates)
+- The redundant oracle timestamp
+- The N-iteration `transact_op` loop
+
+The coord-blocking work becomes: get one write timestamp, pack N rows, submit to group commit.
 
 The `WeirdStorageUsageUpdates` op variant (it's literally called "Weird" in the code), the durable ID allocator, and the `VersionedStorageUsage` type in the audit-log crate could all be cleaned up as part of this.
