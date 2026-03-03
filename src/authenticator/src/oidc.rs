@@ -32,7 +32,6 @@ use url::Url;
 #[derive(Debug)]
 pub enum OidcError {
     MissingIssuer,
-    MissingAuthenticationClaim,
     /// Failed to parse OIDC configuration URL.
     InvalidIssuerUrl(String),
     /// Failed to fetch from the identity provider.
@@ -67,9 +66,6 @@ impl std::fmt::Display for OidcError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             OidcError::MissingIssuer => write!(f, "OIDC issuer is not configured"),
-            OidcError::MissingAuthenticationClaim => {
-                write!(f, "OIDC authentication claim is not configured")
-            }
             OidcError::InvalidIssuerUrl(_) => write!(f, "invalid OIDC issuer URL"),
             OidcError::FetchFromProviderFailed { .. } => {
                 write!(f, "failed to fetch OIDC provider configuration")
@@ -126,9 +122,6 @@ impl OidcError {
             OidcError::MissingIssuer => {
                 Some("Configure the OIDC issuer using the oidc_issuer system variable.".into())
             }
-            OidcError::MissingAuthenticationClaim => {
-                Some("Configure which token claim to use as the username using the oidc_authentication_claim system variable.".into())
-            }
             _ => None,
         }
     }
@@ -164,8 +157,6 @@ where
 /// Claims extracted from a validated JWT.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OidcClaims {
-    /// Subject (user identifier).
-    pub sub: String,
     /// Issuer.
     pub iss: String,
     /// Expiration time (Unix timestamp).
@@ -184,13 +175,9 @@ pub struct OidcClaims {
 impl OidcClaims {
     /// Extract the username from the OIDC claims.
     fn user(&self, authentication_claim: &str) -> Option<&str> {
-        match authentication_claim {
-            "sub" => Some(&self.sub),
-            _ => self
-                .unknown_claims
-                .get(authentication_claim)
-                .and_then(|value| value.as_str()),
-        }
+        self.unknown_claims
+            .get(authentication_claim)
+            .and_then(|value| value.as_str())
     }
 }
 
@@ -398,10 +385,7 @@ impl GenericOidcAuthenticatorInner {
             return Err(OidcError::MissingIssuer);
         };
 
-        let Some(authentication_claim) = OIDC_AUTHENTICATION_CLAIM.get(system_vars.dyncfgs())
-        else {
-            return Err(OidcError::MissingAuthenticationClaim);
-        };
+        let authentication_claim = OIDC_AUTHENTICATION_CLAIM.get(system_vars.dyncfgs());
 
         let audience = {
             let aud = OIDC_AUDIENCE.get(system_vars.dyncfgs());

@@ -2098,69 +2098,6 @@ async fn test_auth_oidc_required_issuer() {
 /// This test verifies that we return an error when the OIDC authentication claim is not set.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)]
-async fn test_auth_oidc_required_authentication_claim() {
-    let ca = Ca::new_root("test ca").unwrap();
-    let (server_cert, server_key) = ca
-        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
-        .unwrap();
-
-    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
-
-    let kid = "test-key-1".to_string();
-    let oidc_server = OidcMockServer::start(
-        None,
-        encoding_key,
-        kid,
-        SYSTEM_TIME.clone(),
-        i64::try_from(EXPIRES_IN_SECS).unwrap(),
-    )
-    .await
-    .unwrap();
-
-    let oidc_user = "user@example.com";
-
-    let token = oidc_server.generate_jwt(
-        oidc_user,
-        GenerateJwtOptions {
-            ..Default::default()
-        },
-    );
-
-    let server = test_util::TestHarness::default()
-        .with_tls(server_cert, server_key)
-        .with_oidc_auth(Some(oidc_server.issuer), None, None)
-        .start()
-        .await;
-
-    run_tests(
-        "OIDC required authentication claim validation",
-        &server,
-        &[
-            // JWT with no authentication claim configured should fail.
-            TestCase::Pgwire {
-                user_to_auth_as: oidc_user,
-                user_reported_by_system: oidc_user,
-                password: Some(Cow::Borrowed(&token)),
-                ssl_mode: SslMode::Require,
-                options: Some("--oidc_auth_enabled=true"),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
-                assert: Assert::DbErr(Box::new(|err| {
-                    assert_eq!(err.message(), "OIDC authentication claim is not configured");
-                    assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
-                    assert_eq!(
-                        err.hint(),
-                        Some("Configure which token claim to use as the username using the oidc_authentication_claim system variable.")
-                    );
-                })),
-            },
-        ],
-    )
-    .await;
-}
-
-/// This test verifies that we return an error when the OIDC authentication claim is not set.
-#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)]
 async fn test_auth_oidc_no_matching_authentication_claim() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca

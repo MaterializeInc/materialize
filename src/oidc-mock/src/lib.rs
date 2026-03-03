@@ -169,19 +169,22 @@ impl OidcMockServer {
     pub fn generate_jwt(&self, sub: &str, opts: GenerateJwtOptions<'_>) -> String {
         let now_ms = (self.now)();
         let now_secs = i64::try_from(now_ms / 1000).expect("timestamp must fit in i64");
+        let sub_claim_map = BTreeMap::from([("sub".to_string(), sub.to_string())]);
+
+        let unknown_claims = opts
+            .unknown_claims
+            .unwrap_or_default()
+            .into_iter()
+            .chain(sub_claim_map)
+            .map(|(k, v)| (k, serde_json::Value::String(v.to_string())))
+            .collect();
 
         let claims = OidcClaims {
-            sub: sub.to_string(),
             iss: opts.issuer.unwrap_or(&self.issuer).to_string(),
             exp: opts.exp.unwrap_or(now_secs + self.expires_in_secs),
             iat: Some(now_secs),
             aud: opts.aud.unwrap_or_default(),
-            unknown_claims: opts
-                .unknown_claims
-                .unwrap_or_default()
-                .into_iter()
-                .map(|(k, v)| (k, serde_json::Value::String(v.to_string())))
-                .collect(),
+            unknown_claims,
         };
 
         let mut header = Header::new(jsonwebtoken::Algorithm::RS256);

@@ -136,9 +136,9 @@ pub const OIDC_AUDIENCE: Config<Option<&'static str>> = Config::new(
 );
 
 /// OIDC authentication claim to use as username
-pub const OIDC_AUTHENTICATION_CLAIM: Config<Option<&'static str>> = Config::new(
+pub const OIDC_AUTHENTICATION_CLAIM: Config<&'static str> = Config::new(
     "oidc_authentication_claim",
-    None,
+    "sub",
     "OIDC authentication claim to use as username.",
 );
 

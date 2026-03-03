@@ -610,6 +610,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "kafka_reconnect_backoff_max",
     "oidc_issuer",
     "oidc_audience",
+    "oidc_authentication_claim",
 ]
 
 
