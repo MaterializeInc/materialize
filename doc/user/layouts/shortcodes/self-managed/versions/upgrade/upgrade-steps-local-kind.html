@@ -66,19 +66,18 @@ deployment has not been configured with a license key:
    | Field | Description |
    |-------|-------------|
    | `environmentdImageRef` | Update the version to the new version. This should be the same as the operator version: `{{ $operator_version }}`. |
-   | `requestRollout` or `forceRollout`| Enter a new UUID. Can be generated with `uuidgen`. <br> <ul><li>`requestRollout` triggers a rollout only if changes exist. </li><li>`forceRollout` triggers a rollout even if no changes exist.</li></ul> |
+   | `forceRollout`| Enter a new UUID. Can be generated with `uuidgen`. <br> <ul><li>`forceRollout` triggers a rollout even if no other changes exist.</li></ul> |
 
 
    ```yaml
-   apiVersion: materialize.cloud/v1alpha1
+   apiVersion: materialize.cloud/v1alpha2
    kind: Materialize
    metadata:
      name: 12345678-1234-1234-1234-123456789012
      namespace: materialize-environment
    spec:
      environmentdImageRef: materialize/environmentd:{{ $environmentd_version }} # Update version
-     requestRollout: 22222222-2222-2222-2222-222222222222    # Enter a new UUID
-   # forceRollout: 33333333-3333-3333-3333-333333333333    # For forced rollouts
+     # forceRollout: 33333333-3333-3333-3333-333333333333    # For forced rollouts
      rolloutStrategy: WaitUntilReady                         # The mechanism to use when rolling out the new version.
      backendSecretName: materialize-backend
    ```

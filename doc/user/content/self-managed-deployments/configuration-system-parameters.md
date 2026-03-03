@@ -9,6 +9,12 @@ menu:
     weight: 71
 ---
 
+{{< note >}}
+If you are running Materialize Operator versions before v26.16, refer to the
+[v1alpha1 system parameters guide](/self-managed-deployments/configuration-system-parameters-v1alpha1/)
+instead.
+{{< /note >}}
+
 This guide explains how to configure system parameters for your Materialize
 deployment using a Kubernetes ConfigMap.
 
@@ -68,7 +74,7 @@ Reference the ConfigMap in your Materialize custom resource by setting the
 `systemParameterConfigmapName` field to the name of your ConfigMap:
 
 ```yaml {hl_lines="9"}
-apiVersion: materialize.cloud/v1alpha1
+apiVersion: materialize.cloud/v1alpha2
 kind: Materialize
 metadata:
   name: 12345678-1234-1234-1234-123456789012
@@ -126,7 +132,7 @@ Materialize custom resource YAML and update it whenever you need to force a
 ConfigMap reload:
 
 ```yaml
-apiVersion: materialize.cloud/v1alpha1
+apiVersion: materialize.cloud/v1alpha2
 kind: Materialize
 metadata:
   name: 12345678-1234-1234-1234-123456789012

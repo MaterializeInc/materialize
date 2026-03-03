@@ -156,13 +156,19 @@ A Materialize instance manages:
 
 ### Deploying with the operator
 
+{{< note >}}
+If you are running Materialize Operator versions before v26.16, refer to the
+[v1alpha1 deployment guide](/self-managed-deployments/v1alpha1-deployment-guide/)
+for CRD examples and modification instructions using the `v1alpha1` API.
+{{< /note >}}
+
 To deploy Materialize instances with the operator, create and apply Materialize
 custom resources definitions(CRDs). For a full list of fields available for the
 Materialize CR, see [Materialize CRD Field
 Descriptions](/self-managed-deployments/materialize-crd-field-descriptions/).
 
 ```yaml
-apiVersion: materialize.cloud/v1alpha1
+apiVersion: materialize.cloud/v1alpha2
 kind: Materialize
 metadata:
   name: 12345678-1234-1234-1234-123456789012
@@ -177,13 +183,8 @@ creates all required Kubernetes resources.
 
 ### Modifying the custom resource
 
-To modify a custom resource, update the CRD with your changes, including the
-`requestRollout` field with a new UUID value. When you apply the CRD, the
-operator will roll out the changes.
-
-{{< note >}} If you do not specify  a new `requestRollout` UUID, the operator
-watches for updates but does not roll out the changes.
-{{< /note >}}
+To modify a custom resource, update the CRD with your changes.
+When you apply the CRD, the operator will roll out the changes.
 
 For a full list of fields available for the Materialize CR, see [Materialize CRD
 Field
