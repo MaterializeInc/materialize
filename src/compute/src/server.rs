@@ -70,6 +70,8 @@ struct Config {
     pub context: ComputeInstanceContext,
     /// The process-global metrics registry.
     pub metrics_registry: MetricsRegistry,
+    /// The number of timely workers per process.
+    pub workers_per_process: usize,
 }
 
 /// Initiates a timely dataflow computation, processing compute commands.
@@ -88,6 +90,7 @@ pub async fn serve(
         metrics: ComputeMetrics::register_with(metrics_registry),
         context,
         metrics_registry: metrics_registry.clone(),
+        workers_per_process: timely_config.workers,
     };
     let tokio_executor = tokio::runtime::Handle::current();
 
@@ -219,6 +222,8 @@ struct Worker<'w, A: Allocate> {
     context: ComputeInstanceContext,
     /// The process-global metrics registry.
     metrics_registry: MetricsRegistry,
+    /// The number of timely workers per process.
+    workers_per_process: usize,
 }
 
 impl ClusterSpec for Config {
@@ -263,6 +268,7 @@ impl ClusterSpec for Config {
             compute_state: None,
             tracing_handle: Arc::clone(&self.tracing_handle),
             metrics_registry: self.metrics_registry.clone(),
+            workers_per_process: self.workers_per_process,
         }
         .run()
     }
@@ -400,6 +406,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                     Arc::clone(&self.tracing_handle),
                     self.context.clone(),
                     self.metrics_registry.clone(),
+                    self.workers_per_process,
                 ));
             }
             _ => (),

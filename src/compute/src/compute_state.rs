@@ -146,6 +146,9 @@ pub struct ComputeState {
     /// The process-global metrics registry.
     pub metrics_registry: MetricsRegistry,
 
+    /// The number of timely workers per process.
+    pub workers_per_process: usize,
+
     /// Collections awaiting schedule instruction by the controller.
     ///
     /// Each entry stores a reference to a token that can be dropped to unsuspend the collection's
@@ -177,6 +180,7 @@ impl ComputeState {
         tracing_handle: Arc<TracingHandle>,
         context: ComputeInstanceContext,
         metrics_registry: MetricsRegistry,
+        workers_per_process: usize,
     ) -> Self {
         let traces = TraceManager::new(metrics.clone());
         let command_history = ComputeCommandHistory::new(metrics.for_history());
@@ -199,6 +203,7 @@ impl ComputeState {
             context,
             worker_config: mz_dyncfgs::all_dyncfgs().into(),
             metrics_registry,
+            workers_per_process,
             suspended_collections: Default::default(),
             server_maintenance_interval: Duration::ZERO,
             init_system_time: mz_ore::now::SYSTEM_TIME(),
@@ -680,6 +685,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             &config,
             self.compute_state.metrics_registry.clone(),
             Rc::clone(&self.compute_state.worker_config),
+            self.compute_state.workers_per_process,
         );
 
         let dataflow_index = Rc::new(dataflow_index);

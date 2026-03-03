@@ -53,6 +53,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
     now: Instant,
     start_offset: Duration,
     worker_config: Rc<ConfigSet>,
+    workers_per_process: usize,
 ) -> Return {
     let variant = LogVariant::Compute(ComputeLog::PrometheusMetrics);
     let mut collections = BTreeMap::new();
@@ -63,8 +64,8 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         return Return { collections };
     }
 
-    let process_id = scope.index() / scope.peers();
-    let enable = scope.index() % scope.peers() == 0;
+    let process_id = scope.index() / workers_per_process;
+    let enable = scope.index() % workers_per_process == 0;
 
     // Build a source operator that periodically gathers Prometheus metrics.
     let mut builder = OperatorBuilder::new("PrometheusMetrics".to_string(), scope.clone());
