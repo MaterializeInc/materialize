@@ -24,10 +24,13 @@ from materialize.mzcompose.composition import (
     Service,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.polaris import Polaris, PolarisBootstrap
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -69,6 +72,10 @@ SERVICES = [
     MySql(),
     Clusterd(),
     Mz(app_password=""),
+    Minio(),
+    Mc(),
+    PolarisBootstrap(),
+    Polaris(),
 ]
 
 
@@ -80,6 +87,7 @@ class Scenario:
     materialized_memory: str
     clusterd_memory: str
     disabled: bool = False
+    needs_iceberg: bool = False
 
 
 class PgCdcScenario(Scenario):
@@ -1367,6 +1375,60 @@ SCENARIOS = [
         materialized_memory="10Gb",
         clusterd_memory="3.5Gb",
     ),
+    Scenario(
+        name="iceberg-sink",
+        needs_iceberg=True,
+        pre_restart="\n".join(
+            [
+                "> SET CLUSTER = clusterd",
+                "> CREATE TABLE t1 (key INT, pad TEXT)",
+                f"> INSERT INTO t1 SELECT generate_series, repeat('x', {PAD_LEN}) FROM generate_series(1, {REPEAT})",
+            ]
+            + [
+                f"> INSERT INTO t1 SELECT key + {i * REPEAT}, pad FROM t1 WHERE key <= {REPEAT}"
+                for i in range(1, 16)
+            ]
+            + [
+                "> SELECT count(*) FROM t1",
+                f"{REPEAT * 16}",
+                """> CREATE SECRET access_key_secret AS '${arg.s3-access-key}'""",
+                """> CREATE CONNECTION aws_conn TO AWS (
+  ACCESS KEY ID = '${arg.s3-access-user}',
+  SECRET ACCESS KEY = SECRET access_key_secret,
+  ENDPOINT = 'http://${arg.aws-endpoint}/',
+  REGION = 'us-east-1'
+  )""",
+                """> CREATE CONNECTION polaris_conn TO ICEBERG CATALOG (
+  CATALOG TYPE = 'REST',
+  URL = 'http://polaris:8181/api/catalog',
+  CREDENTIAL = 'root:root',
+  WAREHOUSE = 'default_catalog',
+  SCOPE = 'PRINCIPAL_ROLE:ALL'
+  )""",
+                """> CREATE SINK iceberg_sink
+  IN CLUSTER clusterd
+  FROM t1
+  INTO ICEBERG CATALOG CONNECTION polaris_conn (
+    NAMESPACE 'default_namespace',
+    TABLE 'bounded_memory_test'
+  )
+  USING AWS CONNECTION aws_conn
+  KEY (key) NOT ENFORCED
+  MODE UPSERT
+  WITH (COMMIT INTERVAL '10s')""",
+                "> SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'iceberg_sink'",
+                "running",
+            ]
+        ),
+        post_restart=dedent(
+            """
+            > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'iceberg_sink'
+            running
+            """
+        ),
+        materialized_memory="2.5Gb",
+        clusterd_memory="1Gb",
+    ),
 ]
 
 
@@ -1526,9 +1588,24 @@ def run_scenario(
 
         testdrive_timeout_arg = "--default-timeout=5m"
         statement_timeout = "> SET statement_timeout = '600s';\n"
+        extra_testdrive_args: list[str] = []
+
+        if scenario.needs_iceberg:
+            username, key = setup_polaris_for_iceberg(c)
+            c.sql(
+                "ALTER SYSTEM SET enable_iceberg_sink = true;",
+                port=6877,
+                user="mz_system",
+            )
+            extra_testdrive_args = [
+                f"--var=s3-access-key={key}",
+                f"--var=s3-access-user={username}",
+                "--var=aws-endpoint=minio:9000",
+            ]
 
         c.testdrive(
-            statement_timeout + scenario.pre_restart, args=[testdrive_timeout_arg]
+            statement_timeout + scenario.pre_restart,
+            args=[testdrive_timeout_arg] + extra_testdrive_args,
         )
 
         # Restart Mz to confirm that re-hydration is also bounded memory
@@ -1536,7 +1613,8 @@ def run_scenario(
         c.up("materialized", "clusterd")
 
         c.testdrive(
-            statement_timeout + scenario.post_restart, args=[testdrive_timeout_arg]
+            statement_timeout + scenario.post_restart,
+            args=[testdrive_timeout_arg] + extra_testdrive_args,
         )
 
 
