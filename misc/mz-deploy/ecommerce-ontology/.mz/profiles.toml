@@ -1,0 +1,4 @@
+[default]
+host = "localhost"
+port = 6875
+user = "materialize"
