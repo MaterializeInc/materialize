@@ -329,7 +329,6 @@ async fn monitor_hydration_live(
             deploy_id,
             &cluster_states,
             start_time,
-            false,
             allowed_lag_secs,
         )?;
 

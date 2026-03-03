@@ -432,6 +432,18 @@ pub enum ValidationErrorKind {
         storage_objects: Vec<String>,
         computation_objects: Vec<String>,
     },
+    /// Replacement schema contains non-MV objects
+    ReplacementSchemaNonMvObject {
+        database: String,
+        schema: String,
+        object_name: String,
+        object_type: String,
+    },
+    /// Replacement schema listed in config does not exist in project
+    ReplacementSchemaNotFound {
+        database: String,
+        schema: String,
+    },
 }
 
 impl ValidationErrorKind {
@@ -670,6 +682,26 @@ impl ValidationErrorKind {
                     computation_objects.join(", ")
                 )
             }
+            Self::ReplacementSchemaNonMvObject {
+                database,
+                schema,
+                object_name,
+                object_type,
+            } => {
+                format!(
+                    "replacement schema '{}.{}' contains non-materialized-view object '{}' (type: {})",
+                    database, schema, object_name, object_type
+                )
+            }
+            Self::ReplacementSchemaNotFound {
+                database,
+                schema,
+            } => {
+                format!(
+                    "replacement schema '{}.{}' listed in mz_project.toml does not exist in project",
+                    database, schema
+                )
+            }
         }
     }
 
@@ -777,6 +809,12 @@ impl ValidationErrorKind {
             }
             Self::StorageAndComputationObjectsInSameSchema { .. } => {
                 Some("storage objects (tables, sinks) cannot share a schema with computation objects (views, materialized views) to prevent accidentally recreating tables or sinks when recreating views. Organize your schemas: use one schema for storage objects (e.g., 'tables') and another for computation objects (e.g., 'views' or 'public')".to_string())
+            }
+            Self::ReplacementSchemaNonMvObject { .. } => {
+                Some("replacement schemas (listed in mz_project.toml replacement_schemas) can only contain CREATE MATERIALIZED VIEW statements".to_string())
+            }
+            Self::ReplacementSchemaNotFound { .. } => {
+                Some("ensure the schema exists as a directory in your project (e.g., database/schema/) and is listed correctly in mz_project.toml".to_string())
             }
         }
     }

@@ -13,7 +13,9 @@ use super::validation::{
     validate_schema_mod_statements, validate_sink_cluster,
 };
 use crate::project::error::{ValidationError, ValidationErrorKind, ValidationErrors};
+use crate::project::raw::ProjectConfig;
 use mz_sql_parser::ast::*;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 impl TryFrom<super::super::raw::DatabaseObject> for DatabaseObject {
@@ -337,10 +339,85 @@ impl TryFrom<super::super::raw::Project> for Project {
             }
         }
 
+        // Validate replacement schemas from project config
+        validate_replacement_schemas(&value.config, &databases, &mut all_errors);
+
         if !all_errors.is_empty() {
             return Err(ValidationErrors::new(all_errors));
         }
 
-        Ok(Self { databases })
+        Ok(Self {
+            databases,
+            config: value.config,
+        })
+    }
+}
+
+/// Validate replacement schemas from project config.
+///
+/// Ensures:
+/// 1. All listed replacement schemas exist in the project
+/// 2. Replacement schemas only contain materialized views
+fn validate_replacement_schemas(
+    config: &ProjectConfig,
+    databases: &[Database],
+    errors: &mut Vec<ValidationError>,
+) {
+    if config.replacement_schemas.is_empty() {
+        return;
+    }
+
+    // Build set of existing (database, schema) pairs
+    let mut existing_schemas = BTreeSet::new();
+    for db in databases {
+        for schema in &db.schemas {
+            existing_schemas.insert((db.name.clone(), schema.name.clone()));
+        }
+    }
+
+    // Check each replacement schema exists
+    for (db_name, schema_name) in &config.replacement_schemas {
+        if !existing_schemas.contains(&(db_name.clone(), schema_name.clone())) {
+            errors.push(ValidationError::with_file(
+                ValidationErrorKind::ReplacementSchemaNotFound {
+                    database: db_name.clone(),
+                    schema: schema_name.clone(),
+                },
+                PathBuf::from("mz_project.toml"),
+            ));
+        }
+    }
+
+    // Check replacement schemas only contain MVs
+    for db in databases {
+        for schema in &db.schemas {
+            if !config
+                .replacement_schemas
+                .contains(&(db.name.clone(), schema.name.clone()))
+            {
+                continue;
+            }
+
+            for obj in &schema.objects {
+                if !matches!(obj.stmt, Statement::CreateMaterializedView(_)) {
+                    let object_type = match &obj.stmt {
+                        Statement::CreateView(_) => "view",
+                        Statement::CreateTable(_) => "table",
+                        Statement::CreateTableFromSource(_) => "table from source",
+                        Statement::CreateSink(_) => "sink",
+                        Statement::CreateMaterializedView(_) => unreachable!(),
+                    };
+                    errors.push(ValidationError::with_file(
+                        ValidationErrorKind::ReplacementSchemaNonMvObject {
+                            database: db.name.clone(),
+                            schema: schema.name.clone(),
+                            object_name: obj.stmt.ident().object.clone(),
+                            object_type: object_type.to_string(),
+                        },
+                        PathBuf::from("mz_project.toml"),
+                    ));
+                }
+            }
+        }
     }
 }

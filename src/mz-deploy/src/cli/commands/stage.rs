@@ -1,7 +1,9 @@
 //! Stage command - deploy to staging environment with renamed schemas and clusters.
 
 use crate::cli::{CliError, helpers};
-use crate::client::{Client, ClusterConfig, DeploymentKind, PendingStatement, Profile};
+use crate::client::{
+    Client, ClusterConfig, DeploymentKind, PendingStatement, Profile, ReplacementMvRecord,
+};
 use crate::project::ast::Statement;
 use crate::project::changeset::ChangeSet;
 use crate::project::object_id::ObjectId;
@@ -10,7 +12,6 @@ use crate::project::typed::FullyQualifiedName;
 use crate::project::{self, normalize::NormalizingVisitor};
 use crate::utils::{git, progress};
 use crate::verbose;
-use mz_sql_parser::ast::Ident;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Instant;
@@ -133,12 +134,24 @@ pub async fn run(
         planned_project.get_sorted_objects()?
     };
 
-    // Separate tables, sinks, and other objects
+    // Determine which objects need the CREATE REPLACEMENT MV protocol.
+    // Only CHANGED replacement MVs (already exist in production) use this protocol.
+    // NEW replacement MVs (first deployment) go through normal blue-green schema swap.
+    let replacement_object_ids: BTreeSet<ObjectId> = if let Some(ref cs) = change_set {
+        cs.changed_replacement_objects.clone()
+    } else {
+        // Full deployment with no prior snapshot: nothing to replace, all are new
+        BTreeSet::new()
+    };
+
+    // Separate tables, sinks, replacement MVs, and other objects
     // - Tables: filter out (use create-tables command for those)
     // - Sinks: store for deferred execution during apply (they write to external systems)
+    // - Replacement MVs: deploy via CREATE REPLACEMENT MV protocol
     // - Other objects: deploy to staging
     let objects_before_filter = objects.len();
     let mut sinks: Vec<_> = Vec::new();
+    let mut replacement_mvs: Vec<_> = Vec::new();
     let objects: Vec<_> = objects
         .into_iter()
         .filter(|(object_id, typed_obj)| {
@@ -149,12 +162,20 @@ pub async fn run(
                     sinks.push((object_id.clone(), *typed_obj));
                     false
                 }
+                Statement::CreateMaterializedView(_)
+                    if replacement_object_ids.contains(object_id) =>
+                {
+                    // Collect replacement MVs for special handling
+                    replacement_mvs.push((object_id.clone(), *typed_obj));
+                    false
+                }
                 _ => true,
             }
         })
         .collect();
 
-    let table_count = objects_before_filter - objects.len() - sinks.len();
+    let table_count =
+        objects_before_filter - objects.len() - sinks.len() - replacement_mvs.len();
     if table_count > 0 {
         verbose!(
             "Skipped {} table(s) - use 'mz-deploy create-tables' for those",
@@ -165,6 +186,12 @@ pub async fn run(
         verbose!(
             "Found {} sink(s) - will be created during apply after swap",
             sinks.len()
+        );
+    }
+    if !replacement_mvs.is_empty() {
+        verbose!(
+            "Found {} replacement MV(s) - will use CREATE REPLACEMENT protocol",
+            replacement_mvs.len()
         );
     }
 
@@ -187,7 +214,7 @@ pub async fn run(
     let mut schema_set = BTreeSet::new();
     let mut cluster_set = BTreeSet::new();
 
-    for (object_id, typed_obj) in &objects {
+    for (object_id, typed_obj) in objects.iter().chain(replacement_mvs.iter()) {
         schema_set.insert((object_id.database.clone(), object_id.schema.clone()));
         cluster_set.extend(typed_obj.clusters());
     }
@@ -254,6 +281,17 @@ pub async fn run(
                 .or_insert(DeploymentKind::Sinks);
         }
 
+        // Add replacement MVs - schemas get kind=Replacement
+        for (object_id, typed_obj) in &replacement_mvs {
+            let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
+            staging_snapshot.objects.insert(object_id.clone(), hash);
+
+            staging_snapshot.schemas.insert(
+                (object_id.database.clone(), object_id.schema.clone()),
+                DeploymentKind::Replacement,
+            );
+        }
+
         // Write deployment state to database BEFORE creating resources
         // (environment=stage_name for staging, promoted_at=None)
         project::deployment_snapshot::write_to_database(
@@ -272,12 +310,8 @@ pub async fn run(
                 .enumerate()
                 .map(|(idx, (object_id, typed_obj))| {
                     // Create original FQN (without staging suffix)
-                    let original_item_name = mz_sql_parser::ast::UnresolvedItemName(vec![
-                        Ident::new(&object_id.database).expect("valid database"),
-                        Ident::new(&object_id.schema).expect("valid schema"),
-                        Ident::new(&object_id.object).expect("valid object"),
-                    ]);
-                    let original_fqn = FullyQualifiedName::from(original_item_name);
+                    let original_fqn =
+                        FullyQualifiedName::from(object_id.to_unresolved_item_name());
 
                     // Use fully_qualifying visitor - sinks are created in production schemas
                     // (no staging suffix needed since they're created after the swap)
@@ -318,6 +352,29 @@ pub async fn run(
             );
         }
 
+        // Store replacement MV records (to be applied during apply)
+        if !replacement_mvs.is_empty() {
+            let records: Vec<ReplacementMvRecord> = replacement_mvs
+                .iter()
+                .map(|(object_id, _)| {
+                    let staging_schema = format!("{}{}", object_id.schema, staging_suffix);
+                    ReplacementMvRecord {
+                        deploy_id: stage_name.clone(),
+                        target_database: object_id.database.clone(),
+                        target_schema: object_id.schema.clone(),
+                        target_name: object_id.object.clone(),
+                        replacement_schema: staging_schema,
+                    }
+                })
+                .collect();
+
+            client.insert_replacement_mvs(&records).await?;
+            verbose!(
+                "Stored {} replacement MV record(s)",
+                records.len()
+            );
+        }
+
         let metadata_duration = metadata_start.elapsed();
         progress::stage_success("Deployment metadata recorded", metadata_duration);
     }
@@ -331,6 +388,7 @@ pub async fn run(
         &cluster_set,
         &planned_project,
         &objects,
+        &replacement_mvs,
         no_rollback,
         dry_run,
     )
@@ -369,6 +427,7 @@ async fn create_resources_with_rollback<'a>(
     cluster_set: &BTreeSet<String>,
     planned_project: &'a project::planned::Project,
     objects: &'a [(ObjectId, &'a project::typed::DatabaseObject)],
+    replacement_mvs: &'a [(ObjectId, &'a project::typed::DatabaseObject)],
     no_rollback: bool,
     dry_run: bool,
 ) -> Result<usize, CliError> {
@@ -562,8 +621,12 @@ async fn create_resources_with_rollback<'a>(
         let deploy_start = Instant::now();
 
         // Collect ObjectIds from objects being deployed for the staging transformer
-        let objects_to_deploy_set: BTreeSet<_> =
-            objects.iter().map(|(oid, _)| oid.clone()).collect();
+        // Include both regular objects and replacement MVs
+        let objects_to_deploy_set: BTreeSet<_> = objects
+            .iter()
+            .chain(replacement_mvs.iter())
+            .map(|(oid, _)| oid.clone())
+            .collect();
 
         // Deploy external indexes
         let mut external_indexes: Vec<_> = planned_project
@@ -584,6 +647,8 @@ async fn create_resources_with_rollback<'a>(
         }
 
         let mut success_count = 0;
+
+        // Deploy regular objects
         for (idx, (object_id, typed_obj)) in objects.iter().enumerate() {
             verbose!(
                 "Applying {}/{}: {}{} (to schema {}{})",
@@ -595,57 +660,50 @@ async fn create_resources_with_rollback<'a>(
                 staging_suffix
             );
 
-            // Create original FQN (without staging suffix)
-            let original_item_name = mz_sql_parser::ast::UnresolvedItemName(vec![
-                Ident::new(&object_id.database).expect("valid database"),
-                Ident::new(&object_id.schema).expect("valid schema"),
-                Ident::new(&object_id.object).expect("valid object"),
-            ]);
-            let original_fqn = FullyQualifiedName::from(original_item_name);
+            deploy_single_object(
+                &executor,
+                object_id,
+                typed_obj,
+                staging_suffix,
+                planned_project,
+                &objects_to_deploy_set,
+                |stmt| stmt,
+            )
+            .await?;
+            success_count += 1;
+        }
 
-            // Create staging visitor (it will apply the suffix during normalization)
-            // External dependencies and objects not being deployed are NOT transformed
-            let visitor = NormalizingVisitor::staging(
-                &original_fqn,
-                staging_suffix.to_string(),
-                &planned_project.external_dependencies,
-                Some(&objects_to_deploy_set),
+        // Deploy replacement MVs using CREATE REPLACEMENT MATERIALIZED VIEW ... FOR
+        for (idx, (object_id, typed_obj)) in replacement_mvs.iter().enumerate() {
+            verbose!(
+                "Applying replacement MV {}/{}: {} FOR {}.{}.{}",
+                idx + 1,
+                replacement_mvs.len(),
+                &object_id.object,
+                &object_id.database,
+                &object_id.schema,
+                &object_id.object
             );
 
-            // Normalize and deploy main statement
-            // The visitor will transform all names and clusters to include the staging suffix
-            let stmt = typed_obj
-                .stmt
-                .clone()
-                .normalize_name_with(&visitor, &original_fqn.to_item_name())
-                .normalize_dependencies_with(&visitor)
-                .normalize_cluster_with(&visitor);
-
-            executor.execute_sql(&stmt).await?;
-
-            // Deploy indexes, grants, and comments (normalize them with staging transformer)
-            let mut indexes = typed_obj.indexes.clone();
-            let mut grants = typed_obj.grants.clone();
-            let mut comments = typed_obj.comments.clone();
-
-            // Normalize references to use staging suffix
-            visitor.normalize_index_references(&mut indexes);
-            visitor.normalize_index_clusters(&mut indexes);
-            visitor.normalize_grant_references(&mut grants);
-            visitor.normalize_comment_references(&mut comments);
-
-            for index in &indexes {
-                executor.execute_sql(index).await?;
-            }
-
-            for grant in &grants {
-                executor.execute_sql(grant).await?;
-            }
-
-            for comment in &comments {
-                executor.execute_sql(comment).await?;
-            }
-
+            let production_target = object_id.to_unresolved_item_name();
+            deploy_single_object(
+                &executor,
+                object_id,
+                typed_obj,
+                staging_suffix,
+                planned_project,
+                &objects_to_deploy_set,
+                |stmt| match stmt {
+                    Statement::CreateMaterializedView(mut mv) => {
+                        mv.replacement_for = Some(
+                            mz_sql_parser::ast::RawItemName::Name(production_target),
+                        );
+                        Statement::CreateMaterializedView(mv)
+                    }
+                    other => other,
+                },
+            )
+            .await?;
             success_count += 1;
         }
 
@@ -766,9 +824,71 @@ async fn rollback_staging_resources(
         verbose!("Warning: Failed to delete pending statements: {}", e);
     }
 
+    if let Err(e) = client.delete_replacement_mvs(environment).await {
+        verbose!("Warning: Failed to delete replacement MV records: {}", e);
+    }
+
     if let Err(e) = client.delete_deployment(environment).await {
         verbose!("Warning: Failed to delete deployment records: {}", e);
     }
 
     (schema_count, cluster_count)
+}
+
+/// Deploy a single object to the staging environment.
+///
+/// Handles normalization, execution, and deployment of indexes/grants/comments.
+/// The `transform` callback allows the caller to modify the normalized statement
+/// before execution (e.g., to set `replacement_for` on replacement MVs).
+async fn deploy_single_object(
+    executor: &helpers::DeploymentExecutor<'_>,
+    object_id: &ObjectId,
+    typed_obj: &project::typed::DatabaseObject,
+    staging_suffix: &str,
+    planned_project: &project::planned::Project,
+    objects_to_deploy_set: &BTreeSet<ObjectId>,
+    transform: impl FnOnce(Statement) -> Statement,
+) -> Result<(), CliError> {
+    let original_fqn = FullyQualifiedName::from(object_id.to_unresolved_item_name());
+
+    let visitor = NormalizingVisitor::staging(
+        &original_fqn,
+        staging_suffix.to_string(),
+        &planned_project.external_dependencies,
+        Some(objects_to_deploy_set),
+    );
+
+    let stmt = typed_obj
+        .stmt
+        .clone()
+        .normalize_name_with(&visitor, &original_fqn.to_item_name())
+        .normalize_dependencies_with(&visitor)
+        .normalize_cluster_with(&visitor);
+
+    let stmt = transform(stmt);
+    executor.execute_sql(&stmt).await?;
+
+    // Deploy indexes, grants, and comments
+    let mut indexes = typed_obj.indexes.clone();
+    let mut grants = typed_obj.grants.clone();
+    let mut comments = typed_obj.comments.clone();
+
+    visitor.normalize_index_references(&mut indexes);
+    visitor.normalize_index_clusters(&mut indexes);
+    visitor.normalize_grant_references(&mut grants);
+    visitor.normalize_comment_references(&mut comments);
+
+    for index in &indexes {
+        executor.execute_sql(index).await?;
+    }
+
+    for grant in &grants {
+        executor.execute_sql(grant).await?;
+    }
+
+    for comment in &comments {
+        executor.execute_sql(comment).await?;
+    }
+
+    Ok(())
 }

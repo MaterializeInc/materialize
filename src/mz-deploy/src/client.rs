@@ -16,5 +16,6 @@ pub use errors::{ConnectionError, DatabaseValidationError, format_relative_path}
 pub use models::{
     ApplyState, Cluster, ClusterConfig, ClusterGrant, ClusterOptions, ClusterReplica,
     ConflictRecord, DeploymentDetails, DeploymentHistoryEntry, DeploymentKind, DeploymentMetadata,
-    DeploymentObjectRecord, PendingStatement, SchemaDeploymentRecord, StagingDeployment,
+    DeploymentObjectRecord, PendingStatement, ReplacementMvRecord, SchemaDeploymentRecord,
+    StagingDeployment,
 };

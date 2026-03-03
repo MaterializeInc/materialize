@@ -188,6 +188,22 @@ pub async fn create_deployments(client: &PgClient) -> Result<(), ConnectionError
 
     client
         .execute(
+            r#"CREATE TABLE IF NOT EXISTS _mz_deploy.public.replacement_mvs (
+            deploy_id TEXT NOT NULL,
+            target_database TEXT NOT NULL,
+            target_schema TEXT NOT NULL,
+            target_name TEXT NOT NULL,
+            replacement_schema TEXT NOT NULL
+        ) WITH (
+            PARTITION BY (deploy_id)
+        );"#,
+            &[],
+        )
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    client
+        .execute(
             r#"
         CREATE VIEW IF NOT EXISTS _mz_deploy.public.production AS
         WITH candidates AS (
@@ -1310,6 +1326,78 @@ pub async fn delete_pending_statements(
     client
         .execute(
             "DELETE FROM _mz_deploy.public.pending_statements WHERE deploy_id = $1",
+            &[&deploy_id],
+        )
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    Ok(())
+}
+
+/// Insert replacement MV records for a deployment.
+pub async fn insert_replacement_mvs(
+    client: &PgClient,
+    records: &[super::models::ReplacementMvRecord],
+) -> Result<(), ConnectionError> {
+    for record in records {
+        client
+            .execute(
+                r#"INSERT INTO _mz_deploy.public.replacement_mvs
+                   (deploy_id, target_database, target_schema, target_name,
+                    replacement_schema)
+                   VALUES ($1, $2, $3, $4, $5)"#,
+                &[
+                    &record.deploy_id,
+                    &record.target_database,
+                    &record.target_schema,
+                    &record.target_name,
+                    &record.replacement_schema,
+                ],
+            )
+            .await
+            .map_err(ConnectionError::Query)?;
+    }
+
+    Ok(())
+}
+
+/// Get replacement MV records for a deployment.
+pub async fn get_replacement_mvs(
+    client: &PgClient,
+    deploy_id: &str,
+) -> Result<Vec<super::models::ReplacementMvRecord>, ConnectionError> {
+    let rows = client
+        .query(
+            r#"SELECT deploy_id, target_database, target_schema, target_name,
+                      replacement_schema
+               FROM _mz_deploy.public.replacement_mvs
+               WHERE deploy_id = $1
+               ORDER BY target_database, target_schema, target_name"#,
+            &[&deploy_id],
+        )
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    Ok(rows
+        .iter()
+        .map(|row| super::models::ReplacementMvRecord {
+            deploy_id: row.get("deploy_id"),
+            target_database: row.get("target_database"),
+            target_schema: row.get("target_schema"),
+            target_name: row.get("target_name"),
+            replacement_schema: row.get("replacement_schema"),
+        })
+        .collect())
+}
+
+/// Delete all replacement MV records for a deployment.
+pub async fn delete_replacement_mvs(
+    client: &PgClient,
+    deploy_id: &str,
+) -> Result<(), ConnectionError> {
+    client
+        .execute(
+            "DELETE FROM _mz_deploy.public.replacement_mvs WHERE deploy_id = $1",
             &[&deploy_id],
         )
         .await

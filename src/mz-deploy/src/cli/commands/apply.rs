@@ -88,6 +88,9 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
     // Execute pending sinks (skip any already executed)
     execute_pending_sinks(&client, deploy_id).await?;
 
+    // Apply replacement MVs (after swap, the staging cluster is now the production cluster)
+    apply_replacement_mvs(&client, deploy_id).await?;
+
     // Repoint existing sinks that depend on objects being dropped
     // This must happen before drop_old_resources to prevent CASCADE from dropping sinks
     if !staging_schemas.is_empty() {
@@ -114,10 +117,11 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
         .await;
     }
 
-    // Clean up apply state and pending statements
+    // Clean up apply state, pending statements, and replacement MV records
     verbose!("Cleaning up apply state...");
     client.delete_apply_state_schemas(deploy_id).await?;
     client.delete_pending_statements(deploy_id).await?;
+    client.delete_replacement_mvs(deploy_id).await?;
     client
         .delete_deployment_clusters(deploy_id)
         .await
@@ -175,6 +179,17 @@ async fn gather_resources_and_check_conflicts(
         if record.kind == DeploymentKind::Sinks {
             verbose!(
                 "Skipping sink-only schema {}.{} (no swap needed)",
+                record.database,
+                record.schema
+            );
+            continue;
+        }
+
+        // Skip replacement schemas - they don't get swapped
+        // Replacement MVs are applied via ALTER MV APPLY REPLACEMENT, then schemas are dropped
+        if record.kind == DeploymentKind::Replacement {
+            verbose!(
+                "Skipping replacement schema {}.{} (will be dropped after apply)",
                 record.database,
                 record.schema
             );
@@ -414,6 +429,82 @@ async fn execute_pending_sinks(client: &Client, deploy_id: &str) -> Result<(), C
             .await?;
 
         println!("  ✓ {}.{}.{}", stmt.database, stmt.schema, stmt.object);
+    }
+
+    Ok(())
+}
+
+/// Apply replacement materialized views after the swap.
+///
+/// For each replacement MV record, executes:
+///   ALTER MATERIALIZED VIEW "db"."schema"."target" APPLY REPLACEMENT "db"."staging_schema"."name"
+///
+/// After applying, the replacement MVs are absorbed into their targets and the
+/// replacement staging schemas become empty. Those schemas are then dropped.
+async fn apply_replacement_mvs(client: &Client, deploy_id: &str) -> Result<(), CliError> {
+    let records = client.get_replacement_mvs(deploy_id).await?;
+
+    if records.is_empty() {
+        verbose!("No replacement MVs to apply");
+        return Ok(());
+    }
+
+    println!(
+        "\nApplying {} replacement materialized view(s)...",
+        records.len()
+    );
+
+    for record in &records {
+        let alter_sql = format!(
+            "ALTER MATERIALIZED VIEW \"{}\".\"{}\".\"{}\"\
+             APPLY REPLACEMENT \"{}\".\"{}\".\"{}\";",
+            record.target_database,
+            record.target_schema,
+            record.target_name,
+            record.target_database,
+            record.replacement_schema,
+            record.target_name
+        );
+
+        verbose!("  {}", alter_sql);
+        if let Err(e) = client.execute(&alter_sql, &[]).await {
+            eprintln!(
+                "Error applying replacement for {}.{}.{}: {}",
+                record.target_database, record.target_schema, record.target_name, e
+            );
+            return Err(CliError::SqlExecutionFailed {
+                statement: alter_sql,
+                source: e,
+            });
+        }
+
+        println!(
+            "  {} {}.{}.{}",
+            "✓".green(),
+            record.target_database,
+            record.target_schema,
+            record.target_name
+        );
+    }
+
+    // Drop now-empty replacement staging schemas
+    let replacement_schemas: BTreeSet<(String, String)> = records
+        .iter()
+        .map(|r| (r.target_database.clone(), r.replacement_schema.clone()))
+        .collect();
+
+    for (database, schema) in &replacement_schemas {
+        let drop_sql = format!(
+            "DROP SCHEMA IF EXISTS \"{}\".\"{}\" CASCADE;",
+            database, schema
+        );
+        verbose!("  {}", drop_sql);
+        if let Err(e) = client.execute(&drop_sql, &[]).await {
+            eprintln!(
+                "warning: failed to drop replacement schema {}.{}: {}",
+                database, schema, e
+            );
+        }
     }
 
     Ok(())

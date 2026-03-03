@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "objects": {
+    "raw.public.customers": {
+      "customer_id": {
+        "type": "integer",
+        "nullable": false
+      },
+      "email": {
+        "type": "text",
+        "nullable": true
+      },
+      "name": {
+        "type": "text",
+        "nullable": true
+      },
+      "signup_date": {
+        "type": "date",
+        "nullable": true
+      }
+    },
+    "raw.public.orders": {
+      "customer_id": {
+        "type": "integer",
+        "nullable": true
+      },
+      "order_date": {
+        "type": "timestamp without time zone",
+        "nullable": true
+      },
+      "order_id": {
+        "type": "integer",
+        "nullable": false
+      },
+      "product_id": {
+        "type": "integer",
+        "nullable": true
+      },
+      "status": {
+        "type": "text",
+        "nullable": true
+      },
+      "total_amount": {
+        "type": "numeric",
+        "nullable": true
+      }
+    },
+    "raw.public.pg_source": {
+      "lsn": {
+        "type": "uint8",
+        "nullable": true
+      }
+    },
+    "raw.public.products": {
+      "category": {
+        "type": "text",
+        "nullable": true
+      },
+      "cost": {
+        "type": "numeric",
+        "nullable": true
+      },
+      "is_active": {
+        "type": "boolean",
+        "nullable": true
+      },
+      "name": {
+        "type": "text",
+        "nullable": true
+      },
+      "price": {
+        "type": "numeric",
+        "nullable": true
+      },
+      "product_id": {
+        "type": "integer",
+        "nullable": false
+      }
+    },
+    "raw.public.returns": {
+      "order_id": {
+        "type": "integer",
+        "nullable": true
+      },
+      "refund_amount": {
+        "type": "numeric",
+        "nullable": true
+      },
+      "return_id": {
+        "type": "integer",
+        "nullable": false
+      }
+    }
+  }
+}

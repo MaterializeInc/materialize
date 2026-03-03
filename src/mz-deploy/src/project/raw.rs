@@ -54,7 +54,8 @@
 use super::error::{LoadError, ProjectError};
 use super::parser::parse_statements_with_context;
 use mz_sql_parser::ast::{Raw, Statement};
-use std::collections::BTreeMap;
+use serde::Deserialize;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -183,6 +184,31 @@ pub struct Database {
     pub schemas: BTreeMap<String, Schema>,
 }
 
+/// Raw TOML configuration file format for `mz_project.toml`.
+#[derive(Debug, Clone, Deserialize, Default)]
+struct RawProjectConfig {
+    /// Schemas that use replacement materialized view protocol.
+    /// Format: `["database.schema", ...]`
+    #[serde(default)]
+    replacement_schemas: Vec<String>,
+}
+
+/// Project-level configuration parsed from `mz_project.toml`.
+///
+/// Controls deployment behavior for specific schemas, such as which schemas
+/// use the replacement materialized view protocol instead of the standard
+/// blue/green swap.
+#[derive(Debug, Clone, Default)]
+pub struct ProjectConfig {
+    /// Schemas that use replacement materialized views.
+    /// Each entry is a `(database, schema)` pair.
+    ///
+    /// MVs in these schemas are deployed using `CREATE REPLACEMENT MATERIALIZED VIEW ... FOR`
+    /// instead of the standard blue/green swap. This allows atomic in-place updates
+    /// without affecting dependent objects in other schemas.
+    pub replacement_schemas: BTreeSet<(String, String)>,
+}
+
 /// The complete unvalidated project structure loaded from the file system.
 ///
 /// Represents the entire project directory tree with all databases, schemas, and
@@ -206,6 +232,8 @@ pub struct Project {
     /// Each database corresponds to one subdirectory in the project root.
     /// Hidden directories (starting with `.`) are excluded.
     pub databases: BTreeMap<String, Database>,
+    /// Project configuration from `mz_project.toml`.
+    pub config: ProjectConfig,
 }
 
 /// Loads and parses a Materialize project from a directory structure.
@@ -373,9 +401,55 @@ pub fn load_project<P: AsRef<Path>>(root: P) -> Result<Project, ProjectError> {
         }
     }
 
+    // Load optional mz_project.toml
+    let config = load_project_config(root)?;
+
     Ok(Project {
         root: root.to_path_buf(),
         databases,
+        config,
+    })
+}
+
+/// Load project configuration from `mz_project.toml` if it exists.
+fn load_project_config(root: &Path) -> Result<ProjectConfig, ProjectError> {
+    let config_path = root.join("mz_project.toml");
+    if !config_path.exists() {
+        return Ok(ProjectConfig::default());
+    }
+
+    let content = fs::read_to_string(&config_path).map_err(|source| LoadError::FileReadFailed {
+        path: config_path.clone(),
+        source,
+    })?;
+
+    let raw_config: RawProjectConfig =
+        toml::from_str(&content).map_err(|e| LoadError::FileReadFailed {
+            path: config_path.clone(),
+            source: std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()),
+        })?;
+
+    let mut replacement_schemas = BTreeSet::new();
+    for entry in &raw_config.replacement_schemas {
+        let parts: Vec<&str> = entry.split('.').collect();
+        if parts.len() != 2 {
+            return Err(LoadError::FileReadFailed {
+                path: config_path.clone(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "invalid replacement_schemas entry '{}': expected 'database.schema' format",
+                        entry
+                    ),
+                ),
+            }
+            .into());
+        }
+        replacement_schemas.insert((parts[0].to_string(), parts[1].to_string()));
+    }
+
+    Ok(ProjectConfig {
+        replacement_schemas,
     })
 }
 

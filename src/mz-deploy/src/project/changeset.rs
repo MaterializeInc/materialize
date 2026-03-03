@@ -16,7 +16,7 @@
 //! ```datalog
 //! DirtyStmt(O) :- ChangedStmt(O)                             # Changed objects are dirty
 //! DirtyStmt(O) :- StmtUsesCluster(O, C), DirtyCluster(C)     # Objects on dirty statement clusters are dirty
-//! DirtyStmt(O) :- DependsOn(O, P), DirtyStmt(P)              # Downstream dependents are dirty
+//! DirtyStmt(O) :- DependsOn(O, P), DirtyStmt(P), NOT IsChangedReplacement(P)  # Downstream dependents are dirty (except through changed replacement MVs)
 //! DirtyStmt(O) :- DirtySchema(Db, Sch), ObjectInSchema(O, Db, Sch) # Objects in dirty schemas are dirty
 //! ```
 //!
@@ -68,6 +68,14 @@ pub struct ChangeSet {
 
     /// All objects that need redeployment (includes transitive dependencies)
     pub objects_to_deploy: BTreeSet<ObjectId>,
+
+    /// New replacement MVs (in replacement schemas but NOT in old snapshot).
+    /// These are deployed via normal blue-green schema swap.
+    pub new_replacement_objects: BTreeSet<ObjectId>,
+
+    /// Changed replacement MVs (in replacement schemas AND in old snapshot with different hash).
+    /// These are deployed via CREATE REPLACEMENT MV protocol.
+    pub changed_replacement_objects: BTreeSet<ObjectId>,
 }
 
 impl ChangeSet {
@@ -94,15 +102,36 @@ impl ChangeSet {
         // Step 2: Extract base facts from project
         let base_facts = extract_base_facts(project);
 
+        // Step 2b: Identify changed replacement objects (exist in old snapshot)
+        // These use the in-place replacement protocol, so dirtiness should NOT propagate
+        // through them to downstream objects.
+        let changed_replacements: BTreeSet<ObjectId> = base_facts
+            .is_replacement
+            .iter()
+            .filter(|obj| old_snapshot.objects.contains_key(*obj))
+            .cloned()
+            .collect();
+
         // Step 3: Run Datalog fixed-point computation
         let (dirty_stmts, dirty_clusters, dirty_schemas) =
-            compute_dirty_datalog(&changed_objects, &base_facts);
+            compute_dirty_datalog(&changed_objects, &base_facts, &changed_replacements);
+
+        // Step 4: Separate replacement objects into new vs changed
+        // - New: in replacement schemas but NOT in old snapshot (first deployment, use blue-green)
+        // - Changed: in replacement schemas AND in old snapshot (update, use CREATE REPLACEMENT)
+        let (new_replacement_objects, changed_replacement_objects) = dirty_stmts
+            .iter()
+            .filter(|obj| base_facts.is_replacement.contains(*obj))
+            .cloned()
+            .partition(|obj| !old_snapshot.objects.contains_key(obj));
 
         ChangeSet {
             changed_objects: changed_objects.into_iter().collect(),
             dirty_schemas: dirty_schemas.into_iter().collect(),
             dirty_clusters: dirty_clusters.into_iter().collect(),
             objects_to_deploy: dirty_stmts.into_iter().collect(),
+            new_replacement_objects,
+            changed_replacement_objects,
         }
     }
 
@@ -178,6 +207,9 @@ struct BaseFacts {
 
     /// IsSink(object) - objects that are sinks (should not propagate dirtiness to clusters/schemas)
     is_sink: BTreeSet<ObjectId>,
+
+    /// IsReplacement(object) - objects in replacement schemas (should not propagate dirtiness to schemas)
+    is_replacement: BTreeSet<ObjectId>,
 }
 
 /// Find changed objects by comparing snapshot hashes.
@@ -247,10 +279,17 @@ fn extract_base_facts(project: &Project) -> BaseFacts {
     let mut stmt_uses_cluster = Vec::new();
     let mut index_uses_cluster = Vec::new();
     let mut is_sink = BTreeSet::new();
+    let mut is_replacement = BTreeSet::new();
 
     // Extract facts from each object in the project
     for db in &project.databases {
         for schema in &db.schemas {
+            // Check if this schema is a replacement schema
+            let is_replacement_schema = project
+                .config
+                .replacement_schemas
+                .contains(&(db.name.clone(), schema.name.clone()));
+
             for obj in &schema.objects {
                 let obj_id = obj.id.clone();
 
@@ -261,6 +300,16 @@ fn extract_base_facts(project: &Project) -> BaseFacts {
                 if matches!(obj.typed_object.stmt, Statement::CreateSink(_)) {
                     verbose!("  ├─ {}: {}", "IsSink".yellow(), obj_id.to_string().cyan());
                     is_sink.insert(obj_id.clone());
+                }
+
+                // IsReplacement fact - replacement MVs should not propagate dirtiness to schemas
+                if is_replacement_schema {
+                    verbose!(
+                        "  ├─ {}: {}",
+                        "IsReplacement".yellow(),
+                        obj_id.to_string().cyan()
+                    );
+                    is_replacement.insert(obj_id.clone());
                 }
 
                 // DependsOn facts from dependency graph
@@ -300,12 +349,13 @@ fn extract_base_facts(project: &Project) -> BaseFacts {
     }
 
     verbose!(
-        "  └─ Base facts: {} objects, {} dependencies, {} stmt→cluster, {} index→cluster, {} sinks",
+        "  └─ Base facts: {} objects, {} dependencies, {} stmt→cluster, {} index→cluster, {} sinks, {} replacements",
         object_in_schema.len().to_string().bold(),
         depends_on.len().to_string().bold(),
         stmt_uses_cluster.len().to_string().bold(),
         index_uses_cluster.len().to_string().bold(),
-        is_sink.len().to_string().bold()
+        is_sink.len().to_string().bold(),
+        is_replacement.len().to_string().bold()
     );
 
     BaseFacts {
@@ -314,6 +364,7 @@ fn extract_base_facts(project: &Project) -> BaseFacts {
         stmt_uses_cluster,
         index_uses_cluster,
         is_sink,
+        is_replacement,
     }
 }
 
@@ -384,6 +435,7 @@ impl DatalogIndexes {
 fn compute_dirty_datalog(
     changed_stmts: &BTreeSet<ObjectId>,
     base_facts: &BaseFacts,
+    changed_replacements: &BTreeSet<ObjectId>,
 ) -> (
     BTreeSet<ObjectId>,
     BTreeSet<Cluster>,
@@ -488,9 +540,19 @@ fn compute_dirty_datalog(
             }
         }
 
-        // Rule 4: DirtyStmt(O) :- DependsOn(O, P), DirtyStmt(P)
+        // Rule 4: DirtyStmt(O) :- DependsOn(O, P), DirtyStmt(P), NOT IsChangedReplacement(P)
+        // Changed replacement MVs are swapped in-place via ALTER MV APPLY REPLACEMENT,
+        // so their downstream dependents don't need redeployment.
         let current_dirty: Vec<_> = dirty_stmts.iter().cloned().collect();
         for dirty_obj in current_dirty {
+            if changed_replacements.contains(&dirty_obj) {
+                verbose!(
+                    "  ├─ {}: {} is a changed replacement MV, not propagating to dependents",
+                    "SKIP".yellow().bold(),
+                    dirty_obj.to_string().cyan()
+                );
+                continue;
+            }
             if let Some(children) = indexes.dependents.get(&dirty_obj) {
                 for child in children {
                     if dirty_stmts.insert(child.clone()) {
@@ -505,13 +567,23 @@ fn compute_dirty_datalog(
             }
         }
 
-        // --- Schema dirtiness rules (excluding sinks) ---
-        // Rule 5: DirtySchema(Db, Sch) :- DirtyStmt(O), ObjectInSchema(O, Db, Sch), NOT IsSink(O)
+        // --- Schema dirtiness rules (excluding sinks and replacement MVs) ---
+        // Rule 5: DirtySchema(Db, Sch) :- DirtyStmt(O), ObjectInSchema(O, Db, Sch), NOT IsSink(O), NOT IsReplacement(O)
         for obj in &dirty_stmts {
             // Sinks should NOT make schemas dirty
             if base_facts.is_sink.contains(obj) {
                 verbose!(
                     "  ├─ {}: {} is a sink, not marking schema dirty",
+                    "SKIP".yellow().bold(),
+                    obj.to_string().cyan()
+                );
+                continue;
+            }
+            // Replacement MVs should NOT make schemas dirty
+            // (we want per-MV granularity, not schema-level atomic redeployment)
+            if base_facts.is_replacement.contains(obj) {
+                verbose!(
+                    "  ├─ {}: {} is a replacement MV, not marking schema dirty",
                     "SKIP".yellow().bold(),
                     obj.to_string().cyan()
                 );
@@ -529,9 +601,13 @@ fn compute_dirty_datalog(
             }
         }
 
-        // Rule 6: DirtyStmt(O) :- DirtySchema(Db, Sch), ObjectInSchema(O, Db, Sch)
+        // Rule 6: DirtyStmt(O) :- DirtySchema(Db, Sch), ObjectInSchema(O, Db, Sch), NOT IsReplacement(O)
         for (obj, (db, sch)) in &indexes.object_to_schema {
             if dirty_schemas.contains(&(db.clone(), sch.clone())) {
+                // Replacement MVs should NOT be pulled in by schema dirtiness
+                if base_facts.is_replacement.contains(obj) {
+                    continue;
+                }
                 if dirty_stmts.insert(obj.clone()) {
                     verbose!(
                         "  ├─ {}: DirtyStmt({}) ← in DirtySchema({})",
@@ -656,6 +732,7 @@ mod tests {
             stmt_uses_cluster: vec![],
             index_uses_cluster: vec![],
             is_sink: BTreeSet::new(),
+            is_replacement: BTreeSet::new(),
         };
 
         // Only obj1 is changed
@@ -664,7 +741,7 @@ mod tests {
 
         // Run Datalog computation
         let (dirty_stmts, _dirty_clusters, dirty_schemas) =
-            compute_dirty_datalog(&changed_stmts, &base_facts);
+            compute_dirty_datalog(&changed_stmts, &base_facts, &BTreeSet::new());
 
         // Verify schema is dirty
         assert!(
@@ -733,6 +810,7 @@ mod tests {
                 "quickstart".to_string(),
             )],
             is_sink: BTreeSet::new(),
+            is_replacement: BTreeSet::new(),
         };
 
         // Only other_obj is changed
@@ -741,7 +819,7 @@ mod tests {
 
         // Run Datalog computation
         let (dirty_stmts, dirty_clusters, _dirty_schemas) =
-            compute_dirty_datalog(&changed_stmts, &base_facts);
+            compute_dirty_datalog(&changed_stmts, &base_facts, &BTreeSet::new());
 
         println!("Dirty stmts: {:?}", dirty_stmts);
         println!("Dirty clusters: {:?}", dirty_clusters);
@@ -805,13 +883,14 @@ mod tests {
                 "index_cluster".to_string(),
             )],
             is_sink: BTreeSet::new(),
+            is_replacement: BTreeSet::new(),
         };
 
         let mut changed_stmts = BTreeSet::new();
         changed_stmts.insert(other.clone());
 
         let (dirty_stmts, dirty_clusters, dirty_schemas) =
-            compute_dirty_datalog(&changed_stmts, &base_facts);
+            compute_dirty_datalog(&changed_stmts, &base_facts, &BTreeSet::new());
 
         // index_cluster should be dirty
         assert!(dirty_clusters.iter().any(|c| c.name == "index_cluster"));
@@ -893,13 +972,14 @@ mod tests {
                 ),
             ],
             is_sink: BTreeSet::new(),
+            is_replacement: BTreeSet::new(),
         };
 
         let mut changed_stmts = BTreeSet::new();
         changed_stmts.insert(flippers.clone());
 
         let (dirty_stmts, dirty_clusters, dirty_schemas) =
-            compute_dirty_datalog(&changed_stmts, &base_facts);
+            compute_dirty_datalog(&changed_stmts, &base_facts, &BTreeSet::new());
 
         // materialize.public schema should be dirty
         assert!(dirty_schemas.contains(&("materialize".to_string(), "public".to_string())));
@@ -993,13 +1073,14 @@ mod tests {
                 ),
             ],
             is_sink: BTreeSet::new(),
+            is_replacement: BTreeSet::new(),
         };
 
         let mut changed_stmts = BTreeSet::new();
         changed_stmts.insert(winning_bids.clone());
 
         let (dirty_stmts, dirty_clusters, dirty_schemas) =
-            compute_dirty_datalog(&changed_stmts, &base_facts);
+            compute_dirty_datalog(&changed_stmts, &base_facts, &BTreeSet::new());
 
         println!("Dirty stmts: {:?}", dirty_stmts);
         println!("Dirty schemas: {:?}", dirty_schemas);
@@ -1108,13 +1189,14 @@ mod tests {
                 ),
             ],
             is_sink: BTreeSet::new(),
+            is_replacement: BTreeSet::new(),
         };
 
         let mut changed_stmts = BTreeSet::new();
         changed_stmts.insert(foo_b.clone());
 
         let (dirty_stmts, dirty_clusters, dirty_schemas) =
-            compute_dirty_datalog(&changed_stmts, &base_facts);
+            compute_dirty_datalog(&changed_stmts, &base_facts, &BTreeSet::new());
 
         // Only foo.b should be dirty
         assert!(dirty_stmts.contains(&foo_b), "foo.b should be dirty");
@@ -1159,6 +1241,364 @@ mod tests {
         assert!(
             !dirty_stmts.contains(&flip_activities),
             "flip_activities should NOT be dirty - winning_bids isn't dirty"
+        );
+    }
+
+    // =========================================================================
+    // Replacement MV tests
+    // =========================================================================
+
+    #[test]
+    fn test_replacement_mv_does_not_dirty_its_schema() {
+        // A changed replacement MV should NOT make its schema dirty.
+        // This gives per-MV granularity: only the changed MV is redeployed,
+        // not every object in the schema.
+
+        let mv1 = ObjectId::new("db".to_string(), "analytics".to_string(), "mv1".to_string());
+        let mv2 = ObjectId::new("db".to_string(), "analytics".to_string(), "mv2".to_string());
+        let view1 =
+            ObjectId::new("db".to_string(), "analytics".to_string(), "view1".to_string());
+
+        let mut is_replacement = BTreeSet::new();
+        is_replacement.insert(mv1.clone());
+        is_replacement.insert(mv2.clone());
+        // view1 is NOT a replacement (mixed schema scenario)
+
+        let base_facts = BaseFacts {
+            object_in_schema: vec![
+                (mv1.clone(), "db".to_string(), "analytics".to_string()),
+                (mv2.clone(), "db".to_string(), "analytics".to_string()),
+                (view1.clone(), "db".to_string(), "analytics".to_string()),
+            ],
+            depends_on: vec![],
+            stmt_uses_cluster: vec![],
+            index_uses_cluster: vec![],
+            is_sink: BTreeSet::new(),
+            is_replacement,
+        };
+
+        // Only mv1 changed
+        let mut changed_stmts = BTreeSet::new();
+        changed_stmts.insert(mv1.clone());
+
+        let (dirty_stmts, _dirty_clusters, dirty_schemas) =
+            compute_dirty_datalog(&changed_stmts, &base_facts, &BTreeSet::new());
+
+        // mv1 should be dirty (it changed)
+        assert!(dirty_stmts.contains(&mv1), "mv1 should be dirty");
+
+        // Schema should NOT be dirty (replacement MVs don't propagate to schemas)
+        assert!(
+            !dirty_schemas.contains(&("db".to_string(), "analytics".to_string())),
+            "analytics schema should NOT be dirty - replacement MV doesn't dirty schema"
+        );
+
+        // mv2 should NOT be dirty (schema isn't dirty, so no propagation)
+        assert!(
+            !dirty_stmts.contains(&mv2),
+            "mv2 should NOT be dirty - schema not dirty"
+        );
+
+        // view1 should NOT be dirty either
+        assert!(
+            !dirty_stmts.contains(&view1),
+            "view1 should NOT be dirty - schema not dirty"
+        );
+    }
+
+    #[test]
+    fn test_replacement_mv_does_dirty_its_cluster() {
+        // Unlike sinks, replacement MVs DO make their clusters dirty.
+        // This is because the staging cluster needs to be created for hydration.
+
+        let mv1 = ObjectId::new("db".to_string(), "analytics".to_string(), "mv1".to_string());
+
+        let mut is_replacement = BTreeSet::new();
+        is_replacement.insert(mv1.clone());
+
+        let base_facts = BaseFacts {
+            object_in_schema: vec![(
+                mv1.clone(),
+                "db".to_string(),
+                "analytics".to_string(),
+            )],
+            depends_on: vec![],
+            stmt_uses_cluster: vec![(mv1.clone(), "analytics_cluster".to_string())],
+            index_uses_cluster: vec![],
+            is_sink: BTreeSet::new(),
+            is_replacement,
+        };
+
+        let mut changed_stmts = BTreeSet::new();
+        changed_stmts.insert(mv1.clone());
+
+        let (_dirty_stmts, dirty_clusters, _dirty_schemas) =
+            compute_dirty_datalog(&changed_stmts, &base_facts, &BTreeSet::new());
+
+        assert!(
+            dirty_clusters.iter().any(|c| c.name == "analytics_cluster"),
+            "analytics_cluster should be dirty - replacement MVs DO dirty clusters"
+        );
+    }
+
+    #[test]
+    fn test_replacement_mv_not_pulled_in_by_dirty_schema() {
+        // When a non-replacement object makes a schema dirty,
+        // replacement MVs in that schema should NOT be pulled in (Rule 6 exclusion).
+
+        let regular =
+            ObjectId::new("db".to_string(), "analytics".to_string(), "regular".to_string());
+        let other =
+            ObjectId::new("db".to_string(), "analytics".to_string(), "other".to_string());
+        let replacement_mv =
+            ObjectId::new("db".to_string(), "analytics".to_string(), "my_mv".to_string());
+
+        let mut is_replacement = BTreeSet::new();
+        is_replacement.insert(replacement_mv.clone());
+
+        let base_facts = BaseFacts {
+            object_in_schema: vec![
+                (regular.clone(), "db".to_string(), "analytics".to_string()),
+                (other.clone(), "db".to_string(), "analytics".to_string()),
+                (
+                    replacement_mv.clone(),
+                    "db".to_string(),
+                    "analytics".to_string(),
+                ),
+            ],
+            depends_on: vec![],
+            stmt_uses_cluster: vec![],
+            index_uses_cluster: vec![],
+            is_sink: BTreeSet::new(),
+            is_replacement,
+        };
+
+        // regular object changed -> schema dirty -> other pulled in
+        let mut changed_stmts = BTreeSet::new();
+        changed_stmts.insert(regular.clone());
+
+        let (dirty_stmts, _dirty_clusters, dirty_schemas) =
+            compute_dirty_datalog(&changed_stmts, &base_facts, &BTreeSet::new());
+
+        // Schema should be dirty (regular object changed)
+        assert!(
+            dirty_schemas.contains(&("db".to_string(), "analytics".to_string())),
+            "schema should be dirty from regular object change"
+        );
+
+        // other (non-replacement) should be pulled in via schema propagation
+        assert!(
+            dirty_stmts.contains(&other),
+            "other should be dirty via schema propagation"
+        );
+
+        // replacement_mv should NOT be pulled in
+        assert!(
+            !dirty_stmts.contains(&replacement_mv),
+            "replacement MV should NOT be pulled in by dirty schema"
+        );
+    }
+
+    #[test]
+    fn test_replacement_mv_dirty_via_dependency() {
+        // Replacement MVs should still become dirty if they depend on
+        // another dirty object (Rule 4: DependsOn propagation).
+
+        let upstream =
+            ObjectId::new("db".to_string(), "public".to_string(), "source_view".to_string());
+        let replacement_mv =
+            ObjectId::new("db".to_string(), "analytics".to_string(), "my_mv".to_string());
+
+        let mut is_replacement = BTreeSet::new();
+        is_replacement.insert(replacement_mv.clone());
+
+        let base_facts = BaseFacts {
+            object_in_schema: vec![
+                (upstream.clone(), "db".to_string(), "public".to_string()),
+                (
+                    replacement_mv.clone(),
+                    "db".to_string(),
+                    "analytics".to_string(),
+                ),
+            ],
+            depends_on: vec![(replacement_mv.clone(), upstream.clone())],
+            stmt_uses_cluster: vec![],
+            index_uses_cluster: vec![],
+            is_sink: BTreeSet::new(),
+            is_replacement,
+        };
+
+        let mut changed_stmts = BTreeSet::new();
+        changed_stmts.insert(upstream.clone());
+
+        let (dirty_stmts, _dirty_clusters, dirty_schemas) =
+            compute_dirty_datalog(&changed_stmts, &base_facts, &BTreeSet::new());
+
+        // replacement_mv should be dirty via dependency
+        assert!(
+            dirty_stmts.contains(&replacement_mv),
+            "replacement MV should be dirty - depends on changed upstream"
+        );
+
+        // But analytics schema should NOT be dirty (replacement MV doesn't propagate)
+        assert!(
+            !dirty_schemas.contains(&("db".to_string(), "analytics".to_string())),
+            "analytics schema should NOT be dirty - replacement MV doesn't dirty schema"
+        );
+    }
+
+    #[test]
+    fn test_replacement_mv_dirty_via_cluster() {
+        // When a cluster becomes dirty, replacement MVs on that cluster
+        // should become dirty (Rule 3: StmtUsesCluster propagation).
+
+        let regular = ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "regular_mv".to_string(),
+        );
+        let replacement_mv =
+            ObjectId::new("db".to_string(), "analytics".to_string(), "my_mv".to_string());
+
+        let mut is_replacement = BTreeSet::new();
+        is_replacement.insert(replacement_mv.clone());
+
+        let base_facts = BaseFacts {
+            object_in_schema: vec![
+                (regular.clone(), "db".to_string(), "public".to_string()),
+                (
+                    replacement_mv.clone(),
+                    "db".to_string(),
+                    "analytics".to_string(),
+                ),
+            ],
+            depends_on: vec![],
+            stmt_uses_cluster: vec![
+                (regular.clone(), "shared_cluster".to_string()),
+                (replacement_mv.clone(), "shared_cluster".to_string()),
+            ],
+            index_uses_cluster: vec![],
+            is_sink: BTreeSet::new(),
+            is_replacement,
+        };
+
+        // regular object changes -> shared_cluster dirty -> replacement_mv dirty
+        let mut changed_stmts = BTreeSet::new();
+        changed_stmts.insert(regular.clone());
+
+        let (dirty_stmts, dirty_clusters, dirty_schemas) =
+            compute_dirty_datalog(&changed_stmts, &base_facts, &BTreeSet::new());
+
+        assert!(
+            dirty_clusters.iter().any(|c| c.name == "shared_cluster"),
+            "shared_cluster should be dirty"
+        );
+
+        assert!(
+            dirty_stmts.contains(&replacement_mv),
+            "replacement MV should be dirty - its cluster is dirty"
+        );
+
+        // analytics schema still should NOT be dirty
+        assert!(
+            !dirty_schemas.contains(&("db".to_string(), "analytics".to_string())),
+            "analytics schema should NOT be dirty even though replacement MV is dirty"
+        );
+    }
+
+    #[test]
+    fn test_mixed_replacement_and_regular_in_shared_cluster() {
+        // Real-world scenario: one cluster runs both a replacement schema (MVs)
+        // and a regular schema (views + indexes). When a regular object changes:
+        // - The cluster becomes dirty
+        // - Regular objects on that cluster are pulled in
+        // - Replacement MVs on that cluster are pulled in
+        // - But replacement MVs don't propagate schema dirtiness
+
+        let regular_view = ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "my_view".to_string(),
+        );
+        let regular_view2 = ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "other_view".to_string(),
+        );
+        let replacement_mv1 = ObjectId::new(
+            "db".to_string(),
+            "analytics".to_string(),
+            "mv_alpha".to_string(),
+        );
+        let replacement_mv2 = ObjectId::new(
+            "db".to_string(),
+            "analytics".to_string(),
+            "mv_beta".to_string(),
+        );
+
+        let mut is_replacement = BTreeSet::new();
+        is_replacement.insert(replacement_mv1.clone());
+        is_replacement.insert(replacement_mv2.clone());
+
+        let base_facts = BaseFacts {
+            object_in_schema: vec![
+                (regular_view.clone(), "db".to_string(), "public".to_string()),
+                (
+                    regular_view2.clone(),
+                    "db".to_string(),
+                    "public".to_string(),
+                ),
+                (
+                    replacement_mv1.clone(),
+                    "db".to_string(),
+                    "analytics".to_string(),
+                ),
+                (
+                    replacement_mv2.clone(),
+                    "db".to_string(),
+                    "analytics".to_string(),
+                ),
+            ],
+            depends_on: vec![],
+            stmt_uses_cluster: vec![
+                (regular_view.clone(), "shared".to_string()),
+                (replacement_mv1.clone(), "shared".to_string()),
+                (replacement_mv2.clone(), "shared".to_string()),
+            ],
+            index_uses_cluster: vec![],
+            is_sink: BTreeSet::new(),
+            is_replacement,
+        };
+
+        let mut changed_stmts = BTreeSet::new();
+        changed_stmts.insert(regular_view.clone());
+
+        let (dirty_stmts, dirty_clusters, dirty_schemas) =
+            compute_dirty_datalog(&changed_stmts, &base_facts, &BTreeSet::new());
+
+        // Cluster dirty
+        assert!(dirty_clusters.iter().any(|c| c.name == "shared"));
+
+        // public schema dirty (regular object changed)
+        assert!(dirty_schemas.contains(&("db".to_string(), "public".to_string())));
+
+        // regular_view2 pulled in via schema propagation
+        assert!(dirty_stmts.contains(&regular_view2));
+
+        // Both replacement MVs dirty via cluster
+        assert!(
+            dirty_stmts.contains(&replacement_mv1),
+            "replacement_mv1 should be dirty via cluster"
+        );
+        assert!(
+            dirty_stmts.contains(&replacement_mv2),
+            "replacement_mv2 should be dirty via cluster"
+        );
+
+        // analytics schema should NOT be dirty
+        assert!(
+            !dirty_schemas.contains(&("db".to_string(), "analytics".to_string())),
+            "analytics schema should NOT be dirty - only replacement MVs are there"
         );
     }
 }

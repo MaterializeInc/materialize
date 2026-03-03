@@ -75,6 +75,12 @@ pub async fn run(profile: &Profile, deploy_id: &str) -> Result<(), CliError> {
         .await
         .map_err(|source| CliError::DeploymentStateWriteFailed { source })?;
 
+    // Clean up replacement MV records
+    client
+        .delete_replacement_mvs(deploy_id)
+        .await
+        .map_err(|source| CliError::DeploymentStateWriteFailed { source })?;
+
     // Clean up apply state schemas if they exist (from interrupted apply)
     client
         .delete_apply_state_schemas(deploy_id)

@@ -6,6 +6,7 @@
 use super::super::ast::Statement;
 use super::super::normalize::{ClusterTransformer, NameTransformer, NormalizingVisitor};
 use super::super::object_id::ObjectId;
+use super::super::raw::ProjectConfig;
 use crate::project::error::ValidationError;
 use crate::project::error::ValidationErrorKind;
 use mz_sql_parser::ast::*;
@@ -416,4 +417,6 @@ pub struct Database {
 pub struct Project {
     /// All validated databases in this project
     pub databases: Vec<Database>,
+    /// Project configuration from `mz_project.toml`
+    pub config: ProjectConfig,
 }

@@ -424,7 +424,7 @@ pub async fn find_sinks_depending_on_schemas(
         FROM mz_sinks sinks
         JOIN mz_schemas sink_schema ON sinks.schema_id = sink_schema.id
         JOIN mz_databases sink_db ON sink_schema.database_id = sink_db.id
-        JOIN mz_object_dependencies deps ON sinks.id = deps.object_id
+        JOIN mz_internal.mz_object_dependencies deps ON sinks.id = deps.object_id
         JOIN mz_objects dep_obj ON deps.referenced_object_id = dep_obj.id
         JOIN mz_schemas dep_schema ON dep_obj.schema_id = dep_schema.id
         JOIN mz_databases dep_db ON dep_schema.database_id = dep_db.id

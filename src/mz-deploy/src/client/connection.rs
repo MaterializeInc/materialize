@@ -931,6 +931,31 @@ impl Client {
     }
 
     // =========================================================================
+    // Replacement MV Operations
+    // =========================================================================
+
+    /// Insert replacement MV records for a deployment.
+    pub async fn insert_replacement_mvs(
+        &self,
+        records: &[crate::client::models::ReplacementMvRecord],
+    ) -> Result<(), ConnectionError> {
+        deployment_ops::insert_replacement_mvs(&self.client, records).await
+    }
+
+    /// Get replacement MV records for a deployment.
+    pub async fn get_replacement_mvs(
+        &self,
+        deploy_id: &str,
+    ) -> Result<Vec<crate::client::models::ReplacementMvRecord>, ConnectionError> {
+        deployment_ops::get_replacement_mvs(&self.client, deploy_id).await
+    }
+
+    /// Delete all replacement MV records for a deployment.
+    pub async fn delete_replacement_mvs(&self, deploy_id: &str) -> Result<(), ConnectionError> {
+        deployment_ops::delete_replacement_mvs(&self.client, deploy_id).await
+    }
+
+    // =========================================================================
     // Introspection Operations
     // =========================================================================
 

@@ -1,4 +1,4 @@
-use mz_sql_parser::ast::{RawItemName, UnresolvedItemName};
+use mz_sql_parser::ast::{Ident, RawItemName, UnresolvedItemName};
 
 /// A fully qualified object identifier.
 ///
@@ -75,6 +75,15 @@ impl ObjectId {
     ) -> Self {
         // RawItemName wraps UnresolvedItemName
         Self::from_item_name(name.name(), default_database, default_schema)
+    }
+
+    /// Convert to an `UnresolvedItemName` (the reverse of `from_item_name`).
+    pub fn to_unresolved_item_name(&self) -> UnresolvedItemName {
+        UnresolvedItemName(vec![
+            Ident::new(&self.database).expect("valid database"),
+            Ident::new(&self.schema).expect("valid schema"),
+            Ident::new(&self.object).expect("valid object"),
+        ])
     }
 
     /// Parse an ObjectId from a fully qualified name string.

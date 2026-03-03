@@ -16,6 +16,8 @@ pub enum DeploymentKind {
     Objects,
     /// Contains sinks
     Sinks,
+    /// Contains replacement materialized views (drop after apply, not swap)
+    Replacement,
 }
 
 impl fmt::Display for DeploymentKind {
@@ -24,6 +26,7 @@ impl fmt::Display for DeploymentKind {
             DeploymentKind::Tables => write!(f, "tables"),
             DeploymentKind::Objects => write!(f, "objects"),
             DeploymentKind::Sinks => write!(f, "sinks"),
+            DeploymentKind::Replacement => write!(f, "replacement"),
         }
     }
 }
@@ -36,6 +39,7 @@ impl FromStr for DeploymentKind {
             "tables" => Ok(DeploymentKind::Tables),
             "objects" => Ok(DeploymentKind::Objects),
             "sinks" => Ok(DeploymentKind::Sinks),
+            "replacement" => Ok(DeploymentKind::Replacement),
             _ => Err(format!("Invalid deployment kind: {}", s)),
         }
     }
@@ -291,6 +295,27 @@ pub enum ApplyState {
     PostSwap,
 }
 
+/// A replacement materialized view record tracking the mapping between
+/// the replacement MV (in staging schema) and its production target.
+///
+/// The replacement MV lives in a staging schema (`target_schema` + staging suffix)
+/// within the same database, and has the same object name as the target.
+///
+/// Stored in `_mz_deploy.public.replacement_mvs` table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplacementMvRecord {
+    /// Deploy ID this replacement belongs to
+    pub deploy_id: String,
+    /// Database of the target (and replacement) MV
+    pub target_database: String,
+    /// Schema of the production target MV
+    pub target_schema: String,
+    /// Name of the target (and replacement) MV
+    pub target_name: String,
+    /// Schema of the replacement MV (staging) — typically `target_schema` + staging suffix
+    pub replacement_schema: String,
+}
+
 /// A pending statement to be executed after the swap.
 ///
 /// Used for deferred execution of statements like sinks that cannot
@@ -354,6 +379,7 @@ mod tests {
             DeploymentKind::Tables,
             DeploymentKind::Objects,
             DeploymentKind::Sinks,
+            DeploymentKind::Replacement,
         ] {
             let s = kind.to_string();
             let parsed: DeploymentKind = s.parse().unwrap();

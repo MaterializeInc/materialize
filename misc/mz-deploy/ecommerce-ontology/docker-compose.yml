@@ -15,6 +15,7 @@ services:
     command:
       - --system-parameter-default=enable_create_table_from_source=true
     ports:
+      - "6874:6874"
       - "6875:6875"
       - "6876:6876"
       - "6878:6878"

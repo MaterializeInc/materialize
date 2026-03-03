@@ -1,6 +1,7 @@
 //! Type definitions for the planned representation.
 
 use super::super::ast::Cluster;
+use super::super::raw::ProjectConfig;
 use super::super::typed;
 use crate::project::object_id::ObjectId;
 use mz_sql_parser::ast::*;
@@ -90,4 +91,6 @@ pub struct Project {
     pub cluster_dependencies: BTreeSet<Cluster>,
     /// Unit tests defined in the project, organized by the object they test
     pub tests: Vec<(ObjectId, crate::unit_test::UnitTest)>,
+    /// Project configuration from `mz_project.toml`
+    pub config: ProjectConfig,
 }
