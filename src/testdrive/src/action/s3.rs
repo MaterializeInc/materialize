@@ -413,6 +413,8 @@ pub async fn run_upload_parquet_types(
     Ok(ControlFlow::Continue)
 }
 
+// Using `as ArrayRef` is necessary when creating the struct array because the inner arrays have different types.
+#[allow(clippy::as_conversions)]
 fn build_parquet_types_batch() -> Result<RecordBatch, anyhow::Error> {
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
 
@@ -466,14 +468,14 @@ fn build_parquet_types_batch() -> Result<RecordBatch, anyhow::Error> {
     }
     list_builder.append(true);
     list_builder.append(true); // empty list
-    let list_array = Arc::new(list_builder.finish()) as ArrayRef;
+    let list_array = Arc::new(list_builder.finish());
 
     // decimal128(precision=10, scale=5): -54.321, 123.45, null
     let decimal_array = Arc::new(
         Decimal128Array::from(vec![Some(-5_432_100i128), Some(12_345_000i128), None])
             .with_precision_and_scale(10, 5)
             .context("setting decimal precision/scale")?,
-    ) as ArrayRef;
+    );
 
     // struct/record: (name text, age int32, avg float64)
     let struct_array = Arc::new(StructArray::from(vec![
@@ -489,7 +491,7 @@ fn build_parquet_types_batch() -> Result<RecordBatch, anyhow::Error> {
             Arc::new(Field::new("avg", DataType::Float64, true)),
             Arc::new(Float64Array::from(vec![2.2, 4.5, 1.14])) as ArrayRef,
         ),
-    ])) as ArrayRef;
+    ]));
 
     // uuid: FixedSizeBinary(16) with arrow.uuid extension metadata
     let mut uuid_builder = FixedSizeBinaryBuilder::with_capacity(3, 16);
@@ -503,14 +505,14 @@ fn build_parquet_types_batch() -> Result<RecordBatch, anyhow::Error> {
             .append_value(uuid_val.as_bytes())
             .context("appending uuid bytes")?;
     }
-    let uuid_array = Arc::new(uuid_builder.finish()) as ArrayRef;
+    let uuid_array = Arc::new(uuid_builder.finish());
 
     // variable-length binary
     let mut binary_builder = BinaryBuilder::new();
     binary_builder.append_value(b"raw1");
     binary_builder.append_value(b"raw2");
     binary_builder.append_value(b"raw3");
-    let binary_array = Arc::new(binary_builder.finish()) as ArrayRef;
+    let binary_array = Arc::new(binary_builder.finish());
 
     let mut uuid_metadata = HashMap::new();
     uuid_metadata.insert("ARROW:extension:name".to_string(), "arrow.uuid".to_string());
@@ -561,37 +563,37 @@ fn build_parquet_types_batch() -> Result<RecordBatch, anyhow::Error> {
     let batch = RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(Int8Array::from(vec![-1i8, 2, 3])) as ArrayRef,
-            Arc::new(UInt8Array::from(vec![10u8, 20, 30])) as ArrayRef,
-            Arc::new(Int16Array::from(vec![-1000i16, 2000, 3000])) as ArrayRef,
-            Arc::new(UInt16Array::from(vec![10000u16, 20000, 30000])) as ArrayRef,
-            Arc::new(Int32Array::from(vec![-100000i32, 200000, 300000])) as ArrayRef,
-            Arc::new(UInt32Array::from(vec![1000000u32, 2000000, 3000000])) as ArrayRef,
+            Arc::new(Int8Array::from(vec![-1i8, 2, 3])),
+            Arc::new(UInt8Array::from(vec![10u8, 20, 30])),
+            Arc::new(Int16Array::from(vec![-1000i16, 2000, 3000])),
+            Arc::new(UInt16Array::from(vec![10000u16, 20000, 30000])),
+            Arc::new(Int32Array::from(vec![-100000i32, 200000, 300000])),
+            Arc::new(UInt32Array::from(vec![1000000u32, 2000000, 3000000])),
             Arc::new(Int64Array::from(vec![
                 -1_000_000_000i64,
                 2_000_000_000,
                 3_000_000_000,
-            ])) as ArrayRef,
+            ])),
             Arc::new(UInt64Array::from(vec![
                 1_000_000_000_000_000_000u64,
                 2_000_000_000_000_000_000,
                 3_000_000_000_000_000_000,
-            ])) as ArrayRef,
-            Arc::new(Float32Array::from(vec![-1.0f32, 2.5, 3.7])) as ArrayRef,
-            Arc::new(Float64Array::from(vec![-1.0f64, 2.5, 3.7])) as ArrayRef,
-            Arc::new(BooleanArray::from(vec![true, false, true])) as ArrayRef,
-            Arc::new(StringArray::from(vec!["apple", "banana", "cherry"])) as ArrayRef,
+            ])),
+            Arc::new(Float32Array::from(vec![-1.0f32, 2.5, 3.7])),
+            Arc::new(Float64Array::from(vec![-1.0f64, 2.5, 3.7])),
+            Arc::new(BooleanArray::from(vec![true, false, true])),
+            Arc::new(StringArray::from(vec!["apple", "banana", "cherry"])),
             binary_array,
-            Arc::new(Date32Array::from(date_values)) as ArrayRef,
-            Arc::new(TimestampMillisecondArray::from(datetime_values)) as ArrayRef,
-            Arc::new(Time32SecondArray::from(time_values)) as ArrayRef,
+            Arc::new(Date32Array::from(date_values)),
+            Arc::new(TimestampMillisecondArray::from(datetime_values)),
+            Arc::new(Time32SecondArray::from(time_values)),
             list_array,
             decimal_array,
             Arc::new(StringArray::from(vec![
                 r#"{"a": 5, "b": { "c": 1.1 } }"#,
                 r#"{ "d": "str", "e" : [1,2,3] }"#,
                 "{}",
-            ])) as ArrayRef,
+            ])),
             struct_array,
             uuid_array,
         ],
