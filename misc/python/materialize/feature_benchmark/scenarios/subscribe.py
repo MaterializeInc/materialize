@@ -115,6 +115,51 @@ class SubscribeParallelKafka(SubscribeParallel):
             """)
 
 
+class SubscribeParallelLarge(Scenario):
+    """Feature benchmarks related to SUBSCRIBE with a large initial dataset."""
+
+    SCALE = 6
+
+    def benchmark(self) -> MeasurementSource:
+        total_size = self.n()
+        step = min(100_000, total_size)
+        return Td(
+            dedent(
+                dedent("""
+                    > DROP TABLE IF EXISTS s1;
+                    > CREATE TABLE s1 (f2 INTEGER);
+                    """)
+                + "\n".join(
+                    f"> INSERT INTO s1 SELECT generate_series FROM generate_series({n+1}, {n+step});"
+                    for n in range(0, total_size, step)
+                )
+                # Note that we use a separate connection for the subscribe, largely so we ignore the (large) result
+                # set instead of matching against it in testdrive code; we're interested in performance and not validating
+                # the actual contents.
+                + dedent(f"""
+                    > SELECT COUNT(*) FROM s1;
+                      /* A */
+                    {total_size}
+
+                    $ postgres-execute connection=postgres://materialize@${{testdrive.materialize-sql-addr}}
+                    START TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+                    DECLARE c1 CURSOR FOR SUBSCRIBE (SELECT * FROM s1);
+                    """)
+                + "\n".join(
+                    f"FETCH {step} c1 WITH (TIMEOUT = '60s');"
+                    for n in range(0, total_size, step)
+                )
+                + dedent("""
+                    COMMIT;
+
+                    > SELECT 1;
+                      /* B */
+                    1
+                    """)
+            )
+        )
+
+
 class SubscribeNoSnapshotTable(Scenario):
     """Feature benchmarks related to SUBSCRIBE without a snapshot"""
 
