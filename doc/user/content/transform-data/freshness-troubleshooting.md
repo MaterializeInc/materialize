@@ -279,6 +279,87 @@ WHERE o.type = 'sink'
 ORDER BY ml.local_lag DESC;
 ```
 
+## Measuring aggregate freshness
+
+The steps above diagnose individual objects.
+To measure overall freshness across your deployment — for example, to answer "what is our P99.999 freshness?" — aggregate over `mz_internal.mz_wallclock_global_lag_history`.
+
+### Filtering noise
+
+Raw aggregation over all objects produces misleading results because several categories of objects report high lag without representing a real freshness problem:
+
+* **Paused sources**: A deliberately paused source stops ingesting data and its lag grows indefinitely.
+  Filter these out by joining `mz_internal.mz_source_statuses` and excluding `status = 'paused'`.
+* **Zero-replica clusters**: Clusters with `replication_factor = 0` have no compute assigned.
+  Their frontiers are frozen and lag grows linearly over time, but no work is expected.
+* **Static data (dbt seeds, snapshots)**: Tables loaded once and never updated accumulate lag equal to their age.
+  Filter by cluster name or object name patterns.
+* **Non-production clusters**: Development or staging clusters (`_dev`, `_uat` suffixes) may not represent production freshness.
+
+### Peak and threshold-based freshness
+
+Materialize does not support `percentile_disc ... WITHIN GROUP`.
+At the sample sizes available in `mz_wallclock_global_lag_history` (one row per minute per object, 30-day retention), P99.999 is effectively `max(lag)`.
+A more useful approach is to count how many minutes exceed specific thresholds:
+
+```mzsql
+SELECT
+    o.name,
+    o.type,
+    c.name AS cluster_name,
+    max(wl.lag) AS peak_lag,
+    avg(extract(epoch FROM wl.lag))::int || 's' AS avg_lag,
+    count(*) AS total_minutes,
+    count(*) FILTER (WHERE wl.lag > INTERVAL '10 seconds') AS above_10s,
+    count(*) FILTER (WHERE wl.lag > INTERVAL '1 minute') AS above_1m,
+    count(*) FILTER (WHERE wl.lag > INTERVAL '5 minutes') AS above_5m,
+    count(*) FILTER (WHERE wl.lag > INTERVAL '30 minutes') AS above_30m
+FROM mz_internal.mz_wallclock_global_lag_history wl
+JOIN mz_catalog.mz_objects o ON wl.object_id = o.id
+LEFT JOIN mz_catalog.mz_clusters c ON o.cluster_id = c.id
+LEFT JOIN mz_internal.mz_source_statuses ss ON o.id = ss.id
+WHERE wl.occurred_at > now() - INTERVAL '7 days'
+  AND o.id LIKE 'u%'
+  AND wl.lag IS NOT NULL
+  -- Exclude paused sources
+  AND (ss.id IS NULL OR ss.status != 'paused')
+  -- Exclude zero-replica clusters
+  AND (c.id IS NULL OR c.replication_factor > 0)
+GROUP BY o.name, o.type, c.name
+HAVING max(wl.lag) > INTERVAL '10 seconds'
+ORDER BY max(wl.lag) DESC
+LIMIT 30;
+```
+
+{{< note >}}
+`avg(wl.lag)` does not work directly because Materialize does not support `sum(interval)`.
+Use `avg(extract(epoch FROM wl.lag))` to compute the average in seconds instead.
+{{< /note >}}
+
+### Cluster-level freshness summary
+
+To get a per-cluster summary (useful for SLO reporting):
+
+```mzsql
+SELECT
+    c.name AS cluster_name,
+    count(DISTINCT wl.object_id) AS objects,
+    max(wl.lag) AS peak_lag,
+    avg(extract(epoch FROM wl.lag))::int || 's' AS avg_lag,
+    count(*) FILTER (WHERE wl.lag > INTERVAL '1 minute') AS minutes_above_1m
+FROM mz_internal.mz_wallclock_global_lag_history wl
+JOIN mz_catalog.mz_objects o ON wl.object_id = o.id
+JOIN mz_catalog.mz_clusters c ON o.cluster_id = c.id
+LEFT JOIN mz_internal.mz_source_statuses ss ON o.id = ss.id
+WHERE wl.occurred_at > now() - INTERVAL '7 days'
+  AND o.id LIKE 'u%'
+  AND wl.lag IS NOT NULL
+  AND (ss.id IS NULL OR ss.status != 'paused')
+  AND c.replication_factor > 0
+GROUP BY c.name
+ORDER BY max(wl.lag) DESC;
+```
+
 ## Investigating historical spikes
 
 Materialize retains wallclock lag history for up to 30 days in [`mz_internal.mz_wallclock_global_lag_history`](/sql/system-catalog/mz_internal/#mz_wallclock_global_lag_history), binned by minute.
@@ -411,6 +492,40 @@ Use the [historical spike analysis](#determine-spike-scope) to confirm that all 
 
 **Resolution**: These spikes are typically transient and self-resolving.
 If they recur frequently, check environment upgrade schedules and storage layer health.
+
+### Paused source
+
+**Symptoms**: Extremely high wallclock lag (days or more) on a single source and all downstream objects.
+Other sources are unaffected.
+
+**Diagnosis**: The source is intentionally paused.
+Check `mz_internal.mz_source_statuses` — a status of `paused` confirms this.
+Unlike a stalled source, a paused source has no error and was deliberately stopped.
+
+**Resolution**: This is expected behavior for a paused source.
+If the source should be active, resume it with `ALTER SOURCE ... SET (STATUS = 'running')`.
+When measuring aggregate freshness, exclude paused sources to avoid skewing metrics.
+
+### Zero-replica cluster
+
+**Symptoms**: All objects on a cluster show wallclock lag that grows linearly over time (1 minute per minute).
+The cluster has no entries in `mz_internal.mz_cluster_replica_utilization`.
+Source health for root inputs is normal.
+
+**Diagnosis**: The cluster has `replication_factor = 0`, meaning no replicas are assigned.
+With no compute, frontiers are frozen and lag grows indefinitely:
+
+```mzsql
+SELECT c.name, c.replication_factor
+FROM mz_catalog.mz_clusters c
+WHERE c.replication_factor = 0;
+```
+
+This is common for clusters used only during scheduled batch jobs (e.g., dbt snapshot runs) where replicas are scaled to zero between runs to save costs.
+
+**Resolution**: This is expected behavior for zero-replica clusters.
+Scale the cluster up when compute is needed.
+When measuring aggregate freshness, exclude zero-replica clusters to avoid skewing metrics.
 
 ### Correlated subsource lag
 
