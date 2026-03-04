@@ -12,6 +12,39 @@
 //! environmentd embeds an HTTP server for introspection into the running
 //! process. At the moment, its primary exports are Prometheus metrics, heap
 //! profiles, and catalog dumps.
+//!
+//! ## Authentication flow
+//!
+//! The server supports several authentication modes, controlled by the
+//! configured [`AuthenticatorKind`]. The general flow is:
+//!
+//! 1. **Identity resolution.** An authentication middleware runs on every
+//!    protected request and resolves the caller's identity via one of:
+//!    - **Credentials in headers.** The caller supplies a username/password or
+//!      token in the request headers. Supported by all [`AuthenticatorKind`]s.
+//!    - **Session reuse.** If the caller has an active authenticated session
+//!      (established via `POST /api/login`) and has not supplied credentials
+//!      in the request headers, the session is reused. Only available for
+//!      [`AuthenticatorKind::Password`] and [`AuthenticatorKind::Oidc`].
+//!    - **Trusted header injection.** A trusted upstream proxy (e.g. Teleport)
+//!      may inject the caller's identity into the request headers. Only available
+//!      for [`AuthenticatorKind::None`].
+//!
+//! 2. **Session initialization.** Once the caller's identity is known, an
+//!    adapter session is opened on their behalf. This happens as part of
+//!    request processing, after all middleware has run.
+//!
+//! 3. **Request handling.** The handler executes the request (e.g. runs SQL)
+//!    using the initialized adapter session.
+//!
+//! ### WebSocket
+//!
+//! The WebSocket flow is identical to the HTTP flow with two differences:
+//!
+//! - Credentials are not read from request headers. Instead, the first
+//!   message sent by the client is treated as the authentication message.
+//! - Session initialization (step 2) happens inside the WebSocket handler
+//!   itself, rather than as a separate middleware step.
 
 // Axum handlers must use async, but often don't actually use `await`.
 #![allow(clippy::unused_async)]
@@ -83,7 +116,7 @@ use tracing::warn;
 
 use crate::BUILD_INFO;
 use crate::deployment::state::DeploymentStateHandle;
-use crate::http::sql::SqlError;
+use crate::http::sql::{ExistingUser, SqlError};
 
 mod catalog;
 mod cluster;
@@ -771,7 +804,7 @@ where
 }
 
 #[derive(Debug, Error)]
-pub enum AuthError {
+pub(crate) enum AuthError {
     #[error("role dissallowed")]
     RoleDisallowed(String),
     #[error("{0}")]
@@ -958,7 +991,7 @@ async fn init_ws(
         helm_chart_version,
         allowed_roles,
     }: WsState,
-    existing_user: Option<AuthedUser>,
+    existing_user: Option<ExistingUser>,
     peer_addr: IpAddr,
     ws: &mut WebSocket,
 ) -> Result<AuthedClient, anyhow::Error> {
@@ -1003,21 +1036,26 @@ async fn init_ws(
         WebSocketAuth::OptionsOnly { options } => (None, options),
     };
 
-    let (user, options) = if let Some(creds) = creds {
-        let authenticator = get_authenticator(
-            authenticator_kind,
-            Some(&creds),
-            frontegg,
-            &oidc_rx,
-            &adapter_client_rx,
-        )
-        .await;
-        let user = auth(&authenticator, Some(creds), allowed_roles, false).await?;
-        (user, options)
-    } else if let Some(existing_user) = existing_user {
-        (existing_user, options)
-    } else {
-        anyhow::bail!("expected auth information");
+    let user = match (existing_user, creds) {
+        (Some(ExistingUser::XMaterializeUserHeader(_)), Some(_creds)) => {
+            warn!("Unexpected bearer or basic auth provided when using user header");
+            anyhow::bail!("unexpected")
+        }
+        (Some(ExistingUser::Session(user)), None)
+        | (Some(ExistingUser::XMaterializeUserHeader(user)), None) => user,
+        (_, Some(creds)) => {
+            let authenticator = get_authenticator(
+                authenticator_kind,
+                Some(&creds),
+                frontegg,
+                &oidc_rx,
+                &adapter_client_rx,
+            )
+            .await;
+            let user = auth(&authenticator, Some(creds), allowed_roles, false).await?;
+            user
+        }
+        (None, None) => anyhow::bail!("expected auth information"),
     };
 
     let client = AuthedClient::new(
@@ -1074,8 +1112,8 @@ async fn get_authenticator(
 
 /// Attempts to retrieve session data from a [`TowerSession`], if available.
 /// Session data is present only if an authenticated session has been
-/// established via [`crate::http::handle_login`].
-pub async fn maybe_get_authenticated_session(
+/// established via [`handle_login`].
+pub(crate) async fn maybe_get_authenticated_session(
     session: Option<&TowerSession>,
 ) -> Option<(&TowerSession, TowerSessionData)> {
     if let Some(session) = session {
@@ -1083,12 +1121,12 @@ pub async fn maybe_get_authenticated_session(
             return Some((session, session_data));
         }
     }
-    return None;
+    None
 }
 
 /// Ensures the session is still valid by checking for expiration,
 /// and returns the associated user if the session remains active.
-pub async fn ensure_session_unexpired(
+pub(crate) async fn ensure_session_unexpired(
     session: &TowerSession,
     session_data: TowerSessionData,
 ) -> Result<AuthedUser, AuthError> {
@@ -1108,11 +1146,11 @@ pub async fn ensure_session_unexpired(
         .await
         .map_err(|_| AuthError::FailedToUpdateSession)?;
 
-    return Ok(AuthedUser {
+    Ok(AuthedUser {
         name: session_data.username,
         external_metadata_rx: None,
         authenticated: session_data.authenticated,
-    });
+    })
 }
 
 async fn auth(

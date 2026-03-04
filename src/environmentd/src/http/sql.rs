@@ -277,7 +277,17 @@ pub async fn handle_sql(
     }
 }
 
-pub async fn handle_sql_ws(
+#[derive(Debug)]
+pub enum ExistingUser {
+    /// An AuthedUser provided by the
+    /// `x_materialize_user_header_auth` middleware
+    XMaterializeUserHeader(AuthedUser),
+    /// An AuthedUser provided by an authenticated session
+    /// established via [`crate::http::handle_login`].
+    Session(AuthedUser),
+}
+
+pub(crate) async fn handle_sql_ws(
     State(state): State<WsState>,
     existing_user: Option<Extension<AuthedUser>>,
     ws: WebSocketUpgrade,
@@ -287,12 +297,12 @@ pub async fn handle_sql_ws(
     let session = tower_session.map(|Extension(session)| session);
     // The `x_materialize_user_header_auth` middleware may have already provided the user for us
     let user = match existing_user {
-        Some(Extension(user)) => Some(user),
+        Some(Extension(user)) => Some(ExistingUser::XMaterializeUserHeader(user)),
         None => {
             let session = maybe_get_authenticated_session(session.as_ref()).await;
             if let Some((session, session_data)) = session {
                 let user = ensure_session_unexpired(session, session_data).await?;
-                Some(user)
+                Some(ExistingUser::Session(user))
             } else {
                 None
             }
@@ -325,7 +335,7 @@ pub enum WebSocketAuth {
     },
 }
 
-async fn run_ws(state: WsState, user: Option<AuthedUser>, peer_addr: IpAddr, mut ws: WebSocket) {
+async fn run_ws(state: WsState, user: Option<ExistingUser>, peer_addr: IpAddr, mut ws: WebSocket) {
     let mut client = match init_ws(state, user, peer_addr, &mut ws).await {
         Ok(client) => client,
         Err(e) => {
