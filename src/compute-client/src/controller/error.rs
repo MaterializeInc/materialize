@@ -116,6 +116,9 @@ pub enum DataflowCreationError {
     /// The dataflow definition has doesn't have an `as_of` set.
     #[error("dataflow definition lacks an as_of value")]
     MissingAsOf,
+    /// The target replica does not host the peeked index.
+    #[error("replica {0} does not host the target index")]
+    ReplicaNotHostingIndex(ReplicaId),
     /// One of the imported collections has a read frontier greater than the dataflow `as_of`.
     #[error("dataflow has an as_of not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),
@@ -153,9 +156,9 @@ pub enum PeekError {
     /// The replica that the peek was issued against does not exist.
     #[error("replica does not exist: {0}")]
     ReplicaMissing(ReplicaId),
-    /// The target replica does not host the peeked collection.
-    #[error("replica {0} does not host the target collection")]
-    ReplicaNotHosting(ReplicaId),
+    /// The target replica does not host the peeked index.
+    #[error("replica {0} does not host the target index")]
+    ReplicaNotHostingIndex(ReplicaId),
     /// The read hold that was passed in is for a later time than the peek's timestamp.
     #[error("peek timestamp is not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),

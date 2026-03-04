@@ -406,9 +406,9 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
     /// Return the IDs of in-progress subscribes targeting the specified replica.
     fn subscribes_targeting(&self, replica_id: ReplicaId) -> impl Iterator<Item = GlobalId> + '_ {
-        self.subscribes.iter().filter_map(move |(id, subscribe)| {
-            let targeting = subscribe.target_replica == Some(replica_id);
-            targeting.then_some(*id)
+        self.subscribes.keys().copied().filter(move |id| {
+            let collection = self.expect_collection(*id);
+            collection.target_replica == Some(replica_id)
         })
     }
 
@@ -917,14 +917,11 @@ where
     }
 
     pub(super) async fn run(mut self) {
-        self.send(
-            ComputeCommand::Hello {
-                // The nonce is protocol iteration-specific and will be set in
-                // `ReplicaTask::specialize_command`.
-                nonce: Uuid::default(),
-            },
-            None,
-        );
+        self.send(ComputeCommand::Hello {
+            // The nonce is protocol iteration-specific and will be set in
+            // `ReplicaTask::specialize_command`.
+            nonce: Uuid::default(),
+        });
 
         let instance_config = InstanceConfig {
             peek_stash_persist_location: self.peek_stash_persist_location.clone(),
@@ -934,10 +931,7 @@ where
             expiration_offset: Default::default(),
         };
 
-        self.send(
-            ComputeCommand::CreateInstance(Box::new(instance_config)),
-            None,
-        );
+        self.send(ComputeCommand::CreateInstance(Box::new(instance_config)));
 
         loop {
             tokio::select! {
@@ -961,7 +955,7 @@ where
         }
 
         let command = ComputeCommand::UpdateConfiguration(Box::new(config_params));
-        self.send(command, None);
+        self.send(command);
     }
 
     /// Marks the end of any initialization commands.
@@ -972,7 +966,7 @@ where
     pub fn initialization_complete(&mut self) {
         // The compute protocol requires that `InitializationComplete` is sent only once.
         if !self.initialized {
-            self.send(ComputeCommand::InitializationComplete, None);
+            self.send(ComputeCommand::InitializationComplete);
             self.initialized = true;
         }
     }
@@ -999,7 +993,7 @@ where
         }
 
         collection.read_only = false;
-        self.send(ComputeCommand::AllowWrites(collection_id), None);
+        self.send(ComputeCommand::AllowWrites(collection_id));
 
         Ok(())
     }
@@ -1027,22 +1021,38 @@ where
     }
 
     /// Sends a command to replicas of this instance.
-    ///
-    /// If `target_replica` is `Some`, the command is sent only to that replica. Otherwise,
-    /// for commands that target a specific collection (via [`ComputeCommand::collection_id`]),
-    /// the command is only sent to the replica maintaining that collection, if the collection
-    /// is targeted at a specific replica. Otherwise, the command is sent to all replicas.
     #[mz_ore::instrument(level = "debug")]
-    fn send(&mut self, cmd: ComputeCommand<T>, target_replica: Option<ReplicaId>) {
+    fn send(&mut self, cmd: ComputeCommand<T>) {
         // Record the command so that new replicas can be brought up to speed.
         self.history.push(cmd.clone());
 
-        let target = target_replica.or_else(|| {
-            cmd.collection_id()
-                .and_then(|id| self.collections.get(&id))
-                .and_then(|c| c.target_replica)
-        });
-        if let Some(rid) = target {
+        let target_replica = match &cmd {
+            ComputeCommand::Schedule(id)
+            | ComputeCommand::AllowWrites(id)
+            | ComputeCommand::AllowCompaction { id, .. } => {
+                self.expect_collection(*id).target_replica
+            }
+            ComputeCommand::CreateDataflow(desc) => {
+                let mut target_replica = None;
+                for id in desc.export_ids() {
+                    if let Some(replica) = self.expect_collection(id).target_replica {
+                        if target_replica.is_some() {
+                            assert_eq!(target_replica, Some(replica));
+                        }
+                        target_replica = Some(replica);
+                    }
+                }
+                target_replica
+            }
+            ComputeCommand::Peek(_)
+            | ComputeCommand::Hello { .. }
+            | ComputeCommand::CreateInstance(_)
+            | ComputeCommand::InitializationComplete
+            | ComputeCommand::UpdateConfiguration(_)
+            | ComputeCommand::CancelPeek { .. } => None,
+        };
+
+        if let Some(rid) = target_replica {
             if let Some(replica) = self.replicas.get_mut(&rid) {
                 let _ = replica.client.send(cmd);
             }
@@ -1086,9 +1096,8 @@ where
         self.history.update_source_uppers(&self.storage_collections);
 
         // Replay the commands at the client, creating new dataflow identifiers.
-        // Skip dataflows targeted at other replicas, along with their dependent commands.
-        let mut skipped_ids = BTreeSet::new();
         for command in self.history.iter() {
+            // Skip `CreateDataflow` commands targeted at different replicas.
             if let ComputeCommand::CreateDataflow(dataflow) = &command {
                 let all_exports_skip = dataflow.export_ids().all(|eid| {
                     self.collections
@@ -1097,16 +1106,10 @@ where
                         .is_some_and(|rid| rid != id)
                 });
                 if all_exports_skip {
-                    skipped_ids.extend(dataflow.export_ids());
                     continue;
                 }
             }
-            if command
-                .collection_id()
-                .is_some_and(|cid| skipped_ids.contains(&cid))
-            {
-                continue;
-            }
+
             if client.send(command.clone()).is_err() {
                 // We swallow the error here. On the next send, we will fail again, and
                 // restart the connection as well as this rehydration.
@@ -1303,7 +1306,7 @@ where
         // Initialize tracking of subscribes.
         for subscribe_id in dataflow.subscribe_ids() {
             self.subscribes
-                .insert(subscribe_id, ActiveSubscribe::new(target_replica));
+                .insert(subscribe_id, ActiveSubscribe::default());
         }
 
         // Initialize tracking of copy tos.
@@ -1439,8 +1442,7 @@ where
             );
         } else {
             let collections: Vec<_> = augmented_dataflow.export_ids().collect();
-            let cmd = ComputeCommand::CreateDataflow(Box::new(augmented_dataflow));
-            self.send(cmd, target_replica);
+            self.send(ComputeCommand::CreateDataflow(Box::new(augmented_dataflow)));
 
             for id in collections {
                 self.maybe_schedule_collection(id);
@@ -1517,7 +1519,7 @@ where
         };
 
         if ready {
-            self.send(ComputeCommand::Schedule(id), None);
+            self.send(ComputeCommand::Schedule(id));
             let collection = self.expect_collection_mut(id);
             collection.scheduled = true;
         }
@@ -1633,7 +1635,7 @@ where
             target: peek_target,
             result_desc,
         };
-        self.send(ComputeCommand::Peek(Box::new(peek)), None);
+        self.send(ComputeCommand::Peek(Box::new(peek)));
 
         Ok(())
     }
@@ -1807,13 +1809,10 @@ where
         }
 
         // Produce `AllowCompaction` command.
-        self.send(
-            ComputeCommand::AllowCompaction {
-                id,
-                frontier: new_since,
-            },
-            None,
-        );
+        self.send(ComputeCommand::AllowCompaction {
+            id,
+            frontier: new_since,
+        });
     }
 
     /// Fulfills a registered peek and cleans up associated state.
@@ -1834,7 +1833,7 @@ where
 
         // NOTE: We need to send the `CancelPeek` command _before_ we release the peek's read hold
         // (by dropping it), to avoid the edge case that caused database-issues#4812.
-        self.send(ComputeCommand::CancelPeek { uuid }, None);
+        self.send(ComputeCommand::CancelPeek { uuid });
 
         drop(peek.read_hold);
     }
@@ -2055,10 +2054,6 @@ where
         let Some(mut subscribe) = self.subscribes.get(&subscribe_id).cloned() else {
             return;
         };
-        let replica_targeted = subscribe.target_replica.unwrap_or(replica_id) == replica_id;
-        if !replica_targeted {
-            return;
-        }
 
         // Apply a global frontier update.
         // If this is a replica-targeted subscribe, it is important that we advance the global
@@ -2888,17 +2883,12 @@ struct PendingPeek<T: Timestamp> {
 struct ActiveSubscribe<T> {
     /// Current upper frontier of this subscribe.
     frontier: Antichain<T>,
-    /// For replica-targeted subscribes, this specifies the replica whose responses we should pass on.
-    ///
-    /// If this value is `None`, we pass on the first response for each time slice.
-    target_replica: Option<ReplicaId>,
 }
 
-impl<T: ComputeControllerTimestamp> ActiveSubscribe<T> {
-    fn new(target_replica: Option<ReplicaId>) -> Self {
+impl<T: ComputeControllerTimestamp> Default for ActiveSubscribe<T> {
+    fn default() -> Self {
         Self {
             frontier: Antichain::from_elem(T::minimum()),
-            target_replica,
         }
     }
 }

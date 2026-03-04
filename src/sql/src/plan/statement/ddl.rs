@@ -168,6 +168,7 @@ use crate::plan::{
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
     ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
+    ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS,
 };
 use crate::{names, parse};
 
@@ -2769,6 +2770,8 @@ pub fn plan_create_materialized_view(
 
     let target_replica = match &stmt.in_cluster_replica {
         Some(replica_name) => {
+            scx.require_feature_flag(&ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS)?;
+
             let cluster = scx.catalog.get_cluster(cluster_id);
             let replica_id = cluster
                 .replica_ids()

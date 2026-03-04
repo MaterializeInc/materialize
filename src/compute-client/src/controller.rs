@@ -764,6 +764,13 @@ where
 
         let instance = self.instance(instance_id)?;
 
+        // Validation: target replica
+        if let Some(replica_id) = target_replica {
+            if !instance.replicas.contains(&replica_id) {
+                return Err(ReplicaMissing(replica_id));
+            }
+        }
+
         // Validation: as_of
         let as_of = dataflow.as_of.as_ref().ok_or(MissingAsOf)?;
         if as_of.is_empty() && dataflow.subscribe_ids().next().is_some() {
@@ -777,6 +784,14 @@ where
         let storage_ids = dataflow.imported_source_ids().collect();
         let mut import_read_holds = self.storage_collections.acquire_read_holds(storage_ids)?;
         for id in dataflow.imported_index_ids() {
+            if let Some(target_replica) = target_replica
+                && instance
+                    .collection(id)?
+                    .target_replica
+                    .is_some_and(|r| r != target_replica)
+            {
+                return Err(ReplicaNotHostingIndex(target_replica));
+            }
             let read_hold = instance.acquire_read_hold(id)?;
             import_read_holds.push(read_hold);
         }
@@ -874,10 +889,9 @@ where
                 return Err(ReplicaMissing(replica_id));
             }
             let collection = instance.collection(peek_target.id())?;
-            if let Some(collection_replica) = collection.target_replica {
-                if replica_id != collection_replica {
-                    return Err(ReplicaNotHosting(replica_id));
-                }
+            if !collection.write_only && collection.target_replica.is_some_and(|r| r != replica_id)
+            {
+                return Err(ReplicaNotHostingIndex(replica_id));
             }
         }
 
@@ -1172,6 +1186,7 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
 
 #[derive(Debug)]
 struct Collection<T> {
+    /// Whether a collection is write-only, i.e., we cannot read it directly like an index.
     write_only: bool,
     compute_dependencies: BTreeSet<GlobalId>,
     shared: SharedCollectionState<T>,

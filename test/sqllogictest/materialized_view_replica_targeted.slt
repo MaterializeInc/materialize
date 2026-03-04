@@ -85,7 +85,7 @@ ALTER SYSTEM SET enable_replica_targeted_materialized_views = false;
 ----
 COMPLETE 0
 
-statement error replica-targeted materialized views is not supported in this environment
+statement error replica\-targeted materialized views is not available
 CREATE MATERIALIZED VIEW mv_bad IN CLUSTER test REPLICA r1 AS SELECT 1;
 
 simple conn=mz_system,user=mz_system

@@ -335,17 +335,6 @@ impl Coordinator {
             ..
         } = &plan;
 
-        // Replica-targeted materialized views require a feature flag.
-        if plan.materialized_view.target_replica.is_some()
-            && !mz_adapter_types::dyncfgs::ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS
-                .get(self.catalog().system_config().dyncfgs())
-        {
-            return Err(AdapterError::UnavailableFeature {
-                feature: "replica-targeted materialized views".to_string(),
-                docs: None,
-            });
-        }
-
         // Validate any references in the materialized view's expression. We do
         // this on the unoptimized plan to better reflect what the user typed.
         // We want to reject queries that depend on log sources, for example,

@@ -842,8 +842,8 @@ impl AdapterError {
                 dependency_kind: "replica",
                 dependency_id: id.to_string(),
             },
-            ReplicaNotHosting(id) => AdapterError::Unstructured(anyhow::anyhow!(
-                "the requested replica {} does not host the target collection",
+            ReplicaNotHostingIndex(id) => AdapterError::Unstructured(anyhow::anyhow!(
+                "the requested replica {} does not host the target index",
                 id,
             )),
             e @ SinceViolation(_) => AdapterError::internal("peek error", e),
@@ -867,6 +867,10 @@ impl AdapterError {
                 dependency_kind: "replica",
                 dependency_id: id.to_string(),
             },
+            ReplicaNotHostingIndex(id) => AdapterError::Unstructured(anyhow::anyhow!(
+                "the requested replica {} does not host the target index",
+                id,
+            )),
             MissingAsOf | SinceViolation(..) | EmptyAsOfForSubscribe | EmptyAsOfForCopyTo => {
                 AdapterError::internal("dataflow creation error", e)
             }

@@ -374,6 +374,7 @@ impl ShouldTerminateGracefully for DataflowCreationError {
             | DataflowCreationError::InstanceMissing(_)
             | DataflowCreationError::CollectionMissing(_)
             | DataflowCreationError::ReplicaMissing(_)
+            | DataflowCreationError::ReplicaNotHostingIndex(_)
             | DataflowCreationError::MissingAsOf
             | DataflowCreationError::EmptyAsOfForSubscribe
             | DataflowCreationError::EmptyAsOfForCopyTo => false,
@@ -397,7 +398,7 @@ impl ShouldTerminateGracefully for PeekError {
             | PeekError::InstanceMissing(_)
             | PeekError::CollectionMissing(_)
             | PeekError::ReplicaMissing(_)
-            | PeekError::ReplicaNotHosting(_) => false,
+            | PeekError::ReplicaNotHostingIndex(_) => false,
         }
     }
 }

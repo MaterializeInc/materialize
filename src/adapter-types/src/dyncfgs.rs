@@ -154,13 +154,6 @@ pub const ENABLE_S3_TABLES_REGION_CHECK: Config<bool> = Config::new(
     "Whether to enforce that S3 Tables connections are in the same region as the environment.",
 );
 
-/// Whether to enable creation of replica-targeted materialized views.
-pub const ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS: Config<bool> = Config::new(
-    "enable_replica_targeted_materialized_views",
-    false,
-    "Enable creation of replica-targeted materialized views.",
-);
-
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -184,5 +177,4 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&OIDC_AUTHENTICATION_CLAIM)
         .add(&PERSIST_FAST_PATH_ORDER)
         .add(&ENABLE_S3_TABLES_REGION_CHECK)
-        .add(&ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS)
 }
