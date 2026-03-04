@@ -1694,18 +1694,21 @@ impl HirScalarExpr {
             Literal(datum, typ, _name) => SS::Literal(Ok(datum), ReprColumnType::from(&typ)),
             CallUnmaterializable(func, _name) => SS::CallUnmaterializable(func),
             CallUnary {
-                func: func::UnaryFunc::CastVarCharToString(_),
-                expr,
-                name: _,
-            } if config.enable_cast_elimination => expr.lower_uncorrelated(config)?,
-            CallUnary {
                 func,
                 expr,
                 name: _,
-            } => SS::CallUnary {
-                func,
-                expr: Box::new(expr.lower_uncorrelated(config)?),
-            },
+            } => {
+                let inner = expr.lower_uncorrelated(config)?;
+
+                if config.enable_cast_elimination && func.is_eliminable_cast() {
+                    inner
+                } else {
+                    SS::CallUnary {
+                        func,
+                        expr: Box::new(inner),
+                    }
+                }
+            }
             CallBinary {
                 func,
                 expr1,
