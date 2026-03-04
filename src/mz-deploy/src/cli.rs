@@ -6,6 +6,15 @@ pub mod helpers;
 
 pub use error::CliError;
 
+/// Whether to type-check SQL against a Materialize Docker container.
+#[derive(Debug, Clone)]
+pub enum TypeCheckMode {
+    /// Type-check using the given Docker image.
+    Enabled { image: String },
+    /// Skip type checking.
+    Disabled,
+}
+
 /// Display a CLI error and exit with status code 1.
 ///
 /// Formats the error using colored output with rustc-style formatting,

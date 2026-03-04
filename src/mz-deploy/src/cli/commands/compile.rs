@@ -7,23 +7,7 @@ use crate::{project, verbose};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-/// Arguments for the compile command
-#[derive(Debug, Clone)]
-pub struct CompileArgs {
-    /// Enable type checking with Docker
-    pub typecheck: bool,
-    /// Docker image to use for type checking
-    pub docker_image: Option<String>,
-}
-
-impl Default for CompileArgs {
-    fn default() -> Self {
-        Self {
-            typecheck: true,
-            docker_image: None,
-        }
-    }
-}
+use crate::cli::TypeCheckMode;
 
 /// Compile and validate the project, showing the deployment plan.
 ///
@@ -44,7 +28,7 @@ impl Default for CompileArgs {
 /// Returns `CliError::Project` if compilation or validation fails
 pub async fn run(
     directory: &Path,
-    args: CompileArgs,
+    typecheck: TypeCheckMode,
 ) -> Result<project::planned::Project, CliError> {
     let start_time = Instant::now();
 
@@ -123,9 +107,8 @@ pub async fn run(
     }
 
     // Type checking with Docker if enabled
-    if args.typecheck {
-        let typecheck_duration =
-            typecheck_with_docker(directory, &planned_project, args.docker_image).await?;
+    if let TypeCheckMode::Enabled { image } = &typecheck {
+        let typecheck_duration = typecheck_with_docker(directory, &planned_project, image).await?;
 
         if let Some(duration) = typecheck_duration {
             progress::stage_success(&format!("{} objects passed", object_count), duration);
@@ -148,7 +131,7 @@ pub async fn run(
 async fn typecheck_with_docker(
     directory: &Path,
     planned_project: &project::planned::Project,
-    docker_image: Option<String>,
+    docker_image: &str,
 ) -> Result<Option<Duration>, CliError> {
     use crate::types::{TypeCheckError, typecheck_with_client};
     use crate::utils::docker_runtime::DockerRuntime;
@@ -167,10 +150,7 @@ async fn typecheck_with_docker(
     });
 
     // Create Docker runtime
-    let mut runtime = DockerRuntime::new();
-    if let Some(image) = docker_image {
-        runtime = runtime.with_image(image);
-    }
+    let runtime = DockerRuntime::new().with_image(docker_image);
 
     // Get connected client with staged dependencies
     let mut client = match runtime.get_client(&types).await {

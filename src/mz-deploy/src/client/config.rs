@@ -4,6 +4,49 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+pub const DEFAULT_DOCKER_IMAGE: &str = "materialize/materialized:latest";
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct ProjectSettings {
+    pub mz_version: Option<String>,
+    /// CLI override for the Docker image. Takes precedence over `mz_version`.
+    #[serde(skip)]
+    docker_image_override: Option<String>,
+}
+
+impl ProjectSettings {
+    pub fn load(project_directory: &Path) -> Result<Self, ConfigError> {
+        let path = project_directory.join("project.toml");
+        match fs::read_to_string(&path) {
+            Ok(content) => toml::from_str(&content).map_err(|source| ConfigError::ParseError {
+                path: path.display().to_string(),
+                source,
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(source) => Err(ConfigError::ReadError {
+                path: path.display().to_string(),
+                source,
+            }),
+        }
+    }
+
+    /// Override the Docker image with a CLI-provided value.
+    pub fn with_docker_image_override(mut self, docker_image: Option<String>) -> Self {
+        self.docker_image_override = docker_image;
+        self
+    }
+
+    pub fn docker_image(&self) -> String {
+        if let Some(image) = &self.docker_image_override {
+            return image.clone();
+        }
+        match self.mz_version.as_deref() {
+            None | Some("cloud") => DEFAULT_DOCKER_IMAGE.to_string(),
+            Some(tag) => format!("materialize/materialized:{}", tag),
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error(

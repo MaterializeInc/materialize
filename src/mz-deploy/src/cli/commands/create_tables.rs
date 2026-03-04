@@ -1,6 +1,6 @@
 //! Create tables command - create tables that don't exist in the database.
 
-use crate::cli::{CliError, helpers};
+use crate::cli::{CliError, TypeCheckMode, helpers};
 use crate::client::{Client, Profile};
 use crate::project::ast::Statement;
 use crate::utils::git;
@@ -57,11 +57,7 @@ pub async fn run(
     }
 
     // Compile the project first (skip type checking since we're deploying)
-    let compile_args = super::compile::CompileArgs {
-        typecheck: false, // Skip type checking for create-tables
-        docker_image: None,
-    };
-    let planned_project = super::compile::run(directory, compile_args).await?;
+    let planned_project = super::compile::run(directory, TypeCheckMode::Disabled).await?;
 
     // Connect to the database
     let mut client = Client::connect_with_profile(profile.clone())

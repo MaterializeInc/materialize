@@ -3,6 +3,7 @@
 //! This module manages a persistent Docker container and provides a connected database client
 //! with external dependencies already staged as temporary tables.
 
+use crate::client::config::DEFAULT_DOCKER_IMAGE;
 use crate::client::{Client, Profile};
 use crate::types::{TypeCheckError, Types};
 use crate::verbose;
@@ -25,7 +26,7 @@ impl DockerRuntime {
     /// Create a new Docker runtime with the default Materialize image
     pub fn new() -> Self {
         Self {
-            image: "materialize/materialized:latest".to_string(),
+            image: DEFAULT_DOCKER_IMAGE.to_string(),
         }
     }
 

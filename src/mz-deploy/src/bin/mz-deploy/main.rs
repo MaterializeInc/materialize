@@ -2,11 +2,11 @@ use clap::CommandFactory;
 use clap::{Parser, Subcommand};
 use mz_build_info::{BuildInfo, build_info};
 use mz_deploy::cli;
-use mz_deploy::cli::CliError;
+use mz_deploy::cli::{CliError, TypeCheckMode};
 use mz_deploy::client::ConnectionError;
-use mz_deploy::client::config::ProfilesConfig;
+use mz_deploy::client::config::{ProfilesConfig, ProjectSettings};
 use mz_deploy::utils::log;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 const BUILD_INFO: BuildInfo = build_info!();
@@ -29,6 +29,10 @@ struct Args {
     #[arg(short, long, global = true)]
     profile: Option<String>,
 
+    /// Materialize Docker image to use for type checking and tests
+    #[arg(long, value_name = "IMAGE", global = true)]
+    docker_image: Option<String>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -45,10 +49,6 @@ enum Command {
         /// Skip SQL type checking (faster but less thorough validation)
         #[arg(long)]
         skip_typecheck: bool,
-
-        /// Materialize Docker image to use for type checking
-        #[arg(long, value_name = "IMAGE")]
-        docker_image: Option<String>,
     },
 
     /// Create tables that don't exist in the database
@@ -326,16 +326,18 @@ async fn main() {
 }
 
 async fn run(args: Args) -> Result<(), CliError> {
+    let settings = load_project_settings(&args.directory, args.docker_image)?;
+
     match args.command {
-        Some(Command::Compile {
-            skip_typecheck,
-            docker_image,
-        }) => {
-            let compile_args = cli::commands::compile::CompileArgs {
-                typecheck: !skip_typecheck,
-                docker_image,
+        Some(Command::Compile { skip_typecheck }) => {
+            let typecheck = if skip_typecheck {
+                TypeCheckMode::Disabled
+            } else {
+                TypeCheckMode::Enabled {
+                    image: settings.docker_image(),
+                }
             };
-            cli::commands::compile::run(&args.directory, compile_args)
+            cli::commands::compile::run(&args.directory, typecheck)
                 .await
                 .map(|_| ())
         }
@@ -427,7 +429,9 @@ async fn run(args: Args) -> Result<(), CliError> {
                     .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
             cli::commands::gen_data_contracts::run(&profile, &args.directory).await
         }
-        Some(Command::Test) => cli::commands::test::run(&args.directory).await,
+        Some(Command::Test) => {
+            cli::commands::test::run(&args.directory, &settings.docker_image()).await
+        }
         Some(Command::Abort { deploy_id }) => {
             let profile =
                 ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
@@ -463,4 +467,13 @@ async fn run(args: Args) -> Result<(), CliError> {
             Ok(())
         }
     }
+}
+
+fn load_project_settings(
+    directory: &Path,
+    docker_image: Option<String>,
+) -> Result<ProjectSettings, CliError> {
+    ProjectSettings::load(directory)
+        .map(|s| s.with_docker_image_override(docker_image))
+        .map_err(|e| CliError::Message(format!("failed to load project settings: {}", e)))
 }

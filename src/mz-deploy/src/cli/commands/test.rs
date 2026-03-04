@@ -52,7 +52,7 @@ use std::path::Path;
 /// Returns `CliError::Project` if project loading fails
 /// Returns `CliError::Connection` if database connection fails
 /// Returns error if tests fail (exits with code 1)
-pub async fn run(directory: &Path) -> Result<(), CliError> {
+pub async fn run(directory: &Path, docker_image: &str) -> Result<(), CliError> {
     // Load the project (tests are loaded during compilation)
     let planned_project = project::plan(directory)?;
 
@@ -60,7 +60,7 @@ pub async fn run(directory: &Path) -> Result<(), CliError> {
     let empty_types = Types::default();
 
     // Create Docker runtime and get connected client
-    let runtime = DockerRuntime::new();
+    let runtime = DockerRuntime::new().with_image(docker_image);
     if planned_project.tests.is_empty() {
         println!("No tests found in {}", directory.display());
         return Ok(());

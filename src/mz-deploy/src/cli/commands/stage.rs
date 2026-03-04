@@ -1,6 +1,6 @@
 //! Stage command - deploy to staging environment with renamed schemas and clusters.
 
-use crate::cli::{CliError, helpers};
+use crate::cli::{CliError, TypeCheckMode, helpers};
 use crate::client::{
     Client, ClusterConfig, DeploymentKind, PendingStatement, Profile, ReplacementMvRecord,
 };
@@ -75,11 +75,7 @@ pub async fn run(
     }
 
     // Run compile to validate and get the project (skip type checking for staging deployment)
-    let compile_args = super::compile::CompileArgs {
-        typecheck: false, // Skip type checking for staging deployment
-        docker_image: None,
-    };
-    let planned_project = super::compile::run(directory, compile_args).await?;
+    let planned_project = super::compile::run(directory, TypeCheckMode::Disabled).await?;
 
     let staging_suffix = format!("_{}", stage_name);
 
