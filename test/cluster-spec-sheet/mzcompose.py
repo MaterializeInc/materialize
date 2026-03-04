@@ -2190,8 +2190,14 @@ def cloud_disable_enable_and_wait(
     """
     disable_region(target.composition, hard=False)
 
+    version_args = (
+        ["--version", VERSION]
+        if isinstance(target, CloudTarget) and target.is_staging
+        else []
+    )
+
     if environmentd_cpu_allocation is None:
-        target.composition.run("mz", "region", "enable", "--version", VERSION, rm=True)
+        target.composition.run("mz", "region", "enable", *version_args, rm=True)
     else:
         target.composition.run(
             "mz",
@@ -2199,8 +2205,7 @@ def cloud_disable_enable_and_wait(
             "enable",
             "--environmentd-cpu-allocation",
             str(environmentd_cpu_allocation),
-            "--version",
-            VERSION,
+            *version_args,
             rm=True,
         )
 
@@ -2386,7 +2391,10 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         )
     elif args.target == "cloud-staging":
         target: BenchTarget = CloudTarget(
-            composition, STAGING_USERNAME, STAGING_APP_PASSWORD or ""
+            composition,
+            STAGING_USERNAME,
+            STAGING_APP_PASSWORD or "",
+            is_staging=True,
         )
         mz = Mz(
             region=STAGING_REGION,
@@ -2632,12 +2640,17 @@ class BenchTarget:
 
 class CloudTarget(BenchTarget):
     def __init__(
-        self, composition: Composition, username: str, app_password: str
+        self,
+        composition: Composition,
+        username: str,
+        app_password: str,
+        is_staging: bool = False,
     ) -> None:
         self.composition = composition
         self.username = username
         self.app_password = app_password
         self.new_app_password: str | None = None
+        self.is_staging = is_staging
 
     def dbbench_connection_flags(self) -> list[str]:
         assert self.new_app_password is not None
@@ -2879,14 +2892,14 @@ def run_scenario_envd_strong_scaling(
         if isinstance(target, CloudTarget):
             # We reset the cloud envd's core count in any case, to avoid accidentally burning a lot of money.
             print("--- Resetting Cloud environmentd CPUs to the default")
+            version_args = ["--version", VERSION] if target.is_staging else []
             target.composition.run(
                 "mz",
                 "region",
                 "enable",
                 "--environmentd-cpu-allocation",
                 "2",
-                "--version",
-                VERSION,
+                *version_args,
                 rm=True,
             )
 
