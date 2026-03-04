@@ -4975,7 +4975,10 @@ fn plan_array(
         elem_type,
         SqlScalarType::Char { .. } | SqlScalarType::List { .. } | SqlScalarType::Map { .. }
     ) {
-        bail_unsupported!(format!("{}[]", ecx.humanize_sql_scalar_type(&elem_type, false)));
+        bail_unsupported!(format!(
+            "{}[]",
+            ecx.humanize_sql_scalar_type(&elem_type, false)
+        ));
     }
 
     Ok(HirScalarExpr::call_variadic(ArrayCreate { elem_type }, exprs).into())
