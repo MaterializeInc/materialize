@@ -391,7 +391,7 @@ struct DemuxState {
     /// Maps channel IDs to boxed slices counting the messages received from each source worker.
     messages_received: BTreeMap<usize, Box<[MessageCount]>>,
     /// Stores for scheduled operators the time when they were scheduled.
-    schedule_starts: BTreeMap<usize, Duration>,
+    schedule_starts: Vec<(usize, Duration)>,
     /// Maps operator IDs to a vector recording the (count, elapsed_ns) values in each histogram
     /// bucket.
     schedules_data: BTreeMap<usize, Vec<(isize, Diff)>>,
@@ -728,16 +728,18 @@ impl DemuxHandler<'_, '_, '_> {
     fn handle_schedule(&mut self, event: ScheduleEvent) {
         match event.start_stop {
             timely::logging::StartStop::Start => {
-                let existing = self.state.schedule_starts.insert(event.id, self.time);
-                if existing.is_some() {
-                    error!(operator_id = ?event.id, "schedule start without succeeding stop");
-                }
+                self.state.schedule_starts.push((event.id, self.time));
             }
             timely::logging::StartStop::Stop => {
-                let Some(start_time) = self.state.schedule_starts.remove(&event.id) else {
-                    error!(operator_id = ?event.id, "schedule stop without preceeding start");
+                let Some((old_id, start_time)) = self.state.schedule_starts.pop() else {
+                    error!(operator_id = ?event.id, "schedule stop without preceding start");
                     return;
                 };
+
+                if old_id != event.id {
+                    error!(start_id = ?old_id, stop_id = ?event.id, "schedule stop without preceding start");
+                    return;
+                }
 
                 let elapsed_ns = self.time.saturating_sub(start_time).as_nanos();
                 let elapsed_i64 = i64::try_from(elapsed_ns).expect("must fit");
