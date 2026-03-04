@@ -1096,18 +1096,45 @@ where
         self.history.update_source_uppers(&self.storage_collections);
 
         // Replay the commands at the client, creating new dataflow identifiers.
+        let mut skipped_ids = BTreeSet::new();
         for command in self.history.iter() {
             // Skip `CreateDataflow` commands targeted at different replicas.
-            if let ComputeCommand::CreateDataflow(dataflow) = &command {
-                let all_exports_skip = dataflow.export_ids().all(|eid| {
-                    self.collections
-                        .get(&eid)
-                        .and_then(|c| c.target_replica)
-                        .is_some_and(|rid| rid != id)
-                });
-                if all_exports_skip {
-                    continue;
+            match &command {
+                ComputeCommand::CreateDataflow(dataflow) => {
+                    let all_exports_skip = dataflow.export_ids().all(|eid| {
+                        self.collections
+                            .get(&eid)
+                            .and_then(|c| c.target_replica)
+                            .is_some_and(|rid| rid != id)
+                    });
+                    if all_exports_skip {
+                        skipped_ids.extend(dataflow.export_ids());
+                        continue;
+                    }
                 }
+                ComputeCommand::Schedule(id)
+                | ComputeCommand::AllowWrites(id)
+                | ComputeCommand::AllowCompaction { id, frontier: _ } => {
+                    if skipped_ids.contains(id) {
+                        continue;
+                    }
+                }
+                // Should have been validated before.
+                ComputeCommand::Peek(peek) => {
+                    if let Some(peek_state) = self.peeks.get(&peek.uuid) {
+                        if let Some(target_replica) = peek_state.target_replica
+                            && target_replica != id
+                        {
+                            continue;
+                        }
+                    }
+                }
+                // Do not contain collection IDs.
+                ComputeCommand::Hello { .. } => {}
+                ComputeCommand::CreateInstance(_) => {}
+                ComputeCommand::InitializationComplete => {}
+                ComputeCommand::UpdateConfiguration(_) => {}
+                ComputeCommand::CancelPeek { .. } => {}
             }
 
             if client.send(command.clone()).is_err() {
