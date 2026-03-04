@@ -13,7 +13,9 @@ use mz_expr::{ColumnSpecs, Interpreter, MapFilterProject, ResultSpec, Unmaterial
 use mz_persist_types::stats::{
     BytesStats, ColumnStatKinds, JsonStats, PartStats, PartStatsMetrics,
 };
-use mz_repr::{ColumnIndex, Datum, RelationDesc, RowArena, SqlColumnType, SqlScalarType};
+use mz_repr::{
+    ColumnIndex, Datum, RelationDesc, ReprRelationType, RowArena, SqlColumnType, SqlScalarType,
+};
 
 /// Bundles together a relation desc with the stats for a specific part, and translates between
 /// Persist's stats representation and the `ResultSpec`s that are used for eg. filter pushdown.
@@ -44,7 +46,8 @@ impl<'a> RelationPartStats<'a> {
 impl RelationPartStats<'_> {
     pub fn may_match_mfp<'a>(&'a self, time_range: ResultSpec<'a>, mfp: &MapFilterProject) -> bool {
         let arena = RowArena::new();
-        let mut ranges = ColumnSpecs::new(self.desc.typ(), &arena);
+        let relation = ReprRelationType::from(self.desc.typ());
+        let mut ranges = ColumnSpecs::new(&relation, &arena);
         ranges.push_unmaterializable(UnmaterializableFunc::MzNow, time_range);
 
         if self.err_count().into_iter().any(|count| count > 0) {

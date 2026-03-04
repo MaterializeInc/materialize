@@ -33,7 +33,7 @@ use mz_persist_client::stats::STATS_AUDIT_PANIC;
 use mz_persist_types::Codec64;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::{ColumnEncoder, Schema};
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationDesc, ReprRelationType, Row, RowArena, Timestamp};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
 use mz_storage_types::errors::DataflowError;
@@ -392,7 +392,8 @@ fn filter_result(
     plan: &MfpPlan,
 ) -> FilterResult {
     let arena = RowArena::new();
-    let mut ranges = ColumnSpecs::new(relation_desc.typ(), &arena);
+    let relation = ReprRelationType::from(relation_desc.typ());
+    let mut ranges = ColumnSpecs::new(&relation, &arena);
     ranges.push_unmaterializable(UnmaterializableFunc::MzNow, time_range);
 
     let may_error = stats.err_count().map_or(true, |count| count > 0);
