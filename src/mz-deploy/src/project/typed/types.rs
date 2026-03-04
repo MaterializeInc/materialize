@@ -196,6 +196,10 @@ impl Statement {
                 s.name = transformed_name;
                 Statement::CreateTableFromSource(s)
             }
+            Statement::CreateSource(mut s) => {
+                s.name = transformed_name;
+                Statement::CreateSource(s)
+            }
         }
     }
 
@@ -223,7 +227,7 @@ impl Statement {
                 Statement::CreateSink(s)
             }
             // These statements don't have dependencies on other database objects
-            Statement::CreateTable(_) => self,
+            Statement::CreateTable(_) | Statement::CreateSource(_) => self,
         }
     }
 
@@ -244,8 +248,14 @@ impl Statement {
                 visitor.normalize_cluster_name(&mut s.in_cluster);
                 Statement::CreateSink(s)
             }
+            Statement::CreateSource(mut s) => {
+                visitor.normalize_cluster_name(&mut s.in_cluster);
+                Statement::CreateSource(s)
+            }
             // These statements don't have cluster references
-            _ => self,
+            Statement::CreateView(_)
+            | Statement::CreateTable(_)
+            | Statement::CreateTableFromSource(_) => self,
         }
     }
 }
@@ -299,16 +309,17 @@ pub struct DatabaseObject {
 impl DatabaseObject {
     pub fn clusters(&self) -> BTreeSet<String> {
         let mut cluster_set = BTreeSet::new();
-        if let Statement::CreateMaterializedView(mv) = &self.stmt {
-            if let Some(RawClusterName::Unresolved(cluster_name)) = &mv.in_cluster {
-                cluster_set.insert(cluster_name.to_string());
-            }
-        }
 
-        if let Statement::CreateSink(sink) = &self.stmt {
-            if let Some(RawClusterName::Unresolved(cluster_name)) = &sink.in_cluster {
-                cluster_set.insert(cluster_name.to_string());
-            }
+        let in_cluster = match &self.stmt {
+            Statement::CreateMaterializedView(mv) => mv.in_cluster.as_ref(),
+            Statement::CreateSink(sink) => sink.in_cluster.as_ref(),
+            Statement::CreateSource(source) => source.in_cluster.as_ref(),
+            Statement::CreateView(_)
+            | Statement::CreateTable(_)
+            | Statement::CreateTableFromSource(_) => None,
+        };
+        if let Some(RawClusterName::Unresolved(cluster_name)) = in_cluster {
+            cluster_set.insert(cluster_name.to_string());
         }
 
         for index in &self.indexes {

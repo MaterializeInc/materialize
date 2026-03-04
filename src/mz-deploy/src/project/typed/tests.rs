@@ -2113,3 +2113,226 @@ mod identifier_validation {
         assert!(validate_identifier_format("a$b$c", IdentifierKind::Object).is_ok());
     }
 }
+
+// ============================================================================
+// Source tests
+// ============================================================================
+
+#[test]
+fn test_source_normalization() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir
+        .path()
+        .join("materialize/ingestion/kafka_source.sql");
+
+    let sql = r#"
+        CREATE SOURCE kafka_source
+          IN CLUSTER ingest_cluster
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'events')
+          FORMAT JSON;
+    "#;
+
+    let raw = create_raw_object("kafka_source", path, sql);
+    let result = DatabaseObject::try_from(raw);
+
+    assert!(result.is_ok());
+    let obj = result.unwrap();
+
+    let source_stmt = match obj.stmt {
+        super::super::ast::Statement::CreateSource(ref s) => s,
+        _ => panic!("Expected CreateSource statement"),
+    };
+
+    // Verify name is fully qualified
+    assert_eq!(
+        source_stmt.name.to_string(),
+        "materialize.ingestion.kafka_source"
+    );
+
+    // Verify IN CLUSTER is present
+    assert!(source_stmt.in_cluster.is_some());
+}
+
+#[test]
+fn test_source_missing_cluster_fails() {
+    let source_sql = r#"
+        CREATE SOURCE kafka_source
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'events')
+          FORMAT JSON;
+    "#;
+    let source_stmts = parse_statements(vec![source_sql]).unwrap();
+
+    let raw_source = raw::DatabaseObject {
+        name: "kafka_source".to_string(),
+        path: PathBuf::from("materialize/ingestion/kafka_source.sql"),
+        statements: source_stmts,
+    };
+
+    let raw_schema = raw::Schema {
+        name: "ingestion".to_string(),
+        objects: vec![raw_source],
+        mod_statements: None,
+    };
+
+    let result = Schema::try_from(raw_schema);
+    assert!(
+        result.is_err(),
+        "Source without IN CLUSTER clause should fail validation"
+    );
+
+    // Verify it's the correct error type
+    if let Err(crate::project::error::ValidationErrors { errors }) = result {
+        assert_eq!(errors.len(), 1);
+        match &errors[0].kind {
+            crate::project::error::ValidationErrorKind::SourceMissingCluster { source_name } => {
+                assert_eq!(source_name, "materialize.ingestion.kafka_source");
+            }
+            _ => panic!(
+                "Expected SourceMissingCluster error, got {:?}",
+                errors[0].kind
+            ),
+        }
+    } else {
+        panic!("Expected ValidationErrors");
+    }
+}
+
+#[test]
+fn test_source_with_cluster_succeeds() {
+    let source_sql = r#"
+        CREATE SOURCE kafka_source
+          IN CLUSTER ingest_cluster
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'events')
+          FORMAT JSON;
+    "#;
+    let source_stmts = parse_statements(vec![source_sql]).unwrap();
+
+    let raw_source = raw::DatabaseObject {
+        name: "kafka_source".to_string(),
+        path: PathBuf::from("materialize/ingestion/kafka_source.sql"),
+        statements: source_stmts,
+    };
+
+    let raw_schema = raw::Schema {
+        name: "ingestion".to_string(),
+        objects: vec![raw_source],
+        mod_statements: None,
+    };
+
+    let result = Schema::try_from(raw_schema);
+    assert!(
+        result.is_ok(),
+        "Source with IN CLUSTER clause should pass validation"
+    );
+}
+
+#[test]
+fn test_schema_with_source_and_view_fails() {
+    let source_sql = r#"
+        CREATE SOURCE kafka_source
+          IN CLUSTER ingest_cluster
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'events')
+          FORMAT JSON;
+    "#;
+    let view_sql = "CREATE VIEW event_view AS SELECT * FROM events;";
+
+    let source_stmts = parse_statements(vec![source_sql]).unwrap();
+    let view_stmts = parse_statements(vec![view_sql]).unwrap();
+
+    let raw_source = raw::DatabaseObject {
+        name: "kafka_source".to_string(),
+        path: PathBuf::from("materialize/mixed/kafka_source.sql"),
+        statements: source_stmts,
+    };
+
+    let raw_view = raw::DatabaseObject {
+        name: "event_view".to_string(),
+        path: PathBuf::from("materialize/mixed/event_view.sql"),
+        statements: view_stmts,
+    };
+
+    let raw_schema = raw::Schema {
+        name: "mixed".to_string(),
+        objects: vec![raw_source, raw_view],
+        mod_statements: None,
+    };
+
+    let result = Schema::try_from(raw_schema);
+    assert!(
+        result.is_err(),
+        "Schema with source and view should fail validation (storage + computation in same schema)"
+    );
+}
+
+#[test]
+fn test_schema_with_source_and_table_succeeds() {
+    let source_sql = r#"
+        CREATE SOURCE kafka_source
+          IN CLUSTER ingest_cluster
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'events')
+          FORMAT JSON;
+    "#;
+    let table_sql = "CREATE TABLE events (id INT, payload TEXT);";
+
+    let source_stmts = parse_statements(vec![source_sql]).unwrap();
+    let table_stmts = parse_statements(vec![table_sql]).unwrap();
+
+    let raw_source = raw::DatabaseObject {
+        name: "kafka_source".to_string(),
+        path: PathBuf::from("materialize/ingestion/kafka_source.sql"),
+        statements: source_stmts,
+    };
+
+    let raw_table = raw::DatabaseObject {
+        name: "events".to_string(),
+        path: PathBuf::from("materialize/ingestion/events.sql"),
+        statements: table_stmts,
+    };
+
+    let raw_schema = raw::Schema {
+        name: "ingestion".to_string(),
+        objects: vec![raw_source, raw_table],
+        mod_statements: None,
+    };
+
+    let result = Schema::try_from(raw_schema);
+    assert!(
+        result.is_ok(),
+        "Schema with source and table should pass validation (both are storage objects)"
+    );
+}
+
+#[test]
+fn test_source_with_comments_and_grants() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir
+        .path()
+        .join("materialize/ingestion/kafka_source.sql");
+
+    let sql = r#"
+        CREATE SOURCE kafka_source
+          IN CLUSTER ingest_cluster
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'events')
+          FORMAT JSON;
+        COMMENT ON SOURCE kafka_source IS 'Kafka event source';
+        GRANT SELECT ON kafka_source TO reader_role;
+    "#;
+
+    let raw = create_raw_object("kafka_source", path, sql);
+    let result = DatabaseObject::try_from(raw);
+
+    assert!(result.is_ok());
+    let obj = result.unwrap();
+
+    // Verify 1 comment, 1 grant
+    assert_eq!(obj.comments.len(), 1);
+    assert_eq!(obj.grants.len(), 1);
+
+    // Verify comment reference is normalized to FQN
+    match &obj.comments[0].object {
+        CommentObjectType::Source { name } => {
+            assert_eq!(name.to_string(), "materialize.ingestion.kafka_source");
+        }
+        _ => panic!("Expected Source comment"),
+    }
+}

@@ -347,12 +347,24 @@ pub(crate) async fn validate_sources_exist_impl(
 ) -> Result<(), DatabaseValidationError> {
     let mut missing_sources = Vec::new();
 
+    // Collect all source ObjectIds defined in the project (CreateSource statements)
+    let defined_sources: BTreeSet<ObjectId> = planned_project
+        .iter_objects()
+        .filter(|obj| matches!(obj.typed_object.stmt, Statement::CreateSource(_)))
+        .map(|obj| obj.id.clone())
+        .collect();
+
     // Collect all source references from CREATE TABLE FROM SOURCE statements
     for obj in planned_project.iter_objects() {
         if let Statement::CreateTableFromSource(ref stmt) = obj.typed_object.stmt {
             // Extract the source ObjectId from the statement
             let source_id =
                 ObjectId::from_raw_item_name(&stmt.source, &obj.id.database, &obj.id.schema);
+
+            // Skip sources defined in the project (they'll be created during create-tables)
+            if defined_sources.contains(&source_id) {
+                continue;
+            }
 
             // Check if source exists in the database
             let query = r#"

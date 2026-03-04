@@ -328,6 +328,100 @@ pub async fn get_current_user(client: &PgClient) -> Result<String, ConnectionErr
     Ok(row.get(0))
 }
 
+/// Check which schemas from a set of (database, schema) pairs exist.
+///
+/// Returns a BTreeSet of (database, schema) tuples that exist.
+pub async fn check_schemas_exist(
+    client: &PgClient,
+    schemas: &[(String, String)],
+) -> Result<BTreeSet<(String, String)>, ConnectionError> {
+    if schemas.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+
+    // Build FQN strings and a lookup map from FQN -> original tuple (reusing the same strings)
+    let fqns: Vec<String> = schemas
+        .iter()
+        .map(|(db, schema)| format!("{}.{}", db, schema))
+        .collect();
+
+    let fqn_map: BTreeMap<&str, &(String, String)> = fqns
+        .iter()
+        .zip(schemas.iter())
+        .map(|(fqn, pair)| (fqn.as_str(), pair))
+        .collect();
+
+    let placeholders: Vec<String> = (1..=fqns.len()).map(|i| format!("${}", i)).collect();
+    let placeholders_str = placeholders.join(", ");
+
+    let query = format!(
+        r#"
+        SELECT d.name || '.' || s.name as fqn
+        FROM mz_catalog.mz_schemas s
+        JOIN mz_catalog.mz_databases d ON s.database_id = d.id
+        WHERE d.name || '.' || s.name IN ({})
+        ORDER BY fqn
+    "#,
+        placeholders_str
+    );
+
+    let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
+    for fqn in &fqns {
+        params.push(fqn);
+    }
+
+    let rows = client
+        .query(&query, &params)
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    let mut existing = BTreeSet::new();
+    for row in rows {
+        let fqn: String = row.get("fqn");
+        if let Some(pair) = fqn_map.get(fqn.as_str()) {
+            existing.insert((*pair).clone());
+        }
+    }
+
+    Ok(existing)
+}
+
+/// Check which clusters from a set of names exist.
+///
+/// Returns a BTreeSet of cluster names that exist.
+pub async fn check_clusters_exist(
+    client: &PgClient,
+    clusters: &[String],
+) -> Result<BTreeSet<String>, ConnectionError> {
+    if clusters.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+
+    let placeholders: Vec<String> = (1..=clusters.len()).map(|i| format!("${}", i)).collect();
+    let placeholders_str = placeholders.join(", ");
+
+    let query = format!(
+        r#"
+        SELECT name FROM mz_catalog.mz_clusters
+        WHERE name IN ({})
+        ORDER BY name
+    "#,
+        placeholders_str
+    );
+
+    let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
+    for name in clusters {
+        params.push(name);
+    }
+
+    let rows = client
+        .query(&query, &params)
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    Ok(rows.iter().map(|row| row.get("name")).collect())
+}
+
 /// Check which objects from a set exist in the production database.
 ///
 /// Returns fully-qualified names of objects that exist.
@@ -429,6 +523,16 @@ pub async fn check_tables_exist(
     tables: &BTreeSet<ObjectId>,
 ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
     check_catalog_objects_exist(client, tables, "mz_tables").await
+}
+
+/// Check which sources from the given set exist in the database.
+///
+/// Returns a BTreeSet of ObjectIds for sources that already exist.
+pub async fn check_sources_exist(
+    client: &PgClient,
+    sources: &BTreeSet<ObjectId>,
+) -> Result<BTreeSet<ObjectId>, ConnectionError> {
+    check_catalog_objects_exist(client, sources, "mz_sources").await
 }
 
 /// Check which sinks from the given set exist in the database.

@@ -79,41 +79,56 @@ pub async fn run(
         });
     }
 
-    // Filter to only table objects (CreateTable and CreateTableFromSource)
-    let table_object_ids: BTreeSet<project::object_id::ObjectId> = planned_project
-        .iter_objects()
-        .filter(|obj| {
-            matches!(
-                obj.typed_object.stmt,
-                Statement::CreateTable(_) | Statement::CreateTableFromSource(_)
-            )
-        })
-        .map(|obj| obj.id.clone())
+    // Partition objects into tables and sources (they use different catalog tables)
+    let mut table_object_ids: BTreeSet<project::object_id::ObjectId> = BTreeSet::new();
+    let mut source_object_ids: BTreeSet<project::object_id::ObjectId> = BTreeSet::new();
+    for obj in planned_project.iter_objects() {
+        match &obj.typed_object.stmt {
+            Statement::CreateTable(_) | Statement::CreateTableFromSource(_) => {
+                table_object_ids.insert(obj.id.clone());
+            }
+            Statement::CreateSource(_) => {
+                source_object_ids.insert(obj.id.clone());
+            }
+            _ => {}
+        }
+    }
+
+    let all_object_ids: BTreeSet<_> = table_object_ids
+        .union(&source_object_ids)
+        .cloned()
         .collect();
 
-    if table_object_ids.is_empty() {
+    if all_object_ids.is_empty() {
         println!("No tables found in project");
         return Ok(());
     }
 
-    // Get sorted table objects (respecting dependencies)
-    let table_objects = planned_project.get_sorted_objects_filtered(&table_object_ids)?;
+    // Get sorted objects (respecting dependencies)
+    let table_objects = planned_project.get_sorted_objects_filtered(&all_object_ids)?;
 
     println!("Found {} table(s) in project", table_objects.len());
 
-    // Query which tables already exist
+    // Query which tables and sources already exist (separate catalog tables)
     let existing_tables = client.check_tables_exist(&table_object_ids).await?;
+    let existing_sources = client.check_sources_exist(&source_object_ids).await?;
 
-    // Filter to only tables that don't exist
+    // Merge existing tables and sources
+    let existing_objects: BTreeSet<_> = existing_tables
+        .union(&existing_sources)
+        .cloned()
+        .collect();
+
+    // Filter to only objects that don't exist
     let tables_to_create: Vec<_> = table_objects
         .into_iter()
-        .filter(|(obj_id, _)| !existing_tables.contains(obj_id))
+        .filter(|(obj_id, _)| !existing_objects.contains(obj_id))
         .collect();
 
     // Show what's being skipped
-    if !existing_tables.is_empty() {
-        println!("\nTables that already exist (skipping):");
-        let mut existing_list: Vec<_> = existing_tables.iter().collect();
+    if !existing_objects.is_empty() {
+        println!("\nObjects that already exist (skipping):");
+        let mut existing_list: Vec<_> = existing_objects.iter().collect();
         existing_list.sort_by_key(|obj| (&obj.database, &obj.schema, &obj.object));
         for table_id in existing_list {
             println!(
@@ -244,10 +259,10 @@ pub async fn run(
         .await?;
 
         println!("\n✓ Successfully created {} new table(s)", success_count);
-        if !existing_tables.is_empty() {
+        if !existing_objects.is_empty() {
             println!(
-                "  Skipped {} table(s) that already existed",
-                existing_tables.len()
+                "  Skipped {} object(s) that already existed",
+                existing_objects.len()
             );
         }
     } else {

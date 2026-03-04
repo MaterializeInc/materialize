@@ -153,7 +153,9 @@ pub async fn run(
         .into_iter()
         .filter(|(object_id, typed_obj)| {
             match &typed_obj.stmt {
-                Statement::CreateTable(_) | Statement::CreateTableFromSource(_) => false,
+                Statement::CreateTable(_)
+                | Statement::CreateTableFromSource(_)
+                | Statement::CreateSource(_) => false,
                 Statement::CreateSink(_) => {
                     // Collect sinks for deferred execution
                     sinks.push((object_id.clone(), *typed_obj));
@@ -174,7 +176,7 @@ pub async fn run(
     let table_count = objects_before_filter - objects.len() - sinks.len() - replacement_mvs.len();
     if table_count > 0 {
         verbose!(
-            "Skipped {} table(s) - use 'mz-deploy create-tables' for those",
+            "Skipped {} table(s)/source(s) - use 'mz-deploy create-tables' for those",
             table_count
         );
     }
@@ -536,6 +538,18 @@ async fn create_resources_with_rollback<'a>(
         }
         let cluster_start = Instant::now();
         let mut created_clusters = 0;
+
+        // Batch check which staging clusters already exist (skip in dry-run mode)
+        let existing_staging_clusters = if !dry_run {
+            let staging_cluster_names: Vec<String> = cluster_set
+                .iter()
+                .map(|name| format!("{}{}", name, staging_suffix))
+                .collect();
+            client.check_clusters_exist(&staging_cluster_names).await?
+        } else {
+            BTreeSet::new()
+        };
+
         for prod_cluster in cluster_set {
             let staging_cluster = format!("{}{}", prod_cluster, staging_suffix);
 
@@ -551,10 +565,8 @@ async fn create_resources_with_rollback<'a>(
                 continue;
             }
 
-            // Check if staging cluster already exists
-            let cluster_exists = client.cluster_exists(&staging_cluster).await?;
-
-            if cluster_exists {
+            // Check if staging cluster already exists using batch result
+            if existing_staging_clusters.contains(&staging_cluster) {
                 verbose!("  Cluster '{}' already exists, skipping", staging_cluster);
                 continue;
             }

@@ -132,6 +132,8 @@ pub enum Statement {
     CreateTable(CreateTableStatement<Raw>),
     /// CREATE TABLE ... FROM SOURCE statement
     CreateTableFromSource(CreateTableFromSourceStatement<Raw>),
+    /// CREATE SOURCE statement
+    CreateSource(CreateSourceStatement<Raw>),
 }
 
 impl Statement {
@@ -150,6 +152,7 @@ impl Statement {
             Statement::CreateMaterializedView(m) => m.name.clone().into(),
             Statement::CreateTable(t) => t.name.clone().into(),
             Statement::CreateTableFromSource(t) => t.name.clone().into(),
+            Statement::CreateSource(s) => s.name.clone().into(),
         }
     }
 }
@@ -162,6 +165,7 @@ impl std::fmt::Display for Statement {
             Statement::CreateMaterializedView(s) => write!(f, "{}", s),
             Statement::CreateTable(s) => write!(f, "{}", s),
             Statement::CreateTableFromSource(s) => write!(f, "{}", s),
+            Statement::CreateSource(s) => write!(f, "{}", s),
         }
     }
 }

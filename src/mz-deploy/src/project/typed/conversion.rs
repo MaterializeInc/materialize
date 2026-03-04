@@ -10,7 +10,7 @@ use super::validation::{
     validate_comment_references, validate_database_mod_statements, validate_fqn_identifiers,
     validate_grant_references, validate_ident, validate_index_clusters, validate_index_references,
     validate_mv_cluster, validate_no_storage_and_computation_in_schema,
-    validate_schema_mod_statements, validate_sink_cluster,
+    validate_schema_mod_statements, validate_sink_cluster, validate_source_cluster,
 };
 use crate::project::SchemaQualifier;
 use crate::project::error::{ValidationError, ValidationErrorKind, ValidationErrors};
@@ -120,6 +120,20 @@ impl TryFrom<super::super::raw::DatabaseObject> for DatabaseObject {
                     }
                 }
 
+                mz_sql_parser::ast::Statement::CreateSource(s) => {
+                    if main_stmt.is_some() {
+                        errors.push(ValidationError::with_file(
+                            ValidationErrorKind::MultipleMainStatements {
+                                object_name: value.name.clone(),
+                            },
+                            value.path.clone(),
+                        ));
+                    } else {
+                        main_stmt = Some(Statement::CreateSource(s));
+                        object_type = Some(ObjectType::Source)
+                    }
+                }
+
                 // Supporting statements
                 mz_sql_parser::ast::Statement::CreateIndex(s) => {
                     indexes.push(s);
@@ -208,6 +222,7 @@ impl TryFrom<super::super::raw::DatabaseObject> for DatabaseObject {
         validate_index_clusters(&fqn, &indexes, &mut errors);
         validate_mv_cluster(&fqn, &stmt, &mut errors);
         validate_sink_cluster(&fqn, &stmt, &mut errors);
+        validate_source_cluster(&fqn, &stmt, &mut errors);
 
         validate_index_references(&fqn, &indexes, &main_ident, &mut errors);
         validate_grant_references(&fqn, &grants, &main_ident, obj_type, &mut errors);
@@ -405,6 +420,7 @@ fn validate_replacement_schemas(
                         Statement::CreateTable(_) => "table",
                         Statement::CreateTableFromSource(_) => "table from source",
                         Statement::CreateSink(_) => "sink",
+                        Statement::CreateSource(_) => "source",
                         Statement::CreateMaterializedView(_) => unreachable!(),
                     };
                     errors.push(ValidationError::with_file(

@@ -579,6 +579,34 @@ pub(super) fn validate_sink_cluster(
     }
 }
 
+/// Validates that a CREATE SOURCE statement has a required IN CLUSTER clause.
+pub(super) fn validate_source_cluster(
+    fqn: &FullyQualifiedName,
+    stmt: &Statement,
+    errors: &mut Vec<ValidationError>,
+) {
+    if let Statement::CreateSource(source) = stmt {
+        match &source.in_cluster {
+            None => {
+                let source_sql = format!("{};", source);
+                errors.push(ValidationError::with_file_and_sql(
+                    ValidationErrorKind::SourceMissingCluster {
+                        source_name: source.name.to_string(),
+                    },
+                    fqn.path.clone(),
+                    source_sql,
+                ));
+            }
+            Some(cluster) => {
+                let cluster_name = cluster.to_string();
+                if let Err(e) = validate_cluster_name(&cluster_name, &fqn.path) {
+                    errors.push(e);
+                }
+            }
+        }
+    }
+}
+
 /// Validates that all CREATE INDEX statements reference the main object.
 ///
 /// Ensures that every index defined in the file is created on the object
@@ -1225,6 +1253,7 @@ pub(super) fn validate_no_storage_and_computation_in_schema(
             // Storage objects (persist data)
             Statement::CreateTable(_)
             | Statement::CreateTableFromSource(_)
+            | Statement::CreateSource(_)
             | Statement::CreateSink(_) => {
                 has_storage = true;
                 let ident = obj.stmt.ident();

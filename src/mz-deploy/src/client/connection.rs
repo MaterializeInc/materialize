@@ -1033,12 +1033,36 @@ impl Client {
         introspection::check_tables_exist(&self.client, tables).await
     }
 
+    /// Check which sources from the given set exist in the database.
+    pub async fn check_sources_exist(
+        &self,
+        sources: &BTreeSet<ObjectId>,
+    ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
+        introspection::check_sources_exist(&self.client, sources).await
+    }
+
     /// Check which sinks from the given set exist in the database.
     pub async fn check_sinks_exist(
         &self,
         sinks: &BTreeSet<ObjectId>,
     ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
         introspection::check_sinks_exist(&self.client, sinks).await
+    }
+
+    /// Check which schemas from a set of (database, schema) pairs exist.
+    pub async fn check_schemas_exist(
+        &self,
+        schemas: &[(String, String)],
+    ) -> Result<BTreeSet<(String, String)>, ConnectionError> {
+        introspection::check_schemas_exist(&self.client, schemas).await
+    }
+
+    /// Check which clusters from a set of names exist.
+    pub async fn check_clusters_exist(
+        &self,
+        clusters: &[String],
+    ) -> Result<BTreeSet<String>, ConnectionError> {
+        introspection::check_clusters_exist(&self.client, clusters).await
     }
 
     /// Find sinks that depend on objects in the specified schemas.

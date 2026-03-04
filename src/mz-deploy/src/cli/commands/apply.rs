@@ -174,41 +174,45 @@ async fn gather_resources_and_check_conflicts(
 
     // Get schemas from deploy.deployments table for this deployment
     let deployment_records = client.get_schema_deployments(Some(deploy_id)).await?;
-    for record in deployment_records {
-        // Skip sink-only schemas - they don't need swapping
-        // Sinks are created after the swap via pending_statements
-        if record.kind == DeploymentKind::Sinks {
-            verbose!(
-                "Skipping sink-only schema {}.{} (no swap needed)",
-                record.database,
-                record.schema
-            );
-            continue;
-        }
 
-        // Skip replacement schemas - they don't get swapped
-        // Replacement MVs are applied via ALTER MV APPLY REPLACEMENT, then schemas are dropped
-        if record.kind == DeploymentKind::Replacement {
-            verbose!(
-                "Skipping replacement schema {}.{} (will be dropped after apply)",
-                record.database,
-                record.schema
-            );
-            continue;
-        }
+    // Build list of (database, staging_schema) pairs to check, filtering out Sinks and Replacement
+    let schemas_to_check: Vec<(String, String)> = deployment_records
+        .iter()
+        .filter(|record| {
+            if record.kind == DeploymentKind::Sinks {
+                verbose!(
+                    "Skipping sink-only schema {}.{} (no swap needed)",
+                    record.database,
+                    record.schema
+                );
+                false
+            } else if record.kind == DeploymentKind::Replacement {
+                verbose!(
+                    "Skipping replacement schema {}.{} (will be dropped after apply)",
+                    record.database,
+                    record.schema
+                );
+                false
+            } else {
+                true
+            }
+        })
+        .map(|record| {
+            let staging_schema = format!("{}{}", record.schema, staging_suffix);
+            (record.database.clone(), staging_schema)
+        })
+        .collect();
 
-        let staging_schema = format!("{}{}", record.schema, staging_suffix);
+    // Batch check which staging schemas exist
+    let existing_schemas = client.check_schemas_exist(&schemas_to_check).await?;
 
-        // Verify staging schema still exists
-        if client
-            .schema_exists(&record.database, &staging_schema)
-            .await?
-        {
-            staging_schemas.insert((record.database.clone(), staging_schema));
+    for pair in schemas_to_check {
+        if existing_schemas.contains(&pair) {
+            staging_schemas.insert(pair);
         } else {
             eprintln!(
                 "Warning: Staging schema {}.{} not found",
-                record.database, staging_schema
+                pair.0, pair.1
             );
         }
     }
@@ -218,11 +222,16 @@ async fn gather_resources_and_check_conflicts(
 
     // Get clusters from deploy.clusters table
     let cluster_names = client.get_deployment_clusters(deploy_id).await?;
-    for cluster_name in cluster_names {
-        let staging_cluster = format!("{}{}", cluster_name, staging_suffix);
 
-        // Verify staging cluster still exists
-        if client.cluster_exists(&staging_cluster).await? {
+    // Batch check which staging clusters exist
+    let staging_cluster_names: Vec<String> = cluster_names
+        .iter()
+        .map(|name| format!("{}{}", name, staging_suffix))
+        .collect();
+    let existing_clusters = client.check_clusters_exist(&staging_cluster_names).await?;
+
+    for (cluster_name, staging_cluster) in cluster_names.into_iter().zip(staging_cluster_names) {
+        if existing_clusters.contains(&staging_cluster) {
             staging_clusters.insert(cluster_name);
         } else {
             eprintln!("Warning: Staging cluster {} not found", staging_cluster);
@@ -551,17 +560,40 @@ async fn repoint_dependent_sinks(
         dependent_sinks.len()
     );
 
+    // Batch check which replacement objects exist
+    let replacement_ids: BTreeSet<ObjectId> = dependent_sinks
+        .iter()
+        .map(|sink| {
+            let new_schema = sink
+                .dependency_schema
+                .trim_end_matches(staging_suffix)
+                .to_string();
+            ObjectId {
+                database: sink.dependency_database.clone(),
+                schema: new_schema,
+                object: sink.dependency_name.clone(),
+            }
+        })
+        .collect();
+
+    let existing_fqns: BTreeSet<String> = client
+        .check_objects_exist(&replacement_ids)
+        .await
+        .map_err(CliError::Connection)?
+        .into_iter()
+        .collect();
+
     for sink in dependent_sinks {
         // Compute new schema name (strip suffix to get production schema name)
         let new_schema = sink.dependency_schema.trim_end_matches(staging_suffix);
 
-        // Check if replacement object exists in new schema
-        let replacement_exists = client
-            .object_exists(&sink.dependency_database, new_schema, &sink.dependency_name)
-            .await
-            .map_err(CliError::Connection)?;
+        // Check if replacement object exists using batch result
+        let replacement_fqn = format!(
+            "{}.{}.{}",
+            sink.dependency_database, new_schema, sink.dependency_name
+        );
 
-        if !replacement_exists {
+        if !existing_fqns.contains(&replacement_fqn) {
             return Err(CliError::SinkRepointFailed {
                 sink: format!(
                     "{}.{}.{}",

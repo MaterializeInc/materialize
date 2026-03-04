@@ -1982,3 +1982,143 @@ fn test_dependencies_mutually_recursive_with_nested_cte_in_subquery() {
         panic!("Expected CreateView statement");
     }
 }
+
+// ============================================================================
+// Source dependency extraction tests
+// ============================================================================
+
+#[test]
+fn test_extract_dependencies_source_with_cluster() {
+    let sql =
+        "CREATE SOURCE kafka_source IN CLUSTER ingest_cluster FROM KAFKA CONNECTION kafka_conn (TOPIC 'events') FORMAT JSON";
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateSource(source_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateSource(source_stmt.clone());
+        let (deps, clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Sources have no object dependencies
+        assert!(deps.is_empty());
+
+        // Should have one cluster dependency
+        assert_eq!(clusters.len(), 1);
+        assert!(clusters.contains(&Cluster::new("ingest_cluster".to_string())));
+    } else {
+        panic!("Expected CreateSource statement");
+    }
+}
+
+#[test]
+fn test_extract_dependencies_source_without_cluster() {
+    let sql =
+        "CREATE SOURCE kafka_source FROM KAFKA CONNECTION kafka_conn (TOPIC 'events') FORMAT JSON";
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateSource(source_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateSource(source_stmt.clone());
+        let (deps, clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Sources have no object dependencies
+        assert!(deps.is_empty());
+
+        // No cluster
+        assert!(clusters.is_empty());
+    } else {
+        panic!("Expected CreateSource statement");
+    }
+}
+
+#[test]
+fn test_source_determines_storage_schema_type() {
+    use crate::project::raw;
+    use crate::project::typed;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let src_dir = temp_dir.path();
+
+    // Create test structure with a source in an ingestion schema
+    let db_path = src_dir.join("models").join("test_db");
+    let ingestion_schema_path = db_path.join("ingestion");
+    fs::create_dir_all(&ingestion_schema_path).unwrap();
+
+    fs::write(
+        ingestion_schema_path.join("kafka_source.sql"),
+        "CREATE SOURCE kafka_source IN CLUSTER c FROM KAFKA CONNECTION conn (TOPIC 't') FORMAT JSON;",
+    )
+    .unwrap();
+
+    // Load raw → typed → planned
+    let raw_project = raw::load_project(src_dir).unwrap();
+    let typed_project = typed::Project::try_from(raw_project).unwrap();
+    let planned_project = Project::from(typed_project);
+
+    // Verify schema type is Storage
+    let schema = &planned_project.databases[0].schemas[0];
+    assert_eq!(schema.schema_type, SchemaType::Storage);
+}
+
+#[test]
+fn test_source_and_table_from_source_dependency_ordering() {
+    use crate::project::raw;
+    use crate::project::typed;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let src_dir = temp_dir.path();
+
+    let db_path = src_dir.join("models").join("test_db");
+    let ingestion_schema_path = db_path.join("ingestion");
+    fs::create_dir_all(&ingestion_schema_path).unwrap();
+
+    // Create a source
+    fs::write(
+        ingestion_schema_path.join("kafka_source.sql"),
+        "CREATE SOURCE kafka_source IN CLUSTER c FROM KAFKA CONNECTION conn (TOPIC 't') FORMAT JSON;",
+    )
+    .unwrap();
+
+    // Create a table from source that references it
+    fs::write(
+        ingestion_schema_path.join("events.sql"),
+        "CREATE TABLE events FROM SOURCE kafka_source (REFERENCE events);",
+    )
+    .unwrap();
+
+    // Load raw → typed → planned
+    let raw_project = raw::load_project(src_dir).unwrap();
+    let typed_project = typed::Project::try_from(raw_project).unwrap();
+    let planned_project = Project::from(typed_project);
+
+    // Get sorted objects
+    let sorted = planned_project.get_sorted_objects().unwrap();
+
+    let source_id = ObjectId::new(
+        "test_db".to_string(),
+        "ingestion".to_string(),
+        "kafka_source".to_string(),
+    );
+    let table_id = ObjectId::new(
+        "test_db".to_string(),
+        "ingestion".to_string(),
+        "events".to_string(),
+    );
+
+    let source_pos = sorted.iter().position(|(id, _)| *id == source_id);
+    let table_pos = sorted.iter().position(|(id, _)| *id == table_id);
+
+    assert!(
+        source_pos.is_some(),
+        "Source should be in sorted objects"
+    );
+    assert!(
+        table_pos.is_some(),
+        "Table should be in sorted objects"
+    );
+    assert!(
+        source_pos.unwrap() < table_pos.unwrap(),
+        "Source should appear before table from source in sorted order"
+    );
+}

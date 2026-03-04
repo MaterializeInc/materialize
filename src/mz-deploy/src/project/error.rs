@@ -391,6 +391,8 @@ pub enum ValidationErrorKind {
     MaterializedViewMissingCluster { view_name: String },
     /// Sink missing required IN CLUSTER clause
     SinkMissingCluster { sink_name: String },
+    /// Source missing required IN CLUSTER clause
+    SourceMissingCluster { source_name: String },
     /// Invalid statement type in database mod file
     InvalidDatabaseModStatement {
         statement_type: String,
@@ -613,6 +615,12 @@ impl ValidationErrorKind {
             }
             Self::SinkMissingCluster { sink_name } => {
                 format!("sink '{}' is missing required IN CLUSTER clause", sink_name)
+            }
+            Self::SourceMissingCluster { source_name } => {
+                format!(
+                    "source '{}' is missing required IN CLUSTER clause",
+                    source_name
+                )
             }
             Self::InvalidDatabaseModStatement {
                 statement_type,
@@ -896,6 +904,9 @@ impl ValidationErrorKind {
             }
             Self::SinkMissingCluster { .. } => {
                 Some("add 'IN CLUSTER <cluster_name>' to your CREATE SINK statement (e.g., CREATE SINK sink IN CLUSTER quickstart FROM ...)".to_string())
+            }
+            Self::SourceMissingCluster { .. } => {
+                Some("add 'IN CLUSTER <cluster_name>' to your CREATE SOURCE statement (e.g., CREATE SOURCE src IN CLUSTER quickstart FROM ...)".to_string())
             }
             Self::InvalidDatabaseModStatement { .. } => {
                 Some("database mod files (e.g., materialize.sql) can only contain COMMENT ON DATABASE, GRANT ON DATABASE, and ALTER DEFAULT PRIVILEGES statements".to_string())

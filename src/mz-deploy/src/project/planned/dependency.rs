@@ -26,6 +26,7 @@ fn determine_schema_type(objects: &[DatabaseObject]) -> SchemaType {
     match &objects[0].typed_object.stmt {
         Statement::CreateTable(_)
         | Statement::CreateTableFromSource(_)
+        | Statement::CreateSource(_)
         | Statement::CreateSink(_) => SchemaType::Storage,
         Statement::CreateView(_) | Statement::CreateMaterializedView(_) => SchemaType::Compute,
     }
@@ -206,6 +207,11 @@ pub fn extract_dependencies(
             let from_id = ObjectId::from_raw_item_name(&s.from, default_database, default_schema);
             deps.insert(from_id);
 
+            if let Some(ref cluster_name) = s.in_cluster {
+                clusters.insert(Cluster::new(cluster_name.to_string()));
+            }
+        }
+        Statement::CreateSource(s) => {
             if let Some(ref cluster_name) = s.in_cluster {
                 clusters.insert(Cluster::new(cluster_name.to_string()));
             }
