@@ -38,9 +38,11 @@ operator:
         scale: 1                  # Generally, should be set to 1.
         cpu_exclusive: <bool>
         cpu_limit: <float>         # e.g., 6
+        cpu_request: <float>       # e.g., 4 (optional, defaults to cpu_limit, may not be higher than cpu_limit)
         credits_per_hour: "0.0"    # N/A for self-managed.
         disk_limit: <string>       # e.g., "93150MiB"
         memory_limit: <string>     # e.g., "46575MiB"
+        swap_enabled: <bool>       # optional, defaults to the cluster-level swap_enabled
         selectors: <map>           # k8s label selectors
         # ex: kubernetes.io/arch: amd64
 ```
