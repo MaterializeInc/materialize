@@ -60,7 +60,15 @@ def get_known_issues_from_github_page(
     )
 
     if response.status_code != 200:
-        raise ValueError(f"Bad return code from GitHub: {response.status_code}")
+        rate_limit = response.headers.get("X-RateLimit-Remaining", "unknown")
+        rate_limit_reset = response.headers.get("X-RateLimit-Reset", "unknown")
+        raise ValueError(
+            f"Bad return code from GitHub: {response.status_code}, "
+            f"rate_limit_remaining={rate_limit}, "
+            f"rate_limit_reset={rate_limit_reset}, "
+            f"response={response.text[:500]}, "
+            f"has_token={token is not None}"
+        )
 
     issues_json = response.json()
     assert issues_json["incomplete_results"] == False
@@ -71,6 +79,10 @@ def get_known_issues_from_github(
     token: str | None = os.getenv("GITHUB_TOKEN"),
     repo: str = "MaterializeInc/database-issues",
 ) -> tuple[list[KnownGitHubIssue], list[GitHubIssueWithInvalidRegexp]]:
+    if not token:
+        raise ValueError(
+            "No GitHub token provided. Set GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN or GITHUB_TOKEN."
+        )
     page = 1
     issues_json = get_known_issues_from_github_page(token, repo, page)
     while issues_json["total_count"] > len(issues_json["items"]):
