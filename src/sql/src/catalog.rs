@@ -561,6 +561,12 @@ impl RoleAttributesRaw {
         }
     }
 
+    /// Adds the login attribute.
+    pub fn with_login(mut self) -> RoleAttributesRaw {
+        self.login = Some(true);
+        self
+    }
+
     /// Adds all attributes excluding password.
     pub const fn with_all(mut self) -> RoleAttributesRaw {
         self.inherit = true;

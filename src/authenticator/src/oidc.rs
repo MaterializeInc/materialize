@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use jsonwebtoken::jwk::JwkSet;
 use mz_adapter::Client as AdapterClient;
+use mz_adapter::{AdapterError, AuthenticationError};
 use mz_adapter_types::dyncfgs::{OIDC_AUDIENCE, OIDC_AUTHENTICATION_CLAIM, OIDC_ISSUER};
 use mz_auth::Authenticated;
 use mz_ore::soft_panic_or_log;
@@ -60,6 +61,8 @@ pub enum OidcError {
         expected_issuer: String,
     },
     ExpiredSignature,
+    /// The role is not allowed to login.
+    NonLogin,
 }
 
 impl std::fmt::Display for OidcError {
@@ -80,6 +83,7 @@ impl std::fmt::Display for OidcError {
             OidcError::InvalidAudience { .. } => write!(f, "invalid audience"),
             OidcError::InvalidIssuer { .. } => write!(f, "invalid issuer"),
             OidcError::ExpiredSignature => write!(f, "authentication credentials have expired"),
+            OidcError::NonLogin => write!(f, "role is not allowed to login"),
         }
     }
 }
@@ -452,6 +456,24 @@ impl GenericOidcAuthenticatorInner {
         if let Some(expected) = expected_user {
             if user != expected {
                 return Err(OidcError::WrongUser);
+            }
+        }
+
+        // Validate that the role can login via the coordinator catalog.
+        // RoleNotFound is treated as success: first-time OIDC users don't have
+        // a role yet, and it will be auto-created with login=true during startup.
+        match self.adapter_client.validate_login_user(user).await {
+            Ok(_) => {}
+            Err(AdapterError::AuthenticationError(AuthenticationError::RoleNotFound)) => {}
+            Err(AdapterError::AuthenticationError(AuthenticationError::NonLogin)) => {
+                return Err(OidcError::NonLogin);
+            }
+            Err(e) => {
+                warn!(
+                    ?e,
+                    "unexpected error validating login user during OIDC authentication"
+                );
+                return Err(OidcError::Jwt);
             }
         }
 
