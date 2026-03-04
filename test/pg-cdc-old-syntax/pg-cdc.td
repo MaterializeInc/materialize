@@ -355,19 +355,21 @@ public          trailing_space_nopk
 public          "\"\"\"literal_quotes\"\"\""
 conflict_schema conflict_table
 
-# Ensure all ingestion export subsources have an ID greater than the primary source ID
+# Ensure all ingestion export subsources have an ID greater than the primary source ID.
+# We compare IDs as integers because the string `id` column (e.g. 'u9', 'u10') doesn't
+# sort correctly with lexicographic comparison across different digit counts.
 > SELECT bool_and(primary_source_id < subsource_id)
   FROM
-      (SELECT id AS primary_source_id FROM mz_sources WHERE type = 'postgres')
-          CROSS JOIN (SELECT id AS subsource_id FROM mz_sources WHERE type = 'subsource');
+      (SELECT substr(id, 2)::integer AS primary_source_id FROM mz_sources WHERE type = 'postgres')
+          CROSS JOIN (SELECT substr(id, 2)::integer AS subsource_id FROM mz_sources WHERE type = 'subsource');
 true
 
-# Ensure progress subsources have an ID less than the primary source ID
+# Ensure progress subsources have an ID less than the primary source ID.
 > SELECT progress_source_id < primary_source_id
     FROM (
         SELECT
-            (SELECT id FROM mz_sources WHERE type = 'postgres') AS primary_source_id,
-            (SELECT id FROM mz_sources WHERE type = 'progress') AS progress_source_id
+            (SELECT substr(id, 2)::integer FROM mz_sources WHERE type = 'postgres') AS primary_source_id,
+            (SELECT substr(id, 2)::integer FROM mz_sources WHERE type = 'progress') AS progress_source_id
     );
 true
 
