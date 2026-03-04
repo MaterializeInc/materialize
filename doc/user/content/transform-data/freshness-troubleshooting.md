@@ -130,7 +130,7 @@ ORDER BY u.cpu_percent DESC;
 ```
 
 When a cluster has high CPU utilization, all objects on that cluster experience correlated freshness degradation.
-High memory usage can trigger compaction pressure that also slows down processing.
+High memory can force data to disk that also slows down processing.
 
 To confirm that lag is cluster-wide, check all objects on the affected cluster:
 
@@ -153,7 +153,7 @@ Consider scaling the cluster up or moving expensive workloads to a dedicated clu
 ### Check for OOM crash loops
 
 A cluster that repeatedly runs out of memory will have its replica crash and restart.
-Each restart triggers rehydration, during which no progress is made — causing recurring freshness degradation.
+Each restart triggers rehydration, during which no progress is made, causing recurring freshness degradation.
 
 Check the current replica status:
 
@@ -189,7 +189,7 @@ LIMIT 20;
 ```
 
 A repeating pattern of `offline` with reason `oom-killed` followed by `online` confirms a crash loop.
-The time between restarts indicates the severity: a replica that OOMs every few minutes after a ~30 minute hydration attempt is fundamentally too small for its workload.
+The time between restarts indicates the severity: a replica that OOMs every few minutes is fundamentally too small for its workload.
 
 To see the full lifecycle of replicas, including how often new ones are created:
 
@@ -262,7 +262,6 @@ SELECT '<object_id>', '<object_id>', '<object_id>'
 ## Step 6: Check sink lag
 
 Sinks export data to external systems and often introduce lag due to batching and commit intervals.
-A delay of 10-60 seconds at a sink edge is typical for Iceberg sinks, while Kafka sinks are usually faster.
 
 ```mzsql
 SELECT
@@ -282,7 +281,7 @@ ORDER BY ml.local_lag DESC;
 ## Measuring aggregate freshness
 
 The steps above diagnose individual objects.
-To measure overall freshness across your deployment — for example, to answer "what is our P99.999 freshness?" — aggregate over [`mz_internal.mz_wallclock_global_lag_history`](/sql/system-catalog/mz_internal/#mz_wallclock_global_lag_history).
+To measure overall freshness across your deployment, for example, to answer "what is our P99.999 freshness?", aggregate over [`mz_internal.mz_wallclock_global_lag_history`](/sql/system-catalog/mz_internal/#mz_wallclock_global_lag_history).
 
 ### Filtering noise
 
@@ -294,11 +293,10 @@ Raw aggregation over all objects produces misleading results because several cat
   Their frontiers are frozen and lag grows linearly over time, but no work is expected.
 * **Static data (dbt seeds, snapshots)**: Tables loaded once and never updated accumulate lag equal to their age.
   Filter by cluster name or object name patterns.
-* **Non-production clusters**: Development or staging clusters (`_dev`, `_uat` suffixes) may not represent production freshness.
+* **Non-production clusters**: Development or staging clusters may not represent production freshness.
 
 ### Peak and threshold-based freshness
 
-Materialize does not support `percentile_disc ... WITHIN GROUP`.
 At per-object sample sizes in `mz_wallclock_global_lag_history` (one row per minute, up to ~43,200 samples over 30 days), P99.999 is effectively `max(lag)` for any individual object.
 A more useful approach is to count how many minutes exceed specific thresholds:
 
@@ -467,6 +465,15 @@ Use [dataflow troubleshooting](/transform-data/dataflow-troubleshooting/) to ide
 
 **Resolution**: Optimize the view query, or move it to a dedicated cluster with more resources.
 
+### Skew
+
+**Symptoms**: One index or materialized view has high `local_lag` while the CPU utilization is low
+
+**Diagnosis**: The data might be skewed, or the query includes non-data-parallel patterns, like cross joins.
+Use [dataflow troubleshooting](/transform-data/dataflow-troubleshooting/) to identify expensive operators.
+
+**Resolution**: Optimize the view query to avoid the problem.
+
 ### OOM crash loop
 
 **Symptoms**: An object shows persistent lag that fluctuates.
@@ -474,7 +481,7 @@ Historical lag data for the object has gaps.
 The cluster has high memory utilization.
 
 **Diagnosis**: Check [`mz_internal.mz_cluster_replica_status_history`](/sql/system-catalog/mz_internal/#mz_cluster_replica_status_history) for repeated `oom-killed` events and [`mz_internal.mz_cluster_replica_history`](/sql/system-catalog/mz_internal/#mz_cluster_replica_history) for short-lived replicas.
-A typical pattern is: the replica hydrates for ~30 minutes, OOMs, restarts, OOMs again within minutes, and repeats.
+A typical pattern is: the replica hydrates for some time, OOMs, restarts, OOMs again within minutes, and repeats.
 During this cycle the cluster makes no sustained progress on frontiers.
 
 **Resolution**: Scale the cluster up.
