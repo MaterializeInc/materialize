@@ -18,8 +18,9 @@ mod tests {
         let project_path = temp_dir.path();
 
         // Create project structure
-        let materialize_dir = project_path.join("materialize");
-        fs::create_dir(&materialize_dir).unwrap();
+        let models_dir = project_path.join("models");
+        let materialize_dir = models_dir.join("materialize");
+        fs::create_dir_all(&materialize_dir).unwrap();
         let public_dir = materialize_dir.join("public");
         fs::create_dir(&public_dir).unwrap();
 

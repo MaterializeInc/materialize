@@ -133,12 +133,13 @@ pub(crate) async fn validate_project_impl(
     }
 
     // Build ObjectId to file path mapping by reconstructing paths from ObjectIds
-    // Path format: <root>/<database>/<schema>/<object>.sql
+    // Path format: <root>/models/<database>/<schema>/<object>.sql
     let mut object_paths: BTreeMap<ObjectId, PathBuf> = BTreeMap::new();
     for db in &planned_project.databases {
         for schema in &db.schemas {
             for obj in &schema.objects {
                 let file_path = project_root
+                    .join("models")
                     .join(&obj.id.database)
                     .join(&obj.id.schema)
                     .join(format!("{}.sql", obj.id.object));

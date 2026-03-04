@@ -91,6 +91,13 @@ pub enum LoadError {
         path: PathBuf,
     },
 
+    /// models/ subdirectory does not exist
+    #[error("models/ directory not found in project root: {path}")]
+    ModelsNotFound {
+        /// The expected models/ path
+        path: PathBuf,
+    },
+
     /// Failed to read a directory
     #[error("Failed to read directory: {path}")]
     DirectoryReadFailed {

@@ -206,7 +206,7 @@ fn test_get_sorted_objects_filtered() {
     let src_dir = temp_dir.path();
 
     // Create test structure with separate schemas for tables and views
-    let db_path = src_dir.join("test_db");
+    let db_path = src_dir.join("models").join("test_db");
     let tables_schema_path = db_path.join("tables");
     let views_schema_path = db_path.join("views");
     fs::create_dir_all(&tables_schema_path).unwrap();

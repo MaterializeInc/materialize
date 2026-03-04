@@ -32,12 +32,13 @@
 //! The expected directory structure is:
 //! ```text
 //! project_root/
-//!   database_name/              ← Database directory
-//!   database_name.sql           ← Optional database-level statements (sibling)
-//!     schema_name/              ← Schema directory
-//!     schema_name.sql           ← Optional schema-level statements (sibling)
-//!       object_name.sql         ← DatabaseObject
-//!       another_object.sql      ← DatabaseObject
+//!   models/                       ← Models directory (contains all databases)
+//!     database_name/              ← Database directory
+//!     database_name.sql           ← Optional database-level statements (sibling)
+//!       schema_name/              ← Schema directory
+//!       schema_name.sql           ← Optional schema-level statements (sibling)
+//!         object_name.sql         ← DatabaseObject
+//!         another_object.sql      ← DatabaseObject
 //! ```
 //!
 //! # Database and Schema .sql Files
@@ -226,15 +227,23 @@ pub fn load_project<P: AsRef<Path>>(root: P) -> Result<Project, ProjectError> {
         .into());
     }
 
+    let models_dir = root.join("models");
+    if !models_dir.is_dir() {
+        return Err(LoadError::ModelsNotFound {
+            path: models_dir,
+        }
+        .into());
+    }
+
     let mut databases = BTreeMap::new();
 
-    // Iterate over database directories (first level)
-    for db_entry in fs::read_dir(root).map_err(|source| LoadError::DirectoryReadFailed {
-        path: root.to_path_buf(),
+    // Iterate over database directories (first level inside models/)
+    for db_entry in fs::read_dir(&models_dir).map_err(|source| LoadError::DirectoryReadFailed {
+        path: models_dir.to_path_buf(),
         source,
     })? {
         let db_entry = db_entry.map_err(|source| LoadError::EntryReadFailed {
-            directory: root.to_path_buf(),
+            directory: models_dir.to_path_buf(),
             source,
         })?;
         let db_path = db_entry.path();
@@ -248,7 +257,7 @@ pub fn load_project<P: AsRef<Path>>(root: P) -> Result<Project, ProjectError> {
         let mut schemas = BTreeMap::new();
 
         // Check for database-level sibling .sql file (e.g., materialize.sql next to materialize/)
-        let db_mod_path = root.join(format!("{}.sql", db_name));
+        let db_mod_path = models_dir.join(format!("{}.sql", db_name));
         let db_mod_statements = if db_mod_path.exists() {
             let sql_content =
                 fs::read_to_string(&db_mod_path).map_err(|source| LoadError::FileReadFailed {
@@ -391,8 +400,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let root = temp_dir.path();
 
-        // Create database/schema/object structure
-        let db_path = root.join("my_database");
+        // Create models/database/schema/object structure
+        let db_path = root.join("models").join("my_database");
         let schema_path = db_path.join("my_schema");
         fs::create_dir_all(&schema_path).unwrap();
 
@@ -425,7 +434,7 @@ mod tests {
         // Create multiple databases with multiple schemas
         for db in ["db1", "db2"] {
             for schema in ["schema1", "schema2"] {
-                let schema_path = root.join(db).join(schema);
+                let schema_path = root.join("models").join(db).join(schema);
                 fs::create_dir_all(&schema_path).unwrap();
 
                 // Create a SQL file in each schema
@@ -449,12 +458,12 @@ mod tests {
         let root = temp_dir.path();
 
         // Create a hidden directory
-        let hidden_path = root.join(".hidden").join("schema");
+        let hidden_path = root.join("models").join(".hidden").join("schema");
         fs::create_dir_all(&hidden_path).unwrap();
         fs::write(hidden_path.join("object.sql"), "CREATE TABLE t (id INT);").unwrap();
 
         // Create a normal directory
-        let normal_path = root.join("normal").join("schema");
+        let normal_path = root.join("models").join("normal").join("schema");
         fs::create_dir_all(&normal_path).unwrap();
         fs::write(normal_path.join("object.sql"), "CREATE TABLE t (id INT);").unwrap();
 
@@ -471,13 +480,14 @@ mod tests {
         let root = temp_dir.path();
 
         // Create database with sibling .sql file
-        let db_path = root.join("my_database");
+        let models_dir = root.join("models");
+        let db_path = models_dir.join("my_database");
         let schema_path = db_path.join("my_schema");
         fs::create_dir_all(&schema_path).unwrap();
 
         // Write database-level sibling .sql file (my_database.sql next to my_database/)
         fs::write(
-            root.join("my_database.sql"),
+            models_dir.join("my_database.sql"),
             "GRANT CREATE ON DATABASE my_database TO admin;",
         )
         .unwrap();
@@ -499,7 +509,7 @@ mod tests {
         let root = temp_dir.path();
 
         // Create schema with sibling .sql file
-        let db_path = root.join("my_database");
+        let db_path = root.join("models").join("my_database");
         let schema_path = db_path.join("my_schema");
         fs::create_dir_all(&schema_path).unwrap();
 
@@ -526,7 +536,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let root = temp_dir.path();
 
-        let db_path = root.join("my_database");
+        let db_path = root.join("models").join("my_database");
         let schema_path = db_path.join("my_schema");
         fs::create_dir_all(&schema_path).unwrap();
 
@@ -558,7 +568,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let root = temp_dir.path();
 
-        let db_path = root.join("my_database");
+        let db_path = root.join("models").join("my_database");
         let schema_path = db_path.join("my_schema");
         fs::create_dir_all(&schema_path).unwrap();
 
@@ -591,7 +601,7 @@ mod tests {
         let root = temp_dir.path();
 
         // Create database/schema structure with separate schemas for tables and views
-        let db_path = root.join("test_db");
+        let db_path = root.join("models").join("test_db");
         let tables_schema_path = db_path.join("tables");
         let views_schema_path = db_path.join("views");
         fs::create_dir_all(&tables_schema_path).unwrap();
