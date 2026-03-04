@@ -78,23 +78,25 @@ pub(crate) async fn validate_project_impl(
     let mut missing_schemas = Vec::new();
     let mut missing_clusters = Vec::new();
 
-    // Collect all required databases
-    let mut required_databases = BTreeSet::new();
+    // Collect project databases (will be created if needed)
+    let mut project_databases = BTreeSet::new();
     for db in &planned_project.databases {
-        required_databases.insert(db.name.clone());
-    }
-    for ext_dep in &planned_project.external_dependencies {
-        required_databases.insert(ext_dep.database.clone());
+        project_databases.insert(db.name.clone());
     }
 
-    // Collect schemas - split into project schemas (we can create) vs external schemas (must exist)
+    // Collect external databases and schemas (must already exist)
+    let mut external_databases = BTreeSet::new();
     let mut external_schemas = BTreeSet::new();
     for ext_dep in &planned_project.external_dependencies {
+        // Only require external databases that aren't project databases
+        if !project_databases.contains(&ext_dep.database) {
+            external_databases.insert(ext_dep.database.clone());
+        }
         external_schemas.insert((ext_dep.database.clone(), ext_dep.schema.clone()));
     }
 
-    // Check databases exist
-    for database in &required_databases {
+    // Check only external databases exist (project databases will be created if needed)
+    for database in &external_databases {
         let query = "SELECT name FROM mz_databases WHERE name = $1";
         let rows = client
             .query(query, &[database])

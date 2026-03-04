@@ -7,21 +7,8 @@ MZ_USER="${MZ_USER:-materialize}"
 
 PSQL="psql -h $MZ_HOST -p $MZ_PORT -U $MZ_USER -v ON_ERROR_STOP=1"
 
-echo "Creating clusters..."
-$PSQL -c "CREATE CLUSTER ontology SIZE = '25cc'"
-$PSQL -c "CREATE CLUSTER fulfillment SIZE = '25cc'"
-$PSQL -c "CREATE CLUSTER storefront SIZE = '25cc'"
-
-echo "Creating databases..."
-$PSQL -c "CREATE DATABASE raw"
-$PSQL -c "CREATE DATABASE ontology"
-$PSQL -c "CREATE DATABASE fulfillment"
-$PSQL -c "CREATE DATABASE storefront"
-
-echo "Creating ontology.internal schema..."
-$PSQL -d ontology -c "CREATE SCHEMA internal"
-
-echo "Creating Postgres source..."
+echo "Creating raw database and Postgres source..."
+$PSQL -c "CREATE DATABASE IF NOT EXISTS raw"
 $PSQL -d raw -c "CREATE SECRET pgpass AS 'postgres'"
 $PSQL -d raw -c "
 CREATE CONNECTION pg_conn TO POSTGRES (

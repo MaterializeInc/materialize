@@ -362,6 +362,23 @@ impl Client {
     // Schema Operations
     // =========================================================================
 
+    /// Create a database (idempotent).
+    pub async fn create_database(&self, database: &str) -> Result<(), ConnectionError> {
+        let sql = format!(
+            "CREATE DATABASE IF NOT EXISTS {}",
+            quote_identifier(database)
+        );
+
+        self.client.execute(&sql, &[]).await.map_err(|e| {
+            ConnectionError::DatabaseCreationFailed {
+                database: database.to_string(),
+                source: Box::new(e),
+            }
+        })?;
+
+        Ok(())
+    }
+
     /// Create a schema in the specified database (idempotent).
     pub async fn create_schema(&self, database: &str, schema: &str) -> Result<(), ConnectionError> {
         let sql = format!(
@@ -548,6 +565,26 @@ impl Client {
                 Ok(())
             }
         }
+    }
+
+    /// Alter a managed cluster's options (SIZE, REPLICATION FACTOR).
+    pub async fn alter_cluster(
+        &self,
+        name: &str,
+        options: &ClusterOptions,
+    ) -> Result<(), ConnectionError> {
+        let sql = format!(
+            "ALTER CLUSTER {} SET (SIZE = '{}', REPLICATION FACTOR = {})",
+            quote_identifier(name),
+            options.size,
+            options.replication_factor
+        );
+
+        self.client.execute(&sql, &[]).await.map_err(|e| {
+            ConnectionError::Message(format!("Failed to alter cluster '{}': {}", name, e))
+        })?;
+
+        Ok(())
     }
 
     // =========================================================================

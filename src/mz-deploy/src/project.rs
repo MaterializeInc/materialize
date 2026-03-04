@@ -2,6 +2,7 @@ use std::path::Path;
 
 pub mod ast;
 pub mod changeset;
+pub mod clusters;
 pub mod deployment_snapshot;
 pub mod error;
 pub mod normalize;

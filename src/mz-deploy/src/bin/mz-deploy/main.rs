@@ -81,29 +81,28 @@ enum Command {
         dry_run: bool,
     },
 
-    /// Promote a staging deployment to production
+    /// Apply changes to Materialize
     ///
-    /// Performs an atomic schema swap between staging and production. Before promoting,
-    /// verifies that all staging clusters are fully hydrated and caught up (unless
-    /// --skip-ready is specified). This ensures zero-downtime deployments.
+    /// When used with a DEPLOY_ID, promotes a staging deployment to production
+    /// via an atomic schema swap. Before promoting, verifies that all staging
+    /// clusters are fully hydrated and caught up (unless --skip-ready is specified).
     ///
-    /// The promotion will fail if:
-    /// - Any cluster is still hydrating (objects not yet materialized)
-    /// - Any cluster has lag exceeding --allowed-lag threshold
-    /// - Any cluster has no replicas or all replicas are OOM-looping
-    /// - Production schemas were modified after staging was created (unless --force)
+    /// Subcommands:
+    ///   clusters  Apply cluster definitions from clusters/ directory
     ///
-    /// Example:
+    /// Examples:
     ///   mz-deploy apply abc123                    # Promote staging deployment
     ///   mz-deploy apply abc123 --skip-ready       # Skip hydration check
     ///   mz-deploy apply abc123 --allowed-lag 600  # Allow up to 10 min lag
+    ///   mz-deploy apply clusters                  # Apply cluster definitions
+    #[command(subcommand_negates_reqs = true)]
     Apply {
         /// Staging deployment ID to promote to production
         ///
         /// The deployment ID was assigned when running 'mz-deploy stage'. You can
         /// find active deployments with 'mz-deploy deployments'.
-        #[arg(value_name = "DEPLOY_ID")]
-        deploy_id: String,
+        #[arg(value_name = "DEPLOY_ID", required = true)]
+        deploy_id: Option<String>,
 
         /// Skip conflict detection when promoting
         ///
@@ -128,6 +127,9 @@ enum Command {
         /// how far behind real-time the materialized data is. Default: 300 (5 min).
         #[arg(long, value_name = "SECONDS", default_value = "300")]
         allowed_lag: i64,
+
+        #[command(subcommand)]
+        subcommand: Option<ApplyCommand>,
     },
 
     /// Create a staging deployment for testing changes
@@ -300,6 +302,19 @@ enum Command {
     },
 }
 
+#[derive(Subcommand, Debug)]
+enum ApplyCommand {
+    /// Apply cluster definitions from clusters/ directory
+    ///
+    /// Converges the live Materialize state to match the cluster definitions.
+    /// Creates clusters that don't exist and alters ones whose configuration
+    /// has drifted. Grants and comments are applied idempotently.
+    ///
+    /// Example:
+    ///   mz-deploy apply clusters
+    Clusters,
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
@@ -352,14 +367,25 @@ async fn run(args: Args) -> Result<(), CliError> {
             force,
             skip_ready,
             allowed_lag,
+            subcommand,
         }) => {
             let profile =
                 ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
                     .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
-            if !skip_ready {
-                cli::commands::ready::run(&profile, &deploy_id, true, None, allowed_lag).await?;
+
+            match subcommand {
+                Some(ApplyCommand::Clusters) => {
+                    cli::commands::clusters::run(&args.directory, &profile).await
+                }
+                None => {
+                    let deploy_id = deploy_id.expect("deploy_id is required without subcommand");
+                    if !skip_ready {
+                        cli::commands::ready::run(&profile, &deploy_id, true, None, allowed_lag)
+                            .await?;
+                    }
+                    cli::commands::apply::run(&profile, &deploy_id, force).await
+                }
             }
-            cli::commands::apply::run(&profile, &deploy_id, force).await
         }
         Some(Command::Stage {
             deploy_id,

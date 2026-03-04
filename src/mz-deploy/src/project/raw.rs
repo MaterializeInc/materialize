@@ -229,10 +229,7 @@ pub fn load_project<P: AsRef<Path>>(root: P) -> Result<Project, ProjectError> {
 
     let models_dir = root.join("models");
     if !models_dir.is_dir() {
-        return Err(LoadError::ModelsNotFound {
-            path: models_dir,
-        }
-        .into());
+        return Err(LoadError::ModelsNotFound { path: models_dir }.into());
     }
 
     let mut databases = BTreeMap::new();

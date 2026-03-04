@@ -1,0 +1,1 @@
+CREATE CLUSTER fulfillment (SIZE = '100cc', REPLICATION FACTOR = 1);

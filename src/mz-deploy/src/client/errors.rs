@@ -30,6 +30,12 @@ pub enum ConnectionError {
     #[error("dependency error: {0}")]
     Dependency(#[from] crate::project::error::DependencyError),
 
+    #[error("failed to create database '{database}': {source}")]
+    DatabaseCreationFailed {
+        database: String,
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
     #[error("failed to create schema '{database}.{schema}': {source}")]
     SchemaCreationFailed {
         database: String,

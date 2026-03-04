@@ -5,6 +5,7 @@
 
 pub mod abort;
 pub mod apply;
+pub mod clusters;
 pub mod compile;
 pub mod create_tables;
 pub mod debug;

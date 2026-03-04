@@ -448,6 +448,27 @@ pub enum ValidationErrorKind {
         object_name: String,
         object_type: String,
     },
+    /// Invalid statement type in cluster definition file
+    InvalidClusterStatement {
+        statement_type: String,
+        cluster_name: String,
+    },
+    /// Cluster name in CREATE CLUSTER doesn't match filename
+    ClusterNameMismatch { declared: String, expected: String },
+    /// Cluster file missing required CREATE CLUSTER statement
+    ClusterMissingCreateStatement { cluster_name: String },
+    /// Cluster file contains multiple CREATE CLUSTER statements
+    ClusterMultipleCreateStatements { cluster_name: String },
+    /// GRANT in cluster file targets a different cluster
+    ClusterGrantTargetMismatch {
+        target: String,
+        cluster_name: String,
+    },
+    /// COMMENT in cluster file targets a different cluster
+    ClusterCommentTargetMismatch {
+        target: String,
+        cluster_name: String,
+    },
 }
 
 impl ValidationErrorKind {
@@ -706,6 +727,51 @@ impl ValidationErrorKind {
                     database, schema, object_name, object_type
                 )
             }
+            Self::InvalidClusterStatement {
+                statement_type,
+                cluster_name,
+            } => {
+                format!(
+                    "invalid statement type in cluster file '{}': {}. Only CREATE CLUSTER, GRANT ON CLUSTER, and COMMENT ON CLUSTER are allowed",
+                    cluster_name, statement_type
+                )
+            }
+            Self::ClusterNameMismatch { declared, expected } => {
+                format!(
+                    "cluster name mismatch: declared '{}', expected '{}'",
+                    declared, expected
+                )
+            }
+            Self::ClusterMissingCreateStatement { cluster_name } => {
+                format!(
+                    "no CREATE CLUSTER statement found in cluster file '{}'",
+                    cluster_name
+                )
+            }
+            Self::ClusterMultipleCreateStatements { cluster_name } => {
+                format!(
+                    "multiple CREATE CLUSTER statements found in cluster file '{}'",
+                    cluster_name
+                )
+            }
+            Self::ClusterGrantTargetMismatch {
+                target,
+                cluster_name,
+            } => {
+                format!(
+                    "GRANT in cluster file '{}' targets wrong cluster: '{}'",
+                    cluster_name, target
+                )
+            }
+            Self::ClusterCommentTargetMismatch {
+                target,
+                cluster_name,
+            } => {
+                format!(
+                    "COMMENT in cluster file '{}' targets wrong cluster: '{}'",
+                    cluster_name, target
+                )
+            }
         }
     }
 
@@ -819,6 +885,24 @@ impl ValidationErrorKind {
             }
             Self::ReplacementSchemaNonMvObject { .. } => {
                 Some("schemas with CREATE DATA CONTRACT FOR SCHEMA can only contain CREATE MATERIALIZED VIEW statements".to_string())
+            }
+            Self::InvalidClusterStatement { .. } => {
+                Some("cluster files can only contain CREATE CLUSTER, GRANT ON CLUSTER, and COMMENT ON CLUSTER statements".to_string())
+            }
+            Self::ClusterNameMismatch { .. } => {
+                Some("the cluster name in your CREATE CLUSTER statement must match the .sql file name".to_string())
+            }
+            Self::ClusterMissingCreateStatement { .. } => {
+                Some("each cluster file must contain exactly one CREATE CLUSTER statement".to_string())
+            }
+            Self::ClusterMultipleCreateStatements { .. } => {
+                Some("each cluster file must contain exactly one CREATE CLUSTER statement".to_string())
+            }
+            Self::ClusterGrantTargetMismatch { .. } => {
+                Some("GRANT statements in a cluster file must target the cluster defined in that file".to_string())
+            }
+            Self::ClusterCommentTargetMismatch { .. } => {
+                Some("COMMENT statements in a cluster file must target the cluster defined in that file".to_string())
             }
         }
     }

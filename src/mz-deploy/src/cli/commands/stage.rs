@@ -11,7 +11,7 @@ use crate::project::object_id::ObjectId;
 use crate::project::planned::extract_external_indexes;
 use crate::project::typed::FullyQualifiedName;
 use crate::project::{self, normalize::NormalizingVisitor};
-use crate::utils::{git, progress};
+use crate::utils::{git, progress, sql_utils::quote_identifier};
 use crate::verbose;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -433,7 +433,23 @@ async fn create_resources_with_rollback<'a>(
 
     // Wrap resource creation in a closure that we can call and handle errors from
     let create_result = async {
-        // Stage 4: Create staging schemas
+        // Stage 4a: Create project databases if they don't exist
+        if !dry_run {
+            progress::info("Creating project databases if not exists");
+            for db in &planned_project.databases {
+                client.create_database(&db.name).await?;
+                verbose!("  Ensured database {} exists", db.name);
+            }
+        } else {
+            println!("-- Create project databases --");
+            for db in &planned_project.databases {
+                let create_db_sql =
+                    format!("CREATE DATABASE IF NOT EXISTS {}", quote_identifier(&db.name));
+                executor.execute_sql(&create_db_sql).await?;
+            }
+        }
+
+        // Stage 4b: Create staging schemas
         if !dry_run {
             progress::stage_start("Creating staging schemas");
         } else {
