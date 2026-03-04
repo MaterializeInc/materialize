@@ -1743,6 +1743,8 @@ class FlipFlagsAction(Action):
             "enable_expression_cache",
             "enable_multi_replica_sources",
             "enable_password_auth",
+            "enable_login_attribute",
+            "enable_superuser_attribute",
             "persist_fast_path_order",
             "enable_mcp_agents",
             "enable_mcp_observatory",

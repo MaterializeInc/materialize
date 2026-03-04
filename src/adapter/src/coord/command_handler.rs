@@ -12,7 +12,7 @@
 
 use base64::prelude::*;
 use differential_dataflow::lattice::Lattice;
-use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
+use mz_adapter_types::dyncfgs::{ALLOW_USER_SESSIONS, ENABLE_LOGIN_ATTRIBUTE};
 use mz_auth::AuthenticatorKind;
 use mz_auth::password::Password;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
@@ -812,6 +812,11 @@ impl Coordinator {
                 }
             };
 
+            // Certain authenticators, such as Frontegg, do not allow the LOGIN attribute of a role.
+            // Therefore, we add the attribute only when it is permitted.
+            if ENABLE_LOGIN_ATTRIBUTE.get(self.catalog().system_config().dyncfgs()) {
+                attributes.login = Some(true);
+            }
             let plan = CreateRolePlan {
                 name: user.name.to_string(),
                 attributes,

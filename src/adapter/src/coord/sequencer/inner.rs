@@ -20,7 +20,10 @@ use futures::{Future, StreamExt, future};
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::{ENABLE_MULTI_REPLICA_SOURCES, ENABLE_PASSWORD_AUTH};
+use mz_adapter_types::dyncfgs::{
+    ENABLE_LOGIN_ATTRIBUTE, ENABLE_MULTI_REPLICA_SOURCES, ENABLE_PASSWORD_AUTH,
+    ENABLE_SUPERUSER_ATTRIBUTE,
+};
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
@@ -855,16 +858,32 @@ impl Coordinator {
 
     /// Validates the role attributes for a `CREATE ROLE` statement.
     fn validate_role_attributes(&self, attributes: &RoleAttributesRaw) -> Result<(), AdapterError> {
-        if !ENABLE_PASSWORD_AUTH.get(self.catalog().system_config().dyncfgs()) {
-            if attributes.superuser.is_some()
-                || attributes.password.is_some()
-                || attributes.login.is_some()
-            {
-                return Err(AdapterError::UnavailableFeature {
-                    feature: "SUPERUSER, PASSWORD, and LOGIN attributes".to_string(),
-                    docs: Some("https://materialize.com/docs/sql/create-role/#details".to_string()),
-                });
-            }
+        let unavailable_features: Vec<String> = [
+            (
+                ENABLE_PASSWORD_AUTH.get(self.catalog().system_config().dyncfgs()),
+                attributes.password.is_some(),
+                "PASSWORD",
+            ),
+            (
+                ENABLE_SUPERUSER_ATTRIBUTE.get(self.catalog().system_config().dyncfgs()),
+                attributes.superuser.is_some(),
+                "SUPERUSER",
+            ),
+            (
+                ENABLE_LOGIN_ATTRIBUTE.get(self.catalog().system_config().dyncfgs()),
+                attributes.login.is_some(),
+                "LOGIN",
+            ),
+        ]
+        .into_iter()
+        .filter(|(enabled, exists, _)| *exists && !*enabled)
+        .map(|(_, _, name)| name.to_string())
+        .collect();
+        if !unavailable_features.is_empty() {
+            return Err(AdapterError::UnavailableFeature {
+                feature: format!("{} attribute", unavailable_features.join(", ")),
+                docs: Some("https://materialize.com/docs/sql/create-role/#details".to_string()),
+            });
         }
         Ok(())
     }
