@@ -95,7 +95,7 @@ SELECT s.id, o.name, s.status, s.error
 FROM mz_internal.mz_source_statuses s
 JOIN mz_catalog.mz_objects o ON s.id = o.id
 WHERE o.id LIKE 'u%'
-  AND s.status != 'running';
+  AND s.status <> 'running';
 ```
 
 A source with status `stalled` or `starting` will hold back all downstream objects.
@@ -242,7 +242,7 @@ JOIN mz_internal.mz_frontiers fn ON depends_on.next = fn.object_id
 JOIN mz_catalog.mz_objects o_probe ON depends_on.probe = o_probe.id
 JOIN mz_catalog.mz_objects o_prev ON depends_on.prev = o_prev.id
 JOIN mz_catalog.mz_objects o_next ON depends_on.next = o_next.id
-WHERE depends_on.prev != depends_on.next
+WHERE depends_on.prev <> depends_on.next
   AND fn.write_frontier <= fp.write_frontier
   AND fp.write_frontier::text::numeric > fn.write_frontier::text::numeric
 ORDER BY edge_delay DESC
@@ -282,7 +282,7 @@ ORDER BY ml.local_lag DESC;
 ## Measuring aggregate freshness
 
 The steps above diagnose individual objects.
-To measure overall freshness across your deployment — for example, to answer "what is our P99.999 freshness?" — aggregate over `mz_internal.mz_wallclock_global_lag_history`.
+To measure overall freshness across your deployment — for example, to answer "what is our P99.999 freshness?" — aggregate over [`mz_internal.mz_wallclock_global_lag_history`](/sql/system-catalog/mz_internal/#mz_wallclock_global_lag_history).
 
 ### Filtering noise
 
@@ -299,7 +299,7 @@ Raw aggregation over all objects produces misleading results because several cat
 ### Peak and threshold-based freshness
 
 Materialize does not support `percentile_disc ... WITHIN GROUP`.
-At the sample sizes available in `mz_wallclock_global_lag_history` (one row per minute per object, 30-day retention), P99.999 is effectively `max(lag)`.
+At per-object sample sizes in `mz_wallclock_global_lag_history` (one row per minute, up to ~43,200 samples over 30 days), P99.999 is effectively `max(lag)` for any individual object.
 A more useful approach is to count how many minutes exceed specific thresholds:
 
 ```mzsql
@@ -322,10 +322,10 @@ WHERE wl.occurred_at > now() - INTERVAL '7 days'
   AND o.id LIKE 'u%'
   AND wl.lag IS NOT NULL
   -- Exclude paused sources
-  AND (ss.id IS NULL OR ss.status != 'paused')
+  AND (ss.id IS NULL OR ss.status <> 'paused')
   -- Exclude zero-replica clusters
   AND (c.id IS NULL OR c.replication_factor > 0)
-GROUP BY o.name, o.type, c.name
+GROUP BY o.id, o.name, o.type, c.name
 HAVING max(wl.lag) > INTERVAL '10 seconds'
 ORDER BY max(wl.lag) DESC
 LIMIT 30;
@@ -354,7 +354,7 @@ LEFT JOIN mz_internal.mz_source_statuses ss ON o.id = ss.id
 WHERE wl.occurred_at > now() - INTERVAL '7 days'
   AND o.id LIKE 'u%'
   AND wl.lag IS NOT NULL
-  AND (ss.id IS NULL OR ss.status != 'paused')
+  AND (ss.id IS NULL OR ss.status <> 'paused')
   AND c.replication_factor > 0
 GROUP BY c.name
 ORDER BY max(wl.lag) DESC;
@@ -502,8 +502,8 @@ Other sources are unaffected.
 Check `mz_internal.mz_source_statuses` — a status of `paused` confirms this.
 Unlike a stalled source, a paused source has no error and was deliberately stopped.
 
-**Resolution**: This is expected behavior for a paused source.
-If the source should be active, resume it with `ALTER SOURCE ... SET (STATUS = 'running')`.
+**Resolution**: If the source was paused intentionally, this is expected behavior.
+If the source should be active, drop and recreate it, or investigate why it was paused.
 When measuring aggregate freshness, exclude paused sources to avoid skewing metrics.
 
 ### Zero-replica cluster
