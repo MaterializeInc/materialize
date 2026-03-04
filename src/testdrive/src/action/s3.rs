@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// The metadata for Arrow `Field` type requires `std::collections::HashMap`, which is disallowed.
+#[allow(clippy::disallowed_types)]
 use std::collections::HashMap;
 use std::fs;
 use std::pin::Pin;
@@ -414,7 +416,8 @@ pub async fn run_upload_parquet_types(
 }
 
 // Using `as ArrayRef` is necessary when creating the struct array because the inner arrays have different types.
-#[allow(clippy::as_conversions)]
+// The metadata for Arrow `Field` type requires `std::collections::HashMap`, which is disallowed.
+#[allow(clippy::as_conversions, clippy::disallowed_types)]
 fn build_parquet_types_batch() -> Result<RecordBatch, anyhow::Error> {
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
 
