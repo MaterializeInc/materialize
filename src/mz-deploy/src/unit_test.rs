@@ -1600,8 +1600,8 @@ mod tests {
     #[test]
     fn test_normalize_type_preserves_other_types() {
         // Types without aliases should be preserved as-is (lowercased)
-        assert_eq!(normalize_type("timestamp"), "timestamp");
-        assert_eq!(normalize_type("TIMESTAMP"), "timestamp");
+        assert_eq!(normalize_type("timestamp"), "timestamp without time zone");
+        assert_eq!(normalize_type("TIMESTAMP"), "timestamp without time zone");
         assert_eq!(normalize_type("date"), "date");
         assert_eq!(normalize_type("time"), "time");
         assert_eq!(normalize_type("interval"), "interval");

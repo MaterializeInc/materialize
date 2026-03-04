@@ -445,6 +445,16 @@ impl Client {
         introspection::role_exists(&self.client, name).await
     }
 
+    /// Get the members granted to a role.
+    pub async fn get_role_members(&self, name: &str) -> Result<Vec<String>, ConnectionError> {
+        introspection::get_role_members(&self.client, name).await
+    }
+
+    /// Get session default parameter names for a role.
+    pub async fn get_role_parameters(&self, name: &str) -> Result<Vec<String>, ConnectionError> {
+        introspection::get_role_parameters(&self.client, name).await
+    }
+
     /// Check if a cluster exists.
     pub async fn cluster_exists(&self, name: &str) -> Result<bool, ConnectionError> {
         introspection::cluster_exists(&self.client, name).await

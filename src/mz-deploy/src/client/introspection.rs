@@ -275,6 +275,49 @@ pub async fn role_exists(client: &PgClient, name: &str) -> Result<bool, Connecti
     Ok(row.get("exists"))
 }
 
+/// Get the members granted to a role.
+pub async fn get_role_members(
+    client: &PgClient,
+    role_name: &str,
+) -> Result<Vec<String>, ConnectionError> {
+    let query = r#"
+        SELECT m.name AS member
+        FROM mz_catalog.mz_role_members rm
+        JOIN mz_catalog.mz_roles r ON r.id = rm.role_id
+        JOIN mz_catalog.mz_roles m ON m.id = rm.member
+        WHERE r.name = $1
+        ORDER BY m.name
+    "#;
+
+    let rows = client
+        .query(query, &[&role_name])
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    Ok(rows.iter().map(|row| row.get("member")).collect())
+}
+
+/// Get session default parameter names for a role.
+pub async fn get_role_parameters(
+    client: &PgClient,
+    role_name: &str,
+) -> Result<Vec<String>, ConnectionError> {
+    let query = r#"
+        SELECT rp.parameter_name
+        FROM mz_catalog.mz_role_parameters rp
+        JOIN mz_catalog.mz_roles r ON r.id = rp.role_id
+        WHERE r.name = $1
+        ORDER BY rp.parameter_name
+    "#;
+
+    let rows = client
+        .query(query, &[&role_name])
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    Ok(rows.iter().map(|row| row.get("parameter_name")).collect())
+}
+
 /// Get the current Materialize user/role.
 pub async fn get_current_user(client: &PgClient) -> Result<String, ConnectionError> {
     let row = client

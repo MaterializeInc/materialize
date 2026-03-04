@@ -4,7 +4,11 @@ use crate::cli::CliError;
 use crate::client::{Client, ConnectionError, Profile};
 use crate::project::roles::{self, RoleDefinition};
 use crate::utils::progress;
+use crate::utils::sql_utils::quote_identifier;
+use mz_sql_parser::ast::AlterRoleOption;
+use mz_sql_parser::ast::SetRoleVar;
 use owo_colors::OwoColorize;
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Instant;
 
@@ -106,6 +110,79 @@ async fn apply_role(client: &Client, def: &RoleDefinition) -> Result<(), CliErro
                 role_name, e
             )))
         })?;
+    }
+
+    // Revoke stale grants
+    let current_members = client
+        .get_role_members(role_name)
+        .await
+        .map_err(CliError::Connection)?;
+
+    let desired_members: BTreeSet<String> = def
+        .grants
+        .iter()
+        .flat_map(|g| g.member_names.iter().map(|m| m.as_str().to_lowercase()))
+        .collect();
+
+    for member in &current_members {
+        if !desired_members.contains(&member.to_lowercase()) {
+            println!(
+                "  {} Revoking role '{}' from '{}'",
+                "-".red().bold(),
+                role_name,
+                member
+            );
+            let sql = format!(
+                "REVOKE {} FROM {}",
+                quote_identifier(role_name),
+                quote_identifier(member)
+            );
+            client.execute(&sql, &[]).await.map_err(|e| {
+                CliError::Connection(ConnectionError::Message(format!(
+                    "Failed to revoke role '{}' from '{}': {}",
+                    role_name, member, e
+                )))
+            })?;
+        }
+    }
+
+    // Reset stale session defaults
+    let current_params = client
+        .get_role_parameters(role_name)
+        .await
+        .map_err(CliError::Connection)?;
+
+    let desired_params: BTreeSet<String> = def
+        .alter_stmts
+        .iter()
+        .filter_map(|alter| match &alter.option {
+            AlterRoleOption::Variable(SetRoleVar::Set { name, .. }) => {
+                Some(name.as_str().to_lowercase())
+            }
+            _ => None,
+        })
+        .collect();
+
+    for param in &current_params {
+        if !desired_params.contains(&param.to_lowercase()) {
+            println!(
+                "  {} Resetting '{}' on role '{}'",
+                "-".red().bold(),
+                param,
+                role_name
+            );
+            let sql = format!(
+                "ALTER ROLE {} RESET {}",
+                quote_identifier(role_name),
+                quote_identifier(param)
+            );
+            client.execute(&sql, &[]).await.map_err(|e| {
+                CliError::Connection(ConnectionError::Message(format!(
+                    "Failed to reset '{}' on role '{}': {}",
+                    param, role_name, e
+                )))
+            })?;
+        }
     }
 
     Ok(())
