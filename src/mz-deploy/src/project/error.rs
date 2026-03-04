@@ -415,8 +415,8 @@ pub enum ValidationErrorKind {
     SchemaModCommentTargetMismatch { target: String, schema_name: String },
     /// Grant in schema mod file targets wrong object
     SchemaModGrantTargetMismatch { target: String, schema_name: String },
-    /// CREATE DATA CONTRACT in schema mod file targets wrong schema
-    SchemaModDataContractTargetMismatch { target: String, schema_name: String },
+    /// SET variable in schema mod file has invalid value
+    InvalidSetVariable { variable: String, value: String },
     /// ALTER DEFAULT PRIVILEGES in database mod requires IN DATABASE scope
     AlterDefaultPrivilegesRequiresDatabaseScope { database_name: String },
     /// ALTER DEFAULT PRIVILEGES in schema mod requires IN SCHEMA scope
@@ -629,7 +629,7 @@ impl ValidationErrorKind {
                 schema_name,
             } => {
                 format!(
-                    "invalid statement type in schema mod file '{}': {}. Only COMMENT ON SCHEMA, GRANT ON SCHEMA, ALTER DEFAULT PRIVILEGES, and CREATE DATA CONTRACT FOR SCHEMA are allowed",
+                    "invalid statement type in schema mod file '{}': {}. Only COMMENT ON SCHEMA, GRANT ON SCHEMA, ALTER DEFAULT PRIVILEGES, and SET api = stable are allowed",
                     schema_name, statement_type
                 )
             }
@@ -651,14 +651,8 @@ impl ValidationErrorKind {
                     schema_name, target
                 )
             }
-            Self::SchemaModDataContractTargetMismatch {
-                target,
-                schema_name,
-            } => {
-                format!(
-                    "CREATE DATA CONTRACT in schema mod file must target the schema itself. Expected SCHEMA '{}', but found SCHEMA {}",
-                    schema_name, target
-                )
+            Self::InvalidSetVariable { variable, value } => {
+                format!("invalid value for SET {}: {}", variable, value)
             }
             Self::AlterDefaultPrivilegesRequiresDatabaseScope { database_name } => {
                 format!(
@@ -851,7 +845,7 @@ impl ValidationErrorKind {
                 Some("grants in database mod files must target the database itself using GRANT ON DATABASE".to_string())
             }
             Self::InvalidSchemaModStatement { .. } => {
-                Some("schema mod files (e.g., materialize/public.sql) can only contain COMMENT ON SCHEMA, GRANT ON SCHEMA, ALTER DEFAULT PRIVILEGES, and CREATE DATA CONTRACT FOR SCHEMA statements".to_string())
+                Some("schema mod files (e.g., materialize/public.sql) can only contain COMMENT ON SCHEMA, GRANT ON SCHEMA, ALTER DEFAULT PRIVILEGES, and SET api = stable statements".to_string())
             }
             Self::SchemaModCommentTargetMismatch { .. } => {
                 Some("comments in schema mod files must target the schema itself using COMMENT ON SCHEMA".to_string())
@@ -859,8 +853,8 @@ impl ValidationErrorKind {
             Self::SchemaModGrantTargetMismatch { .. } => {
                 Some("grants in schema mod files must target the schema itself using GRANT ON SCHEMA".to_string())
             }
-            Self::SchemaModDataContractTargetMismatch { .. } => {
-                Some("CREATE DATA CONTRACT FOR SCHEMA must target the schema that the mod file belongs to".to_string())
+            Self::InvalidSetVariable { .. } => {
+                Some("only 'SET api = stable' is supported in schema mod files".to_string())
             }
             Self::AlterDefaultPrivilegesRequiresDatabaseScope { .. } => {
                 Some("add 'IN DATABASE <database_name>' to your ALTER DEFAULT PRIVILEGES statement".to_string())
@@ -884,7 +878,7 @@ impl ValidationErrorKind {
                 Some("storage objects (tables, sinks) cannot share a schema with computation objects (views, materialized views) to prevent accidentally recreating tables or sinks when recreating views. Organize your schemas: use one schema for storage objects (e.g., 'tables') and another for computation objects (e.g., 'views' or 'public')".to_string())
             }
             Self::ReplacementSchemaNonMvObject { .. } => {
-                Some("schemas with CREATE DATA CONTRACT FOR SCHEMA can only contain CREATE MATERIALIZED VIEW statements".to_string())
+                Some("schemas with SET api = stable can only contain CREATE MATERIALIZED VIEW statements".to_string())
             }
             Self::InvalidClusterStatement { .. } => {
                 Some("cluster files can only contain CREATE CLUSTER, GRANT ON CLUSTER, and COMMENT ON CLUSTER statements".to_string())

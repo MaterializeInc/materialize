@@ -1,0 +1,361 @@
+{
+  "version": 1,
+  "objects": {
+    "fulfillment.public.flagged_orders": {
+      "customer_email": {
+        "type": "text",
+        "nullable": false
+      },
+      "customer_id": {
+        "type": "integer",
+        "nullable": false
+      },
+      "customer_name": {
+        "type": "text",
+        "nullable": true
+      },
+      "flag_reason": {
+        "type": "text",
+        "nullable": true
+      },
+      "lifetime_orders": {
+        "type": "bigint",
+        "nullable": false
+      },
+      "order_date": {
+        "type": "timestamp without time zone",
+        "nullable": true
+      },
+      "order_id": {
+        "type": "integer",
+        "nullable": false
+      },
+      "refund_amount": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "total_amount": {
+        "type": "numeric",
+        "nullable": true
+      }
+    },
+    "fulfillment.public.open_orders": {
+      "customer_email": {
+        "type": "text",
+        "nullable": false
+      },
+      "customer_id": {
+        "type": "integer",
+        "nullable": false
+      },
+      "customer_name": {
+        "type": "text",
+        "nullable": true
+      },
+      "order_date": {
+        "type": "timestamp without time zone",
+        "nullable": true
+      },
+      "order_id": {
+        "type": "integer",
+        "nullable": false
+      },
+      "product_category": {
+        "type": "text",
+        "nullable": true
+      },
+      "product_name": {
+        "type": "text",
+        "nullable": true
+      },
+      "status": {
+        "type": "text",
+        "nullable": true
+      },
+      "total_amount": {
+        "type": "numeric",
+        "nullable": true
+      }
+    },
+    "ontology.internal.active_customer_detail": {
+      "customer_id": {
+        "type": "integer",
+        "nullable": false
+      },
+      "email": {
+        "type": "text",
+        "nullable": false
+      },
+      "last_order_date": {
+        "type": "timestamp without time zone",
+        "nullable": true
+      },
+      "lifetime_orders": {
+        "type": "bigint",
+        "nullable": false
+      },
+      "lifetime_spend": {
+        "type": "numeric",
+        "nullable": true
+      },
+      "name": {
+        "type": "text",
+        "nullable": true
+      },
+      "signup_date": {
+        "type": "date",
+        "nullable": true
+      }
+    },
+    "ontology.internal.active_products": {
+      "category": {
+        "type": "text",
+        "nullable": true
+      },
+      "cost": {
+        "type": "numeric",
+        "nullable": true
+      },
+      "price": {
+        "type": "numeric",
+        "nullable": true
+      },
+      "product_id": {
+        "type": "integer",
+        "nullable": false
+      },
+      "product_name": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "ontology.internal.customers_cleaned": {
+      "customer_id": {
+        "type": "integer",
+        "nullable": false
+      },
+      "email": {
+        "type": "text",
+        "nullable": false
+      },
+      "name": {
+        "type": "text",
+        "nullable": true
+      },
+      "signup_date": {
+        "type": "date",
+        "nullable": true
+      }
+    },
+    "ontology.internal.orders_enriched": {
+      "customer_id": {
+        "type": "integer",
+        "nullable": true
+      },
+      "net_amount": {
+        "type": "numeric",
+        "nullable": true
+      },
+      "order_date": {
+        "type": "timestamp without time zone",
+        "nullable": true
+      },
+      "order_id": {
+        "type": "integer",
+        "nullable": false
+      },
+      "product_id": {
+        "type": "integer",
+        "nullable": true
+      },
+      "refund_amount": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "status": {
+        "type": "text",
+        "nullable": true
+      },
+      "total_amount": {
+        "type": "numeric",
+        "nullable": true
+      }
+    },
+    "ontology.public.customers": {
+      "customer_id": {
+        "type": "integer",
+        "nullable": false
+      },
+      "email": {
+        "type": "text",
+        "nullable": false
+      },
+      "last_order_date": {
+        "type": "timestamp without time zone",
+        "nullable": true
+      },
+      "lifetime_orders": {
+        "type": "bigint",
+        "nullable": false
+      },
+      "lifetime_spend": {
+        "type": "numeric",
+        "nullable": true
+      },
+      "name": {
+        "type": "text",
+        "nullable": true
+      },
+      "signup_date": {
+        "type": "date",
+        "nullable": true
+      }
+    },
+    "ontology.public.orders": {
+      "customer_id": {
+        "type": "integer",
+        "nullable": true
+      },
+      "net_amount": {
+        "type": "numeric",
+        "nullable": true
+      },
+      "order_date": {
+        "type": "timestamp without time zone",
+        "nullable": true
+      },
+      "order_id": {
+        "type": "integer",
+        "nullable": false
+      },
+      "product_id": {
+        "type": "integer",
+        "nullable": true
+      },
+      "refund_amount": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "status": {
+        "type": "text",
+        "nullable": true
+      },
+      "total_amount": {
+        "type": "numeric",
+        "nullable": true
+      }
+    },
+    "ontology.public.products": {
+      "category": {
+        "type": "text",
+        "nullable": true
+      },
+      "cost": {
+        "type": "numeric",
+        "nullable": true
+      },
+      "price": {
+        "type": "numeric",
+        "nullable": true
+      },
+      "product_id": {
+        "type": "integer",
+        "nullable": false
+      },
+      "product_name": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "storefront.public.account_activity": {
+      "customer_id": {
+        "type": "integer",
+        "nullable": false
+      },
+      "email": {
+        "type": "text",
+        "nullable": false
+      },
+      "last_order_date": {
+        "type": "timestamp without time zone",
+        "nullable": true
+      },
+      "lifetime_orders": {
+        "type": "bigint",
+        "nullable": false
+      },
+      "lifetime_spend": {
+        "type": "numeric",
+        "nullable": true
+      },
+      "loyalty_tier": {
+        "type": "text",
+        "nullable": false
+      },
+      "name": {
+        "type": "text",
+        "nullable": true
+      },
+      "signup_date": {
+        "type": "date",
+        "nullable": true
+      }
+    },
+    "storefront.public.product_detail": {
+      "category": {
+        "type": "text",
+        "nullable": true
+      },
+      "price": {
+        "type": "numeric",
+        "nullable": true
+      },
+      "product_id": {
+        "type": "integer",
+        "nullable": false
+      },
+      "product_name": {
+        "type": "text",
+        "nullable": true
+      },
+      "units_sold": {
+        "type": "bigint",
+        "nullable": false
+      }
+    },
+    "storefront.public.shipping_updates": {
+      "customer_email": {
+        "type": "text",
+        "nullable": false
+      },
+      "customer_id": {
+        "type": "integer",
+        "nullable": false
+      },
+      "customer_name": {
+        "type": "text",
+        "nullable": true
+      },
+      "order_date": {
+        "type": "timestamp without time zone",
+        "nullable": true
+      },
+      "order_id": {
+        "type": "integer",
+        "nullable": false
+      },
+      "product_name": {
+        "type": "text",
+        "nullable": true
+      },
+      "status": {
+        "type": "text",
+        "nullable": true
+      },
+      "total_amount": {
+        "type": "numeric",
+        "nullable": true
+      }
+    }
+  }
+}

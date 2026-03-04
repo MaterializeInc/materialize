@@ -16,29 +16,29 @@ CREATE INDEX orders_enriched_by_product IN CLUSTER ontology ON orders_enriched (
 
 EXECUTE UNIT TEST test_order_with_refund
 FOR ontology.internal.orders_enriched
-MOCK raw.public.orders(order_id INTEGER, customer_id INTEGER, product_id INTEGER, order_date TIMESTAMP, total_amount NUMERIC, status TEXT) AS (
-  SELECT * FROM VALUES
+MOCK raw.public.orders(order_id INTEGER, customer_id INTEGER, product_id INTEGER, order_date TIMESTAMP WITHOUT TIME ZONE, total_amount NUMERIC, status TEXT) AS (
+  VALUES
     (1, 1, 1, '2025-06-01 10:00:00'::TIMESTAMP, 100::NUMERIC, 'completed')
 ),
 MOCK raw.public.returns(return_id INTEGER, order_id INTEGER, refund_amount NUMERIC) AS (
-  SELECT * FROM VALUES
+  VALUES
     (1, 1, 25::NUMERIC)
 ),
-EXPECTED(order_id INTEGER, customer_id INTEGER, product_id INTEGER, order_date TIMESTAMP, total_amount NUMERIC, status TEXT, refund_amount NUMERIC, net_amount NUMERIC) AS (
-  SELECT * FROM VALUES
+EXPECTED(order_id INTEGER, customer_id INTEGER, product_id INTEGER, order_date TIMESTAMP WITHOUT TIME ZONE, total_amount NUMERIC, status TEXT, refund_amount NUMERIC, net_amount NUMERIC) AS (
+  VALUES
     (1, 1, 1, '2025-06-01 10:00:00'::TIMESTAMP, 100::NUMERIC, 'completed', 25::NUMERIC, 75::NUMERIC)
 );
 
 EXECUTE UNIT TEST test_order_without_refund
 FOR ontology.internal.orders_enriched
-MOCK raw.public.orders(order_id INTEGER, customer_id INTEGER, product_id INTEGER, order_date TIMESTAMP, total_amount NUMERIC, status TEXT) AS (
-  SELECT * FROM VALUES
+MOCK raw.public.orders(order_id INTEGER, customer_id INTEGER, product_id INTEGER, order_date TIMESTAMP WITHOUT TIME ZONE, total_amount NUMERIC, status TEXT) AS (
+  VALUES
     (2, 2, 2, '2025-07-10 09:00:00'::TIMESTAMP, 200::NUMERIC, 'completed')
 ),
 MOCK raw.public.returns(return_id INTEGER, order_id INTEGER, refund_amount NUMERIC) AS (
-  SELECT * FROM VALUES (NULL::INTEGER, NULL::INTEGER, NULL::NUMERIC) LIMIT 0
+  SELECT * FROM (VALUES (NULL::INTEGER, NULL::INTEGER, NULL::NUMERIC)) LIMIT 0
 ),
-EXPECTED(order_id INTEGER, customer_id INTEGER, product_id INTEGER, order_date TIMESTAMP, total_amount NUMERIC, status TEXT, refund_amount NUMERIC, net_amount NUMERIC) AS (
-  SELECT * FROM VALUES
+EXPECTED(order_id INTEGER, customer_id INTEGER, product_id INTEGER, order_date TIMESTAMP WITHOUT TIME ZONE, total_amount NUMERIC, status TEXT, refund_amount NUMERIC, net_amount NUMERIC) AS (
+  VALUES
     (2, 2, 2, '2025-07-10 09:00:00'::TIMESTAMP, 200::NUMERIC, 'completed', 0::NUMERIC, 200::NUMERIC)
 )

@@ -339,7 +339,7 @@ impl TryFrom<super::super::raw::Project> for Project {
             }
         }
 
-        // Derive replacement schemas from CREATE DATA CONTRACT statements
+        // Derive replacement schemas from SET api = stable statements
         let replacement_schemas = derive_replacement_schemas(&databases);
 
         // Validate replacement schemas only contain MVs
@@ -356,7 +356,7 @@ impl TryFrom<super::super::raw::Project> for Project {
     }
 }
 
-/// Scan all schemas for `CREATE DATA CONTRACT FOR SCHEMA` statements and build
+/// Scan all schemas for `SET api = stable` statements and build
 /// the set of replacement schemas.
 fn derive_replacement_schemas(databases: &[Database]) -> BTreeSet<SchemaQualifier> {
     let mut replacement_schemas = BTreeSet::new();
@@ -364,7 +364,8 @@ fn derive_replacement_schemas(databases: &[Database]) -> BTreeSet<SchemaQualifie
         for schema in &db.schemas {
             if let Some(mod_stmts) = &schema.mod_statements {
                 for stmt in mod_stmts {
-                    if matches!(stmt, mz_sql_parser::ast::Statement::CreateDataContract(_)) {
+                    if matches!(stmt, mz_sql_parser::ast::Statement::SetVariable(s) if s.variable.as_str().eq_ignore_ascii_case("api"))
+                    {
                         replacement_schemas.insert((db.name.clone(), schema.name.clone()));
                         break;
                     }
@@ -375,7 +376,7 @@ fn derive_replacement_schemas(databases: &[Database]) -> BTreeSet<SchemaQualifie
     replacement_schemas
 }
 
-/// Validate replacement schemas derived from `CREATE DATA CONTRACT` statements.
+/// Validate replacement schemas derived from `SET api = stable` statements.
 ///
 /// Ensures replacement schemas only contain materialized views.
 fn validate_replacement_schemas(

@@ -1,1 +1,1 @@
-CREATE DATA CONTRACT FOR SCHEMA public;
+SET api = stable;

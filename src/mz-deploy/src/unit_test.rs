@@ -677,6 +677,7 @@ fn normalize_type(t: &str) -> String {
         "json" | "jsonb" => "jsonb".to_string(),
 
         // Timestamp types
+        "timestamp" | "timestamp without time zone" => "timestamp without time zone".to_string(),
         "timestamptz" | "timestamp with time zone" => "timestamp with time zone".to_string(),
 
         _ => {
@@ -689,6 +690,10 @@ fn normalize_type(t: &str) -> String {
                 || normalized.starts_with("timestamptz")
             {
                 "timestamp with time zone".to_string()
+            } else if normalized.starts_with("timestamp without time zone")
+                || normalized == "timestamp"
+            {
+                "timestamp without time zone".to_string()
             } else {
                 normalized
             }

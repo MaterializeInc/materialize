@@ -1063,23 +1063,44 @@ pub(super) fn validate_schema_mod_statements(
                     }
                 }
             }
-            MzStatement::CreateDataContract(contract_stmt) => {
-                // Must be CREATE DATA CONTRACT FOR SCHEMA targeting this schema
-                let target_schema = contract_stmt.schema_name.to_string();
-                let is_match = schema_name_matches(&target_schema, database_name, schema_name);
+            MzStatement::SetVariable(set_stmt) => {
+                if set_stmt.variable.as_str().eq_ignore_ascii_case("api") {
+                    // SET api = stable is a valid schema mod directive
+                    let is_valid = match &set_stmt.to {
+                        mz_sql_parser::ast::SetVariableTo::Values(values) => {
+                            values.len() == 1
+                                && match &values[0] {
+                                    mz_sql_parser::ast::SetVariableValue::Ident(ident) => {
+                                        ident.as_str().eq_ignore_ascii_case("stable")
+                                    }
+                                    mz_sql_parser::ast::SetVariableValue::Literal(
+                                        mz_sql_parser::ast::Value::String(s),
+                                    ) => s.eq_ignore_ascii_case("stable"),
+                                    _ => false,
+                                }
+                        }
+                        _ => false,
+                    };
 
-                if !is_match {
+                    if !is_valid {
+                        errors.push(ValidationError::with_file_and_sql(
+                            ValidationErrorKind::InvalidSetVariable {
+                                variable: set_stmt.variable.as_str().to_string(),
+                                value: set_stmt.to.to_string(),
+                            },
+                            schema_path.to_path_buf(),
+                            stmt_sql,
+                        ));
+                    }
+                } else {
                     errors.push(ValidationError::with_file_and_sql(
-                        ValidationErrorKind::SchemaModDataContractTargetMismatch {
-                            target: target_schema,
+                        ValidationErrorKind::InvalidSchemaModStatement {
+                            statement_type: "SET".to_string(),
                             schema_name: format!("{}.{}", database_name, schema_name),
                         },
                         schema_path.to_path_buf(),
                         stmt_sql,
                     ));
-                } else {
-                    // Normalize the schema name to be fully qualified
-                    normalize_schema_name(&mut contract_stmt.schema_name);
                 }
             }
             MzStatement::AlterDefaultPrivileges(alter_stmt) => {

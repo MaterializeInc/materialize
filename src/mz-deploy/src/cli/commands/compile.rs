@@ -159,7 +159,7 @@ async fn typecheck_with_docker(
     // Load types.lock if it exists
     let types = crate::types::load_types_lock(directory).unwrap_or_else(|_| {
         println!("No types.lock found, assuming no external dependencies");
-        println!("See gen-data-contracts for more information");
+        println!("See SET api = stable for more information");
         crate::types::Types {
             version: 1,
             objects: std::collections::BTreeMap::new(),

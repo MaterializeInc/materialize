@@ -160,9 +160,10 @@ impl Project {
             for schema in &database.schemas {
                 if let Some(stmts) = &schema.mod_statements {
                     for stmt in stmts {
-                        // Skip CREATE DATA CONTRACT — it's a directive for mz-deploy,
+                        // Skip SET api — it's a directive for mz-deploy,
                         // not SQL to send to Materialize.
-                        if matches!(stmt, mz_sql_parser::ast::Statement::CreateDataContract(_)) {
+                        if matches!(stmt, mz_sql_parser::ast::Statement::SetVariable(s) if s.variable.as_str().eq_ignore_ascii_case("api"))
+                        {
                             continue;
                         }
                         result.push(ModStatement::Schema {

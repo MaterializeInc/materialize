@@ -418,7 +418,7 @@ pub struct Project {
     /// All validated databases in this project
     pub databases: Vec<Database>,
     /// Schemas that use replacement materialized views, derived from
-    /// `CREATE DATA CONTRACT FOR SCHEMA` statements.
+    /// `SET api = stable` statements.
     /// Each entry is a `(database, schema)` pair.
     pub replacement_schemas: BTreeSet<SchemaQualifier>,
 }

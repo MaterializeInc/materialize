@@ -108,7 +108,6 @@ Connection
 Connections
 Constraint
 Continual
-Contract
 Copy
 Count
 Counter

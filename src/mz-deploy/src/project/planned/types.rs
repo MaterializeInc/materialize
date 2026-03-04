@@ -92,6 +92,6 @@ pub struct Project {
     /// Unit tests defined in the project, organized by the object they test
     pub tests: Vec<(ObjectId, crate::unit_test::UnitTest)>,
     /// Schemas that use replacement materialized views, derived from
-    /// `CREATE DATA CONTRACT FOR SCHEMA` statements.
+    /// `SET api = stable` statements.
     pub replacement_schemas: BTreeSet<SchemaQualifier>,
 }
