@@ -5198,7 +5198,20 @@ pub static MZ_WALLCLOCK_GLOBAL_LAG_HISTORY: LazyLock<BuiltinView> = LazyLock::ne
         )
         .with_key(vec![0, 2])
         .finish(),
-    column_comments: BTreeMap::new(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "object_id",
+            "The ID of the table, source, materialized view, index, or sink. Corresponds to `mz_objects.id`.",
+        ),
+        (
+            "lag",
+            "The minimum wallclock lag observed for the object during the minute.",
+        ),
+        (
+            "occurred_at",
+            "The minute-aligned timestamp of the observation.",
+        ),
+    ]),
     sql: "
 WITH times_binned AS (
     SELECT
@@ -5217,8 +5230,8 @@ OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)",
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY: LazyLock<BuiltinView> =
-    LazyLock::new(|| BuiltinView {
+pub static MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
         name: "mz_wallclock_global_lag_recent_history",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::VIEW_MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY_OID,
@@ -5231,13 +5244,27 @@ pub static MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY: LazyLock<BuiltinView> =
             )
             .with_key(vec![0, 2])
             .finish(),
-        column_comments: BTreeMap::new(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "object_id",
+                "The ID of the table, source, materialized view, index, or sink. Corresponds to `mz_objects.id`.",
+            ),
+            (
+                "lag",
+                "The minimum wallclock lag observed for the object during the minute.",
+            ),
+            (
+                "occurred_at",
+                "The minute-aligned timestamp of the observation.",
+            ),
+        ]),
         sql: "
 SELECT object_id, lag, occurred_at
 FROM mz_internal.mz_wallclock_global_lag_history
 WHERE occurred_at + '1 day' > mz_now()",
         access: vec![PUBLIC_SELECT],
-    });
+    }
+});
 
 pub static MZ_WALLCLOCK_GLOBAL_LAG: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_wallclock_global_lag",
