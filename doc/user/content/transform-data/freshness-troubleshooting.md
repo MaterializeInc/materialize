@@ -150,6 +150,65 @@ ORDER BY ml.local_lag DESC;
 If all objects on the cluster have similar `local_lag`, the cluster is the bottleneck.
 Consider scaling the cluster up or moving expensive workloads to a dedicated cluster.
 
+### Check for OOM crash loops
+
+A cluster that repeatedly runs out of memory will have its replica crash and restart.
+Each restart triggers rehydration, during which no progress is made — causing recurring freshness degradation.
+
+Check the current replica status:
+
+```mzsql
+SELECT
+    c.name AS cluster_name,
+    rs.replica_id,
+    rs.process_id,
+    rs.status,
+    rs.reason,
+    rs.updated_at
+FROM mz_internal.mz_cluster_replica_statuses rs
+JOIN mz_catalog.mz_cluster_replicas r ON rs.replica_id = r.id
+JOIN mz_catalog.mz_clusters c ON r.cluster_id = c.id
+WHERE c.name = '<cluster_name>';
+```
+
+A replica with status `offline` and reason `oom-killed` confirms the cluster is currently out of memory.
+
+Check whether the replica has been restarting repeatedly:
+
+```mzsql
+SELECT
+    rsh.replica_id,
+    rsh.status,
+    rsh.reason,
+    rsh.occurred_at
+FROM mz_internal.mz_cluster_replica_status_history rsh
+JOIN mz_internal.mz_cluster_replica_history rh ON rsh.replica_id = rh.replica_id
+WHERE rh.cluster_name = '<cluster_name>'
+ORDER BY rsh.occurred_at DESC
+LIMIT 20;
+```
+
+A repeating pattern of `offline` with reason `oom-killed` followed by `online` confirms a crash loop.
+The time between restarts indicates the severity: a replica that OOMs every few minutes after a ~30 minute hydration attempt is fundamentally too small for its workload.
+
+To see the full lifecycle of replicas, including how often new ones are created:
+
+```mzsql
+SELECT
+    rh.replica_id,
+    rh.size,
+    rh.created_at,
+    rh.dropped_at,
+    rh.dropped_at - rh.created_at AS uptime
+FROM mz_internal.mz_cluster_replica_history rh
+WHERE rh.cluster_name = '<cluster_name>'
+ORDER BY rh.created_at DESC
+LIMIT 20;
+```
+
+**Resolution**: The cluster is undersized for its workload.
+Scale it up to a larger size, or reduce the number of objects on the cluster.
+
 ## Step 5: Attribute lag through the dependency graph
 
 For more complex pipelines, you may need to trace which specific edge in the dependency graph introduces delay.
@@ -326,6 +385,19 @@ Cross-reference with [expensive operators](/transform-data/dataflow-troubleshoot
 Use [dataflow troubleshooting](/transform-data/dataflow-troubleshooting/) to identify expensive operators.
 
 **Resolution**: Optimize the view query, or move it to a dedicated cluster with more resources.
+
+### OOM crash loop
+
+**Symptoms**: An object shows persistent lag that fluctuates.
+Historical lag data for the object has gaps.
+The cluster has high memory utilization.
+
+**Diagnosis**: Check [`mz_internal.mz_cluster_replica_status_history`](/sql/system-catalog/mz_internal/#mz_cluster_replica_status_history) for repeated `oom-killed` events and [`mz_internal.mz_cluster_replica_history`](/sql/system-catalog/mz_internal/#mz_cluster_replica_history) for short-lived replicas.
+A typical pattern is: the replica hydrates for ~30 minutes, OOMs, restarts, OOMs again within minutes, and repeats.
+During this cycle the cluster makes no sustained progress on frontiers.
+
+**Resolution**: Scale the cluster up.
+The cluster cannot hold its working set in memory at its current size.
 
 ### System-wide freshness spike
 
