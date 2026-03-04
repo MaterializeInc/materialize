@@ -10,7 +10,6 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
-use mz_ore::soft_assert_or_log;
 use mz_repr::{Datum, ReprColumnType, ReprRelationType, ReprScalarType, Row, RowArena};
 
 use crate::scalar::func::variadic::And;
@@ -958,15 +957,10 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     }
 
     fn cond(&self, cond: Self::Summary, then: Self::Summary, els: Self::Summary) -> Self::Summary {
-        soft_assert_or_log!(
-            then.col_type.union(&els.col_type).is_ok(),
-            "abstract interpretation: failed type union for cond: {then:?} {els:?}"
-        );
-
-        let col_type = ReprColumnType {
-            scalar_type: then.col_type.scalar_type,
-            nullable: then.col_type.nullable || els.col_type.nullable,
-        };
+        let col_type = then
+            .col_type
+            .union(&els.col_type)
+            .expect("failed type union for cond during abstract interpretation");
 
         let range = cond
             .range
