@@ -2,6 +2,7 @@
 
 use crate::cli::CliError;
 use crate::client::{ApplyState, Client, DeploymentKind, Profile};
+use crate::project::SchemaQualifier;
 use crate::project::object_id::ObjectId;
 use crate::{project, verbose};
 use owo_colors::OwoColorize;
@@ -140,7 +141,7 @@ async fn gather_resources_and_check_conflicts(
     client: &Client,
     deploy_id: &str,
     force: bool,
-) -> Result<(BTreeSet<(String, String)>, BTreeSet<String>, String), CliError> {
+) -> Result<(BTreeSet<SchemaQualifier>, BTreeSet<String>, String), CliError> {
     verbose!("Checking for deployment conflicts...");
     let conflicts = client.check_deployment_conflicts(deploy_id).await?;
 
@@ -254,7 +255,7 @@ async fn gather_resources_and_check_conflicts(
 async fn execute_atomic_swap(
     client: &Client,
     deploy_id: &str,
-    staging_schemas: &BTreeSet<(String, String)>,
+    staging_schemas: &BTreeSet<SchemaQualifier>,
     staging_clusters: &BTreeSet<String>,
 ) -> Result<(), CliError> {
     let staging_suffix = format!("_{}", deploy_id);
@@ -488,7 +489,7 @@ async fn apply_replacement_mvs(client: &Client, deploy_id: &str) -> Result<(), C
     }
 
     // Drop now-empty replacement staging schemas
-    let replacement_schemas: BTreeSet<(String, String)> = records
+    let replacement_schemas: BTreeSet<SchemaQualifier> = records
         .iter()
         .map(|r| (r.target_database.clone(), r.replacement_schema.clone()))
         .collect();
@@ -520,7 +521,7 @@ async fn apply_replacement_mvs(client: &Client, deploy_id: &str) -> Result<(), C
 /// old schemas are dropped.
 async fn repoint_dependent_sinks(
     client: &Client,
-    staging_schemas: &BTreeSet<(String, String)>,
+    staging_schemas: &BTreeSet<SchemaQualifier>,
     staging_suffix: &str,
 ) -> Result<(), CliError> {
     // Build list of old schema names (database, old_schema_with_suffix)
@@ -616,7 +617,7 @@ async fn repoint_dependent_sinks(
 /// This function drops them to clean up.
 async fn drop_old_resources(
     client: &Client,
-    staging_schemas: &BTreeSet<(String, String)>,
+    staging_schemas: &BTreeSet<SchemaQualifier>,
     staging_clusters: &BTreeSet<String>,
     staging_suffix: &str,
 ) {

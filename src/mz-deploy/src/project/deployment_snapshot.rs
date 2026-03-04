@@ -12,6 +12,8 @@ use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 
 use chrono::{DateTime, Utc};
+
+use crate::project::SchemaQualifier;
 use sha2::{Digest, Sha256};
 
 use crate::client::{
@@ -65,7 +67,7 @@ pub struct DeploymentSnapshot {
     /// - Objects: Regular schemas containing views/MVs that need swapping
     /// - Sinks: Schemas containing only sinks (no swap needed, sinks created after swap)
     /// - Tables: Schemas containing only tables
-    pub schemas: BTreeMap<(String, String), DeploymentKind>,
+    pub schemas: BTreeMap<SchemaQualifier, DeploymentKind>,
 }
 
 /// Metadata collected during deployment.

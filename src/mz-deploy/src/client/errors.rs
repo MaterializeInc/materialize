@@ -4,6 +4,7 @@
 //! including connection errors and validation errors.
 
 use crate::client::config::ConfigError;
+use crate::project::SchemaQualifier;
 use crate::project::object_id::ObjectId;
 use owo_colors::OwoColorize;
 use std::fmt;
@@ -99,7 +100,7 @@ impl From<tokio_postgres::Error> for ConnectionError {
 #[derive(Debug)]
 pub enum DatabaseValidationError {
     MissingDatabases(Vec<String>),
-    MissingSchemas(Vec<(String, String)>),
+    MissingSchemas(Vec<SchemaQualifier>),
     MissingClusters(Vec<String>),
     CompilationFailed {
         file_path: PathBuf,
@@ -108,7 +109,7 @@ pub enum DatabaseValidationError {
     },
     Multiple {
         databases: Vec<String>,
-        schemas: Vec<(String, String)>,
+        schemas: Vec<SchemaQualifier>,
         clusters: Vec<String>,
         compilation_errors: Vec<DatabaseValidationError>,
     },

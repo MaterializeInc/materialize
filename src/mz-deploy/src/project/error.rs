@@ -408,6 +408,8 @@ pub enum ValidationErrorKind {
     SchemaModCommentTargetMismatch { target: String, schema_name: String },
     /// Grant in schema mod file targets wrong object
     SchemaModGrantTargetMismatch { target: String, schema_name: String },
+    /// CREATE DATA CONTRACT in schema mod file targets wrong schema
+    SchemaModDataContractTargetMismatch { target: String, schema_name: String },
     /// ALTER DEFAULT PRIVILEGES in database mod requires IN DATABASE scope
     AlterDefaultPrivilegesRequiresDatabaseScope { database_name: String },
     /// ALTER DEFAULT PRIVILEGES in schema mod requires IN SCHEMA scope
@@ -438,11 +440,6 @@ pub enum ValidationErrorKind {
         schema: String,
         object_name: String,
         object_type: String,
-    },
-    /// Replacement schema listed in config does not exist in project
-    ReplacementSchemaNotFound {
-        database: String,
-        schema: String,
     },
 }
 
@@ -604,7 +601,7 @@ impl ValidationErrorKind {
                 schema_name,
             } => {
                 format!(
-                    "invalid statement type in schema mod file '{}': {}. Only COMMENT ON SCHEMA, GRANT ON SCHEMA, and ALTER DEFAULT PRIVILEGES are allowed",
+                    "invalid statement type in schema mod file '{}': {}. Only COMMENT ON SCHEMA, GRANT ON SCHEMA, ALTER DEFAULT PRIVILEGES, and CREATE DATA CONTRACT FOR SCHEMA are allowed",
                     schema_name, statement_type
                 )
             }
@@ -623,6 +620,15 @@ impl ValidationErrorKind {
             } => {
                 format!(
                     "grant in schema mod file must target the schema itself. Expected GRANT ON SCHEMA '{}', but found GRANT ON {}",
+                    schema_name, target
+                )
+            }
+            Self::SchemaModDataContractTargetMismatch {
+                target,
+                schema_name,
+            } => {
+                format!(
+                    "CREATE DATA CONTRACT in schema mod file must target the schema itself. Expected SCHEMA '{}', but found SCHEMA {}",
                     schema_name, target
                 )
             }
@@ -691,15 +697,6 @@ impl ValidationErrorKind {
                 format!(
                     "replacement schema '{}.{}' contains non-materialized-view object '{}' (type: {})",
                     database, schema, object_name, object_type
-                )
-            }
-            Self::ReplacementSchemaNotFound {
-                database,
-                schema,
-            } => {
-                format!(
-                    "replacement schema '{}.{}' listed in mz_project.toml does not exist in project",
-                    database, schema
                 )
             }
         }
@@ -781,13 +778,16 @@ impl ValidationErrorKind {
                 Some("grants in database mod files must target the database itself using GRANT ON DATABASE".to_string())
             }
             Self::InvalidSchemaModStatement { .. } => {
-                Some("schema mod files (e.g., materialize/public.sql) can only contain COMMENT ON SCHEMA, GRANT ON SCHEMA, and ALTER DEFAULT PRIVILEGES statements".to_string())
+                Some("schema mod files (e.g., materialize/public.sql) can only contain COMMENT ON SCHEMA, GRANT ON SCHEMA, ALTER DEFAULT PRIVILEGES, and CREATE DATA CONTRACT FOR SCHEMA statements".to_string())
             }
             Self::SchemaModCommentTargetMismatch { .. } => {
                 Some("comments in schema mod files must target the schema itself using COMMENT ON SCHEMA".to_string())
             }
             Self::SchemaModGrantTargetMismatch { .. } => {
                 Some("grants in schema mod files must target the schema itself using GRANT ON SCHEMA".to_string())
+            }
+            Self::SchemaModDataContractTargetMismatch { .. } => {
+                Some("CREATE DATA CONTRACT FOR SCHEMA must target the schema that the mod file belongs to".to_string())
             }
             Self::AlterDefaultPrivilegesRequiresDatabaseScope { .. } => {
                 Some("add 'IN DATABASE <database_name>' to your ALTER DEFAULT PRIVILEGES statement".to_string())
@@ -811,10 +811,7 @@ impl ValidationErrorKind {
                 Some("storage objects (tables, sinks) cannot share a schema with computation objects (views, materialized views) to prevent accidentally recreating tables or sinks when recreating views. Organize your schemas: use one schema for storage objects (e.g., 'tables') and another for computation objects (e.g., 'views' or 'public')".to_string())
             }
             Self::ReplacementSchemaNonMvObject { .. } => {
-                Some("replacement schemas (listed in mz_project.toml replacement_schemas) can only contain CREATE MATERIALIZED VIEW statements".to_string())
-            }
-            Self::ReplacementSchemaNotFound { .. } => {
-                Some("ensure the schema exists as a directory in your project (e.g., database/schema/) and is listed correctly in mz_project.toml".to_string())
+                Some("schemas with CREATE DATA CONTRACT FOR SCHEMA can only contain CREATE MATERIALIZED VIEW statements".to_string())
             }
         }
     }

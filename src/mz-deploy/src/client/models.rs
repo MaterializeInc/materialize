@@ -7,6 +7,8 @@ use chrono::{DateTime, Utc};
 use std::fmt;
 use std::str::FromStr;
 
+use crate::project::SchemaQualifier;
+
 /// The type of deployment - either tables-only or full objects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeploymentKind {
@@ -202,7 +204,7 @@ pub struct DeploymentMetadata {
     /// When this deployment was promoted (NULL if not promoted)
     pub promoted_at: Option<DateTime<Utc>>,
     /// List of (database, schema) tuples in this deployment
-    pub schemas: Vec<(String, String)>,
+    pub schemas: Vec<SchemaQualifier>,
 }
 
 /// A conflict record indicating a schema was updated after deployment started.
@@ -238,7 +240,7 @@ pub struct DeploymentDetails {
     /// Type of deployment (tables or objects)
     pub kind: DeploymentKind,
     /// List of (database, schema) tuples in this deployment
-    pub schemas: Vec<(String, String)>,
+    pub schemas: Vec<SchemaQualifier>,
 }
 
 /// Summary of a staging deployment.
@@ -255,7 +257,7 @@ pub struct StagingDeployment {
     /// Type of deployment (tables or objects)
     pub kind: DeploymentKind,
     /// List of (database, schema) tuples in this deployment
-    pub schemas: Vec<(String, String)>,
+    pub schemas: Vec<SchemaQualifier>,
 }
 
 /// A promoted deployment in history.
@@ -274,7 +276,7 @@ pub struct DeploymentHistoryEntry {
     /// Type of deployment (tables or objects)
     pub kind: DeploymentKind,
     /// List of (database, schema) tuples in this deployment
-    pub schemas: Vec<(String, String)>,
+    pub schemas: Vec<SchemaQualifier>,
 }
 
 /// State of an apply operation for resumable apply.

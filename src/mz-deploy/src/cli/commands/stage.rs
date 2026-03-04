@@ -4,6 +4,7 @@ use crate::cli::{CliError, helpers};
 use crate::client::{
     Client, ClusterConfig, DeploymentKind, PendingStatement, Profile, ReplacementMvRecord,
 };
+use crate::project::SchemaQualifier;
 use crate::project::ast::Statement;
 use crate::project::changeset::ChangeSet;
 use crate::project::object_id::ObjectId;
@@ -174,8 +175,7 @@ pub async fn run(
         })
         .collect();
 
-    let table_count =
-        objects_before_filter - objects.len() - sinks.len() - replacement_mvs.len();
+    let table_count = objects_before_filter - objects.len() - sinks.len() - replacement_mvs.len();
     if table_count > 0 {
         verbose!(
             "Skipped {} table(s) - use 'mz-deploy create-tables' for those",
@@ -369,10 +369,7 @@ pub async fn run(
                 .collect();
 
             client.insert_replacement_mvs(&records).await?;
-            verbose!(
-                "Stored {} replacement MV record(s)",
-                records.len()
-            );
+            verbose!("Stored {} replacement MV record(s)", records.len());
         }
 
         let metadata_duration = metadata_start.elapsed();
@@ -423,7 +420,7 @@ async fn create_resources_with_rollback<'a>(
     client: &crate::client::Client,
     stage_name: &str,
     staging_suffix: &str,
-    schema_set: &BTreeSet<(String, String)>,
+    schema_set: &BTreeSet<SchemaQualifier>,
     cluster_set: &BTreeSet<String>,
     planned_project: &'a project::planned::Project,
     objects: &'a [(ObjectId, &'a project::typed::DatabaseObject)],

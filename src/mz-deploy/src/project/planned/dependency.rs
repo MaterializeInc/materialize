@@ -125,7 +125,7 @@ impl From<typed::Project> for Project {
             external_dependencies,
             cluster_dependencies,
             tests,
-            config: typed_project.config,
+            replacement_schemas: typed_project.replacement_schemas,
         }
     }
 }

@@ -19,10 +19,7 @@ use std::path::Path;
 /// # Errors
 /// Returns `CliError::StagingEnvironmentNotFound` if deployment doesn't exist
 /// Returns `CliError::StagingAlreadyPromoted` if already promoted
-pub async fn validate_staging_deployment(
-    client: &Client,
-    deploy_id: &str,
-) -> Result<(), CliError> {
+pub async fn validate_staging_deployment(client: &Client, deploy_id: &str) -> Result<(), CliError> {
     let metadata = client.get_deployment_metadata(deploy_id).await?;
     match metadata {
         Some(meta) if meta.promoted_at.is_some() => Err(CliError::StagingAlreadyPromoted {

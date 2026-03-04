@@ -5,6 +5,7 @@
 
 use crate::client::errors::ConnectionError;
 use crate::client::models::{Cluster, ClusterConfig, ClusterGrant, ClusterOptions, ClusterReplica};
+use crate::project::SchemaQualifier;
 use crate::project::object_id::ObjectId;
 use crate::utils::sql_utils::quote_identifier;
 use std::collections::{BTreeMap, BTreeSet};
@@ -322,8 +323,7 @@ async fn check_catalog_objects_exist(
     }
 
     // Build a lookup map from FQN string -> ObjectId for O(1) matching
-    let fqn_map: BTreeMap<String, &ObjectId> =
-        objects.iter().map(|o| (o.to_string(), o)).collect();
+    let fqn_map: BTreeMap<String, &ObjectId> = objects.iter().map(|o| (o.to_string(), o)).collect();
     let fqns: Vec<&String> = fqn_map.keys().collect();
 
     let placeholders: Vec<String> = (1..=fqns.len()).map(|i| format!("${}", i)).collect();
@@ -390,7 +390,7 @@ pub async fn check_sinks_exist(
 /// upstream object (FROM clause) is in one of the specified schemas.
 pub async fn find_sinks_depending_on_schemas(
     client: &PgClient,
-    schemas: &[(String, String)],
+    schemas: &[SchemaQualifier],
 ) -> Result<Vec<DependentSink>, ConnectionError> {
     if schemas.is_empty() {
         return Ok(Vec::new());
@@ -492,7 +492,7 @@ pub async fn object_exists(
 pub async fn get_staging_schemas(
     client: &PgClient,
     deploy_id: &str,
-) -> Result<Vec<(String, String)>, ConnectionError> {
+) -> Result<Vec<SchemaQualifier>, ConnectionError> {
     let suffix = format!("_{}", deploy_id);
     let pattern = format!("%{}", suffix);
 
@@ -673,7 +673,7 @@ pub async fn drop_objects(
 /// Drop staging schemas by name.
 pub async fn drop_staging_schemas(
     client: &PgClient,
-    schemas: &[(String, String)],
+    schemas: &[SchemaQualifier],
 ) -> Result<(), ConnectionError> {
     for (database, schema) in schemas {
         let drop_sql = format!(

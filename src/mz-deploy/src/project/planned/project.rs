@@ -160,6 +160,11 @@ impl Project {
             for schema in &database.schemas {
                 if let Some(stmts) = &schema.mod_statements {
                     for stmt in stmts {
+                        // Skip CREATE DATA CONTRACT — it's a directive for mz-deploy,
+                        // not SQL to send to Materialize.
+                        if matches!(stmt, mz_sql_parser::ast::Statement::CreateDataContract(_)) {
+                            continue;
+                        }
                         result.push(ModStatement::Schema {
                             database: &database.name,
                             schema: &schema.name,

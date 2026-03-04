@@ -22,6 +22,7 @@ use crate::client::models::{
     SchemaDeploymentRecord, StagingDeployment,
 };
 use crate::client::validation;
+use crate::project::SchemaQualifier;
 use crate::project::deployment_snapshot::DeploymentSnapshot;
 use crate::project::object_id::ObjectId;
 use crate::project::planned;
@@ -994,7 +995,7 @@ impl Client {
     /// before old schemas are dropped with CASCADE.
     pub async fn find_sinks_depending_on_schemas(
         &self,
-        schemas: &[(String, String)],
+        schemas: &[SchemaQualifier],
     ) -> Result<Vec<introspection::DependentSink>, ConnectionError> {
         introspection::find_sinks_depending_on_schemas(&self.client, schemas).await
     }
@@ -1013,7 +1014,7 @@ impl Client {
     pub async fn get_staging_schemas(
         &self,
         deploy_id: &str,
-    ) -> Result<Vec<(String, String)>, ConnectionError> {
+    ) -> Result<Vec<SchemaQualifier>, ConnectionError> {
         introspection::get_staging_schemas(&self.client, deploy_id).await
     }
 
@@ -1045,7 +1046,7 @@ impl Client {
     /// Drop staging schemas by name.
     pub async fn drop_staging_schemas(
         &self,
-        schemas: &[(String, String)],
+        schemas: &[SchemaQualifier],
     ) -> Result<(), ConnectionError> {
         introspection::drop_staging_schemas(&self.client, schemas).await
     }

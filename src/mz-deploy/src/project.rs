@@ -14,6 +14,9 @@ pub mod typed;
 // Re-export commonly used types
 pub use planned::ModStatement;
 
+/// A `(database_name, schema_name)` pair identifying a schema within a project.
+pub type SchemaQualifier = (String, String);
+
 /// Load, validate, and convert a project to a planned deployment representation.
 pub fn plan<P: AsRef<Path>>(root: P) -> Result<planned::Project, error::ProjectError> {
     let raw_project = raw::load_project(root)?;

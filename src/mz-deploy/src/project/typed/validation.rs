@@ -971,8 +971,8 @@ pub(super) fn validate_schema_mod_statements(
                     CommentObjectType::Schema { name } => {
                         // Check if it targets this schema (can be qualified or unqualified)
                         let target_schema = name.to_string();
-                        let is_match = target_schema == schema_name
-                            || target_schema == format!("{}.{}", database_name, schema_name);
+                        let is_match =
+                            schema_name_matches(&target_schema, database_name, schema_name);
 
                         if !is_match {
                             errors.push(ValidationError::with_file_and_sql(
@@ -1025,9 +1025,11 @@ pub(super) fn validate_schema_mod_statements(
                             for name in names {
                                 if let UnresolvedObjectName::Schema(schema_name_obj) = name {
                                     let target_schema = schema_name_obj.to_string();
-                                    let is_match = target_schema == schema_name
-                                        || target_schema
-                                            == format!("{}.{}", database_name, schema_name);
+                                    let is_match = schema_name_matches(
+                                        &target_schema,
+                                        database_name,
+                                        schema_name,
+                                    );
 
                                     if !is_match {
                                         errors.push(ValidationError::with_file_and_sql(
@@ -1061,6 +1063,25 @@ pub(super) fn validate_schema_mod_statements(
                     }
                 }
             }
+            MzStatement::CreateDataContract(contract_stmt) => {
+                // Must be CREATE DATA CONTRACT FOR SCHEMA targeting this schema
+                let target_schema = contract_stmt.schema_name.to_string();
+                let is_match = schema_name_matches(&target_schema, database_name, schema_name);
+
+                if !is_match {
+                    errors.push(ValidationError::with_file_and_sql(
+                        ValidationErrorKind::SchemaModDataContractTargetMismatch {
+                            target: target_schema,
+                            schema_name: format!("{}.{}", database_name, schema_name),
+                        },
+                        schema_path.to_path_buf(),
+                        stmt_sql,
+                    ));
+                } else {
+                    // Normalize the schema name to be fully qualified
+                    normalize_schema_name(&mut contract_stmt.schema_name);
+                }
+            }
             MzStatement::AlterDefaultPrivileges(alter_stmt) => {
                 // Must specify IN SCHEMA targeting this schema
                 match &mut alter_stmt.target_objects {
@@ -1070,8 +1091,8 @@ pub(super) fn validate_schema_mod_statements(
                             let schema_str = schema_name_obj.to_string();
 
                             // Check if it matches the current schema (qualified or unqualified)
-                            let is_match = schema_str == schema_name
-                                || schema_str == format!("{}.{}", database_name, schema_name);
+                            let is_match =
+                                schema_name_matches(&schema_str, database_name, schema_name);
 
                             if !is_match {
                                 errors.push(ValidationError::with_file_and_sql(
@@ -1127,6 +1148,11 @@ pub(super) fn validate_schema_mod_statements(
             }
         }
     }
+}
+
+/// Returns true if `target` matches `schema_name` either unqualified or as `database.schema`.
+fn schema_name_matches(target: &str, database_name: &str, schema_name: &str) -> bool {
+    target == schema_name || target == format!("{}.{}", database_name, schema_name)
 }
 
 /// Validates that a schema doesn't mix storage objects with computation objects.

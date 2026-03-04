@@ -116,6 +116,7 @@ pub enum Statement<T: AstInfo> {
     ReassignOwned(ReassignOwnedStatement<T>),
     ValidateConnection(ValidateConnectionStatement<T>),
     Comment(CommentStatement<T>),
+    CreateDataContract(CreateDataContractStatement),
 }
 
 impl<T: AstInfo> AstDisplay for Statement<T> {
@@ -196,6 +197,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::ReassignOwned(stmt) => f.write_node(stmt),
             Statement::ValidateConnection(stmt) => f.write_node(stmt),
             Statement::Comment(stmt) => f.write_node(stmt),
+            Statement::CreateDataContract(stmt) => f.write_node(stmt),
         }
     }
 }
@@ -281,6 +283,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::ReassignOwned => "reassign_owned",
         StatementKind::ValidateConnection => "validate_connection",
         StatementKind::Comment => "comment",
+        StatementKind::CreateDataContract => "create_data_contract",
     }
 }
 
@@ -5827,6 +5830,20 @@ impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
 }
 
 impl_display_t!(CommentObjectType);
+
+/// `CREATE DATA CONTRACT FOR SCHEMA <name>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateDataContractStatement {
+    pub schema_name: UnresolvedSchemaName,
+}
+
+impl AstDisplay for CreateDataContractStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE DATA CONTRACT FOR SCHEMA ");
+        f.write_node(&self.schema_name);
+    }
+}
+impl_display!(CreateDataContractStatement);
 
 // Include the `AstDisplay` implementations for simple options derived by the
 // crate's build.rs script.

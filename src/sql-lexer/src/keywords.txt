@@ -108,6 +108,7 @@ Connection
 Connections
 Constraint
 Continual
+Contract
 Copy
 Count
 Counter
@@ -124,6 +125,7 @@ Cse
 Csv
 Current
 Cursor
+Data
 Database
 Databases
 Datums

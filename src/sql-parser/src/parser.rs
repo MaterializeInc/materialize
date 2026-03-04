@@ -1989,6 +1989,9 @@ impl<'a> Parser<'a> {
         } else if self.peek_keywords(&[NETWORK, POLICY]) {
             self.parse_create_network_policy()
                 .map_parser_err(StatementKind::CreateNetworkPolicy)
+        } else if self.peek_keyword(DATA) {
+            self.parse_create_data_contract()
+                .map_parser_err(StatementKind::CreateDataContract)
         } else {
             let index = self.index;
 
@@ -5056,6 +5059,14 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::RParen)?;
         Ok(Statement::CreateNetworkPolicy(
             CreateNetworkPolicyStatement { name, options },
+        ))
+    }
+
+    fn parse_create_data_contract(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keywords(&[DATA, CONTRACT, FOR, SCHEMA])?;
+        let schema_name = self.parse_schema_name()?;
+        Ok(Statement::CreateDataContract(
+            CreateDataContractStatement { schema_name },
         ))
     }
 

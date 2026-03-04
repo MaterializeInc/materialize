@@ -179,7 +179,7 @@ fn test_build_reverse_dependency_graph() {
         external_dependencies: BTreeSet::new(),
         cluster_dependencies: BTreeSet::new(),
         tests: vec![],
-        config: Default::default(),
+        replacement_schemas: Default::default(),
     };
 
     // Build reverse graph
@@ -912,7 +912,7 @@ fn create_test_project_for_cluster_validation() -> Project {
         external_dependencies: BTreeSet::new(),
         cluster_dependencies: BTreeSet::new(),
         tests: vec![],
-        config: Default::default(),
+        replacement_schemas: Default::default(),
     }
 }
 
@@ -986,7 +986,7 @@ fn test_validate_cluster_isolation_separate_clusters() {
         external_dependencies: BTreeSet::new(),
         cluster_dependencies: BTreeSet::new(),
         tests: vec![],
-        config: Default::default(),
+        replacement_schemas: Default::default(),
     };
 
     // Sources on storage_cluster (different from compute objects)
@@ -1043,7 +1043,7 @@ fn test_validate_cluster_isolation_conflict_mv_and_source() {
         external_dependencies: BTreeSet::new(),
         cluster_dependencies: BTreeSet::new(),
         tests: vec![],
-        config: Default::default(),
+        replacement_schemas: Default::default(),
     };
 
     // Source on the same cluster as MV
@@ -1108,7 +1108,7 @@ fn test_validate_cluster_isolation_only_compute_objects() {
         external_dependencies: BTreeSet::new(),
         cluster_dependencies: BTreeSet::new(),
         tests: vec![],
-        config: Default::default(),
+        replacement_schemas: Default::default(),
     };
 
     // No sources on any cluster
@@ -1160,7 +1160,7 @@ fn test_validate_cluster_isolation_only_storage_objects() {
         external_dependencies: BTreeSet::new(),
         cluster_dependencies: BTreeSet::new(),
         tests: vec![],
-        config: Default::default(),
+        replacement_schemas: Default::default(),
     };
 
     // Sources on the same cluster

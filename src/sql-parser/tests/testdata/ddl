@@ -3473,3 +3473,17 @@ DROP NETWORK POLICY if exists q
 DROP NETWORK POLICY IF EXISTS q
 =>
 DropObjects(DropObjectsStatement { object_type: NetworkPolicy, if_exists: true, names: [NetworkPolicy(Ident("q"))], cascade: false })
+
+parse-statement
+CREATE DATA CONTRACT FOR SCHEMA public
+----
+CREATE DATA CONTRACT FOR SCHEMA public
+=>
+CreateDataContract(CreateDataContractStatement { schema_name: UnresolvedSchemaName([Ident("public")]) })
+
+parse-statement
+CREATE DATA CONTRACT FOR SCHEMA mydb.public
+----
+CREATE DATA CONTRACT FOR SCHEMA mydb.public
+=>
+CreateDataContract(CreateDataContractStatement { schema_name: UnresolvedSchemaName([Ident("mydb"), Ident("public")]) })

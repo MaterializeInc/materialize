@@ -12,8 +12,8 @@ use super::validation::{
     validate_mv_cluster, validate_no_storage_and_computation_in_schema,
     validate_schema_mod_statements, validate_sink_cluster,
 };
+use crate::project::SchemaQualifier;
 use crate::project::error::{ValidationError, ValidationErrorKind, ValidationErrors};
-use crate::project::raw::ProjectConfig;
 use mz_sql_parser::ast::*;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -339,8 +339,11 @@ impl TryFrom<super::super::raw::Project> for Project {
             }
         }
 
-        // Validate replacement schemas from project config
-        validate_replacement_schemas(&value.config, &databases, &mut all_errors);
+        // Derive replacement schemas from CREATE DATA CONTRACT statements
+        let replacement_schemas = derive_replacement_schemas(&databases);
+
+        // Validate replacement schemas only contain MVs
+        validate_replacement_schemas(&replacement_schemas, &databases, &mut all_errors);
 
         if !all_errors.is_empty() {
             return Err(ValidationErrors::new(all_errors));
@@ -348,52 +351,48 @@ impl TryFrom<super::super::raw::Project> for Project {
 
         Ok(Self {
             databases,
-            config: value.config,
+            replacement_schemas,
         })
     }
 }
 
-/// Validate replacement schemas from project config.
+/// Scan all schemas for `CREATE DATA CONTRACT FOR SCHEMA` statements and build
+/// the set of replacement schemas.
+fn derive_replacement_schemas(databases: &[Database]) -> BTreeSet<SchemaQualifier> {
+    let mut replacement_schemas = BTreeSet::new();
+    for db in databases {
+        for schema in &db.schemas {
+            if let Some(mod_stmts) = &schema.mod_statements {
+                for stmt in mod_stmts {
+                    if matches!(stmt, mz_sql_parser::ast::Statement::CreateDataContract(_)) {
+                        replacement_schemas.insert((db.name.clone(), schema.name.clone()));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    replacement_schemas
+}
+
+/// Validate replacement schemas derived from `CREATE DATA CONTRACT` statements.
 ///
-/// Ensures:
-/// 1. All listed replacement schemas exist in the project
-/// 2. Replacement schemas only contain materialized views
+/// Ensures replacement schemas only contain materialized views.
 fn validate_replacement_schemas(
-    config: &ProjectConfig,
+    replacement_schemas: &BTreeSet<SchemaQualifier>,
     databases: &[Database],
     errors: &mut Vec<ValidationError>,
 ) {
-    if config.replacement_schemas.is_empty() {
+    if replacement_schemas.is_empty() {
         return;
-    }
-
-    // Build set of existing (database, schema) pairs
-    let mut existing_schemas = BTreeSet::new();
-    for db in databases {
-        for schema in &db.schemas {
-            existing_schemas.insert((db.name.clone(), schema.name.clone()));
-        }
-    }
-
-    // Check each replacement schema exists
-    for (db_name, schema_name) in &config.replacement_schemas {
-        if !existing_schemas.contains(&(db_name.clone(), schema_name.clone())) {
-            errors.push(ValidationError::with_file(
-                ValidationErrorKind::ReplacementSchemaNotFound {
-                    database: db_name.clone(),
-                    schema: schema_name.clone(),
-                },
-                PathBuf::from("mz_project.toml"),
-            ));
-        }
     }
 
     // Check replacement schemas only contain MVs
     for db in databases {
         for schema in &db.schemas {
-            if !config
-                .replacement_schemas
-                .contains(&(db.name.clone(), schema.name.clone()))
+            if !replacement_schemas
+                .iter()
+                .any(|(d, s)| d == &db.name && s == &schema.name)
             {
                 continue;
             }
@@ -414,7 +413,7 @@ fn validate_replacement_schemas(
                             object_name: obj.stmt.ident().object.clone(),
                             object_type: object_type.to_string(),
                         },
-                        PathBuf::from("mz_project.toml"),
+                        PathBuf::from(format!("{}/{}.sql", db.name, schema.name)),
                     ));
                 }
             }

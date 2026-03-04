@@ -46,6 +46,7 @@
 use super::ast::{Cluster, Statement};
 use super::deployment_snapshot::DeploymentSnapshot;
 use super::planned::{self, Project};
+use crate::project::SchemaQualifier;
 use crate::project::object_id::ObjectId;
 use crate::verbose;
 use owo_colors::OwoColorize;
@@ -61,7 +62,7 @@ pub struct ChangeSet {
     pub changed_objects: BTreeSet<ObjectId>,
 
     /// Schemas where ANY file changed (entire schema is dirty)
-    pub dirty_schemas: BTreeSet<(String, String)>,
+    pub dirty_schemas: BTreeSet<SchemaQualifier>,
 
     /// Clusters used by objects in dirty schemas
     pub dirty_clusters: BTreeSet<Cluster>,
@@ -286,9 +287,9 @@ fn extract_base_facts(project: &Project) -> BaseFacts {
         for schema in &db.schemas {
             // Check if this schema is a replacement schema
             let is_replacement_schema = project
-                .config
                 .replacement_schemas
-                .contains(&(db.name.clone(), schema.name.clone()));
+                .iter()
+                .any(|(d, s)| d == &db.name && s == &schema.name);
 
             for obj in &schema.objects {
                 let obj_id = obj.id.clone();
@@ -377,7 +378,7 @@ struct DatalogIndexes {
     /// Parent -> list of dependent children (reverse of depends_on)
     dependents: BTreeMap<ObjectId, Vec<ObjectId>>,
     /// Object -> (database, schema) it belongs to
-    object_to_schema: BTreeMap<ObjectId, (String, String)>,
+    object_to_schema: BTreeMap<ObjectId, SchemaQualifier>,
 }
 
 impl DatalogIndexes {
@@ -439,7 +440,7 @@ fn compute_dirty_datalog(
 ) -> (
     BTreeSet<ObjectId>,
     BTreeSet<Cluster>,
-    BTreeSet<(String, String)>,
+    BTreeSet<SchemaQualifier>,
 ) {
     verbose!(
         "{} {}",
@@ -469,7 +470,7 @@ fn compute_dirty_datalog(
     // Initialize result sets
     let mut dirty_stmts: BTreeSet<ObjectId> = changed_stmts.clone();
     let mut dirty_clusters: BTreeSet<String> = BTreeSet::new();
-    let mut dirty_schemas: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut dirty_schemas: BTreeSet<SchemaQualifier> = BTreeSet::new();
 
     // Fixed-point iteration: apply rules until no changes
     let mut iteration = 0;
@@ -603,7 +604,7 @@ fn compute_dirty_datalog(
 
         // Rule 6: DirtyStmt(O) :- DirtySchema(Db, Sch), ObjectInSchema(O, Db, Sch), NOT IsReplacement(O)
         for (obj, (db, sch)) in &indexes.object_to_schema {
-            if dirty_schemas.contains(&(db.clone(), sch.clone())) {
+            if dirty_schemas.iter().any(|(d, s)| d == db && s == sch) {
                 // Replacement MVs should NOT be pulled in by schema dirtiness
                 if base_facts.is_replacement.contains(obj) {
                     continue;
@@ -1256,8 +1257,11 @@ mod tests {
 
         let mv1 = ObjectId::new("db".to_string(), "analytics".to_string(), "mv1".to_string());
         let mv2 = ObjectId::new("db".to_string(), "analytics".to_string(), "mv2".to_string());
-        let view1 =
-            ObjectId::new("db".to_string(), "analytics".to_string(), "view1".to_string());
+        let view1 = ObjectId::new(
+            "db".to_string(),
+            "analytics".to_string(),
+            "view1".to_string(),
+        );
 
         let mut is_replacement = BTreeSet::new();
         is_replacement.insert(mv1.clone());
@@ -1317,11 +1321,7 @@ mod tests {
         is_replacement.insert(mv1.clone());
 
         let base_facts = BaseFacts {
-            object_in_schema: vec![(
-                mv1.clone(),
-                "db".to_string(),
-                "analytics".to_string(),
-            )],
+            object_in_schema: vec![(mv1.clone(), "db".to_string(), "analytics".to_string())],
             depends_on: vec![],
             stmt_uses_cluster: vec![(mv1.clone(), "analytics_cluster".to_string())],
             index_uses_cluster: vec![],
@@ -1346,12 +1346,21 @@ mod tests {
         // When a non-replacement object makes a schema dirty,
         // replacement MVs in that schema should NOT be pulled in (Rule 6 exclusion).
 
-        let regular =
-            ObjectId::new("db".to_string(), "analytics".to_string(), "regular".to_string());
-        let other =
-            ObjectId::new("db".to_string(), "analytics".to_string(), "other".to_string());
-        let replacement_mv =
-            ObjectId::new("db".to_string(), "analytics".to_string(), "my_mv".to_string());
+        let regular = ObjectId::new(
+            "db".to_string(),
+            "analytics".to_string(),
+            "regular".to_string(),
+        );
+        let other = ObjectId::new(
+            "db".to_string(),
+            "analytics".to_string(),
+            "other".to_string(),
+        );
+        let replacement_mv = ObjectId::new(
+            "db".to_string(),
+            "analytics".to_string(),
+            "my_mv".to_string(),
+        );
 
         let mut is_replacement = BTreeSet::new();
         is_replacement.insert(replacement_mv.clone());
@@ -1404,10 +1413,16 @@ mod tests {
         // Replacement MVs should still become dirty if they depend on
         // another dirty object (Rule 4: DependsOn propagation).
 
-        let upstream =
-            ObjectId::new("db".to_string(), "public".to_string(), "source_view".to_string());
-        let replacement_mv =
-            ObjectId::new("db".to_string(), "analytics".to_string(), "my_mv".to_string());
+        let upstream = ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "source_view".to_string(),
+        );
+        let replacement_mv = ObjectId::new(
+            "db".to_string(),
+            "analytics".to_string(),
+            "my_mv".to_string(),
+        );
 
         let mut is_replacement = BTreeSet::new();
         is_replacement.insert(replacement_mv.clone());
@@ -1457,8 +1472,11 @@ mod tests {
             "public".to_string(),
             "regular_mv".to_string(),
         );
-        let replacement_mv =
-            ObjectId::new("db".to_string(), "analytics".to_string(), "my_mv".to_string());
+        let replacement_mv = ObjectId::new(
+            "db".to_string(),
+            "analytics".to_string(),
+            "my_mv".to_string(),
+        );
 
         let mut is_replacement = BTreeSet::new();
         is_replacement.insert(replacement_mv.clone());
