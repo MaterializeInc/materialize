@@ -15,7 +15,7 @@ mod test {
     use mz_lowertest::{MzReflect, deserialize, deserialize_optional, tokenize};
     use mz_ore::result::ResultExt;
     use mz_ore::str::separated;
-    use mz_repr::{ReprColumnType, RowArena, SqlColumnType, SqlRelationType};
+    use mz_repr::{ReprColumnType, ReprRelationType, RowArena, SqlColumnType};
     use serde::{Deserialize, Serialize};
 
     fn reduce(s: &str) -> Result<MirScalarExpr, String> {
@@ -130,7 +130,7 @@ mod test {
             deserialize(&mut input_stream, "Vec<MirScalarExpr>", &mut ctx)?;
 
         let arena = RowArena::new();
-        let relation = SqlRelationType::new(types);
+        let relation = ReprRelationType::new(types.iter().map(ReprColumnType::from).collect());
         let mut interpreter = ColumnSpecs::new(&relation, &arena);
 
         let specs: Vec<_> = values
