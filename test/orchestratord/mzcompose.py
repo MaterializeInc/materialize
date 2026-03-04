@@ -448,7 +448,7 @@ class BalancerdEnabled(Modification):
                 assert not result, f"Unexpected result: {result}"
 
         # Balancerd can take a while to start up
-        retry(check, 120)
+        retry(check, 240)
 
 
 class BalancerdNodeSelector(Modification):
@@ -488,7 +488,7 @@ class BalancerdNodeSelector(Modification):
                 assert not balancerd["items"], f"Unexpected items: {balancerd['items']}"
 
         # Balancerd can take a while to start up
-        retry(check, 120)
+        retry(check, 240)
 
 
 class ConsoleEnabled(Modification):
