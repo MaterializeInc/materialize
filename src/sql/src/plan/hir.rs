@@ -945,8 +945,8 @@ impl CoercibleScalarExpr {
             sql_bail!(
                 "{} must have type {}, not type {}",
                 ecx.name,
-                ecx.humanize_scalar_type(ty, false),
-                ecx.humanize_scalar_type(&expr_ty, false),
+                ecx.humanize_sql_scalar_type(ty, false),
+                ecx.humanize_sql_scalar_type(&expr_ty, false),
             );
         }
         Ok(expr)
