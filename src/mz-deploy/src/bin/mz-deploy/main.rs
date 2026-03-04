@@ -313,6 +313,15 @@ enum ApplyCommand {
     /// Example:
     ///   mz-deploy apply clusters
     Clusters,
+    /// Apply role definitions from roles/ directory
+    ///
+    /// Converges the live Materialize state to match the role definitions.
+    /// Creates roles that don't exist, then applies ALTER ROLE, GRANT ROLE,
+    /// and COMMENT statements idempotently.
+    ///
+    /// Example:
+    ///   mz-deploy apply roles
+    Roles,
 }
 
 #[tokio::main]
@@ -378,6 +387,9 @@ async fn run(args: Args) -> Result<(), CliError> {
             match subcommand {
                 Some(ApplyCommand::Clusters) => {
                     cli::commands::clusters::run(&args.directory, &profile).await
+                }
+                Some(ApplyCommand::Roles) => {
+                    cli::commands::roles::run(&args.directory, &profile).await
                 }
                 None => {
                     let deploy_id = deploy_id.expect("deploy_id is required without subcommand");

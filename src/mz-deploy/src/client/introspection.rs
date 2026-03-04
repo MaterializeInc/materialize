@@ -259,6 +259,22 @@ pub async fn get_cluster_config(
     }
 }
 
+/// Check if a role exists.
+pub async fn role_exists(client: &PgClient, name: &str) -> Result<bool, ConnectionError> {
+    let query = r#"
+        SELECT EXISTS(
+            SELECT 1 FROM mz_catalog.mz_roles WHERE name = $1
+        ) AS exists
+    "#;
+
+    let row = client
+        .query_one(query, &[&name])
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    Ok(row.get("exists"))
+}
+
 /// Get the current Materialize user/role.
 pub async fn get_current_user(client: &PgClient) -> Result<String, ConnectionError> {
     let row = client

@@ -10,6 +10,7 @@ pub mod object_id;
 mod parser;
 pub mod planned;
 pub mod raw;
+pub mod roles;
 pub mod typed;
 
 // Re-export commonly used types

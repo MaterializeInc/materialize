@@ -7,7 +7,7 @@
 use crate::project::error::{
     LoadError, ProjectError, ValidationError, ValidationErrorKind, ValidationErrors,
 };
-use crate::project::parser::parse_statements_with_context;
+use crate::project::parser::{parse_statements_with_context, statement_type_name};
 use mz_sql_parser::ast::{
     ClusterOptionName, CommentObjectType, CommentStatement, CreateClusterStatement,
     GrantPrivilegesStatement, GrantTargetSpecification, GrantTargetSpecificationInner, ObjectType,
@@ -260,27 +260,6 @@ pub fn extract_replication_factor(create_stmt: &CreateClusterStatement<Raw>) -> 
         }
     }
     None
-}
-
-/// Get a human-readable name for a statement type.
-fn statement_type_name(stmt: &Statement<Raw>) -> &'static str {
-    match stmt {
-        Statement::CreateTable(_) => "CREATE TABLE",
-        Statement::CreateView(_) => "CREATE VIEW",
-        Statement::CreateMaterializedView(_) => "CREATE MATERIALIZED VIEW",
-        Statement::CreateSource(_) => "CREATE SOURCE",
-        Statement::CreateSink(_) => "CREATE SINK",
-        Statement::CreateIndex(_) => "CREATE INDEX",
-        Statement::CreateCluster(_) => "CREATE CLUSTER",
-        Statement::CreateConnection(_) => "CREATE CONNECTION",
-        Statement::CreateSecret(_) => "CREATE SECRET",
-        Statement::CreateSchema(_) => "CREATE SCHEMA",
-        Statement::CreateDatabase(_) => "CREATE DATABASE",
-        Statement::GrantPrivileges(_) => "GRANT",
-        Statement::Comment(_) => "COMMENT",
-        Statement::AlterCluster(_) => "ALTER CLUSTER",
-        _ => "unsupported statement",
-    }
 }
 
 #[cfg(test)]

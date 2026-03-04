@@ -62,6 +62,33 @@ pub fn parse_statements_with_context(
     Ok(statements)
 }
 
+/// Get a human-readable name for a statement type.
+///
+/// Used by resource definition modules (clusters, roles) to produce clear
+/// error messages when an unsupported statement type is encountered.
+pub fn statement_type_name(stmt: &Statement<Raw>) -> &'static str {
+    match stmt {
+        Statement::CreateTable(_) => "CREATE TABLE",
+        Statement::CreateView(_) => "CREATE VIEW",
+        Statement::CreateMaterializedView(_) => "CREATE MATERIALIZED VIEW",
+        Statement::CreateSource(_) => "CREATE SOURCE",
+        Statement::CreateSink(_) => "CREATE SINK",
+        Statement::CreateIndex(_) => "CREATE INDEX",
+        Statement::CreateCluster(_) => "CREATE CLUSTER",
+        Statement::CreateConnection(_) => "CREATE CONNECTION",
+        Statement::CreateSecret(_) => "CREATE SECRET",
+        Statement::CreateSchema(_) => "CREATE SCHEMA",
+        Statement::CreateDatabase(_) => "CREATE DATABASE",
+        Statement::CreateRole(_) => "CREATE ROLE",
+        Statement::AlterRole(_) => "ALTER ROLE",
+        Statement::AlterCluster(_) => "ALTER CLUSTER",
+        Statement::GrantRole(_) => "GRANT ROLE",
+        Statement::GrantPrivileges(_) => "GRANT",
+        Statement::Comment(_) => "COMMENT",
+        _ => "unsupported statement",
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::project::parser::parse_statements;

@@ -469,6 +469,23 @@ pub enum ValidationErrorKind {
         target: String,
         cluster_name: String,
     },
+    /// Invalid statement type in role definition file
+    InvalidRoleStatement {
+        statement_type: String,
+        role_name: String,
+    },
+    /// Role name in CREATE ROLE doesn't match filename
+    RoleNameMismatch { declared: String, expected: String },
+    /// Role file missing required CREATE ROLE statement
+    RoleMissingCreateStatement { role_name: String },
+    /// Role file contains multiple CREATE ROLE statements
+    RoleMultipleCreateStatements { role_name: String },
+    /// ALTER ROLE in role file targets a different role
+    RoleAlterTargetMismatch { target: String, role_name: String },
+    /// GRANT ROLE in role file targets a different role
+    RoleGrantTargetMismatch { target: String, role_name: String },
+    /// COMMENT in role file targets a different role
+    RoleCommentTargetMismatch { target: String, role_name: String },
 }
 
 impl ValidationErrorKind {
@@ -766,6 +783,51 @@ impl ValidationErrorKind {
                     cluster_name, target
                 )
             }
+            Self::InvalidRoleStatement {
+                statement_type,
+                role_name,
+            } => {
+                format!(
+                    "invalid statement type in role file '{}': {}. Only CREATE ROLE, ALTER ROLE, GRANT ROLE, and COMMENT ON ROLE are allowed",
+                    role_name, statement_type
+                )
+            }
+            Self::RoleNameMismatch { declared, expected } => {
+                format!(
+                    "role name mismatch: declared '{}', expected '{}'",
+                    declared, expected
+                )
+            }
+            Self::RoleMissingCreateStatement { role_name } => {
+                format!(
+                    "no CREATE ROLE statement found in role file '{}'",
+                    role_name
+                )
+            }
+            Self::RoleMultipleCreateStatements { role_name } => {
+                format!(
+                    "multiple CREATE ROLE statements found in role file '{}'",
+                    role_name
+                )
+            }
+            Self::RoleAlterTargetMismatch { target, role_name } => {
+                format!(
+                    "ALTER ROLE in role file '{}' targets wrong role: '{}'",
+                    role_name, target
+                )
+            }
+            Self::RoleGrantTargetMismatch { target, role_name } => {
+                format!(
+                    "GRANT ROLE in role file '{}' targets wrong role: '{}'",
+                    role_name, target
+                )
+            }
+            Self::RoleCommentTargetMismatch { target, role_name } => {
+                format!(
+                    "COMMENT in role file '{}' targets wrong role: '{}'",
+                    role_name, target
+                )
+            }
         }
     }
 
@@ -897,6 +959,27 @@ impl ValidationErrorKind {
             }
             Self::ClusterCommentTargetMismatch { .. } => {
                 Some("COMMENT statements in a cluster file must target the cluster defined in that file".to_string())
+            }
+            Self::InvalidRoleStatement { .. } => {
+                Some("role files can only contain CREATE ROLE, ALTER ROLE, GRANT ROLE, and COMMENT ON ROLE statements".to_string())
+            }
+            Self::RoleNameMismatch { .. } => {
+                Some("the role name in your CREATE ROLE statement must match the .sql file name".to_string())
+            }
+            Self::RoleMissingCreateStatement { .. } => {
+                Some("each role file must contain exactly one CREATE ROLE statement".to_string())
+            }
+            Self::RoleMultipleCreateStatements { .. } => {
+                Some("each role file must contain exactly one CREATE ROLE statement".to_string())
+            }
+            Self::RoleAlterTargetMismatch { .. } => {
+                Some("ALTER ROLE statements in a role file must target the role defined in that file".to_string())
+            }
+            Self::RoleGrantTargetMismatch { .. } => {
+                Some("GRANT ROLE statements in a role file must grant the role defined in that file".to_string())
+            }
+            Self::RoleCommentTargetMismatch { .. } => {
+                Some("COMMENT statements in a role file must target the role defined in that file".to_string())
             }
         }
     }

@@ -440,6 +440,11 @@ impl Client {
         Ok(())
     }
 
+    /// Check if a role exists.
+    pub async fn role_exists(&self, name: &str) -> Result<bool, ConnectionError> {
+        introspection::role_exists(&self.client, name).await
+    }
+
     /// Check if a cluster exists.
     pub async fn cluster_exists(&self, name: &str) -> Result<bool, ConnectionError> {
         introspection::cluster_exists(&self.client, name).await

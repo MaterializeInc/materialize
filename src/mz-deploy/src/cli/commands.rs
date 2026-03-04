@@ -14,5 +14,6 @@ pub mod describe;
 pub mod gen_data_contracts;
 pub mod history;
 pub mod ready;
+pub mod roles;
 pub mod stage;
 pub mod test;
