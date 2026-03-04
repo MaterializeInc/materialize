@@ -556,11 +556,15 @@ class CopyToS3Action(Action):
             )
         else:
             expressions = "*"
-        query = f"COPY (SELECT {expressions} FROM {obj_name} WHERE {expression(Boolean, obj.columns, self.rng)} LIMIT {self.rng.randint(0, 100)}) TO 's3://copytos3/{location}' WITH (AWS CONNECTION = aws_conn, FORMAT = '{format}')"
+        flag_query = "ALTER SYSTEM SET enable_copy_from_remote = true"
+        to_query = f"COPY (SELECT {expressions} FROM {obj_name} WHERE {expression(Boolean, obj.columns, self.rng)} LIMIT {self.rng.randint(0, 100)}) TO 's3://copytos3/{location}' WITH (AWS CONNECTION = aws_conn, FORMAT = '{format}')"
 
-        exe.execute(query, explainable=False, http=Http.NO, fetch=False)
+        exe.execute(flag_query, explainable=False, http=Http.NO, fetch=False)
+        exe.execute(to_query, explainable=False, http=Http.NO, fetch=False)
 
-        create_table_query = f"CREATE TABLE t1 AS SELECT {expressions} FROM {obj_name} WITH NO DATA"
+        create_table_query = (
+            f"CREATE TABLE t1 AS SELECT {expressions} FROM {obj_name} WITH NO DATA"
+        )
         from_query = f"COPY INTO t1 FROM 's3://copytos3/{location}' (FORMAT {format.upper()}, AWS CONNECTION = aws_conn)"
         exe.execute(create_table_query, explainable=False, http=Http.NO, fetch=False)
         exe.execute(from_query, explainable=False, http=Http.NO, fetch=False)

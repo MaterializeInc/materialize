@@ -106,6 +106,12 @@ SELECT TO_CHAR(now(), 'YYYY-MM-DD')
     FORMAT = 'csv'
   );
 
+> CREATE TABLE t_from_1 (a INT)
+> COPY INTO t_from_1 FROM 's3://copytos3/test/1/${key-1}' (FORMAT CSV, AWS CONNECTION = aws_conn)
+> SELECT a FROM t_from_1 ORDER BY 1
+1
+2
+
 $ set-from-sql var=key-2
 SELECT TO_CHAR(now(), 'YYYY-MM-DD')
 
@@ -124,6 +130,12 @@ true
     MAX FILE SIZE = "100MB",
     FORMAT = 'csv'
   );
+
+> CREATE TABLE t_from_2 (a INT)
+> COPY INTO t_from_2 FROM 's3://copytos3/test/2' (FORMAT CSV, AWS CONNECTION = aws_conn)
+> SELECT a FROM t_from_2 ORDER BY 1
+1
+2
 
 # copy should work on non-table objects (views, etc)
 > CREATE VIEW my_view AS SELECT a FROM t WHERE a < 2;
@@ -169,6 +181,11 @@ contains:S3 bucket path is not empty
     FORMAT = 'csv'
   );
 
+> CREATE TABLE t_from_4 (n INT)
+> COPY INTO t_from_4 FROM 's3://copytos3/test/4' (FORMAT CSV, AWS CONNECTION = aws_conn)
+> SELECT COUNT(*) FROM t_from_4
+1000000
+
 # test CSV format options
 > COPY (SELECT array[1,2]::int[], 83647::integer, '{"s": "ab`c"}'::jsonb, '2010-10-10 10:10:10+00'::timestamp) TO 's3://copytos3/test/4_5'
   WITH (
@@ -179,12 +196,28 @@ contains:S3 bucket path is not empty
     HEADER = true
   )
 
+> CREATE TABLE t_from_4_5 (c1 INT[], c2 INT, c3 JSONB, c4 TIMESTAMP)
+> COPY INTO t_from_4_5 FROM 's3://copytos3/test/4_5' (
+    FORMAT CSV,
+    AWS CONNECTION = aws_conn,
+    DELIMITER = ';',
+    QUOTE = '`',
+    HEADER = true
+  )
+> SELECT c1, c2, c3, c4 FROM t_from_4_5
+{1,2} 83647 "{\"s\":\"ab`c\"}" "2010-10-10 10:10:10"
+
 > COPY (SELECT 1 WHERE FALSE) TO 's3://copytos3/test/5'
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
     FORMAT = 'csv'
   );
+
+> CREATE TABLE t_from_5 (a INT)
+> COPY INTO t_from_5 FROM 's3://copytos3/test/5' (FORMAT CSV, AWS CONNECTION = aws_conn)
+> SELECT COUNT(*) FROM t_from_5
+0
 
 $ s3-verify-data bucket=copytos3 key=test/1/${key-1} sort-rows=true
 1
