@@ -1322,6 +1322,7 @@ impl Sink {
         match &self.envelope {
             SinkEnvelope::Debezium => Some("debezium"),
             SinkEnvelope::Upsert => Some("upsert"),
+            SinkEnvelope::Append => Some("append"),
         }
     }
 

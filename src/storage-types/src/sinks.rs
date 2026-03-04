@@ -124,8 +124,11 @@ impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SinkEnvelope {
+    /// Only used for Kafka.
     Debezium,
     Upsert,
+    /// Only used for Iceberg.
+    Append,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

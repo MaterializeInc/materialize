@@ -708,6 +708,7 @@ impl_display!(SinkEnvelope);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IcebergSinkMode {
     Upsert,
+    Append,
 }
 
 impl AstDisplay for IcebergSinkMode {
@@ -715,6 +716,9 @@ impl AstDisplay for IcebergSinkMode {
         match self {
             Self::Upsert => {
                 f.write_str("UPSERT");
+            }
+            Self::Append => {
+                f.write_str("APPEND");
             }
         }
     }
