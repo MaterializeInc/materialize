@@ -25,12 +25,7 @@ ALTER SYSTEM SET enable_copy_from_remote = true;
     REGION = 'us-east-1'
   );
 
-$s3-file-upload-path bucket=copyfroms3 key=parquet/types.parquet path=${env.testdrive-path}/types.parquet
-$s3-file-upload-path bucket=copyfroms3 key=parquet/types.parquet.brotli path=${env.testdrive-path}/types.parquet.brotli
-$s3-file-upload-path bucket=copyfroms3 key=parquet/types.parquet.gzip path=${env.testdrive-path}/types.parquet.gzip
-$s3-file-upload-path bucket=copyfroms3 key=parquet/types.parquet.lz4 path=${env.testdrive-path}/types.parquet.lz4
-$s3-file-upload-path bucket=copyfroms3 key=parquet/types.parquet.snappy path=${env.testdrive-path}/types.parquet.snappy
-$s3-file-upload-path bucket=copyfroms3 key=parquet/types.parquet.zstd path=${env.testdrive-path}/types.parquet.zstd
+$ s3-upload-parquet-types bucket=copyfroms3 key-prefix=parquet/types.parquet
 
 # Create a custom type for a composite type
 > CREATE TYPE record_type AS (name text, age int, avg double precision);
@@ -54,7 +49,7 @@ $s3-file-upload-path bucket=copyfroms3 key=parquet/types.parquet.zstd path=${env
   timestamp_ms_col timestamp,
   -- timestampz_ms_col timestamp with time zone, -- not supported
   time32_col time,
-  list_col bigint list, -- TIL
+  list_col bigint list,
   decimal_col decimal,
   json_col jsonb,
   record_col record_type,

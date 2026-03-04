@@ -17,7 +17,6 @@ from kubernetes.client import V1Container, V1EnvVar, V1ObjectMeta, V1Pod, V1PodS
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_pod import K8sPod
-from materialize.generate_parquet_files import generate_parquet_files
 from materialize.mzcompose import (
     cluster_replica_size_map,
 )
@@ -158,8 +157,6 @@ class TestdrivePod(K8sPod, TestdriveBase):
 
         pod_spec = V1PodSpec(containers=[container], node_selector=node_selector)
         self.pod = V1Pod(metadata=metadata, spec=pod_spec)
-
-        generate_parquet_files()
 
     def _run_internal(
         self,

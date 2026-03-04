@@ -17,7 +17,6 @@ import glob
 import os
 
 from materialize import MZ_ROOT, buildkite, ci_util
-from materialize.generate_parquet_files import generate_parquet_files
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -178,9 +177,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
 
         non_default_testdrive_vars = []
-
-        generate_parquet_files()
-        non_default_testdrive_vars.append("--var=parquet-files-path=")
 
         if args.replicas > 1:
             c.sql("DROP CLUSTER quickstart CASCADE", user="mz_system", port=6877)
