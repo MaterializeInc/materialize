@@ -28,5 +28,17 @@ services:
       retries: 12
       start_period: 30s
 
+  setup:
+    image: postgres:17
+    depends_on:
+      materialized:
+        condition: service_healthy
+    volumes:
+      - "./setup.sh:/setup.sh"
+    entrypoint: ["bash", "/setup.sh"]
+    environment:
+      MZ_HOST: materialized
+      MZ_PORT: "6875"
+
 volumes:
   postgres-data:
