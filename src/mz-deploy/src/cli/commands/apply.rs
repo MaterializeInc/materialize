@@ -210,10 +210,7 @@ async fn gather_resources_and_check_conflicts(
         if existing_schemas.contains(&pair) {
             staging_schemas.insert(pair);
         } else {
-            eprintln!(
-                "Warning: Staging schema {}.{} not found",
-                pair.0, pair.1
-            );
+            eprintln!("Warning: Staging schema {}.{} not found", pair.0, pair.1);
         }
     }
 

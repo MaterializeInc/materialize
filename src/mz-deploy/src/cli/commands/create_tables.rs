@@ -114,10 +114,7 @@ pub async fn run(
     let existing_sources = client.check_sources_exist(&source_object_ids).await?;
 
     // Merge existing tables and sources
-    let existing_objects: BTreeSet<_> = existing_tables
-        .union(&existing_sources)
-        .cloned()
-        .collect();
+    let existing_objects: BTreeSet<_> = existing_tables.union(&existing_sources).cloned().collect();
 
     // Filter to only objects that don't exist
     let tables_to_create: Vec<_> = table_objects

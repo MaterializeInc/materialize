@@ -1989,8 +1989,7 @@ fn test_dependencies_mutually_recursive_with_nested_cte_in_subquery() {
 
 #[test]
 fn test_extract_dependencies_source_with_cluster() {
-    let sql =
-        "CREATE SOURCE kafka_source IN CLUSTER ingest_cluster FROM KAFKA CONNECTION kafka_conn (TOPIC 'events') FORMAT JSON";
+    let sql = "CREATE SOURCE kafka_source IN CLUSTER ingest_cluster FROM KAFKA CONNECTION kafka_conn (TOPIC 'events') FORMAT JSON";
     let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
 
     if let mz_sql_parser::ast::Statement::CreateSource(source_stmt) = &parsed[0].ast {
@@ -2109,14 +2108,8 @@ fn test_source_and_table_from_source_dependency_ordering() {
     let source_pos = sorted.iter().position(|(id, _)| *id == source_id);
     let table_pos = sorted.iter().position(|(id, _)| *id == table_id);
 
-    assert!(
-        source_pos.is_some(),
-        "Source should be in sorted objects"
-    );
-    assert!(
-        table_pos.is_some(),
-        "Table should be in sorted objects"
-    );
+    assert!(source_pos.is_some(), "Source should be in sorted objects");
+    assert!(table_pos.is_some(), "Table should be in sorted objects");
     assert!(
         source_pos.unwrap() < table_pos.unwrap(),
         "Source should appear before table from source in sorted order"

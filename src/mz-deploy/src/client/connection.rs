@@ -9,7 +9,7 @@
 //! - `introspection` - Database metadata queries
 //! - `validation` - Project validation against the database
 
-use crate::client::config::{Profile, ProfilesConfig};
+use crate::client::config::Profile;
 use crate::client::deployment_ops::{
     self, ClusterDeploymentStatus, ClusterStatusContext, DEFAULT_ALLOWED_LAG_SECS, FailureReason,
     HydrationStatusUpdate,
@@ -54,29 +54,6 @@ impl Client {
     // =========================================================================
     // Connection Methods
     // =========================================================================
-
-    /// Connect to the database using a named profile.
-    ///
-    /// Note: This method searches for profiles.toml in the current working directory.
-    /// For project-specific configuration, use `ProfilesConfig::load_profile()` with
-    /// a project directory and then `connect_with_profile()`.
-    pub async fn connect(profile_name: Option<&str>) -> Result<Self, ConnectionError> {
-        // Load profiles configuration (searches in CWD for backwards compatibility)
-        let config = ProfilesConfig::load(None)?;
-
-        // Get the requested profile or default
-        let profile = if let Some(name) = profile_name {
-            config.get_profile(name)?
-        } else {
-            config.get_default_profile()?
-        };
-
-        // Expand environment variables
-        let profile = config.expand_env_vars(profile)?;
-
-        // Connect to the database
-        Self::connect_with_profile(profile).await
-    }
 
     /// Connect to the database using a Profile directly.
     ///

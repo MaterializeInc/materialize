@@ -4,7 +4,7 @@ use mz_build_info::{BuildInfo, build_info};
 use mz_deploy::cli;
 use mz_deploy::cli::{CliError, TypeCheckMode};
 use mz_deploy::client::ConnectionError;
-use mz_deploy::client::config::{ProfilesConfig, ProjectSettings};
+use mz_deploy::client::config::{Profile, ProfilesConfig, ProjectSettings};
 use mz_deploy::utils::log;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -355,9 +355,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             allow_dirty,
             dry_run,
         }) => {
-            let profile =
-                ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
-                    .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
+            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
 
             cli::commands::create_tables::run(
                 &profile,
@@ -380,9 +378,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             allowed_lag,
             subcommand,
         }) => {
-            let profile =
-                ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
-                    .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
+            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
 
             match subcommand {
                 Some(ApplyCommand::Clusters) => {
@@ -407,9 +403,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             no_rollback,
             dry_run,
         }) => {
-            let profile =
-                ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
-                    .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
+            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
 
             cli::commands::stage::run(
                 &profile,
@@ -422,44 +416,32 @@ async fn run(args: Args) -> Result<(), CliError> {
             .await
         }
         Some(Command::Debug) => {
-            let profile =
-                ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
-                    .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
+            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
 
             cli::commands::debug::run(&profile).await
         }
         Some(Command::Describe { deploy_id }) => {
-            let profile =
-                ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
-                    .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
+            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
 
             cli::commands::describe::run(&profile, &deploy_id).await
         }
         Some(Command::GenDataContracts) => {
-            let profile =
-                ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
-                    .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
+            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
             cli::commands::gen_data_contracts::run(&profile, &args.directory).await
         }
         Some(Command::Test) => {
             cli::commands::test::run(&args.directory, &settings.docker_image()).await
         }
         Some(Command::Abort { deploy_id }) => {
-            let profile =
-                ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
-                    .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
+            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
             cli::commands::abort::run(&profile, &deploy_id).await
         }
         Some(Command::Deployments { allowed_lag }) => {
-            let profile =
-                ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
-                    .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
+            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
             cli::commands::deployments::run(&profile, allowed_lag).await
         }
         Some(Command::History { limit }) => {
-            let profile =
-                ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
-                    .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
+            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
             cli::commands::history::run(&profile, limit).await
         }
         Some(Command::Ready {
@@ -468,9 +450,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             timeout,
             allowed_lag,
         }) => {
-            let profile =
-                ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
-                    .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
+            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
 
             cli::commands::ready::run(&profile, &name, snapshot, timeout, allowed_lag).await
         }
@@ -488,4 +468,13 @@ fn load_project_settings(
     ProjectSettings::load(directory)
         .map(|s| s.with_docker_image_override(docker_image))
         .map_err(|e| CliError::Message(format!("failed to load project settings: {}", e)))
+}
+
+fn load_profile(
+    directory: &Path,
+    cli_profile: Option<&str>,
+    settings: &ProjectSettings,
+) -> Result<Profile, CliError> {
+    ProfilesConfig::load_profile(Some(directory), cli_profile, &settings.profile)
+        .map_err(|e| CliError::Connection(ConnectionError::Config(e)))
 }

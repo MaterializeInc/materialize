@@ -6,8 +6,9 @@ use thiserror::Error;
 
 pub const DEFAULT_DOCKER_IMAGE: &str = "materialize/materialized:latest";
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct ProjectSettings {
+    pub profile: String,
     pub mz_version: Option<String>,
     /// CLI override for the Docker image. Takes precedence over `mz_version`.
     #[serde(skip)]
@@ -22,7 +23,11 @@ impl ProjectSettings {
                 path: path.display().to_string(),
                 source,
             }),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(ConfigError::ProjectSettingsNotFound {
+                    path: path.display().to_string(),
+                })
+            }
             Err(source) => Err(ConfigError::ReadError {
                 path: path.display().to_string(),
                 source,
@@ -66,8 +71,8 @@ pub enum ConfigError {
         path: String,
         source: toml::de::Error,
     },
-    #[error("no default profile found. Add a profile named 'default' to your profiles.toml")]
-    NoDefaultProfile,
+    #[error("project.toml not found at {path}")]
+    ProjectSettingsNotFound { path: String },
     #[error("profile '{name}' not found in configuration")]
     ProfileNotFound { name: String },
     #[error("environment variable '{var}' not found for profile '{profile}'")]
@@ -161,11 +166,6 @@ impl ProfilesConfig {
             );
         }
 
-        // Validate that a default profile exists
-        if !profiles.contains_key("default") {
-            return Err(ConfigError::NoDefaultProfile);
-        }
-
         Ok(ProfilesConfig {
             profiles,
             source_path: path,
@@ -180,11 +180,6 @@ impl ProfilesConfig {
             .ok_or_else(|| ConfigError::ProfileNotFound {
                 name: name.to_string(),
             })
-    }
-
-    /// Get the default profile
-    pub fn get_default_profile(&self) -> Result<Profile, ConfigError> {
-        self.get_profile("default")
     }
 
     /// Expand environment variables in a profile's password field
@@ -220,17 +215,16 @@ impl ProfilesConfig {
     ///
     /// # Arguments
     /// * `project_directory` - Optional project directory to search for profiles.toml
-    /// * `profile_name` - Optional profile name. If None, uses "default"
+    /// * `cli_profile` - Optional profile name from CLI flag override
+    /// * `default_profile` - Default profile name from project.toml
     pub fn load_profile(
         project_directory: Option<&Path>,
-        profile_name: Option<&str>,
+        cli_profile: Option<&str>,
+        default_profile: &str,
     ) -> Result<Profile, ConfigError> {
         let config = Self::load(project_directory)?;
-        let profile = if let Some(name) = profile_name {
-            config.get_profile(name)?
-        } else {
-            config.get_default_profile()?
-        };
+        let name = cli_profile.unwrap_or(default_profile);
+        let profile = config.get_profile(name)?;
         config.expand_env_vars(profile)
     }
 }
