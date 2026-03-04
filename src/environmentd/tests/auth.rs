@@ -4194,7 +4194,6 @@ async fn test_password_auth() {
             "log_filter".to_string(),
             "mz_frontegg_auth=debug,info".to_string(),
         )
-        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_password_auth(Password("mz_system_password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()
@@ -4284,7 +4283,6 @@ async fn test_sasl_auth() {
             "log_filter".to_string(),
             "mz_frontegg_auth=debug,info".to_string(),
         )
-        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_sasl_scram_auth(Password("mz_system_password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()
@@ -4339,7 +4337,6 @@ async fn test_sasl_auth_failure() {
             "log_filter".to_string(),
             "mz_frontegg_auth=debug,info".to_string(),
         )
-        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_sasl_scram_auth(Password("mz_system_password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()
@@ -4385,7 +4382,6 @@ async fn test_password_auth_superuser() {
             "log_filter".to_string(),
             "mz_frontegg_auth=debug,info".to_string(),
         )
-        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_password_auth(Password("password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()
@@ -4440,7 +4436,6 @@ async fn test_password_auth_alter_role() {
             "log_filter".to_string(),
             "mz_frontegg_auth=debug,info".to_string(),
         )
-        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_password_auth(Password("mz_system_password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()
@@ -4580,7 +4575,6 @@ async fn test_password_auth_http() {
             "log_filter".to_string(),
             "mz_frontegg_auth=debug,info".to_string(),
         )
-        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_password_auth(Password("mz_system_password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()
@@ -4725,7 +4719,6 @@ async fn test_password_auth_http_superuser() {
             "log_filter".to_string(),
             "mz_frontegg_auth=debug,info".to_string(),
         )
-        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_password_auth(Password("mz_system_password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()

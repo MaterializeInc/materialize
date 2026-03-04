@@ -12,7 +12,7 @@
 
 use base64::prelude::*;
 use differential_dataflow::lattice::Lattice;
-use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
+use mz_adapter_types::dyncfgs::{ALLOW_USER_SESSIONS, ENABLE_LOGIN_ATTRIBUTE};
 use mz_auth::password::Password;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_sql::session::metadata::SessionMetadata;
@@ -815,7 +815,12 @@ impl Coordinator {
             // This includes preventing any user, except a pre-defined set of system users, from
             // connecting to an internal port. Therefore it's ok to always create a new role for the
             // user.
-            let attributes = RoleAttributesRaw::new().with_login();
+            let mut attributes = RoleAttributesRaw::new();
+            // Certain authenticators, such as Frontegg, do not allow the LOGIN attribute of a role.
+            // Therefore, we add the attribute only when it is permitted.
+            if ENABLE_LOGIN_ATTRIBUTE.get(self.catalog().system_config().dyncfgs()) {
+                attributes = attributes.with_login();
+            }
             let plan = CreateRolePlan {
                 name: user.name.to_string(),
                 attributes,
