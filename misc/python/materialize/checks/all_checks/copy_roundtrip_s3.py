@@ -13,8 +13,8 @@ from materialize.checks.checks import Check, externally_idempotent
 
 
 @externally_idempotent(False)
-class CopyToS3(Check):
-    """Basic check on copy to s3"""
+class CopyRoundtripS3(Check):
+    """Basic check on copy to and from s3"""
 
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -77,12 +77,12 @@ class CopyToS3(Check):
                 21,22,23
 
                 > SELECT * FROM t1;
-                1,2,3
-                11,12,13
-                11,12,13
-                21,22,23
-                21,22,23
-                21,22,23
+                1 2 3
+                11 12 13
+                11 12 13
+                21 22 23
+                21 22 23
+                21 22 23
                 """
             )
         )

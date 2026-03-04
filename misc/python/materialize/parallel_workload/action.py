@@ -517,7 +517,7 @@ class SQLsmithAction(Action):
         return True
 
 
-class CopyToS3Action(Action):
+class CopyRoundtripS3Action(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
         result.extend(
@@ -3098,7 +3098,7 @@ read_action_list = ActionList(
         (SelectOneAction, 1),
         # (SQLsmithAction, 30),  # Questionable use
         (
-            CopyToS3Action,
+            CopyRoundtripS3Action,
             100,
         ),  # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9661 is fixed
         (SetClusterAction, 1),
