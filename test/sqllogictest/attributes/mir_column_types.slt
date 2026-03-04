@@ -32,11 +32,11 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(types, humanized expressions) AS VERBOSE TEXT FOR (SELECT * FROM v WHERE f) UNION ALL (SELECT * FROM v WHERE e IS NOT NULL)
 ----
 Explained Query:
-  Union // { types: "(double precision?, boolean?)" }
-    Filter #1{f} // { types: "(double precision?, boolean)" }
-      ReadStorage materialize.public.v // { types: "(double precision?, boolean?)" }
-    Filter (#0{e}) IS NOT NULL // { types: "(double precision, boolean?)" }
-      ReadStorage materialize.public.v // { types: "(double precision?, boolean?)" }
+  Union // { types: "(float64?, rbool?)" }
+    Filter #1{f} // { types: "(float64?, rbool)" }
+      ReadStorage materialize.public.v // { types: "(float64?, rbool?)" }
+    Filter (#0{e}) IS NOT NULL // { types: "(float64, rbool?)" }
+      ReadStorage materialize.public.v // { types: "(float64?, rbool?)" }
 
 Source materialize.public.v
 
@@ -49,11 +49,11 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(types, humanized expressions) AS VERBOSE TEXT FOR (SELECT * FROM v WHERE e = 1.25) UNION ALL (SELECT * FROM v WHERE e IS NOT NULL)
 ----
 Explained Query:
-  Union // { types: "(double precision, boolean?)" }
-    Filter (#0{e} = 1.25) // { types: "(double precision, boolean?)" }
-      ReadStorage materialize.public.v // { types: "(double precision?, boolean?)" }
-    Filter (#0{e}) IS NOT NULL // { types: "(double precision, boolean?)" }
-      ReadStorage materialize.public.v // { types: "(double precision?, boolean?)" }
+  Union // { types: "(float64, rbool?)" }
+    Filter (#0{e} = 1.25) // { types: "(float64, rbool?)" }
+      ReadStorage materialize.public.v // { types: "(float64?, rbool?)" }
+    Filter (#0{e}) IS NOT NULL // { types: "(float64, rbool?)" }
+      ReadStorage materialize.public.v // { types: "(float64?, rbool?)" }
 
 Source materialize.public.v
 
@@ -70,20 +70,20 @@ EXCEPT
 (SELECT sum(a) as a, max(b) as b, c FROM t GROUP BY c)
 ----
 Explained Query:
-  Threshold // { types: "(bigint?, text?, date?)" }
-    Union // { types: "(bigint?, text?, date?)" }
-      Negate // { types: "(bigint?, text?, date?)" }
-        Project (#3{sum_a}, #1{max_b}, #0{c}) // { types: "(bigint?, text?, date?)" }
-          Join on=(#0{c} = #2{c}) type=differential // { types: "(date?, text?, date?, bigint?)" }
-            ArrangeBy keys=[[#0{c}]] // { types: "(date?, text?)" }
-              Reduce group_by=[#1{c}] aggregates=[max(#0{b})] // { types: "(date?, text?)" }
-                Project (#1{b}, #2{c}) // { types: "(text?, date?)" }
-                  ReadStorage materialize.public.t // { types: "(integer?, text?, date?)" }
-            ArrangeBy keys=[[#0{c}]] // { types: "(date?, bigint?)" }
-              Reduce group_by=[#1{c}] aggregates=[sum(#0{a})] // { types: "(date?, bigint?)" }
-                Project (#0{a}, #2{c}) // { types: "(integer?, date?)" }
-                  ReadStorage materialize.public.t // { types: "(integer?, text?, date?)" }
-      Constant // { types: "(bigint, text, date?)" }
+  Threshold // { types: "(rint64?, rstring?, rdate?)" }
+    Union // { types: "(rint64?, rstring?, rdate?)" }
+      Negate // { types: "(rint64?, rstring?, rdate?)" }
+        Project (#3{sum_a}, #1{max_b}, #0{c}) // { types: "(rint64?, rstring?, rdate?)" }
+          Join on=(#0{c} = #2{c}) type=differential // { types: "(rdate?, rstring?, rdate?, rint64?)" }
+            ArrangeBy keys=[[#0{c}]] // { types: "(rdate?, rstring?)" }
+              Reduce group_by=[#1{c}] aggregates=[max(#0{b})] // { types: "(rdate?, rstring?)" }
+                Project (#1{b}, #2{c}) // { types: "(rstring?, rdate?)" }
+                  ReadStorage materialize.public.t // { types: "(rint32?, rstring?, rdate?)" }
+            ArrangeBy keys=[[#0{c}]] // { types: "(rdate?, rint64?)" }
+              Reduce group_by=[#1{c}] aggregates=[sum(#0{a})] // { types: "(rdate?, rint64?)" }
+                Project (#0{a}, #2{c}) // { types: "(rint32?, rdate?)" }
+                  ReadStorage materialize.public.t // { types: "(rint32?, rstring?, rdate?)" }
+      Constant // { types: "(rint64, rstring, rdate?)" }
         - (1, "hello", null)
 
 Source materialize.public.t
@@ -101,31 +101,31 @@ SELECT t.* FROM u LEFT OUTER JOIN t on t.a = u.d
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0{d}]] // { types: "(integer)" }
-        Filter (#0{d}) IS NOT NULL // { types: "(integer)" }
-          ReadStorage materialize.public.u // { types: "(integer?)" }
+      ArrangeBy keys=[[#0{d}]] // { types: "(rint32)" }
+        Filter (#0{d}) IS NOT NULL // { types: "(rint32)" }
+          ReadStorage materialize.public.u // { types: "(rint32?)" }
     cte l1 =
-      Project (#0{d}, #2{b}, #3{c}) // { types: "(integer, text?, date?)" }
-        Join on=(#0{d} = #1{a}) type=differential // { types: "(integer, integer, text?, date?)" }
-          Get l0 // { types: "(integer)" }
-          ArrangeBy keys=[[#0{a}]] // { types: "(integer, text?, date?)" }
-            Filter (#0{a}) IS NOT NULL // { types: "(integer, text?, date?)" }
-              ReadStorage materialize.public.t // { types: "(integer?, text?, date?)" }
-  Return // { types: "(integer?, text?, date?)" }
-    Union // { types: "(integer?, text?, date?)" }
-      Map (null, null, null) // { types: "(integer?, text?, date?)" }
+      Project (#0{d}, #2{b}, #3{c}) // { types: "(rint32, rstring?, rdate?)" }
+        Join on=(#0{d} = #1{a}) type=differential // { types: "(rint32, rint32, rstring?, rdate?)" }
+          Get l0 // { types: "(rint32)" }
+          ArrangeBy keys=[[#0{a}]] // { types: "(rint32, rstring?, rdate?)" }
+            Filter (#0{a}) IS NOT NULL // { types: "(rint32, rstring?, rdate?)" }
+              ReadStorage materialize.public.t // { types: "(rint32?, rstring?, rdate?)" }
+  Return // { types: "(rint32?, rstring?, rdate?)" }
+    Union // { types: "(rint32?, rstring?, rdate?)" }
+      Map (null, null, null) // { types: "(rint32?, rstring?, rdate?)" }
         Union // { types: "()" }
           Negate // { types: "()" }
             Project () // { types: "()" }
-              Join on=(#0{d} = #1{d}) type=differential // { types: "(integer, integer)" }
-                Get l0 // { types: "(integer)" }
-                ArrangeBy keys=[[#0{d}]] // { types: "(integer)" }
-                  Distinct project=[#0{d}] // { types: "(integer)" }
-                    Project (#0{d}) // { types: "(integer)" }
-                      Get l1 // { types: "(integer, text?, date?)" }
+              Join on=(#0{d} = #1{d}) type=differential // { types: "(rint32, rint32)" }
+                Get l0 // { types: "(rint32)" }
+                ArrangeBy keys=[[#0{d}]] // { types: "(rint32)" }
+                  Distinct project=[#0{d}] // { types: "(rint32)" }
+                    Project (#0{d}) // { types: "(rint32)" }
+                      Get l1 // { types: "(rint32, rstring?, rdate?)" }
           Project () // { types: "()" }
-            ReadStorage materialize.public.u // { types: "(integer?)" }
-      Get l1 // { types: "(integer, text?, date?)" }
+            ReadStorage materialize.public.u // { types: "(rint32?)" }
+      Get l1 // { types: "(rint32, rstring?, rdate?)" }
 
 Source materialize.public.t
   filter=((#0{a}) IS NOT NULL)
@@ -142,37 +142,37 @@ EXPLAIN OPTIMIZED PLAN WITH(types, humanized expressions) AS VERBOSE TEXT FOR
 Explained Query:
   With
     cte l0 =
-      Project (#0{e}, #1{f}) // { types: "(double precision, boolean?)" }
-        Join on=(#0{e} = #2) type=differential // { types: "(double precision, boolean?, double precision)" }
-          ArrangeBy keys=[[#0{e}]] // { types: "(double precision, boolean?)" }
-            Filter (#0{e}) IS NOT NULL // { types: "(double precision, boolean?)" }
-              ReadStorage materialize.public.v // { types: "(double precision?, boolean?)" }
-          ArrangeBy keys=[[#0]] // { types: "(double precision?)" }
-            Union // { types: "(double precision?)" }
-              Project (#1) // { types: "(double precision?)" }
-                Filter (#0{d}) IS NOT NULL // { types: "(integer, double precision?)" }
-                  Map (integer_to_double(#0{d})) // { types: "(integer?, double precision?)" }
-                    ReadStorage materialize.public.u // { types: "(integer?)" }
-              Project (#1) // { types: "(double precision)" }
-                FlatMap guard_subquery_size(#0{count}) // { types: "(bigint, double precision)" }
-                  Reduce aggregates=[count(*)] // { types: "(bigint)" }
+      Project (#0{e}, #1{f}) // { types: "(float64, rbool?)" }
+        Join on=(#0{e} = #2) type=differential // { types: "(float64, rbool?, float64)" }
+          ArrangeBy keys=[[#0{e}]] // { types: "(float64, rbool?)" }
+            Filter (#0{e}) IS NOT NULL // { types: "(float64, rbool?)" }
+              ReadStorage materialize.public.v // { types: "(float64?, rbool?)" }
+          ArrangeBy keys=[[#0]] // { types: "(float64?)" }
+            Union // { types: "(float64?)" }
+              Project (#1) // { types: "(float64?)" }
+                Filter (#0{d}) IS NOT NULL // { types: "(rint32, float64?)" }
+                  Map (integer_to_double(#0{d})) // { types: "(rint32?, float64?)" }
+                    ReadStorage materialize.public.u // { types: "(rint32?)" }
+              Project (#1) // { types: "(float64)" }
+                FlatMap guard_subquery_size(#0{count}) // { types: "(rint64, float64)" }
+                  Reduce aggregates=[count(*)] // { types: "(rint64)" }
                     Project () // { types: "()" }
-                      ReadStorage materialize.public.u // { types: "(integer?)" }
-  Return // { types: "(boolean?, bigint)" }
-    Threshold // { types: "(boolean?, bigint)" }
-      Union // { types: "(boolean?, bigint)" }
-        Negate // { types: "(boolean?, bigint)" }
-          TopK limit=1 // { types: "(boolean?, bigint)" }
-            Project (#1{min_f}, #3{count}) // { types: "(boolean?, bigint)" }
-              Join on=(#0{e} = #2{e}) type=differential // { types: "(double precision, boolean?, double precision, bigint)" }
-                ArrangeBy keys=[[#0{e}]] // { types: "(double precision, boolean?)" }
-                  Reduce group_by=[#0{e}] aggregates=[min(#1{f})] // { types: "(double precision, boolean?)" }
-                    Get l0 // { types: "(double precision, boolean?)" }
-                ArrangeBy keys=[[#0{e}]] // { types: "(double precision, bigint)" }
-                  Reduce group_by=[#0{e}] aggregates=[count(*)] // { types: "(double precision, bigint)" }
-                    Project (#0{e}) // { types: "(double precision)" }
-                      Get l0 // { types: "(double precision, boolean?)" }
-        Constant // { types: "(boolean?, bigint)" }
+                      ReadStorage materialize.public.u // { types: "(rint32?)" }
+  Return // { types: "(rbool?, rint64)" }
+    Threshold // { types: "(rbool?, rint64)" }
+      Union // { types: "(rbool?, rint64)" }
+        Negate // { types: "(rbool?, rint64)" }
+          TopK limit=1 // { types: "(rbool?, rint64)" }
+            Project (#1{min_f}, #3{count}) // { types: "(rbool?, rint64)" }
+              Join on=(#0{e} = #2{e}) type=differential // { types: "(float64, rbool?, float64, rint64)" }
+                ArrangeBy keys=[[#0{e}]] // { types: "(float64, rbool?)" }
+                  Reduce group_by=[#0{e}] aggregates=[min(#1{f})] // { types: "(float64, rbool?)" }
+                    Get l0 // { types: "(float64, rbool?)" }
+                ArrangeBy keys=[[#0{e}]] // { types: "(float64, rint64)" }
+                  Reduce group_by=[#0{e}] aggregates=[count(*)] // { types: "(float64, rint64)" }
+                    Project (#0{e}) // { types: "(float64)" }
+                      Get l0 // { types: "(float64, rbool?)" }
+        Constant // { types: "(rbool?, rint64)" }
           - (null, 10)
 
 Source materialize.public.u
