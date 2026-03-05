@@ -178,10 +178,13 @@ The change from the current upgrade procedure would be this flow:
 7. Cutover: once orchestration determines that the new-version `environmentd`
    is ready to serve queries, network routes are updated to point at the new
    version
-8. Orchestration reaps old-version deployment processes
-9. Catalog upgrade: once the old version is fully gone, the new version is
-   signaled that it may upgrade the catalog format and activate features gated
-   on the newer catalog version
+8. Orchestration reaps old-version deployment processes. Note that old
+   processes may not terminate instantly.
+9. Catalog upgrade: once the old version is fully gone, the new version
+   upgrades the catalog format (applies catalog migrations) and activates
+   features gated on the newer catalog version. This step also serves as the
+   fencing mechanism: any old-version process that may still be lingering will
+   be unable to read or write the migrated catalog.
 
 The big difference to the current procedure is that **both versions run in full
 read-write mode during the overlap window**. This is possible because the new
