@@ -202,12 +202,14 @@ mod tests {
     use std::sync::LazyLock;
     use std::time::Duration;
 
+    use super::*;
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
     use mz_ore::url::SensitiveUrl;
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_client::critical::Opaque;
     use mz_persist_client::rpc::PubSubClientConnection;
     use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
     use mz_persist_types::codec_impls::UnitSchema;
@@ -220,8 +222,6 @@ mod tests {
     use mz_timely_util::order::Partitioned;
     use timely::progress::Timestamp as _;
     use tokio::sync::watch;
-
-    use super::*;
 
     // 15 minutes
     static PERSIST_READER_LEASE_TIMEOUT_MS: Duration = Duration::from_secs(60 * 15);
@@ -392,9 +392,10 @@ mod tests {
             .expect("error creating persist client");
 
         let mut remap_read_handle = persist_client
-            .open_critical_since::<SourceData, (), Timestamp, StorageDiff, u64>(
+            .open_critical_since::<SourceData, (), Timestamp, StorageDiff>(
                 remap_shard,
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Opaque::encode(&0u64),
                 Diagnostics::from_purpose("test_since_hold"),
             )
             .await
@@ -424,7 +425,10 @@ mod tests {
 
         // Compact enough so that offsets >= 3 remain uncompacted
         remap_read_handle
-            .compare_and_downgrade_since(&0, (&0, &Antichain::from_elem(1000.into())))
+            .compare_and_downgrade_since(
+                &Opaque::encode(&0u64),
+                (&Opaque::encode(&0u64), &Antichain::from_elem(1000.into())),
+            )
             .await
             .unwrap();
 

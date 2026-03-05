@@ -17,6 +17,10 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::collection_mgmt::{
+    AppendOnlyIntrospectionConfig, CollectionManagerKind, DifferentialIntrospectionConfig,
+};
+use crate::instance::{Instance, ReplicaConfig};
 use async_trait::async_trait;
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use derivative::Derivative;
@@ -39,6 +43,7 @@ use mz_ore::{assert_none, halt, instrument, soft_panic_or_log};
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
+use mz_persist_client::critical::Opaque;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::schema::CaESchema;
 use mz_persist_client::write::WriteHandle;
@@ -93,11 +98,6 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
 use tokio::time::error::Elapsed;
 use tracing::{debug, info, warn};
-
-use crate::collection_mgmt::{
-    AppendOnlyIntrospectionConfig, CollectionManagerKind, DifferentialIntrospectionConfig,
-};
-use crate::instance::{Instance, ReplicaConfig};
 
 mod collection_mgmt;
 mod history;
@@ -2816,6 +2816,7 @@ where
                 txns_client.dyncfgs().clone(),
                 Arc::clone(&txns_metrics),
                 txns_id,
+                Opaque::encode(&PersistEpoch::default()),
             )
             .await;
             txns.upgrade_version().await;

@@ -15,11 +15,12 @@ use std::time::Duration;
 
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
-use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
-use mz_persist_types::{Codec, Codec64, Opaque};
+use mz_ore::{instrument, soft_assert_eq_or_log};
+use mz_persist_types::{Codec, Codec64};
 use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeTupleStruct;
+use serde::{Deserialize, Serialize, Serializer};
 use timely::progress::{Antichain, Timestamp};
 use uuid::Uuid;
 
@@ -90,6 +91,41 @@ impl CriticalReaderId {
     }
 }
 
+/// An opaque fencing token used in compare_and_downgrade_since.
+#[derive(Arbitrary, Debug, Clone, PartialEq)]
+pub struct Opaque(pub(crate) String, pub(crate) [u8; 8]);
+
+impl Serialize for Opaque {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut serializer = serializer.serialize_tuple_struct("Opaque", 2)?;
+        serializer.serialize_field(&self.0)?;
+        serializer.serialize_field(&u64::from_le_bytes(self.1))?;
+        serializer.end()
+    }
+}
+
+impl Opaque {
+    /// The name of the codec used to encode this token.
+    pub fn codec_name(&self) -> &str {
+        &self.0
+    }
+
+    /// Decode this token as the given type.
+    pub fn decode<T: Codec64>(&self) -> T {
+        soft_assert_eq_or_log!(T::codec_name(), self.0);
+        T::decode(self.1)
+    }
+
+    /// Encode the given 64-bit type as an opaque token. This records both the name of the type/encoding
+    /// and the 64-bit value itself.
+    pub fn encode<T: Codec64>(value: &T) -> Self {
+        Self(T::codec_name(), T::encode(value))
+    }
+}
+
 /// A "capability" granting the ability to hold back the `since` frontier of a
 /// shard.
 ///
@@ -110,30 +146,29 @@ impl CriticalReaderId {
 /// means that callers can add a timeout using [tokio::time::timeout] or
 /// [tokio::time::timeout_at].
 #[derive(Debug)]
-pub struct SinceHandle<K: Codec, V: Codec, T, D, O> {
+pub struct SinceHandle<K: Codec, V: Codec, T, D> {
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) reader_id: CriticalReaderId,
 
     since: Antichain<T>,
-    opaque: O,
+    opaque: Opaque,
     last_downgrade_since: EpochMillis,
 }
 
-impl<K, V, T, D, O> SinceHandle<K, V, T, D, O>
+impl<K, V, T, D> SinceHandle<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
     D: Monoid + Codec64 + Send + Sync,
-    O: Opaque + Codec64,
 {
     pub(crate) fn new(
         machine: Machine<K, V, T, D>,
         gc: GarbageCollector<K, V, T, D>,
         reader_id: CriticalReaderId,
         since: Antichain<T>,
-        opaque: O,
+        opaque: Opaque,
     ) -> Self {
         SinceHandle {
             machine,
@@ -158,7 +193,7 @@ where
     }
 
     /// This handle's `opaque`.
-    pub fn opaque(&self) -> &O {
+    pub fn opaque(&self) -> &Opaque {
         &self.opaque
     }
 
@@ -187,12 +222,12 @@ where
     ///
     /// ```rust,no_run
     /// use timely::progress::Antichain;
-    /// use mz_persist_client::critical::SinceHandle;
+    /// use mz_persist_client::critical::{SinceHandle, Opaque};
     /// use mz_persist_types::Codec64;
     ///
     /// # async fn example() {
-    /// let fencing_token: u64 = unimplemented!();
-    /// let mut since: SinceHandle<String, String, u64, i64, u64> = unimplemented!();
+    /// let fencing_token: Opaque = unimplemented!();
+    /// let mut since: SinceHandle<String, String, u64, i64> = unimplemented!();
     ///
     /// let new_since: Antichain<u64> = unimplemented!();
     /// let res = since
@@ -225,7 +260,7 @@ where
     /// use mz_persist_types::Codec64;
     ///
     /// # async fn example() {
-    /// let mut since: SinceHandle<String, String, u64, i64, u64> = unimplemented!();
+    /// let mut since: SinceHandle<String, String, u64, i64> = unimplemented!();
     /// let new_since: Antichain<u64> = unimplemented!();
     /// let res = since
     ///     .maybe_compare_and_downgrade_since(
@@ -250,9 +285,9 @@ where
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn maybe_compare_and_downgrade_since(
         &mut self,
-        expected: &O,
-        new: (&O, &Antichain<T>),
-    ) -> Option<Result<Antichain<T>, O>> {
+        expected: &Opaque,
+        new: (&Opaque, &Antichain<T>),
+    ) -> Option<Result<Antichain<T>, Opaque>> {
         let elapsed_since_last_downgrade = Duration::from_millis(
             (self.machine.applier.cfg.now)().saturating_sub(self.last_downgrade_since),
         );
@@ -283,9 +318,9 @@ where
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn compare_and_downgrade_since(
         &mut self,
-        expected: &O,
-        new: (&O, &Antichain<T>),
-    ) -> Result<Antichain<T>, O> {
+        expected: &Opaque,
+        new: (&Opaque, &Antichain<T>),
+    ) -> Result<Antichain<T>, Opaque> {
         let (res, maintenance) = self
             .machine
             .compare_and_downgrade_since(&self.reader_id, expected, new)
@@ -409,24 +444,31 @@ mod tests {
         let shard_id = crate::ShardId::new();
 
         let mut since = client
-            .open_critical_since::<(), (), u64, i64, i64>(
+            .open_critical_since::<(), (), u64, i64>(
                 shard_id,
                 CriticalReaderId::new(),
+                Opaque::encode(&i64::MIN),
                 Diagnostics::for_tests(),
             )
             .await
             .expect("codec mismatch");
 
-        assert_eq!(since.opaque(), &i64::initial());
+        assert_eq!(since.opaque(), &Opaque::encode(&i64::MIN));
 
         since
-            .compare_and_downgrade_since(&i64::initial(), (&5, &Antichain::from_elem(0)))
+            .compare_and_downgrade_since(
+                &Opaque::encode(&i64::MIN),
+                (&Opaque::encode(&5i64), &Antichain::from_elem(0)),
+            )
             .await
             .unwrap();
 
         // should not fire, since we just had a successful `compare_and_downgrade_since` call
         let noop = since
-            .maybe_compare_and_downgrade_since(&5, (&5, &Antichain::from_elem(0)))
+            .maybe_compare_and_downgrade_since(
+                &Opaque::encode(&5i64),
+                (&Opaque::encode(&5i64), &Antichain::from_elem(0)),
+            )
             .await;
 
         assert_eq!(noop, None);
@@ -440,35 +482,40 @@ mod tests {
         let shard_id = ShardId::new();
 
         let mut since = client
-            .open_critical_since::<(), (), u64, i64, i64>(
+            .open_critical_since::<(), (), u64, i64>(
                 shard_id,
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Opaque::encode(&i64::MIN),
                 Diagnostics::for_tests(),
             )
             .await
             .expect("codec mismatch");
 
         // The token must be initialized to the default value
-        assert_eq!(since.opaque(), &i64::MIN);
+        assert_eq!(since.opaque(), &Opaque::encode(&i64::MIN));
 
         since
-            .compare_and_downgrade_since(&i64::MIN, (&5, &Antichain::from_elem(0)))
+            .compare_and_downgrade_since(
+                &Opaque::encode(&i64::MIN),
+                (&Opaque::encode(&5i64), &Antichain::from_elem(0)),
+            )
             .await
             .unwrap();
 
         // Our view of the token must be updated now
-        assert_eq!(since.opaque(), &5);
+        assert_eq!(since.opaque(), &Opaque::encode(&5i64));
 
         let since2 = client
-            .open_critical_since::<(), (), u64, i64, i64>(
+            .open_critical_since::<(), (), u64, i64>(
                 shard_id,
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Opaque::encode(&i64::MIN),
                 Diagnostics::for_tests(),
             )
             .await
             .expect("codec mismatch");
 
         // The token should still be 5
-        assert_eq!(since2.opaque(), &5);
+        assert_eq!(since2.opaque(), &Opaque::encode(&5i64));
     }
 }

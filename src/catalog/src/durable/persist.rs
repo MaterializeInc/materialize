@@ -30,7 +30,7 @@ use mz_ore::{
 };
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_CATALOG;
 use mz_persist_client::cli::admin::{CATALOG_FORCE_COMPACTION_FUEL, CATALOG_FORCE_COMPACTION_WAIT};
-use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::critical::{Opaque, SinceHandle};
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
@@ -333,7 +333,7 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     /// The [`Mode`] that this catalog was opened in.
     pub(crate) mode: Mode,
     /// Since handle to control compaction.
-    since_handle: SinceHandle<SourceData, (), Timestamp, StorageDiff, i64>,
+    since_handle: SinceHandle<SourceData, (), Timestamp, StorageDiff>,
     /// Write handle to persist.
     write_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
     /// Listener to catalog changes.
@@ -460,7 +460,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         // (See the method documentation for details.)
         // That's not needed here, so we use the since handle's opaque token to avoid any comparison
         // failures.
-        let opaque = *self.since_handle.opaque();
+        let opaque = self.since_handle.opaque().clone();
         let downgrade = self
             .since_handle
             .maybe_compare_and_downgrade_since(&opaque, (&opaque, &downgrade_to))
@@ -468,7 +468,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
         match downgrade {
             None => {}
-            Some(Err(e)) => soft_panic_or_log!("found opaque value {e}, but expected {opaque}"),
+            Some(Err(e)) => soft_panic_or_log!("found opaque value {e:?}, but expected {opaque:?}"),
             Some(Ok(updated)) => soft_assert_or_log!(
                 updated == downgrade_to,
                 "updated bound should match expected"
@@ -937,6 +937,7 @@ impl UnopenedPersistCatalogState {
                 // TODO: We may need to use a different critical reader
                 // id for this if we want to be able to introspect it via SQL.
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Opaque::encode(&i64::MIN),
                 Diagnostics {
                     shard_name: CATALOG_SHARD_NAME.to_string(),
                     handle_purpose: "durable catalog state critical since".to_string(),
