@@ -8,6 +8,16 @@ use crate::{project, verbose};
 use owo_colors::OwoColorize;
 use std::collections::BTreeSet;
 
+/// Runtime context shared across apply phases.
+///
+/// `run` computes this once and reuses it so each phase can focus on its own
+/// responsibility (swap, post-swap work, cleanup) without re-querying state.
+struct ApplyResources {
+    staging_schemas: BTreeSet<SchemaQualifier>,
+    staging_clusters: BTreeSet<String>,
+    staging_suffix: String,
+}
+
 /// Promote a staging deployment to production using ALTER SWAP.
 ///
 /// This command implements a resumable promotion flow:
@@ -42,83 +52,133 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
     // Validate deployment exists and is not promoted
     crate::cli::helpers::validate_staging_deployment(&client, deploy_id).await?;
 
-    // Check apply state for resume scenarios
     let apply_state = client.get_apply_state(deploy_id).await?;
     verbose!("Apply state: {:?}", apply_state);
 
-    // Load staging deployment state to identify what's deployed in staging
-    let staging_snapshot =
-        project::deployment_snapshot::load_from_database(&client, Some(deploy_id)).await?;
-
+    let staging_snapshot = project::deployment_snapshot::load_from_database(&client, Some(deploy_id)).await?;
     verbose!(
         "Found {} objects in staging deployment",
         staging_snapshot.objects.len()
     );
 
-    // Only check conflicts and gather resources if we haven't swapped yet
-    let (staging_schemas, staging_clusters, staging_suffix) = if apply_state != ApplyState::PostSwap
-    {
-        gather_resources_and_check_conflicts(&client, deploy_id, force).await?
-    } else {
-        // Post-swap: we don't need these for sink execution
-        verbose!("Resuming post-swap: skipping conflict check and resource gathering");
-        (BTreeSet::new(), BTreeSet::new(), format!("_{}", deploy_id))
-    };
+    let resources = prepare_apply_resources(&client, deploy_id, apply_state, force).await?;
+    execute_swap_phase(&client, deploy_id, apply_state, &resources).await?;
+    run_post_swap_steps(&client, deploy_id, &resources).await?;
+    cleanup_apply_state(&client, deploy_id).await?;
 
-    // Execute based on current state
+    println!("Deployment completed successfully!");
+    println!("Staging deployment '{}' is now in production", deploy_id);
+
+    Ok(())
+}
+
+/// Collects swap targets for the current apply attempt.
+///
+/// During `PostSwap` resume we intentionally skip discovery because swap already happened;
+/// the returned empty sets signal later phases to avoid swap-specific cleanup.
+async fn prepare_apply_resources(
+    client: &Client,
+    deploy_id: &str,
+    apply_state: ApplyState,
+    force: bool,
+) -> Result<ApplyResources, CliError> {
+    if apply_state == ApplyState::PostSwap {
+        verbose!("Resuming post-swap: skipping conflict check and resource gathering");
+        return Ok(ApplyResources {
+            staging_schemas: BTreeSet::new(),
+            staging_clusters: BTreeSet::new(),
+            staging_suffix: format!("_{}", deploy_id),
+        });
+    }
+    let (staging_schemas, staging_clusters, staging_suffix) =
+        gather_resources_and_check_conflicts(client, deploy_id, force).await?;
+    Ok(ApplyResources {
+        staging_schemas,
+        staging_clusters,
+        staging_suffix,
+    })
+}
+
+/// Runs the swap portion of apply according to persisted resume state.
+///
+/// This function is the state-machine boundary for apply: it decides whether
+/// to create state schemas, execute swap, or skip directly to post-swap work.
+async fn execute_swap_phase(
+    client: &Client,
+    deploy_id: &str,
+    apply_state: ApplyState,
+    resources: &ApplyResources,
+) -> Result<(), CliError> {
     match apply_state {
         ApplyState::NotStarted => {
-            // Fresh apply: create state schemas and execute swap
             verbose!("Creating apply state schemas...");
             client.create_apply_state_schemas(deploy_id).await?;
-
             verbose!("Executing atomic swap...");
-            execute_atomic_swap(&client, deploy_id, &staging_schemas, &staging_clusters).await?;
+            execute_atomic_swap(
+                client,
+                deploy_id,
+                &resources.staging_schemas,
+                &resources.staging_clusters,
+            )
+            .await?;
         }
         ApplyState::PreSwap => {
-            // Resume: state schemas exist but swap didn't complete
             verbose!("Resuming from pre-swap state...");
-            execute_atomic_swap(&client, deploy_id, &staging_schemas, &staging_clusters).await?;
+            execute_atomic_swap(
+                client,
+                deploy_id,
+                &resources.staging_schemas,
+                &resources.staging_clusters,
+            )
+            .await?;
         }
         ApplyState::PostSwap => {
-            // Resume: swap completed, continue to sinks
             verbose!("Resuming from post-swap state...");
         }
     }
+    Ok(())
+}
 
-    // Execute pending sinks (skip any already executed)
-    execute_pending_sinks(&client, deploy_id).await?;
+/// Completes promotion work that must happen after schemas/clusters are swapped.
+///
+/// Includes deferred sink execution, replacement MV apply, promoted timestamp update,
+/// and best-effort dropping of old production resources when their identities are known.
+async fn run_post_swap_steps(
+    client: &Client,
+    deploy_id: &str,
+    resources: &ApplyResources,
+) -> Result<(), CliError> {
+    execute_pending_sinks(client, deploy_id).await?;
+    apply_replacement_mvs(client, deploy_id).await?;
 
-    // Apply replacement MVs (after swap, the staging cluster is now the production cluster)
-    apply_replacement_mvs(&client, deploy_id).await?;
-
-    // Repoint existing sinks that depend on objects being dropped
-    // This must happen before drop_old_resources to prevent CASCADE from dropping sinks
-    if !staging_schemas.is_empty() {
-        repoint_dependent_sinks(&client, &staging_schemas, &staging_suffix).await?;
+    if !resources.staging_schemas.is_empty() {
+        repoint_dependent_sinks(client, &resources.staging_schemas, &resources.staging_suffix)
+            .await?;
     }
 
-    // Update promoted_at timestamp
     verbose!("\nUpdating deployment table...");
     client
         .update_promoted_at(deploy_id)
         .await
         .map_err(|source| CliError::DeploymentStateWriteFailed { source })?;
 
-    // Drop old production resources (now have staging suffix after swap)
-    // Only do this if we have the resource info (i.e., we did the swap in this run)
-    if !staging_schemas.is_empty() || !staging_clusters.is_empty() {
+    if !resources.staging_schemas.is_empty() || !resources.staging_clusters.is_empty() {
         println!("\nDropping old production objects...");
         drop_old_resources(
-            &client,
-            &staging_schemas,
-            &staging_clusters,
-            &staging_suffix,
+            client,
+            &resources.staging_schemas,
+            &resources.staging_clusters,
+            &resources.staging_suffix,
         )
         .await;
     }
+    Ok(())
+}
 
-    // Clean up apply state, pending statements, and replacement MV records
+/// Removes deployment bookkeeping that is only needed while apply is in-flight.
+///
+/// This finalizes apply by clearing resume metadata and deferred-operation tables.
+async fn cleanup_apply_state(client: &Client, deploy_id: &str) -> Result<(), CliError> {
     verbose!("Cleaning up apply state...");
     client.delete_apply_state_schemas(deploy_id).await?;
     client.delete_pending_statements(deploy_id).await?;
@@ -127,10 +187,6 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
         .delete_deployment_clusters(deploy_id)
         .await
         .map_err(|source| CliError::DeploymentStateWriteFailed { source })?;
-
-    println!("Deployment completed successfully!");
-    println!("Staging deployment '{}' is now in production", deploy_id);
-
     Ok(())
 }
 

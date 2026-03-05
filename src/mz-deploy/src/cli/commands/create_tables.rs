@@ -9,6 +9,8 @@ use chrono::Utc;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use super::ObjectRef;
+
 /// Create tables that don't exist in the database.
 ///
 /// This command:
@@ -39,16 +41,13 @@ pub async fn run(
     allow_dirty: bool,
     dry_run: bool,
 ) -> Result<(), CliError> {
-    // Check for uncommitted changes before proceeding
     if !allow_dirty && git::is_dirty(directory) {
         return Err(CliError::GitDirty);
     }
 
-    // Determine deploy ID (use provided name or random 7-char hex)
-    let deploy_id = match deploy_id {
-        Some(name) => name.to_string(),
-        None => helpers::generate_random_env_name(),
-    };
+    let deploy_id = deploy_id
+        .map(ToString::to_string)
+        .unwrap_or_else(helpers::generate_random_env_name);
 
     if dry_run {
         println!("-- DRY RUN: The following SQL would be executed --\n");
@@ -56,10 +55,7 @@ pub async fn run(
         println!("Creating tables in deployment: {}", deploy_id);
     }
 
-    // Compile the project first (skip type checking since we're deploying)
     let planned_project = super::compile::run(directory, TypeCheckMode::Disabled).await?;
-
-    // Connect to the database
     let mut client = Client::connect_with_profile(profile.clone())
         .await
         .map_err(CliError::Connection)?;
@@ -79,9 +75,67 @@ pub async fn run(
         });
     }
 
-    // Partition objects into tables and sources (they use different catalog tables)
-    let mut table_object_ids: BTreeSet<project::object_id::ObjectId> = BTreeSet::new();
-    let mut source_object_ids: BTreeSet<project::object_id::ObjectId> = BTreeSet::new();
+    let (table_object_ids, source_object_ids) = collect_table_and_source_ids(&planned_project);
+    let all_object_ids: BTreeSet<_> = table_object_ids.union(&source_object_ids).cloned().collect();
+    if all_object_ids.is_empty() {
+        println!("No tables found in project");
+        return Ok(());
+    }
+
+    let table_objects = planned_project.get_sorted_objects_filtered(&all_object_ids)?;
+    println!("Found {} table(s) in project", table_objects.len());
+
+    let existing_tables = client.check_tables_exist(&table_object_ids).await?;
+    let existing_sources = client.check_sources_exist(&source_object_ids).await?;
+    let existing_objects: BTreeSet<_> = existing_tables.union(&existing_sources).cloned().collect();
+    let tables_to_create: Vec<_> = table_objects
+        .into_iter()
+        .filter(|(obj_id, _)| !existing_objects.contains(obj_id))
+        .collect();
+
+    print_existing_objects(&existing_objects);
+
+    if tables_to_create.is_empty() {
+        println!(
+            "\nAll {} table(s) already exist. Nothing to create.",
+            table_object_ids.len()
+        );
+        return Ok(());
+    }
+
+    println!("\nCreating {} new table(s)...", tables_to_create.len());
+
+    let executor = helpers::DeploymentExecutor::with_dry_run(&client, dry_run);
+    let table_schemas = collect_table_schemas(&tables_to_create);
+    prepare_schemas_and_mod_statements(&executor, &planned_project, &table_schemas, dry_run).await?;
+    let success_count = execute_table_creates(&executor, &tables_to_create, dry_run).await?;
+    finalize_table_deployment(
+        &client,
+        directory,
+        &deploy_id,
+        &tables_to_create,
+        &table_schemas,
+        &existing_objects,
+        success_count,
+        dry_run,
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Partitions planned objects into catalog categories used by existence checks.
+///
+/// Tables and sources are checked in different system catalogs, so this split
+/// is the input contract for "what already exists" filtering.
+fn collect_table_and_source_ids(
+    planned_project: &project::planned::Project,
+) -> (
+    BTreeSet<project::object_id::ObjectId>,
+    BTreeSet<project::object_id::ObjectId>,
+) {
+    let mut table_object_ids = BTreeSet::new();
+    let mut source_object_ids = BTreeSet::new();
     for obj in planned_project.iter_objects() {
         match &obj.typed_object.stmt {
             Statement::CreateTable(_) | Statement::CreateTableFromSource(_) => {
@@ -93,131 +147,111 @@ pub async fn run(
             _ => {}
         }
     }
+    (table_object_ids, source_object_ids)
+}
 
-    let all_object_ids: BTreeSet<_> = table_object_ids
-        .union(&source_object_ids)
-        .cloned()
-        .collect();
-
-    if all_object_ids.is_empty() {
-        println!("No tables found in project");
-        return Ok(());
+/// Emits the skip list shown to users before create execution begins.
+///
+/// The list is sorted for deterministic output so repeated runs are easy to compare.
+fn print_existing_objects(existing_objects: &BTreeSet<project::object_id::ObjectId>) {
+    if existing_objects.is_empty() {
+        return;
     }
-
-    // Get sorted objects (respecting dependencies)
-    let table_objects = planned_project.get_sorted_objects_filtered(&all_object_ids)?;
-
-    println!("Found {} table(s) in project", table_objects.len());
-
-    // Query which tables and sources already exist (separate catalog tables)
-    let existing_tables = client.check_tables_exist(&table_object_ids).await?;
-    let existing_sources = client.check_sources_exist(&source_object_ids).await?;
-
-    // Merge existing tables and sources
-    let existing_objects: BTreeSet<_> = existing_tables.union(&existing_sources).cloned().collect();
-
-    // Filter to only objects that don't exist
-    let tables_to_create: Vec<_> = table_objects
-        .into_iter()
-        .filter(|(obj_id, _)| !existing_objects.contains(obj_id))
-        .collect();
-
-    // Show what's being skipped
-    if !existing_objects.is_empty() {
-        println!("\nObjects that already exist (skipping):");
-        let mut existing_list: Vec<_> = existing_objects.iter().collect();
-        existing_list.sort_by_key(|obj| (&obj.database, &obj.schema, &obj.object));
-        for table_id in existing_list {
-            println!(
-                "  - {}.{}.{}",
-                table_id.database, table_id.schema, table_id.object
-            );
-        }
-    }
-
-    // If all tables exist, exit early
-    if tables_to_create.is_empty() {
+    println!("\nObjects that already exist (skipping):");
+    let mut existing_list: Vec<_> = existing_objects.iter().collect();
+    existing_list.sort_by_key(|obj| (&obj.database, &obj.schema, &obj.object));
+    for table_id in existing_list {
         println!(
-            "\nAll {} table(s) already exist. Nothing to create.",
-            table_object_ids.len()
+            "  - {}.{}.{}",
+            table_id.database, table_id.schema, table_id.object
         );
-        return Ok(());
     }
+}
 
-    println!("\nCreating {} new table(s)...", tables_to_create.len());
-
-    // Collect all schemas that contain tables to create
+/// Builds the schema deployment map for objects that will actually be created.
+///
+/// This map is reused both for schema preparation and for persisted deployment metadata.
+fn collect_table_schemas(
+    tables_to_create: &[ObjectRef<'_>],
+) -> BTreeMap<project::SchemaQualifier, crate::client::DeploymentKind> {
     let mut table_schemas = BTreeMap::new();
-    for (object_id, _) in &tables_to_create {
+    for (object_id, _) in tables_to_create {
         table_schemas.insert(
             (object_id.database.clone(), object_id.schema.clone()),
             crate::client::DeploymentKind::Tables,
         );
     }
+    table_schemas
+}
 
-    // Create executor with dry-run mode
-    let executor = helpers::DeploymentExecutor::with_dry_run(&client, dry_run);
+/// Prepares the target environment for table creation.
+///
+/// Ensures schemas exist and replays relevant database/schema module setup SQL
+/// only for the databases/schemas that contain pending table objects.
+async fn prepare_schemas_and_mod_statements(
+    executor: &helpers::DeploymentExecutor<'_>,
+    planned_project: &project::planned::Project,
+    table_schemas: &BTreeMap<project::SchemaQualifier, crate::client::DeploymentKind>,
+    dry_run: bool,
+) -> Result<(), CliError> {
+    if table_schemas.is_empty() {
+        return Ok(());
+    }
+    if !dry_run {
+        println!("Preparing schemas...");
+    } else {
+        println!("-- Create schemas --");
+    }
 
-    // Create schemas and execute their mod statements
-    if !table_schemas.is_empty() {
-        if !dry_run {
-            println!("Preparing schemas...");
-        } else {
-            println!("-- Create schemas --");
-        }
+    for (database, schema) in table_schemas.keys() {
+        verbose!("Creating schema {}.{} if not exists", database, schema);
+        let create_schema_sql = format!("CREATE SCHEMA IF NOT EXISTS {}.{}", database, schema);
+        executor.execute_sql(&create_schema_sql).await?;
+    }
 
-        for ((database, schema), _kind) in &table_schemas {
-            verbose!("Creating schema {}.{} if not exists", database, schema);
-            let create_schema_sql = format!("CREATE SCHEMA IF NOT EXISTS {}.{}", database, schema);
-            executor.execute_sql(&create_schema_sql).await?;
-        }
-
-        // Execute schema mod statements for schemas that contain tables
-        for mod_stmt in planned_project.iter_mod_statements() {
-            match mod_stmt {
-                project::ModStatement::Database {
-                    database,
-                    statement,
-                } => {
-                    // Check if any schema in this database contains tables
-                    let has_tables = table_schemas.keys().any(|(db, _)| db == database);
-                    if has_tables {
-                        verbose!("Applying database setup for: {}", database);
-                        executor.execute_sql(statement).await?;
-                    }
+    for mod_stmt in planned_project.iter_mod_statements() {
+        match mod_stmt {
+            project::ModStatement::Database {
+                database,
+                statement,
+            } => {
+                let has_tables = table_schemas.keys().any(|(db, _)| db == database);
+                if has_tables {
+                    verbose!("Applying database setup for: {}", database);
+                    executor.execute_sql(statement).await?;
                 }
-                project::ModStatement::Schema {
-                    database,
-                    schema,
-                    statement,
-                } => {
-                    if table_schemas.contains_key(&(database.to_string(), schema.to_string())) {
-                        verbose!("Applying schema setup for: {}.{}", database, schema);
-                        executor.execute_sql(statement).await?;
-                    }
+            }
+            project::ModStatement::Schema {
+                database,
+                schema,
+                statement,
+            } => {
+                if table_schemas.contains_key(&(database.to_string(), schema.to_string())) {
+                    verbose!("Applying schema setup for: {}.{}", database, schema);
+                    executor.execute_sql(statement).await?;
                 }
             }
         }
     }
+    Ok(())
+}
 
+/// Executes missing table/source objects in dependency order.
+///
+/// Returns the count of successfully executed objects for summary and metadata reporting.
+async fn execute_table_creates(
+    executor: &helpers::DeploymentExecutor<'_>,
+    tables_to_create: &[ObjectRef<'_>],
+    dry_run: bool,
+) -> Result<usize, CliError> {
     if dry_run {
         println!("-- Create tables --");
     }
 
-    // Execute table statements (only for tables that don't exist)
     let mut success_count = 0;
-
     for (idx, (object_id, typed_obj)) in tables_to_create.iter().enumerate() {
-        verbose!(
-            "Creating {}/{}: {}",
-            idx + 1,
-            tables_to_create.len(),
-            object_id
-        );
-
-        // Execute the table statement along with indexes, grants, and comments
+        verbose!("Creating {}/{}: {}", idx + 1, tables_to_create.len(), object_id);
         executor.execute_object(typed_obj).await?;
-
         if !dry_run {
             println!(
                 "  ✓ {}.{}.{}",
@@ -226,45 +260,55 @@ pub async fn run(
         }
         success_count += 1;
     }
+    Ok(success_count)
+}
 
-    // Skip deployment tracking in dry-run mode
-    if !dry_run {
-        // Build snapshot for deployment tracking - only include tables that were created
-        let mut snapshot_objects = BTreeMap::new();
-        for (object_id, typed_obj) in &tables_to_create {
-            let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
-            snapshot_objects.insert(object_id.clone(), hash);
-        }
-
-        let new_snapshot = project::deployment_snapshot::DeploymentSnapshot {
-            objects: snapshot_objects,
-            schemas: table_schemas.clone(), // Already contains only schemas with tables
-        };
-
-        // Collect deployment metadata
-        let metadata = helpers::collect_deployment_metadata(&client, directory).await;
-
-        // Write deployment state to database (promoted deployment)
-        let now = Utc::now();
-        project::deployment_snapshot::write_to_database(
-            &client,
-            &new_snapshot,
-            &deploy_id,
-            &metadata,
-            Some(now),
-        )
-        .await?;
-
-        println!("\n✓ Successfully created {} new table(s)", success_count);
-        if !existing_objects.is_empty() {
-            println!(
-                "  Skipped {} object(s) that already existed",
-                existing_objects.len()
-            );
-        }
-    } else {
+#[allow(clippy::too_many_arguments)]
+/// Finalizes create-tables with either dry-run output or persisted deployment state.
+///
+/// In non-dry-run mode this writes a promoted deployment snapshot containing exactly
+/// the objects created in this invocation so later diffing and conflict checks stay accurate.
+async fn finalize_table_deployment(
+    client: &Client,
+    directory: &Path,
+    deploy_id: &str,
+    tables_to_create: &[ObjectRef<'_>],
+    table_schemas: &BTreeMap<project::SchemaQualifier, crate::client::DeploymentKind>,
+    existing_objects: &BTreeSet<project::object_id::ObjectId>,
+    success_count: usize,
+    dry_run: bool,
+) -> Result<(), CliError> {
+    if dry_run {
         println!("-- End of dry run ({} statement(s)) --", success_count);
+        return Ok(());
     }
 
+    let mut snapshot_objects = BTreeMap::new();
+    for (object_id, typed_obj) in tables_to_create {
+        let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
+        snapshot_objects.insert(object_id.clone(), hash);
+    }
+
+    let new_snapshot = project::deployment_snapshot::DeploymentSnapshot {
+        objects: snapshot_objects,
+        schemas: table_schemas.clone(),
+    };
+    let metadata = helpers::collect_deployment_metadata(client, directory).await;
+    project::deployment_snapshot::write_to_database(
+        client,
+        &new_snapshot,
+        deploy_id,
+        &metadata,
+        Some(Utc::now()),
+    )
+    .await?;
+
+    println!("\n✓ Successfully created {} new table(s)", success_count);
+    if !existing_objects.is_empty() {
+        println!(
+            "  Skipped {} object(s) that already existed",
+            existing_objects.len()
+        );
+    }
     Ok(())
 }

@@ -17,6 +17,30 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Instant;
 
+use super::ObjectRef;
+
+/// Planning output produced once and consumed by all stage execution phases.
+///
+/// Keeps stage deterministic by passing one analyzed view of objects/resources through
+/// validation, metadata recording, and resource creation.
+struct StageAnalysis<'a> {
+    objects: Vec<ObjectRef<'a>>,
+    sinks: Vec<ObjectRef<'a>>,
+    replacement_mvs: Vec<ObjectRef<'a>>,
+    schema_set: BTreeSet<SchemaQualifier>,
+    cluster_set: BTreeSet<String>,
+}
+
+/// Classification result for objects considered during staging.
+///
+/// Separates deploy-now objects from deferred/special-case categories that apply handles later.
+struct PartitionedObjects<'a> {
+    objects: Vec<ObjectRef<'a>>,
+    sinks: Vec<ObjectRef<'a>>,
+    replacement_mvs: Vec<ObjectRef<'a>>,
+    table_count: usize,
+}
+
 /// Deploy project to staging environment with renamed schemas and clusters.
 ///
 /// This command implements blue/green deployment by creating staging versions of all
@@ -58,15 +82,13 @@ pub async fn run(
 ) -> Result<(), CliError> {
     let start_time = Instant::now();
 
-    // Check for uncommitted changes before proceeding
     if !allow_dirty && git::is_dirty(directory) {
         return Err(CliError::GitDirty);
     }
 
-    let stage_name = match stage_name {
-        Some(name) => name.to_string(),
-        None => helpers::generate_random_env_name(),
-    };
+    let stage_name = stage_name
+        .map(ToString::to_string)
+        .unwrap_or_else(helpers::generate_random_env_name);
 
     if dry_run {
         println!("-- DRY RUN: The following SQL would be executed --\n");
@@ -74,141 +96,222 @@ pub async fn run(
         println!("Deploying to staging environment: {}", stage_name);
     }
 
-    // Run compile to validate and get the project (skip type checking for staging deployment)
     let planned_project = super::compile::run(directory, TypeCheckMode::Disabled).await?;
-
     let staging_suffix = format!("_{}", stage_name);
 
-    // Connect to the database
     let mut client = Client::connect_with_profile(profile.clone())
         .await
         .map_err(CliError::Connection)?;
 
-    // Stage 1: Analyze project changes
+    let Some(analysis) = analyze_project_changes(&mut client, &planned_project, &stage_name).await?
+    else {
+        return Ok(());
+    };
+
+    validate_project_for_stage(&mut client, &planned_project, directory).await?;
+
+    if !dry_run {
+        record_stage_metadata(
+            &client,
+            directory,
+            &stage_name,
+            &staging_suffix,
+            &analysis.objects,
+            &analysis.sinks,
+            &analysis.replacement_mvs,
+        )
+        .await?;
+    }
+
+    let success_count = create_resources_with_rollback(
+        &client,
+        &stage_name,
+        &staging_suffix,
+        &analysis.schema_set,
+        &analysis.cluster_set,
+        &planned_project,
+        &analysis.objects,
+        &analysis.replacement_mvs,
+        no_rollback,
+        dry_run,
+    )
+    .await?;
+
+    if dry_run {
+        println!("-- End of dry run ({} object(s)) --", success_count);
+    } else {
+        let total_duration = start_time.elapsed();
+        progress::summary(
+            &format!(
+                "Successfully deployed to {} objects to '{}' staging environment",
+                success_count, stage_name
+            ),
+            total_duration,
+        );
+    }
+    Ok(())
+}
+
+/// Produces the stage deployment plan by diffing against current production snapshot.
+///
+/// Handles incremental-vs-full mode, applies stage-specific object filtering,
+/// validates table dependencies, and returns resource sets required for execution.
+async fn analyze_project_changes<'a>(
+    client: &mut Client,
+    planned_project: &'a project::planned::Project,
+    stage_name: &str,
+) -> Result<Option<StageAnalysis<'a>>, CliError> {
     progress::stage_start("Analyzing project changes");
     let analyze_start = Instant::now();
 
-    // Initialize deployment tracking infrastructure
-    project::deployment_snapshot::initialize_deployment_table(&client).await?;
-
-    // Validate deployment doesn't already exist
-    let existing_metadata = client.get_deployment_metadata(&stage_name).await?;
-
-    if existing_metadata.is_some() {
+    project::deployment_snapshot::initialize_deployment_table(client).await?;
+    if client.get_deployment_metadata(stage_name).await?.is_some() {
         return Err(CliError::InvalidEnvironmentName {
             name: format!("deployment '{}' already exists", stage_name),
         });
     }
 
-    // Build new snapshot from current planned project
-    let new_snapshot = project::deployment_snapshot::build_snapshot_from_planned(&planned_project)?;
+    let new_snapshot = project::deployment_snapshot::build_snapshot_from_planned(planned_project)?;
+    let production_snapshot = project::deployment_snapshot::load_from_database(client, None).await?;
 
-    // Load PRODUCTION deployment state for comparison (environment=None)
-    // Stage always compares against production, not against previous staging deployments
-    let production_snapshot =
-        project::deployment_snapshot::load_from_database(&client, None).await?;
-
-    let change_set = if !production_snapshot.objects.is_empty() {
+    let change_set = if production_snapshot.objects.is_empty() {
+        None
+    } else {
         Some(ChangeSet::from_deployment_snapshot_comparison(
             &production_snapshot,
             &new_snapshot,
-            &planned_project,
+            planned_project,
         ))
-    } else {
-        None
     };
 
-    let objects = if let Some(ref cs) = change_set {
-        if cs.is_empty() {
-            progress::info("No changes detected compared to production, skipping deployment");
-            return Ok(());
-        }
-
-        verbose!("{}", cs);
-        planned_project.get_sorted_objects_filtered(&cs.objects_to_deploy)?
-    } else {
-        verbose!("Full deployment: no production deployment found");
-        planned_project.get_sorted_objects()?
-    };
-
-    // Determine which objects need the CREATE REPLACEMENT MV protocol.
-    // Only CHANGED replacement MVs (already exist in production) use this protocol.
-    // NEW replacement MVs (first deployment) go through normal blue-green schema swap.
-    let replacement_object_ids: BTreeSet<ObjectId> = if let Some(ref cs) = change_set {
-        cs.changed_replacement_objects.clone()
-    } else {
-        // Full deployment with no prior snapshot: nothing to replace, all are new
-        BTreeSet::new()
-    };
-
-    // Separate tables, sinks, replacement MVs, and other objects
-    // - Tables: filter out (use create-tables command for those)
-    // - Sinks: store for deferred execution during apply (they write to external systems)
-    // - Replacement MVs: deploy via CREATE REPLACEMENT MV protocol
-    // - Other objects: deploy to staging
-    let objects_before_filter = objects.len();
-    let mut sinks: Vec<_> = Vec::new();
-    let mut replacement_mvs: Vec<_> = Vec::new();
-    let objects: Vec<_> = objects
-        .into_iter()
-        .filter(|(object_id, typed_obj)| {
-            match &typed_obj.stmt {
-                Statement::CreateTable(_)
-                | Statement::CreateTableFromSource(_)
-                | Statement::CreateSource(_) => false,
-                Statement::CreateSink(_) => {
-                    // Collect sinks for deferred execution
-                    sinks.push((object_id.clone(), *typed_obj));
-                    false
-                }
-                Statement::CreateMaterializedView(_)
-                    if replacement_object_ids.contains(object_id) =>
-                {
-                    // Collect replacement MVs for special handling
-                    replacement_mvs.push((object_id.clone(), *typed_obj));
-                    false
-                }
-                _ => true,
-            }
-        })
-        .collect();
-
-    let table_count = objects_before_filter - objects.len() - sinks.len() - replacement_mvs.len();
-    if table_count > 0 {
-        verbose!(
-            "Skipped {} table(s)/source(s) - use 'mz-deploy create-tables' for those",
-            table_count
-        );
-    }
-    if !sinks.is_empty() {
-        verbose!(
-            "Found {} sink(s) - will be created during apply after swap",
-            sinks.len()
-        );
-    }
-    if !replacement_mvs.is_empty() {
-        verbose!(
-            "Found {} replacement MV(s) - will use CREATE REPLACEMENT protocol",
-            replacement_mvs.len()
-        );
+    let objects = select_stage_objects(planned_project, change_set.as_ref())?;
+    if objects.is_empty() && change_set.as_ref().is_some_and(ChangeSet::is_empty) {
+        progress::info("No changes detected compared to production, skipping deployment");
+        return Ok(None);
     }
 
-    // Validate remaining objects don't depend on missing tables
-    let object_ids: BTreeSet<_> = objects.iter().map(|(id, _)| id.clone()).collect();
+    let replacement_object_ids = change_set
+        .as_ref()
+        .map(|cs| cs.changed_replacement_objects.clone())
+        .unwrap_or_default();
+    let partitioned = partition_objects(objects, &replacement_object_ids);
+    log_partition_summary(&partitioned);
+
+    let object_ids: BTreeSet<_> = partitioned.objects.iter().map(|(id, _)| id.clone()).collect();
     client
-        .validate_table_dependencies(&planned_project, &object_ids)
+        .validate_table_dependencies(planned_project, &object_ids)
         .await?;
+
+    let (schema_set, cluster_set) = collect_stage_resources(
+        planned_project,
+        &partitioned.objects,
+        &partitioned.replacement_mvs,
+        change_set.as_ref(),
+    );
 
     let analyze_duration = analyze_start.elapsed();
     progress::stage_success(
         &format!(
             "Ready to deploy {} view(s)/materialized view(s)",
-            objects.len()
+            partitioned.objects.len()
         ),
         analyze_duration,
     );
 
-    // Collect schemas and clusters from objects that are actually being deployed
+    Ok(Some(StageAnalysis {
+        objects: partitioned.objects,
+        sinks: partitioned.sinks,
+        replacement_mvs: partitioned.replacement_mvs,
+        schema_set,
+        cluster_set,
+    }))
+}
+
+/// Chooses the initial object set for stage before stage-specific partitioning.
+///
+/// Incremental mode uses the change set; full mode uses all sorted project objects.
+fn select_stage_objects<'a>(
+    planned_project: &'a project::planned::Project,
+    change_set: Option<&ChangeSet>,
+) -> Result<Vec<ObjectRef<'a>>, CliError> {
+    if let Some(cs) = change_set {
+        if cs.is_empty() {
+            return Ok(Vec::new());
+        }
+        verbose!("{}", cs);
+        Ok(planned_project.get_sorted_objects_filtered(&cs.objects_to_deploy)?)
+    } else {
+        verbose!("Full deployment: no production deployment found");
+        Ok(planned_project.get_sorted_objects()?)
+    }
+}
+
+/// Splits objects into stage execution categories.
+///
+/// Tables/sources are excluded, sinks are deferred to apply, and changed replacement MVs
+/// are tracked for special replacement handling.
+fn partition_objects<'a>(
+    objects: Vec<ObjectRef<'a>>,
+    replacement_object_ids: &BTreeSet<ObjectId>,
+) -> PartitionedObjects<'a> {
+    let mut kept = Vec::new();
+    let mut sinks = Vec::new();
+    let mut replacement_mvs = Vec::new();
+    let mut table_count = 0;
+
+    for (object_id, typed_obj) in objects {
+        match &typed_obj.stmt {
+            Statement::CreateTable(_) | Statement::CreateTableFromSource(_) | Statement::CreateSource(_) => {
+                table_count += 1;
+            }
+            Statement::CreateSink(_) => sinks.push((object_id, typed_obj)),
+            Statement::CreateMaterializedView(_) if replacement_object_ids.contains(&object_id) => {
+                replacement_mvs.push((object_id, typed_obj));
+            }
+            _ => kept.push((object_id, typed_obj)),
+        }
+    }
+
+    PartitionedObjects {
+        objects: kept,
+        sinks,
+        replacement_mvs,
+        table_count,
+    }
+}
+
+/// Reports the partitioning decisions visible to users in verbose mode.
+fn log_partition_summary(partitioned: &PartitionedObjects<'_>) {
+    if partitioned.table_count > 0 {
+        verbose!(
+            "Skipped {} table(s)/source(s) - use 'mz-deploy create-tables' for those",
+            partitioned.table_count
+        );
+    }
+    if !partitioned.sinks.is_empty() {
+        verbose!(
+            "Found {} sink(s) - will be created during apply after swap",
+            partitioned.sinks.len()
+        );
+    }
+    if !partitioned.replacement_mvs.is_empty() {
+        verbose!(
+            "Found {} replacement MV(s) - will use CREATE REPLACEMENT protocol",
+            partitioned.replacement_mvs.len()
+        );
+    }
+}
+
+/// Derives schema/cluster prerequisites for resource creation.
+///
+/// Combines directly referenced resources with dirty clusters from the change set
+/// to ensure swap-time requirements are represented even when not in object SQL.
+fn collect_stage_resources(
+    planned_project: &project::planned::Project,
+    objects: &[ObjectRef<'_>],
+    replacement_mvs: &[ObjectRef<'_>],
+    change_set: Option<&ChangeSet>,
+) -> (BTreeSet<SchemaQualifier>, BTreeSet<String>) {
     let mut schema_set = BTreeSet::new();
     let mut cluster_set = BTreeSet::new();
 
@@ -217,196 +320,145 @@ pub async fn run(
         cluster_set.extend(typed_obj.clusters());
     }
 
-    // Also include clusters from the changeset if available
-    if let Some(ref cs) = change_set {
+    if let Some(cs) = change_set {
         for cluster in &cs.dirty_clusters {
             cluster_set.insert(cluster.name.clone());
         }
     } else {
-        // For full deployment, include all project clusters
         for cluster in &planned_project.cluster_dependencies {
             cluster_set.insert(cluster.name.clone());
         }
     }
+    (schema_set, cluster_set)
+}
 
-    // Stage 2: Validate project before writing any metadata or creating resources
-    // This ensures databases, schemas, clusters, and external dependencies exist
+/// Runs all preflight database validations required before mutating deployment state.
+///
+/// This is intentionally isolated so stage fails before any metadata/resource writes.
+async fn validate_project_for_stage(
+    client: &mut Client,
+    planned_project: &project::planned::Project,
+    directory: &Path,
+) -> Result<(), CliError> {
     progress::stage_start("Validating project");
     let validate_start = Instant::now();
-    client.validate_project(&planned_project, directory).await?;
-    client.validate_cluster_isolation(&planned_project).await?;
-    client.validate_privileges(&planned_project).await?;
-    client
-        .validate_sink_connections_exist(&planned_project)
-        .await?;
+    client.validate_project(planned_project, directory).await?;
+    client.validate_cluster_isolation(planned_project).await?;
+    client.validate_privileges(planned_project).await?;
+    client.validate_sink_connections_exist(planned_project).await?;
     let validate_duration = validate_start.elapsed();
     progress::stage_success("All validations passed", validate_duration);
+    Ok(())
+}
 
-    // Skip metadata recording in dry-run mode
-    if !dry_run {
-        // Stage 3: Collect deployment metadata and write to database BEFORE creating resources
-        // This allows abort logic to clean up even if resource creation fails
-        progress::stage_start("Recording deployment metadata");
-        let metadata_start = Instant::now();
-        let metadata = helpers::collect_deployment_metadata(&client, directory).await;
+/// Persists stage deployment state and deferred apply actions.
+///
+/// Records object hashes plus schema deployment kinds, then stores sink/replacement
+/// records that the `apply` command consumes after swap.
+async fn record_stage_metadata(
+    client: &Client,
+    directory: &Path,
+    stage_name: &str,
+    staging_suffix: &str,
+    objects: &[ObjectRef<'_>],
+    sinks: &[ObjectRef<'_>],
+    replacement_mvs: &[ObjectRef<'_>],
+) -> Result<(), CliError> {
+    progress::stage_start("Recording deployment metadata");
+    let metadata_start = Instant::now();
+    let metadata = helpers::collect_deployment_metadata(client, directory).await;
 
-        // Build a snapshot containing all objects that will be deployed
-        // Objects go to schemas with kind=Objects, sinks go to schemas with kind=Sinks
-        let mut staging_snapshot = project::deployment_snapshot::DeploymentSnapshot::default();
+    let mut staging_snapshot = project::deployment_snapshot::DeploymentSnapshot::default();
 
-        // Add regular objects (views, MVs) - schemas get kind=Objects
-        for (object_id, typed_obj) in &objects {
-            let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
-            staging_snapshot.objects.insert(object_id.clone(), hash);
-
-            // Track which schema this object belongs to (kind=Objects for regular objects)
-            staging_snapshot.schemas.insert(
-                (object_id.database.clone(), object_id.schema.clone()),
-                DeploymentKind::Objects,
-            );
-        }
-
-        // Add sinks - schemas get kind=Sinks (only if not already marked as Objects)
-        // If a schema has both regular objects AND sinks, it stays as Objects
-        for (object_id, typed_obj) in &sinks {
-            let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
-            staging_snapshot.objects.insert(object_id.clone(), hash);
-
-            // Only mark as Sinks if the schema doesn't already have regular objects
-            staging_snapshot
-                .schemas
-                .entry((object_id.database.clone(), object_id.schema.clone()))
-                .or_insert(DeploymentKind::Sinks);
-        }
-
-        // Add replacement MVs - schemas get kind=Replacement
-        for (object_id, typed_obj) in &replacement_mvs {
-            let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
-            staging_snapshot.objects.insert(object_id.clone(), hash);
-
-            staging_snapshot.schemas.insert(
-                (object_id.database.clone(), object_id.schema.clone()),
-                DeploymentKind::Replacement,
-            );
-        }
-
-        // Write deployment state to database BEFORE creating resources
-        // (environment=stage_name for staging, promoted_at=None)
-        project::deployment_snapshot::write_to_database(
-            &client,
-            &staging_snapshot,
-            &stage_name,
-            &metadata,
-            None,
-        )
-        .await?;
-
-        // Store pending statements for sinks (to be executed during apply after swap)
-        if !sinks.is_empty() {
-            let pending_statements: Vec<PendingStatement> = sinks
-                .iter()
-                .enumerate()
-                .map(|(idx, (object_id, typed_obj))| {
-                    // Create original FQN (without staging suffix)
-                    let original_fqn =
-                        FullyQualifiedName::from(object_id.to_unresolved_item_name());
-
-                    // Use fully_qualifying visitor - sinks are created in production schemas
-                    // (no staging suffix needed since they're created after the swap)
-                    let visitor = NormalizingVisitor::fully_qualifying(&original_fqn);
-
-                    // Normalize the sink statement for production
-                    // Note: cluster is not transformed since FullyQualifyingTransformer doesn't
-                    // implement ClusterTransformer - the sink will use the production cluster as-is
-                    let stmt = typed_obj
-                        .stmt
-                        .clone()
-                        .normalize_name_with(&visitor, &original_fqn.to_item_name())
-                        .normalize_dependencies_with(&visitor);
-
-                    let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
-
-                    #[allow(clippy::as_conversions)]
-                    PendingStatement {
-                        deploy_id: stage_name.clone(),
-                        sequence_num: idx as i32,
-                        database: object_id.database.clone(),
-                        schema: object_id.schema.clone(),
-                        object: object_id.object.clone(),
-                        object_hash: hash,
-                        statement_sql: stmt.to_string(),
-                        statement_kind: "sink".to_string(),
-                        executed_at: None,
-                    }
-                })
-                .collect();
-
-            client
-                .insert_pending_statements(&pending_statements)
-                .await?;
-            verbose!(
-                "Stored {} pending sink statement(s)",
-                pending_statements.len()
-            );
-        }
-
-        // Store replacement MV records (to be applied during apply)
-        if !replacement_mvs.is_empty() {
-            let records: Vec<ReplacementMvRecord> = replacement_mvs
-                .iter()
-                .map(|(object_id, _)| {
-                    let staging_schema = format!("{}{}", object_id.schema, staging_suffix);
-                    ReplacementMvRecord {
-                        deploy_id: stage_name.clone(),
-                        target_database: object_id.database.clone(),
-                        target_schema: object_id.schema.clone(),
-                        target_name: object_id.object.clone(),
-                        replacement_schema: staging_schema,
-                    }
-                })
-                .collect();
-
-            client.insert_replacement_mvs(&records).await?;
-            verbose!("Stored {} replacement MV record(s)", records.len());
-        }
-
-        let metadata_duration = metadata_start.elapsed();
-        progress::stage_success("Deployment metadata recorded", metadata_duration);
+    for (object_id, typed_obj) in objects {
+        let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
+        staging_snapshot.objects.insert(object_id.clone(), hash);
+        staging_snapshot.schemas.insert(
+            (object_id.database.clone(), object_id.schema.clone()),
+            DeploymentKind::Objects,
+        );
     }
 
-    // Perform resource creation with automatic rollback on failure
-    let result = create_resources_with_rollback(
-        &client,
-        &stage_name,
-        &staging_suffix,
-        &schema_set,
-        &cluster_set,
-        &planned_project,
-        &objects,
-        &replacement_mvs,
-        no_rollback,
-        dry_run,
+    for (object_id, typed_obj) in sinks {
+        let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
+        staging_snapshot.objects.insert(object_id.clone(), hash);
+        staging_snapshot
+            .schemas
+            .entry((object_id.database.clone(), object_id.schema.clone()))
+            .or_insert(DeploymentKind::Sinks);
+    }
+
+    for (object_id, typed_obj) in replacement_mvs {
+        let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
+        staging_snapshot.objects.insert(object_id.clone(), hash);
+        staging_snapshot.schemas.insert(
+            (object_id.database.clone(), object_id.schema.clone()),
+            DeploymentKind::Replacement,
+        );
+    }
+
+    project::deployment_snapshot::write_to_database(
+        client,
+        &staging_snapshot,
+        stage_name,
+        &metadata,
+        None,
     )
-    .await;
+    .await?;
 
-    match result {
-        Ok(success_count) => {
-            if dry_run {
-                println!("-- End of dry run ({} object(s)) --", success_count);
-            } else {
-                let total_duration = start_time.elapsed();
-                progress::summary(
-                    &format!(
-                        "Successfully deployed to {} objects to '{}' staging environment",
-                        success_count, stage_name
-                    ),
-                    total_duration,
-                );
-            }
-            Ok(())
-        }
-        Err(e) => Err(e),
+    if !sinks.is_empty() {
+        let pending_statements: Vec<PendingStatement> = sinks
+            .iter()
+            .enumerate()
+            .map(|(idx, (object_id, typed_obj))| {
+                let original_fqn = FullyQualifiedName::from(object_id.to_unresolved_item_name());
+                let visitor = NormalizingVisitor::fully_qualifying(&original_fqn);
+                let stmt = typed_obj
+                    .stmt
+                    .clone()
+                    .normalize_name_with(&visitor, &original_fqn.to_item_name())
+                    .normalize_dependencies_with(&visitor);
+                let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
+                #[allow(clippy::as_conversions)]
+                PendingStatement {
+                    deploy_id: stage_name.to_string(),
+                    sequence_num: idx as i32,
+                    database: object_id.database.clone(),
+                    schema: object_id.schema.clone(),
+                    object: object_id.object.clone(),
+                    object_hash: hash,
+                    statement_sql: stmt.to_string(),
+                    statement_kind: "sink".to_string(),
+                    executed_at: None,
+                }
+            })
+            .collect();
+
+        client.insert_pending_statements(&pending_statements).await?;
+        verbose!(
+            "Stored {} pending sink statement(s)",
+            pending_statements.len()
+        );
     }
+
+    if !replacement_mvs.is_empty() {
+        let records: Vec<ReplacementMvRecord> = replacement_mvs
+            .iter()
+            .map(|(object_id, _)| ReplacementMvRecord {
+                deploy_id: stage_name.to_string(),
+                target_database: object_id.database.clone(),
+                target_schema: object_id.schema.clone(),
+                target_name: object_id.object.clone(),
+                replacement_schema: format!("{}{}", object_id.schema, staging_suffix),
+            })
+            .collect();
+        client.insert_replacement_mvs(&records).await?;
+        verbose!("Stored {} replacement MV record(s)", records.len());
+    }
+
+    let metadata_duration = metadata_start.elapsed();
+    progress::stage_success("Deployment metadata recorded", metadata_duration);
+    Ok(())
 }
 
 /// Create staging resources (schemas, clusters, objects) with automatic rollback on failure.
@@ -785,75 +837,76 @@ async fn rollback_staging_resources(
     client: &crate::client::Client,
     environment: &str,
 ) -> (usize, usize) {
-    // Get staging resources using pattern matching (same as abort command)
-    let staging_schemas = match client.get_staging_schemas(environment).await {
-        Ok(schemas) => schemas,
-        Err(e) => {
-            verbose!("Warning: Failed to query staging schemas: {}", e);
-            vec![]
-        }
-    };
-
-    let staging_clusters = match client.get_staging_clusters(environment).await {
-        Ok(clusters) => clusters,
-        Err(e) => {
-            verbose!("Warning: Failed to query staging clusters: {}", e);
-            vec![]
-        }
-    };
+    let staging_schemas =
+        best_effort_fetch(client.get_staging_schemas(environment).await, "query staging schemas");
+    let staging_clusters =
+        best_effort_fetch(client.get_staging_clusters(environment).await, "query staging clusters");
 
     let schema_count = staging_schemas.len();
     let cluster_count = staging_clusters.len();
 
-    // Drop staging schemas (best-effort)
     if !staging_schemas.is_empty() {
         verbose!("Dropping staging schemas...");
-        match client.drop_staging_schemas(&staging_schemas).await {
-            Ok(()) => {
-                for (database, schema) in &staging_schemas {
-                    verbose!("  Dropped {}.{}", database, schema);
-                }
-            }
-            Err(e) => {
-                verbose!("Warning: Failed to drop some schemas: {}", e);
+        if let Err(e) = client.drop_staging_schemas(&staging_schemas).await {
+            verbose!("Warning: Failed to drop some schemas: {}", e);
+        } else {
+            for (database, schema) in &staging_schemas {
+                verbose!("  Dropped {}.{}", database, schema);
             }
         }
     }
 
-    // Drop staging clusters (best-effort)
     if !staging_clusters.is_empty() {
         verbose!("Dropping staging clusters...");
-        match client.drop_staging_clusters(&staging_clusters).await {
-            Ok(()) => {
-                for cluster in &staging_clusters {
-                    verbose!("  Dropped {}", cluster);
-                }
-            }
-            Err(e) => {
-                verbose!("Warning: Failed to drop some clusters: {}", e);
+        if let Err(e) = client.drop_staging_clusters(&staging_clusters).await {
+            verbose!("Warning: Failed to drop some clusters: {}", e);
+        } else {
+            for cluster in &staging_clusters {
+                verbose!("  Dropped {}", cluster);
             }
         }
     }
 
-    // Delete deployment records (best-effort)
     verbose!("Deleting deployment records...");
-    if let Err(e) = client.delete_deployment_clusters(environment).await {
-        verbose!("Warning: Failed to delete cluster records: {}", e);
-    }
-
-    if let Err(e) = client.delete_pending_statements(environment).await {
-        verbose!("Warning: Failed to delete pending statements: {}", e);
-    }
-
-    if let Err(e) = client.delete_replacement_mvs(environment).await {
-        verbose!("Warning: Failed to delete replacement MV records: {}", e);
-    }
-
-    if let Err(e) = client.delete_deployment(environment).await {
-        verbose!("Warning: Failed to delete deployment records: {}", e);
-    }
+    best_effort_delete(
+        client.delete_deployment_clusters(environment).await,
+        "delete cluster records",
+    );
+    best_effort_delete(
+        client.delete_pending_statements(environment).await,
+        "delete pending statements",
+    );
+    best_effort_delete(
+        client.delete_replacement_mvs(environment).await,
+        "delete replacement MV records",
+    );
+    best_effort_delete(
+        client.delete_deployment(environment).await,
+        "delete deployment records",
+    );
 
     (schema_count, cluster_count)
+}
+
+/// Best-effort fetch wrapper used by rollback.
+///
+/// Converts query failures into empty results so cleanup can continue and report
+/// as much progress as possible instead of aborting midway.
+fn best_effort_fetch<T, E: std::fmt::Display>(result: Result<Vec<T>, E>, action: &str) -> Vec<T> {
+    match result {
+        Ok(values) => values,
+        Err(e) => {
+            verbose!("Warning: Failed to {}: {}", action, e);
+            vec![]
+        }
+    }
+}
+
+/// Best-effort delete wrapper used by rollback metadata cleanup.
+fn best_effort_delete<E: std::fmt::Display>(result: Result<(), E>, action: &str) {
+    if let Err(e) = result {
+        verbose!("Warning: Failed to {}: {}", action, e);
+    }
 }
 
 /// Deploy a single object to the staging environment.

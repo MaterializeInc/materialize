@@ -14,6 +14,26 @@ use std::path::PathBuf;
 use tokio_postgres::Client as PgClient;
 use tokio_postgres::types::ToSql;
 
+const LOOKUP_BATCH_SIZE: usize = 1000;
+
+enum CatalogLookup {
+    Objects,
+    Sources,
+    Tables,
+    Connections,
+}
+
+impl CatalogLookup {
+    fn table_name(&self) -> &'static str {
+        match self {
+            CatalogLookup::Objects => "mz_objects",
+            CatalogLookup::Sources => "mz_sources",
+            CatalogLookup::Tables => "mz_tables",
+            CatalogLookup::Connections => "mz_connections",
+        }
+    }
+}
+
 /// Internal helper to query which sources exist on the given clusters using IN clause.
 pub(crate) async fn query_sources_by_cluster(
     client: &PgClient,
@@ -68,146 +88,155 @@ pub(crate) async fn query_sources_by_cluster(
     Ok(result)
 }
 
+async fn query_existing_names(
+    client: &PgClient,
+    table_name: &str,
+    column_name: &str,
+    names: &BTreeSet<String>,
+) -> Result<BTreeSet<String>, DatabaseValidationError> {
+    let mut existing = BTreeSet::new();
+    if names.is_empty() {
+        return Ok(existing);
+    }
+
+    let name_list: Vec<String> = names.iter().cloned().collect();
+    for chunk in name_list.chunks(LOOKUP_BATCH_SIZE) {
+        let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("${}", i)).collect();
+        let query = format!(
+            "SELECT {column} FROM {table} WHERE {column} IN ({placeholders})",
+            column = column_name,
+            table = table_name,
+            placeholders = placeholders.join(", ")
+        );
+
+        #[allow(clippy::as_conversions)]
+        let params: Vec<&(dyn ToSql + Sync)> =
+            chunk.iter().map(|name| name as &(dyn ToSql + Sync)).collect();
+
+        let rows = client
+            .query(&query, &params)
+            .await
+            .map_err(DatabaseValidationError::QueryError)?;
+        for row in rows {
+            let name: String = row.get(column_name);
+            existing.insert(name);
+        }
+    }
+
+    Ok(existing)
+}
+
+async fn query_existing_schema_pairs(
+    client: &PgClient,
+    schema_pairs: &BTreeSet<(String, String)>,
+) -> Result<BTreeSet<(String, String)>, DatabaseValidationError> {
+    let mut existing = BTreeSet::new();
+    if schema_pairs.is_empty() {
+        return Ok(existing);
+    }
+
+    let fqn_to_pair: BTreeMap<String, (String, String)> = schema_pairs
+        .iter()
+        .map(|(database, schema)| (format!("{}.{}", database, schema), (database.clone(), schema.clone())))
+        .collect();
+    let fqns: Vec<String> = fqn_to_pair.keys().cloned().collect();
+
+    for chunk in fqns.chunks(LOOKUP_BATCH_SIZE) {
+        let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("${}", i)).collect();
+        let query = format!(
+            r#"
+            SELECT d.name || '.' || s.name AS fqn
+            FROM mz_schemas s
+            JOIN mz_databases d ON s.database_id = d.id
+            WHERE d.name || '.' || s.name IN ({})
+            "#,
+            placeholders.join(", ")
+        );
+
+        #[allow(clippy::as_conversions)]
+        let params: Vec<&(dyn ToSql + Sync)> =
+            chunk.iter().map(|fqn| fqn as &(dyn ToSql + Sync)).collect();
+
+        let rows = client
+            .query(&query, &params)
+            .await
+            .map_err(DatabaseValidationError::QueryError)?;
+        for row in rows {
+            let fqn: String = row.get("fqn");
+            if let Some(pair) = fqn_to_pair.get(&fqn) {
+                existing.insert(pair.clone());
+            }
+        }
+    }
+
+    Ok(existing)
+}
+
+async fn query_existing_object_ids(
+    client: &PgClient,
+    object_ids: &BTreeSet<ObjectId>,
+    lookup: CatalogLookup,
+) -> Result<BTreeSet<ObjectId>, DatabaseValidationError> {
+    let mut existing = BTreeSet::new();
+    if object_ids.is_empty() {
+        return Ok(existing);
+    }
+
+    let fqn_to_object: BTreeMap<String, ObjectId> = object_ids
+        .iter()
+        .map(|obj| (obj.to_string(), obj.clone()))
+        .collect();
+    let fqns: Vec<String> = fqn_to_object.keys().cloned().collect();
+    let table_name = lookup.table_name();
+
+    for chunk in fqns.chunks(LOOKUP_BATCH_SIZE) {
+        let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("${}", i)).collect();
+        let query = format!(
+            r#"
+            SELECT d.name || '.' || s.name || '.' || t.name AS fqn
+            FROM {table_name} t
+            JOIN mz_schemas s ON t.schema_id = s.id
+            JOIN mz_databases d ON s.database_id = d.id
+            WHERE d.name || '.' || s.name || '.' || t.name IN ({placeholders})
+            "#,
+            table_name = table_name,
+            placeholders = placeholders.join(", ")
+        );
+
+        #[allow(clippy::as_conversions)]
+        let params: Vec<&(dyn ToSql + Sync)> =
+            chunk.iter().map(|fqn| fqn as &(dyn ToSql + Sync)).collect();
+
+        let rows = client
+            .query(&query, &params)
+            .await
+            .map_err(DatabaseValidationError::QueryError)?;
+        for row in rows {
+            let fqn: String = row.get("fqn");
+            if let Some(obj) = fqn_to_object.get(&fqn) {
+                existing.insert(obj.clone());
+            }
+        }
+    }
+
+    Ok(existing)
+}
+
 /// Internal implementation of validate_project.
 pub(crate) async fn validate_project_impl(
     client: &PgClient,
     planned_project: &planned::Project,
     project_root: &Path,
 ) -> Result<(), DatabaseValidationError> {
-    let mut missing_databases = Vec::new();
-    let mut missing_schemas = Vec::new();
-    let mut missing_clusters = Vec::new();
+    let (external_databases, external_schemas) = collect_external_dependencies(planned_project);
+    let missing_databases = find_missing_databases(client, &external_databases).await?;
+    let missing_schemas = find_missing_schemas(client, &external_schemas).await?;
+    let missing_clusters = find_missing_clusters(client, planned_project).await?;
+    let object_paths = build_object_paths(planned_project, project_root);
+    let missing_external_deps = find_missing_external_dependencies(client, planned_project).await?;
+    let compilation_errors =
+        build_compilation_errors(planned_project, &object_paths, &missing_external_deps);
 
-    // Collect project databases (will be created if needed)
-    let mut project_databases = BTreeSet::new();
-    for db in &planned_project.databases {
-        project_databases.insert(db.name.clone());
-    }
-
-    // Collect external databases and schemas (must already exist)
-    let mut external_databases = BTreeSet::new();
-    let mut external_schemas = BTreeSet::new();
-    for ext_dep in &planned_project.external_dependencies {
-        // Only require external databases that aren't project databases
-        if !project_databases.contains(&ext_dep.database) {
-            external_databases.insert(ext_dep.database.clone());
-        }
-        external_schemas.insert((ext_dep.database.clone(), ext_dep.schema.clone()));
-    }
-
-    // Check only external databases exist (project databases will be created if needed)
-    for database in &external_databases {
-        let query = "SELECT name FROM mz_databases WHERE name = $1";
-        let rows = client
-            .query(query, &[database])
-            .await
-            .map_err(DatabaseValidationError::QueryError)?;
-        if rows.is_empty() {
-            missing_databases.push(database.clone());
-        }
-    }
-
-    // Check only external dependency schemas exist (project schemas will be created if needed)
-    for (database, schema) in &external_schemas {
-        let query = r#"
-            SELECT s.name FROM mz_schemas s
-            JOIN mz_databases d ON s.database_id = d.id
-            WHERE s.name = $1 AND d.name = $2"#;
-        let rows = client
-            .query(query, &[schema, database])
-            .await
-            .map_err(DatabaseValidationError::QueryError)?;
-        if rows.is_empty() {
-            missing_schemas.push((database.clone(), schema.clone()));
-        }
-    }
-
-    // Check clusters exist
-    for cluster in &planned_project.cluster_dependencies {
-        let query = "SELECT name FROM mz_clusters WHERE name = $1";
-        let rows = client
-            .query(query, &[&cluster.name])
-            .await
-            .map_err(DatabaseValidationError::QueryError)?;
-        if rows.is_empty() {
-            missing_clusters.push(cluster.name.clone());
-        }
-    }
-
-    // Build ObjectId to file path mapping by reconstructing paths from ObjectIds
-    // Path format: <root>/models/<database>/<schema>/<object>.sql
-    let mut object_paths: BTreeMap<ObjectId, PathBuf> = BTreeMap::new();
-    for db in &planned_project.databases {
-        for schema in &db.schemas {
-            for obj in &schema.objects {
-                let file_path = project_root
-                    .join("models")
-                    .join(&obj.id.database)
-                    .join(&obj.id.schema)
-                    .join(format!("{}.sql", obj.id.object));
-                object_paths.insert(obj.id.clone(), file_path);
-            }
-        }
-    }
-
-    // Check external dependencies and group missing ones by file
-    let mut missing_external_deps = BTreeSet::new();
-    for ext_dep in &planned_project.external_dependencies {
-        let query = r#"
-            SELECT mo.name
-            FROM mz_objects mo
-            JOIN mz_schemas s ON mo.schema_id = s.id
-            JOIN mz_databases d ON s.database_id = d.id
-            WHERE mo.name = $1 AND s.name = $2 AND d.name = $3
-           "#;
-
-        let rows = client
-            .query(
-                query,
-                &[&ext_dep.object, &ext_dep.schema, &ext_dep.database],
-            )
-            .await
-            .map_err(DatabaseValidationError::QueryError)?;
-        if rows.is_empty() {
-            missing_external_deps.insert(ext_dep.clone());
-        }
-    }
-
-    // Group missing dependencies by the files that reference them
-    let mut file_missing_deps: BTreeMap<PathBuf, (ObjectId, Vec<ObjectId>)> = BTreeMap::new();
-
-    for db in &planned_project.databases {
-        for schema in &db.schemas {
-            for obj in &schema.objects {
-                let mut missing_for_this_object = Vec::new();
-
-                for dep in &obj.dependencies {
-                    if missing_external_deps.contains(dep) {
-                        missing_for_this_object.push(dep.clone());
-                    }
-                }
-
-                if !missing_for_this_object.is_empty()
-                    && let Some(file_path) = object_paths.get(&obj.id)
-                {
-                    file_missing_deps
-                        .insert(file_path.clone(), (obj.id.clone(), missing_for_this_object));
-                }
-            }
-        }
-    }
-
-    // Create compilation error for each file with missing dependencies
-    let mut compilation_errors = Vec::new();
-    for (file_path, (object_id, missing_deps)) in file_missing_deps {
-        compilation_errors.push(DatabaseValidationError::CompilationFailed {
-            file_path,
-            object_name: object_id,
-            missing_dependencies: missing_deps,
-        });
-    }
-
-    // Return results
     if !missing_databases.is_empty()
         || !missing_schemas.is_empty()
         || !missing_clusters.is_empty()
@@ -222,6 +251,135 @@ pub(crate) async fn validate_project_impl(
     } else {
         Ok(())
     }
+}
+
+/// Derives the set of external database/schema prerequisites from project dependencies.
+///
+/// Project-owned databases are excluded because deployment can create them if needed.
+fn collect_external_dependencies(
+    planned_project: &planned::Project,
+) -> (BTreeSet<String>, BTreeSet<(String, String)>) {
+    let project_databases: BTreeSet<_> = planned_project
+        .databases
+        .iter()
+        .map(|db| db.name.clone())
+        .collect();
+
+    let mut external_databases = BTreeSet::new();
+    let mut external_schemas = BTreeSet::new();
+    for ext_dep in &planned_project.external_dependencies {
+        if !project_databases.contains(&ext_dep.database) {
+            external_databases.insert(ext_dep.database.clone());
+        }
+        external_schemas.insert((ext_dep.database.clone(), ext_dep.schema.clone()));
+    }
+    (external_databases, external_schemas)
+}
+
+/// Checks catalog state for external databases that must pre-exist.
+async fn find_missing_databases(
+    client: &PgClient,
+    external_databases: &BTreeSet<String>,
+) -> Result<Vec<String>, DatabaseValidationError> {
+    let existing = query_existing_names(client, "mz_databases", "name", external_databases).await?;
+    Ok(external_databases
+        .difference(&existing)
+        .cloned()
+        .collect())
+}
+
+/// Checks catalog state for external schemas that must pre-exist.
+async fn find_missing_schemas(
+    client: &PgClient,
+    external_schemas: &BTreeSet<(String, String)>,
+) -> Result<Vec<(String, String)>, DatabaseValidationError> {
+    let existing = query_existing_schema_pairs(client, external_schemas).await?;
+    Ok(external_schemas
+        .difference(&existing)
+        .cloned()
+        .collect())
+}
+
+/// Checks whether all cluster dependencies referenced by the project are present.
+async fn find_missing_clusters(
+    client: &PgClient,
+    planned_project: &planned::Project,
+) -> Result<Vec<String>, DatabaseValidationError> {
+    let required: BTreeSet<String> = planned_project
+        .cluster_dependencies
+        .iter()
+        .map(|cluster| cluster.name.clone())
+        .collect();
+    let existing = query_existing_names(client, "mz_clusters", "name", &required).await?;
+    Ok(required.difference(&existing).cloned().collect())
+}
+
+/// Reconstructs source file paths for planned objects under `models/`.
+///
+/// These paths are used to attach dependency errors to concrete files for users.
+fn build_object_paths(
+    planned_project: &planned::Project,
+    project_root: &Path,
+) -> BTreeMap<ObjectId, PathBuf> {
+    let mut object_paths = BTreeMap::new();
+    for db in &planned_project.databases {
+        for schema in &db.schemas {
+            for obj in &schema.objects {
+                let file_path = project_root
+                    .join("models")
+                    .join(&obj.id.database)
+                    .join(&obj.id.schema)
+                    .join(format!("{}.sql", obj.id.object));
+                object_paths.insert(obj.id.clone(), file_path);
+            }
+        }
+    }
+    object_paths
+}
+
+/// Checks whether externally-referenced objects actually exist in the target catalog.
+async fn find_missing_external_dependencies(
+    client: &PgClient,
+    planned_project: &planned::Project,
+) -> Result<BTreeSet<ObjectId>, DatabaseValidationError> {
+    let external_deps: BTreeSet<ObjectId> =
+        planned_project.external_dependencies.iter().cloned().collect();
+    let existing = query_existing_object_ids(client, &external_deps, CatalogLookup::Objects).await?;
+    Ok(external_deps.difference(&existing).cloned().collect())
+}
+
+/// Converts missing external dependencies into user-facing, file-scoped errors.
+///
+/// Grouping by file/object keeps output aligned with how users navigate project SQL.
+fn build_compilation_errors(
+    planned_project: &planned::Project,
+    object_paths: &BTreeMap<ObjectId, PathBuf>,
+    missing_external_deps: &BTreeSet<ObjectId>,
+) -> Vec<DatabaseValidationError> {
+    let mut errors = Vec::new();
+    for db in &planned_project.databases {
+        for schema in &db.schemas {
+            for obj in &schema.objects {
+                let missing_for_object: Vec<_> = obj
+                    .dependencies
+                    .iter()
+                    .filter(|dep| missing_external_deps.contains(*dep))
+                    .cloned()
+                    .collect();
+                if missing_for_object.is_empty() {
+                    continue;
+                }
+                if let Some(file_path) = object_paths.get(&obj.id) {
+                    errors.push(DatabaseValidationError::CompilationFailed {
+                        file_path: file_path.clone(),
+                        object_name: obj.id.clone(),
+                        missing_dependencies: missing_for_object,
+                    });
+                }
+            }
+        }
+    }
+    errors
 }
 
 /// Internal implementation of validate_cluster_isolation.
@@ -345,49 +503,25 @@ pub(crate) async fn validate_sources_exist_impl(
     client: &PgClient,
     planned_project: &planned::Project,
 ) -> Result<(), DatabaseValidationError> {
-    let mut missing_sources = Vec::new();
-
-    // Collect all source ObjectIds defined in the project (CreateSource statements)
     let defined_sources: BTreeSet<ObjectId> = planned_project
         .iter_objects()
         .filter(|obj| matches!(obj.typed_object.stmt, Statement::CreateSource(_)))
         .map(|obj| obj.id.clone())
         .collect();
 
-    // Collect all source references from CREATE TABLE FROM SOURCE statements
+    let mut referenced_sources = BTreeSet::new();
     for obj in planned_project.iter_objects() {
         if let Statement::CreateTableFromSource(ref stmt) = obj.typed_object.stmt {
-            // Extract the source ObjectId from the statement
             let source_id =
                 ObjectId::from_raw_item_name(&stmt.source, &obj.id.database, &obj.id.schema);
-
-            // Skip sources defined in the project (they'll be created during create-tables)
-            if defined_sources.contains(&source_id) {
-                continue;
-            }
-
-            // Check if source exists in the database
-            let query = r#"
-                SELECT s.name
-                FROM mz_sources s
-                JOIN mz_schemas sch ON s.schema_id = sch.id
-                JOIN mz_databases d ON sch.database_id = d.id
-                WHERE s.name = $1 AND sch.name = $2 AND d.name = $3"#;
-
-            let rows = client
-                .query(
-                    query,
-                    &[&source_id.object, &source_id.schema, &source_id.database],
-                )
-                .await
-                .map_err(DatabaseValidationError::QueryError)?;
-
-            if rows.is_empty() {
-                missing_sources.push(source_id);
+            if !defined_sources.contains(&source_id) {
+                referenced_sources.insert(source_id);
             }
         }
     }
 
+    let existing = query_existing_object_ids(client, &referenced_sources, CatalogLookup::Sources).await?;
+    let missing_sources: Vec<ObjectId> = referenced_sources.difference(&existing).cloned().collect();
     if !missing_sources.is_empty() {
         return Err(DatabaseValidationError::MissingSources(missing_sources));
     }
@@ -403,13 +537,9 @@ pub(crate) async fn validate_sink_connections_exist_impl(
     client: &PgClient,
     planned_project: &planned::Project,
 ) -> Result<(), DatabaseValidationError> {
-    let mut missing_connections = Vec::new();
-    let mut checked = BTreeSet::new(); // Avoid duplicate checks
-
-    // Collect all connection references from CREATE SINK statements
+    let mut referenced_connections = BTreeSet::new();
     for obj in planned_project.iter_objects() {
         if let Statement::CreateSink(ref stmt) = obj.typed_object.stmt {
-            // Extract connection ObjectId(s) based on sink type
             let connection_ids = match &stmt.connection {
                 CreateSinkConnection::Kafka { connection, .. } => {
                     vec![ObjectId::from_raw_item_name(
@@ -434,39 +564,24 @@ pub(crate) async fn validate_sink_connections_exist_impl(
                 }
             };
 
-            // Check each connection exists
             for conn_id in connection_ids {
-                if checked.contains(&conn_id) {
-                    continue;
-                }
-                checked.insert(conn_id.clone());
-
-                let query = r#"
-                    SELECT c.name
-                    FROM mz_connections c
-                    JOIN mz_schemas s ON c.schema_id = s.id
-                    JOIN mz_databases d ON s.database_id = d.id
-                    WHERE c.name = $1 AND s.name = $2 AND d.name = $3"#;
-
-                let rows = client
-                    .query(
-                        query,
-                        &[&conn_id.object, &conn_id.schema, &conn_id.database],
-                    )
-                    .await
-                    .map_err(DatabaseValidationError::QueryError)?;
-
-                if rows.is_empty() {
-                    missing_connections.push(conn_id);
-                }
+                referenced_connections.insert(conn_id);
             }
         }
     }
 
+    let existing = query_existing_object_ids(
+        client,
+        &referenced_connections,
+        CatalogLookup::Connections,
+    )
+    .await?;
+    let missing_connections: Vec<ObjectId> = referenced_connections
+        .difference(&existing)
+        .cloned()
+        .collect();
     if !missing_connections.is_empty() {
-        return Err(DatabaseValidationError::MissingConnections(
-            missing_connections,
-        ));
+        return Err(DatabaseValidationError::MissingConnections(missing_connections));
     }
 
     Ok(())
@@ -478,37 +593,31 @@ pub(crate) async fn validate_table_dependencies_impl(
     planned_project: &planned::Project,
     objects_to_deploy: &BTreeSet<ObjectId>,
 ) -> Result<(), DatabaseValidationError> {
-    let mut objects_needing_tables = Vec::new();
-
-    // Build a set of all table IDs in the project
     let project_tables: BTreeSet<ObjectId> = planned_project.get_tables().collect();
 
-    // For each object to be deployed, check if it depends on tables
+    let mut required_tables = BTreeSet::new();
     for object_id in objects_to_deploy {
-        // Find the object in the planned project
+        if let Some(obj) = planned_project.find_object(object_id) {
+            for dep_id in &obj.dependencies {
+                if project_tables.contains(dep_id) {
+                    required_tables.insert(dep_id.clone());
+                }
+            }
+        }
+    }
+
+    let existing_tables =
+        query_existing_object_ids(client, &required_tables, CatalogLookup::Tables).await?;
+    let missing_table_set: BTreeSet<ObjectId> =
+        required_tables.difference(&existing_tables).cloned().collect();
+
+    let mut objects_needing_tables = Vec::new();
+    for object_id in objects_to_deploy {
         if let Some(obj) = planned_project.find_object(object_id) {
             let mut missing_tables = Vec::new();
-
-            // Check each dependency
             for dep_id in &obj.dependencies {
-                // Is this dependency a table?
-                if project_tables.contains(dep_id) {
-                    // Check if the table exists in the database
-                    let query = r#"
-                        SELECT t.name
-                        FROM mz_tables t
-                        JOIN mz_schemas s ON t.schema_id = s.id
-                        JOIN mz_databases d ON s.database_id = d.id
-                        WHERE t.name = $1 AND s.name = $2 AND d.name = $3"#;
-
-                    let rows = client
-                        .query(query, &[&dep_id.object, &dep_id.schema, &dep_id.database])
-                        .await
-                        .map_err(DatabaseValidationError::QueryError)?;
-
-                    if rows.is_empty() {
-                        missing_tables.push(dep_id.clone());
-                    }
+                if project_tables.contains(dep_id) && missing_table_set.contains(dep_id) {
+                    missing_tables.push(dep_id.clone());
                 }
             }
 

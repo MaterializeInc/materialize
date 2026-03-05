@@ -181,80 +181,110 @@ async fn typecheck_with_docker(
 
 /// Print verbose details about the project (only shown with VERBOSE env var)
 fn print_verbose_details(planned_project: &project::planned::Project, sorted: &[ObjectId]) {
-    // Display external dependencies
-    if !planned_project.external_dependencies.is_empty() {
-        verbose!("\nExternal Dependencies (not defined in this project):");
-        let mut external: Vec<_> = planned_project.external_dependencies.iter().collect();
-        external.sort();
-        for dep in external {
-            verbose!("  - {}", dep);
-        }
-    }
+    let mod_stmts = planned_project.iter_mod_statements();
+    print_external_dependencies(planned_project);
+    print_cluster_dependencies(planned_project);
+    print_dependency_graph(planned_project);
+    print_deployment_order(sorted);
+    print_module_setup_statements(&mod_stmts);
+    print_full_sql_plan(&mod_stmts);
+    print_sorted_object_sql(planned_project);
+}
 
-    // Display cluster dependencies
-    if !planned_project.cluster_dependencies.is_empty() {
-        verbose!("\nCluster Dependencies:");
-        let mut clusters: Vec<_> = planned_project.cluster_dependencies.iter().collect();
-        clusters.sort_by_key(|c| &c.name);
-        for cluster in clusters {
-            verbose!("  - {}", cluster.name);
-        }
+/// Prints dependencies that are referenced but not declared in this project tree.
+///
+/// These are the objects operators must provision externally before deployment.
+fn print_external_dependencies(planned_project: &project::planned::Project) {
+    if planned_project.external_dependencies.is_empty() {
+        return;
     }
+    verbose!("\nExternal Dependencies (not defined in this project):");
+    let mut external: Vec<_> = planned_project.external_dependencies.iter().collect();
+    external.sort();
+    for dep in external {
+        verbose!("  - {}", dep);
+    }
+}
 
-    // Display dependency graph
+/// Prints cluster prerequisites inferred from object and index definitions.
+fn print_cluster_dependencies(planned_project: &project::planned::Project) {
+    if planned_project.cluster_dependencies.is_empty() {
+        return;
+    }
+    verbose!("\nCluster Dependencies:");
+    let mut clusters: Vec<_> = planned_project.cluster_dependencies.iter().collect();
+    clusters.sort_by_key(|c| &c.name);
+    for cluster in clusters {
+        verbose!("  - {}", cluster.name);
+    }
+}
+
+/// Prints per-object dependency edges for troubleshooting deployment ordering.
+///
+/// External dependencies are annotated inline to separate project-internal edges
+/// from dependencies that are expected to pre-exist.
+fn print_dependency_graph(planned_project: &project::planned::Project) {
     verbose!("\nDependency Graph:");
     for (object_id, deps) in &planned_project.dependency_graph {
-        if !deps.is_empty() {
-            verbose!("  {} depends on:", object_id);
-            for dep in deps {
-                // Mark external dependencies
-                if planned_project.external_dependencies.contains(dep) {
-                    verbose!("    - {} (external)", dep);
-                } else {
-                    verbose!("    - {}", dep);
-                }
+        if deps.is_empty() {
+            continue;
+        }
+        verbose!("  {} depends on:", object_id);
+        for dep in deps {
+            if planned_project.external_dependencies.contains(dep) {
+                verbose!("    - {} (external)", dep);
+            } else {
+                verbose!("    - {}", dep);
             }
         }
     }
+}
 
-    // Display deployment order
+/// Prints final object deployment order derived from topological sorting.
+fn print_deployment_order(sorted: &[ObjectId]) {
     verbose!("\nDeployment order:");
     for (idx, object_id) in sorted.iter().enumerate() {
         verbose!("  {}. {}", idx + 1, object_id);
     }
+}
 
-    // Display module statements
-    let mod_stmts = planned_project.iter_mod_statements();
-    if !mod_stmts.is_empty() {
-        verbose!("\nModule Setup Statements:");
-        for (idx, mod_stmt) in mod_stmts.iter().enumerate() {
-            match mod_stmt {
-                project::ModStatement::Database {
-                    database,
-                    statement,
-                } => {
-                    verbose!("  {}. Database {}: {}", idx + 1, database, statement);
-                }
-                project::ModStatement::Schema {
+/// Prints module setup statements that run before object SQL.
+///
+/// This section shows database/schema-level setup artifacts separately from
+/// object creation steps, which helps explain side-effect ordering.
+fn print_module_setup_statements(mod_stmts: &[project::ModStatement]) {
+    if mod_stmts.is_empty() {
+        return;
+    }
+    verbose!("\nModule Setup Statements:");
+    for (idx, mod_stmt) in mod_stmts.iter().enumerate() {
+        match mod_stmt {
+            project::ModStatement::Database {
+                database,
+                statement,
+            } => {
+                verbose!("  {}. Database {}: {}", idx + 1, database, statement);
+            }
+            project::ModStatement::Schema {
+                database,
+                schema,
+                statement,
+            } => {
+                verbose!(
+                    "  {}. Schema {}.{}: {}",
+                    idx + 1,
                     database,
                     schema,
-                    statement,
-                } => {
-                    verbose!(
-                        "  {}. Schema {}.{}: {}",
-                        idx + 1,
-                        database,
-                        schema,
-                        statement
-                    );
-                }
+                    statement
+                );
             }
         }
     }
+}
 
-    // Display full SQL
+/// Prints executable SQL for module setup statements in run order.
+fn print_full_sql_plan(mod_stmts: &[project::ModStatement]) {
     verbose!("\nSQL Deployment Plan (fully qualified)");
-
     for (idx, mod_stmt) in mod_stmts.iter().enumerate() {
         match mod_stmt {
             project::ModStatement::Database {
@@ -281,28 +311,26 @@ fn print_verbose_details(planned_project: &project::planned::Project, sorted: &[
             }
         }
     }
+}
 
-    // Print objects in deployment order
+/// Prints full SQL payload for each object deployment step.
+///
+/// Includes statement SQL and attached indexes/grants/comments so verbose output
+/// reflects what the deploy command would execute end-to-end.
+fn print_sorted_object_sql(planned_project: &project::planned::Project) {
     if let Ok(objects) = planned_project.get_sorted_objects() {
         for (idx, (object_id, typed_obj)) in objects.iter().enumerate() {
             verbose!("-- Step {}: {}", idx + 1, object_id);
             verbose!("{};", typed_obj.stmt);
-
-            // Print indexes for this object
             for index in &typed_obj.indexes {
                 verbose!("{};", index);
             }
-
-            // Print grants for this object
             for grant in &typed_obj.grants {
                 verbose!("{};", grant);
             }
-
-            // Print comments for this object
             for comment in &typed_obj.comments {
                 verbose!("{};", comment);
             }
-
             verbose!();
         }
     }

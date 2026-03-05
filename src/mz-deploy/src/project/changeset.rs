@@ -442,6 +442,73 @@ fn compute_dirty_datalog(
     BTreeSet<Cluster>,
     BTreeSet<SchemaQualifier>,
 ) {
+    log_datalog_start(changed_stmts, base_facts);
+    let indexes = DatalogIndexes::from_base_facts(base_facts);
+    let mut state = DirtyState::new(changed_stmts);
+
+    // Fixed-point iteration: apply rules until no changes
+    let mut iteration = 0;
+    loop {
+        iteration += 1;
+        let prev_sizes = state.sizes();
+        log_iteration(iteration, &state);
+
+        apply_cluster_dirtiness_rules(changed_stmts, base_facts, &indexes, &mut state);
+        apply_stmt_dirtiness_from_clusters(&indexes, &mut state);
+        apply_stmt_dependency_rules(changed_replacements, &indexes, &mut state);
+        apply_schema_dirtiness_rules(base_facts, &indexes, &mut state);
+        apply_stmt_dirtiness_from_schemas(base_facts, &indexes, &mut state);
+
+        // Fixed point reached when no sets grew
+        if state.sizes() == prev_sizes {
+            verbose!(
+                "\n{} Fixed point reached after {} iteration(s)",
+                "✓".green(),
+                iteration.to_string().bold()
+            );
+            break;
+        }
+    }
+
+    log_final_results(&state);
+
+    // Convert cluster names to Cluster structs
+    let dirty_cluster_structs = state.dirty_clusters.into_iter().map(Cluster::new).collect();
+
+    (state.dirty_stmts, dirty_cluster_structs, state.dirty_schemas)
+}
+
+/// Mutable working sets carried across fixed-point iterations.
+///
+/// Keeps the Datalog loop state explicit and grouped so each rule helper can
+/// update shared dirtiness sets without additional tuple plumbing.
+struct DirtyState {
+    dirty_stmts: BTreeSet<ObjectId>,
+    dirty_clusters: BTreeSet<String>,
+    dirty_schemas: BTreeSet<SchemaQualifier>,
+}
+
+impl DirtyState {
+    /// Seeds dirty state from objects whose hashes changed between snapshots.
+    fn new(changed_stmts: &BTreeSet<ObjectId>) -> Self {
+        Self {
+            dirty_stmts: changed_stmts.clone(),
+            dirty_clusters: BTreeSet::new(),
+            dirty_schemas: BTreeSet::new(),
+        }
+    }
+
+    fn sizes(&self) -> (usize, usize, usize) {
+        (
+            self.dirty_stmts.len(),
+            self.dirty_clusters.len(),
+            self.dirty_schemas.len(),
+        )
+    }
+}
+
+/// Emits an initial summary of inputs before rule evaluation starts.
+fn log_datalog_start(changed_stmts: &BTreeSet<ObjectId>, base_facts: &BaseFacts) {
     verbose!(
         "{} {}",
         "▶".cyan(),
@@ -464,179 +531,194 @@ fn compute_dirty_datalog(
             .collect::<Vec<_>>()
             .join(", ")
     );
+}
 
-    let indexes = DatalogIndexes::from_base_facts(base_facts);
+/// Emits per-iteration progress for dirty set growth.
+fn log_iteration(iteration: usize, state: &DirtyState) {
+    verbose!(
+        "\n{} {} (stmts={}, clusters={}, schemas={})",
+        "▶".cyan(),
+        format!("Iteration {}", iteration).cyan().bold(),
+        state.dirty_stmts.len().to_string().bold(),
+        state.dirty_clusters.len().to_string().bold(),
+        state.dirty_schemas.len().to_string().bold()
+    );
+}
 
-    // Initialize result sets
-    let mut dirty_stmts: BTreeSet<ObjectId> = changed_stmts.clone();
-    let mut dirty_clusters: BTreeSet<String> = BTreeSet::new();
-    let mut dirty_schemas: BTreeSet<SchemaQualifier> = BTreeSet::new();
-
-    // Fixed-point iteration: apply rules until no changes
-    let mut iteration = 0;
-    loop {
-        iteration += 1;
-        let prev_sizes = (dirty_stmts.len(), dirty_clusters.len(), dirty_schemas.len());
-        verbose!(
-            "\n{} {} (stmts={}, clusters={}, schemas={})",
-            "▶".cyan(),
-            format!("Iteration {}", iteration).cyan().bold(),
-            dirty_stmts.len().to_string().bold(),
-            dirty_clusters.len().to_string().bold(),
-            dirty_schemas.len().to_string().bold()
-        );
-
-        // --- Cluster dirtiness rules (only from changed statements, excluding sinks) ---
-        // Rule 1: DirtyCluster(C) :- ChangedStmt(O), StmtUsesCluster(O, C), NOT IsSink(O)
-        // Rule 2: DirtyCluster(C) :- ChangedStmt(O), IndexUsesCluster(O, _, C), NOT IsSink(O)
-        for obj in changed_stmts {
-            // Sinks should NOT make clusters dirty
-            if base_facts.is_sink.contains(obj) {
-                verbose!(
-                    "  ├─ {}: {} is a sink, not marking clusters dirty",
-                    "SKIP".yellow().bold(),
-                    obj.to_string().cyan()
-                );
-                continue;
-            }
-            if let Some(clusters) = indexes.stmt_to_clusters.get(obj) {
-                for cluster in clusters {
-                    if dirty_clusters.insert(cluster.clone()) {
-                        verbose!(
-                            "  ├─ {}: DirtyCluster({}) ← ChangedStmt({}) uses cluster",
-                            "Rule 1".bold(),
-                            cluster.magenta(),
-                            obj.to_string().cyan()
-                        );
-                    }
-                }
-            }
-            if let Some(clusters) = indexes.index_to_clusters.get(obj) {
-                for cluster in clusters {
-                    if dirty_clusters.insert(cluster.clone()) {
-                        verbose!(
-                            "  ├─ {}: DirtyCluster({}) ← ChangedStmt({}) has index on cluster",
-                            "Rule 2".bold(),
-                            cluster.magenta(),
-                            obj.to_string().cyan()
-                        );
-                    }
-                }
-            }
+/// Applies cluster dirtiness rules that originate only from changed statements.
+///
+/// This intentionally excludes sink propagation so sink changes do not force
+/// unrelated cluster redeployments.
+fn apply_cluster_dirtiness_rules(
+    changed_stmts: &BTreeSet<ObjectId>,
+    base_facts: &BaseFacts,
+    indexes: &DatalogIndexes,
+    state: &mut DirtyState,
+) {
+    // Rule 1: DirtyCluster(C) :- ChangedStmt(O), StmtUsesCluster(O, C), NOT IsSink(O)
+    // Rule 2: DirtyCluster(C) :- ChangedStmt(O), IndexUsesCluster(O, _, C), NOT IsSink(O)
+    for obj in changed_stmts {
+        if base_facts.is_sink.contains(obj) {
+            verbose!(
+                "  ├─ {}: {} is a sink, not marking clusters dirty",
+                "SKIP".yellow().bold(),
+                obj.to_string().cyan()
+            );
+            continue;
         }
-
-        // --- Statement dirtiness rules ---
-        // Rule 3: DirtyStmt(O) :- StmtUsesCluster(O, C), DirtyCluster(C)
-        for (obj, clusters) in &indexes.stmt_to_clusters {
+        if let Some(clusters) = indexes.stmt_to_clusters.get(obj) {
             for cluster in clusters {
-                if dirty_clusters.contains(cluster) && dirty_stmts.insert(obj.clone()) {
+                if state.dirty_clusters.insert(cluster.clone()) {
                     verbose!(
-                        "  ├─ {}: DirtyStmt({}) ← uses DirtyCluster({})",
-                        "Rule 3".bold(),
-                        obj.to_string().cyan(),
-                        cluster.magenta()
-                    );
-                    break;
-                }
-            }
-        }
-
-        // Rule 4: DirtyStmt(O) :- DependsOn(O, P), DirtyStmt(P), NOT IsChangedReplacement(P)
-        // Changed replacement MVs are swapped in-place via ALTER MV APPLY REPLACEMENT,
-        // so their downstream dependents don't need redeployment.
-        let current_dirty: Vec<_> = dirty_stmts.iter().cloned().collect();
-        for dirty_obj in current_dirty {
-            if changed_replacements.contains(&dirty_obj) {
-                verbose!(
-                    "  ├─ {}: {} is a changed replacement MV, not propagating to dependents",
-                    "SKIP".yellow().bold(),
-                    dirty_obj.to_string().cyan()
-                );
-                continue;
-            }
-            if let Some(children) = indexes.dependents.get(&dirty_obj) {
-                for child in children {
-                    if dirty_stmts.insert(child.clone()) {
-                        verbose!(
-                            "  ├─ {}: DirtyStmt({}) ← depends on DirtyStmt({})",
-                            "Rule 4".bold(),
-                            child.to_string().cyan(),
-                            dirty_obj.to_string().cyan()
-                        );
-                    }
-                }
-            }
-        }
-
-        // --- Schema dirtiness rules (excluding sinks and replacement MVs) ---
-        // Rule 5: DirtySchema(Db, Sch) :- DirtyStmt(O), ObjectInSchema(O, Db, Sch), NOT IsSink(O), NOT IsReplacement(O)
-        for obj in &dirty_stmts {
-            // Sinks should NOT make schemas dirty
-            if base_facts.is_sink.contains(obj) {
-                verbose!(
-                    "  ├─ {}: {} is a sink, not marking schema dirty",
-                    "SKIP".yellow().bold(),
-                    obj.to_string().cyan()
-                );
-                continue;
-            }
-            // Replacement MVs should NOT make schemas dirty
-            // (we want per-MV granularity, not schema-level atomic redeployment)
-            if base_facts.is_replacement.contains(obj) {
-                verbose!(
-                    "  ├─ {}: {} is a replacement MV, not marking schema dirty",
-                    "SKIP".yellow().bold(),
-                    obj.to_string().cyan()
-                );
-                continue;
-            }
-            if let Some((db, sch)) = indexes.object_to_schema.get(obj) {
-                if dirty_schemas.insert((db.clone(), sch.clone())) {
-                    verbose!(
-                        "  ├─ {}: DirtySchema({}) ← DirtyStmt({}) in schema",
-                        "Rule 5".bold(),
-                        format!("{}.{}", db, sch).blue(),
+                        "  ├─ {}: DirtyCluster({}) ← ChangedStmt({}) uses cluster",
+                        "Rule 1".bold(),
+                        cluster.magenta(),
                         obj.to_string().cyan()
                     );
                 }
             }
         }
-
-        // Rule 6: DirtyStmt(O) :- DirtySchema(Db, Sch), ObjectInSchema(O, Db, Sch), NOT IsReplacement(O)
-        for (obj, (db, sch)) in &indexes.object_to_schema {
-            if dirty_schemas.iter().any(|(d, s)| d == db && s == sch) {
-                // Replacement MVs should NOT be pulled in by schema dirtiness
-                if base_facts.is_replacement.contains(obj) {
-                    continue;
-                }
-                if dirty_stmts.insert(obj.clone()) {
+        if let Some(clusters) = indexes.index_to_clusters.get(obj) {
+            for cluster in clusters {
+                if state.dirty_clusters.insert(cluster.clone()) {
                     verbose!(
-                        "  ├─ {}: DirtyStmt({}) ← in DirtySchema({})",
-                        "Rule 6".bold(),
-                        obj.to_string().cyan(),
-                        format!("{}.{}", db, sch).blue()
+                        "  ├─ {}: DirtyCluster({}) ← ChangedStmt({}) has index on cluster",
+                        "Rule 2".bold(),
+                        cluster.magenta(),
+                        obj.to_string().cyan()
                     );
                 }
             }
         }
+    }
+}
 
-        // Fixed point reached when no sets grew
-        if (dirty_stmts.len(), dirty_clusters.len(), dirty_schemas.len()) == prev_sizes {
-            verbose!(
-                "\n{} Fixed point reached after {} iteration(s)",
-                "✓".green(),
-                iteration.to_string().bold()
-            );
-            break;
+/// Applies statement dirtiness induced by dirty clusters.
+fn apply_stmt_dirtiness_from_clusters(indexes: &DatalogIndexes, state: &mut DirtyState) {
+    // Rule 3: DirtyStmt(O) :- StmtUsesCluster(O, C), DirtyCluster(C)
+    for (obj, clusters) in &indexes.stmt_to_clusters {
+        for cluster in clusters {
+            if state.dirty_clusters.contains(cluster) && state.dirty_stmts.insert(obj.clone()) {
+                verbose!(
+                    "  ├─ {}: DirtyStmt({}) ← uses DirtyCluster({})",
+                    "Rule 3".bold(),
+                    obj.to_string().cyan(),
+                    cluster.magenta()
+                );
+                break;
+            }
         }
     }
+}
 
-    // Log final results
+/// Applies downstream dependency propagation for dirty statements.
+///
+/// Changed replacement MVs are excluded so in-place replacement does not fan out
+/// to dependents that do not require redeployment.
+fn apply_stmt_dependency_rules(
+    changed_replacements: &BTreeSet<ObjectId>,
+    indexes: &DatalogIndexes,
+    state: &mut DirtyState,
+) {
+    // Rule 4: DirtyStmt(O) :- DependsOn(O, P), DirtyStmt(P), NOT IsChangedReplacement(P)
+    let current_dirty: Vec<_> = state.dirty_stmts.iter().cloned().collect();
+    for dirty_obj in current_dirty {
+        if changed_replacements.contains(&dirty_obj) {
+            verbose!(
+                "  ├─ {}: {} is a changed replacement MV, not propagating to dependents",
+                "SKIP".yellow().bold(),
+                dirty_obj.to_string().cyan()
+            );
+            continue;
+        }
+        if let Some(children) = indexes.dependents.get(&dirty_obj) {
+            for child in children {
+                if state.dirty_stmts.insert(child.clone()) {
+                    verbose!(
+                        "  ├─ {}: DirtyStmt({}) ← depends on DirtyStmt({})",
+                        "Rule 4".bold(),
+                        child.to_string().cyan(),
+                        dirty_obj.to_string().cyan()
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Marks schemas dirty from dirty statements eligible for schema-level redeploy.
+///
+/// Sinks and replacement MVs are excluded to preserve stage/apply semantics.
+fn apply_schema_dirtiness_rules(
+    base_facts: &BaseFacts,
+    indexes: &DatalogIndexes,
+    state: &mut DirtyState,
+) {
+    // Rule 5: DirtySchema(Db, Sch) :- DirtyStmt(O), ObjectInSchema(O, Db, Sch), NOT IsSink(O), NOT IsReplacement(O)
+    for obj in &state.dirty_stmts {
+        if base_facts.is_sink.contains(obj) {
+            verbose!(
+                "  ├─ {}: {} is a sink, not marking schema dirty",
+                "SKIP".yellow().bold(),
+                obj.to_string().cyan()
+            );
+            continue;
+        }
+        if base_facts.is_replacement.contains(obj) {
+            verbose!(
+                "  ├─ {}: {} is a replacement MV, not marking schema dirty",
+                "SKIP".yellow().bold(),
+                obj.to_string().cyan()
+            );
+            continue;
+        }
+        if let Some((db, sch)) = indexes.object_to_schema.get(obj)
+            && state.dirty_schemas.insert((db.clone(), sch.clone()))
+        {
+            verbose!(
+                "  ├─ {}: DirtySchema({}) ← DirtyStmt({}) in schema",
+                "Rule 5".bold(),
+                format!("{}.{}", db, sch).blue(),
+                obj.to_string().cyan()
+            );
+        }
+    }
+}
+
+/// Pulls statements into the dirty set when their schema is marked dirty.
+fn apply_stmt_dirtiness_from_schemas(
+    base_facts: &BaseFacts,
+    indexes: &DatalogIndexes,
+    state: &mut DirtyState,
+) {
+    // Rule 6: DirtyStmt(O) :- DirtySchema(Db, Sch), ObjectInSchema(O, Db, Sch), NOT IsReplacement(O)
+    for (obj, (db, sch)) in &indexes.object_to_schema {
+        let schema_is_dirty = state
+            .dirty_schemas
+            .iter()
+            .any(|(dirty_db, dirty_schema)| dirty_db == db && dirty_schema == sch);
+        if !schema_is_dirty || base_facts.is_replacement.contains(obj) {
+            continue;
+        }
+        if state.dirty_stmts.insert(obj.clone()) {
+            verbose!(
+                "  ├─ {}: DirtyStmt({}) ← in DirtySchema({})",
+                "Rule 6".bold(),
+                obj.to_string().cyan(),
+                format!("{}.{}", db, sch).blue()
+            );
+        }
+    }
+}
+
+/// Emits final dirty object/cluster/schema sets after convergence.
+fn log_final_results(state: &DirtyState) {
     verbose!("{} {}", "▶".cyan(), "Final Results".cyan().bold());
     verbose!(
         "  ├─ Dirty statements ({}): [{}]",
-        dirty_stmts.len().to_string().bold(),
-        dirty_stmts
+        state.dirty_stmts.len().to_string().bold(),
+        state
+            .dirty_stmts
             .iter()
             .map(|o| o.to_string().cyan().to_string())
             .collect::<Vec<_>>()
@@ -644,8 +726,9 @@ fn compute_dirty_datalog(
     );
     verbose!(
         "  ├─ Dirty clusters ({}): [{}]",
-        dirty_clusters.len().to_string().bold(),
-        dirty_clusters
+        state.dirty_clusters.len().to_string().bold(),
+        state
+            .dirty_clusters
             .iter()
             .map(|c| c.magenta().to_string())
             .collect::<Vec<_>>()
@@ -653,18 +736,14 @@ fn compute_dirty_datalog(
     );
     verbose!(
         "  └─ Dirty schemas ({}): [{}]",
-        dirty_schemas.len().to_string().bold(),
-        dirty_schemas
+        state.dirty_schemas.len().to_string().bold(),
+        state
+            .dirty_schemas
             .iter()
             .map(|(db, sch)| format!("{}.{}", db, sch).blue().to_string())
             .collect::<Vec<_>>()
             .join(", ")
     );
-
-    // Convert cluster names to Cluster structs
-    let dirty_cluster_structs = dirty_clusters.into_iter().map(Cluster::new).collect();
-
-    (dirty_stmts, dirty_cluster_structs, dirty_schemas)
 }
 
 #[cfg(test)]

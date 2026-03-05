@@ -1,6 +1,7 @@
 //! Test command - run unit tests against the database.
 
 use crate::cli::CliError;
+use crate::client::Client;
 use crate::project::{self, typed};
 use crate::types::{self, TypeCheckError, Types};
 use crate::unit_test;
@@ -9,6 +10,16 @@ use mz_sql_parser::ast::Ident;
 use owo_colors::OwoColorize;
 use std::collections::BTreeSet;
 use std::path::Path;
+
+/// Final classification for a single test invocation.
+///
+/// `ValidationFailed` is tracked separately from execution failures so summary output
+/// can distinguish broken test definitions from assertion/runtime failures.
+enum TestOutcome {
+    Passed,
+    Failed,
+    ValidationFailed,
+}
 
 /// Run unit tests against the database.
 ///
@@ -53,24 +64,15 @@ use std::path::Path;
 /// Returns `CliError::Connection` if database connection fails
 /// Returns error if tests fail (exits with code 1)
 pub async fn run(directory: &Path, docker_image: &str) -> Result<(), CliError> {
-    // Load the project (tests are loaded during compilation)
     let planned_project = project::plan(directory)?;
-
-    // Tests use their own mocks, so don't pre-create tables from types.lock
     let empty_types = Types::default();
-
-    // Create Docker runtime and get connected client
     let runtime = DockerRuntime::new().with_image(docker_image);
     if planned_project.tests.is_empty() {
         println!("No tests found in {}", directory.display());
         return Ok(());
     }
 
-    // Load types for validation
-    // 1. Load types.lock (external dependencies) - ok if missing
     let mut combined_types = types::load_types_lock(directory).unwrap_or_default();
-
-    // 2. Load types.cache (internal views) or trigger typecheck if stale/missing
     let internal_types =
         load_or_generate_types_cache(directory, &planned_project, &runtime).await?;
     combined_types.merge(&internal_types);
@@ -80,218 +82,26 @@ pub async fn run(directory: &Path, docker_image: &str) -> Result<(), CliError> {
         format!("Running tests from {}:", directory.display()).bold()
     );
 
-    let mut passed_tests = 0;
-    let mut failed_tests = 0;
-    let mut validation_failed = 0;
-
-    // Run each test from the compiled project
+    let (mut passed_tests, mut failed_tests, mut validation_failed) = (0, 0, 0);
     for (object_id, test) in &planned_project.tests {
-        // Get dependencies for this object from the project's dependency graph
-        let dependencies = planned_project
-            .dependency_graph
-            .get(object_id)
-            .cloned()
-            .unwrap_or_else(BTreeSet::new);
-
-        // Validate test before running
-        if let Err(e) =
-            unit_test::validate_unit_test(test, object_id, &combined_types, &dependencies)
+        match run_single_test(
+            &planned_project,
+            object_id,
+            test,
+            &combined_types,
+            &runtime,
+            &empty_types,
+        )
+        .await?
         {
-            println!(
-                "{} {} ... {}",
-                "test".cyan(),
-                test.name.cyan(),
-                "VALIDATION FAILED".red().bold()
-            );
-            // Print the inner error which has the detailed display
-            match &e {
-                unit_test::TestValidationError::UnmockedDependency(inner) => eprintln!("{}", inner),
-                unit_test::TestValidationError::MockSchemaMismatch(inner) => eprintln!("{}", inner),
-                unit_test::TestValidationError::ExpectedSchemaMismatch(inner) => {
-                    eprintln!("{}", inner)
-                }
-                unit_test::TestValidationError::InvalidAtTime(inner) => {
-                    eprintln!("{}", inner)
-                }
-                unit_test::TestValidationError::TypesCacheUnavailable { reason } => {
-                    eprintln!(
-                        "{}: types cache unavailable: {}",
-                        "error".bright_red().bold(),
-                        reason
-                    );
-                }
-            }
-            validation_failed += 1;
-            continue;
-        }
-
-        let client = match runtime.get_client(&empty_types).await {
-            Ok(client) => client,
-            Err(TypeCheckError::ContainerStartFailed(e)) => {
-                return Err(CliError::Message(format!(
-                    "Docker not available for running tests: {}",
-                    e
-                )));
-            }
-            Err(e) => {
-                return Err(CliError::Message(format!(
-                    "Failed to start test environment: {}",
-                    e
-                )));
-            }
-        };
-
-        // Validate at_time if present by attempting to cast it to mz_timestamp
-        if let Some(at_time) = &test.at_time {
-            let validation_query = format!("SELECT {}::mz_timestamp", at_time);
-            if let Err(e) = client.query(&validation_query, &[]).await {
-                println!(
-                    "{} {} ... {}",
-                    "test".cyan(),
-                    test.name.cyan(),
-                    "VALIDATION FAILED".red().bold()
-                );
-                let error = unit_test::InvalidAtTimeError {
-                    test_name: test.name.clone(),
-                    at_time_value: at_time.clone(),
-                    db_error: e.to_string(),
-                };
-                eprintln!("{}", error);
-                validation_failed += 1;
-                continue;
-            }
-        }
-
-        print!("{} {} ... ", "test".cyan(), test.name.cyan());
-
-        // Find the target object in the project
-        let target_obj = match planned_project.find_object(object_id) {
-            Some(obj) => obj,
-            None => {
-                println!("{}", "FAILED".red().bold());
-                eprintln!(
-                    "  {}: target object '{}' not found in project",
-                    "error".red().bold(),
-                    object_id
-                );
-                failed_tests += 1;
-                continue;
-            }
-        };
-
-        // Convert planned::ObjectId to typed::FullyQualifiedName for unit test processing
-        // Note: Ident::new() only fails for invalid SQL identifiers, but ObjectIds
-        // are created from successfully parsed SQL files, so identifiers are always valid.
-        let typed_fqn =
-            typed::FullyQualifiedName::from(mz_sql_parser::ast::UnresolvedItemName(vec![
-                Ident::new(&object_id.database)
-                    .expect("database name from parsed SQL should be valid identifier"),
-                Ident::new(&object_id.schema)
-                    .expect("schema name from parsed SQL should be valid identifier"),
-                Ident::new(&object_id.object)
-                    .expect("object name from parsed SQL should be valid identifier"),
-            ]));
-
-        // Desugar the test
-        let sql_statements =
-            unit_test::desugar_unit_test(test, &target_obj.typed_object.stmt, &typed_fqn);
-
-        // Execute all SQL statements except the last one (which is the test query)
-        let mut execution_failed = false;
-        for sql in &sql_statements[..sql_statements.len() - 1] {
-            if let Err(e) = client.execute(sql, &[]).await {
-                println!("{}", "FAILED".red().bold());
-                eprintln!("  {}: failed to execute SQL: {:?}", "error".red().bold(), e);
-                eprintln!("  statement: {}", sql);
-                execution_failed = true;
-                failed_tests += 1;
-                break;
-            }
-        }
-
-        if execution_failed {
-            continue;
-        }
-
-        // Execute the test query (last statement)
-        let test_query = &sql_statements[sql_statements.len() - 1];
-        match client.query(test_query, &[]).await {
-            Ok(rows) => {
-                if rows.is_empty() {
-                    println!("{}", "ok".green().bold());
-                    passed_tests += 1;
-                } else {
-                    println!("{}", "FAILED".red().bold());
-                    eprintln!("  {}:", "Test assertion failed".yellow().bold());
-
-                    // Print column headers
-                    if let Some(first_row) = rows.first() {
-                        let columns: Vec<String> = first_row
-                            .columns()
-                            .iter()
-                            .map(|col| col.name().to_string())
-                            .collect();
-                        let header = columns.join(" | ");
-                        eprintln!("  {}", header.bold().cyan());
-                        eprintln!("  {}", "-".repeat(header.len()).cyan());
-                    }
-
-                    // Print rows
-                    for row in &rows {
-                        let mut values: Vec<String> = Vec::new();
-                        for i in 0..row.len() {
-                            let value_str = if let Ok(v) = row.try_get::<_, String>(i) {
-                                v
-                            } else if let Ok(v) = row.try_get::<_, i64>(i) {
-                                v.to_string()
-                            } else if let Ok(v) = row.try_get::<_, i32>(i) {
-                                v.to_string()
-                            } else if let Ok(v) = row.try_get::<_, f64>(i) {
-                                v.to_string()
-                            } else if let Ok(v) = row.try_get::<_, bool>(i) {
-                                v.to_string()
-                            } else {
-                                "<unprintable>".to_string()
-                            };
-
-                            // Color the status column (first column) differently
-                            if i == 0 {
-                                let colored = match value_str.as_str() {
-                                    "MISSING" => value_str.red().bold().to_string(),
-                                    "UNEXPECTED" => value_str.yellow().bold().to_string(),
-                                    _ => value_str,
-                                };
-                                values.push(colored);
-                            } else {
-                                values.push(value_str);
-                            }
-                        }
-                        eprintln!("  {}", values.join(" | "));
-                    }
-
-                    failed_tests += 1;
-                }
-            }
-            Err(e) => {
-                println!("{}", "FAILED".red().bold());
-                eprintln!(
-                    "  {}: failed to execute test query: {}",
-                    "error".red().bold(),
-                    e
-                );
-                failed_tests += 1;
-            }
-        }
-
-        // Clean up with DISCARD ALL
-        if let Err(e) = client.execute("DISCARD ALL", &[]).await {
-            eprintln!("warning: failed to execute DISCARD ALL: {}", e);
+            TestOutcome::Passed => passed_tests += 1,
+            TestOutcome::Failed => failed_tests += 1,
+            TestOutcome::ValidationFailed => validation_failed += 1,
         }
     }
 
-    // Print test summary
-    print!("\n{}: ", "test result".bold());
     let total_failed = failed_tests + validation_failed;
+    print!("\n{}: ", "test result".bold());
     if total_failed == 0 {
         print!("{}. ", "ok".green().bold());
     } else {
@@ -320,6 +130,209 @@ pub async fn run(directory: &Path, docker_image: &str) -> Result<(), CliError> {
     }
 
     Ok(())
+}
+
+/// Executes one test case through validation, setup SQL, assertion query, and cleanup.
+///
+/// Returns a `TestOutcome` instead of mutating counters so top-level `run` remains
+/// a simple coordinator over independent per-test executions.
+async fn run_single_test(
+    planned_project: &project::planned::Project,
+    object_id: &project::object_id::ObjectId,
+    test: &unit_test::UnitTest,
+    combined_types: &Types,
+    runtime: &DockerRuntime,
+    empty_types: &Types,
+) -> Result<TestOutcome, CliError> {
+    let dependencies = planned_project
+        .dependency_graph
+        .get(object_id)
+        .cloned()
+        .unwrap_or_else(BTreeSet::new);
+
+    if let Err(e) = unit_test::validate_unit_test(test, object_id, combined_types, &dependencies) {
+        println!(
+            "{} {} ... {}",
+            "test".cyan(),
+            test.name.cyan(),
+            "VALIDATION FAILED".red().bold()
+        );
+        print_test_validation_error(&e);
+        return Ok(TestOutcome::ValidationFailed);
+    }
+
+    let client = runtime_client(runtime, empty_types).await?;
+    if !validate_test_at_time(&client, test).await? {
+        return Ok(TestOutcome::ValidationFailed);
+    }
+
+    print!("{} {} ... ", "test".cyan(), test.name.cyan());
+
+    let Some(target_obj) = planned_project.find_object(object_id) else {
+        println!("{}", "FAILED".red().bold());
+        eprintln!(
+            "  {}: target object '{}' not found in project",
+            "error".red().bold(),
+            object_id
+        );
+        return Ok(TestOutcome::Failed);
+    };
+
+    let typed_fqn = typed_fqn_from_object_id(object_id);
+    let sql_statements = unit_test::desugar_unit_test(test, &target_obj.typed_object.stmt, &typed_fqn);
+
+    for sql in &sql_statements[..sql_statements.len() - 1] {
+        if let Err(e) = client.execute(sql, &[]).await {
+            println!("{}", "FAILED".red().bold());
+            eprintln!("  {}: failed to execute SQL: {:?}", "error".red().bold(), e);
+            eprintln!("  statement: {}", sql);
+            return Ok(TestOutcome::Failed);
+        }
+    }
+
+    let test_query = &sql_statements[sql_statements.len() - 1];
+    let outcome = match client.query(test_query, &[]).await {
+        Ok(rows) if rows.is_empty() => {
+            println!("{}", "ok".green().bold());
+            TestOutcome::Passed
+        }
+        Ok(rows) => {
+            println!("{}", "FAILED".red().bold());
+            print_test_assertion_rows(&rows);
+            TestOutcome::Failed
+        }
+        Err(e) => {
+            println!("{}", "FAILED".red().bold());
+            eprintln!(
+                "  {}: failed to execute test query: {}",
+                "error".red().bold(),
+                e
+            );
+            TestOutcome::Failed
+        }
+    };
+
+    if let Err(e) = client.execute("DISCARD ALL", &[]).await {
+        eprintln!("warning: failed to execute DISCARD ALL: {}", e);
+    }
+    Ok(outcome)
+}
+
+/// Renders validation failures with the same detail shape as legacy test output.
+fn print_test_validation_error(error: &unit_test::TestValidationError) {
+    match error {
+        unit_test::TestValidationError::UnmockedDependency(inner) => eprintln!("{}", inner),
+        unit_test::TestValidationError::MockSchemaMismatch(inner) => eprintln!("{}", inner),
+        unit_test::TestValidationError::ExpectedSchemaMismatch(inner) => eprintln!("{}", inner),
+        unit_test::TestValidationError::InvalidAtTime(inner) => eprintln!("{}", inner),
+        unit_test::TestValidationError::TypesCacheUnavailable { reason } => {
+            eprintln!(
+                "{}: types cache unavailable: {}",
+                "error".bright_red().bold(),
+                reason
+            );
+        }
+    }
+}
+
+/// Creates an isolated runtime client for test execution.
+///
+/// Converts runtime startup failures into user-facing CLI messages with actionable wording.
+async fn runtime_client(runtime: &DockerRuntime, empty_types: &Types) -> Result<Client, CliError> {
+    match runtime.get_client(empty_types).await {
+        Ok(client) => Ok(client),
+        Err(TypeCheckError::ContainerStartFailed(e)) => Err(CliError::Message(format!(
+            "Docker not available for running tests: {}",
+            e
+        ))),
+        Err(e) => Err(CliError::Message(format!(
+            "Failed to start test environment: {}",
+            e
+        ))),
+    }
+}
+
+/// Pre-validates optional `AT TIME` test expressions against `mz_timestamp` casting.
+///
+/// Returning `false` marks the test as validation failure without entering execution phases.
+async fn validate_test_at_time(client: &Client, test: &unit_test::UnitTest) -> Result<bool, CliError> {
+    if let Some(at_time) = &test.at_time {
+        let validation_query = format!("SELECT {}::mz_timestamp", at_time);
+        if let Err(e) = client.query(&validation_query, &[]).await {
+            println!(
+                "{} {} ... {}",
+                "test".cyan(),
+                test.name.cyan(),
+                "VALIDATION FAILED".red().bold()
+            );
+            let error = unit_test::InvalidAtTimeError {
+                test_name: test.name.clone(),
+                at_time_value: at_time.clone(),
+                db_error: e.to_string(),
+            };
+            eprintln!("{}", error);
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Converts planned object identity into the AST form expected by unit test desugaring.
+fn typed_fqn_from_object_id(object_id: &project::object_id::ObjectId) -> typed::FullyQualifiedName {
+    typed::FullyQualifiedName::from(mz_sql_parser::ast::UnresolvedItemName(vec![
+        Ident::new(&object_id.database)
+            .expect("database name from parsed SQL should be valid identifier"),
+        Ident::new(&object_id.schema).expect("schema name from parsed SQL should be valid identifier"),
+        Ident::new(&object_id.object).expect("object name from parsed SQL should be valid identifier"),
+    ]))
+}
+
+/// Prints failing assertion rows in a readable table-like format.
+///
+/// This is intentionally display-only and does not affect pass/fail decisions.
+fn print_test_assertion_rows(rows: &[tokio_postgres::Row]) {
+    eprintln!("  {}:", "Test assertion failed".yellow().bold());
+    if let Some(first_row) = rows.first() {
+        let columns: Vec<String> = first_row
+            .columns()
+            .iter()
+            .map(|col| col.name().to_string())
+            .collect();
+        let header = columns.join(" | ");
+        eprintln!("  {}", header.bold().cyan());
+        eprintln!("  {}", "-".repeat(header.len()).cyan());
+    }
+
+    for row in rows {
+        let mut values = Vec::new();
+        for i in 0..row.len() {
+            let value_str = if let Ok(v) = row.try_get::<_, String>(i) {
+                v
+            } else if let Ok(v) = row.try_get::<_, i64>(i) {
+                v.to_string()
+            } else if let Ok(v) = row.try_get::<_, i32>(i) {
+                v.to_string()
+            } else if let Ok(v) = row.try_get::<_, f64>(i) {
+                v.to_string()
+            } else if let Ok(v) = row.try_get::<_, bool>(i) {
+                v.to_string()
+            } else {
+                "<unprintable>".to_string()
+            };
+
+            if i == 0 {
+                let colored = match value_str.as_str() {
+                    "MISSING" => value_str.red().bold().to_string(),
+                    "UNEXPECTED" => value_str.yellow().bold().to_string(),
+                    _ => value_str,
+                };
+                values.push(colored);
+            } else {
+                values.push(value_str);
+            }
+        }
+        eprintln!("  {}", values.join(" | "));
+    }
 }
 
 /// Load types.cache or generate it by running type checking if stale/missing.
