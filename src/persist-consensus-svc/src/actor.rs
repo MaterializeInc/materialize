@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use bytes::Bytes;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Interval;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use prost::Message;
 
@@ -161,6 +161,8 @@ impl<W: WalWriter> Actor<W> {
 
     /// Runs the actor loop until the channel is closed.
     pub async fn run(mut self) {
+        let mut stats_interval = tokio::time::interval(std::time::Duration::from_secs(10));
+        stats_interval.tick().await; // consume the immediate first tick
         loop {
             tokio::select! {
                 biased;
@@ -185,6 +187,15 @@ impl<W: WalWriter> Actor<W> {
                     if self.has_pending_work() {
                         self.flush().await;
                     }
+                }
+                _ = stats_interval.tick() => {
+                    info!(
+                        shards = self.shards.len(),
+                        batches = self.batch_number,
+                        entries = self.running_entry_count,
+                        bytes = self.running_byte_count,
+                        "stats"
+                    );
                 }
             }
         }
@@ -369,7 +380,8 @@ impl<W: WalWriter> Actor<W> {
 
         // Only write to WAL if there are actual ops (skip for flush with only
         // pending loser replies).
-        if !pending_ops.is_empty() {
+        let had_work = !pending_ops.is_empty();
+        if had_work {
             let num_ops = pending_ops.len();
             // Count distinct shards in this batch.
             let distinct_shards: usize = pending_ops
@@ -407,49 +419,41 @@ impl<W: WalWriter> Actor<W> {
 
             let batch_bytes = batch.encoded_len();
 
-            // Write WAL entry (the commit point).
+            // Write WAL entry (the commit point). This MUST succeed — we
+            // retry indefinitely with exponential backoff because returning
+            // an error to clients on a transient S3 failure is unacceptable.
+            // Only Ok and AlreadyExists are definite results.
             let s3_start = std::time::Instant::now();
-            match self.wal_writer.write_batch(&batch).await {
-                Ok(()) => {}
-                Err(WalWriteError::AlreadyExists) => {
-                    // Batch already exists — shouldn't happen without a prior
-                    // retry, but safe to treat as success.
-                    warn!(
-                        batch = self.batch_number,
-                        "batch already exists, treating as success"
-                    );
-                }
-                Err(WalWriteError::Failed(e)) => {
-                    warn!("WAL write failed: {}, retrying", e);
-                    self.metrics.s3_write_retries.inc();
-                    // Retry once. If-None-Match ensures exactly-once.
-                    match self.wal_writer.write_batch(&batch).await {
-                        Ok(()) => {}
-                        Err(WalWriteError::AlreadyExists) => {
-                            // Original write landed after all.
+            let mut attempt = 0u64;
+            let mut backoff = std::time::Duration::from_millis(125);
+            let max_backoff = std::time::Duration::from_secs(2);
+            loop {
+                match self.wal_writer.write_batch(&batch).await {
+                    Ok(()) => break,
+                    Err(WalWriteError::AlreadyExists) => {
+                        if attempt > 0 {
                             info!(
                                 batch = self.batch_number,
-                                "retry conflict: original write landed"
+                                attempt, "retry conflict: original write landed"
                             );
                             self.metrics.s3_write_retry_already_exists.inc();
+                        } else {
+                            warn!(
+                                batch = self.batch_number,
+                                "batch already exists, treating as success"
+                            );
                         }
-                        Err(WalWriteError::Failed(e2)) => {
-                            warn!("WAL write retry failed: {}", e2);
-                            let replies = std::mem::take(&mut self.pending_replies);
-                            for pending in replies {
-                                match pending {
-                                    PendingReply::Cas { reply, .. } => {
-                                        let _ =
-                                            reply.send(Err(format!("WAL write failed: {}", e2)));
-                                    }
-                                    PendingReply::Truncate { reply, .. } => {
-                                        let _ =
-                                            reply.send(Err(format!("WAL write failed: {}", e2)));
-                                    }
-                                }
-                            }
-                            return;
-                        }
+                        break;
+                    }
+                    Err(WalWriteError::Failed(e)) => {
+                        warn!(
+                            batch = self.batch_number,
+                            attempt, "WAL write failed: {}, retrying in {:?}", e, backoff
+                        );
+                        self.metrics.s3_write_retries.inc();
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(max_backoff);
+                        attempt += 1;
                     }
                 }
             }
@@ -469,30 +473,11 @@ impl<W: WalWriter> Actor<W> {
                 .flush_shards_per_batch
                 .observe(distinct_shards as f64);
 
-            // Write snapshot every N batches.
-            if self.batches_since_snapshot >= self.snapshot_interval {
-                let snap_start = std::time::Instant::now();
-                match self
-                    .wal_writer
-                    .write_snapshot(&self.shards, self.batch_number - 1)
-                    .await
-                {
-                    Err(e) => {
-                        // Snapshot failure is not fatal; recovery can replay WAL.
-                        warn!("snapshot write failed: {}", e);
-                    }
-                    Ok(()) => {
-                        self.metrics
-                            .s3_snapshot_write_latency_seconds
-                            .observe(snap_start.elapsed().as_secs_f64());
-                        self.metrics.s3_snapshot_writes.inc();
-                        self.batches_since_snapshot = 0;
-                    }
-                }
-            }
         }
 
-        // Resolve all pending replies (both winners and losers).
+        // Resolve all pending replies (both winners and losers) BEFORE the
+        // snapshot write so clients aren't blocked by the (potentially slow)
+        // snapshot PUT.
         let replies = std::mem::take(&mut self.pending_replies);
         for pending in replies {
             match pending {
@@ -514,6 +499,30 @@ impl<W: WalWriter> Actor<W> {
         self.metrics
             .flush_latency_seconds
             .observe(flush_start.elapsed().as_secs_f64());
+
+        // Write snapshot every N batches. This happens after replies are
+        // resolved so the snapshot latency doesn't add to client-visible
+        // flush latency.
+        if had_work && self.batches_since_snapshot >= self.snapshot_interval {
+            let snap_start = std::time::Instant::now();
+            match self
+                .wal_writer
+                .write_snapshot(&self.shards, self.batch_number - 1)
+                .await
+            {
+                Err(e) => {
+                    // Snapshot failure is not fatal; recovery can replay WAL.
+                    warn!("snapshot write failed: {}", e);
+                }
+                Ok(()) => {
+                    self.metrics
+                        .s3_snapshot_write_latency_seconds
+                        .observe(snap_start.elapsed().as_secs_f64());
+                    self.metrics.s3_snapshot_writes.inc();
+                    self.batches_since_snapshot = 0;
+                }
+            }
+        }
     }
 }
 
