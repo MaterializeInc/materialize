@@ -1,7 +1,8 @@
-//! Shared helper functions for CLI commands.
+//! Deployment execution utilities.
 //!
-//! This module contains common functionality used across multiple commands
-//! to reduce code duplication and ensure consistent behavior.
+//! This module contains the `DeploymentExecutor` for running SQL statements
+//! during deployment, along with helper functions for collecting deployment
+//! metadata and generating environment names.
 
 use crate::cli::CliError;
 use crate::client::Client;
@@ -9,44 +10,11 @@ use crate::project::{self, typed};
 use crate::utils::git::get_git_commit;
 use std::path::Path;
 
-/// Validate that a staging deployment exists and has not been promoted.
-///
-/// This encapsulates the common validation pattern used by apply, ready, and abort.
-///
-/// # Returns
-/// Ok(()) if the deployment exists and has not been promoted.
-///
-/// # Errors
-/// Returns `CliError::StagingEnvironmentNotFound` if deployment doesn't exist
-/// Returns `CliError::StagingAlreadyPromoted` if already promoted
-pub async fn validate_staging_deployment(client: &Client, deploy_id: &str) -> Result<(), CliError> {
-    let metadata = client
-        .deployments()
-        .get_deployment_metadata(deploy_id)
-        .await?;
-    match metadata {
-        Some(meta) if meta.promoted_at.is_some() => Err(CliError::StagingAlreadyPromoted {
-            name: deploy_id.to_string(),
-        }),
-        Some(_) => Ok(()),
-        None => Err(CliError::StagingEnvironmentNotFound {
-            name: deploy_id.to_string(),
-        }),
-    }
-}
-
 /// Collect deployment metadata (user and git commit).
 ///
 /// This function retrieves the current database user and git commit hash
 /// for recording deployment provenance. If the current user cannot be
 /// determined, it defaults to "unknown".
-///
-/// # Arguments
-/// * `client` - Database client for querying current user
-/// * `directory` - Project directory for determining git commit
-///
-/// # Returns
-/// Deployment metadata containing user and optional git commit
 pub async fn collect_deployment_metadata(
     client: &Client,
     directory: &Path,
@@ -72,9 +40,6 @@ pub async fn collect_deployment_metadata(
 ///
 /// Uses SHA256 hash of current timestamp to generate a unique identifier
 /// for deployments when no explicit name is provided.
-///
-/// # Returns
-/// A 7-character lowercase hex string (e.g., "a3f7b2c")
 pub fn generate_random_env_name() -> String {
     use sha2::{Digest, Sha256};
     use std::time::SystemTime;
@@ -129,15 +94,6 @@ impl<'a> DeploymentExecutor<'a> {
     ///
     /// This executes the main CREATE statement, followed by any indexes,
     /// grants, and comments associated with the object.
-    ///
-    /// # Arguments
-    /// * `typed_obj` - The typed database object to deploy
-    ///
-    /// # Returns
-    /// Ok(()) if all statements execute successfully
-    ///
-    /// # Errors
-    /// Returns `CliError::SqlExecutionFailed` if any statement fails
     pub async fn execute_object(&self, typed_obj: &typed::DatabaseObject) -> Result<(), CliError> {
         // Execute main statement
         self.execute_sql(&typed_obj.stmt).await?;
@@ -161,12 +117,6 @@ impl<'a> DeploymentExecutor<'a> {
     }
 
     /// Execute (or print in dry-run mode) a single SQL statement.
-    ///
-    /// # Arguments
-    /// * `stmt` - Any type that can be converted to SQL string (via ToString)
-    ///
-    /// # Errors
-    /// Returns `CliError::SqlExecutionFailed` with statement context (only in non-dry-run mode)
     pub async fn execute_sql(&self, stmt: &impl ToString) -> Result<(), CliError> {
         let sql = stmt.to_string();
 

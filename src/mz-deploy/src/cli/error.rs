@@ -48,14 +48,6 @@ pub enum CliError {
         plural = if conflicts.len() == 1 { "" } else { "s" })]
     DeploymentConflict { conflicts: Vec<ConflictRecord> },
 
-    /// Staging environment not found
-    #[error("staging environment '{name}' not found")]
-    StagingEnvironmentNotFound { name: String },
-
-    /// Staging environment already promoted
-    #[error("staging environment '{name}' has already been promoted")]
-    StagingAlreadyPromoted { name: String },
-
     /// Failed to determine git SHA
     #[error("failed to determine git SHA for staging environment name")]
     GitShaFailed,
@@ -145,7 +137,24 @@ impl CliError {
     /// Returns `None` for errors that wrap other error types (they provide their own hints).
     pub fn hint(&self) -> Option<String> {
         match self {
-            Self::Project(_) | Self::Connection(_) => None,
+            Self::Project(_) => None,
+            Self::Connection(e) => match e {
+                ConnectionError::DeploymentNotFound { deploy_id } => Some(format!(
+                    "verify the staging environment name '{}' is correct, or deploy to staging first using:\n  \
+                     {} {} {} --name {}",
+                    deploy_id.yellow(),
+                    "mz-deploy".cyan(),
+                    "stage".cyan(),
+                    ".".cyan(),
+                    deploy_id.cyan()
+                )),
+                ConnectionError::DeploymentAlreadyPromoted { .. } => Some(
+                    "this staging environment has already been applied to production.\n\
+                     Deploy a new staging environment to make changes"
+                        .to_string(),
+                ),
+                _ => None,
+            },
             Self::DeploymentConflict { conflicts } => {
                 let conflict_list = conflicts
                     .iter()
@@ -178,20 +187,6 @@ impl CliError {
                     "--force".yellow().bold()
                 ))
             }
-            Self::StagingEnvironmentNotFound { name } => Some(format!(
-                "verify the staging environment name '{}' is correct, or deploy to staging first using:\n  \
-                 {} {} {} --name {}",
-                name.yellow(),
-                "mz-deploy".cyan(),
-                "stage".cyan(),
-                ".".cyan(),
-                name.cyan()
-            )),
-            Self::StagingAlreadyPromoted { .. } => Some(
-                "this staging environment has already been applied to production.\n\
-                 Deploy a new staging environment to make changes"
-                    .to_string(),
-            ),
             Self::GitShaFailed => Some(
                 "either run mz-deploy from inside a git repository, or provide a staging environment name using:\n  \
                  mz-deploy stage . --name <environment-name>"

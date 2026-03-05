@@ -52,7 +52,7 @@ pub async fn run(
         .await
         .map_err(CliError::Connection)?;
     // Validate staging deployment exists and is not promoted
-    crate::cli::helpers::validate_staging_deployment(&client, deploy_id).await?;
+    client.deployments().validate_staging(deploy_id).await?;
 
     if snapshot {
         // Snapshot mode: query once and display status

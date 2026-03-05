@@ -2,7 +2,7 @@
 
 pub mod commands;
 mod error;
-pub mod helpers;
+pub mod executor;
 
 pub use error::CliError;
 

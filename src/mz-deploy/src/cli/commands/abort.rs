@@ -30,7 +30,7 @@ pub async fn run(profile: &Profile, deploy_id: &str) -> Result<(), CliError> {
         .await
         .map_err(CliError::Connection)?;
 
-    crate::cli::helpers::validate_staging_deployment(&client, deploy_id).await?;
+    client.deployments().validate_staging(deploy_id).await?;
 
     // Get staging schemas and clusters
     let staging_schemas = client

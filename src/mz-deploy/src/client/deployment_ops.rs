@@ -1392,6 +1392,22 @@ impl DeploymentsClient<'_> {
         get_deployment_metadata(self.client, deploy_id).await
     }
 
+    /// Validate that a staging deployment exists and has not been promoted.
+    pub async fn validate_staging(&self, deploy_id: &str) -> Result<(), ConnectionError> {
+        let metadata = self.get_deployment_metadata(deploy_id).await?;
+        match metadata {
+            Some(meta) if meta.promoted_at.is_some() => {
+                Err(ConnectionError::DeploymentAlreadyPromoted {
+                    deploy_id: deploy_id.to_string(),
+                })
+            }
+            Some(_) => Ok(()),
+            None => Err(ConnectionError::DeploymentNotFound {
+                deploy_id: deploy_id.to_string(),
+            }),
+        }
+    }
+
     pub async fn get_deployment_details(
         &self,
         deploy_id: &str,

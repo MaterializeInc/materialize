@@ -1,6 +1,6 @@
 //! Create tables command - create tables that don't exist in the database.
 
-use crate::cli::{CliError, TypeCheckMode, helpers};
+use crate::cli::{CliError, TypeCheckMode, executor};
 use crate::client::{Client, Profile};
 use crate::project::ast::Statement;
 use crate::utils::git;
@@ -47,7 +47,7 @@ pub async fn run(
 
     let deploy_id = deploy_id
         .map(ToString::to_string)
-        .unwrap_or_else(helpers::generate_random_env_name);
+        .unwrap_or_else(executor::generate_random_env_name);
 
     if dry_run {
         println!("-- DRY RUN: The following SQL would be executed --\n");
@@ -126,7 +126,7 @@ pub async fn run(
 
     println!("\nCreating {} new table(s)...", tables_to_create.len());
 
-    let executor = helpers::DeploymentExecutor::with_dry_run(&client, dry_run);
+    let executor = executor::DeploymentExecutor::with_dry_run(&client, dry_run);
     let table_schemas = collect_table_schemas(&tables_to_create);
     prepare_schemas_and_mod_statements(&executor, &planned_project, &table_schemas, dry_run)
         .await?;
@@ -211,7 +211,7 @@ fn collect_table_schemas(
 /// Ensures schemas exist and replays relevant database/schema module setup SQL
 /// only for the databases/schemas that contain pending table objects.
 async fn prepare_schemas_and_mod_statements(
-    executor: &helpers::DeploymentExecutor<'_>,
+    executor: &executor::DeploymentExecutor<'_>,
     planned_project: &project::planned::Project,
     table_schemas: &BTreeMap<project::SchemaQualifier, crate::client::DeploymentKind>,
     dry_run: bool,
@@ -270,7 +270,7 @@ async fn prepare_schemas_and_mod_statements(
 ///
 /// Returns the count of successfully executed objects for summary and metadata reporting.
 async fn execute_table_creates(
-    executor: &helpers::DeploymentExecutor<'_>,
+    executor: &executor::DeploymentExecutor<'_>,
     tables_to_create: &[ObjectRef<'_>],
     dry_run: bool,
 ) -> Result<usize, CliError> {
@@ -328,7 +328,7 @@ async fn finalize_table_deployment(
         objects: snapshot_objects,
         schemas: table_schemas.clone(),
     };
-    let metadata = helpers::collect_deployment_metadata(client, directory).await;
+    let metadata = executor::collect_deployment_metadata(client, directory).await;
     project::deployment_snapshot::write_to_database(
         client,
         &new_snapshot,

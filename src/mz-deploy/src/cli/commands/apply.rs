@@ -50,7 +50,7 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
     project::deployment_snapshot::initialize_deployment_table(&client).await?;
 
     // Validate deployment exists and is not promoted
-    crate::cli::helpers::validate_staging_deployment(&client, deploy_id).await?;
+    client.deployments().validate_staging(deploy_id).await?;
 
     let apply_state = client.deployments().get_apply_state(deploy_id).await?;
     verbose!("Apply state: {:?}", apply_state);

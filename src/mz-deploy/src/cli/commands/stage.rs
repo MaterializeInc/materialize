@@ -1,6 +1,6 @@
 //! Stage command - deploy to staging environment with renamed schemas and clusters.
 
-use crate::cli::{CliError, TypeCheckMode, helpers};
+use crate::cli::{CliError, TypeCheckMode, executor};
 use crate::client::{
     Client, ClusterConfig, DeploymentKind, PendingStatement, Profile, ReplacementMvRecord,
 };
@@ -88,7 +88,7 @@ pub async fn run(
 
     let stage_name = stage_name
         .map(ToString::to_string)
-        .unwrap_or_else(helpers::generate_random_env_name);
+        .unwrap_or_else(executor::generate_random_env_name);
 
     if dry_run {
         println!("-- DRY RUN: The following SQL would be executed --\n");
@@ -395,7 +395,7 @@ async fn record_stage_metadata(
 ) -> Result<(), CliError> {
     progress::stage_start("Recording deployment metadata");
     let metadata_start = Instant::now();
-    let metadata = helpers::collect_deployment_metadata(client, directory).await;
+    let metadata = executor::collect_deployment_metadata(client, directory).await;
 
     let mut staging_snapshot = project::deployment_snapshot::DeploymentSnapshot::default();
 
@@ -517,7 +517,7 @@ async fn create_resources_with_rollback<'a>(
     dry_run: bool,
 ) -> Result<usize, CliError> {
     // Create executor with dry-run mode
-    let executor = helpers::DeploymentExecutor::with_dry_run(client, dry_run);
+    let executor = executor::DeploymentExecutor::with_dry_run(client, dry_run);
 
     // Wrap resource creation in a closure that we can call and handle errors from
     let create_result = async {
@@ -981,7 +981,7 @@ fn best_effort_delete<E: std::fmt::Display>(result: Result<(), E>, action: &str)
 /// The `transform` callback allows the caller to modify the normalized statement
 /// before execution (e.g., to set `replacement_for` on replacement MVs).
 async fn deploy_single_object(
-    executor: &helpers::DeploymentExecutor<'_>,
+    executor: &executor::DeploymentExecutor<'_>,
     object_id: &ObjectId,
     typed_obj: &project::typed::DatabaseObject,
     staging_suffix: &str,
