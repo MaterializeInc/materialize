@@ -57,6 +57,7 @@ async fn apply_cluster(client: &Client, def: &ClusterDefinition) -> Result<(), C
 
     // Check if cluster already exists
     let existing = client
+        .introspection()
         .get_cluster(cluster_name)
         .await
         .map_err(CliError::Connection)?;
@@ -114,6 +115,7 @@ async fn apply_cluster(client: &Client, def: &ClusterDefinition) -> Result<(), C
                     replication_factor: rf,
                 };
                 client
+                    .provisioning()
                     .alter_cluster(cluster_name, &options)
                     .await
                     .map_err(CliError::Connection)?;

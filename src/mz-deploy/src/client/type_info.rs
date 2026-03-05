@@ -28,7 +28,6 @@ impl TypeInfoClient<'_> {
 
             let rows = self
                 .client
-                .postgres_client()
                 .query(
                     &format!(
                         "SHOW COLUMNS FROM {}.{}.{}",
@@ -36,8 +35,7 @@ impl TypeInfoClient<'_> {
                     ),
                     &[],
                 )
-                .await
-                .map_err(ConnectionError::Query)?;
+                .await?;
 
             let mut columns = BTreeMap::new();
             for row in rows {
@@ -83,10 +81,8 @@ impl TypeInfoClient<'_> {
 
             let rows = self
                 .client
-                .postgres_client()
                 .query(&format!("SHOW COLUMNS FROM {}", object_ref), &[])
-                .await
-                .map_err(ConnectionError::Query)?;
+                .await?;
 
             let mut columns = BTreeMap::new();
             for row in rows {

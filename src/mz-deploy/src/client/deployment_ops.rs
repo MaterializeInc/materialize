@@ -4,7 +4,7 @@
 //! including creating tracking tables, inserting/querying deployment records,
 //! and managing deployment lifecycle (staging, promotion, abort).
 
-use crate::client::connection::{DeploymentsClient, DeploymentsClientMut};
+use crate::client::connection::{Client, DeploymentsClient, DeploymentsClientMut};
 use crate::client::errors::ConnectionError;
 use crate::client::models::{
     ApplyState, ConflictRecord, DeploymentDetails, DeploymentHistoryEntry, DeploymentKind,
@@ -18,7 +18,6 @@ use chrono::{DateTime, Utc};
 use futures::Stream;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use tokio_postgres::Client as PgClient;
 use tokio_postgres::types::ToSql;
 
 /// Reason why a cluster deployment is failing.
@@ -115,11 +114,10 @@ pub struct HydrationStatusUpdate {
 /// - `_mz_deploy.public.clusters` table for tracking clusters used by deployments
 /// - `_mz_deploy.public.pending_statements` table for deferred statements (sinks)
 /// - `_mz_deploy.public.production` view for querying current production state
-pub async fn create_deployments(client: &PgClient) -> Result<(), ConnectionError> {
+pub async fn create_deployments(client: &Client) -> Result<(), ConnectionError> {
     client
         .execute("CREATE DATABASE IF NOT EXISTS _mz_deploy;", &[])
-        .await
-        .map_err(ConnectionError::Query)?;
+        .await?;
 
     client
         .execute(
@@ -137,8 +135,7 @@ pub async fn create_deployments(client: &PgClient) -> Result<(), ConnectionError
         );"#,
             &[],
         )
-        .await
-        .map_err(ConnectionError::Query)?;
+        .await?;
 
     client
         .execute(
@@ -153,8 +150,7 @@ pub async fn create_deployments(client: &PgClient) -> Result<(), ConnectionError
         );"#,
             &[],
         )
-        .await
-        .map_err(ConnectionError::Query)?;
+        .await?;
 
     client
         .execute(
@@ -166,8 +162,7 @@ pub async fn create_deployments(client: &PgClient) -> Result<(), ConnectionError
         );"#,
             &[],
         )
-        .await
-        .map_err(ConnectionError::Query)?;
+        .await?;
 
     client
         .execute(
@@ -186,8 +181,7 @@ pub async fn create_deployments(client: &PgClient) -> Result<(), ConnectionError
         );"#,
             &[],
         )
-        .await
-        .map_err(ConnectionError::Query)?;
+        .await?;
 
     client
         .execute(
@@ -202,8 +196,7 @@ pub async fn create_deployments(client: &PgClient) -> Result<(), ConnectionError
         );"#,
             &[],
         )
-        .await
-        .map_err(ConnectionError::Query)?;
+        .await?;
 
     client
         .execute(
@@ -223,15 +216,14 @@ pub async fn create_deployments(client: &PgClient) -> Result<(), ConnectionError
     "#,
             &[],
         )
-        .await
-        .map_err(ConnectionError::Query)?;
+        .await?;
 
     Ok(())
 }
 
 /// Insert schema deployment records (insert-only, no DELETE).
 pub async fn insert_schema_deployments(
-    client: &PgClient,
+    client: &Client,
     deployments: &[SchemaDeploymentRecord],
 ) -> Result<(), ConnectionError> {
     if deployments.is_empty() {
@@ -261,8 +253,7 @@ pub async fn insert_schema_deployments(
                     &kind_str,
                 ],
             )
-            .await
-            .map_err(ConnectionError::Query)?;
+            .await?;
     }
 
     Ok(())
@@ -270,7 +261,7 @@ pub async fn insert_schema_deployments(
 
 /// Append deployment object records (insert-only, never update or delete).
 pub async fn append_deployment_objects(
-    client: &PgClient,
+    client: &Client,
     objects: &[DeploymentObjectRecord],
 ) -> Result<(), ConnectionError> {
     if objects.is_empty() {
@@ -296,8 +287,7 @@ pub async fn append_deployment_objects(
                     &obj.object_hash,
                 ],
             )
-            .await
-            .map_err(ConnectionError::Query)?;
+            .await?;
     }
 
     Ok(())
@@ -308,7 +298,7 @@ pub async fn append_deployment_objects(
 /// Accepts cluster names and resolves them to cluster IDs internally.
 /// Fails if any cluster names cannot be resolved (cluster doesn't exist).
 pub async fn insert_deployment_clusters(
-    client: &PgClient,
+    client: &Client,
     deploy_id: &str,
     clusters: &[String],
 ) -> Result<(), ConnectionError> {
@@ -360,8 +350,7 @@ pub async fn insert_deployment_clusters(
         let cluster_id: String = row.get("id");
         client
             .execute(insert_sql, &[&deploy_id, &cluster_id])
-            .await
-            .map_err(ConnectionError::Query)?;
+            .await?;
     }
 
     Ok(())
@@ -373,7 +362,7 @@ pub async fn insert_deployment_clusters(
 /// If a cluster ID exists in _mz_deploy.public.clusters but the cluster was deleted from the catalog,
 /// that cluster will be silently omitted from results.
 pub async fn get_deployment_clusters(
-    client: &PgClient,
+    client: &Client,
     deploy_id: &str,
 ) -> Result<Vec<String>, ConnectionError> {
     let query = r#"
@@ -384,10 +373,7 @@ pub async fn get_deployment_clusters(
         ORDER BY c.name
     "#;
 
-    let rows = client
-        .query(query, &[&deploy_id])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(query, &[&deploy_id]).await?;
 
     Ok(rows.iter().map(|row| row.get("name")).collect())
 }
@@ -397,7 +383,7 @@ pub async fn get_deployment_clusters(
 /// Returns an error if any cluster IDs in _mz_deploy.public.clusters cannot be resolved
 /// to clusters in mz_catalog.mz_clusters (i.e., clusters were deleted).
 pub async fn validate_deployment_clusters(
-    client: &PgClient,
+    client: &Client,
     deploy_id: &str,
 ) -> Result<(), ConnectionError> {
     let query = r#"
@@ -407,10 +393,7 @@ pub async fn validate_deployment_clusters(
         WHERE dc.deploy_id = $1 AND c.id IS NULL
     "#;
 
-    let rows = client
-        .query(query, &[&deploy_id])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(query, &[&deploy_id]).await?;
 
     if !rows.is_empty() {
         let missing_ids: Vec<String> = rows.iter().map(|row| row.get("cluster_id")).collect();
@@ -433,7 +416,7 @@ pub async fn validate_deployment_clusters(
 
 /// Delete cluster records for a staging deployment.
 pub async fn delete_deployment_clusters(
-    client: &PgClient,
+    client: &Client,
     deploy_id: &str,
 ) -> Result<(), ConnectionError> {
     client
@@ -441,48 +424,42 @@ pub async fn delete_deployment_clusters(
             "DELETE FROM _mz_deploy.public.clusters WHERE deploy_id = $1",
             &[&deploy_id],
         )
-        .await
-        .map_err(ConnectionError::Query)?;
+        .await?;
     Ok(())
 }
 
 /// Update promoted_at timestamp for a staging deployment.
-pub async fn update_promoted_at(client: &PgClient, deploy_id: &str) -> Result<(), ConnectionError> {
+pub async fn update_promoted_at(client: &Client, deploy_id: &str) -> Result<(), ConnectionError> {
     let update_sql = r#"
         UPDATE _mz_deploy.public.deployments
         SET promoted_at = NOW()
         WHERE deploy_id = $1
     "#;
 
-    client
-        .execute(update_sql, &[&deploy_id])
-        .await
-        .map_err(ConnectionError::Query)?;
+    client.execute(update_sql, &[&deploy_id]).await?;
     Ok(())
 }
 
 /// Delete all deployment records for a specific deployment.
-pub async fn delete_deployment(client: &PgClient, deploy_id: &str) -> Result<(), ConnectionError> {
+pub async fn delete_deployment(client: &Client, deploy_id: &str) -> Result<(), ConnectionError> {
     client
         .execute(
             "DELETE FROM _mz_deploy.public.deployments WHERE deploy_id = $1",
             &[&deploy_id],
         )
-        .await
-        .map_err(ConnectionError::Query)?;
+        .await?;
     client
         .execute(
             "DELETE FROM _mz_deploy.public.objects WHERE deploy_id = $1",
             &[&deploy_id],
         )
-        .await
-        .map_err(ConnectionError::Query)?;
+        .await?;
     Ok(())
 }
 
 /// Get schema deployment records from the database for a specific deployment.
 pub async fn get_schema_deployments(
-    client: &PgClient,
+    client: &Client,
     deploy_id: Option<&str>,
 ) -> Result<Vec<SchemaDeploymentRecord>, ConnectionError> {
     let query = if deploy_id.is_none() {
@@ -511,15 +488,9 @@ pub async fn get_schema_deployments(
     };
 
     let rows = if deploy_id.is_none() {
-        client
-            .query(query, &[])
-            .await
-            .map_err(ConnectionError::Query)?
+        client.query(query, &[]).await?
     } else {
-        client
-            .query(query, &[&deploy_id])
-            .await
-            .map_err(ConnectionError::Query)?
+        client.query(query, &[&deploy_id]).await?
     };
 
     let mut records = Vec::new();
@@ -554,7 +525,7 @@ pub async fn get_schema_deployments(
 
 /// Get deployment object records from the database for a specific deployment.
 pub async fn get_deployment_objects(
-    client: &PgClient,
+    client: &Client,
     deploy_id: Option<&str>,
 ) -> Result<DeploymentSnapshot, ConnectionError> {
     let query = if deploy_id.is_none() {
@@ -574,15 +545,9 @@ pub async fn get_deployment_objects(
     };
 
     let rows = if deploy_id.is_none() {
-        client
-            .query(query, &[])
-            .await
-            .map_err(ConnectionError::Query)?
+        client.query(query, &[]).await?
     } else {
-        client
-            .query(query, &[&deploy_id])
-            .await
-            .map_err(ConnectionError::Query)?
+        client.query(query, &[&deploy_id]).await?
     };
 
     let mut objects = BTreeMap::new();
@@ -610,7 +575,7 @@ pub async fn get_deployment_objects(
 
 /// Get metadata about a deployment for validation.
 pub async fn get_deployment_metadata(
-    client: &PgClient,
+    client: &Client,
     deploy_id: &str,
 ) -> Result<Option<DeploymentMetadata>, ConnectionError> {
     let query = r#"
@@ -622,10 +587,7 @@ pub async fn get_deployment_metadata(
         WHERE deploy_id = $1
     "#;
 
-    let rows = client
-        .query(query, &[&deploy_id])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(query, &[&deploy_id]).await?;
 
     if rows.is_empty() {
         return Ok(None);
@@ -653,7 +615,7 @@ pub async fn get_deployment_metadata(
 ///
 /// Returns deployment details if the deployment exists, or None if not found.
 pub async fn get_deployment_details(
-    client: &PgClient,
+    client: &Client,
     deploy_id: &str,
 ) -> Result<Option<DeploymentDetails>, ConnectionError> {
     let query = r#"
@@ -670,10 +632,7 @@ pub async fn get_deployment_details(
         ORDER BY database, schema
     "#;
 
-    let rows = client
-        .query(query, &[&deploy_id])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(query, &[&deploy_id]).await?;
 
     if rows.is_empty() {
         return Ok(None);
@@ -708,7 +667,7 @@ pub async fn get_deployment_details(
 ///
 /// Returns a map from deploy_id to staging deployment details.
 pub async fn list_staging_deployments(
-    client: &PgClient,
+    client: &Client,
 ) -> Result<BTreeMap<String, StagingDeployment>, ConnectionError> {
     let query = r#"
         SELECT deploy_id,
@@ -723,10 +682,7 @@ pub async fn list_staging_deployments(
         ORDER BY deploy_id, database, schema
     "#;
 
-    let rows = client
-        .query(query, &[])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(query, &[]).await?;
 
     let mut deployments: BTreeMap<String, StagingDeployment> = BTreeMap::new();
 
@@ -763,7 +719,7 @@ pub async fn list_staging_deployments(
 ///
 /// Returns a vector of deployment history entries ordered by promotion time.
 pub async fn list_deployment_history(
-    client: &PgClient,
+    client: &Client,
     limit: Option<usize>,
 ) -> Result<Vec<DeploymentHistoryEntry>, ConnectionError> {
     // We need to limit unique deployments, not individual schema rows
@@ -810,10 +766,7 @@ pub async fn list_deployment_history(
         .to_string()
     };
 
-    let rows = client
-        .query(&query, &[])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(&query, &[]).await?;
 
     // Group by (deploy_id, promoted_at, deployed_by, commit, kind)
     let mut deployments: Vec<DeploymentHistoryEntry> = Vec::new();
@@ -855,7 +808,7 @@ pub async fn list_deployment_history(
 
 /// Check for deployment conflicts (schemas updated after deployment started).
 pub async fn check_deployment_conflicts(
-    client: &PgClient,
+    client: &Client,
     deploy_id: &str,
 ) -> Result<Vec<ConflictRecord>, ConnectionError> {
     let query = r#"
@@ -865,10 +818,7 @@ pub async fn check_deployment_conflicts(
         WHERE d.deploy_id = $1 AND p.promoted_at > d.deployed_at
     "#;
 
-    let rows = client
-        .query(query, &[&deploy_id])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(query, &[&deploy_id]).await?;
 
     let conflicts = rows
         .iter()
@@ -884,7 +834,7 @@ pub async fn check_deployment_conflicts(
 }
 
 /// Check if the deployment tracking table exists.
-pub async fn deployment_table_exists(client: &PgClient) -> Result<bool, ConnectionError> {
+pub async fn deployment_table_exists(client: &Client) -> Result<bool, ConnectionError> {
     let query = r#"
         SELECT EXISTS(
             SELECT 1
@@ -897,10 +847,7 @@ pub async fn deployment_table_exists(client: &PgClient) -> Result<bool, Connecti
         )
     "#;
 
-    let row = client
-        .query_one(query, &[])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let row = client.query_one(query, &[]).await?;
 
     Ok(row.get(0))
 }
@@ -923,7 +870,7 @@ pub const DEFAULT_ALLOWED_LAG_SECS: i64 = 300;
 /// # Returns
 /// A vector of `ClusterStatusContext` with full status details for each cluster.
 pub async fn get_deployment_hydration_status(
-    client: &PgClient,
+    client: &Client,
     deploy_id: &str,
     allowed_lag_secs: i64,
 ) -> Result<Vec<ClusterStatusContext>, ConnectionError> {
@@ -1016,10 +963,7 @@ pub async fn get_deployment_hydration_status(
         allowed_lag_secs = allowed_lag_secs
     );
 
-    let rows = client
-        .query(&query, &[&pattern])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(&query, &[&pattern]).await?;
 
     let mut results = Vec::new();
     for row in rows {
@@ -1084,7 +1028,7 @@ pub async fn get_deployment_hydration_status(
 /// exchange names, which effectively moves the 'swapped=true' comment to the
 /// `_pre` schema.
 pub async fn create_apply_state_schemas(
-    client: &PgClient,
+    client: &Client,
     deploy_id: &str,
 ) -> Result<(), ConnectionError> {
     let pre_schema = format!("apply_{}_pre", deploy_id);
@@ -1092,17 +1036,11 @@ pub async fn create_apply_state_schemas(
 
     // Create _pre schema if it doesn't exist
     let create_pre = format!("CREATE SCHEMA IF NOT EXISTS _mz_deploy.{}", pre_schema);
-    client
-        .execute(&create_pre, &[])
-        .await
-        .map_err(ConnectionError::Query)?;
+    client.execute(&create_pre, &[]).await?;
 
     // Create _post schema if it doesn't exist
     let create_post = format!("CREATE SCHEMA IF NOT EXISTS _mz_deploy.{}", post_schema);
-    client
-        .execute(&create_post, &[])
-        .await
-        .map_err(ConnectionError::Query)?;
+    client.execute(&create_post, &[]).await?;
 
     // Query to check if a schema has a comment (using mz_internal.mz_comments)
     let comment_check_query = r#"
@@ -1114,10 +1052,7 @@ pub async fn create_apply_state_schemas(
     "#;
 
     // Set comment on _pre schema if it doesn't have one
-    let rows = client
-        .query(comment_check_query, &[&pre_schema])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(comment_check_query, &[&pre_schema]).await?;
 
     if !rows.is_empty() {
         let comment: Option<String> = rows[0].get("comment");
@@ -1126,18 +1061,12 @@ pub async fn create_apply_state_schemas(
                 "COMMENT ON SCHEMA _mz_deploy.{} IS 'swapped=false'",
                 pre_schema
             );
-            client
-                .execute(&comment_pre, &[])
-                .await
-                .map_err(ConnectionError::Query)?;
+            client.execute(&comment_pre, &[]).await?;
         }
     }
 
     // Set comment on _post schema if it doesn't have one
-    let rows = client
-        .query(comment_check_query, &[&post_schema])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(comment_check_query, &[&post_schema]).await?;
 
     if !rows.is_empty() {
         let comment: Option<String> = rows[0].get("comment");
@@ -1146,10 +1075,7 @@ pub async fn create_apply_state_schemas(
                 "COMMENT ON SCHEMA _mz_deploy.{} IS 'swapped=true'",
                 post_schema
             );
-            client
-                .execute(&comment_post, &[])
-                .await
-                .map_err(ConnectionError::Query)?;
+            client.execute(&comment_post, &[]).await?;
         }
     }
 
@@ -1164,7 +1090,7 @@ pub async fn create_apply_state_schemas(
 /// - Schema exists with comment 'swapped=false' → PreSwap
 /// - Schema exists with comment 'swapped=true' → PostSwap
 pub async fn get_apply_state(
-    client: &PgClient,
+    client: &Client,
     deploy_id: &str,
 ) -> Result<ApplyState, ConnectionError> {
     let pre_schema = format!("apply_{}_pre", deploy_id);
@@ -1178,10 +1104,7 @@ pub async fn get_apply_state(
         WHERE s.name = $1 AND d.name = '_mz_deploy'
     "#;
 
-    let rows = client
-        .query(query, &[&pre_schema])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(query, &[&pre_schema]).await?;
 
     if rows.is_empty() {
         return Ok(ApplyState::NotStarted);
@@ -1200,7 +1123,7 @@ pub async fn get_apply_state(
 
 /// Delete apply state schemas after successful completion.
 pub async fn delete_apply_state_schemas(
-    client: &PgClient,
+    client: &Client,
     deploy_id: &str,
 ) -> Result<(), ConnectionError> {
     let pre_schema = format!("apply_{}_pre", deploy_id);
@@ -1208,16 +1131,10 @@ pub async fn delete_apply_state_schemas(
 
     // Drop schemas if they exist
     let drop_pre = format!("DROP SCHEMA IF EXISTS _mz_deploy.{}", pre_schema);
-    client
-        .execute(&drop_pre, &[])
-        .await
-        .map_err(ConnectionError::Query)?;
+    client.execute(&drop_pre, &[]).await?;
 
     let drop_post = format!("DROP SCHEMA IF EXISTS _mz_deploy.{}", post_schema);
-    client
-        .execute(&drop_post, &[])
-        .await
-        .map_err(ConnectionError::Query)?;
+    client.execute(&drop_post, &[]).await?;
 
     Ok(())
 }
@@ -1228,7 +1145,7 @@ pub async fn delete_apply_state_schemas(
 
 /// Insert pending statements for deferred execution (e.g., sinks).
 pub async fn insert_pending_statements(
-    client: &PgClient,
+    client: &Client,
     statements: &[PendingStatement],
 ) -> Result<(), ConnectionError> {
     if statements.is_empty() {
@@ -1258,8 +1175,7 @@ pub async fn insert_pending_statements(
                     &stmt.executed_at,
                 ],
             )
-            .await
-            .map_err(ConnectionError::Query)?;
+            .await?;
     }
 
     Ok(())
@@ -1267,7 +1183,7 @@ pub async fn insert_pending_statements(
 
 /// Get pending statements for a deployment that haven't been executed yet.
 pub async fn get_pending_statements(
-    client: &PgClient,
+    client: &Client,
     deploy_id: &str,
 ) -> Result<Vec<PendingStatement>, ConnectionError> {
     let query = r#"
@@ -1278,10 +1194,7 @@ pub async fn get_pending_statements(
         ORDER BY sequence_num
     "#;
 
-    let rows = client
-        .query(query, &[&deploy_id])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(query, &[&deploy_id]).await?;
 
     let mut statements = Vec::new();
     for row in rows {
@@ -1303,7 +1216,7 @@ pub async fn get_pending_statements(
 
 /// Mark a pending statement as executed.
 pub async fn mark_statement_executed(
-    client: &PgClient,
+    client: &Client,
     deploy_id: &str,
     sequence_num: i32,
 ) -> Result<(), ConnectionError> {
@@ -1315,15 +1228,14 @@ pub async fn mark_statement_executed(
 
     client
         .execute(update_sql, &[&deploy_id, &sequence_num])
-        .await
-        .map_err(ConnectionError::Query)?;
+        .await?;
 
     Ok(())
 }
 
 /// Delete all pending statements for a deployment.
 pub async fn delete_pending_statements(
-    client: &PgClient,
+    client: &Client,
     deploy_id: &str,
 ) -> Result<(), ConnectionError> {
     client
@@ -1331,15 +1243,14 @@ pub async fn delete_pending_statements(
             "DELETE FROM _mz_deploy.public.pending_statements WHERE deploy_id = $1",
             &[&deploy_id],
         )
-        .await
-        .map_err(ConnectionError::Query)?;
+        .await?;
 
     Ok(())
 }
 
 /// Insert replacement MV records for a deployment.
 pub async fn insert_replacement_mvs(
-    client: &PgClient,
+    client: &Client,
     records: &[super::models::ReplacementMvRecord],
 ) -> Result<(), ConnectionError> {
     for record in records {
@@ -1357,8 +1268,7 @@ pub async fn insert_replacement_mvs(
                     &record.replacement_schema,
                 ],
             )
-            .await
-            .map_err(ConnectionError::Query)?;
+            .await?;
     }
 
     Ok(())
@@ -1366,7 +1276,7 @@ pub async fn insert_replacement_mvs(
 
 /// Get replacement MV records for a deployment.
 pub async fn get_replacement_mvs(
-    client: &PgClient,
+    client: &Client,
     deploy_id: &str,
 ) -> Result<Vec<super::models::ReplacementMvRecord>, ConnectionError> {
     let rows = client
@@ -1378,8 +1288,7 @@ pub async fn get_replacement_mvs(
                ORDER BY target_database, target_schema, target_name"#,
             &[&deploy_id],
         )
-        .await
-        .map_err(ConnectionError::Query)?;
+        .await?;
 
     Ok(rows
         .iter()
@@ -1395,21 +1304,21 @@ pub async fn get_replacement_mvs(
 
 impl DeploymentsClient<'_> {
     pub async fn create_deployments(&self) -> Result<(), ConnectionError> {
-        create_deployments(self.client.postgres_client()).await
+        create_deployments(self.client).await
     }
 
     pub async fn insert_schema_deployments(
         &self,
         deployments: &[SchemaDeploymentRecord],
     ) -> Result<(), ConnectionError> {
-        insert_schema_deployments(self.client.postgres_client(), deployments).await
+        insert_schema_deployments(self.client, deployments).await
     }
 
     pub async fn append_deployment_objects(
         &self,
         objects: &[DeploymentObjectRecord],
     ) -> Result<(), ConnectionError> {
-        append_deployment_objects(self.client.postgres_client(), objects).await
+        append_deployment_objects(self.client, objects).await
     }
 
     pub async fn insert_deployment_clusters(
@@ -1417,33 +1326,28 @@ impl DeploymentsClient<'_> {
         deploy_id: &str,
         clusters: &[String],
     ) -> Result<(), ConnectionError> {
-        insert_deployment_clusters(self.client.postgres_client(), deploy_id, clusters).await
+        insert_deployment_clusters(self.client, deploy_id, clusters).await
     }
 
     pub async fn get_deployment_clusters(
         &self,
         deploy_id: &str,
     ) -> Result<Vec<String>, ConnectionError> {
-        get_deployment_clusters(self.client.postgres_client(), deploy_id).await
+        get_deployment_clusters(self.client, deploy_id).await
     }
 
     pub async fn validate_deployment_clusters(
         &self,
         deploy_id: &str,
     ) -> Result<(), ConnectionError> {
-        validate_deployment_clusters(self.client.postgres_client(), deploy_id).await
+        validate_deployment_clusters(self.client, deploy_id).await
     }
 
     pub async fn get_deployment_hydration_status(
         &self,
         deploy_id: &str,
     ) -> Result<Vec<ClusterStatusContext>, ConnectionError> {
-        get_deployment_hydration_status(
-            self.client.postgres_client(),
-            deploy_id,
-            DEFAULT_ALLOWED_LAG_SECS,
-        )
-        .await
+        get_deployment_hydration_status(self.client, deploy_id, DEFAULT_ALLOWED_LAG_SECS).await
     }
 
     pub async fn get_deployment_hydration_status_with_lag(
@@ -1451,98 +1355,97 @@ impl DeploymentsClient<'_> {
         deploy_id: &str,
         allowed_lag_secs: i64,
     ) -> Result<Vec<ClusterStatusContext>, ConnectionError> {
-        get_deployment_hydration_status(self.client.postgres_client(), deploy_id, allowed_lag_secs)
-            .await
+        get_deployment_hydration_status(self.client, deploy_id, allowed_lag_secs).await
     }
 
     pub async fn delete_deployment_clusters(&self, deploy_id: &str) -> Result<(), ConnectionError> {
-        delete_deployment_clusters(self.client.postgres_client(), deploy_id).await
+        delete_deployment_clusters(self.client, deploy_id).await
     }
 
     pub async fn update_promoted_at(&self, deploy_id: &str) -> Result<(), ConnectionError> {
-        update_promoted_at(self.client.postgres_client(), deploy_id).await
+        update_promoted_at(self.client, deploy_id).await
     }
 
     pub async fn delete_deployment(&self, deploy_id: &str) -> Result<(), ConnectionError> {
-        delete_deployment(self.client.postgres_client(), deploy_id).await
+        delete_deployment(self.client, deploy_id).await
     }
 
     pub async fn get_schema_deployments(
         &self,
         deploy_id: Option<&str>,
     ) -> Result<Vec<SchemaDeploymentRecord>, ConnectionError> {
-        get_schema_deployments(self.client.postgres_client(), deploy_id).await
+        get_schema_deployments(self.client, deploy_id).await
     }
 
     pub async fn get_deployment_objects(
         &self,
         deploy_id: Option<&str>,
     ) -> Result<DeploymentSnapshot, ConnectionError> {
-        get_deployment_objects(self.client.postgres_client(), deploy_id).await
+        get_deployment_objects(self.client, deploy_id).await
     }
 
     pub async fn get_deployment_metadata(
         &self,
         deploy_id: &str,
     ) -> Result<Option<DeploymentMetadata>, ConnectionError> {
-        get_deployment_metadata(self.client.postgres_client(), deploy_id).await
+        get_deployment_metadata(self.client, deploy_id).await
     }
 
     pub async fn get_deployment_details(
         &self,
         deploy_id: &str,
     ) -> Result<Option<DeploymentDetails>, ConnectionError> {
-        get_deployment_details(self.client.postgres_client(), deploy_id).await
+        get_deployment_details(self.client, deploy_id).await
     }
 
     pub async fn list_staging_deployments(
         &self,
     ) -> Result<BTreeMap<String, StagingDeployment>, ConnectionError> {
-        list_staging_deployments(self.client.postgres_client()).await
+        list_staging_deployments(self.client).await
     }
 
     pub async fn list_deployment_history(
         &self,
         limit: Option<usize>,
     ) -> Result<Vec<DeploymentHistoryEntry>, ConnectionError> {
-        list_deployment_history(self.client.postgres_client(), limit).await
+        list_deployment_history(self.client, limit).await
     }
 
     pub async fn check_deployment_conflicts(
         &self,
         deploy_id: &str,
     ) -> Result<Vec<ConflictRecord>, ConnectionError> {
-        check_deployment_conflicts(self.client.postgres_client(), deploy_id).await
+        check_deployment_conflicts(self.client, deploy_id).await
     }
 
     pub async fn deployment_table_exists(&self) -> Result<bool, ConnectionError> {
-        deployment_table_exists(self.client.postgres_client()).await
+        deployment_table_exists(self.client).await
     }
 
     pub async fn create_apply_state_schemas(&self, deploy_id: &str) -> Result<(), ConnectionError> {
-        create_apply_state_schemas(self.client.postgres_client(), deploy_id).await
+        create_apply_state_schemas(self.client, deploy_id).await
     }
 
     pub async fn get_apply_state(&self, deploy_id: &str) -> Result<ApplyState, ConnectionError> {
-        get_apply_state(self.client.postgres_client(), deploy_id).await
+        get_apply_state(self.client, deploy_id).await
     }
 
     pub async fn delete_apply_state_schemas(&self, deploy_id: &str) -> Result<(), ConnectionError> {
-        delete_apply_state_schemas(self.client.postgres_client(), deploy_id).await
+        delete_apply_state_schemas(self.client, deploy_id).await
     }
 
     pub async fn insert_pending_statements(
         &self,
         statements: &[PendingStatement],
     ) -> Result<(), ConnectionError> {
-        insert_pending_statements(self.client.postgres_client(), statements).await
+        insert_pending_statements(self.client, statements).await
     }
 
     pub async fn get_pending_statements(
         &self,
         deploy_id: &str,
     ) -> Result<Vec<PendingStatement>, ConnectionError> {
-        get_pending_statements(self.client.postgres_client(), deploy_id).await
+        get_pending_statements(self.client, deploy_id).await
     }
 
     pub async fn mark_statement_executed(
@@ -1550,29 +1453,29 @@ impl DeploymentsClient<'_> {
         deploy_id: &str,
         sequence_num: i32,
     ) -> Result<(), ConnectionError> {
-        mark_statement_executed(self.client.postgres_client(), deploy_id, sequence_num).await
+        mark_statement_executed(self.client, deploy_id, sequence_num).await
     }
 
     pub async fn delete_pending_statements(&self, deploy_id: &str) -> Result<(), ConnectionError> {
-        delete_pending_statements(self.client.postgres_client(), deploy_id).await
+        delete_pending_statements(self.client, deploy_id).await
     }
 
     pub async fn insert_replacement_mvs(
         &self,
         records: &[super::models::ReplacementMvRecord],
     ) -> Result<(), ConnectionError> {
-        insert_replacement_mvs(self.client.postgres_client(), records).await
+        insert_replacement_mvs(self.client, records).await
     }
 
     pub async fn get_replacement_mvs(
         &self,
         deploy_id: &str,
     ) -> Result<Vec<super::models::ReplacementMvRecord>, ConnectionError> {
-        get_replacement_mvs(self.client.postgres_client(), deploy_id).await
+        get_replacement_mvs(self.client, deploy_id).await
     }
 
     pub async fn delete_replacement_mvs(&self, deploy_id: &str) -> Result<(), ConnectionError> {
-        delete_replacement_mvs(self.client.postgres_client(), deploy_id).await
+        delete_replacement_mvs(self.client, deploy_id).await
     }
 }
 
@@ -1584,10 +1487,9 @@ impl DeploymentsClientMut<'_> {
         allowed_lag_secs: i64,
     ) -> impl Stream<Item = Result<HydrationStatusUpdate, ConnectionError>> + '_ {
         let deploy_id = deploy_id.to_string();
-        let pg_client = self.client.postgres_client_mut();
 
         try_stream! {
-                let txn = pg_client.transaction().await?;
+                let txn = self.client.begin_transaction().await?;
                 let pattern = format!("%_{}", deploy_id);
 
                 let subscribe_sql = format!(
@@ -1733,7 +1635,7 @@ impl DeploymentsClientMut<'_> {
 
 /// Delete all replacement MV records for a deployment.
 pub async fn delete_replacement_mvs(
-    client: &PgClient,
+    client: &Client,
     deploy_id: &str,
 ) -> Result<(), ConnectionError> {
     client
@@ -1741,8 +1643,7 @@ pub async fn delete_replacement_mvs(
             "DELETE FROM _mz_deploy.public.replacement_mvs WHERE deploy_id = $1",
             &[&deploy_id],
         )
-        .await
-        .map_err(ConnectionError::Query)?;
+        .await?;
 
     Ok(())
 }

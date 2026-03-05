@@ -133,7 +133,7 @@ pub enum DatabaseValidationError {
     MissingTableDependencies {
         objects_needing_tables: Vec<(ObjectId, Vec<ObjectId>)>,
     },
-    QueryError(tokio_postgres::Error),
+    QueryError(ConnectionError),
 }
 
 impl fmt::Display for DatabaseValidationError {

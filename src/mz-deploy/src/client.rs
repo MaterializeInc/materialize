@@ -4,6 +4,7 @@ mod deployment_ops;
 mod errors;
 mod introspection;
 mod models;
+mod provisioning;
 mod type_info;
 mod validation;
 

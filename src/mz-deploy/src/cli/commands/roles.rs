@@ -61,6 +61,7 @@ async fn apply_role(client: &Client, def: &RoleDefinition) -> Result<(), CliErro
 
     // Check if role already exists
     let exists = client
+        .introspection()
         .role_exists(role_name)
         .await
         .map_err(CliError::Connection)?;
@@ -114,6 +115,7 @@ async fn apply_role(client: &Client, def: &RoleDefinition) -> Result<(), CliErro
 
     // Revoke stale grants
     let current_members = client
+        .introspection()
         .get_role_members(role_name)
         .await
         .map_err(CliError::Connection)?;
@@ -148,6 +150,7 @@ async fn apply_role(client: &Client, def: &RoleDefinition) -> Result<(), CliErro
 
     // Reset stale session defaults
     let current_params = client
+        .introspection()
         .get_role_parameters(role_name)
         .await
         .map_err(CliError::Connection)?;

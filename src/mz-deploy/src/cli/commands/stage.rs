@@ -519,7 +519,7 @@ async fn create_resources_with_rollback<'a>(
         if !dry_run {
             progress::info("Creating project databases if not exists");
             for db in &planned_project.databases {
-                client.create_database(&db.name).await?;
+                client.provisioning().create_database(&db.name).await?;
                 verbose!("  Ensured database {} exists", db.name);
             }
         } else {
@@ -557,7 +557,7 @@ async fn create_resources_with_rollback<'a>(
             // Create production schemas if they don't exist (needed for swap)
             progress::info("Creating production schemas if not exists");
             for (database, schema) in schema_set {
-                client.create_schema(database, schema).await?;
+                client.provisioning().create_schema(database, schema).await?;
                 verbose!("  Ensured schema {}.{} exists", database, schema);
             }
         }
@@ -656,7 +656,7 @@ async fn create_resources_with_rollback<'a>(
             }
 
             // Get production cluster configuration (handles both managed and unmanaged)
-            let config = client.get_cluster_config(prod_cluster).await?;
+            let config = client.introspection().get_cluster_config(prod_cluster).await?;
 
             let config = match config {
                 Some(config) => config,
@@ -669,6 +669,7 @@ async fn create_resources_with_rollback<'a>(
 
             // Create staging cluster with same configuration
             client
+                .provisioning()
                 .create_cluster_with_config(&staging_cluster, &config)
                 .await?;
             created_clusters += 1;

@@ -11,13 +11,10 @@
 
 use crate::client::config::Profile;
 use crate::client::errors::ConnectionError;
-use crate::client::introspection;
-use crate::client::models::{Cluster, ClusterConfig, ClusterOptions};
-use crate::utils::sql_utils::quote_identifier;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use postgres_openssl::MakeTlsConnector;
 use tokio_postgres::types::ToSql;
-use tokio_postgres::{Client as PgClient, NoTls, Row, ToStatement};
+use tokio_postgres::{Client as PgClient, NoTls, Row, ToStatement, Transaction};
 
 /// Database client for interacting with Materialize.
 ///
@@ -54,6 +51,11 @@ pub struct ValidationClient<'a> {
 
 /// Domain sub-client for column/type introspection used by type checking and tests.
 pub struct TypeInfoClient<'a> {
+    pub(crate) client: &'a Client,
+}
+
+/// Domain sub-client for provisioning databases, schemas, and clusters.
+pub struct ProvisioningClient<'a> {
     pub(crate) client: &'a Client,
 }
 
@@ -174,14 +176,12 @@ impl Client {
         &self.profile
     }
 
-    /// Get a reference to the underlying tokio-postgres client.
-    pub fn postgres_client(&self) -> &PgClient {
-        &self.client
-    }
-
-    /// Get a mutable reference to the underlying tokio-postgres client.
-    pub fn postgres_client_mut(&mut self) -> &mut PgClient {
-        &mut self.client
+    /// Start a transaction on the underlying connection.
+    pub(crate) async fn begin_transaction(&mut self) -> Result<Transaction<'_>, ConnectionError> {
+        self.client
+            .transaction()
+            .await
+            .map_err(ConnectionError::Query)
     }
 
     /// Access deployment lifecycle operations.
@@ -207,6 +207,11 @@ impl Client {
     /// Access type/column introspection operations.
     pub fn types(&self) -> TypeInfoClient<'_> {
         TypeInfoClient { client: self }
+    }
+
+    /// Access provisioning operations for databases, schemas, and clusters.
+    pub fn provisioning(&self) -> ProvisioningClient<'_> {
+        ProvisioningClient { client: self }
     }
 
     // =========================================================================
@@ -256,250 +261,6 @@ impl Client {
             .query(statement, params)
             .await
             .map_err(ConnectionError::Query)
-    }
-
-    // =========================================================================
-    // Schema Operations
-    // =========================================================================
-
-    /// Create a database (idempotent).
-    pub async fn create_database(&self, database: &str) -> Result<(), ConnectionError> {
-        let sql = format!(
-            "CREATE DATABASE IF NOT EXISTS {}",
-            quote_identifier(database)
-        );
-
-        self.client.execute(&sql, &[]).await.map_err(|e| {
-            ConnectionError::DatabaseCreationFailed {
-                database: database.to_string(),
-                source: Box::new(e),
-            }
-        })?;
-
-        Ok(())
-    }
-
-    /// Create a schema in the specified database (idempotent).
-    pub async fn create_schema(&self, database: &str, schema: &str) -> Result<(), ConnectionError> {
-        let sql = format!(
-            "CREATE SCHEMA IF NOT EXISTS {}.{}",
-            quote_identifier(database),
-            quote_identifier(schema)
-        );
-
-        self.client.execute(&sql, &[]).await.map_err(|e| {
-            ConnectionError::SchemaCreationFailed {
-                database: database.to_string(),
-                schema: schema.to_string(),
-                source: Box::new(e),
-            }
-        })?;
-
-        Ok(())
-    }
-
-    /// Check if a schema exists in the specified database.
-    pub async fn schema_exists(
-        &self,
-        database: &str,
-        schema: &str,
-    ) -> Result<bool, ConnectionError> {
-        introspection::schema_exists(&self.client, database, schema).await
-    }
-
-    // =========================================================================
-    // Cluster Operations
-    // =========================================================================
-
-    /// Create a cluster with the specified configuration.
-    pub async fn create_cluster(
-        &self,
-        name: &str,
-        options: &ClusterOptions,
-    ) -> Result<(), ConnectionError> {
-        let sql = format!(
-            "CREATE CLUSTER {} (SIZE = '{}', REPLICATION FACTOR = {})",
-            quote_identifier(name),
-            options.size,
-            options.replication_factor
-        );
-
-        self.client.execute(&sql, &[]).await.map_err(|e| {
-            if e.to_string().contains("already exists") {
-                ConnectionError::ClusterAlreadyExists {
-                    name: name.to_string(),
-                }
-            } else {
-                ConnectionError::ClusterCreationFailed {
-                    name: name.to_string(),
-                    source: Box::new(e),
-                }
-            }
-        })?;
-
-        Ok(())
-    }
-
-    /// Check if a role exists.
-    pub async fn role_exists(&self, name: &str) -> Result<bool, ConnectionError> {
-        introspection::role_exists(&self.client, name).await
-    }
-
-    /// Get the members granted to a role.
-    pub async fn get_role_members(&self, name: &str) -> Result<Vec<String>, ConnectionError> {
-        introspection::get_role_members(&self.client, name).await
-    }
-
-    /// Get session default parameter names for a role.
-    pub async fn get_role_parameters(&self, name: &str) -> Result<Vec<String>, ConnectionError> {
-        introspection::get_role_parameters(&self.client, name).await
-    }
-
-    /// Check if a cluster exists.
-    pub async fn cluster_exists(&self, name: &str) -> Result<bool, ConnectionError> {
-        introspection::cluster_exists(&self.client, name).await
-    }
-
-    /// Get a cluster by name.
-    pub async fn get_cluster(&self, name: &str) -> Result<Option<Cluster>, ConnectionError> {
-        introspection::get_cluster(&self.client, name).await
-    }
-
-    /// List all clusters.
-    pub async fn list_clusters(&self) -> Result<Vec<Cluster>, ConnectionError> {
-        introspection::list_clusters(&self.client).await
-    }
-
-    /// Get cluster configuration including replicas and grants.
-    ///
-    /// This fetches all information needed to clone a cluster's configuration:
-    /// - For managed clusters: size and replication factor
-    /// - For unmanaged clusters: replica configurations
-    /// - For both: privilege grants
-    pub async fn get_cluster_config(
-        &self,
-        name: &str,
-    ) -> Result<Option<ClusterConfig>, ConnectionError> {
-        introspection::get_cluster_config(&self.client, name).await
-    }
-
-    /// Create a cluster with the specified configuration (managed or unmanaged).
-    ///
-    /// For managed clusters, creates a cluster with SIZE and REPLICATION FACTOR.
-    /// For unmanaged clusters, creates an empty cluster and then adds replicas.
-    /// In both cases, applies the privilege grants from the configuration.
-    pub async fn create_cluster_with_config(
-        &self,
-        name: &str,
-        config: &ClusterConfig,
-    ) -> Result<(), ConnectionError> {
-        match config {
-            ClusterConfig::Managed { options, grants } => {
-                // Create managed cluster
-                self.create_cluster(name, options).await?;
-
-                // Apply grants
-                for grant in grants {
-                    let sql = format!(
-                        "GRANT {} ON CLUSTER {} TO {}",
-                        grant.privilege_type,
-                        quote_identifier(name),
-                        quote_identifier(&grant.grantee)
-                    );
-                    self.client.execute(&sql, &[]).await.map_err(|e| {
-                        ConnectionError::Message(format!(
-                            "Failed to grant {} to {} on cluster '{}': {}",
-                            grant.privilege_type, grant.grantee, name, e
-                        ))
-                    })?;
-                }
-
-                Ok(())
-            }
-            ClusterConfig::Unmanaged { replicas, grants } => {
-                // Create empty unmanaged cluster
-                let create_cluster_sql =
-                    format!("CREATE CLUSTER {} REPLICAS ()", quote_identifier(name));
-
-                self.client
-                    .execute(&create_cluster_sql, &[])
-                    .await
-                    .map_err(|e| {
-                        if e.to_string().contains("already exists") {
-                            ConnectionError::ClusterAlreadyExists {
-                                name: name.to_string(),
-                            }
-                        } else {
-                            ConnectionError::ClusterCreationFailed {
-                                name: name.to_string(),
-                                source: Box::new(e),
-                            }
-                        }
-                    })?;
-
-                // Create each replica
-                for replica in replicas {
-                    let mut options_parts = vec![format!("SIZE = '{}'", replica.size)];
-
-                    if let Some(ref az) = replica.availability_zone {
-                        options_parts.push(format!("AVAILABILITY ZONE '{}'", az));
-                    }
-
-                    let create_replica_sql = format!(
-                        "CREATE CLUSTER REPLICA {}.{} ({})",
-                        quote_identifier(name),
-                        quote_identifier(&replica.name),
-                        options_parts.join(", ")
-                    );
-
-                    self.client
-                        .execute(&create_replica_sql, &[])
-                        .await
-                        .map_err(|e| ConnectionError::ClusterCreationFailed {
-                            name: format!("{}.{}", name, replica.name),
-                            source: Box::new(e),
-                        })?;
-                }
-
-                // Apply grants
-                for grant in grants {
-                    let sql = format!(
-                        "GRANT {} ON CLUSTER {} TO {}",
-                        grant.privilege_type,
-                        quote_identifier(name),
-                        quote_identifier(&grant.grantee)
-                    );
-                    self.client.execute(&sql, &[]).await.map_err(|e| {
-                        ConnectionError::Message(format!(
-                            "Failed to grant {} to {} on cluster '{}': {}",
-                            grant.privilege_type, grant.grantee, name, e
-                        ))
-                    })?;
-                }
-
-                Ok(())
-            }
-        }
-    }
-
-    /// Alter a managed cluster's options (SIZE, REPLICATION FACTOR).
-    pub async fn alter_cluster(
-        &self,
-        name: &str,
-        options: &ClusterOptions,
-    ) -> Result<(), ConnectionError> {
-        let sql = format!(
-            "ALTER CLUSTER {} SET (SIZE = '{}', REPLICATION FACTOR = {})",
-            quote_identifier(name),
-            options.size,
-            options.replication_factor
-        );
-
-        self.client.execute(&sql, &[]).await.map_err(|e| {
-            ConnectionError::Message(format!("Failed to alter cluster '{}': {}", name, e))
-        })?;
-
-        Ok(())
     }
 }
 

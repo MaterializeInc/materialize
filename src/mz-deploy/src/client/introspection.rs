@@ -3,14 +3,13 @@
 //! This module contains methods for querying database metadata,
 //! such as checking for existence of schemas, clusters, and objects.
 
-use crate::client::connection::IntrospectionClient;
+use crate::client::connection::{Client, IntrospectionClient};
 use crate::client::errors::ConnectionError;
 use crate::client::models::{Cluster, ClusterConfig, ClusterGrant, ClusterOptions, ClusterReplica};
 use crate::project::SchemaQualifier;
 use crate::project::object_id::ObjectId;
 use crate::utils::sql_utils::quote_identifier;
 use std::collections::{BTreeMap, BTreeSet};
-use tokio_postgres::Client as PgClient;
 use tokio_postgres::types::ToSql;
 
 /// A sink that depends on an object in a schema being dropped.
@@ -30,7 +29,7 @@ pub struct DependentSink {
 
 /// Check if a schema exists in the specified database.
 pub async fn schema_exists(
-    client: &PgClient,
+    client: &Client,
     database: &str,
     schema: &str,
 ) -> Result<bool, ConnectionError> {
@@ -43,35 +42,26 @@ pub async fn schema_exists(
         ) AS exists
     "#;
 
-    let row = client
-        .query_one(query, &[&schema, &database])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let row = client.query_one(query, &[&schema, &database]).await?;
 
     Ok(row.get("exists"))
 }
 
 /// Check if a cluster exists.
-pub async fn cluster_exists(client: &PgClient, name: &str) -> Result<bool, ConnectionError> {
+pub async fn cluster_exists(client: &Client, name: &str) -> Result<bool, ConnectionError> {
     let query = r#"
         SELECT EXISTS(
             SELECT 1 FROM mz_catalog.mz_clusters WHERE name = $1
         ) AS exists
     "#;
 
-    let row = client
-        .query_one(query, &[&name])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let row = client.query_one(query, &[&name]).await?;
 
     Ok(row.get("exists"))
 }
 
 /// Get a cluster by name.
-pub async fn get_cluster(
-    client: &PgClient,
-    name: &str,
-) -> Result<Option<Cluster>, ConnectionError> {
+pub async fn get_cluster(client: &Client, name: &str) -> Result<Option<Cluster>, ConnectionError> {
     let query = r#"
         SELECT
             id,
@@ -82,10 +72,7 @@ pub async fn get_cluster(
         WHERE name = $1
     "#;
 
-    let rows = client
-        .query(query, &[&name])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(query, &[&name]).await?;
 
     if rows.is_empty() {
         return Ok(None);
@@ -113,7 +100,7 @@ pub async fn get_cluster(
 }
 
 /// List all clusters.
-pub async fn list_clusters(client: &PgClient) -> Result<Vec<Cluster>, ConnectionError> {
+pub async fn list_clusters(client: &Client) -> Result<Vec<Cluster>, ConnectionError> {
     let query = r#"
         SELECT
             id,
@@ -124,10 +111,7 @@ pub async fn list_clusters(client: &PgClient) -> Result<Vec<Cluster>, Connection
         ORDER BY name
     "#;
 
-    let rows = client
-        .query(query, &[])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(query, &[]).await?;
 
     Ok(rows
         .iter()
@@ -147,7 +131,7 @@ pub async fn list_clusters(client: &PgClient) -> Result<Vec<Cluster>, Connection
 /// - For unmanaged clusters: replica configurations
 /// - For both: privilege grants
 pub async fn get_cluster_config(
-    client: &PgClient,
+    client: &Client,
     name: &str,
 ) -> Result<Option<ClusterConfig>, ConnectionError> {
     // Query 1: Get cluster info and replicas with LEFT JOIN
@@ -167,10 +151,7 @@ pub async fn get_cluster_config(
         ORDER BY r.name
     "#;
 
-    let cluster_rows = client
-        .query(cluster_query, &[&name])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let cluster_rows = client.query(cluster_query, &[&name]).await?;
 
     if cluster_rows.is_empty() {
         return Ok(None);
@@ -209,10 +190,7 @@ pub async fn get_cluster_config(
         WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
     "#;
 
-    let grant_rows = client
-        .query(grants_query, &[&name])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let grant_rows = client.query(grants_query, &[&name]).await?;
 
     let grants: Vec<ClusterGrant> = grant_rows
         .iter()
@@ -261,24 +239,21 @@ pub async fn get_cluster_config(
 }
 
 /// Check if a role exists.
-pub async fn role_exists(client: &PgClient, name: &str) -> Result<bool, ConnectionError> {
+pub async fn role_exists(client: &Client, name: &str) -> Result<bool, ConnectionError> {
     let query = r#"
         SELECT EXISTS(
             SELECT 1 FROM mz_catalog.mz_roles WHERE name = $1
         ) AS exists
     "#;
 
-    let row = client
-        .query_one(query, &[&name])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let row = client.query_one(query, &[&name]).await?;
 
     Ok(row.get("exists"))
 }
 
 /// Get the members granted to a role.
 pub async fn get_role_members(
-    client: &PgClient,
+    client: &Client,
     role_name: &str,
 ) -> Result<Vec<String>, ConnectionError> {
     let query = r#"
@@ -290,17 +265,14 @@ pub async fn get_role_members(
         ORDER BY m.name
     "#;
 
-    let rows = client
-        .query(query, &[&role_name])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(query, &[&role_name]).await?;
 
     Ok(rows.iter().map(|row| row.get("member")).collect())
 }
 
 /// Get session default parameter names for a role.
 pub async fn get_role_parameters(
-    client: &PgClient,
+    client: &Client,
     role_name: &str,
 ) -> Result<Vec<String>, ConnectionError> {
     let query = r#"
@@ -311,20 +283,14 @@ pub async fn get_role_parameters(
         ORDER BY rp.parameter_name
     "#;
 
-    let rows = client
-        .query(query, &[&role_name])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(query, &[&role_name]).await?;
 
     Ok(rows.iter().map(|row| row.get("parameter_name")).collect())
 }
 
 /// Get the current Materialize user/role.
-pub async fn get_current_user(client: &PgClient) -> Result<String, ConnectionError> {
-    let row = client
-        .query_one("SELECT current_user()", &[])
-        .await
-        .map_err(ConnectionError::Query)?;
+pub async fn get_current_user(client: &Client) -> Result<String, ConnectionError> {
+    let row = client.query_one("SELECT current_user()", &[]).await?;
 
     Ok(row.get(0))
 }
@@ -333,7 +299,7 @@ pub async fn get_current_user(client: &PgClient) -> Result<String, ConnectionErr
 ///
 /// Returns a BTreeSet of (database, schema) tuples that exist.
 pub async fn check_schemas_exist(
-    client: &PgClient,
+    client: &Client,
     schemas: &[(String, String)],
 ) -> Result<BTreeSet<(String, String)>, ConnectionError> {
     if schemas.is_empty() {
@@ -371,10 +337,7 @@ pub async fn check_schemas_exist(
         params.push(fqn);
     }
 
-    let rows = client
-        .query(&query, &params)
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(&query, &params).await?;
 
     let mut existing = BTreeSet::new();
     for row in rows {
@@ -391,7 +354,7 @@ pub async fn check_schemas_exist(
 ///
 /// Returns a BTreeSet of cluster names that exist.
 pub async fn check_clusters_exist(
-    client: &PgClient,
+    client: &Client,
     clusters: &[String],
 ) -> Result<BTreeSet<String>, ConnectionError> {
     if clusters.is_empty() {
@@ -415,10 +378,7 @@ pub async fn check_clusters_exist(
         params.push(name);
     }
 
-    let rows = client
-        .query(&query, &params)
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(&query, &params).await?;
 
     Ok(rows.iter().map(|row| row.get("name")).collect())
 }
@@ -427,7 +387,7 @@ pub async fn check_clusters_exist(
 ///
 /// Returns fully-qualified names of objects that exist.
 pub async fn check_objects_exist(
-    client: &PgClient,
+    client: &Client,
     objects: &BTreeSet<ObjectId>,
 ) -> Result<Vec<String>, ConnectionError> {
     let fqns: Vec<String> = objects.iter().map(|o| o.to_string()).collect();
@@ -456,10 +416,7 @@ pub async fn check_objects_exist(
         params.push(fqn);
     }
 
-    let rows = client
-        .query(&query, &params)
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(&query, &params).await?;
 
     Ok(rows.iter().map(|row| row.get("fqn")).collect())
 }
@@ -468,7 +425,7 @@ pub async fn check_objects_exist(
 ///
 /// Returns a BTreeSet of ObjectIds for objects that already exist.
 async fn check_catalog_objects_exist(
-    client: &PgClient,
+    client: &Client,
     objects: &BTreeSet<ObjectId>,
     catalog_table: &str,
 ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
@@ -500,10 +457,7 @@ async fn check_catalog_objects_exist(
         params.push(*fqn);
     }
 
-    let rows = client
-        .query(&query, &params)
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(&query, &params).await?;
 
     let mut existing = BTreeSet::new();
     for row in rows {
@@ -520,7 +474,7 @@ async fn check_catalog_objects_exist(
 ///
 /// Returns a BTreeSet of ObjectIds for tables that already exist.
 pub async fn check_tables_exist(
-    client: &PgClient,
+    client: &Client,
     tables: &BTreeSet<ObjectId>,
 ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
     check_catalog_objects_exist(client, tables, "mz_tables").await
@@ -530,7 +484,7 @@ pub async fn check_tables_exist(
 ///
 /// Returns a BTreeSet of ObjectIds for sources that already exist.
 pub async fn check_sources_exist(
-    client: &PgClient,
+    client: &Client,
     sources: &BTreeSet<ObjectId>,
 ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
     check_catalog_objects_exist(client, sources, "mz_sources").await
@@ -541,7 +495,7 @@ pub async fn check_sources_exist(
 /// Returns a BTreeSet of ObjectIds for sinks that already exist.
 /// Used during apply to skip creating sinks that already exist (like tables).
 pub async fn check_sinks_exist(
-    client: &PgClient,
+    client: &Client,
     sinks: &BTreeSet<ObjectId>,
 ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
     check_catalog_objects_exist(client, sinks, "mz_sinks").await
@@ -553,7 +507,7 @@ pub async fn check_sinks_exist(
 /// before old schemas are dropped with CASCADE. Only returns sinks whose
 /// upstream object (FROM clause) is in one of the specified schemas.
 pub async fn find_sinks_depending_on_schemas(
-    client: &PgClient,
+    client: &Client,
     schemas: &[SchemaQualifier],
 ) -> Result<Vec<DependentSink>, ConnectionError> {
     if schemas.is_empty() {
@@ -606,10 +560,7 @@ pub async fn find_sinks_depending_on_schemas(
         params.push(schema);
     }
 
-    let rows = client
-        .query(&query, &params)
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(&query, &params).await?;
 
     Ok(rows
         .iter()
@@ -629,7 +580,7 @@ pub async fn find_sinks_depending_on_schemas(
 ///
 /// Used to verify that a replacement object exists before repointing a sink.
 pub async fn object_exists(
-    client: &PgClient,
+    client: &Client,
     database: &str,
     schema: &str,
     object: &str,
@@ -646,15 +597,14 @@ pub async fn object_exists(
 
     let row = client
         .query_one(query, &[&database, &schema, &object])
-        .await
-        .map_err(ConnectionError::Query)?;
+        .await?;
 
     Ok(row.get("exists"))
 }
 
 /// Get staging schema names for a specific deployment.
 pub async fn get_staging_schemas(
-    client: &PgClient,
+    client: &Client,
     deploy_id: &str,
 ) -> Result<Vec<SchemaQualifier>, ConnectionError> {
     let suffix = format!("_{}", deploy_id);
@@ -667,10 +617,7 @@ pub async fn get_staging_schemas(
         WHERE s.name LIKE $1
     "#;
 
-    let rows = client
-        .query(query, &[&pattern])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(query, &[&pattern]).await?;
 
     Ok(rows
         .iter()
@@ -684,7 +631,7 @@ pub async fn get_staging_schemas(
 
 /// Get staging cluster names for a specific deployment.
 pub async fn get_staging_clusters(
-    client: &PgClient,
+    client: &Client,
     deploy_id: &str,
 ) -> Result<Vec<String>, ConnectionError> {
     let suffix = format!("_{}", deploy_id);
@@ -696,10 +643,7 @@ pub async fn get_staging_clusters(
         WHERE name LIKE $1
     "#;
 
-    let rows = client
-        .query(query, &[&pattern])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(query, &[&pattern]).await?;
 
     Ok(rows.iter().map(|row| row.get("name")).collect())
 }
@@ -720,7 +664,7 @@ fn mz_type_to_drop_keyword(obj_type: &str) -> Option<&'static str> {
 ///
 /// Returns the fully-qualified names of dropped objects.
 pub async fn drop_schema_objects(
-    client: &PgClient,
+    client: &Client,
     database: &str,
     schema: &str,
 ) -> Result<Vec<String>, ConnectionError> {
@@ -734,10 +678,7 @@ pub async fn drop_schema_objects(
         ORDER BY mo.id DESC
     "#;
 
-    let rows = client
-        .query(query, &[&database, &schema])
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(query, &[&database, &schema]).await?;
 
     let mut dropped = Vec::new();
     for row in rows {
@@ -755,10 +696,7 @@ pub async fn drop_schema_objects(
         };
 
         let drop_sql = format!("DROP {} IF EXISTS {} CASCADE", drop_type, fqn);
-        client
-            .execute(&drop_sql, &[])
-            .await
-            .map_err(ConnectionError::Query)?;
+        client.execute(&drop_sql, &[]).await?;
 
         dropped.push(fqn);
     }
@@ -770,7 +708,7 @@ pub async fn drop_schema_objects(
 ///
 /// Returns the fully-qualified names of dropped objects.
 pub async fn drop_objects(
-    client: &PgClient,
+    client: &Client,
     objects: &BTreeSet<ObjectId>,
 ) -> Result<Vec<String>, ConnectionError> {
     let mut dropped = Vec::new();
@@ -801,10 +739,7 @@ pub async fn drop_objects(
         params.push(fqn);
     }
 
-    let rows = client
-        .query(&query, &params)
-        .await
-        .map_err(ConnectionError::Query)?;
+    let rows = client.query(&query, &params).await?;
 
     for row in rows {
         let name: String = row.get("name");
@@ -823,10 +758,7 @@ pub async fn drop_objects(
         };
 
         let drop_sql = format!("DROP {} IF EXISTS {} CASCADE", drop_type, fqn);
-        client
-            .execute(&drop_sql, &[])
-            .await
-            .map_err(ConnectionError::Query)?;
+        client.execute(&drop_sql, &[]).await?;
 
         dropped.push(fqn);
     }
@@ -836,7 +768,7 @@ pub async fn drop_objects(
 
 /// Drop staging schemas by name.
 pub async fn drop_staging_schemas(
-    client: &PgClient,
+    client: &Client,
     schemas: &[SchemaQualifier],
 ) -> Result<(), ConnectionError> {
     for (database, schema) in schemas {
@@ -845,10 +777,7 @@ pub async fn drop_staging_schemas(
             quote_identifier(database),
             quote_identifier(schema)
         );
-        client
-            .execute(&drop_sql, &[])
-            .await
-            .map_err(ConnectionError::Query)?;
+        client.execute(&drop_sql, &[]).await?;
     }
 
     Ok(())
@@ -856,7 +785,7 @@ pub async fn drop_staging_schemas(
 
 /// Drop staging clusters by name.
 pub async fn drop_staging_clusters(
-    client: &PgClient,
+    client: &Client,
     clusters: &[String],
 ) -> Result<(), ConnectionError> {
     for cluster in clusters {
@@ -864,10 +793,7 @@ pub async fn drop_staging_clusters(
             "DROP CLUSTER IF EXISTS {} CASCADE",
             quote_identifier(cluster)
         );
-        client
-            .execute(&drop_sql, &[])
-            .await
-            .map_err(ConnectionError::Query)?;
+        client.execute(&drop_sql, &[]).await?;
     }
 
     Ok(())
@@ -876,7 +802,7 @@ pub async fn drop_staging_clusters(
 impl IntrospectionClient<'_> {
     /// Get the current Materialize user/role.
     pub async fn get_current_user(&self) -> Result<String, ConnectionError> {
-        get_current_user(self.client.postgres_client()).await
+        get_current_user(self.client).await
     }
 
     /// Check which objects from a set exist in the production database.
@@ -884,7 +810,7 @@ impl IntrospectionClient<'_> {
         &self,
         objects: &BTreeSet<ObjectId>,
     ) -> Result<Vec<String>, ConnectionError> {
-        check_objects_exist(self.client.postgres_client(), objects).await
+        check_objects_exist(self.client, objects).await
     }
 
     /// Check which tables from the given set exist in the database.
@@ -892,7 +818,7 @@ impl IntrospectionClient<'_> {
         &self,
         tables: &BTreeSet<ObjectId>,
     ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
-        check_tables_exist(self.client.postgres_client(), tables).await
+        check_tables_exist(self.client, tables).await
     }
 
     /// Check which sources from the given set exist in the database.
@@ -900,7 +826,7 @@ impl IntrospectionClient<'_> {
         &self,
         sources: &BTreeSet<ObjectId>,
     ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
-        check_sources_exist(self.client.postgres_client(), sources).await
+        check_sources_exist(self.client, sources).await
     }
 
     /// Check which sinks from the given set exist in the database.
@@ -908,7 +834,7 @@ impl IntrospectionClient<'_> {
         &self,
         sinks: &BTreeSet<ObjectId>,
     ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
-        check_sinks_exist(self.client.postgres_client(), sinks).await
+        check_sinks_exist(self.client, sinks).await
     }
 
     /// Check which schemas from a set of (database, schema) pairs exist.
@@ -916,7 +842,7 @@ impl IntrospectionClient<'_> {
         &self,
         schemas: &[(String, String)],
     ) -> Result<BTreeSet<(String, String)>, ConnectionError> {
-        check_schemas_exist(self.client.postgres_client(), schemas).await
+        check_schemas_exist(self.client, schemas).await
     }
 
     /// Check which clusters from a set of names exist.
@@ -924,7 +850,7 @@ impl IntrospectionClient<'_> {
         &self,
         clusters: &[String],
     ) -> Result<BTreeSet<String>, ConnectionError> {
-        check_clusters_exist(self.client.postgres_client(), clusters).await
+        check_clusters_exist(self.client, clusters).await
     }
 
     /// Find sinks that depend on objects in the specified schemas.
@@ -932,7 +858,7 @@ impl IntrospectionClient<'_> {
         &self,
         schemas: &[SchemaQualifier],
     ) -> Result<Vec<DependentSink>, ConnectionError> {
-        find_sinks_depending_on_schemas(self.client.postgres_client(), schemas).await
+        find_sinks_depending_on_schemas(self.client, schemas).await
     }
 
     /// Check if an object (MV, table, source) exists in the specified schema.
@@ -942,7 +868,7 @@ impl IntrospectionClient<'_> {
         schema: &str,
         object: &str,
     ) -> Result<bool, ConnectionError> {
-        object_exists(self.client.postgres_client(), database, schema, object).await
+        object_exists(self.client, database, schema, object).await
     }
 
     /// Get staging schema names for a specific deployment.
@@ -950,7 +876,7 @@ impl IntrospectionClient<'_> {
         &self,
         deploy_id: &str,
     ) -> Result<Vec<SchemaQualifier>, ConnectionError> {
-        get_staging_schemas(self.client.postgres_client(), deploy_id).await
+        get_staging_schemas(self.client, deploy_id).await
     }
 
     /// Get staging cluster names for a specific deployment.
@@ -958,7 +884,7 @@ impl IntrospectionClient<'_> {
         &self,
         deploy_id: &str,
     ) -> Result<Vec<String>, ConnectionError> {
-        get_staging_clusters(self.client.postgres_client(), deploy_id).await
+        get_staging_clusters(self.client, deploy_id).await
     }
 
     /// Drop all objects in a schema.
@@ -967,7 +893,7 @@ impl IntrospectionClient<'_> {
         database: &str,
         schema: &str,
     ) -> Result<Vec<String>, ConnectionError> {
-        drop_schema_objects(self.client.postgres_client(), database, schema).await
+        drop_schema_objects(self.client, database, schema).await
     }
 
     /// Drop specific objects by their ObjectIds.
@@ -975,7 +901,7 @@ impl IntrospectionClient<'_> {
         &self,
         objects: &BTreeSet<ObjectId>,
     ) -> Result<Vec<String>, ConnectionError> {
-        drop_objects(self.client.postgres_client(), objects).await
+        drop_objects(self.client, objects).await
     }
 
     /// Drop staging schemas by name.
@@ -983,12 +909,12 @@ impl IntrospectionClient<'_> {
         &self,
         schemas: &[SchemaQualifier],
     ) -> Result<(), ConnectionError> {
-        drop_staging_schemas(self.client.postgres_client(), schemas).await
+        drop_staging_schemas(self.client, schemas).await
     }
 
     /// Drop staging clusters by name.
     pub async fn drop_staging_clusters(&self, clusters: &[String]) -> Result<(), ConnectionError> {
-        drop_staging_clusters(self.client.postgres_client(), clusters).await
+        drop_staging_clusters(self.client, clusters).await
     }
 
     /// Check if a schema exists in the specified database.
@@ -997,37 +923,37 @@ impl IntrospectionClient<'_> {
         database: &str,
         schema: &str,
     ) -> Result<bool, ConnectionError> {
-        schema_exists(self.client.postgres_client(), database, schema).await
+        schema_exists(self.client, database, schema).await
     }
 
     /// Check if a role exists.
     pub async fn role_exists(&self, name: &str) -> Result<bool, ConnectionError> {
-        role_exists(self.client.postgres_client(), name).await
+        role_exists(self.client, name).await
     }
 
     /// Get the members granted to a role.
     pub async fn get_role_members(&self, name: &str) -> Result<Vec<String>, ConnectionError> {
-        get_role_members(self.client.postgres_client(), name).await
+        get_role_members(self.client, name).await
     }
 
     /// Get session default parameter names for a role.
     pub async fn get_role_parameters(&self, name: &str) -> Result<Vec<String>, ConnectionError> {
-        get_role_parameters(self.client.postgres_client(), name).await
+        get_role_parameters(self.client, name).await
     }
 
     /// Check if a cluster exists.
     pub async fn cluster_exists(&self, name: &str) -> Result<bool, ConnectionError> {
-        cluster_exists(self.client.postgres_client(), name).await
+        cluster_exists(self.client, name).await
     }
 
     /// Get a cluster by name.
     pub async fn get_cluster(&self, name: &str) -> Result<Option<Cluster>, ConnectionError> {
-        get_cluster(self.client.postgres_client(), name).await
+        get_cluster(self.client, name).await
     }
 
     /// List all clusters.
     pub async fn list_clusters(&self) -> Result<Vec<Cluster>, ConnectionError> {
-        list_clusters(self.client.postgres_client()).await
+        list_clusters(self.client).await
     }
 
     /// Get cluster configuration including replicas and grants.
@@ -1035,6 +961,6 @@ impl IntrospectionClient<'_> {
         &self,
         name: &str,
     ) -> Result<Option<ClusterConfig>, ConnectionError> {
-        get_cluster_config(self.client.postgres_client(), name).await
+        get_cluster_config(self.client, name).await
     }
 }

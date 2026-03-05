@@ -3,7 +3,7 @@
 //! This module contains methods for validating projects against the database,
 //! including checking for required databases, schemas, clusters, and privileges.
 
-use crate::client::connection::ValidationClient;
+use crate::client::connection::{Client, ValidationClient};
 use crate::client::errors::DatabaseValidationError;
 use crate::project::ast::Statement;
 use crate::project::object_id::ObjectId;
@@ -12,7 +12,6 @@ use mz_sql_parser::ast::CreateSinkConnection;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::path::PathBuf;
-use tokio_postgres::Client as PgClient;
 use tokio_postgres::types::ToSql;
 
 const LOOKUP_BATCH_SIZE: usize = 1000;
@@ -37,7 +36,7 @@ impl CatalogLookup {
 
 /// Internal helper to query which sources exist on the given clusters using IN clause.
 pub(crate) async fn query_sources_by_cluster(
-    client: &PgClient,
+    client: &Client,
     cluster_names: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, Vec<String>>, DatabaseValidationError> {
     if cluster_names.is_empty() {
@@ -90,7 +89,7 @@ pub(crate) async fn query_sources_by_cluster(
 }
 
 async fn query_existing_names(
-    client: &PgClient,
+    client: &Client,
     table_name: &str,
     column_name: &str,
     names: &BTreeSet<String>,
@@ -130,7 +129,7 @@ async fn query_existing_names(
 }
 
 async fn query_existing_schema_pairs(
-    client: &PgClient,
+    client: &Client,
     schema_pairs: &BTreeSet<(String, String)>,
 ) -> Result<BTreeSet<(String, String)>, DatabaseValidationError> {
     let mut existing = BTreeSet::new();
@@ -181,7 +180,7 @@ async fn query_existing_schema_pairs(
 }
 
 async fn query_existing_object_ids(
-    client: &PgClient,
+    client: &Client,
     object_ids: &BTreeSet<ObjectId>,
     lookup: CatalogLookup,
 ) -> Result<BTreeSet<ObjectId>, DatabaseValidationError> {
@@ -232,7 +231,7 @@ async fn query_existing_object_ids(
 
 /// Internal implementation of validate_project.
 pub(crate) async fn validate_project_impl(
-    client: &PgClient,
+    client: &Client,
     planned_project: &planned::Project,
     project_root: &Path,
 ) -> Result<(), DatabaseValidationError> {
@@ -286,7 +285,7 @@ fn collect_external_dependencies(
 
 /// Checks catalog state for external databases that must pre-exist.
 async fn find_missing_databases(
-    client: &PgClient,
+    client: &Client,
     external_databases: &BTreeSet<String>,
 ) -> Result<Vec<String>, DatabaseValidationError> {
     let existing = query_existing_names(client, "mz_databases", "name", external_databases).await?;
@@ -295,7 +294,7 @@ async fn find_missing_databases(
 
 /// Checks catalog state for external schemas that must pre-exist.
 async fn find_missing_schemas(
-    client: &PgClient,
+    client: &Client,
     external_schemas: &BTreeSet<(String, String)>,
 ) -> Result<Vec<(String, String)>, DatabaseValidationError> {
     let existing = query_existing_schema_pairs(client, external_schemas).await?;
@@ -304,7 +303,7 @@ async fn find_missing_schemas(
 
 /// Checks whether all cluster dependencies referenced by the project are present.
 async fn find_missing_clusters(
-    client: &PgClient,
+    client: &Client,
     planned_project: &planned::Project,
 ) -> Result<Vec<String>, DatabaseValidationError> {
     let required: BTreeSet<String> = planned_project
@@ -341,7 +340,7 @@ fn build_object_paths(
 
 /// Checks whether externally-referenced objects actually exist in the target catalog.
 async fn find_missing_external_dependencies(
-    client: &PgClient,
+    client: &Client,
     planned_project: &planned::Project,
 ) -> Result<BTreeSet<ObjectId>, DatabaseValidationError> {
     let external_deps: BTreeSet<ObjectId> = planned_project
@@ -395,7 +394,7 @@ impl ValidationClient<'_> {
         planned_project: &planned::Project,
         project_root: &Path,
     ) -> Result<(), DatabaseValidationError> {
-        validate_project_impl(self.client.postgres_client(), planned_project, project_root).await
+        validate_project_impl(self.client, planned_project, project_root).await
     }
 
     /// Validate that sources and sinks don't share clusters with indexes or materialized views.
@@ -403,7 +402,7 @@ impl ValidationClient<'_> {
         &self,
         planned_project: &planned::Project,
     ) -> Result<(), DatabaseValidationError> {
-        validate_cluster_isolation_impl(self.client.postgres_client(), planned_project).await
+        validate_cluster_isolation_impl(self.client, planned_project).await
     }
 
     /// Validate that the user has sufficient privileges to deploy the project.
@@ -411,7 +410,7 @@ impl ValidationClient<'_> {
         &self,
         planned_project: &planned::Project,
     ) -> Result<(), DatabaseValidationError> {
-        validate_privileges_impl(self.client.postgres_client(), planned_project).await
+        validate_privileges_impl(self.client, planned_project).await
     }
 
     /// Validate that all sources referenced by CREATE TABLE FROM SOURCE statements exist.
@@ -419,7 +418,7 @@ impl ValidationClient<'_> {
         &self,
         planned_project: &planned::Project,
     ) -> Result<(), DatabaseValidationError> {
-        validate_sources_exist_impl(self.client.postgres_client(), planned_project).await
+        validate_sources_exist_impl(self.client, planned_project).await
     }
 
     /// Validate that all connections referenced by CREATE SINK statements exist.
@@ -427,7 +426,7 @@ impl ValidationClient<'_> {
         &self,
         planned_project: &planned::Project,
     ) -> Result<(), DatabaseValidationError> {
-        validate_sink_connections_exist_impl(self.client.postgres_client(), planned_project).await
+        validate_sink_connections_exist_impl(self.client, planned_project).await
     }
 
     /// Validate that all tables referenced by objects to be deployed exist in the database.
@@ -436,18 +435,13 @@ impl ValidationClient<'_> {
         planned_project: &planned::Project,
         objects_to_deploy: &BTreeSet<ObjectId>,
     ) -> Result<(), DatabaseValidationError> {
-        validate_table_dependencies_impl(
-            self.client.postgres_client(),
-            planned_project,
-            objects_to_deploy,
-        )
-        .await
+        validate_table_dependencies_impl(self.client, planned_project, objects_to_deploy).await
     }
 }
 
 /// Internal implementation of validate_cluster_isolation.
 pub(crate) async fn validate_cluster_isolation_impl(
-    client: &PgClient,
+    client: &Client,
     planned_project: &planned::Project,
 ) -> Result<(), DatabaseValidationError> {
     // Get all clusters used by the project
@@ -473,7 +467,7 @@ pub(crate) async fn validate_cluster_isolation_impl(
 
 /// Internal implementation of validate_privileges.
 pub(crate) async fn validate_privileges_impl(
-    client: &PgClient,
+    client: &Client,
     planned_project: &planned::Project,
 ) -> Result<(), DatabaseValidationError> {
     // Check if user is a superuser
@@ -563,7 +557,7 @@ pub(crate) async fn validate_privileges_impl(
 
 /// Internal implementation of validate_sources_exist.
 pub(crate) async fn validate_sources_exist_impl(
-    client: &PgClient,
+    client: &Client,
     planned_project: &planned::Project,
 ) -> Result<(), DatabaseValidationError> {
     let defined_sources: BTreeSet<ObjectId> = planned_project
@@ -599,7 +593,7 @@ pub(crate) async fn validate_sources_exist_impl(
 /// Validates that all connections referenced by sinks exist in the database.
 /// Sinks reference connections (Kafka, Iceberg) that are not managed by mz-deploy.
 pub(crate) async fn validate_sink_connections_exist_impl(
-    client: &PgClient,
+    client: &Client,
     planned_project: &planned::Project,
 ) -> Result<(), DatabaseValidationError> {
     let mut referenced_connections = BTreeSet::new();
@@ -653,7 +647,7 @@ pub(crate) async fn validate_sink_connections_exist_impl(
 
 /// Internal implementation of validate_table_dependencies.
 pub(crate) async fn validate_table_dependencies_impl(
-    client: &PgClient,
+    client: &Client,
     planned_project: &planned::Project,
     objects_to_deploy: &BTreeSet<ObjectId>,
 ) -> Result<(), DatabaseValidationError> {
