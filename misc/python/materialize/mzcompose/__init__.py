@@ -81,6 +81,7 @@ def get_minimal_system_parameters(
         "enable_continual_task_retain": "true",
         "enable_continual_task_transform": "true",
         "enable_copy_to_expr": "true",
+        "enable_copy_from_remote": "true",
         "enable_create_table_from_source": "true",
         "enable_eager_delta_joins": "true",
         "enable_envelope_debezium_in_subscribe": "true",

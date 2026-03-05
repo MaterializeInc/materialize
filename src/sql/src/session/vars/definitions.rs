@@ -2166,7 +2166,7 @@ feature_flags!(
     {
         name: enable_copy_from_remote,
         desc: "Whether to allow COPY FROM <url>.",
-        default: false,
+        default: true,
         enable_for_item_parsing: false,
     },
     {
