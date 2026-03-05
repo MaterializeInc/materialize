@@ -19,10 +19,10 @@ bench = false
 [dependencies]
 anyhow = "1.0.101"
 async-trait = "0.1.89"
-aws-config = { version = "1.8.13", default-features = false }
 aws-sdk-s3 = { version = "1.94.0", default-features = false, features = ["rt-tokio"] }
 bytes = "1.11.1"
 clap = { version = "4.5.23", features = ["derive", "env"] }
+mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-persist = { path = "../persist" }
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 tokio = { version = "1.49.0", default-features = false, features = ["macros", "sync", "rt", "time"] }

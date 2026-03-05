@@ -21,17 +21,15 @@ use crate::actor::{Actor, ActorCommand};
 use crate::s3_wal::{NoopWalWriter, RecordingWalWriter};
 
 /// Test wrapper that holds the actor's sender and join handle.
-/// Call `shutdown()` at the end of each test to cleanly stop the actor.
+/// The actor task is aborted on drop so tests don't need explicit cleanup.
 struct TestActor {
     tx: mpsc::Sender<ActorCommand>,
     handle: JoinHandle<()>,
 }
 
-impl TestActor {
-    /// Drop the sender (closing the channel) and wait for the actor to exit.
-    async fn shutdown(self) {
-        drop(self.tx);
-        let _ = self.handle.await;
+impl Drop for TestActor {
+    fn drop(&mut self) {
+        self.handle.abort();
     }
 }
 
@@ -87,7 +85,6 @@ async fn cas_and_flush(
     })
     .await
     .unwrap();
-    // Flush to resolve the pending reply.
     send_flush(tx).await;
     let resp = reply_rx.await.unwrap()?;
     Ok(resp.committed)
@@ -137,11 +134,6 @@ async fn send_cas_expect_validation_error(
     })
     .await
     .unwrap();
-    // Validation errors are sent immediately, but the reply is still buffered
-    // until flush. We need to flush to get it.
-    // Actually — looking at the actor code, validation errors DO reply
-    // immediately (return early before pushing to pending_replies). So we can
-    // just await.
     reply_rx.await.unwrap().unwrap_err()
 }
 
@@ -224,7 +216,6 @@ async fn send_truncate_expect_error(
     })
     .await
     .unwrap();
-    // Validation errors for truncate are sent immediately.
     reply_rx.await.unwrap().unwrap_err()
 }
 
@@ -245,7 +236,6 @@ async fn send_list_keys(tx: &mpsc::Sender<ActorCommand>) -> Vec<String> {
 async fn cas_on_empty_shard() {
     let a = spawn_test_actor();
     assert!(cas_and_flush(&a.tx, "shard-1", None, 1, b"hello").await.unwrap());
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -254,7 +244,6 @@ async fn cas_wrong_expected() {
     assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
     let committed = cas_and_flush(&a.tx, "s", Some(999), 1000, b"v2").await.unwrap();
     assert!(!committed);
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -262,7 +251,6 @@ async fn cas_correct_expected() {
     let a = spawn_test_actor();
     assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
     assert!(cas_and_flush(&a.tx, "s", Some(1), 2, b"v2").await.unwrap());
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -272,7 +260,6 @@ async fn cas_sequential() {
     assert!(cas_and_flush(&a.tx, "s", Some(1), 2, b"v2").await.unwrap());
     assert!(cas_and_flush(&a.tx, "s", Some(2), 3, b"v3").await.unwrap());
     assert!(cas_and_flush(&a.tx, "s", Some(3), 4, b"v4").await.unwrap());
-    a.shutdown().await;
 }
 
 // --- CAS validation ---
@@ -282,7 +269,6 @@ async fn cas_seqno_not_greater_than_expected() {
     let a = spawn_test_actor();
     let err = send_cas_expect_validation_error(&a.tx, "s", Some(5), 3, b"v").await;
     assert!(err.contains("strictly greater"));
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -290,7 +276,6 @@ async fn cas_seqno_equal_to_expected() {
     let a = spawn_test_actor();
     let err = send_cas_expect_validation_error(&a.tx, "s", Some(5), 5, b"v").await;
     assert!(err.contains("strictly greater"));
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -298,7 +283,6 @@ async fn cas_seqno_exceeds_i64_max() {
     let a = spawn_test_actor();
     let err = send_cas_expect_validation_error(&a.tx, "s", None, (i64::MAX as u64) + 1, b"v").await;
     assert!(err.contains("i64::MAX"));
-    a.shutdown().await;
 }
 
 // --- Group commit semantics ---
@@ -311,7 +295,6 @@ async fn group_commit_different_shards() {
     send_flush(&a.tx).await;
     assert!(rx1.await.unwrap().unwrap().committed);
     assert!(rx2.await.unwrap().unwrap().committed);
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -322,7 +305,6 @@ async fn group_commit_same_shard_conflict() {
     send_flush(&a.tx).await;
     assert!(rx1.await.unwrap().unwrap().committed);
     assert!(!rx2.await.unwrap().unwrap().committed);
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -332,7 +314,6 @@ async fn cas_caller_blocks_until_flush() {
     assert!(rx.try_recv().is_err());
     send_flush(&a.tx).await;
     assert!(rx.await.unwrap().unwrap().committed);
-    a.shutdown().await;
 }
 
 // --- Read operations ---
@@ -341,7 +322,6 @@ async fn cas_caller_blocks_until_flush() {
 async fn head_empty_shard() {
     let a = spawn_test_actor();
     assert_eq!(send_head(&a.tx, "nonexistent").await, None);
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -349,7 +329,6 @@ async fn head_after_cas() {
     let a = spawn_test_actor();
     assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
     assert_eq!(send_head(&a.tx, "s").await, Some((1, b"v1".to_vec())));
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -358,7 +337,6 @@ async fn head_returns_latest() {
     assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
     assert!(cas_and_flush(&a.tx, "s", Some(1), 2, b"v2").await.unwrap());
     assert_eq!(send_head(&a.tx, "s").await, Some((2, b"v2".to_vec())));
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -373,7 +351,6 @@ async fn scan_returns_entries_in_order() {
     assert_eq!(entries[0].0, 1);
     assert_eq!(entries[1].0, 2);
     assert_eq!(entries[2].0, 3);
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -386,7 +363,6 @@ async fn scan_respects_from_and_limit() {
     let entries = send_scan(&a.tx, "s", 2, 1).await;
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].0, 2);
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -394,7 +370,6 @@ async fn scan_empty_shard() {
     let a = spawn_test_actor();
     let entries = send_scan(&a.tx, "nonexistent", 0, u64::MAX).await;
     assert!(entries.is_empty());
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -404,7 +379,6 @@ async fn list_keys_returns_all_shards() {
     assert!(cas_and_flush(&a.tx, "a", None, 1, b"v").await.unwrap());
     assert!(cas_and_flush(&a.tx, "c", None, 1, b"v").await.unwrap());
     assert_eq!(send_list_keys(&a.tx).await, vec!["a", "b", "c"]);
-    a.shutdown().await;
 }
 
 // --- Truncate ---
@@ -423,7 +397,6 @@ async fn truncate_removes_entries_below() {
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].0, 2);
     assert_eq!(entries[1].0, 3);
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -432,7 +405,6 @@ async fn truncate_above_head_errors() {
     assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
     let err = send_truncate_expect_error(&a.tx, "s", 999).await;
     assert!(err.contains("upper bound too high"));
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -440,7 +412,6 @@ async fn truncate_empty_shard_errors() {
     let a = spawn_test_actor();
     let err = send_truncate_expect_error(&a.tx, "nonexistent", 1).await;
     assert!(err.contains("upper bound too high"));
-    a.shutdown().await;
 }
 
 // --- WAL integration ---
@@ -456,8 +427,6 @@ async fn flush_calls_wal_writer() {
     let batches = writer.batches.lock().unwrap();
     assert_eq!(batches.len(), 1);
     assert_eq!(batches[0].ops.len(), 2);
-    drop(batches);
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -471,8 +440,6 @@ async fn batch_number_increments() {
     assert_eq!(batches.len(), 2);
     assert_eq!(batches[0].batch_number, 0);
     assert_eq!(batches[1].batch_number, 1);
-    drop(batches);
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -482,8 +449,6 @@ async fn empty_flush_is_noop() {
 
     let batches = writer.batches.lock().unwrap();
     assert!(batches.is_empty());
-    drop(batches);
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -507,8 +472,6 @@ async fn truncate_recorded_in_wal() {
         }
         other => panic!("expected truncate op, got {:?}", other),
     }
-    drop(batches);
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -521,8 +484,6 @@ async fn snapshot_written_every_n_batches() {
 
     let snapshots = writer.snapshots.lock().unwrap();
     assert_eq!(snapshots.len(), 1, "expected exactly one snapshot after 3 batches");
-    drop(snapshots);
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -534,8 +495,6 @@ async fn no_snapshot_before_interval() {
 
     let snapshots = writer.snapshots.lock().unwrap();
     assert!(snapshots.is_empty(), "no snapshot expected before interval");
-    drop(snapshots);
-    a.shutdown().await;
 }
 
 #[tokio::test]
@@ -547,5 +506,4 @@ async fn reads_are_immediate() {
     assert_eq!(head, Some((1, b"v1".to_vec())));
 
     send_flush(&a.tx).await;
-    a.shutdown().await;
 }
