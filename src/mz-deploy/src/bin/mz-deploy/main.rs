@@ -254,6 +254,24 @@ enum Command {
         limit: Option<usize>,
     },
 
+    /// Create a new mz-deploy project
+    ///
+    /// Scaffolds a project directory with the required structure including
+    /// project.toml, models/, clusters/, and roles/ directories.
+    /// Initializes a git repository unless --no-git is specified.
+    ///
+    /// Example:
+    ///   mz-deploy new my-project
+    New {
+        /// Name of the project directory to create
+        #[arg(value_name = "NAME")]
+        name: String,
+
+        /// Skip git repository initialization
+        #[arg(long)]
+        no_git: bool,
+    },
+
     /// Wait for staging deployment clusters to be hydrated and ready
     ///
     /// Monitors cluster hydration status with a live dashboard showing progress for
@@ -335,6 +353,11 @@ async fn main() {
 }
 
 async fn run(args: Args) -> Result<(), CliError> {
+    // Handle commands that don't require an existing project
+    if let Some(Command::New { name, no_git }) = &args.command {
+        return cli::commands::new_project::run(name, !no_git).await;
+    }
+
     let settings = load_project_settings(&args.directory, args.docker_image)?;
 
     match args.command {
@@ -454,6 +477,7 @@ async fn run(args: Args) -> Result<(), CliError> {
 
             cli::commands::ready::run(&profile, &name, snapshot, timeout, allowed_lag).await
         }
+        Some(Command::New { .. }) => unreachable!("handled above"),
         None => {
             Args::command().print_help().unwrap();
             Ok(())

@@ -16,4 +16,5 @@ pub mod history;
 pub mod ready;
 pub mod roles;
 pub mod stage;
+pub mod new_project;
 pub mod test;
