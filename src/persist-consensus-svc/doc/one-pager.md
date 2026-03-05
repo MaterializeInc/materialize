@@ -1,10 +1,11 @@
 # Group Commit Consensus for Persist
 
-**March 2026 | Skunkworks**
-
 ## The Problem
 
-Persist's consensus layer is backed by Postgres (or CockroachDB). Every persist shard performs a compare-and-set (CAS) against Postgres at the source tick rate. Today at ~1 tick/s with 8,000 shards, that's 8,000 writes/s to a SQL database — scaling linearly with shard count. Pushing tick rates faster (100ms, 10ms) would multiply this by 10-100x. The SQL database becomes the bottleneck, limiting both how many objects we can maintain and how fresh we can make them.
+Persist's consensus layer is backed by Postgres (or CockroachDB). Every persist shard performs a compare-and-set (CAS)
+against Postgres at the source tick rate. Today at ~1 tick/s with 8,000 shards, that's 8,000 writes/s to a SQL
+database — scaling linearly with shard count. Pushing tick rates faster (100ms, 10ms) would multiply this by 10-100x.
+The SQL database becomes the bottleneck, limiting both how many objects we can maintain and how fresh we can make them.
 
 ```
   Today: O(shards) writes to Postgres per tick
@@ -20,9 +21,19 @@ Persist's consensus layer is backed by Postgres (or CockroachDB). Every persist 
   └──────────────┘
 ```
 
-## The Insight
+## The Approach
 
-CAS writes across different shards are independent. They don't need to be serialized one-by-one through SQL. If we batch N shards' CAS operations into a single durable write, the cost becomes O(1/batch\_window) instead of O(shards). A 20ms batch window means ~50 writes/s regardless of whether we have 100 or 100,000 shards.
+By moving consensus into a service we own, we can group commit — batching independent CAS operations across shards
+into a single durable write. Instead of N shards making N independent writes to a SQL database, the service collects
+them all and flushes once per batch window.
+
+We back the service with object storage (S3 Express One Zone), which gives us two things: durable storage for the
+write-ahead log, and distributed compare-and-set via conditional PUTs (`If-None-Match: *`). This means the service
+doesn't need its own consensus protocol.
+
+Because the consensus data per shard is so small, the entire working set for an environment can easily fit in memory.
+This allows the service to serve all reads operations (`head`, `scan`, `list_keys` in the Consensus API) directly from
+RAM.
 
 ```
   Group Commit: O(1/batch_window) writes to S3
@@ -44,13 +55,15 @@ CAS writes across different shards are independent. They don't need to be serial
 
 ### 1. A Consensus Service (`persist-consensus-svc`)
 
-A standalone gRPC service that implements persist's `Consensus` trait — the same `head`, `compare_and_set`, `scan`, `truncate`, and `list_keys` interface that Postgres implements today.
+A standalone gRPC service that implements persist's `Consensus` trait — the same `head`, `compare_and_set`, `scan`,
+`truncate`, and `list_keys` interface that Postgres implements today.
 
-Internally, it runs a **single-threaded actor** that:
+Internally, it runs a single-threaded actor that:
 
 - Accepts CAS operations from all shards via a channel
 - Evaluates each CAS against in-memory committed state (first writer for a shard wins per batch, all others wait)
-- On a 20ms flush timer, serializes the entire batch into a single protobuf WAL entry and writes it to **S3 Express One Zone** with a conditional PUT (`If-None-Match: *`)
+- On a 20ms flush timer, serializes the entire batch into a single protobuf WAL entry and writes it to S3 Express One
+  Zone with a conditional PUT (`If-None-Match: *`)
 - On S3 success, resolves all waiting callers: winners get `Committed`, losers get `ExpectationMismatch`
 - All callers — winners and losers — experience the same latency, making the system predictable
 
@@ -89,7 +102,9 @@ Reads (`head`, `scan`, `list_keys`) are served immediately from in-memory state 
 
 ### 2. An RPC Consensus Client (`RpcConsensus`)
 
-A new `Consensus` trait implementation that translates persist's consensus API into gRPC calls. From persist's perspective, this is just another backend — selected by passing `--persist-consensus-url='rpc://host:port'` to environmentd. No changes to persist's write/read paths, compaction, or any other machinery.
+A new `Consensus` trait implementation that translates persist's consensus API into gRPC calls. From persist's
+perspective, this is just another backend — selected by passing `--persist-consensus-url='rpc://host:port'` to
+environmentd. No changes to persist's write/read paths, compaction, or any other machinery.
 
 ```
     Consensus Trait — pluggable backends
@@ -110,13 +125,20 @@ A new `Consensus` trait implementation that translates persist's consensus API i
 
 ## How Durability Works
 
-At its core, what we've built is a **log on object storage**. The service appends batched entries to a write-ahead log stored as sequentially-numbered S3 objects, with periodic snapshots for fast recovery. S3 Express One Zone (directory buckets) is the sole durable store. Two object types:
+At its core, what we've built is a log on object storage. The service appends batched entries to a write-ahead log
+stored as sequentially-numbered S3 objects, with periodic snapshots for fast recovery. S3 Express One Zone (directory
+buckets) is the sole durable store. There are two object types:
 
-**WAL entries** (`wal/000000000001`, `wal/000000000002`, ...): Written every flush. Each is a protobuf containing all CAS writes and truncates in that batch. The conditional PUT (`If-None-Match: *`) guarantees exactly-once — if a write times out and we retry, S3 returns 412 if the original landed, confirming success without duplication.
+**WAL entries** (`wal/000000000001`, `wal/000000000002`, ...): Written every flush. Each is a protobuf containing all
+CAS writes and truncates in that batch. The conditional PUT (`If-None-Match: *`) guarantees exactly-once writes, as we
+can definitively know whether the request succeeded (HTTP 200) or already was written (HTTP 412). These translate into
+the existing `persist` Consensus return codes.
 
-**Snapshots** (`snapshot`): Written every N WAL entries (default 100). A full serialization of all shard state. Bounds recovery time.
+**Snapshots** (`snapshot`): Written every N WAL entries (default 100). A full serialization of all shard state. By
+performing snapshots at a fixed interval, we can predictably bound recovery time.
 
-**Recovery** requires no LIST operation (directory buckets return unordered results). Instead: load the snapshot, then linearly probe WAL entries starting from snapshot+1 until a 404 signals the end.
+**Recovery** avoids LIST operations, as directory buckets return unordered results. Instead: we load the snapshot, then
+linearly probe WAL entries starting from snapshot+1 until a 404 signals the end.
 
 ```
     S3 Bucket Layout
@@ -155,9 +177,9 @@ At its core, what we've built is a **log on object storage**. The service append
 |-----------|-------------------|--------------------------|
 | 1s        | 8,000             | ~50                      |
 | 100ms     | 80,000            | ~50                      |
-| 10ms      | 800,000           | ~50                      |
 
-S3 Express One Zone: single-digit millisecond PUT latency, ~$0.0025 per 1,000 PUTs. At 50 PUTs/s, that's ~$11/month for consensus — down from a dedicated Postgres/CRDB instance.
+S3 Express One Zone: single-digit millisecond PUT latency, ~$0.0025 per 1,000 PUTs. At 50 PUTs/s, that's ~$11/month for
+consensus — down from a dedicated Postgres/CRDB instance.
 
 ```
     Writes/s vs. Shard Count
@@ -174,7 +196,7 @@ S3 Express One Zone: single-digit millisecond PUT latency, ~$0.0025 per 1,000 PU
           0    4k    8k shards        0    4k    8k shards
 ```
 
-## What Changed in Materialize
+## What Changes in Materialize
 
 The changes to Materialize itself are minimal and non-invasive:
 
@@ -184,12 +206,35 @@ The changes to Materialize itself are minimal and non-invasive:
 - **Modified**: `src/persist/src/cfg.rs` — route `rpc://` URLs to `RpcConsensus`
 - **No changes** to persist-client internals, compaction, blob storage, or any read/write paths
 
-The service is deployment-agnostic: it can run as a standalone process or be embedded within environmentd. Clients only need `rpc://host:port`.
+The service is deployment-agnostic: it can run as a standalone process or be embedded within environmentd. Clients only
+need `rpc://host:port`.
 
 ## Key Design Properties
 
-- **Single-threaded actor**: No locks, no races. The simplest possible concurrency model for a correctness-critical component.
-- **S3 conditional writes provide fencing**: `If-None-Match: *` guarantees exactly-once WAL entries without implementing our own consensus protocol. This also enables a future path to multi-instance (active-standby) if needed.
-- **Opaque data**: The service stores `(shard_id, seqno, bytes)` tuples and never decodes the bytes. Same contract as Postgres today.
-- **Infinite retry on S3 failure**: WAL writes retry indefinitely with exponential backoff. Only `Ok` and `AlreadyExists` (412) are definite results — transient failures never propagate to clients.
-- **Structurally recursive**: The snapshot + WAL + compaction pattern is the same thing persist itself does (rollups + diffs + GC). A natural future evolution is "persist-on-persist" — using an internal persist shard for the snapshot layer to get compaction for free.
+- **Isolated by S3 prefix**: Each service instance writes to its own prefix — e.g. `consensus/<env-id>/<cluster-id>/`.
+  You run one consensus service per cluster, and clusters share nothing. This is a natural fit for per-cluster scaling
+  and multi-tenancy.
+- **Single-threaded actor**: No locks, no races. The simplest possible concurrency model for a correctness-critical
+  component.
+- **S3 conditional writes provide fencing**: `If-None-Match: *` guarantees exactly-once WAL entries without implementing
+  our own consensus protocol. This also enables a future path to multi-instance (active-standby) if needed.
+- **Opaque data**: The service stores `(shard_id, seqno, bytes)` tuples and never decodes the bytes. Same contract as
+  Postgres today.
+- **Infinite retry on S3 failure**: WAL writes retry indefinitely with exponential backoff. Only `Ok` and
+  `AlreadyExists` (412) are definite results — transient failures never propagate to clients.
+
+## What We Did Not Build
+
+This service does not change anything about `persist` semantics or how information flows through Materialize. Despite
+having a "group commit" stage, this work does not bring us any closer to introducing something like atomic cross-shard
+writes, which require a higher-level reimagining of coordination within Materialize.
+
+This is purely a swap of the consensus implementation: from Postgres/CockroachDB to an in-memory serving layer backed
+by an object storage WAL.
+
+## Wait a second...
+
+_Maintaining an object storage-backed log sounds a lot like what persist does already. Did you just rewrite persist?_
+
+This is not untrue. You could very likely replace the backend of `persist-consensus-svc` with a `persist` shard, itself
+backed by Cockroach/Postgres. It's turtles all the way down.
