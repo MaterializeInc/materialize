@@ -966,6 +966,7 @@ class Database:
     kafka_sinks: list[KafkaSink]
     kafka_sink_id: int
     s3_path: int
+    s3_objects: list[S3Object]
     lock: threading.Lock
     seed: str
     sqlsmith_state: str
@@ -1040,6 +1041,7 @@ class Database:
         self.sql_server_sources = []
         self.iceberg_sinks = []
         self.kafka_sinks = []
+        self.s3_objects = []
         self.kafka_source_id = len(self.kafka_sources)
         self.mysql_source_id = len(self.mysql_sources)
         self.postgres_source_id = len(self.postgres_sources)

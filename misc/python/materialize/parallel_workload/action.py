@@ -548,7 +548,7 @@ class CopyToS3Action(Action):
             location = exe.db.s3_path
             exe.db.s3_path += 1
         format = "csv" if self.rng.choice([True, False]) else "parquet"
-        s3_obj = S3Object(location, "copytos3", format)
+        s3_obj = S3Object(str(location), "copytos3", format)
         if self.rng.random() < 0.9:
             dts = [self.rng.choice(list(DATA_TYPES)) for _ in range(self.rng.randint(1, 10))]
             expressions = ", ".join(
@@ -562,18 +562,9 @@ class CopyToS3Action(Action):
             expressions = "*"
             cols = [Column(self.rng, i, column.data_type, s3_obj) for i, column in enumerate(obj.columns)]
         s3_obj.columns = cols
-        flag_query = "ALTER SYSTEM SET enable_copy_from_remote = true"
         to_query = f"COPY (SELECT {expressions} FROM {obj_name} WHERE {expression(Boolean, obj.columns, self.rng)} LIMIT {self.rng.randint(0, 100)}) TO 's3://copytos3/{location}' WITH (AWS CONNECTION = aws_conn, FORMAT = '{format}')"
 
-        exe.execute(flag_query, explainable=False, http=Http.NO, fetch=False)
         exe.execute(to_query, explainable=False, http=Http.NO, fetch=False)
-
-        create_table_query = (
-            f"CREATE TABLE t1 AS SELECT {expressions} FROM {obj_name} WITH NO DATA"
-        )
-        from_query = f"COPY INTO t1 FROM 's3://copytos3/{location}' (FORMAT {format.upper()}, AWS CONNECTION = aws_conn)"
-        exe.execute(create_table_query, explainable=False, http=Http.NO, fetch=False)
-        exe.execute(from_query, explainable=False, http=Http.NO, fetch=False)
         return True
 
 class CopyFromS3Action(Action):
@@ -588,11 +579,9 @@ class CopyFromS3Action(Action):
         return result
     
     def run(self, exe: Executor) -> bool:
-        s3_obj = 
-        from_query = f"COPY INTO t1 FROM 's3://copyfroms3/{location}' (FORMAT {format.upper()}, AWS CONNECTION = aws_conn)"
-        exe.execute(to_query, explainable=False, http=Http.NO, fetch=False)
-        create_table_query = f"CREATE TABLE t1 ({', '.join(column.create() for column in cols)})"
-        exe.execute(create_table_query, explainable=False, http=Http.NO, fetch=False)
+        s3_obj = self.rng.choice(exe.db.s3_objects)
+        from_query = f"COPY INTO t1 FROM 's3://copyfroms3/{s3_obj.key}' (FORMAT {format.upper()}, AWS CONNECTION = aws_conn)"
+        s3_obj.create(exe)
         exe.execute(from_query, explainable=False, http=Http.NO, fetch=False)
         return True
 
@@ -3123,7 +3112,7 @@ read_action_list = ActionList(
         (SelectOneAction, 1),
         # (SQLsmithAction, 30),  # Questionable use
         (
-            CopyRoundtripS3Action,
+            CopyToS3Action,
             100,
         ),  # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9661 is fixed
         (SetClusterAction, 1),
