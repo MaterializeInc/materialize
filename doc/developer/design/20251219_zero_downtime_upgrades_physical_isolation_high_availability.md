@@ -426,12 +426,15 @@ listen to catalog changes, apply migrations live, and when promoted fences out
 the old `environmentd` and gets all its in-memory structures, controllers, and
 the like out of read-only mode.
 
-I contend that this can still take on the order of seconds and only an approach
-where we use HA across versions can bring us down to true zero downtime.
-
-Additionally, the parts required for live-listening to changes and acting on
-them will be tricky to write, though we will need it long term for the other
-initiatives.
+The "speed of light" of a version cutover is cutting over network routes — you
+have to do that regardless because you're pointing clients at different
+processes. The proposal with two deployments running concurrently gets as close
+to that speed of light as possible. With an in-process transition, however long
+it takes to bring everything out of read-only mode (transitioning in-memory
+data structures, controllers, on-cluster dataflows, etc.) shows up directly in
+the downtime. Getting that to actual zero is very hard or impossible. On top of
+the time cost, successfully transitioning all in-memory data structures from
+read-only to read-write mode is itself a difficult and error-prone undertaking.
 
 ### Focus on further improving `environmentd` bootstrap times
 
