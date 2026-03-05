@@ -261,9 +261,11 @@ There are two types of builtin tables:
 2. Other tables, which are largely append-only
 
 We have to audit and find out which is which. For builtin tables that mirror
-catalog state we can use the self-correcting approach that we also use for
-materialized views and for a number of builtin storage-managed collections. For
-others, we have to find other ways to make them work.
+catalog state, the most promising approach is to make them views over the
+catalog rather than independently written tables. This sidesteps the concurrent
+writer problem entirely for these tables: there is nothing to write, the data
+is just computed from catalog state. There is already work in progress towards
+this approach. For others, we have to find other ways to make them work.
 
 The difficult tables/collections will be those that are not derived from
 catalog state. For example:
