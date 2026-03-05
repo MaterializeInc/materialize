@@ -1,8 +1,8 @@
 //! Compile command - validate project and show deployment plan.
 
 use crate::cli::CliError;
+use crate::cli::progress;
 use crate::project::object_id::ObjectId;
-use crate::utils::progress;
 use crate::{project, verbose};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -116,7 +116,7 @@ pub async fn run(
     }
 
     // Show verbose details if requested
-    if crate::utils::log::verbose_enabled() {
+    if crate::log::verbose_enabled() {
         print_verbose_details(&planned_project, &sorted);
     }
 
@@ -133,8 +133,8 @@ async fn typecheck_with_docker(
     planned_project: &project::planned::Project,
     docker_image: &str,
 ) -> Result<Option<Duration>, CliError> {
+    use crate::types::docker_runtime::DockerRuntime;
     use crate::types::{TypeCheckError, typecheck_with_client};
-    use crate::utils::docker_runtime::DockerRuntime;
 
     progress::stage_start("Type checking with Docker");
     let typecheck_start = Instant::now();

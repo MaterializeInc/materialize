@@ -7,10 +7,10 @@
 
 use crate::client::connection::TypeInfoClient;
 use crate::client::errors::ConnectionError;
+use crate::client::quote_identifier;
 use crate::project::object_id::ObjectId;
 use crate::project::planned;
 use crate::types::{ColumnType, Types};
-use crate::utils::sql_utils::quote_identifier;
 use std::collections::BTreeMap;
 
 impl TypeInfoClient<'_> {

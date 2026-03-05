@@ -9,8 +9,8 @@ mod tests {
     #[cfg(feature = "docker-typecheck")]
     #[tokio::test]
     async fn test_docker_typechecker_with_external_dependencies() {
+        use mz_deploy::types::docker_runtime::DockerRuntime;
         use mz_deploy::types::{ColumnType, Types, typecheck_with_client};
-        use mz_deploy::utils::docker_runtime::DockerRuntime;
         use std::collections::BTreeMap;
 
         // Create a test project with external dependencies

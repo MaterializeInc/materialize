@@ -5,7 +5,7 @@
 //! initializes a git repository.
 
 use crate::cli::CliError;
-use crate::utils::progress;
+use crate::cli::progress;
 use std::fs;
 use std::path::Path;
 use std::process::Command;

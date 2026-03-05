@@ -1,6 +1,8 @@
 //! Stage command - deploy to staging environment with renamed schemas and clusters.
 
 use crate::cli::{CliError, TypeCheckMode, executor};
+use crate::cli::{git, progress};
+use crate::client::quote_identifier;
 use crate::client::{
     Client, ClusterConfig, DeploymentKind, PendingStatement, Profile, ReplacementMvRecord,
 };
@@ -11,7 +13,6 @@ use crate::project::object_id::ObjectId;
 use crate::project::planned::extract_external_indexes;
 use crate::project::typed::FullyQualifiedName;
 use crate::project::{self, normalize::NormalizingVisitor};
-use crate::utils::{git, progress, sql_utils::quote_identifier};
 use crate::verbose;
 use std::collections::BTreeSet;
 use std::path::Path;

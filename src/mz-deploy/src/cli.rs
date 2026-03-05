@@ -22,6 +22,8 @@ pub mod commands;
 mod error;
 pub mod executor;
 pub mod extended_help;
+pub mod git;
+pub mod progress;
 
 pub use error::CliError;
 

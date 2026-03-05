@@ -1,9 +1,9 @@
 //! Clusters apply command - converge live cluster state to match definitions.
 
 use crate::cli::CliError;
+use crate::cli::progress;
 use crate::client::{Client, ClusterOptions, ConnectionError, Profile};
 use crate::project::clusters::{self, ClusterDefinition, extract_replication_factor, extract_size};
-use crate::utils::progress;
 use owo_colors::OwoColorize;
 use std::path::Path;
 use std::time::Instant;

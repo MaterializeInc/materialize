@@ -22,14 +22,13 @@
 //!
 //! ## Supporting Modules
 //!
-//! - **[`utils`]** — Shared helpers: progress bars, logging, git metadata, SQL
-//!   quoting, and Docker runtime management.
+//! - **[`log`]** — Verbose logging and the [`verbose!`] macro.
 //! - **[`unit_test`]** — In-process test runner that validates SQL unit tests
 //!   against cached type information.
 
 pub mod cli;
 pub mod client;
+pub mod log;
 pub mod project;
 pub mod types;
 pub mod unit_test;
-pub mod utils;

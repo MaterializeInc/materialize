@@ -8,7 +8,7 @@
 use crate::client::connection::ProvisioningClient;
 use crate::client::errors::ConnectionError;
 use crate::client::models::{ClusterConfig, ClusterOptions};
-use crate::utils::sql_utils::quote_identifier;
+use crate::client::quote_identifier;
 
 impl ProvisioningClient<'_> {
     /// Create a database if it does not already exist.

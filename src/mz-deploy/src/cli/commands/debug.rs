@@ -2,7 +2,7 @@
 
 use crate::cli::CliError;
 use crate::client::{Client, Profile};
-use crate::utils::docker_runtime::{DockerRuntime, DockerStatus};
+use crate::types::docker_runtime::{DockerRuntime, DockerStatus};
 use crossterm::style::Stylize;
 use owo_colors::OwoColorize;
 

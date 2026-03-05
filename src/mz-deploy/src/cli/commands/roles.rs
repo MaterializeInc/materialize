@@ -1,10 +1,10 @@
 //! Roles apply command - converge live role state to match definitions.
 
 use crate::cli::CliError;
+use crate::cli::progress;
+use crate::client::quote_identifier;
 use crate::client::{Client, ConnectionError, Profile};
 use crate::project::roles::{self, RoleDefinition};
-use crate::utils::progress;
-use crate::utils::sql_utils::quote_identifier;
 use mz_sql_parser::ast::AlterRoleOption;
 use mz_sql_parser::ast::SetRoleVar;
 use owo_colors::OwoColorize;

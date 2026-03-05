@@ -39,6 +39,11 @@ mod validation;
 
 pub use config::Profile;
 pub use connection::Client;
+
+/// Double-quote a SQL identifier, escaping any embedded double quotes.
+pub fn quote_identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
 pub use deployment_ops::{
     ClusterDeploymentStatus, ClusterStatusContext, DEFAULT_ALLOWED_LAG_SECS, FailureReason,
     HydrationStatusUpdate,

@@ -5,9 +5,9 @@
 //! metadata and generating environment names.
 
 use crate::cli::CliError;
+use crate::cli::git::get_git_commit;
 use crate::client::Client;
 use crate::project::{self, typed};
-use crate::utils::git::get_git_commit;
 use std::path::Path;
 
 /// Collect deployment metadata (user and git commit).

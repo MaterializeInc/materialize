@@ -8,9 +8,9 @@
 use crate::client::connection::{Client, IntrospectionClient};
 use crate::client::errors::ConnectionError;
 use crate::client::models::{Cluster, ClusterConfig, ClusterGrant, ClusterOptions, ClusterReplica};
+use crate::client::quote_identifier;
 use crate::project::SchemaQualifier;
 use crate::project::object_id::ObjectId;
-use crate::utils::sql_utils::quote_identifier;
 use std::collections::{BTreeMap, BTreeSet};
 use tokio_postgres::types::ToSql;
 

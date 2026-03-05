@@ -3,9 +3,9 @@
 use crate::cli::CliError;
 use crate::client::Client;
 use crate::project::{self, typed};
+use crate::types::docker_runtime::DockerRuntime;
 use crate::types::{self, TypeCheckError, Types};
 use crate::unit_test;
-use crate::utils::docker_runtime::DockerRuntime;
 use mz_sql_parser::ast::Ident;
 use owo_colors::OwoColorize;
 use std::collections::BTreeSet;

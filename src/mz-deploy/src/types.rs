@@ -30,6 +30,7 @@
 //!   [`typecheck_with_client`] helper, and structured error types for
 //!   per-object type-check failures.
 
+pub mod docker_runtime;
 mod typechecker;
 
 pub use typechecker::{

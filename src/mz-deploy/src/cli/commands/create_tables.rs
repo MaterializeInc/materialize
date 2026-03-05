@@ -1,9 +1,9 @@
 //! Create tables command - create tables that don't exist in the database.
 
+use crate::cli::git;
 use crate::cli::{CliError, TypeCheckMode, executor};
 use crate::client::{Client, Profile};
 use crate::project::ast::Statement;
-use crate::utils::git;
 use crate::{project, verbose};
 use chrono::Utc;
 use std::collections::{BTreeMap, BTreeSet};

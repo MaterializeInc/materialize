@@ -10,7 +10,7 @@ use mz_deploy::cli;
 use mz_deploy::cli::{CliError, TypeCheckMode};
 use mz_deploy::client::ConnectionError;
 use mz_deploy::client::config::{Profile, ProfilesConfig, ProjectSettings};
-use mz_deploy::utils::log;
+use mz_deploy::log;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
