@@ -16,6 +16,16 @@ const CONTAINER_NAME: &str = "mz-deploy-typecheck";
 /// Host port to bind for the persistent container
 const CONTAINER_PORT: u16 = 16875;
 
+/// Result of checking whether Docker is available on the system.
+pub enum DockerStatus {
+    /// Docker is installed and the daemon is running.
+    Running,
+    /// Docker is installed but the daemon is not running.
+    NotRunning,
+    /// Docker is not installed (not found in PATH).
+    NotInstalled,
+}
+
 /// Docker runtime for managing a Materialize container
 pub struct DockerRuntime {
     /// Materialize Docker image to use
@@ -23,6 +33,24 @@ pub struct DockerRuntime {
 }
 
 impl DockerRuntime {
+    /// Check whether Docker is installed and the daemon is running.
+    ///
+    /// This is a standalone check that does not require a runtime instance.
+    pub async fn check_availability() -> DockerStatus {
+        let result = Command::new("docker")
+            .arg("info")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await;
+
+        match result {
+            Ok(status) if status.success() => DockerStatus::Running,
+            Ok(_) => DockerStatus::NotRunning,
+            Err(_) => DockerStatus::NotInstalled,
+        }
+    }
+
     /// Create a new Docker runtime with the default Materialize image
     pub fn new() -> Self {
         Self {

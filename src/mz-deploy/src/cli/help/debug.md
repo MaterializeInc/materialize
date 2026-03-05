@@ -19,6 +19,9 @@ connectivity and configuration before running deployments.
    - Current cluster
    - Materialize version
    - Current role
+4. Checks Docker availability and displays:
+   - Whether Docker is installed
+   - Whether the Docker daemon is running
 
 ## Examples
 
@@ -31,6 +34,10 @@ connectivity and configuration before running deployments.
 - **Authentication failed** — Check your credentials or app-password.
 - **Profile not found** — List available profiles in `profiles.toml`
   or create one with the connection details.
+- **Docker not installed** — Install Docker from https://docs.docker.com/get-docker/.
+  Docker is required for `mz-deploy test` and `mz-deploy compile` with type checking.
+- **Docker daemon not running** — Start Docker Desktop or the Docker daemon
+  (`sudo systemctl start docker` on Linux).
 
 ## Related Commands
 
