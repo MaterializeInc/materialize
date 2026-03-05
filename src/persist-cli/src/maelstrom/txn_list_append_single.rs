@@ -26,7 +26,7 @@ use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHand
 use mz_persist_client::async_runtime::IsolatedRuntime;
 use mz_persist_client::cache::StateCache;
 use mz_persist_client::cfg::PersistConfig;
-use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::critical::{Opaque, SinceHandle};
 use mz_persist_client::metrics::Metrics;
 use mz_persist_client::read::{Listen, ListenEvent};
 use mz_persist_client::rpc::PubSubClientConnection;
@@ -101,10 +101,10 @@ pub struct MaelstromVal(Vec<u64>);
 /// along this timestamp.
 #[derive(Debug)]
 pub struct Transactor {
-    cads_token: u64,
+    cads_token: Opaque,
     shard_id: ShardId,
     client: PersistClient,
-    since: SinceHandle<MaelstromKey, MaelstromVal, u64, i64, u64>,
+    since: SinceHandle<MaelstromKey, MaelstromVal, u64, i64>,
     write: WriteHandle<MaelstromKey, MaelstromVal, u64, i64>,
 
     read_ts: u64,
@@ -122,11 +122,13 @@ impl Transactor {
         node_id: NodeId,
         shard_id: ShardId,
     ) -> Result<Self, MaelstromError> {
-        let cads_token = node_id
-            .0
-            .trim_start_matches('n')
-            .parse::<u64>()
-            .expect("maelstrom node_id should be n followed by an integer");
+        let cads_token = Opaque::encode(
+            &node_id
+                .0
+                .trim_start_matches('n')
+                .parse::<u64>()
+                .expect("maelstrom node_id should be n followed by an integer"),
+        );
 
         let (mut write, mut read) = client
             .open(
@@ -143,6 +145,7 @@ impl Transactor {
             .open_critical_since(
                 shard_id,
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
+                cads_token.clone(),
                 Diagnostics::from_purpose("maelstrom since"),
             )
             .await?;
@@ -504,7 +507,7 @@ impl Transactor {
         const SINCE_LAG: u64 = 10;
         let new_since = Antichain::from_elem(self.read_ts.saturating_sub(SINCE_LAG));
 
-        let mut expected_token = self.cads_token;
+        let mut expected_token = self.cads_token.clone();
         loop {
             let res = self
                 .since
@@ -517,7 +520,7 @@ impl Transactor {
                     let since_ts = Self::extract_ts(&latest_since)?;
                     if since_ts > self.read_ts {
                         info!(
-                            "since was last updated by {}, forwarding our read_ts from {} to {}",
+                            "since was last updated by {:?}, forwarding our read_ts from {} to {}",
                             expected_token, self.read_ts, since_ts
                         );
                         self.read_ts = since_ts;
@@ -527,7 +530,7 @@ impl Transactor {
                 }
                 Some(Err(actual_token)) => {
                     debug!(
-                        "actual downgrade_since token {} didn't match expected {}, retrying",
+                        "actual downgrade_since token {:?} didn't match expected {:?}, retrying",
                         actual_token, expected_token,
                     );
                     expected_token = actual_token;

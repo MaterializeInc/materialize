@@ -18,14 +18,13 @@
 
 use std::fmt::Debug;
 
+use crate::columnar::Schema;
 use bytes::{BufMut, Bytes};
 use mz_ore::url::SensitiveUrl;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
-use crate::columnar::Schema;
 
 pub mod arrow;
 pub mod codec_impls;
@@ -278,13 +277,6 @@ impl RustType<String> for ShardId {
             Err(_) => Err(TryFromProtoError::InvalidShardId(proto)),
         }
     }
-}
-
-/// An opaque fencing token used in compare_and_downgrade_since.
-pub trait Opaque: PartialEq + Clone + Sized + 'static {
-    /// The value of the opaque token when no compare_and_downgrade_since calls
-    /// have yet been successful.
-    fn initial() -> Self;
 }
 
 /// Advance a timestamp by the least amount possible such that

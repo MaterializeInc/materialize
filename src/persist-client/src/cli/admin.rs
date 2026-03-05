@@ -35,7 +35,7 @@ use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
 use crate::cfg::{COMPACTION_MEMORY_BOUND_BYTES, all_dyncfgs};
 use crate::cli::args::{StateArgs, StoreArgs, make_blob, make_consensus};
-use crate::cli::inspect::FAKE_OPAQUE_CODEC;
+use crate::critical::Opaque;
 use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::{GarbageCollector, GcReq};
@@ -263,21 +263,14 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
 
             if force_downgrade_since {
                 let (state, _maintenance) = machine
-                    .register_critical_reader::<crate::cli::inspect::O>(
+                    .register_critical_reader(
                         &crate::PersistClient::CONTROLLER_CRITICAL_SINCE,
+                        Opaque::encode(&crate::cli::inspect::O::default()),
                         "persist-cli finalize with force downgrade",
                     )
                     .await;
 
-                // HACK: Internally we have a check that the Opaque is using
-                // the correct codec. For the purposes of this command we want
-                // to side step that check so we set our reported codec to
-                // whatever the current state of the Shard is.
-                let expected_opaque = crate::cli::inspect::O::decode(state.opaque.0);
-                FAKE_OPAQUE_CODEC
-                    .lock()
-                    .expect("lockable")
-                    .clone_from(&state.opaque_codec);
+                let expected_opaque = state.opaque;
 
                 let (result, _maintenance) = machine
                     .compare_and_downgrade_since(

@@ -27,7 +27,7 @@ use mz_ore::{assert_none, soft_assert_no_log};
 use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
 use mz_persist::retry::Retry;
 use mz_persist_types::schema::SchemaId;
-use mz_persist_types::{Codec, Codec64, Opaque};
+use mz_persist_types::{Codec, Codec64};
 use semver::Version;
 use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -37,7 +37,7 @@ use crate::async_runtime::IsolatedRuntime;
 use crate::batch::INLINE_WRITES_TOTAL_MAX_BYTES;
 use crate::cache::StateCache;
 use crate::cfg::RetryParameters;
-use crate::critical::CriticalReaderId;
+use crate::critical::{CriticalReaderId, Opaque};
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::apply::Applier;
 use crate::internal::compact::CompactReq;
@@ -255,15 +255,21 @@ where
         (reader_state, maintenance)
     }
 
-    pub async fn register_critical_reader<O: Opaque + Codec64>(
+    pub async fn register_critical_reader(
         &self,
         reader_id: &CriticalReaderId,
+        default_opaque: Opaque,
         purpose: &str,
     ) -> (CriticalReaderState<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, state, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, cfg, state| {
-                state.register_critical_reader::<O>(&cfg.hostname, reader_id, purpose)
+                state.register_critical_reader(
+                    &cfg.hostname,
+                    reader_id,
+                    default_opaque.clone(),
+                    purpose,
+                )
             })
             .await;
         (state, maintenance)
@@ -635,18 +641,18 @@ where
         .await
     }
 
-    pub async fn compare_and_downgrade_since<O: Opaque + Codec64>(
+    pub async fn compare_and_downgrade_since(
         &self,
         reader_id: &CriticalReaderId,
-        expected_opaque: &O,
-        (new_opaque, new_since): (&O, &Antichain<T>),
-    ) -> (Result<Since<T>, (O, Since<T>)>, RoutineMaintenance) {
+        expected_opaque: &Opaque,
+        (new_opaque, new_since): (&Opaque, &Antichain<T>),
+    ) -> (Result<Since<T>, (Opaque, Since<T>)>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, res, maintenance) = self
             .apply_unbatched_idempotent_cmd(
                 &metrics.cmds.compare_and_downgrade_since,
                 |_seqno, _cfg, state| {
-                    state.compare_and_downgrade_since::<O>(
+                    state.compare_and_downgrade_since(
                         reader_id,
                         expected_opaque,
                         (new_opaque, new_since),
@@ -1585,11 +1591,19 @@ pub mod datadriven {
         let reader_id = args.expect("reader_id");
         let (res, routine) = datadriven
             .machine
-            .compare_and_downgrade_since(&reader_id, &expected_opaque, (&new_opaque, &new_since))
+            .compare_and_downgrade_since(
+                &reader_id,
+                &Opaque::encode(&expected_opaque),
+                (&Opaque::encode(&new_opaque), &new_since),
+            )
             .await;
         datadriven.routine.push(routine);
         let since = res.map_err(|(opaque, since)| {
-            anyhow!("mismatch: opaque={} since={:?}", opaque, since.0.elements())
+            anyhow!(
+                "mismatch: opaque={} since={:?}",
+                opaque.decode::<u64>(),
+                since.0.elements()
+            )
         })?;
         Ok(format!(
             "{} {} {:?}\n",
@@ -2191,7 +2205,7 @@ pub mod datadriven {
         let reader_id = args.expect("reader_id");
         let (state, maintenance) = datadriven
             .machine
-            .register_critical_reader::<u64>(&reader_id, "tests")
+            .register_critical_reader(&reader_id, Opaque::encode(&0u64), "tests")
             .await;
         datadriven.routine.push(maintenance);
         Ok(format!(
