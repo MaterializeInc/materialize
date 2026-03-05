@@ -577,6 +577,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "storage_rocksdb_use_merge_operator",
     "storage_upsert_max_snapshot_batch_buffering",
     "storage_rocksdb_cleanup_tries",
+    "storage_persist_sink_chunk_size",
     "storage_suspend_and_restart_delay",
     "storage_server_maintenance_interval",
     "storage_sink_progress_search",
