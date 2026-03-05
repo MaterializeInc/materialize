@@ -246,7 +246,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 *non_default_testdrive_vars,
                 *passthrough_args,
                 file,
-                environment={'testdrive-path': '.'},
             )
             # Uploading successful junit files wastes time and contains no useful information
             os.remove(MZ_ROOT / "test" / "testdrive" / junit_report)
