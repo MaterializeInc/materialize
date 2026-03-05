@@ -1,0 +1,42 @@
+[package]
+name = "mz-persist-consensus-svc"
+description = "Group commit consensus service for Materialize persist."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+autobins = false
+autoexamples = false
+autobenches = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "mz-persist-consensus-svc"
+bench = false
+
+[dependencies]
+anyhow = "1.0.101"
+async-trait = "0.1.89"
+aws-config = { version = "1.8.13", default-features = false }
+aws-sdk-s3 = { version = "1.94.0", default-features = false, features = ["rt-tokio"] }
+bytes = "1.11.1"
+clap = { version = "4.5.23", features = ["derive", "env"] }
+mz-persist = { path = "../persist" }
+prost = { version = "0.14.3", features = ["no-recursion-limit"] }
+tokio = { version = "1.49.0", default-features = false, features = ["macros", "sync", "rt", "time"] }
+tokio-stream = "0.1"
+tonic = "0.14.2"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1.49.0", features = ["test-util"] }
+
+[features]
+default = ["workspace-hack"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

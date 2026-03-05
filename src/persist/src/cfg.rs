@@ -29,6 +29,7 @@ use crate::location::{Blob, Consensus, Determinate, ExternalError};
 use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
 use crate::metrics::S3BlobMetrics;
 use crate::postgres::{PostgresConsensus, PostgresConsensusConfig};
+use crate::rpc::RpcConsensusConfig;
 use crate::s3::{S3Blob, S3BlobConfig};
 
 /// Adds the full set of all mz_persist `Config`s.
@@ -231,6 +232,8 @@ pub enum ConsensusConfig {
     Postgres(PostgresConsensusConfig),
     /// Config for [MemConsensus], only available in testing.
     Mem,
+    /// Config for [`crate::rpc::RpcConsensus`].
+    Rpc(RpcConsensusConfig),
     #[cfg(feature = "turmoil")]
     /// Config for [crate::turmoil::TurmoilConsensus].
     Turmoil(crate::turmoil::ConsensusConfig),
@@ -248,6 +251,7 @@ impl ConsensusConfig {
                 Ok(Arc::new(PostgresConsensus::open(config).await?))
             }
             ConsensusConfig::Mem => Ok(Arc::new(MemConsensus::default())),
+            ConsensusConfig::Rpc(config) => crate::rpc::open(config).await,
             #[cfg(feature = "turmoil")]
             ConsensusConfig::Turmoil(config) => {
                 Ok(Arc::new(crate::turmoil::TurmoilConsensus::open(config)))
@@ -276,6 +280,7 @@ impl ConsensusConfig {
                 }
                 Ok(ConsensusConfig::Mem)
             }
+            "rpc" => Ok(ConsensusConfig::Rpc(RpcConsensusConfig::try_from_uri(url)?)),
             #[cfg(feature = "turmoil")]
             "turmoil" => {
                 let cfg = crate::turmoil::ConsensusConfig::new(url);
