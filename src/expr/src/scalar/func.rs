@@ -65,10 +65,12 @@ mod unmaterializable;
 pub mod variadic;
 
 pub use binary::BinaryFunc;
+pub(crate) use binary::EagerBinaryFunc;
 pub use impls::*;
 pub use unary::{EagerUnaryFunc, LazyUnaryFunc, UnaryFunc};
 pub use unmaterializable::UnmaterializableFunc;
 pub use variadic::VariadicFunc;
+pub(crate) use variadic::EagerVariadicFunc;
 
 /// The maximum size of the result strings of certain string functions, such as `repeat` and `lpad`.
 /// Chosen to be the smallest number to keep our tests passing without changing. 100MiB is probably

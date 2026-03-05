@@ -16,7 +16,7 @@ expression: "#[sqlfunc(test = true)]\nfn unary_fn<'a>(a: Datum<'a>, b: u16, temp
     mz_lowertest::MzReflect,
 )]
 pub struct UnaryFn;
-impl crate::func::binary::EagerBinaryFunc for UnaryFn {
+impl crate::EagerScalarFunc for UnaryFn {
     type Input<'a> = (Datum<'a>, u16);
     type Output<'a> = bool;
     fn call<'a>(
@@ -32,9 +32,7 @@ impl crate::func::binary::EagerBinaryFunc for UnaryFn {
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
         let output = Self::Output::as_column_type();
-        let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
-            self,
-        );
+        let propagates_nulls = crate::EagerScalarFunc::propagates_nulls(self);
         let nullable = output.nullable;
         let non_nullable_input_is_nullable = false
             || input_types.get(1usize).map_or(false, |t| t.nullable);
@@ -42,6 +40,23 @@ impl crate::func::binary::EagerBinaryFunc for UnaryFn {
         let is_null = nullable || non_nullable_input_is_nullable
             || (propagates_nulls && inputs_nullable);
         output.nullable(is_null)
+    }
+}
+impl crate::func::EagerBinaryFunc for UnaryFn {
+    type Input<'a> = (Datum<'a>, u16);
+    type Output<'a> = bool;
+    fn call<'a>(
+        &self,
+        (a, b): Self::Input<'a>,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
+        unary_fn(a, b, temp_storage)
+    }
+    fn output_sql_type(
+        &self,
+        input_types: &[mz_repr::SqlColumnType],
+    ) -> mz_repr::SqlColumnType {
+        crate::EagerScalarFunc::output_sql_type(self, input_types)
     }
 }
 impl std::fmt::Display for UnaryFn {
