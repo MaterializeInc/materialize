@@ -175,6 +175,144 @@ pub trait EagerScalarFunc: fmt::Display {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Adapter impls: bridge the existing arity-specific enums to LazyScalarFunc
+// ---------------------------------------------------------------------------
+
+impl LazyScalarFunc for crate::UnaryFunc {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        exprs: &'a [MirScalarExpr],
+    ) -> Result<Datum<'a>, EvalError> {
+        self.eval(datums, temp_storage, &exprs[0])
+    }
+
+    fn output_sql_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
+        self.output_sql_type(input_types[0].clone())
+    }
+
+    fn output_type(&self, input_types: &[ReprColumnType]) -> ReprColumnType {
+        self.output_type(input_types[0].clone())
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        self.propagates_nulls()
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        self.introduces_nulls()
+    }
+
+    fn could_error(&self) -> bool {
+        self.could_error()
+    }
+
+    fn arg_is_monotone(&self, _index: usize) -> bool {
+        self.is_monotone()
+    }
+
+    fn preserves_uniqueness(&self) -> bool {
+        self.preserves_uniqueness()
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        self.inverse()
+    }
+}
+
+impl LazyScalarFunc for crate::BinaryFunc {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        exprs: &'a [MirScalarExpr],
+    ) -> Result<Datum<'a>, EvalError> {
+        self.eval(datums, temp_storage, &[&exprs[0], &exprs[1]])
+    }
+
+    fn output_sql_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
+        self.output_sql_type(input_types)
+    }
+
+    fn output_type(&self, input_types: &[ReprColumnType]) -> ReprColumnType {
+        self.output_type(input_types)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        self.propagates_nulls()
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        self.introduces_nulls()
+    }
+
+    fn could_error(&self) -> bool {
+        self.could_error()
+    }
+
+    fn arg_is_monotone(&self, index: usize) -> bool {
+        let (a, b) = self.is_monotone();
+        match index {
+            0 => a,
+            1 => b,
+            _ => false,
+        }
+    }
+
+    fn negate(&self) -> Option<crate::BinaryFunc> {
+        self.negate()
+    }
+
+    fn is_infix_op(&self) -> bool {
+        self.is_infix_op()
+    }
+}
+
+impl LazyScalarFunc for crate::VariadicFunc {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        exprs: &'a [MirScalarExpr],
+    ) -> Result<Datum<'a>, EvalError> {
+        self.eval(datums, temp_storage, exprs)
+    }
+
+    fn output_sql_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
+        self.output_sql_type(input_types.to_vec())
+    }
+
+    fn output_type(&self, input_types: &[ReprColumnType]) -> ReprColumnType {
+        self.output_type(input_types.to_vec())
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        self.propagates_nulls()
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        self.introduces_nulls()
+    }
+
+    fn could_error(&self) -> bool {
+        self.could_error()
+    }
+
+    fn arg_is_monotone(&self, _index: usize) -> bool {
+        self.is_monotone()
+    }
+
+    fn is_infix_op(&self) -> bool {
+        self.is_infix_op()
+    }
+
+    fn is_associative(&self) -> bool {
+        self.is_associative()
+    }
+}
+
 /// Blanket [`LazyScalarFunc`] implementation for all [`EagerScalarFunc`] types.
 ///
 /// Evaluates argument expressions, converts them to the expected input type
