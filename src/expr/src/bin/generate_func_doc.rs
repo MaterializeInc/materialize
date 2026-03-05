@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 
 use itertools::Itertools;
-use mz_expr::func::{BinaryFuncKind, FuncDoc, UnaryFuncKind};
+use mz_expr::func::{BinaryFuncKind, FuncDoc, UnaryFuncKind, VariadicFuncKind};
 use serde::Serialize;
 
 fn main() {
@@ -22,6 +22,11 @@ fn main() {
         .into_iter()
         .filter_map(|f| f.func_doc())
         .chain(UnaryFuncKind::kinds().into_iter().map(|f| f.func_doc()))
+        .chain(
+            VariadicFuncKind::kinds()
+                .into_iter()
+                .filter_map(|f| f.func_doc()),
+        )
     {
         lint_function(&function);
         categories

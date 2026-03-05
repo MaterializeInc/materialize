@@ -22,7 +22,7 @@ use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
 use itertools::Itertools;
 use md5::Md5;
-use mz_expr_derive::sqlfunc;
+use mz_expr_derive::{sqldoc, sqlfunc};
 use mz_lowertest::MzReflect;
 use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_pgtz::timezone::TimezoneSpec;
@@ -51,6 +51,7 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbRef;
 
+#[sqldoc(unique_name = "and", category = "Boolean")]
 #[derive(
     Ord,
     PartialOrd,
@@ -473,6 +474,12 @@ fn array_to_string<'a>(
     Ok(out)
 }
 
+/// Returns the first non-NULL argument, or NULL if all arguments are NULL.
+#[sqldoc(
+    unique_name = "coalesce",
+    category = "Boolean",
+    url = "/sql/functions/coalesce"
+)]
 #[derive(
     Ord,
     PartialOrd,
@@ -538,6 +545,7 @@ impl LazyVariadicFunc for Coalesce {
     }
 }
 
+#[sqldoc(unique_name = "range_create", category = "Range")]
 #[derive(
     Ord,
     PartialOrd,
@@ -668,6 +676,7 @@ fn date_diff_timestamp_tz(
     Ok(diff)
 }
 
+#[sqldoc(unique_name = "error_if_null", category = "Boolean")]
 #[derive(
     Ord,
     PartialOrd,
@@ -725,6 +734,8 @@ impl LazyVariadicFunc for ErrorIfNull {
     }
 }
 
+/// Returns the greatest of the given values.
+#[sqldoc(unique_name = "greatest", category = "Comparison")]
 #[derive(
     Ord,
     PartialOrd,
@@ -869,6 +880,8 @@ fn jsonb_build_object<'a>(
     Ok(JsonbRef::from_datum(datum))
 }
 
+/// Returns the least of the given values.
+#[sqldoc(unique_name = "least", category = "Comparison")]
 #[derive(
     Ord,
     PartialOrd,
@@ -1130,6 +1143,7 @@ fn map_build<'a>(
     temp_storage.make_datum(|packer| packer.push_dict(map))
 }
 
+#[sqldoc(unique_name = "or", category = "Boolean")]
 #[derive(
     Ord,
     PartialOrd,
@@ -1385,7 +1399,8 @@ fn string_to_array_impl<'a>(
     Ok(temp_storage.push_unary_row(row))
 }
 
-#[sqlfunc]
+/// Extracts a substring from a string, starting at the given position with an optional length.
+#[sqlfunc(category = "String", url = "/sql/functions/substring")]
 fn substr<'a>(s: &'a str, start: i32, length: OptionalArg<i32>) -> Result<&'a str, EvalError> {
     let raw_start_idx = i64::from(start) - 1;
     let start_idx = match usize::try_from(cmp::max(raw_start_idx, 0)) {
@@ -1463,7 +1478,8 @@ fn split_part<'a>(string: &'a str, delimiter: &str, field: i32) -> Result<&'a st
     Ok(string.split(delimiter).nth(index).unwrap_or(""))
 }
 
-#[sqlfunc(is_associative = true)]
+/// Concatenates the text representations of all arguments. NULL arguments are ignored.
+#[sqlfunc(is_associative = true, category = "String")]
 fn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError> {
     let mut total_size = 0;
     for s in &strs {

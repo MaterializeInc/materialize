@@ -1322,16 +1322,25 @@ fn variadic_func(
             .zip(param_statics.iter())
             .map(|(name, ty)| {
                 quote! {
-                    format!("{} {}", #name, <#ty as ::mz_repr::SqlDocName>::sql_doc_name())
+                    <#ty as ::mz_repr::SqlDocName>::fmt_doc_param(#name)
                 }
             })
             .collect();
         quote! {
             {
-                let params = vec![#(#param_parts),*];
+                let params: Vec<(String, bool)> = vec![#(#param_parts),*];
+                let mut sig = String::new();
+                for (formatted, is_optional) in &params {
+                    if *is_optional {
+                        sig.push_str(&format!(" [, {}]", formatted));
+                    } else {
+                        if !sig.is_empty() { sig.push_str(", "); }
+                        sig.push_str(formatted);
+                    }
+                }
                 format!("{}({}) -> {}",
                     #sqlname_str,
-                    params.join(", "),
+                    sig,
                     <#output_static as ::mz_repr::SqlDocName>::sql_doc_name(),
                 )
             }

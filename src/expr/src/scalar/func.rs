@@ -68,7 +68,7 @@ pub use binary::{BinaryFunc, BinaryFuncKind};
 pub use impls::*;
 pub use unary::{EagerUnaryFunc, LazyUnaryFunc, UnaryFunc, UnaryFuncKind};
 pub use unmaterializable::UnmaterializableFunc;
-pub use variadic::VariadicFunc;
+pub use variadic::{VariadicFunc, VariadicFuncKind};
 
 /// Documentation for a function.
 #[derive(Debug, serde::Serialize, Ord, PartialOrd, Clone, PartialEq, Eq, Hash)]

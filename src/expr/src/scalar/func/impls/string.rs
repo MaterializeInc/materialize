@@ -1261,7 +1261,11 @@ fn panic<'a>(a: &'a str) -> String {
 }
 
 /// Quotes the given string as an SQL identifier.
-#[sqlfunc(sqlname = "quote_ident", preserves_uniqueness = true, category = "String")]
+#[sqlfunc(
+    sqlname = "quote_ident",
+    preserves_uniqueness = true,
+    category = "String"
+)]
 fn quote_ident<'a>(a: &'a str) -> Result<String, EvalError> {
     let i = mz_sql_parser::ast::Ident::new(a).map_err(|err| EvalError::InvalidIdentifier {
         ident: a.into(),

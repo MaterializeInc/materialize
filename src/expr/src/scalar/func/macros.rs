@@ -252,7 +252,9 @@ macro_rules! derive_variadic {
         #[derive(
             Ord, PartialOrd, Clone, Debug, Eq, PartialEq,
             serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect,
+            enum_kinds::EnumKind,
         )]
+        #[enum_kind(VariadicFuncKind)]
         pub enum VariadicFunc {
             $($name($variant),)*
         }
@@ -317,6 +319,22 @@ macro_rules! derive_variadic {
                 match self {
                     $(Self::$name(f) => LazyVariadicFunc::is_infix_op(f),)*
                 }
+            }
+        }
+
+        impl VariadicFuncKind {
+            /// Returns the function documentation, if available.
+            pub fn func_doc(&self) -> Option<crate::func::FuncDoc> {
+                match self {
+                    $(Self::$name => Some($variant::func_doc()),)*
+                }
+            }
+
+            /// Returns all known kinds.
+            pub fn kinds() -> &'static [Self] {
+                &[
+                    $(Self::$name,)*
+                ]
             }
         }
 

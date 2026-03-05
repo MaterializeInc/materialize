@@ -1943,6 +1943,13 @@ pub trait AsColumnType {
 pub trait SqlDocName {
     /// Returns the SQL documentation name for this type.
     fn sql_doc_name() -> String;
+
+    /// Format this type as a named parameter in a function signature.
+    /// Returns `(formatted, is_optional)` where `is_optional` indicates
+    /// the parameter can be omitted (should be wrapped in `[, ...]`).
+    fn fmt_doc_param(name: &str) -> (String, bool) {
+        (format!("{} {}", name, Self::sql_doc_name()), false)
+    }
 }
 
 impl SqlDocName for f32 {
@@ -2243,7 +2250,10 @@ impl<T: SqlDocName> SqlDocName for Variadic<T> {
 
 impl<T: SqlDocName> SqlDocName for OptionalArg<T> {
     fn sql_doc_name() -> String {
-        format!("{}?", T::sql_doc_name())
+        T::sql_doc_name()
+    }
+    fn fmt_doc_param(name: &str) -> (String, bool) {
+        (format!("{} {}", name, T::sql_doc_name()), true)
     }
 }
 
