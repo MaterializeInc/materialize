@@ -89,8 +89,8 @@ pub async fn run(profile: &Profile, deploy_id: &str) -> Result<(), CliError> {
 
     // Display schemas
     println!("{} ({}):", "Schemas".bold(), details.schemas.len());
-    for (database, schema) in &details.schemas {
-        println!("    {}.{}", database.dimmed(), schema);
+    for sq in &details.schemas {
+        println!("    {}.{}", sq.database.dimmed(), sq.schema);
     }
     println!();
 

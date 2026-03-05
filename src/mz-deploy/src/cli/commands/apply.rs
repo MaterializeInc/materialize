@@ -292,7 +292,7 @@ async fn gather_resources_and_check_conflicts(
 
     for pair in schemas_to_check {
         if existing_schemas.contains(&pair) {
-            staging_schemas.insert(pair);
+            staging_schemas.insert(SchemaQualifier::new(pair.0, pair.1));
         } else {
             eprintln!("Warning: Staging schema {}.{} not found", pair.0, pair.1);
         }
@@ -329,9 +329,9 @@ async fn gather_resources_and_check_conflicts(
     }
 
     verbose!("\nSchemas to swap:");
-    for (database, schema) in &staging_schemas {
-        let prod_schema = schema.trim_end_matches(&staging_suffix);
-        verbose!("  - {}.{} <-> {}", database, schema, prod_schema);
+    for sq in &staging_schemas {
+        let prod_schema = sq.schema.trim_end_matches(&staging_suffix);
+        verbose!("  - {}.{} <-> {}", sq.database, sq.schema, prod_schema);
     }
 
     if !staging_clusters.is_empty() {
@@ -369,12 +369,12 @@ async fn execute_atomic_swap(
         })?;
 
     // Swap schemas
-    for (database, staging_schema) in staging_schemas {
-        let prod_schema = staging_schema.trim_end_matches(&staging_suffix);
+    for sq in staging_schemas {
+        let prod_schema = sq.schema.trim_end_matches(&staging_suffix);
         // Note: second schema name is NOT fully qualified (same database)
         let swap_sql = format!(
             "ALTER SCHEMA \"{}\".\"{}\" SWAP WITH \"{}\";",
-            database, prod_schema, staging_schema
+            sq.database, prod_schema, sq.schema
         );
 
         verbose!("  {}", swap_sql);
@@ -594,19 +594,19 @@ async fn apply_replacement_mvs(client: &Client, deploy_id: &str) -> Result<(), C
     // Drop now-empty replacement staging schemas
     let replacement_schemas: BTreeSet<SchemaQualifier> = records
         .iter()
-        .map(|r| (r.target_database.clone(), r.replacement_schema.clone()))
+        .map(|r| SchemaQualifier::new(r.target_database.clone(), r.replacement_schema.clone()))
         .collect();
 
-    for (database, schema) in &replacement_schemas {
+    for sq in &replacement_schemas {
         let drop_sql = format!(
             "DROP SCHEMA IF EXISTS \"{}\".\"{}\" CASCADE;",
-            database, schema
+            sq.database, sq.schema
         );
         verbose!("  {}", drop_sql);
         if let Err(e) = client.execute(&drop_sql, &[]).await {
             eprintln!(
                 "warning: failed to drop replacement schema {}.{}: {}",
-                database, schema, e
+                sq.database, sq.schema, e
             );
         }
     }
@@ -629,12 +629,12 @@ async fn repoint_dependent_sinks(
 ) -> Result<(), CliError> {
     // Build list of old schema names (database, old_schema_with_suffix)
     // After swap, old production schemas have the staging suffix
-    let old_schemas: Vec<(String, String)> = staging_schemas
+    let old_schemas: Vec<SchemaQualifier> = staging_schemas
         .iter()
-        .map(|(db, staging_schema)| {
-            let prod_schema = staging_schema.trim_end_matches(staging_suffix);
+        .map(|sq| {
+            let prod_schema = sq.schema.trim_end_matches(staging_suffix);
             let old_schema = format!("{}{}", prod_schema, staging_suffix);
-            (db.clone(), old_schema)
+            SchemaQualifier::new(sq.database.clone(), old_schema)
         })
         .collect();
 
@@ -750,20 +750,20 @@ async fn drop_old_resources(
     staging_suffix: &str,
 ) {
     // Drop schemas
-    for (database, staging_schema) in staging_schemas {
-        let prod_schema = staging_schema.trim_end_matches(staging_suffix);
+    for sq in staging_schemas {
+        let prod_schema = sq.schema.trim_end_matches(staging_suffix);
         // After swap, the old production schema is now named with the staging suffix
         let old_schema = format!("{}{}", prod_schema, staging_suffix);
         let drop_sql = format!(
             "DROP SCHEMA IF EXISTS \"{}\".\"{}\" CASCADE;",
-            database, old_schema
+            sq.database, old_schema
         );
 
         verbose!("  {}", drop_sql);
         if let Err(e) = client.execute(&drop_sql, &[]).await {
             eprintln!(
                 "warning: failed to drop old schema {}.{}: {}",
-                database, old_schema, e
+                sq.database, old_schema, e
             );
         }
     }

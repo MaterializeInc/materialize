@@ -330,7 +330,10 @@ fn collect_stage_resources(
     let mut cluster_set = BTreeSet::new();
 
     for (object_id, typed_obj) in objects.iter().chain(replacement_mvs.iter()) {
-        schema_set.insert((object_id.database.clone(), object_id.schema.clone()));
+        schema_set.insert(SchemaQualifier::new(
+            object_id.database.clone(),
+            object_id.schema.clone(),
+        ));
         cluster_set.extend(typed_obj.clusters());
     }
 
@@ -400,7 +403,7 @@ async fn record_stage_metadata(
         let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
         staging_snapshot.objects.insert(object_id.clone(), hash);
         staging_snapshot.schemas.insert(
-            (object_id.database.clone(), object_id.schema.clone()),
+            SchemaQualifier::new(object_id.database.clone(), object_id.schema.clone()),
             DeploymentKind::Objects,
         );
     }
@@ -410,7 +413,10 @@ async fn record_stage_metadata(
         staging_snapshot.objects.insert(object_id.clone(), hash);
         staging_snapshot
             .schemas
-            .entry((object_id.database.clone(), object_id.schema.clone()))
+            .entry(SchemaQualifier::new(
+                object_id.database.clone(),
+                object_id.schema.clone(),
+            ))
             .or_insert(DeploymentKind::Sinks);
     }
 
@@ -418,7 +424,7 @@ async fn record_stage_metadata(
         let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
         staging_snapshot.objects.insert(object_id.clone(), hash);
         staging_snapshot.schemas.insert(
-            (object_id.database.clone(), object_id.schema.clone()),
+            SchemaQualifier::new(object_id.database.clone(), object_id.schema.clone()),
             DeploymentKind::Replacement,
         );
     }
@@ -538,14 +544,14 @@ async fn create_resources_with_rollback<'a>(
             println!("-- Create staging schemas --");
         }
         let schema_start = Instant::now();
-        for (database, schema) in schema_set {
-            let staging_schema = format!("{}{}", schema, staging_suffix);
+        for sq in schema_set {
+            let staging_schema = format!("{}{}", sq.schema, staging_suffix);
             let create_schema_sql = format!(
                 "CREATE SCHEMA IF NOT EXISTS {}.{}",
-                database, staging_schema
+                sq.database, staging_schema
             );
             executor.execute_sql(&create_schema_sql).await?;
-            verbose!("  Created schema {}.{}", database, staging_schema);
+            verbose!("  Created schema {}.{}", sq.database, staging_schema);
         }
         if !dry_run {
             let schema_duration = schema_start.elapsed();
@@ -556,9 +562,9 @@ async fn create_resources_with_rollback<'a>(
 
             // Create production schemas if they don't exist (needed for swap)
             progress::info("Creating production schemas if not exists");
-            for (database, schema) in schema_set {
-                client.provisioning().create_schema(database, schema).await?;
-                verbose!("  Ensured schema {}.{} exists", database, schema);
+            for sq in schema_set {
+                client.provisioning().create_schema(&sq.database, &sq.schema).await?;
+                verbose!("  Ensured schema {}.{} exists", sq.database, sq.schema);
             }
         }
 
@@ -576,7 +582,7 @@ async fn create_resources_with_rollback<'a>(
                     statement,
                 } => {
                     // Check if any schema in this database is in our schema_set
-                    let has_schema = schema_set.iter().any(|(db, _)| db == database);
+                    let has_schema = schema_set.iter().any(|sq| sq.database == *database);
                     if has_schema {
                         verbose!("Applying database setup for: {}", database);
                         executor.execute_sql(statement).await?;
@@ -587,7 +593,7 @@ async fn create_resources_with_rollback<'a>(
                     schema,
                     statement,
                 } => {
-                    if schema_set.contains(&(database.to_string(), schema.to_string())) {
+                    if schema_set.contains(&SchemaQualifier::new(database.to_string(), schema.to_string())) {
                         // Transform schema name to staging version
                         let staging_schema = format!("{}{}", schema, staging_suffix);
                         let transformed_stmt = statement.to_string().replace(
@@ -897,8 +903,8 @@ async fn rollback_staging_resources(
         {
             verbose!("Warning: Failed to drop some schemas: {}", e);
         } else {
-            for (database, schema) in &staging_schemas {
-                verbose!("  Dropped {}.{}", database, schema);
+            for sq in &staging_schemas {
+                verbose!("  Dropped {}.{}", sq.database, sq.schema);
             }
         }
     }

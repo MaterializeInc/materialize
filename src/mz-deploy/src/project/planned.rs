@@ -41,6 +41,7 @@
 mod dependency;
 mod project;
 mod types;
+mod validation;
 
 // Re-export all public types and functions
 pub use dependency::{extract_dependencies, extract_external_indexes};

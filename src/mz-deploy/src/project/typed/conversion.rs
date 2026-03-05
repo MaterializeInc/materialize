@@ -52,86 +52,96 @@ impl TryFrom<super::super::raw::DatabaseObject> for DatabaseObject {
         let mut comments = Vec::new();
         let mut tests = Vec::new();
 
+        /// Try to set the main statement, recording an error if one is already set.
+        fn set_main_statement(
+            main_stmt: &mut Option<Statement>,
+            object_type: &mut Option<ObjectType>,
+            new_stmt: Statement,
+            new_type: ObjectType,
+            name: &str,
+            path: &std::path::Path,
+            errors: &mut Vec<ValidationError>,
+        ) {
+            if main_stmt.is_some() {
+                errors.push(ValidationError::with_file(
+                    ValidationErrorKind::MultipleMainStatements {
+                        object_name: name.to_string(),
+                    },
+                    path.to_path_buf(),
+                ));
+            } else {
+                *main_stmt = Some(new_stmt);
+                *object_type = Some(new_type);
+            }
+        }
+
         for stmt in value.statements {
             match stmt {
                 mz_sql_parser::ast::Statement::CreateSink(s) => {
-                    if main_stmt.is_some() {
-                        errors.push(ValidationError::with_file(
-                            ValidationErrorKind::MultipleMainStatements {
-                                object_name: value.name.clone(),
-                            },
-                            value.path.clone(),
-                        ));
-                    } else {
-                        main_stmt = Some(Statement::CreateSink(s));
-                        object_type = Some(ObjectType::Sink)
-                    }
+                    set_main_statement(
+                        &mut main_stmt,
+                        &mut object_type,
+                        Statement::CreateSink(s),
+                        ObjectType::Sink,
+                        &value.name,
+                        &value.path,
+                        &mut errors,
+                    );
                 }
                 mz_sql_parser::ast::Statement::CreateView(s) => {
-                    if main_stmt.is_some() {
-                        errors.push(ValidationError::with_file(
-                            ValidationErrorKind::MultipleMainStatements {
-                                object_name: value.name.clone(),
-                            },
-                            value.path.clone(),
-                        ));
-                    } else {
-                        main_stmt = Some(Statement::CreateView(s));
-                        object_type = Some(ObjectType::View)
-                    }
+                    set_main_statement(
+                        &mut main_stmt,
+                        &mut object_type,
+                        Statement::CreateView(s),
+                        ObjectType::View,
+                        &value.name,
+                        &value.path,
+                        &mut errors,
+                    );
                 }
                 mz_sql_parser::ast::Statement::CreateMaterializedView(s) => {
-                    if main_stmt.is_some() {
-                        errors.push(ValidationError::with_file(
-                            ValidationErrorKind::MultipleMainStatements {
-                                object_name: value.name.clone(),
-                            },
-                            value.path.clone(),
-                        ));
-                    } else {
-                        main_stmt = Some(Statement::CreateMaterializedView(s));
-                        object_type = Some(ObjectType::MaterializedView)
-                    }
+                    set_main_statement(
+                        &mut main_stmt,
+                        &mut object_type,
+                        Statement::CreateMaterializedView(s),
+                        ObjectType::MaterializedView,
+                        &value.name,
+                        &value.path,
+                        &mut errors,
+                    );
                 }
                 mz_sql_parser::ast::Statement::CreateTable(s) => {
-                    if main_stmt.is_some() {
-                        errors.push(ValidationError::with_file(
-                            ValidationErrorKind::MultipleMainStatements {
-                                object_name: value.name.clone(),
-                            },
-                            value.path.clone(),
-                        ));
-                    } else {
-                        main_stmt = Some(Statement::CreateTable(s));
-                        object_type = Some(ObjectType::Table)
-                    }
+                    set_main_statement(
+                        &mut main_stmt,
+                        &mut object_type,
+                        Statement::CreateTable(s),
+                        ObjectType::Table,
+                        &value.name,
+                        &value.path,
+                        &mut errors,
+                    );
                 }
                 mz_sql_parser::ast::Statement::CreateTableFromSource(s) => {
-                    if main_stmt.is_some() {
-                        errors.push(ValidationError::with_file(
-                            ValidationErrorKind::MultipleMainStatements {
-                                object_name: value.name.clone(),
-                            },
-                            value.path.clone(),
-                        ));
-                    } else {
-                        main_stmt = Some(Statement::CreateTableFromSource(s));
-                        object_type = Some(ObjectType::Table)
-                    }
+                    set_main_statement(
+                        &mut main_stmt,
+                        &mut object_type,
+                        Statement::CreateTableFromSource(s),
+                        ObjectType::Table,
+                        &value.name,
+                        &value.path,
+                        &mut errors,
+                    );
                 }
-
                 mz_sql_parser::ast::Statement::CreateSource(s) => {
-                    if main_stmt.is_some() {
-                        errors.push(ValidationError::with_file(
-                            ValidationErrorKind::MultipleMainStatements {
-                                object_name: value.name.clone(),
-                            },
-                            value.path.clone(),
-                        ));
-                    } else {
-                        main_stmt = Some(Statement::CreateSource(s));
-                        object_type = Some(ObjectType::Source)
-                    }
+                    set_main_statement(
+                        &mut main_stmt,
+                        &mut object_type,
+                        Statement::CreateSource(s),
+                        ObjectType::Source,
+                        &value.name,
+                        &value.path,
+                        &mut errors,
+                    );
                 }
 
                 // Supporting statements
@@ -381,7 +391,8 @@ fn derive_replacement_schemas(databases: &[Database]) -> BTreeSet<SchemaQualifie
                 for stmt in mod_stmts {
                     if matches!(stmt, mz_sql_parser::ast::Statement::SetVariable(s) if s.variable.as_str().eq_ignore_ascii_case("api"))
                     {
-                        replacement_schemas.insert((db.name.clone(), schema.name.clone()));
+                        replacement_schemas
+                            .insert(SchemaQualifier::new(db.name.clone(), schema.name.clone()));
                         break;
                     }
                 }
@@ -408,7 +419,7 @@ fn validate_replacement_schemas(
         for schema in &db.schemas {
             if !replacement_schemas
                 .iter()
-                .any(|(d, s)| d == &db.name && s == &schema.name)
+                .any(|sq| sq.database == db.name && sq.schema == schema.name)
             {
                 continue;
             }

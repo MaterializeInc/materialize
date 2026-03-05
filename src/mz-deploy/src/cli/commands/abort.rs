@@ -55,8 +55,8 @@ pub async fn run(profile: &Profile, deploy_id: &str) -> Result<(), CliError> {
             .introspection()
             .drop_staging_schemas(&staging_schemas)
             .await?;
-        for (database, schema) in &staging_schemas {
-            verbose!("  Dropped {}.{}", database, schema);
+        for sq in &staging_schemas {
+            verbose!("  Dropped {}.{}", sq.database, sq.schema);
         }
     }
 

@@ -179,7 +179,10 @@ pub fn build_snapshot_from_planned(
 
         // Track which schema this object belongs to (default to Objects kind)
         schemas
-            .entry((object_id.database.clone(), object_id.schema.clone()))
+            .entry(SchemaQualifier::new(
+                object_id.database.clone(),
+                object_id.schema.clone(),
+            ))
             .or_insert(DeploymentKind::Objects);
     }
 
@@ -240,11 +243,11 @@ pub async fn write_to_database(
 
     // Build schema deployment records (kind is now per-schema from the snapshot)
     let mut schema_records = Vec::new();
-    for ((database, schema), kind) in &snapshot.schemas {
+    for (sq, kind) in &snapshot.schemas {
         schema_records.push(SchemaDeploymentRecord {
             deploy_id: deploy_id.to_string(),
-            database: database.clone(),
-            schema: schema.clone(),
+            database: sq.database.clone(),
+            schema: sq.schema.clone(),
             deployed_at: now,
             deployed_by: metadata.deployed_by.clone(),
             promoted_at,

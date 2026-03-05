@@ -114,8 +114,8 @@ pub async fn run(profile: &Profile, allowed_lag_secs: i64) -> Result<(), CliErro
             }
         }
 
-        for (database, schema) in &deployment.schemas {
-            println!("    {}.{}", database.dimmed(), schema);
+        for sq in &deployment.schemas {
+            println!("    {}.{}", sq.database.dimmed(), sq.schema);
         }
         println!();
     }

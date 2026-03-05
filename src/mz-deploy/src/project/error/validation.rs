@@ -1,32 +1,14 @@
-//! Error types for Materialize project operations.
+//! Validation errors for semantic validation of project definitions.
 //!
-//! This module provides structured error types using `thiserror` that capture rich
-//! contextual information about failures during project loading, parsing, and validation.
-//!
-//! # Error Hierarchy
-//!
-//! ```text
-//! ProjectError
-//!   ├── Load(LoadError)              - File I/O and directory traversal errors
-//!   ├── Parse(ParseError)            - SQL parsing errors
-//!   ├── Validation(ValidationError)  - Semantic validation errors with context
-//!   └── Dependency(DependencyError)  - Dependency graph analysis errors
-//! ```
-//!
-//! # Error Context
-//!
-//! Validation errors are wrapped with `ErrorContext` that captures:
-//! - File path where the error occurred
-//! - SQL statement that caused the error (when available)
-//!
-//! This design avoids duplicating context fields across all error variants.
+//! This module defines errors that occur during semantic validation of SQL
+//! statements, including object name mismatches, unsupported statement types,
+//! and constraint violations. Errors carry rich contextual information
+//! (file path, SQL statement) for user-friendly diagnostics.
 
-use crate::project::object_id::ObjectId;
 use owo_colors::OwoColorize;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
-use thiserror::Error;
 
 /// Contextual information about where an error occurred.
 ///
@@ -38,186 +20,6 @@ pub struct ErrorContext {
     pub file: PathBuf,
     /// The SQL statement that caused the error, if available
     pub sql_statement: Option<String>,
-}
-
-/// Top-level error type for all project operations.
-///
-/// This is the main error type returned by project loading and validation functions.
-/// It wraps more specific error types that provide detailed context.
-#[derive(Debug, Error)]
-pub enum ProjectError {
-    /// Error occurred while loading project files from disk
-    #[error(transparent)]
-    Load(#[from] LoadError),
-
-    /// Error occurred while parsing SQL statements
-    #[error(transparent)]
-    Parse(#[from] ParseError),
-
-    /// Error occurred during semantic validation (may contain multiple errors)
-    #[error(transparent)]
-    Validation(#[from] ValidationErrors),
-
-    /// Error occurred during dependency analysis
-    #[error(transparent)]
-    Dependency(#[from] DependencyError),
-}
-
-/// Errors that occur during dependency graph analysis.
-#[derive(Debug, Error)]
-pub enum DependencyError {
-    /// Circular dependency detected in the object dependency graph
-    #[error("Circular dependency detected: {object}")]
-    CircularDependency {
-        /// The fully qualified name of the object involved in the circular dependency
-        object: ObjectId,
-    },
-}
-
-/// Errors that occur during project file loading and I/O operations.
-#[derive(Debug, Error)]
-pub enum LoadError {
-    /// Project root directory does not exist
-    #[error("Project root directory does not exist: {path}")]
-    RootNotFound {
-        /// The path that was not found
-        path: PathBuf,
-    },
-
-    /// Project root path is not a directory
-    #[error("Project root is not a directory: {path}")]
-    RootNotDirectory {
-        /// The path that is not a directory
-        path: PathBuf,
-    },
-
-    /// models/ subdirectory does not exist
-    #[error("models/ directory not found in project root: {path}")]
-    ModelsNotFound {
-        /// The expected models/ path
-        path: PathBuf,
-    },
-
-    /// Failed to read a directory
-    #[error("Failed to read directory: {path}")]
-    DirectoryReadFailed {
-        /// The directory that couldn't be read
-        path: PathBuf,
-        /// The underlying I/O error
-        #[source]
-        source: std::io::Error,
-    },
-
-    /// Failed to read a directory entry
-    #[error("Failed to read directory entry in: {directory}")]
-    EntryReadFailed {
-        /// The directory containing the entry
-        directory: PathBuf,
-        /// The underlying I/O error
-        #[source]
-        source: std::io::Error,
-    },
-
-    /// Failed to read a SQL file
-    #[error("Failed to read SQL file: {path}")]
-    FileReadFailed {
-        /// The file that couldn't be read
-        path: PathBuf,
-        /// The underlying I/O error
-        #[source]
-        source: std::io::Error,
-    },
-
-    /// Invalid file name (couldn't extract stem)
-    #[error("Invalid file name: {path}")]
-    InvalidFileName {
-        /// The file with the invalid name
-        path: PathBuf,
-    },
-
-    /// Failed to extract schema name from path
-    #[error("Failed to extract schema from path: {path}")]
-    SchemaExtractionFailed {
-        /// The path where extraction failed
-        path: PathBuf,
-    },
-
-    /// Failed to extract database name from path
-    #[error("Failed to extract database from path: {path}")]
-    DatabaseExtractionFailed {
-        /// The path where extraction failed
-        path: PathBuf,
-    },
-}
-
-/// Errors that occur during SQL parsing.
-#[derive(Debug)]
-pub enum ParseError {
-    /// Failed to parse SQL statements
-    SqlParseFailed {
-        /// The file containing the SQL
-        path: PathBuf,
-        /// The SQL text that failed to parse
-        sql: String,
-        /// The underlying parser error
-        source: mz_sql_parser::parser::ParserStatementError,
-    },
-
-    /// Failed to parse SQL statements from multiple sources
-    StatementsParseFailed {
-        /// Error message
-        message: String,
-    },
-}
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ParseError::SqlParseFailed { path, sql, source } => {
-                // Extract database/schema/file for path display
-                let path_components: Vec<_> = path.components().collect();
-                let len = path_components.len();
-
-                let relative_path = if len >= 3 {
-                    format!(
-                        "{}/{}/{}",
-                        path_components[len - 3].as_os_str().to_string_lossy(),
-                        path_components[len - 2].as_os_str().to_string_lossy(),
-                        path_components[len - 1].as_os_str().to_string_lossy()
-                    )
-                } else {
-                    path.display().to_string()
-                };
-
-                // Format like rustc: error: <message>
-                writeln!(f, "{}: {}", "error".bright_red().bold(), source.error)?;
-
-                // Show file location: --> path
-                writeln!(f, " {} {}", "-->".bright_blue().bold(), relative_path)?;
-
-                // Show SQL content
-                writeln!(f, "  {}", "|".bright_blue().bold())?;
-                for line in sql.lines() {
-                    writeln!(f, "  {} {}", "|".bright_blue().bold(), line)?;
-                }
-                writeln!(f, "  {}", "|".bright_blue().bold())?;
-
-                Ok(())
-            }
-            ParseError::StatementsParseFailed { message } => {
-                write!(f, "{}: {}", "error".bright_red().bold(), message)
-            }
-        }
-    }
-}
-
-impl std::error::Error for ParseError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            ParseError::SqlParseFailed { source, .. } => Some(source),
-            ParseError::StatementsParseFailed { .. } => None,
-        }
-    }
 }
 
 /// A validation error with contextual information.
@@ -492,7 +294,7 @@ pub enum ValidationErrorKind {
 
 impl ValidationErrorKind {
     /// Get the short error message for this error kind
-    fn message(&self) -> String {
+    pub(crate) fn message(&self) -> String {
         match self {
             Self::MultipleMainStatements { object_name } => {
                 format!(
@@ -840,7 +642,7 @@ impl ValidationErrorKind {
     }
 
     /// Get the help text for this error kind
-    fn help(&self) -> Option<String> {
+    pub(crate) fn help(&self) -> Option<String> {
         match self {
             Self::MultipleMainStatements { .. } => {
                 Some("each file must contain exactly one primary CREATE statement (TABLE, VIEW, SOURCE, etc.)".to_string())

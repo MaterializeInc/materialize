@@ -1,4 +1,30 @@
 //! Dependency extraction and project conversion from typed representation.
+//!
+//! This module walks the SQL AST of every object to build a project-wide
+//! dependency graph and determine schema types. The core algorithm is a
+//! recursive descent through the AST, extracting table references and
+//! cluster usages.
+//!
+//! # CTE Scoping
+//!
+//! CTE references must be excluded from the dependency set because they
+//! are query-local names, not database objects. Two scoping modes exist:
+//!
+//! - **Simple CTEs** (`WITH a AS (...), b AS (...)`) — each CTE can see
+//!   parent CTEs and earlier siblings, but not itself or later siblings.
+//!   Scope is built incrementally.
+//! - **Mutually recursive CTEs** (`WITH MUTUALLY RECURSIVE ...`) — all CTEs
+//!   in the block share a single scope and can reference each other freely.
+//!
+//! Functions with a `_with_ctes` suffix carry an explicit CTE name set
+//! so that unqualified single-identifier references can be checked against
+//! the current scope before being treated as external dependencies.
+//!
+//! # Limitations
+//!
+//! - `TableFactor::Function` (table functions) and `TableFactor::RowsFrom`
+//!   are not tracked — they may reference tables indirectly but extracting
+//!   those dependencies would require function-signature analysis.
 
 use super::super::ast::{Cluster, Statement};
 use super::super::typed;
@@ -223,7 +249,10 @@ pub fn extract_dependencies(
     (deps, clusters)
 }
 
-/// Extract dependencies from a query (used by views and materialized views).
+/// Entry point for query dependency extraction (views and materialized views).
+///
+/// Starts with an empty CTE scope — the `_with_ctes` variant handles
+/// nested scoping as it recurses.
 fn extract_query_dependencies(
     query: &Query<Raw>,
     default_database: &str,
@@ -239,7 +268,10 @@ fn extract_query_dependencies(
     );
 }
 
-/// Extract dependencies from a query, with parent CTE scope.
+/// Extract dependencies from a query, carrying the accumulated CTE scope.
+///
+/// Handles both simple and mutually recursive CTE blocks, merging parent
+/// scope with locally defined CTEs before recursing into the query body.
 fn extract_query_dependencies_with_ctes(
     query: &Query<Raw>,
     default_database: &str,
@@ -411,7 +443,10 @@ fn extract_select_dependencies_with_ctes(
     }
 }
 
-/// Extract dependencies from a table factor, excluding CTE names.
+/// Extract dependencies from a table factor (FROM clause item), excluding CTE names.
+///
+/// For `TableFactor::Table`, checks whether the reference is a CTE by looking
+/// for unqualified single-identifier names in the current CTE scope.
 fn extract_table_factor_dependencies_with_ctes(
     table_factor: &TableFactor<Raw>,
     default_database: &str,
@@ -473,7 +508,11 @@ fn extract_table_factor_dependencies_with_ctes(
     }
 }
 
-/// Extract dependencies from an expression, excluding CTE names.
+/// Extract dependencies from an expression tree, excluding CTE names.
+///
+/// Recurses into subqueries (`EXISTS`, `IN (SELECT ...)`), binary operations,
+/// CASE expressions, function calls, and array/list constructors to find
+/// any nested table references.
 fn extract_expr_dependencies_with_ctes(
     expr: &Expr<Raw>,
     default_database: &str,

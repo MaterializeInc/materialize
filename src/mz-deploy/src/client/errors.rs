@@ -145,7 +145,7 @@ impl fmt::Display for DatabaseValidationError {
             DatabaseValidationError::MissingSchemas(schemas) => {
                 let schema_list: Vec<String> = schemas
                     .iter()
-                    .map(|(db, schema)| format!("{}.{}", db, schema))
+                    .map(|sq| format!("{}.{}", sq.database, sq.schema))
                     .collect();
                 write!(f, "Missing schemas: {}", schema_list.join(", "))
             }
@@ -190,7 +190,7 @@ impl fmt::Display for DatabaseValidationError {
                 if !schemas.is_empty() {
                     let schema_list: Vec<String> = schemas
                         .iter()
-                        .map(|(db, schema)| format!("{}.{}", db, schema))
+                        .map(|sq| format!("{}.{}", sq.database, sq.schema))
                         .collect();
                     writeln!(f, "Missing schemas: {}", schema_list.join(", "))?;
                     has_errors = true;
@@ -477,8 +477,8 @@ mod tests {
     #[test]
     fn test_missing_schemas_error_display() {
         let error = DatabaseValidationError::MissingSchemas(vec![
-            ("db1".to_string(), "schema1".to_string()),
-            ("db2".to_string(), "schema2".to_string()),
+            SchemaQualifier::new("db1".to_string(), "schema1".to_string()),
+            SchemaQualifier::new("db2".to_string(), "schema2".to_string()),
         ]);
         let error_string = format!("{}", error);
         assert!(error_string.contains("Missing schemas"));
@@ -555,7 +555,10 @@ mod tests {
     fn test_multiple_validation_errors_display() {
         let error = DatabaseValidationError::Multiple {
             databases: vec!["missing_db".to_string()],
-            schemas: vec![("db".to_string(), "missing_schema".to_string())],
+            schemas: vec![SchemaQualifier::new(
+                "db".to_string(),
+                "missing_schema".to_string(),
+            )],
             clusters: vec!["missing_cluster".to_string()],
             compilation_errors: vec![],
         };

@@ -555,9 +555,9 @@ pub async fn find_sinks_depending_on_schemas(
 
     // Build params vector with references to the schema tuples
     let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
-    for (database, schema) in schemas {
-        params.push(database);
-        params.push(schema);
+    for sq in schemas {
+        params.push(&sq.database);
+        params.push(&sq.schema);
     }
 
     let rows = client.query(&query, &params).await?;
@@ -624,7 +624,7 @@ pub async fn get_staging_schemas(
         .map(|row| {
             let database: String = row.get("database");
             let schema: String = row.get("schema");
-            (database, schema)
+            SchemaQualifier::new(database, schema)
         })
         .collect())
 }
@@ -771,11 +771,11 @@ pub async fn drop_staging_schemas(
     client: &Client,
     schemas: &[SchemaQualifier],
 ) -> Result<(), ConnectionError> {
-    for (database, schema) in schemas {
+    for sq in schemas {
         let drop_sql = format!(
             "DROP SCHEMA IF EXISTS {}.{} CASCADE",
-            quote_identifier(database),
-            quote_identifier(schema)
+            quote_identifier(&sq.database),
+            quote_identifier(&sq.schema)
         );
         client.execute(&drop_sql, &[]).await?;
     }

@@ -56,7 +56,7 @@ pub async fn run(
     }
 
     let planned_project = super::compile::run(directory, TypeCheckMode::Disabled).await?;
-    let mut client = Client::connect_with_profile(profile.clone())
+    let client = Client::connect_with_profile(profile.clone())
         .await
         .map_err(CliError::Connection)?;
 
@@ -199,7 +199,7 @@ fn collect_table_schemas(
     let mut table_schemas = BTreeMap::new();
     for (object_id, _) in tables_to_create {
         table_schemas.insert(
-            (object_id.database.clone(), object_id.schema.clone()),
+            project::SchemaQualifier::new(object_id.database.clone(), object_id.schema.clone()),
             crate::client::DeploymentKind::Tables,
         );
     }
@@ -225,9 +225,14 @@ async fn prepare_schemas_and_mod_statements(
         println!("-- Create schemas --");
     }
 
-    for (database, schema) in table_schemas.keys() {
-        verbose!("Creating schema {}.{} if not exists", database, schema);
-        let create_schema_sql = format!("CREATE SCHEMA IF NOT EXISTS {}.{}", database, schema);
+    for sq in table_schemas.keys() {
+        verbose!(
+            "Creating schema {}.{} if not exists",
+            sq.database,
+            sq.schema
+        );
+        let create_schema_sql =
+            format!("CREATE SCHEMA IF NOT EXISTS {}.{}", sq.database, sq.schema);
         executor.execute_sql(&create_schema_sql).await?;
     }
 
@@ -237,7 +242,7 @@ async fn prepare_schemas_and_mod_statements(
                 database,
                 statement,
             } => {
-                let has_tables = table_schemas.keys().any(|(db, _)| db == database);
+                let has_tables = table_schemas.keys().any(|sq| sq.database == *database);
                 if has_tables {
                     verbose!("Applying database setup for: {}", database);
                     executor.execute_sql(statement).await?;
@@ -248,7 +253,10 @@ async fn prepare_schemas_and_mod_statements(
                 schema,
                 statement,
             } => {
-                if table_schemas.contains_key(&(database.to_string(), schema.to_string())) {
+                if table_schemas.contains_key(&project::SchemaQualifier::new(
+                    database.to_string(),
+                    schema.to_string(),
+                )) {
                     verbose!("Applying schema setup for: {}.{}", database, schema);
                     executor.execute_sql(statement).await?;
                 }

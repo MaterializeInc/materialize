@@ -11,6 +11,7 @@ use crate::client::models::{
     DeploymentMetadata, DeploymentObjectRecord, PendingStatement, SchemaDeploymentRecord,
     StagingDeployment,
 };
+use crate::project::SchemaQualifier;
 use crate::project::deployment_snapshot::DeploymentSnapshot;
 use crate::project::object_id::ObjectId;
 use async_stream::try_stream;
@@ -566,7 +567,7 @@ pub async fn get_deployment_objects(
         objects.insert(object_id, object_hash);
         // Default to Objects kind for snapshots loaded from DB (used for comparison only)
         schemas
-            .entry((database, schema))
+            .entry(SchemaQualifier::new(database, schema))
             .or_insert(DeploymentKind::Objects);
     }
 
@@ -601,7 +602,7 @@ pub async fn get_deployment_metadata(
     for row in rows {
         let database: String = row.get("database");
         let schema: String = row.get("schema");
-        schemas.push((database, schema));
+        schemas.push(SchemaQualifier::new(database, schema));
     }
 
     Ok(Some(DeploymentMetadata {
@@ -650,7 +651,7 @@ pub async fn get_deployment_details(
     for row in rows {
         let database: String = row.get("database");
         let schema: String = row.get("schema");
-        schemas.push((database, schema));
+        schemas.push(SchemaQualifier::new(database, schema));
     }
 
     Ok(Some(DeploymentDetails {
@@ -709,7 +710,7 @@ pub async fn list_staging_deployments(
                 }
             })
             .schemas
-            .push((database, schema));
+            .push(SchemaQualifier::new(database, schema));
     }
 
     Ok(deployments)
@@ -792,13 +793,13 @@ pub async fn list_deployment_history(
                 deployed_by,
                 git_commit,
                 kind,
-                schemas: vec![(database, schema)],
+                schemas: vec![SchemaQualifier::new(database, schema)],
             });
             current_deploy_id = Some(deploy_id);
         } else {
             // Add schema to current deployment
             if let Some(last) = deployments.last_mut() {
-                last.schemas.push((database, schema));
+                last.schemas.push(SchemaQualifier::new(database, schema));
             }
         }
     }

@@ -32,7 +32,7 @@ pub async fn run(profile: &Profile, directory: &Path) -> Result<(), CliError> {
     println!("Generating data contracts for external dependencies...");
 
     // Connect to the database
-    let mut client = Client::connect_with_profile(profile.clone())
+    let client = Client::connect_with_profile(profile.clone())
         .await
         .map_err(CliError::Connection)?;
 

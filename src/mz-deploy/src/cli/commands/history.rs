@@ -77,8 +77,8 @@ pub async fn run(profile: &Profile, limit: Option<usize>) -> Result<(), CliError
         output.push('\n');
 
         // List all schemas in this deployment (like files in a git commit)
-        for (database, schema) in &entry.schemas {
-            output.push_str(&format!("    {}.{}\n", database.dimmed(), schema));
+        for sq in &entry.schemas {
+            output.push_str(&format!("    {}.{}\n", sq.database.dimmed(), sq.schema));
         }
         output.push('\n');
     }
