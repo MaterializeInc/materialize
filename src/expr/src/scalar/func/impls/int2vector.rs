@@ -14,10 +14,12 @@ use mz_repr::{Datum, Int2Vector, SqlScalarType};
 use crate::EvalError;
 use crate::scalar::func::stringify_datum;
 
+/// Casts the smallint vector `a` to an array.
 #[sqlfunc(
     sqlname = "int2vectortoarray",
     is_monotone = true,
     introduces_nulls = false,
+    category = "Cast",
     output_type_expr = SqlScalarType::Array(Box::from(SqlScalarType::Int16))
         .nullable(input_type.nullable)
 )]
@@ -25,9 +27,11 @@ fn cast_int2_vector_to_array<'a>(a: Int2Vector<'a>) -> Array<'a> {
     a.0
 }
 
+/// Casts the smallint vector `a` to its string representation.
 #[sqlfunc(
     sqlname = "int2vectortostr",
     preserves_uniqueness = true,
+    category = "Cast",
     inverse = to_unary!(super::CastStringToInt2Vector)
 )]
 fn cast_int2_vector_to_string<'a>(a: Int2Vector<'a>) -> Result<String, EvalError> {

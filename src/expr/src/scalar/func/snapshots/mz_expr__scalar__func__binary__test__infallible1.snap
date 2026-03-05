@@ -16,6 +16,23 @@ expression: "#[sqlfunc(sqlname = \"INFALLIBLE\", is_infix_op = true, test = true
     mz_lowertest::MzReflect,
 )]
 pub struct Infallible1;
+impl Infallible1 {
+    pub fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "infallible1",
+            category: "Uncategorized",
+            signature: format!(
+                "{} {} {} -> {}",
+                <f32 as ::mz_repr::SqlDocName>::sql_doc_name(),
+                "INFALLIBLE",
+                <f32 as ::mz_repr::SqlDocName>::sql_doc_name(),
+                <f32 as ::mz_repr::SqlDocName>::sql_doc_name(),
+            ),
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 impl crate::func::binary::EagerBinaryFunc for Infallible1 {
     type Input<'a> = (f32, f32);
     type Output<'a> = f32;

@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use mz_expr_derive::sqlfunc;
+use mz_expr_derive::{sqldoc, sqlfunc};
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::{SqlColumnType, SqlScalarType, strconv};
@@ -112,6 +112,7 @@ fn cast_uint32_to_string(a: u32) -> String {
     buf
 }
 
+#[sqldoc(unique_name = "uint4_to_numeric", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,

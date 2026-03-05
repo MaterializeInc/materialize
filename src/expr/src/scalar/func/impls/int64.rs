@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use mz_expr_derive::sqlfunc;
+use mz_expr_derive::{sqldoc, sqlfunc};
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::system::Oid;
@@ -117,6 +117,7 @@ fn cast_int64_to_uint64(a: i64) -> Result<u64, EvalError> {
     u64::try_from(a).or_else(|_| Err(EvalError::UInt64OutOfRange(a.to_string().into())))
 }
 
+#[sqldoc(unique_name = "bigint_to_numeric", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,

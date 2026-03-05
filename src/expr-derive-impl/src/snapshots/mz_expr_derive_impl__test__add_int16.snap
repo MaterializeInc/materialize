@@ -16,6 +16,26 @@ expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = i16,
     mz_lowertest::MzReflect,
 )]
 pub struct AddInt16;
+impl AddInt16 {
+    pub fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "add_int16",
+            category: "Uncategorized",
+            signature: format!(
+                "{} {} {} -> {}",
+                <Datum<'static> as ::mz_repr::SqlDocName>::sql_doc_name(),
+                "+",
+                <Datum<'static> as ::mz_repr::SqlDocName>::sql_doc_name(),
+                <Result<
+                    Datum<'static>,
+                    EvalError,
+                > as ::mz_repr::SqlDocName>::sql_doc_name(),
+            ),
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 impl crate::func::binary::EagerBinaryFunc for AddInt16 {
     type Input<'a> = (Datum<'a>, Datum<'a>);
     type Output<'a> = Result<Datum<'a>, EvalError>;

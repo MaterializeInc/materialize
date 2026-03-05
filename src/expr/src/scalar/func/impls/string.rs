@@ -12,7 +12,7 @@ use std::fmt;
 use std::sync::LazyLock;
 
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
-use mz_expr_derive::sqlfunc;
+use mz_expr_derive::{sqldoc, sqlfunc};
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
@@ -150,11 +150,13 @@ fn cast_string_to_uint64(a: &str) -> Result<u64, EvalError> {
     strconv::parse_uint64(a).err_into()
 }
 
-#[sqlfunc(sqlname = "reverse")]
+/// Reverse the characters in s.
+#[sqlfunc(sqlname = "reverse", category = "String")]
 fn reverse<'a>(a: &'a str) -> String {
     a.chars().rev().collect()
 }
 
+#[sqldoc(unique_name = "text_to_numeric", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -216,6 +218,7 @@ fn cast_string_to_time<'a>(a: &'a str) -> Result<NaiveTime, EvalError> {
     strconv::parse_time(a).err_into()
 }
 
+#[sqldoc(unique_name = "text_to_timestamp", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -255,7 +258,9 @@ impl fmt::Display for CastStringToTimestamp {
     }
 }
 
-#[sqlfunc(sqlname = "try_parse_monotonic_iso8601_timestamp")]
+/// Parses a specific subset of ISO8601 timestamps, returning `NULL` instead of
+/// error on failure: `YYYY-MM-DDThh:mm:ss.sssZ`
+#[sqlfunc(sqlname = "try_parse_monotonic_iso8601_timestamp", category = "String")]
 // TODO: Pretty sure this preserves uniqueness, but not 100%.
 //
 // Ironically, even though this has "monotonic" in the name, it's not quite
@@ -270,6 +275,7 @@ fn try_parse_monotonic_iso8601_timestamp<'a>(
     Some(ts)
 }
 
+#[sqldoc(unique_name = "text_to_timestamp_with_time_zone", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -327,6 +333,11 @@ fn cast_string_to_uuid<'a>(a: &'a str) -> Result<Uuid, EvalError> {
     strconv::parse_uuid(a).err_into()
 }
 
+#[sqldoc(
+    unique_name = "strtoarray",
+    category = "Cast",
+    signature = "CAST(s: str AS arrayany) -> arrayany"
+)]
 #[derive(
     Ord,
     PartialOrd,
@@ -411,6 +422,7 @@ impl fmt::Display for CastStringToArray {
     }
 }
 
+#[sqldoc(unique_name = "strtolist", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -501,6 +513,7 @@ impl fmt::Display for CastStringToList {
     }
 }
 
+#[sqldoc(unique_name = "strtomap", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -597,6 +610,7 @@ impl fmt::Display for CastStringToMap {
     }
 }
 
+#[sqldoc(unique_name = "text_to_char", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -662,6 +676,7 @@ impl fmt::Display for CastStringToChar {
     }
 }
 
+#[sqldoc(unique_name = "strtorange", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -750,6 +765,7 @@ impl fmt::Display for CastStringToRange {
     }
 }
 
+#[sqldoc(unique_name = "text_to_varchar", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -827,6 +843,7 @@ static INT2VECTOR_CAST_EXPR: LazyLock<MirScalarExpr> = LazyLock::new(|| MirScala
     expr: Box::new(MirScalarExpr::column(0)),
 });
 
+#[sqldoc(unique_name = "strtoint2vector", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -908,22 +925,28 @@ fn cast_string_to_jsonb<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
     Ok(strconv::parse_jsonb(a)?)
 }
 
-#[sqlfunc(sqlname = "btrim")]
-fn trim_whitespace<'a>(a: &'a str) -> &'a str {
-    a.trim_matches(' ')
+/// Trim all spaces from both sides of `s`.
+#[sqlfunc(sqlname = "btrim", category = "String")]
+fn trim_whitespace<'a>(s: &'a str) -> &'a str {
+    s.trim_matches(' ')
 }
 
-#[sqlfunc(sqlname = "ltrim")]
-fn trim_leading_whitespace<'a>(a: &'a str) -> &'a str {
-    a.trim_start_matches(' ')
+/// Trim all spaces from the left side of `s`.
+#[sqlfunc(sqlname = "ltrim", category = "String")]
+fn trim_leading_whitespace<'a>(s: &'a str) -> &'a str {
+    s.trim_start_matches(' ')
 }
 
-#[sqlfunc(sqlname = "rtrim")]
+/// Trim all spaces from the right side of s.
+#[sqlfunc(sqlname = "rtrim", category = "String")]
 fn trim_trailing_whitespace<'a>(a: &'a str) -> &'a str {
     a.trim_end_matches(' ')
 }
 
-#[sqlfunc(sqlname = "initcap")]
+/// Returns `a` with the first character of every word in upper case and all
+/// other characters in lower case. Words are separated by non-alphanumeric
+/// characters.
+#[sqlfunc(sqlname = "initcap", category = "String")]
 fn initcap<'a>(a: &'a str) -> String {
     let mut out = String::new();
     let mut capitalize_next = true;
@@ -938,40 +961,51 @@ fn initcap<'a>(a: &'a str) -> String {
     out
 }
 
-#[sqlfunc(sqlname = "ascii")]
-fn ascii<'a>(a: &'a str) -> i32 {
-    a.chars()
+/// The ASCII value of `s`'s left-most character.
+#[sqlfunc(sqlname = "ascii", category = "String")]
+fn ascii<'a>(s: &'a str) -> i32 {
+    s.chars()
         .next()
         .and_then(|c| i32::try_from(u32::from(c)).ok())
         .unwrap_or(0)
 }
 
-#[sqlfunc(sqlname = "char_length")]
+/// Number of code points in `a`.
+#[sqlfunc(
+    sqlname = "char_length",
+    category = "String",
+    alias = "length",
+    url = "/sql/functions/length"
+)]
 fn char_length<'a>(a: &'a str) -> Result<i32, EvalError> {
     let length = a.chars().count();
     i32::try_from(length).or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
 }
 
-#[sqlfunc(sqlname = "bit_length")]
+/// Number of bits in `a`.
+#[sqlfunc(sqlname = "bit_length", category = "String")]
 fn bit_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
     let length = a.as_bytes().len() * 8;
     i32::try_from(length).or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
 }
 
-#[sqlfunc(sqlname = "octet_length")]
-fn byte_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
+/// Number of bytes in `a`.
+#[sqlfunc(sqlname = "octet_length", category = "String")]
+fn byte_length_string(a: &str) -> Result<i32, EvalError> {
     let length = a.as_bytes().len();
     i32::try_from(length).or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
 }
 
-#[sqlfunc]
+/// Convert s to uppercase.
+#[sqlfunc(category = "String")]
 fn upper<'a>(a: &'a str) -> String {
     a.to_uppercase()
 }
 
-#[sqlfunc]
-fn lower<'a>(a: &'a str) -> String {
-    a.to_lowercase()
+/// Convert `s` to lowercase.
+#[sqlfunc(category = "String")]
+fn lower(s: &str) -> String {
+    s.to_lowercase()
 }
 
 #[sqlfunc]
@@ -989,6 +1023,7 @@ fn normalize(text: &str, form_str: &str) -> Result<String, EvalError> {
     }
 }
 
+#[sqldoc(unique_name = "is_like_match", category = "String")]
 #[derive(
     Ord,
     PartialOrd,
@@ -1027,6 +1062,7 @@ impl fmt::Display for IsLikeMatch {
     }
 }
 
+#[sqldoc(unique_name = "is_regexp_match", category = "String")]
 #[derive(
     Ord,
     PartialOrd,
@@ -1065,6 +1101,15 @@ impl fmt::Display for IsRegexpMatch {
     }
 }
 
+/// Matches the regular expression `needle` against haystack, returning a
+/// string array that contains the value of each capture group specified in
+/// `needle`, in order. If `flags` is set to the string `i` matches
+/// case-insensitively.
+#[sqldoc(
+    unique_name = "regexp_match",
+    category = "String",
+    signature = "regexp_match(haystack: str, needle: str [, flags: str]]) -> str[]"
+)]
 #[derive(
     Ord,
     PartialOrd,
@@ -1134,6 +1179,13 @@ impl fmt::Display for RegexpMatch {
     }
 }
 
+/// Splits `text` by the regular expression `pattern` into an array.
+/// If `flags` is set to `i`, matches case-insensitively.
+#[sqldoc(
+    unique_name = "regexp_split_to_array",
+    category = "String",
+    signature = "regexp_split_to_array(text: str, pattern: str [, flags: str]]) -> str[]"
+)]
 #[derive(
     Ord,
     PartialOrd,
@@ -1208,7 +1260,8 @@ fn panic<'a>(a: &'a str) -> String {
     panic!("{}", a)
 }
 
-#[sqlfunc(sqlname = "quote_ident", preserves_uniqueness = true)]
+/// Quotes the given string as an SQL identifier.
+#[sqlfunc(sqlname = "quote_ident", preserves_uniqueness = true, category = "String")]
 fn quote_ident<'a>(a: &'a str) -> Result<String, EvalError> {
     let i = mz_sql_parser::ast::Ident::new(a).map_err(|err| EvalError::InvalidIdentifier {
         ident: a.into(),
@@ -1217,6 +1270,12 @@ fn quote_ident<'a>(a: &'a str) -> Result<String, EvalError> {
     Ok(i.to_string())
 }
 
+/// Replaces substrings matching a POSIX regular expression.
+#[sqldoc(
+    unique_name = "regexp_replace",
+    category = "String",
+    signature = "regexp_replace(source text, pattern text, replacement text) -> text"
+)]
 #[derive(
     Ord,
     PartialOrd,

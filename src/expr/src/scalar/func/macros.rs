@@ -148,8 +148,9 @@ macro_rules! derive_unary {
         #[derive(
             Ord, PartialOrd, Clone, Debug, Eq, PartialEq,
             serde::Serialize, serde::Deserialize, Hash,
-            mz_lowertest::MzReflect,
+            mz_lowertest::MzReflect, enum_kinds::EnumKind,
         )]
+        #[enum_kind(UnaryFuncKind)]
         pub enum UnaryFunc {
             $($name($name),)*
         }
@@ -205,6 +206,21 @@ macro_rules! derive_unary {
                 match self {
                     $(Self::$name(f) => LazyUnaryFunc::could_error(f),)*
                 }
+            }
+        }
+
+        impl UnaryFuncKind {
+            pub fn func_doc(&self) -> crate::func::FuncDoc {
+                match self {
+                    $(Self::$name => $name::func_doc(),)*
+                }
+            }
+
+            /// Returns all known kinds.
+            pub fn kinds() -> &'static [Self] {
+                &[
+                    $(Self::$name,)*
+                ]
             }
         }
 
@@ -332,8 +348,9 @@ macro_rules! derive_binary {
         #[derive(
             Ord, PartialOrd, Clone, Debug, Eq, PartialEq,
             serde::Serialize, serde::Deserialize, Hash,
-            mz_lowertest::MzReflect,
+            mz_lowertest::MzReflect, enum_kinds::EnumKind,
         )]
+        #[enum_kind(BinaryFuncKind)]
         pub enum BinaryFunc {
             $($name($variant),)*
         }
@@ -398,6 +415,22 @@ macro_rules! derive_binary {
                 match self {
                     $(Self::$name(f) => LazyBinaryFunc::is_monotone(f),)*
                 }
+            }
+        }
+
+        impl BinaryFuncKind {
+            /// Returns the function documentation, if available.
+            pub fn func_doc(&self) -> Option<crate::func::FuncDoc> {
+                match self {
+                    $(Self::$name => Some($variant::func_doc()),)*
+                }
+            }
+
+            /// Returns all known kinds.
+            pub fn kinds() -> &'static [Self] {
+                &[
+                    $(Self::$name,)*
+                ]
             }
         }
 

@@ -12,7 +12,7 @@ use std::fmt;
 use chrono::{
     DateTime, Duration, FixedOffset, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike, Utc,
 };
-use mz_expr_derive::sqlfunc;
+use mz_expr_derive::{sqldoc, sqlfunc};
 use mz_lowertest::MzReflect;
 use mz_ore::result::ResultExt;
 use mz_pgtz::timezone::{Timezone, TimezoneSpec};
@@ -71,6 +71,10 @@ fn cast_timestamp_tz_to_date(a: CheckedTimestamp<DateTime<Utc>>) -> Result<Date,
     Ok(a.naive_utc().date().try_into()?)
 }
 
+#[sqldoc(
+    unique_name = "timestamp_to_timestamp_with_time_zone",
+    category = "Cast"
+)]
 #[derive(
     Ord,
     PartialOrd,
@@ -128,6 +132,7 @@ impl fmt::Display for CastTimestampToTimestampTz {
     }
 }
 
+#[sqldoc(unique_name = "adjust_timestamp_precision", category = "Timestamp")]
 #[derive(
     Ord,
     PartialOrd,
@@ -184,6 +189,10 @@ impl fmt::Display for AdjustTimestampPrecision {
     }
 }
 
+#[sqldoc(
+    unique_name = "timestamp_with_time_zone_to_timestamp",
+    category = "Cast"
+)]
 #[derive(
     Ord,
     PartialOrd,
@@ -240,6 +249,10 @@ impl fmt::Display for CastTimestampTzToTimestamp {
     }
 }
 
+#[sqldoc(
+    unique_name = "ajust_timestamp_with_time_zone_precision",
+    category = "Timestamp"
+)]
 #[derive(
     Ord,
     PartialOrd,
@@ -341,6 +354,13 @@ where
     }
 }
 
+#[sqldoc(
+    unique_name = "extract_interval",
+    category = "Timestamp",
+    signature = "EXTRACT (unit FROM interval) -> numeric",
+    url = "/sql/functions/extract"
+)]
+/// Extracts the specified `unit` from the given `interval` and returns it as a numeric value.
 #[derive(
     Ord,
     PartialOrd,
@@ -374,6 +394,7 @@ impl fmt::Display for ExtractInterval {
     }
 }
 
+#[sqldoc(unique_name = "date_part_interval", category = "Timestamp")]
 #[derive(
     Ord,
     PartialOrd,
@@ -453,6 +474,13 @@ pub(crate) fn most_significant_unit(unit: DateTimeUnits) -> bool {
     }
 }
 
+#[sqldoc(
+    unique_name = "extract_timestamp",
+    category = "Timestamp",
+    signature = "EXTRACT (unit FROM timestamp) -> numeric",
+    url = "/sql/functions/extract"
+)]
+/// Extracts the specified `unit` from the given `interval` and returns it as a numeric value.
 #[derive(
     Ord,
     PartialOrd,
@@ -490,6 +518,13 @@ impl fmt::Display for ExtractTimestamp {
     }
 }
 
+#[sqldoc(
+    unique_name = "extract_tstz",
+    category = "Timestamp",
+    signature = "EXTRACT (unit FROM timestamp with timezone) -> numeric",
+    url = "/sql/functions/extract"
+)]
+/// Extracts the specified `unit` from the given `timestamp with timezone` and returns it as a numeric value.
 #[derive(
     Ord,
     PartialOrd,
@@ -530,6 +565,7 @@ impl fmt::Display for ExtractTimestampTz {
     }
 }
 
+#[sqldoc(unique_name = "date_part_timestamp", category = "Timestamp")]
 #[derive(
     Ord,
     PartialOrd,
@@ -563,6 +599,7 @@ impl fmt::Display for DatePartTimestamp {
     }
 }
 
+#[sqldoc(unique_name = "date_part_tstz", category = "Timestamp")]
 #[derive(
     Ord,
     PartialOrd,
@@ -625,6 +662,7 @@ pub fn date_trunc_inner<T: TimestampLike>(units: DateTimeUnits, ts: &T) -> Resul
     }
 }
 
+#[sqldoc(unique_name = "date_truc_ts", category = "Timestamp")]
 #[derive(
     Ord,
     PartialOrd,
@@ -662,6 +700,7 @@ impl fmt::Display for DateTruncTimestamp {
     }
 }
 
+#[sqldoc(unique_name = "date_truc_tstz", category = "Timestamp")]
 #[derive(
     Ord,
     PartialOrd,
@@ -755,6 +794,7 @@ fn checked_add_with_leapsecond(lhs: &NaiveDateTime, rhs: &FixedOffset) -> Option
     .map(|dt| dt.with_nanosecond(nanos).unwrap())
 }
 
+#[sqldoc(unique_name = "timezone_ts", category = "Timestamp")]
 #[derive(
     Ord,
     PartialOrd,
@@ -788,6 +828,7 @@ impl fmt::Display for TimezoneTimestamp {
     }
 }
 
+#[sqldoc(unique_name = "timezone_tstz", category = "Timestamp")]
 #[derive(
     Ord,
     PartialOrd,
@@ -823,6 +864,7 @@ impl fmt::Display for TimezoneTimestampTz {
     }
 }
 
+#[sqldoc(unique_name = "tocharts", category = "Timestamp")]
 #[derive(
     Clone,
     Debug,
@@ -859,6 +901,7 @@ impl fmt::Display for ToCharTimestamp {
     }
 }
 
+#[sqldoc(unique_name = "tochartstz", category = "Timestamp")]
 #[derive(
     Clone,
     Debug,

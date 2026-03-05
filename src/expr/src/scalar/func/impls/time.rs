@@ -10,7 +10,7 @@
 use std::fmt;
 
 use chrono::{NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike};
-use mz_expr_derive::sqlfunc;
+use mz_expr_derive::{sqldoc, sqlfunc};
 use mz_lowertest::MzReflect;
 use mz_pgtz::timezone::Timezone;
 use mz_repr::adt::datetime::{DateTimeField, DateTimeUnits};
@@ -87,6 +87,11 @@ where
     }
 }
 
+#[sqldoc(
+    unique_name = "extract_time",
+    category = "Time",
+    url = "/sql/functions/extract/"
+)]
 #[derive(
     Ord,
     PartialOrd,
@@ -120,6 +125,7 @@ impl fmt::Display for ExtractTime {
     }
 }
 
+#[sqldoc(unique_name = "date_part_time", category = "Time")]
 #[derive(
     Ord,
     PartialOrd,
@@ -163,6 +169,7 @@ pub fn timezone_time(tz: Timezone, t: NaiveTime, wall_time: &NaiveDateTime) -> N
     t + offset
 }
 
+#[sqldoc(unique_name = "timezone_time", category = "Time")]
 #[derive(
     Ord,
     PartialOrd,

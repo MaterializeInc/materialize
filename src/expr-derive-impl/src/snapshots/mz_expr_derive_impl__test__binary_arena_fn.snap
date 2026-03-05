@@ -16,6 +16,25 @@ expression: "#[sqlfunc(test = true)]\nfn unary_fn<'a>(a: Datum<'a>, b: u16, temp
     mz_lowertest::MzReflect,
 )]
 pub struct UnaryFn;
+impl UnaryFn {
+    pub fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "unary_fn",
+            category: "Uncategorized",
+            signature: format!(
+                "{}({} {}, {} {}) -> {}",
+                "unary_fn",
+                "a",
+                <Datum<'static> as ::mz_repr::SqlDocName>::sql_doc_name(),
+                "b",
+                <u16 as ::mz_repr::SqlDocName>::sql_doc_name(),
+                <bool as ::mz_repr::SqlDocName>::sql_doc_name(),
+            ),
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 impl crate::func::binary::EagerBinaryFunc for UnaryFn {
     type Input<'a> = (Datum<'a>, u16);
     type Output<'a> = bool;

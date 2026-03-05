@@ -182,7 +182,7 @@ impl<T: EagerBinaryFunc> LazyBinaryFunc for T {
     }
 }
 
-pub use derive::BinaryFunc;
+pub use derive::{BinaryFunc, BinaryFuncKind};
 
 mod derive {
     use std::fmt;

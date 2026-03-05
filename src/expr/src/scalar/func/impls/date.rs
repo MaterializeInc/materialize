@@ -10,7 +10,7 @@
 use std::fmt;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Utc};
-use mz_expr_derive::sqlfunc;
+use mz_expr_derive::{sqldoc, sqlfunc};
 use mz_lowertest::MzReflect;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::DateTimeUnits;
@@ -34,6 +34,7 @@ fn cast_date_to_string(a: Date) -> String {
     buf
 }
 
+#[sqldoc(unique_name = "date_to_timestamp", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -82,6 +83,7 @@ impl fmt::Display for CastDateToTimestamp {
     }
 }
 
+#[sqldoc(unique_name = "date_to_timestamp_with_timezone", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -165,6 +167,11 @@ pub fn extract_date_inner(units: DateTimeUnits, date: NaiveDate) -> Result<Numer
     }
 }
 
+#[sqldoc(
+    unique_name = "extract_date",
+    category = "Extract",
+    url = "/sql/functions/extract/"
+)]
 #[derive(
     Ord,
     PartialOrd,

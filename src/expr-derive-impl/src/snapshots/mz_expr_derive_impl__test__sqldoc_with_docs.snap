@@ -1,0 +1,18 @@
+---
+source: src/expr-derive-impl/src/lib.rs
+expression: "#[sqldoc(\n    unique_name = \"extract_interval\",\n    category = \"Timestamp\",\n    signature = \"EXTRACT (unit FROM interval) -> numeric\",\n    url = \"/sql/functions/extract\"\n)]\n/// Extracts the specified `unit` from the given `interval` and returns it as a numeric value.\npub struct ExtractInterval;\n"
+---
+/// Extracts the specified `unit` from the given `interval` and returns it as a numeric value.
+pub struct ExtractInterval;
+impl ExtractInterval {
+    pub fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "extract_interval",
+            category: "Timestamp",
+            signature: "EXTRACT (unit FROM interval) -> numeric".to_string(),
+            description: "Extracts the specified `unit` from the given `interval` and returns it as a numeric value.",
+            url: Some("/sql/functions/extract"),
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}

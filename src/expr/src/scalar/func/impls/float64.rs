@@ -10,7 +10,7 @@
 use std::fmt;
 
 use chrono::{DateTime, Utc};
-use mz_expr_derive::sqlfunc;
+use mz_expr_derive::{sqldoc, sqlfunc};
 use mz_lowertest::MzReflect;
 use mz_ore::cast::TryCastFrom;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
@@ -197,6 +197,7 @@ fn cast_float64_to_uint64(a: f64) -> Result<u64, EvalError> {
     }
 }
 
+#[sqldoc(unique_name = "double_to_numeric", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -265,7 +266,8 @@ fn cbrt_float64(a: f64) -> f64 {
     a.cbrt()
 }
 
-#[sqlfunc]
+/// The cosine of x, with x in radians.
+#[sqlfunc(category = "Trigonometric")]
 fn cos(a: f64) -> Result<f64, EvalError> {
     if a.is_infinite() {
         return Err(EvalError::InfinityOutOfDomain("cos".into()));
@@ -273,7 +275,8 @@ fn cos(a: f64) -> Result<f64, EvalError> {
     Ok(a.cos())
 }
 
-#[sqlfunc]
+/// The inverse cosine of x, result in radians.
+#[sqlfunc(category = "Trigonometric")]
 fn acos(a: f64) -> Result<f64, EvalError> {
     if a < -1.0 || 1.0 < a {
         return Err(EvalError::OutOfDomain(
@@ -285,12 +288,14 @@ fn acos(a: f64) -> Result<f64, EvalError> {
     Ok(a.acos())
 }
 
-#[sqlfunc]
+/// The hyperbolic cosine of x, with x as a hyperbolic angle.
+#[sqlfunc(category = "Trigonometric")]
 fn cosh(a: f64) -> f64 {
     a.cosh()
 }
 
-#[sqlfunc]
+/// The inverse hyperbolic cosine of x.
+#[sqlfunc(category = "Trigonometric")]
 fn acosh(a: f64) -> Result<f64, EvalError> {
     if a < 1.0 {
         return Err(EvalError::OutOfDomain(
@@ -302,7 +307,8 @@ fn acosh(a: f64) -> Result<f64, EvalError> {
     Ok(a.acosh())
 }
 
-#[sqlfunc]
+/// The sine of x, with x in radians.
+#[sqlfunc(category = "Trigonometric")]
 fn sin(a: f64) -> Result<f64, EvalError> {
     if a.is_infinite() {
         return Err(EvalError::InfinityOutOfDomain("sin".into()));
@@ -310,7 +316,8 @@ fn sin(a: f64) -> Result<f64, EvalError> {
     Ok(a.sin())
 }
 
-#[sqlfunc]
+/// The inverse sine of x, result in radians.
+#[sqlfunc(category = "Trigonometric")]
 fn asin(a: f64) -> Result<f64, EvalError> {
     if a < -1.0 || 1.0 < a {
         return Err(EvalError::OutOfDomain(
@@ -322,17 +329,20 @@ fn asin(a: f64) -> Result<f64, EvalError> {
     Ok(a.asin())
 }
 
-#[sqlfunc]
+/// The hyperbolic sine of x, with x as a hyperbolic angle.
+#[sqlfunc(category = "Trigonometric")]
 fn sinh(a: f64) -> f64 {
     a.sinh()
 }
 
-#[sqlfunc]
+/// The inverse hyperbolic sine of x.
+#[sqlfunc(category = "Trigonometric")]
 fn asinh(a: f64) -> f64 {
     a.asinh()
 }
 
-#[sqlfunc]
+/// The tangent of x, with x in radians.
+#[sqlfunc(category = "Trigonometric")]
 fn tan(a: f64) -> Result<f64, EvalError> {
     if a.is_infinite() {
         return Err(EvalError::InfinityOutOfDomain("tan".into()));
@@ -340,17 +350,20 @@ fn tan(a: f64) -> Result<f64, EvalError> {
     Ok(a.tan())
 }
 
-#[sqlfunc]
+/// The inverse tangent of x, result in radians.
+#[sqlfunc(category = "Trigonometric")]
 fn atan(a: f64) -> f64 {
     a.atan()
 }
 
-#[sqlfunc]
+/// The hyperbolic tangent of x, with x as a hyperbolic angle.
+#[sqlfunc(category = "Trigonometric")]
 fn tanh(a: f64) -> f64 {
     a.tanh()
 }
 
-#[sqlfunc]
+/// The inverse hyperbolic tangent of x.
+#[sqlfunc(category = "Trigonometric")]
 fn atanh(a: f64) -> Result<f64, EvalError> {
     if a < -1.0 || 1.0 < a {
         return Err(EvalError::OutOfDomain(
@@ -362,7 +375,8 @@ fn atanh(a: f64) -> Result<f64, EvalError> {
     Ok(a.atanh())
 }
 
-#[sqlfunc]
+/// The cotangent of x, with x in radians.
+#[sqlfunc(category = "Trigonometric")]
 fn cot(a: f64) -> Result<f64, EvalError> {
     if a.is_infinite() {
         return Err(EvalError::InfinityOutOfDomain("cot".into()));
@@ -370,12 +384,14 @@ fn cot(a: f64) -> Result<f64, EvalError> {
     Ok(1.0 / a.tan())
 }
 
-#[sqlfunc]
+/// Converts degrees to radians.
+#[sqlfunc(category = "Trigonometric")]
 fn radians(a: f64) -> f64 {
     a.to_radians()
 }
 
-#[sqlfunc]
+/// Converts radians to degrees.
+#[sqlfunc(category = "Trigonometric")]
 fn degrees(a: f64) -> f64 {
     a.to_degrees()
 }

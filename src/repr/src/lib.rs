@@ -68,7 +68,7 @@ pub use crate::row::{
 pub use crate::scalar::{
     ArrayRustType, AsColumnType, Datum, DatumKind, ExcludeNull, InputDatumType, Int2Vector,
     OptionalArg, OutputDatumType, PropArray, PropDatum, PropDict, PropList, ProtoScalarType,
-    ReprScalarBaseType, ReprScalarType, SqlScalarBaseType, SqlScalarType, Variadic, arb_datum,
-    arb_datum_for_column, arb_datum_for_scalar, arb_range_type,
+    ReprScalarBaseType, ReprScalarType, SqlDocName, SqlScalarBaseType, SqlScalarType, Variadic,
+    arb_datum, arb_datum_for_column, arb_datum_for_scalar, arb_range_type,
 };
 pub use crate::timestamp::{Timestamp, TimestampManipulation};

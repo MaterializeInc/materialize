@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use mz_expr_derive::sqlfunc;
+use mz_expr_derive::{sqldoc, sqlfunc};
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::{SqlColumnType, SqlScalarType, strconv};
@@ -184,6 +184,7 @@ fn cast_float32_to_uint64(a: f32) -> Result<u64, EvalError> {
     }
 }
 
+#[sqldoc(unique_name = "real_to_numeric", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,

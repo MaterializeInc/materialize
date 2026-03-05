@@ -15,6 +15,8 @@ use mz_repr::adt::array::{Array, ArrayDimension};
 use mz_repr::{Datum, DatumList, Row, RowArena, RowPacker, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
+use mz_expr_derive::sqldoc;
+
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
@@ -22,6 +24,7 @@ use crate::{EvalError, MirScalarExpr};
     sqlname = "arraytolist",
     preserves_uniqueness = true,
     introduces_nulls = false,
+    category = "Cast",
     output_type_expr = SqlScalarType::List {
         element_type: Box::new(input_type.scalar_type.unwrap_array_element_type().clone()),
         custom_id: None,
@@ -42,6 +45,7 @@ fn cast_array_to_list_one_dim<'a>(a: Array<'a>) -> Result<DatumList<'a>, EvalErr
     Ok(a.elements())
 }
 
+#[sqldoc(unique_name = "arraytostr", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -107,6 +111,7 @@ impl fmt::Display for CastArrayToString {
     }
 }
 
+#[sqldoc(unique_name = "arraytojsonb", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -213,6 +218,7 @@ impl fmt::Display for CastArrayToJsonb {
 /// Casts an array of one type to an array of another type. Does so by casting
 /// each element of the first array to the desired inner type and collecting
 /// the results into a new array.
+#[sqldoc(unique_name = "arraytoarray", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,

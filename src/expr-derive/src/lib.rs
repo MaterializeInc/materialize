@@ -67,3 +67,38 @@ pub fn sqlfunc(
         .unwrap_or_else(|err| err.write_errors())
         .into()
 }
+
+/// Generate a `func_doc()` associated function for a struct from doc comments and attributes.
+///
+/// The `sqldoc` attribute macro generates documentation metadata for SQL functions that are
+/// implemented as structs (typically "lazy" functions implementing `LazyUnaryFunc` manually).
+///
+/// # Attributes
+/// * `unique_name` - A unique internal name. Defaults to the snake_case of the struct name.
+/// * `category` - The function category (e.g. "Cast", "String"). Defaults to "Uncategorized".
+/// * `signature` - The function signature for documentation.
+/// * `url` - Optional URL for further documentation.
+/// * `version_added` - Optional version string.
+/// * `unmaterializable` - Whether the function is unmaterializable.
+/// * `known_time_zone_limitation_cast` - Whether explicit time zone casts are needed.
+/// * `side_effecting` - Whether the function has side effects.
+/// * `alias` - Optional alternative function name.
+///
+/// # Example
+/// ```ignore
+/// use mz_expr_derive::sqldoc;
+///
+/// /// Extracts a field from an interval.
+/// #[sqldoc(unique_name = "extract_interval", category = "Timestamp")]
+/// #[derive(Clone, Debug)]
+/// pub struct ExtractInterval;
+/// ```
+#[proc_macro_attribute]
+pub fn sqldoc(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    mz_expr_derive_impl::sqldoc(attr.into(), item.into())
+        .unwrap_or_else(|err| err.write_errors())
+        .into()
+}

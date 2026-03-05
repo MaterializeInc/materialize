@@ -15,9 +15,12 @@ use mz_lowertest::MzReflect;
 use mz_repr::{Datum, DatumMap, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
+use mz_expr_derive::sqldoc;
+
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
+#[sqldoc(unique_name = "maptostr", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -82,7 +85,8 @@ impl fmt::Display for CastMapToString {
     }
 }
 
-#[sqlfunc(sqlname = "map_length")]
+/// Returns the number of elements in `m`.
+#[sqlfunc(sqlname = "map_length", category = "Map")]
 fn map_length<'a>(a: DatumMap<'a>) -> Result<i32, EvalError> {
     let count = a.iter().count();
     count
@@ -90,6 +94,7 @@ fn map_length<'a>(a: DatumMap<'a>) -> Result<i32, EvalError> {
         .map_err(|_| EvalError::Int32OutOfRange(count.to_string().into()))
 }
 
+#[sqldoc(unique_name = "map_build", category = "Map")]
 #[derive(
     Ord,
     PartialOrd,

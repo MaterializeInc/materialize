@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use mz_expr_derive::sqlfunc;
+use mz_expr_derive::{sqldoc, sqlfunc};
 use mz_lowertest::MzReflect;
 use mz_repr::adt::range::Range;
 use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
+#[sqldoc(unique_name = "rangetostr", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -82,19 +83,23 @@ impl fmt::Display for CastRangeToString {
     }
 }
 
+/// Returns the lower bound of the range, or NULL if the range is empty or has no lower bound.
 #[sqlfunc(
     sqlname = "rangelower",
     is_monotone = true,
     introduces_nulls = true,
+    category = "Range",
     output_type_expr = input_type.scalar_type.unwrap_range_element_type().clone().nullable(true)
 )]
 fn range_lower<'a>(a: Range<Datum<'a>>) -> Option<Datum<'a>> {
     a.inner.map(|inner| inner.lower.bound).flatten()
 }
 
+/// Returns the upper bound of the range, or NULL if the range is empty or has no lower bound.
 #[sqlfunc(
     sqlname = "rangeupper",
     introduces_nulls = true,
+    category = "Range",
     output_type_expr = input_type.scalar_type.unwrap_range_element_type().clone().nullable(true)
 )]
 fn range_upper<'a>(a: Range<Datum<'a>>) -> Option<Datum<'a>> {

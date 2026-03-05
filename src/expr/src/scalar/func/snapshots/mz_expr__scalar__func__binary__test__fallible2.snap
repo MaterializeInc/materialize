@@ -16,6 +16,25 @@ expression: "#[sqlfunc(test = true)]\n#[allow(dead_code)]\nfn fallible2(a: Optio
     mz_lowertest::MzReflect,
 )]
 pub struct Fallible2;
+impl Fallible2 {
+    pub fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "fallible2",
+            category: "Uncategorized",
+            signature: format!(
+                "{}({} {}, {} {}) -> {}",
+                "fallible2",
+                "a",
+                <Option<f32> as ::mz_repr::SqlDocName>::sql_doc_name(),
+                "b",
+                <Option<f32> as ::mz_repr::SqlDocName>::sql_doc_name(),
+                <Result<f32, EvalError> as ::mz_repr::SqlDocName>::sql_doc_name(),
+            ),
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 impl crate::func::binary::EagerBinaryFunc for Fallible2 {
     type Input<'a> = (Option<f32>, Option<f32>);
     type Output<'a> = Result<f32, EvalError>;

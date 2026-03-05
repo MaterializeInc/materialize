@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use mz_expr_derive::sqlfunc;
+use mz_expr_derive::{sqldoc, sqlfunc};
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::{SqlColumnType, SqlScalarType, strconv};
@@ -125,6 +125,12 @@ fn cast_int16_to_uint64(a: i16) -> Result<u64, EvalError> {
     u64::try_from(a).or_else(|_| Err(EvalError::UInt64OutOfRange(a.to_string().into())))
 }
 
+/// Casts the smallint `x` to a numeric value.
+#[sqldoc(
+    unique_name = "smallint_to_numeric",
+    category = "Cast",
+    signature = "smallint_to_numeric(x: int16)"
+)]
 #[derive(
     Ord,
     PartialOrd,

@@ -10,7 +10,7 @@
 use std::fmt;
 
 use dec::{OrderedDecimal, Rounding};
-use mz_expr_derive::sqlfunc;
+use mz_expr_derive::{sqldoc, sqlfunc};
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::{SqlColumnType, SqlScalarType, strconv};
@@ -305,6 +305,7 @@ fn pg_size_pretty(mut a: Numeric) -> Result<String, EvalError> {
     ))
 }
 
+#[sqldoc(unique_name = "adjust_numeric_scale", category = "Numeric")]
 #[derive(
     Ord,
     PartialOrd,

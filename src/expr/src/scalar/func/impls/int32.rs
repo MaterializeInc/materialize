@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use mz_expr_derive::sqlfunc;
+use mz_expr_derive::{sqldoc, sqlfunc};
 use mz_lowertest::MzReflect;
 use mz_ore::cast::ReinterpretCast;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
@@ -140,6 +140,12 @@ fn cast_int32_to_uint64(a: i32) -> Result<u64, EvalError> {
     u64::try_from(a).or_else(|_| Err(EvalError::UInt64OutOfRange(a.to_string().into())))
 }
 
+/// Returns the number of elements in `m`.
+#[sqldoc(
+    unique_name = "integer_to_numeric",
+    category = "Cast",
+    signature = "CAST(a: int32 AS numeric) -> numeric"
+)]
 #[derive(
     Ord,
     PartialOrd,
@@ -221,7 +227,12 @@ fn cast_int32_to_pg_legacy_char(a: i32) -> Result<PgLegacyChar, EvalError> {
     Ok(PgLegacyChar(u8::reinterpret_cast(a)))
 }
 
-#[sqlfunc]
+/// Return the character with the given Unicode codepoint.
+/// Only supports codepoints that can be encoded in UTF-8.
+/// The NULL (0) character is not allowed.
+///
+/// Errors if the codepoint is invalid or too large.
+#[sqlfunc(category = "String")]
 fn chr(a: i32) -> Result<String, EvalError> {
     // This error matches the behavior of Postgres 13/14 (and potentially earlier versions)
     // Postgres 15 will have a different error message for negative values
