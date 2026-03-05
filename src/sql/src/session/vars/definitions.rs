@@ -2238,7 +2238,7 @@ feature_flags!(
     {
         name: enable_cast_elimination,
         desc: "Allow the optimizer to eliminate noop casts between values of equivalent representation types.",
-        default: false,
+        default: true,
         enable_for_item_parsing: false,
     },
 );
