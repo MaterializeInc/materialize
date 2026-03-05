@@ -1,0 +1,54 @@
+# create-tables — Create tables and sources that don't already exist
+
+Identifies tables and sources defined in the project, checks which ones
+already exist in the target database, and creates only the missing ones.
+Each run is tracked as a deployment record marked as "promoted."
+
+## Usage
+
+    mz-deploy create-tables [FLAGS]
+
+## Behavior
+
+1. Validates the git working tree is clean (unless `--allow-dirty`).
+2. Compiles and validates the project (same as `compile`).
+3. Identifies all table and source objects in the plan.
+4. Queries the database to determine which already exist — existing objects
+   are silently skipped.
+5. Creates missing schemas if needed.
+6. Applies schema setup statements for affected schemas.
+7. Executes `CREATE TABLE` / `CREATE SOURCE` for each new object.
+8. Records created objects in a deployment snapshot marked as "promoted,"
+   so future `stage` runs treat them as existing production objects.
+9. Automatically runs `gen-data-contracts` to update `types.lock`.
+
+Tables are created separately from views and materialized views because
+they represent durable state. Once a table exists, `stage` and `apply`
+will not attempt to recreate it.
+
+## Flags
+
+- `--deploy-id <ID>` — Custom deployment ID (default: random 7-char hex).
+  Must be alphanumeric, hyphens, and underscores only.
+- `--allow-dirty` — Allow deployment with uncommitted git changes.
+- `--dry-run` — Print the SQL that would be executed without running it.
+
+## Examples
+
+    mz-deploy create-tables                       # Create missing tables
+    mz-deploy create-tables --deploy-id init-001  # Custom deploy ID
+    mz-deploy create-tables --dry-run             # Preview SQL only
+
+## Error Recovery
+
+- **Deploy ID already exists** — Choose a different `--deploy-id` or omit
+  it to generate a random one.
+- **Table creation fails** — Tables already created in this run remain.
+  Fix the failing SQL and re-run; existing tables will be skipped.
+- **Git dirty** — Commit or stash your changes, or pass `--allow-dirty`.
+
+## Related Commands
+
+- `mz-deploy stage` — Deploy views/MVs to staging (tables must exist first).
+- `mz-deploy gen-data-contracts` — Automatically run after table creation.
+- `mz-deploy deployments` — List active deployments including table deploys.

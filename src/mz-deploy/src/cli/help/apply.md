@@ -1,0 +1,81 @@
+# apply — Promote a staging deployment to production
+
+Atomically swaps a staging deployment into production using `ALTER ... SWAP`.
+Supports resumable execution — if interrupted, re-running the same command
+picks up where it left off.
+
+## Usage
+
+    mz-deploy apply <DEPLOY_ID> [FLAGS]
+    mz-deploy apply clusters
+    mz-deploy apply roles
+
+## Behavior
+
+Promoting a staging deployment (`mz-deploy apply <DEPLOY_ID>`):
+
+1. Validates the deployment exists and has not already been promoted.
+2. Runs a readiness check (unless `--skip-ready`): all staging clusters
+   must be hydrated and within the `--allowed-lag` threshold.
+3. Detects conflicts — checks whether production schemas were touched by
+   another deployment after this staging deployment was created. Use
+   `--force` to skip this check.
+4. Executes an atomic swap inside a transaction:
+   - Swaps user schemas (production ↔ staging).
+   - Swaps clusters (production ↔ staging).
+   - Swaps apply-state tracking schemas atomically.
+5. Post-swap work:
+   - Creates deferred sinks (held back during `stage`).
+   - Applies replacement materialized views — for schemas marked
+     with `SET api = stable`, updates each changed MV in place via
+     `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` so downstream
+     consumers are never disrupted (see `mz-deploy help stage`).
+   - Repoints sinks that depended on old production objects.
+   - Records the promotion timestamp.
+   - Drops the old production resources (now in staging names).
+6. Cleans up apply-state tracking tables.
+
+The command is **resumable**: if it crashes after the swap but before
+cleanup, re-running `mz-deploy apply <DEPLOY_ID>` detects the post-swap
+state and skips directly to step 5.
+
+## Flags
+
+- `--force` — Skip conflict detection. May overwrite changes made to
+  production after the staging deployment was created.
+- `--skip-ready` — Skip the readiness/hydration check before promoting.
+- `--allowed-lag <SECONDS>` — Maximum wallclock lag (in seconds) for the
+  readiness check (default: 300 = 5 minutes).
+
+## Examples
+
+    mz-deploy apply abc123                    # Promote staging deployment
+    mz-deploy apply abc123 --skip-ready       # Skip hydration check
+    mz-deploy apply abc123 --force            # Ignore conflicts
+    mz-deploy apply abc123 --allowed-lag 600  # 10 min lag tolerance
+    mz-deploy apply clusters                  # Apply cluster definitions
+    mz-deploy apply roles                     # Apply role definitions
+
+## Error Recovery
+
+- **Staging environment not found** — Verify the deploy ID with
+  `mz-deploy deployments`.
+- **Already promoted** — The deployment was already applied. Check
+  `mz-deploy history` for confirmation.
+- **Deployment conflict** — Another deployment modified production schemas.
+  Review with `mz-deploy history`, then re-run with `--force` if the
+  conflict is acceptable.
+- **Clusters not ready** — Wait for hydration with `mz-deploy ready <ID>`
+  or pass `--skip-ready` to promote anyway.
+- **Interrupted after swap** — Re-run the same `apply` command. It will
+  detect the post-swap state and resume cleanup.
+- **Sink creation fails post-swap** — The swap already succeeded. Fix the
+  sink definition and re-run `apply` to retry deferred work.
+
+## Related Commands
+
+- `mz-deploy stage` — Create the staging deployment to promote.
+- `mz-deploy ready` — Monitor hydration before promoting.
+- `mz-deploy abort` — Clean up a staging deployment without promoting.
+- `mz-deploy apply clusters` — Converge cluster definitions separately.
+- `mz-deploy apply roles` — Converge role definitions separately.

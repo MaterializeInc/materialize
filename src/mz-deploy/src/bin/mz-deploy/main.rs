@@ -21,6 +21,7 @@ static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(Non
 #[derive(Parser, Debug)]
 #[command(name = "mz-deploy", version = VERSION.as_str())]
 #[command(about = "Safe, testable deployments for Materialize")]
+#[command(disable_help_subcommand = true)]
 struct Args {
     /// Path to the project root directory containing database schemas
     #[arg(short, long, default_value = ".", global = true)]
@@ -49,7 +50,10 @@ enum Command {
     /// Parses all SQL files, validates dependencies, and optionally type-checks SQL
     /// against a local Materialize Docker container. This is useful for local development
     /// and CI/CD pipelines to catch errors before deployment.
-    #[command(visible_alias = "build")]
+    #[command(
+        visible_alias = "build",
+        after_help = "Run 'mz-deploy help compile' for a detailed usage guide."
+    )]
     Compile {
         /// Skip SQL type checking (faster but less thorough validation)
         #[arg(long)]
@@ -65,6 +69,7 @@ enum Command {
     /// Example:
     ///   mz-deploy create-tables                 # Use random deploy ID
     ///   mz-deploy create-tables --name abc123   # Use custom deploy ID
+    #[command(after_help = "Run 'mz-deploy help create-tables' for a detailed usage guide.")]
     CreateTables {
         /// Deploy ID for this table deployment (default: random 7-char hex)
         ///
@@ -100,7 +105,10 @@ enum Command {
     ///   mz-deploy apply abc123 --skip-ready       # Skip hydration check
     ///   mz-deploy apply abc123 --allowed-lag 600  # Allow up to 10 min lag
     ///   mz-deploy apply clusters                  # Apply cluster definitions
-    #[command(subcommand_negates_reqs = true)]
+    #[command(
+        subcommand_negates_reqs = true,
+        after_help = "Run 'mz-deploy help apply' for a detailed usage guide."
+    )]
     Apply {
         /// Staging deployment ID to promote to production
         ///
@@ -146,6 +154,7 @@ enum Command {
     /// Example:
     ///   mz-deploy stage                    # Use random deploy ID
     ///   mz-deploy stage --name abc123      # Use custom deploy ID
+    #[command(after_help = "Run 'mz-deploy help stage' for a detailed usage guide.")]
     Stage {
         /// Deploy ID for this staging deployment (default: random 7-char hex)
         ///
@@ -176,6 +185,7 @@ enum Command {
     /// Connects to Materialize using the specified profile and displays version,
     /// environment ID, and current role. Useful for verifying connectivity and
     /// configuration before running deployments.
+    #[command(after_help = "Run 'mz-deploy help debug' for a detailed usage guide.")]
     Debug,
 
     /// Show detailed information about a specific deployment
@@ -186,7 +196,10 @@ enum Command {
     ///
     /// Example:
     ///   mz-deploy describe abc123
-    #[command(visible_alias = "show")]
+    #[command(
+        visible_alias = "show",
+        after_help = "Run 'mz-deploy help describe' for a detailed usage guide."
+    )]
     Describe {
         /// Deployment ID to describe
         #[arg(value_name = "DEPLOY_ID")]
@@ -198,13 +211,17 @@ enum Command {
     /// Queries the database for schema information about external dependencies
     /// (tables/views not managed by this project but referenced in SQL). This
     /// creates a types.lock file used for offline type checking.
-    #[command(name = "gen-data-contracts")]
+    #[command(
+        name = "gen-data-contracts",
+        after_help = "Run 'mz-deploy help gen-data-contracts' for a detailed usage guide."
+    )]
     GenDataContracts,
 
     /// Run SQL unit tests defined in test files
     ///
     /// Executes all test files in the project against a temporary Materialize
     /// Docker container. Tests validate SQL logic without affecting production.
+    #[command(after_help = "Run 'mz-deploy help test' for a detailed usage guide.")]
     Test,
 
     /// Clean up a staging deployment by dropping all resources
@@ -215,6 +232,7 @@ enum Command {
     ///
     /// Example:
     ///   mz-deploy abort abc123
+    #[command(after_help = "Run 'mz-deploy help abort' for a detailed usage guide.")]
     Abort {
         /// Staging deploy ID to remove
         #[arg(value_name = "DEPLOY_ID")]
@@ -233,7 +251,10 @@ enum Command {
     /// Example:
     ///   mz-deploy deployments                  # List with default lag threshold
     ///   mz-deploy deployments --allowed-lag 60 # Stricter lag threshold
-    #[command(visible_alias = "branches")]
+    #[command(
+        visible_alias = "branches",
+        after_help = "Run 'mz-deploy help deployments' for a detailed usage guide."
+    )]
     Deployments {
         /// Maximum lag threshold in seconds for cluster status
         ///
@@ -252,7 +273,10 @@ enum Command {
     ///
     /// Example:
     ///   mz-deploy history --limit 10
-    #[command(visible_alias = "log")]
+    #[command(
+        visible_alias = "log",
+        after_help = "Run 'mz-deploy help history' for a detailed usage guide."
+    )]
     History {
         /// Maximum number of deployments to show (default: unlimited)
         #[arg(short, long, value_name = "N")]
@@ -267,6 +291,7 @@ enum Command {
     ///
     /// Example:
     ///   mz-deploy new my-project
+    #[command(after_help = "Run 'mz-deploy help new' for a detailed usage guide.")]
     New {
         /// Name of the project directory to create
         #[arg(value_name = "NAME")]
@@ -296,6 +321,7 @@ enum Command {
     ///   mz-deploy ready abc123 --snapshot         # Check once and exit
     ///   mz-deploy ready abc123 --timeout 300      # Wait up to 5 minutes
     ///   mz-deploy ready abc123 --allowed-lag 60   # Require lag under 1 min
+    #[command(after_help = "Run 'mz-deploy help ready' for a detailed usage guide.")]
     Ready {
         /// Staging deployment ID to monitor
         #[arg(value_name = "DEPLOY_ID")]
@@ -323,6 +349,21 @@ enum Command {
         #[arg(long, value_name = "SECONDS", default_value = "300")]
         allowed_lag: i64,
     },
+
+    /// Show detailed usage guide for a command. Useful for LLM coding agents
+    ///
+    /// Prints extended documentation including behavior notes, examples,
+    /// error recovery guidance, and related commands. Use --all to print
+    /// the complete reference for all commands.
+    Help {
+        /// Command name to show help for
+        #[arg(value_name = "COMMAND")]
+        command: Option<String>,
+
+        /// Print all command guides (for LLM ingestion)
+        #[arg(long)]
+        all: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -335,6 +376,7 @@ enum ApplyCommand {
     ///
     /// Example:
     ///   mz-deploy apply clusters
+    #[command(after_help = "Run 'mz-deploy help apply-clusters' for a detailed usage guide.")]
     Clusters,
     /// Apply role definitions from roles/ directory
     ///
@@ -344,6 +386,7 @@ enum ApplyCommand {
     ///
     /// Example:
     ///   mz-deploy apply roles
+    #[command(after_help = "Run 'mz-deploy help apply-roles' for a detailed usage guide.")]
     Roles,
 }
 
@@ -359,6 +402,23 @@ async fn main() {
 
 async fn run(args: Args) -> Result<(), CliError> {
     // Handle commands that don't require an existing project
+    if let Some(Command::Help { command, all }) = &args.command {
+        if *all {
+            print!("{}", cli::extended_help::all_help());
+        } else if let Some(cmd) = command {
+            match cli::extended_help::help_for(cmd) {
+                Some(text) => print!("{text}"),
+                None => {
+                    cli::extended_help::print_unknown_command(cmd);
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            Args::command().print_help().unwrap();
+        }
+        return Ok(());
+    }
+
     if let Some(Command::New { name, no_git }) = &args.command {
         return cli::commands::new_project::run(name, !no_git).await;
     }
@@ -482,6 +542,7 @@ async fn run(args: Args) -> Result<(), CliError> {
 
             cli::commands::ready::run(&profile, &name, snapshot, timeout, allowed_lag).await
         }
+        Some(Command::Help { .. }) => unreachable!("handled above"),
         Some(Command::New { .. }) => unreachable!("handled above"),
         None => {
             Args::command().print_help().unwrap();
