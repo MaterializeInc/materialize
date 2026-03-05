@@ -1,0 +1,252 @@
+{
+  "uid": "consensus-svc-demo",
+  "title": "Consensus Service — Group Commit Demo",
+  "editable": true,
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "refresh": "5s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "S3 WAL Writes/s (the money chart)",
+      "description": "Should stay FLAT regardless of shard count. Each tick = one S3 PUT for all shards combined.",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 8, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "green" },
+          "custom": {
+            "lineWidth": 3,
+            "fillOpacity": 20,
+            "spanNulls": true
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single" }
+      },
+      "targets": [
+        {
+          "expr": "rate(mz_consensus_svc_s3_wal_writes_total[30s])",
+          "legendFormat": "S3 PUTs/s",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Active Shards",
+      "description": "Number of persist shards tracked. Grows as objects are created.",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 8, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "spanNulls": true
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single" }
+      },
+      "targets": [
+        {
+          "expr": "mz_consensus_svc_active_shards",
+          "legendFormat": "shards",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Operations/s by Type",
+      "description": "CAS committed/rejected, head, scan, truncate rates.",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 8, "x": 16, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 30,
+            "stacking": { "mode": "normal" },
+            "spanNulls": true
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "expr": "rate(mz_consensus_svc_cas_committed_total[30s])",
+          "legendFormat": "CAS committed",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(mz_consensus_svc_cas_rejected_total[30s])",
+          "legendFormat": "CAS rejected",
+          "refId": "B"
+        },
+        {
+          "expr": "rate(mz_consensus_svc_head_ops_total[30s])",
+          "legendFormat": "head",
+          "refId": "C"
+        },
+        {
+          "expr": "rate(mz_consensus_svc_scan_ops_total[30s])",
+          "legendFormat": "scan",
+          "refId": "D"
+        },
+        {
+          "expr": "rate(mz_consensus_svc_truncate_ops_total[30s])",
+          "legendFormat": "truncate",
+          "refId": "E"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "S3 PUT Latency",
+      "description": "S3 Express One Zone PUT latency for WAL writes. p50 and p99.",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 8, "x": 0, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "spanNulls": true
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, rate(mz_consensus_svc_s3_wal_write_latency_seconds_bucket[1m]))",
+          "legendFormat": "WAL p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(mz_consensus_svc_s3_wal_write_latency_seconds_bucket[1m]))",
+          "legendFormat": "WAL p99",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.5, rate(mz_consensus_svc_s3_snapshot_write_latency_seconds_bucket[1m]))",
+          "legendFormat": "Snapshot p50",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Ops per Flush Batch (p50)",
+      "description": "How many WAL ops are batched per flush. Should grow with shard count — this is the batching efficiency.",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 8, "x": 8, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "orange" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "spanNulls": true
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single" }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, rate(mz_consensus_svc_flush_ops_per_batch_bucket[1m]))",
+          "legendFormat": "ops/batch (p50)",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.5, rate(mz_consensus_svc_flush_shards_per_batch_bucket[1m]))",
+          "legendFormat": "shards/batch (p50)",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "In-Memory State",
+      "description": "Total entries and approximate bytes held across all shards.",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 8, "x": 16, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "entries" },
+            "properties": [
+              { "id": "unit", "value": "short" },
+              { "id": "custom.axisPlacement", "value": "left" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "bytes" },
+            "properties": [
+              { "id": "unit", "value": "bytes" },
+              { "id": "custom.axisPlacement", "value": "right" }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "mz_consensus_svc_total_entries",
+          "legendFormat": "entries",
+          "refId": "A"
+        },
+        {
+          "expr": "mz_consensus_svc_approx_bytes",
+          "legendFormat": "bytes",
+          "refId": "B"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 38,
+  "version": 1,
+  "templating": { "list": [] },
+  "annotations": { "list": [] }
+}

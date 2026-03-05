@@ -20,11 +20,31 @@ use mz_persist::generated::consensus_service::{
 
 use crate::actor::{ShardState, VersionedEntry};
 
+/// Error type for WAL write operations that distinguishes recoverable states.
+#[derive(Debug)]
+pub enum WalWriteError {
+    /// The write failed and the object does NOT exist.
+    Failed(anyhow::Error),
+    /// The object already exists (conditional write conflict). This means a
+    /// previous write for this batch number already landed on S3.
+    AlreadyExists,
+}
+
+impl std::fmt::Display for WalWriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WalWriteError::Failed(e) => write!(f, "{}", e),
+            WalWriteError::AlreadyExists => write!(f, "batch already exists"),
+        }
+    }
+}
+
 /// Trait for WAL writing, enabling mock implementations in tests.
 #[async_trait::async_trait]
 pub trait WalWriter: Send {
-    /// Write a WAL batch to durable storage.
-    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), anyhow::Error>;
+    /// Write a WAL batch to durable storage. Returns `WalWriteError::AlreadyExists`
+    /// if the batch already exists (e.g., from a prior write that appeared to fail).
+    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), WalWriteError>;
     /// Write a full snapshot to durable storage.
     async fn write_snapshot(
         &self,
@@ -39,7 +59,7 @@ pub trait WalWriter: Send {
 
 #[async_trait::async_trait]
 impl<W: WalWriter + Sync> WalWriter for std::sync::Arc<W> {
-    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), anyhow::Error> {
+    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), WalWriteError> {
         (**self).write_batch(batch).await
     }
     async fn write_snapshot(
@@ -97,10 +117,11 @@ impl S3WalWriter {
 
 #[async_trait::async_trait]
 impl WalWriter for S3WalWriter {
-    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), anyhow::Error> {
+    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), WalWriteError> {
         let key = self.wal_key(batch.batch_number);
         let body = batch.encode_to_vec();
-        self.client
+        match self
+            .client
             .put_object()
             .bucket(&self.bucket)
             .key(&key)
@@ -108,8 +129,24 @@ impl WalWriter for S3WalWriter {
             .if_none_match("*")
             .send()
             .await
-            .map_err(|e| anyhow::anyhow!("S3 PUT wal/{}: {}", batch.batch_number, e))?;
-        Ok(())
+        {
+            Ok(_) => Ok(()),
+            Err(sdk_err) => {
+                let service_err = sdk_err.into_service_error();
+                // S3 Express returns "ConditionalRequestConflict",
+                // standard S3 returns "PreconditionFailed".
+                let code = service_err.meta().code().unwrap_or("");
+                if code == "PreconditionFailed" || code == "ConditionalRequestConflict" {
+                    Err(WalWriteError::AlreadyExists)
+                } else {
+                    Err(WalWriteError::Failed(anyhow::anyhow!(
+                        "S3 PUT wal/{}: {}",
+                        batch.batch_number,
+                        service_err
+                    )))
+                }
+            }
+        }
     }
 
     async fn write_snapshot(
@@ -231,7 +268,7 @@ pub struct NoopWalWriter;
 #[cfg(test)]
 #[async_trait::async_trait]
 impl WalWriter for NoopWalWriter {
-    async fn write_batch(&self, _batch: &ProtoWalBatch) -> Result<(), anyhow::Error> {
+    async fn write_batch(&self, _batch: &ProtoWalBatch) -> Result<(), WalWriteError> {
         Ok(())
     }
     async fn write_snapshot(
@@ -269,7 +306,7 @@ impl RecordingWalWriter {
 #[cfg(test)]
 #[async_trait::async_trait]
 impl WalWriter for RecordingWalWriter {
-    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), anyhow::Error> {
+    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), WalWriteError> {
         self.batches.lock().unwrap().push(batch.clone());
         Ok(())
     }

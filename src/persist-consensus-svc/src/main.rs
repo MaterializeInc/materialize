@@ -14,6 +14,7 @@
 //! O(shards).
 
 mod actor;
+mod metrics;
 mod recovery;
 mod s3_wal;
 
@@ -24,6 +25,7 @@ use tonic::transport::Server;
 use tracing::info;
 
 use crate::actor::{Actor, ActorCommand};
+use crate::metrics::ConsensusMetrics;
 use crate::recovery::recover;
 use crate::s3_wal::S3WalWriter;
 
@@ -36,6 +38,10 @@ struct Args {
     /// Address to listen on for gRPC connections.
     #[arg(long, default_value = "0.0.0.0:6890")]
     listen_addr: SocketAddr,
+
+    /// Address to listen on for the HTTP metrics endpoint (/metrics).
+    #[arg(long, default_value = "0.0.0.0:6891")]
+    metrics_listen_addr: SocketAddr,
 
     /// S3 bucket for WAL and snapshot storage.
     #[arg(long, env = "CONSENSUS_S3_BUCKET")]
@@ -83,6 +89,9 @@ fn main() {
 }
 
 async fn run(args: Args) {
+    let metrics_registry = mz_ore::metrics::MetricsRegistry::new();
+    let metrics = ConsensusMetrics::register(&metrics_registry);
+
     let wal_writer = S3WalWriter::new(
         &args.s3_bucket,
         &args.s3_prefix,
@@ -107,8 +116,26 @@ async fn run(args: Args) {
         next_batch,
         flush_interval,
         args.snapshot_interval,
+        metrics,
     );
     tokio::task::spawn_local(actor.run());
+
+    // Spawn HTTP metrics server (Send-compatible, uses regular tokio::spawn).
+    let metrics_addr = args.metrics_listen_addr;
+    tokio::spawn(async move {
+        let app = axum::Router::new().route(
+            "/metrics",
+            axum::routing::get(move || {
+                let reg = metrics_registry.clone();
+                async move { mz_http_util::handle_prometheus(&reg).await }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind(metrics_addr)
+            .await
+            .expect("failed to bind metrics listener");
+        info!(addr = %metrics_addr, "starting metrics HTTP server");
+        axum::serve(listener, app).await.expect("metrics server failed");
+    });
 
     let grpc_service = ConsensusGrpcService { tx };
     info!(addr = %args.listen_addr, "starting gRPC server");

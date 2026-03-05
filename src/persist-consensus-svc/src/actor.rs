@@ -10,12 +10,14 @@
 //! The single-threaded actor that owns all shard state and implements group
 //! commit.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Interval;
 use tracing::{info, warn};
+
+use prost::Message;
 
 use mz_persist::generated::consensus_service::{
     ProtoCompareAndSetResponse, ProtoHeadResponse, ProtoScanResponse, ProtoTruncateResponse,
@@ -23,7 +25,8 @@ use mz_persist::generated::consensus_service::{
     proto_wal_op,
 };
 
-use crate::s3_wal::WalWriter;
+use crate::metrics::ConsensusMetrics;
+use crate::s3_wal::{WalWriteError, WalWriter};
 
 /// Per-shard committed state.
 #[derive(Debug, Clone, Default)]
@@ -105,6 +108,12 @@ pub struct Actor<W: WalWriter> {
     snapshot_interval: u64,
     /// WAL batches written since the last snapshot.
     batches_since_snapshot: u64,
+    /// Prometheus metrics.
+    metrics: ConsensusMetrics,
+    /// Running count of entries across all shards (for gauge updates).
+    running_entry_count: i64,
+    /// Running count of approximate bytes across all shards (for gauge updates).
+    running_byte_count: i64,
 }
 
 impl<W: WalWriter> Actor<W> {
@@ -116,7 +125,17 @@ impl<W: WalWriter> Actor<W> {
         next_batch_number: u64,
         flush_interval: Interval,
         snapshot_interval: u64,
+        metrics: ConsensusMetrics,
     ) -> Self {
+        // Compute initial running counters from recovered state.
+        let mut running_entry_count: i64 = 0;
+        let mut running_byte_count: i64 = 0;
+        for state in shards.values() {
+            running_entry_count += state.entries.len() as i64;
+            for entry in &state.entries {
+                running_byte_count += entry.data.len() as i64;
+            }
+        }
         Actor {
             shards,
             rx,
@@ -127,6 +146,9 @@ impl<W: WalWriter> Actor<W> {
             flush_interval,
             snapshot_interval,
             batches_since_snapshot: 0,
+            metrics,
+            running_entry_count,
+            running_byte_count,
         }
     }
 
@@ -169,6 +191,7 @@ impl<W: WalWriter> Actor<W> {
     fn handle_command(&mut self, cmd: ActorCommand) {
         match cmd {
             ActorCommand::Head { key, reply } => {
+                self.metrics.head_ops.inc();
                 let resp = self.handle_head(&key);
                 let _ = reply.send(Ok(resp));
             }
@@ -186,6 +209,7 @@ impl<W: WalWriter> Actor<W> {
                 limit,
                 reply,
             } => {
+                self.metrics.scan_ops.inc();
                 let resp = self.handle_scan(&key, from, limit);
                 let _ = reply.send(Ok(resp));
             }
@@ -193,6 +217,7 @@ impl<W: WalWriter> Actor<W> {
                 self.handle_truncate(key, seqno, reply);
             }
             ActorCommand::ListKeys { reply } => {
+                self.metrics.list_keys_ops.inc();
                 let keys: Vec<String> = self.shards.keys().cloned().collect();
                 let _ = reply.send(Ok(keys));
             }
@@ -247,8 +272,11 @@ impl<W: WalWriter> Actor<W> {
 
         let committed = current_head_seqno == expected;
         if committed {
+            self.metrics.cas_committed.inc();
             // CAS matches: apply to in-memory state immediately so subsequent
             // CAS operations in the same batch see the updated state.
+            self.running_entry_count += 1;
+            self.running_byte_count += new.data.len() as i64;
             let entry = VersionedEntry {
                 seqno: new.seqno,
                 data: Bytes::from(new.data.clone()),
@@ -263,6 +291,8 @@ impl<W: WalWriter> Actor<W> {
                 seqno: new.seqno,
                 data: new.data,
             }));
+        } else {
+            self.metrics.cas_rejected.inc();
         }
 
         // Both winners and losers wait for flush so all callers experience
@@ -279,6 +309,7 @@ impl<W: WalWriter> Actor<W> {
         seqno: u64,
         reply: oneshot::Sender<Result<ProtoTruncateResponse, String>>,
     ) {
+        self.metrics.truncate_ops.inc();
         let shard = match self.shards.get_mut(&key) {
             Some(s) => s,
             None => {
@@ -297,9 +328,18 @@ impl<W: WalWriter> Actor<W> {
             )));
             return;
         }
+        // Compute bytes being deleted for running counter.
+        let deleted_bytes: i64 = shard
+            .entries
+            .iter()
+            .filter(|e| e.seqno < seqno)
+            .map(|e| e.data.len() as i64)
+            .sum();
         let count_before = shard.entries.len();
         shard.entries.retain(|e| e.seqno >= seqno);
         let deleted = (count_before - shard.entries.len()) as u64;
+        self.running_entry_count -= deleted as i64;
+        self.running_byte_count -= deleted_bytes;
 
         // Record truncate in WAL so it survives crash/recovery.
         self.pending_wal_ops.push(PendingWalOp::Truncate(ProtoWalTruncate {
@@ -332,13 +372,25 @@ impl<W: WalWriter> Actor<W> {
     }
 
     async fn flush(&mut self) {
+        let flush_start = std::time::Instant::now();
         let pending_ops = std::mem::take(&mut self.pending_wal_ops);
         let num_replies = self.pending_replies.len();
 
         // Only write to WAL if there are actual ops (skip for flush with only
         // pending loser replies).
         if !pending_ops.is_empty() {
-            info!(batch = self.batch_number, ops = pending_ops.len(), replies = num_replies, "flush");
+            let num_ops = pending_ops.len();
+            // Count distinct shards in this batch.
+            let distinct_shards: usize = pending_ops
+                .iter()
+                .map(|op| match op {
+                    PendingWalOp::Write(w) => w.key.as_str(),
+                    PendingWalOp::Truncate(t) => t.key.as_str(),
+                })
+                .collect::<HashSet<_>>()
+                .len();
+
+            info!(batch = self.batch_number, ops = num_ops, shards = distinct_shards, replies = num_replies, "flush");
             let ops: Vec<ProtoWalOp> = pending_ops
                 .into_iter()
                 .map(|op| match op {
@@ -356,43 +408,78 @@ impl<W: WalWriter> Actor<W> {
                 ops,
             };
 
+            let batch_bytes = batch.encoded_len();
+
             // Write WAL entry (the commit point).
-            if let Err(e) = self.wal_writer.write_batch(&batch).await {
-                warn!("WAL write failed: {}, retrying", e);
-                // On failure, retry once. If-None-Match ensures exactly-once.
-                if let Err(e2) = self.wal_writer.write_batch(&batch).await {
-                    warn!("WAL write retry failed: {}", e2);
-                    let replies = std::mem::take(&mut self.pending_replies);
-                    for pending in replies {
-                        match pending {
-                            PendingReply::Cas { reply, .. } => {
-                                let _ =
-                                    reply.send(Err(format!("WAL write failed: {}", e2)));
+            let s3_start = std::time::Instant::now();
+            match self.wal_writer.write_batch(&batch).await {
+                Ok(()) => {}
+                Err(WalWriteError::AlreadyExists) => {
+                    // Batch already exists — shouldn't happen without a prior
+                    // retry, but safe to treat as success.
+                    warn!(batch = self.batch_number, "batch already exists, treating as success");
+                }
+                Err(WalWriteError::Failed(e)) => {
+                    warn!("WAL write failed: {}, retrying", e);
+                    self.metrics.s3_write_retries.inc();
+                    // Retry once. If-None-Match ensures exactly-once.
+                    match self.wal_writer.write_batch(&batch).await {
+                        Ok(()) => {}
+                        Err(WalWriteError::AlreadyExists) => {
+                            // Original write landed after all.
+                            info!(batch = self.batch_number, "retry conflict: original write landed");
+                            self.metrics.s3_write_retry_already_exists.inc();
+                        }
+                        Err(WalWriteError::Failed(e2)) => {
+                            warn!("WAL write retry failed: {}", e2);
+                            let replies = std::mem::take(&mut self.pending_replies);
+                            for pending in replies {
+                                match pending {
+                                    PendingReply::Cas { reply, .. } => {
+                                        let _ =
+                                            reply.send(Err(format!("WAL write failed: {}", e2)));
+                                    }
+                                    PendingReply::Truncate { reply, .. } => {
+                                        let _ =
+                                            reply.send(Err(format!("WAL write failed: {}", e2)));
+                                    }
+                                }
                             }
-                            PendingReply::Truncate { reply, .. } => {
-                                let _ =
-                                    reply.send(Err(format!("WAL write failed: {}", e2)));
-                            }
+                            return;
                         }
                     }
-                    return;
                 }
             }
 
+            self.metrics.s3_wal_write_latency_seconds.observe(s3_start.elapsed().as_secs_f64());
+            self.metrics.s3_wal_writes.inc();
+            self.metrics.s3_wal_write_bytes.inc_by(batch_bytes as u64);
             self.batch_number += 1;
             self.batches_since_snapshot += 1;
 
+            // Record flush metrics.
+            self.metrics.flush_count.inc();
+            self.metrics.flush_ops_per_batch.observe(num_ops as f64);
+            self.metrics.flush_shards_per_batch.observe(distinct_shards as f64);
+
             // Write snapshot every N batches.
             if self.batches_since_snapshot >= self.snapshot_interval {
-                if let Err(e) = self
+                let snap_start = std::time::Instant::now();
+                match self
                     .wal_writer
                     .write_snapshot(&self.shards, self.batch_number - 1)
                     .await
                 {
-                    // Snapshot failure is not fatal; recovery can replay WAL.
-                    warn!("snapshot write failed: {}", e);
-                } else {
-                    self.batches_since_snapshot = 0;
+                    Err(e) => {
+                        // Snapshot failure is not fatal; recovery can replay WAL.
+                        warn!("snapshot write failed: {}", e);
+                    }
+                    Ok(()) => {
+                        self.metrics.s3_snapshot_write_latency_seconds
+                            .observe(snap_start.elapsed().as_secs_f64());
+                        self.metrics.s3_snapshot_writes.inc();
+                        self.batches_since_snapshot = 0;
+                    }
                 }
             }
         }
@@ -411,6 +498,12 @@ impl<W: WalWriter> Actor<W> {
                 }
             }
         }
+
+        // Update gauges.
+        self.metrics.active_shards.set(self.shards.len() as i64);
+        self.metrics.total_entries.set(self.running_entry_count);
+        self.metrics.approx_bytes.set(self.running_byte_count);
+        self.metrics.flush_latency_seconds.observe(flush_start.elapsed().as_secs_f64());
     }
 }
 
