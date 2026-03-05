@@ -33,6 +33,22 @@ SELECT * FROM data AS OF current_database()
 query error calling an unmaterializable function in AS OF or UP TO not yet supported
 SELECT * FROM data AS OF current_database()::mz_timestamp
 
+query error db error: ERROR: unmaterializable function \(except `mz_now`\) in an AS OF query not yet supported
+SELECT current_database() AS OF 1;
+
+query error db error: ERROR: unmaterializable function \(except `mz_now`\) in an AS OF query not yet supported
+SELECT current_database() AS OF AT LEAST 1;
+
+# mz_now() should be allowed in the SELECT expression of an AS OF query
+query T
+SELECT mz_now() AS OF 1;
+----
+1
+
+# But not now()
+query error db error: ERROR: unmaterializable function \(except `mz_now`\) in an AS OF query not yet supported
+SELECT now() AS OF 1;
+
 query II
 SELECT * FROM data ORDER BY a, b AS OF AT LEAST 1
 ----

@@ -2425,6 +2425,18 @@ impl HirRelationExpr {
         })?;
         Ok(contains)
     }
+
+    /// Whether the expression contains any [`UnmaterializableFunc`] call other than
+    /// [`UnmaterializableFunc::MzNow`].
+    pub fn contains_unmaterializable_except_temporal(&self) -> Result<bool, RecursionLimitError> {
+        let mut contains = false;
+        self.visit_post(&mut |expr| {
+            expr.visit_children(|expr: &HirScalarExpr| {
+                contains = contains || expr.contains_unmaterializable_except_temporal()
+            })
+        })?;
+        Ok(contains)
+    }
 }
 
 impl CollectionPlan for HirRelationExpr {
@@ -3225,6 +3237,21 @@ impl HirScalarExpr {
         self.visit_post_nolimit(&mut |e| {
             if let Self::CallUnmaterializable(_, _) = e {
                 contains = true;
+            }
+        });
+        contains
+    }
+
+    /// Whether the expression contains any [`UnmaterializableFunc`] call other than
+    /// [`UnmaterializableFunc::MzNow`].
+    pub fn contains_unmaterializable_except_temporal(&self) -> bool {
+        let mut contains = false;
+        #[allow(deprecated)]
+        self.visit_post_nolimit(&mut |e| {
+            if let Self::CallUnmaterializable(f, _) = e {
+                if *f != UnmaterializableFunc::MzNow {
+                    contains = true;
+                }
             }
         });
         contains
