@@ -15,6 +15,62 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.14.0
+*Released to Materialize Cloud: 2026-03-05* <br>
+*Released to Materialize Self-Managed: 2026-03-06* <br>
+
+This release significantly improves `COPY FROM STDIN` performance
+(up to 28x faster), speeds up DDL operations at scale, and fixes
+several bugs including incorrect jsonb NULL handling, S3 one-shot
+source pagination, and panics when dropping materialized views with
+active subscribes.
+
+### Improvements
+
+- Dramatically improved `COPY FROM STDIN` performance by parallelizing
+  ingestion and using constant memory, achieving up to 28x faster
+  throughput for large data loads.
+- Improved DDL latency at scale (37-55% faster for environments with
+  many objects) by making the internal catalog state a persistent data
+  structure with structural sharing.
+- Converted OIDC authentication configuration to system parameters for
+  Self-Managed deployments, making it easier to configure and manage
+  OIDC settings.
+- Improved OIDC authentication error messages to provide clearer
+  guidance when authentication fails.
+- Unified source timestamping intervals into a single
+  `default_timestamp_interval` system parameter, and added a
+  `TIMESTAMP INTERVAL` WITH option to `CREATE SOURCE` for per-source
+  customization.
+- Improved Iceberg sink commit performance by disabling the duplicate
+  check for RowDelta actions, which was causing significant commit time
+  overhead.
+
+### Bug Fixes
+
+- Fixed the jsonb contains operator (`?`) to correctly return NULL when
+  the left operand is NULL, matching PostgreSQL behavior.
+- Fixed a panic when using `COPY FROM` with invalid range values (e.g.,
+  `[7,3)` where lower bound exceeds upper bound), now returning a
+  proper error message.
+- Fixed S3 one-shot sources to correctly handle multiple pages of
+  results from `ListObjectsV2`, which previously caused sources to miss
+  objects when the bucket contained more than 1,000 matching keys.
+- Fixed one-shot source ingestions being prematurely dropped in
+  multi-worker clusters, which could cause the ingestion to hang
+  indefinitely on remaining workers.
+- Fixed incorrect replication lag display in the Console during
+  PostgreSQL source snapshots, where `offset_committed` was incorrectly
+  reported as zero until the snapshot completed.
+- Fixed a panic when dropping materialized views that had active
+  subscribes depending on older GlobalIds.
+- Fixed dataflows being incorrectly re-planned after an environmentd
+  restart due to missing per-cluster optimizer feature overrides.
+- Fixed query formatting for SQL Server and MySQL sources.
+- Fixed query formatting for pgwire connections.
+- Fixed `private_key_algorithm` and `private_key_size` fields being
+  null in cloud-resources certificate configuration.
+
 ## v26.13.0
 *Released to Materialize Cloud: 2026-02-26* <br>
 *Released to Materialize Self-Managed: 2026-02-27* <br>
