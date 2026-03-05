@@ -501,7 +501,6 @@ impl Client {
 
         Ok(())
     }
-
 }
 
 /// Escape a value for use in a libpq connection string.

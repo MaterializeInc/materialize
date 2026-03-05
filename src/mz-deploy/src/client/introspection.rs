@@ -3,8 +3,8 @@
 //! This module contains methods for querying database metadata,
 //! such as checking for existence of schemas, clusters, and objects.
 
-use crate::client::errors::ConnectionError;
 use crate::client::connection::IntrospectionClient;
+use crate::client::errors::ConnectionError;
 use crate::client::models::{Cluster, ClusterConfig, ClusterGrant, ClusterOptions, ClusterReplica};
 use crate::project::SchemaQualifier;
 use crate::project::object_id::ObjectId;

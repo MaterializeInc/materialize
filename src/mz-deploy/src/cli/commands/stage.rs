@@ -103,7 +103,8 @@ pub async fn run(
         .await
         .map_err(CliError::Connection)?;
 
-    let Some(analysis) = analyze_project_changes(&mut client, &planned_project, &stage_name).await?
+    let Some(analysis) =
+        analyze_project_changes(&mut client, &planned_project, &stage_name).await?
     else {
         return Ok(());
     };
@@ -165,14 +166,20 @@ async fn analyze_project_changes<'a>(
     let analyze_start = Instant::now();
 
     project::deployment_snapshot::initialize_deployment_table(client).await?;
-    if client.deployments().get_deployment_metadata(stage_name).await?.is_some() {
+    if client
+        .deployments()
+        .get_deployment_metadata(stage_name)
+        .await?
+        .is_some()
+    {
         return Err(CliError::InvalidEnvironmentName {
             name: format!("deployment '{}' already exists", stage_name),
         });
     }
 
     let new_snapshot = project::deployment_snapshot::build_snapshot_from_planned(planned_project)?;
-    let production_snapshot = project::deployment_snapshot::load_from_database(client, None).await?;
+    let production_snapshot =
+        project::deployment_snapshot::load_from_database(client, None).await?;
 
     let change_set = if production_snapshot.objects.is_empty() {
         None
@@ -197,9 +204,14 @@ async fn analyze_project_changes<'a>(
     let partitioned = partition_objects(objects, &replacement_object_ids);
     log_partition_summary(&partitioned);
 
-    let object_ids: BTreeSet<_> = partitioned.objects.iter().map(|(id, _)| id.clone()).collect();
+    let object_ids: BTreeSet<_> = partitioned
+        .objects
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
     client
-        .validation().validate_table_dependencies(planned_project, &object_ids)
+        .validation()
+        .validate_table_dependencies(planned_project, &object_ids)
         .await?;
 
     let (schema_set, cluster_set) = collect_stage_resources(
@@ -261,7 +273,9 @@ fn partition_objects<'a>(
 
     for (object_id, typed_obj) in objects {
         match &typed_obj.stmt {
-            Statement::CreateTable(_) | Statement::CreateTableFromSource(_) | Statement::CreateSource(_) => {
+            Statement::CreateTable(_)
+            | Statement::CreateTableFromSource(_)
+            | Statement::CreateSource(_) => {
                 table_count += 1;
             }
             Statement::CreateSink(_) => sinks.push((object_id, typed_obj)),
@@ -342,10 +356,22 @@ async fn validate_project_for_stage(
 ) -> Result<(), CliError> {
     progress::stage_start("Validating project");
     let validate_start = Instant::now();
-    client.validation().validate_project(planned_project, directory).await?;
-    client.validation().validate_cluster_isolation(planned_project).await?;
-    client.validation().validate_privileges(planned_project).await?;
-    client.validation().validate_sink_connections_exist(planned_project).await?;
+    client
+        .validation()
+        .validate_project(planned_project, directory)
+        .await?;
+    client
+        .validation()
+        .validate_cluster_isolation(planned_project)
+        .await?;
+    client
+        .validation()
+        .validate_privileges(planned_project)
+        .await?;
+    client
+        .validation()
+        .validate_sink_connections_exist(planned_project)
+        .await?;
     let validate_duration = validate_start.elapsed();
     progress::stage_success("All validations passed", validate_duration);
     Ok(())
@@ -434,7 +460,10 @@ async fn record_stage_metadata(
             })
             .collect();
 
-        client.deployments().insert_pending_statements(&pending_statements).await?;
+        client
+            .deployments()
+            .insert_pending_statements(&pending_statements)
+            .await?;
         verbose!(
             "Stored {} pending sink statement(s)",
             pending_statements.len()
@@ -452,7 +481,10 @@ async fn record_stage_metadata(
                 replacement_schema: format!("{}{}", object_id.schema, staging_suffix),
             })
             .collect();
-        client.deployments().insert_replacement_mvs(&records).await?;
+        client
+            .deployments()
+            .insert_replacement_mvs(&records)
+            .await?;
         verbose!("Stored {} replacement MV record(s)", records.len());
     }
 
@@ -837,17 +869,31 @@ async fn rollback_staging_resources(
     client: &crate::client::Client,
     environment: &str,
 ) -> (usize, usize) {
-    let staging_schemas =
-        best_effort_fetch(client.introspection().get_staging_schemas(environment).await, "query staging schemas");
-    let staging_clusters =
-        best_effort_fetch(client.introspection().get_staging_clusters(environment).await, "query staging clusters");
+    let staging_schemas = best_effort_fetch(
+        client
+            .introspection()
+            .get_staging_schemas(environment)
+            .await,
+        "query staging schemas",
+    );
+    let staging_clusters = best_effort_fetch(
+        client
+            .introspection()
+            .get_staging_clusters(environment)
+            .await,
+        "query staging clusters",
+    );
 
     let schema_count = staging_schemas.len();
     let cluster_count = staging_clusters.len();
 
     if !staging_schemas.is_empty() {
         verbose!("Dropping staging schemas...");
-        if let Err(e) = client.introspection().drop_staging_schemas(&staging_schemas).await {
+        if let Err(e) = client
+            .introspection()
+            .drop_staging_schemas(&staging_schemas)
+            .await
+        {
             verbose!("Warning: Failed to drop some schemas: {}", e);
         } else {
             for (database, schema) in &staging_schemas {
@@ -858,7 +904,11 @@ async fn rollback_staging_resources(
 
     if !staging_clusters.is_empty() {
         verbose!("Dropping staging clusters...");
-        if let Err(e) = client.introspection().drop_staging_clusters(&staging_clusters).await {
+        if let Err(e) = client
+            .introspection()
+            .drop_staging_clusters(&staging_clusters)
+            .await
+        {
             verbose!("Warning: Failed to drop some clusters: {}", e);
         } else {
             for cluster in &staging_clusters {
@@ -869,15 +919,24 @@ async fn rollback_staging_resources(
 
     verbose!("Deleting deployment records...");
     best_effort_delete(
-        client.deployments().delete_deployment_clusters(environment).await,
+        client
+            .deployments()
+            .delete_deployment_clusters(environment)
+            .await,
         "delete cluster records",
     );
     best_effort_delete(
-        client.deployments().delete_pending_statements(environment).await,
+        client
+            .deployments()
+            .delete_pending_statements(environment)
+            .await,
         "delete pending statements",
     );
     best_effort_delete(
-        client.deployments().delete_replacement_mvs(environment).await,
+        client
+            .deployments()
+            .delete_replacement_mvs(environment)
+            .await,
         "delete replacement MV records",
     );
     best_effort_delete(

@@ -4,16 +4,16 @@
 //! including creating tracking tables, inserting/querying deployment records,
 //! and managing deployment lifecycle (staging, promotion, abort).
 
-use crate::client::errors::ConnectionError;
 use crate::client::connection::{DeploymentsClient, DeploymentsClientMut};
+use crate::client::errors::ConnectionError;
 use crate::client::models::{
     ApplyState, ConflictRecord, DeploymentDetails, DeploymentHistoryEntry, DeploymentKind,
     DeploymentMetadata, DeploymentObjectRecord, PendingStatement, SchemaDeploymentRecord,
     StagingDeployment,
 };
-use async_stream::try_stream;
 use crate::project::deployment_snapshot::DeploymentSnapshot;
 use crate::project::object_id::ObjectId;
+use async_stream::try_stream;
 use chrono::{DateTime, Utc};
 use futures::Stream;
 use std::collections::{BTreeMap, BTreeSet};
@@ -1427,7 +1427,10 @@ impl DeploymentsClient<'_> {
         get_deployment_clusters(self.client.postgres_client(), deploy_id).await
     }
 
-    pub async fn validate_deployment_clusters(&self, deploy_id: &str) -> Result<(), ConnectionError> {
+    pub async fn validate_deployment_clusters(
+        &self,
+        deploy_id: &str,
+    ) -> Result<(), ConnectionError> {
         validate_deployment_clusters(self.client.postgres_client(), deploy_id).await
     }
 
@@ -1448,7 +1451,8 @@ impl DeploymentsClient<'_> {
         deploy_id: &str,
         allowed_lag_secs: i64,
     ) -> Result<Vec<ClusterStatusContext>, ConnectionError> {
-        get_deployment_hydration_status(self.client.postgres_client(), deploy_id, allowed_lag_secs).await
+        get_deployment_hydration_status(self.client.postgres_client(), deploy_id, allowed_lag_secs)
+            .await
     }
 
     pub async fn delete_deployment_clusters(&self, deploy_id: &str) -> Result<(), ConnectionError> {
@@ -1583,11 +1587,11 @@ impl DeploymentsClientMut<'_> {
         let pg_client = self.client.postgres_client_mut();
 
         try_stream! {
-            let txn = pg_client.transaction().await?;
-            let pattern = format!("%_{}", deploy_id);
+                let txn = pg_client.transaction().await?;
+                let pattern = format!("%_{}", deploy_id);
 
-            let subscribe_sql = format!(
-                r#"
+                let subscribe_sql = format!(
+                    r#"
                 DECLARE c CURSOR FOR SUBSCRIBE (
                     WITH
                     problematic_replicas AS (
@@ -1663,68 +1667,68 @@ impl DeploymentsClientMut<'_> {
                     LEFT JOIN cluster_lag cl ON ch.cluster_name = cl.cluster_name
                 )
             "#,
-                allowed_lag_secs = allowed_lag_secs
-            );
+                    allowed_lag_secs = allowed_lag_secs
+                );
 
-            txn.execute(&subscribe_sql, &[&pattern]).await?;
+                txn.execute(&subscribe_sql, &[&pattern]).await?;
 
-            loop {
-                let rows = txn.query("FETCH ALL c", &[]).await?;
-                if rows.is_empty() {
-                    continue;
-                }
-
-                for row in rows {
-                    let mz_diff: i64 = row.get(1);
-                    if mz_diff == -1 {
+                loop {
+                    let rows = txn.query("FETCH ALL c", &[]).await?;
+                    if rows.is_empty() {
                         continue;
                     }
 
-                    let status_str: String = row.get(4);
-                    let failure_reason_str: Option<String> = row.get(5);
-                    let hydrated_count: i64 = row.get(6);
-                    let total_count: i64 = row.get(7);
-                    let max_lag_secs: i64 = row.get(8);
-                    let total_replicas: i64 = row.get(9);
-                    let problematic_replicas: i64 = row.get(10);
+                    for row in rows {
+                        let mz_diff: i64 = row.get(1);
+                        if mz_diff == -1 {
+                            continue;
+                        }
 
-                    let failure_reason = failure_reason_str.as_deref().map(|s| match s {
-                        "no_replicas" => FailureReason::NoReplicas,
-                        "all_replicas_problematic" => FailureReason::AllReplicasProblematic {
-                            problematic: problematic_replicas,
-                            total: total_replicas,
-                        },
-                        _ => FailureReason::NoReplicas,
-                    });
+                        let status_str: String = row.get(4);
+                        let failure_reason_str: Option<String> = row.get(5);
+                        let hydrated_count: i64 = row.get(6);
+                        let total_count: i64 = row.get(7);
+                        let max_lag_secs: i64 = row.get(8);
+                        let total_replicas: i64 = row.get(9);
+                        let problematic_replicas: i64 = row.get(10);
 
-                    let status = match status_str.as_str() {
-                        "ready" => ClusterDeploymentStatus::Ready,
-                        "hydrating" => ClusterDeploymentStatus::Hydrating {
-                            hydrated: hydrated_count,
-                            total: total_count,
-                        },
-                        "lagging" => ClusterDeploymentStatus::Lagging { max_lag_secs },
-                        "failing" => ClusterDeploymentStatus::Failing {
-                            reason: failure_reason.clone().unwrap_or(FailureReason::NoReplicas),
-                        },
-                        _ => ClusterDeploymentStatus::Ready,
-                    };
+                        let failure_reason = failure_reason_str.as_deref().map(|s| match s {
+                            "no_replicas" => FailureReason::NoReplicas,
+                            "all_replicas_problematic" => FailureReason::AllReplicasProblematic {
+                                problematic: problematic_replicas,
+                                total: total_replicas,
+                            },
+                            _ => FailureReason::NoReplicas,
+                        });
 
-                    yield HydrationStatusUpdate {
-                        cluster_name: row.get(2),
-                        cluster_id: row.get(3),
-                        status,
-                        failure_reason,
-                        hydrated_count,
-                        total_count,
-                        max_lag_secs,
-                        total_replicas,
-                        problematic_replicas,
-                    };
+                        let status = match status_str.as_str() {
+                            "ready" => ClusterDeploymentStatus::Ready,
+                            "hydrating" => ClusterDeploymentStatus::Hydrating {
+                                hydrated: hydrated_count,
+                                total: total_count,
+                            },
+                            "lagging" => ClusterDeploymentStatus::Lagging { max_lag_secs },
+                            "failing" => ClusterDeploymentStatus::Failing {
+                                reason: failure_reason.clone().unwrap_or(FailureReason::NoReplicas),
+                            },
+                            _ => ClusterDeploymentStatus::Ready,
+                        };
+
+                        yield HydrationStatusUpdate {
+                            cluster_name: row.get(2),
+                            cluster_id: row.get(3),
+                            status,
+                            failure_reason,
+                            hydrated_count,
+                            total_count,
+                            max_lag_secs,
+                            total_replicas,
+                            problematic_replicas,
+                        };
+                }
             }
         }
     }
-}
 }
 
 /// Delete all replacement MV records for a deployment.

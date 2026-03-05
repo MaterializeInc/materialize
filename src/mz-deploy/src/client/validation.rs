@@ -3,8 +3,8 @@
 //! This module contains methods for validating projects against the database,
 //! including checking for required databases, schemas, clusters, and privileges.
 
-use crate::client::errors::DatabaseValidationError;
 use crate::client::connection::ValidationClient;
+use crate::client::errors::DatabaseValidationError;
 use crate::project::ast::Statement;
 use crate::project::object_id::ObjectId;
 use crate::project::planned;
@@ -111,8 +111,10 @@ async fn query_existing_names(
         );
 
         #[allow(clippy::as_conversions)]
-        let params: Vec<&(dyn ToSql + Sync)> =
-            chunk.iter().map(|name| name as &(dyn ToSql + Sync)).collect();
+        let params: Vec<&(dyn ToSql + Sync)> = chunk
+            .iter()
+            .map(|name| name as &(dyn ToSql + Sync))
+            .collect();
 
         let rows = client
             .query(&query, &params)
@@ -138,7 +140,12 @@ async fn query_existing_schema_pairs(
 
     let fqn_to_pair: BTreeMap<String, (String, String)> = schema_pairs
         .iter()
-        .map(|(database, schema)| (format!("{}.{}", database, schema), (database.clone(), schema.clone())))
+        .map(|(database, schema)| {
+            (
+                format!("{}.{}", database, schema),
+                (database.clone(), schema.clone()),
+            )
+        })
         .collect();
     let fqns: Vec<String> = fqn_to_pair.keys().cloned().collect();
 
@@ -283,10 +290,7 @@ async fn find_missing_databases(
     external_databases: &BTreeSet<String>,
 ) -> Result<Vec<String>, DatabaseValidationError> {
     let existing = query_existing_names(client, "mz_databases", "name", external_databases).await?;
-    Ok(external_databases
-        .difference(&existing)
-        .cloned()
-        .collect())
+    Ok(external_databases.difference(&existing).cloned().collect())
 }
 
 /// Checks catalog state for external schemas that must pre-exist.
@@ -295,10 +299,7 @@ async fn find_missing_schemas(
     external_schemas: &BTreeSet<(String, String)>,
 ) -> Result<Vec<(String, String)>, DatabaseValidationError> {
     let existing = query_existing_schema_pairs(client, external_schemas).await?;
-    Ok(external_schemas
-        .difference(&existing)
-        .cloned()
-        .collect())
+    Ok(external_schemas.difference(&existing).cloned().collect())
 }
 
 /// Checks whether all cluster dependencies referenced by the project are present.
@@ -343,9 +344,13 @@ async fn find_missing_external_dependencies(
     client: &PgClient,
     planned_project: &planned::Project,
 ) -> Result<BTreeSet<ObjectId>, DatabaseValidationError> {
-    let external_deps: BTreeSet<ObjectId> =
-        planned_project.external_dependencies.iter().cloned().collect();
-    let existing = query_existing_object_ids(client, &external_deps, CatalogLookup::Objects).await?;
+    let external_deps: BTreeSet<ObjectId> = planned_project
+        .external_dependencies
+        .iter()
+        .cloned()
+        .collect();
+    let existing =
+        query_existing_object_ids(client, &external_deps, CatalogLookup::Objects).await?;
     Ok(external_deps.difference(&existing).cloned().collect())
 }
 
@@ -578,8 +583,10 @@ pub(crate) async fn validate_sources_exist_impl(
         }
     }
 
-    let existing = query_existing_object_ids(client, &referenced_sources, CatalogLookup::Sources).await?;
-    let missing_sources: Vec<ObjectId> = referenced_sources.difference(&existing).cloned().collect();
+    let existing =
+        query_existing_object_ids(client, &referenced_sources, CatalogLookup::Sources).await?;
+    let missing_sources: Vec<ObjectId> =
+        referenced_sources.difference(&existing).cloned().collect();
     if !missing_sources.is_empty() {
         return Err(DatabaseValidationError::MissingSources(missing_sources));
     }
@@ -628,18 +635,17 @@ pub(crate) async fn validate_sink_connections_exist_impl(
         }
     }
 
-    let existing = query_existing_object_ids(
-        client,
-        &referenced_connections,
-        CatalogLookup::Connections,
-    )
-    .await?;
+    let existing =
+        query_existing_object_ids(client, &referenced_connections, CatalogLookup::Connections)
+            .await?;
     let missing_connections: Vec<ObjectId> = referenced_connections
         .difference(&existing)
         .cloned()
         .collect();
     if !missing_connections.is_empty() {
-        return Err(DatabaseValidationError::MissingConnections(missing_connections));
+        return Err(DatabaseValidationError::MissingConnections(
+            missing_connections,
+        ));
     }
 
     Ok(())
@@ -666,8 +672,10 @@ pub(crate) async fn validate_table_dependencies_impl(
 
     let existing_tables =
         query_existing_object_ids(client, &required_tables, CatalogLookup::Tables).await?;
-    let missing_table_set: BTreeSet<ObjectId> =
-        required_tables.difference(&existing_tables).cloned().collect();
+    let missing_table_set: BTreeSet<ObjectId> = required_tables
+        .difference(&existing_tables)
+        .cloned()
+        .collect();
 
     let mut objects_needing_tables = Vec::new();
     for object_id in objects_to_deploy {

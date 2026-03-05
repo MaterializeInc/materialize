@@ -209,7 +209,8 @@ pub async fn load_from_database(
     environment: Option<&str>,
 ) -> Result<DeploymentSnapshot, DeploymentSnapshotError> {
     let deployment_snapshot = client
-        .deployments().get_deployment_objects(environment)
+        .deployments()
+        .get_deployment_objects(environment)
         .await
         .map_err(DeploymentSnapshotError::Connection)?;
 
@@ -266,8 +267,14 @@ pub async fn write_to_database(
     }
 
     // Write to database
-    client.deployments().insert_schema_deployments(&schema_records).await?;
-    client.deployments().append_deployment_objects(&object_records).await?;
+    client
+        .deployments()
+        .insert_schema_deployments(&schema_records)
+        .await?;
+    client
+        .deployments()
+        .append_deployment_objects(&object_records)
+        .await?;
 
     Ok(())
 }

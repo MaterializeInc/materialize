@@ -179,7 +179,8 @@ async fn run_single_test(
     };
 
     let typed_fqn = typed_fqn_from_object_id(object_id);
-    let sql_statements = unit_test::desugar_unit_test(test, &target_obj.typed_object.stmt, &typed_fqn);
+    let sql_statements =
+        unit_test::desugar_unit_test(test, &target_obj.typed_object.stmt, &typed_fqn);
 
     for sql in &sql_statements[..sql_statements.len() - 1] {
         if let Err(e) = client.execute(sql, &[]).await {
@@ -255,7 +256,10 @@ async fn runtime_client(runtime: &DockerRuntime, empty_types: &Types) -> Result<
 /// Pre-validates optional `AT TIME` test expressions against `mz_timestamp` casting.
 ///
 /// Returning `false` marks the test as validation failure without entering execution phases.
-async fn validate_test_at_time(client: &Client, test: &unit_test::UnitTest) -> Result<bool, CliError> {
+async fn validate_test_at_time(
+    client: &Client,
+    test: &unit_test::UnitTest,
+) -> Result<bool, CliError> {
     if let Some(at_time) = &test.at_time {
         let validation_query = format!("SELECT {}::mz_timestamp", at_time);
         if let Err(e) = client.query(&validation_query, &[]).await {
@@ -282,8 +286,10 @@ fn typed_fqn_from_object_id(object_id: &project::object_id::ObjectId) -> typed::
     typed::FullyQualifiedName::from(mz_sql_parser::ast::UnresolvedItemName(vec![
         Ident::new(&object_id.database)
             .expect("database name from parsed SQL should be valid identifier"),
-        Ident::new(&object_id.schema).expect("schema name from parsed SQL should be valid identifier"),
-        Ident::new(&object_id.object).expect("object name from parsed SQL should be valid identifier"),
+        Ident::new(&object_id.schema)
+            .expect("schema name from parsed SQL should be valid identifier"),
+        Ident::new(&object_id.object)
+            .expect("object name from parsed SQL should be valid identifier"),
     ]))
 }
 

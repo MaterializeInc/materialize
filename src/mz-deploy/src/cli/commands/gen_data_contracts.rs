@@ -50,7 +50,10 @@ pub async fn run(profile: &Profile, directory: &Path) -> Result<(), CliError> {
     );
 
     // Query external types and write types.lock
-    let types = client.types().query_external_types(&planned_project).await?;
+    let types = client
+        .types()
+        .query_external_types(&planned_project)
+        .await?;
     types.write_types_lock(directory)?;
 
     println!(

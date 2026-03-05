@@ -82,7 +82,8 @@ pub async fn run(profile: &Profile, allowed_lag_secs: i64) -> Result<(), CliErro
 
         // Get hydration status for this deployment
         match client
-            .deployments().get_deployment_hydration_status_with_lag(env_name, allowed_lag_secs)
+            .deployments()
+            .get_deployment_hydration_status_with_lag(env_name, allowed_lag_secs)
             .await
         {
             Ok(hydration_status) if !hydration_status.is_empty() => {

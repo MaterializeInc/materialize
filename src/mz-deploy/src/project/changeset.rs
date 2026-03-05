@@ -475,7 +475,11 @@ fn compute_dirty_datalog(
     // Convert cluster names to Cluster structs
     let dirty_cluster_structs = state.dirty_clusters.into_iter().map(Cluster::new).collect();
 
-    (state.dirty_stmts, dirty_cluster_structs, state.dirty_schemas)
+    (
+        state.dirty_stmts,
+        dirty_cluster_structs,
+        state.dirty_schemas,
+    )
 }
 
 /// Mutable working sets carried across fixed-point iterations.

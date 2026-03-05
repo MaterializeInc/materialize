@@ -60,15 +60,27 @@ pub async fn run(
         .await
         .map_err(CliError::Connection)?;
 
-    (client).validation().validate_privileges(&planned_project).await?;
-    client.validation().validate_cluster_isolation(&planned_project).await?;
-    client.validation().validate_sources_exist(&planned_project).await?;
+    (client)
+        .validation()
+        .validate_privileges(&planned_project)
+        .await?;
+    client
+        .validation()
+        .validate_cluster_isolation(&planned_project)
+        .await?;
+    client
+        .validation()
+        .validate_sources_exist(&planned_project)
+        .await?;
     verbose!("Validation successful");
 
     project::deployment_snapshot::initialize_deployment_table(&client).await?;
 
     // Validate deployment doesn't already exist
-    let existing_metadata = client.deployments().get_deployment_metadata(&deploy_id).await?;
+    let existing_metadata = client
+        .deployments()
+        .get_deployment_metadata(&deploy_id)
+        .await?;
     if existing_metadata.is_some() {
         return Err(CliError::InvalidEnvironmentName {
             name: format!("deployment '{}' already exists", deploy_id),
@@ -76,7 +88,10 @@ pub async fn run(
     }
 
     let (table_object_ids, source_object_ids) = collect_table_and_source_ids(&planned_project);
-    let all_object_ids: BTreeSet<_> = table_object_ids.union(&source_object_ids).cloned().collect();
+    let all_object_ids: BTreeSet<_> = table_object_ids
+        .union(&source_object_ids)
+        .cloned()
+        .collect();
     if all_object_ids.is_empty() {
         println!("No tables found in project");
         return Ok(());
@@ -85,8 +100,14 @@ pub async fn run(
     let table_objects = planned_project.get_sorted_objects_filtered(&all_object_ids)?;
     println!("Found {} table(s) in project", table_objects.len());
 
-    let existing_tables = client.introspection().check_tables_exist(&table_object_ids).await?;
-    let existing_sources = client.introspection().check_sources_exist(&source_object_ids).await?;
+    let existing_tables = client
+        .introspection()
+        .check_tables_exist(&table_object_ids)
+        .await?;
+    let existing_sources = client
+        .introspection()
+        .check_sources_exist(&source_object_ids)
+        .await?;
     let existing_objects: BTreeSet<_> = existing_tables.union(&existing_sources).cloned().collect();
     let tables_to_create: Vec<_> = table_objects
         .into_iter()
@@ -107,7 +128,8 @@ pub async fn run(
 
     let executor = helpers::DeploymentExecutor::with_dry_run(&client, dry_run);
     let table_schemas = collect_table_schemas(&tables_to_create);
-    prepare_schemas_and_mod_statements(&executor, &planned_project, &table_schemas, dry_run).await?;
+    prepare_schemas_and_mod_statements(&executor, &planned_project, &table_schemas, dry_run)
+        .await?;
     let success_count = execute_table_creates(&executor, &tables_to_create, dry_run).await?;
     finalize_table_deployment(
         &client,
@@ -250,7 +272,12 @@ async fn execute_table_creates(
 
     let mut success_count = 0;
     for (idx, (object_id, typed_obj)) in tables_to_create.iter().enumerate() {
-        verbose!("Creating {}/{}: {}", idx + 1, tables_to_create.len(), object_id);
+        verbose!(
+            "Creating {}/{}: {}",
+            idx + 1,
+            tables_to_create.len(),
+            object_id
+        );
         executor.execute_object(typed_obj).await?;
         if !dry_run {
             println!(
