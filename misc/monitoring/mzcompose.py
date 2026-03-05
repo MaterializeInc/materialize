@@ -53,6 +53,7 @@ SERVICES = [
             ],
             "volumes": [
                 "./grafana/datasources:/etc/grafana/provisioning/datasources",
+                "./grafana/dashboards:/etc/grafana/provisioning/dashboards",
             ],
             "allow_host_ports": True,
         },

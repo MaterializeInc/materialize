@@ -44,6 +44,12 @@ scrape_configs:
         separator: "-"
         target_label: pod
         replacement: $1-0
+  - job_name: consensus-svc
+    static_configs:
+    - targets: [host.docker.internal:6891]
+      labels:
+        namespace: local
+        pod: consensus-svc-0
   - job_name: prometheus
     static_configs:
       - targets: [ localhost:9090 ]
