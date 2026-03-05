@@ -7396,10 +7396,10 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "aws-config",
  "aws-sdk-s3",
  "bytes",
  "clap",
+ "mz-aws-util",
  "mz-persist",
  "prost",
  "tokio",

@@ -34,7 +34,7 @@ use mz_persist::generated::consensus_service::consensus_service_server::Consensu
 #[command(name = "mz-persist-consensus-svc")]
 struct Args {
     /// Address to listen on for gRPC connections.
-    #[arg(long, default_value = "0.0.0.0:6879")]
+    #[arg(long, default_value = "0.0.0.0:6890")]
     listen_addr: SocketAddr,
 
     /// S3 bucket for WAL and snapshot storage.
@@ -54,7 +54,7 @@ struct Args {
     s3_region: String,
 
     /// Flush interval in milliseconds.
-    #[arg(long, default_value = "5")]
+    #[arg(long, default_value = "20")]
     flush_interval_ms: u64,
 
     /// Write a snapshot every this many WAL batches.
@@ -78,7 +78,8 @@ fn main() {
         .build()
         .expect("failed to build tokio runtime");
 
-    rt.block_on(run(args));
+    let local = tokio::task::LocalSet::new();
+    local.block_on(&rt, run(args));
 }
 
 async fn run(args: Args) {
@@ -92,18 +93,21 @@ async fn run(args: Args) {
 
     info!("recovering state from S3...");
     let (shards, next_batch) = recover(&wal_writer).await;
-    info!(
-        shards = shards.len(),
-        next_batch, "recovery complete"
-    );
+    info!(shards = shards.len(), next_batch, "recovery complete");
 
-    let flush_interval = tokio::time::interval(std::time::Duration::from_millis(
-        args.flush_interval_ms,
-    ));
+    let flush_interval =
+        tokio::time::interval(std::time::Duration::from_millis(args.flush_interval_ms));
 
     let (tx, rx) = tokio::sync::mpsc::channel::<ActorCommand>(4096);
 
-    let actor = Actor::new(shards, rx, wal_writer, next_batch, flush_interval, args.snapshot_interval);
+    let actor = Actor::new(
+        shards,
+        rx,
+        wal_writer,
+        next_batch,
+        flush_interval,
+        args.snapshot_interval,
+    );
     tokio::task::spawn_local(actor.run());
 
     let grpc_service = ConsensusGrpcService { tx };
@@ -140,6 +144,7 @@ impl ConsensusService for ConsensusGrpcService {
         request: tonic::Request<ProtoHeadRequest>,
     ) -> Result<tonic::Response<ProtoHeadResponse>, tonic::Status> {
         let req = request.into_inner();
+        info!(key = %req.key, "head");
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(ActorCommand::Head {
@@ -162,14 +167,15 @@ impl ConsensusService for ConsensusGrpcService {
         request: tonic::Request<ProtoCompareAndSetRequest>,
     ) -> Result<tonic::Response<ProtoCompareAndSetResponse>, tonic::Status> {
         let req = request.into_inner();
+        info!(key = %req.key, expected = req.expected, new_seqno = req.new.as_ref().map(|v| v.seqno), "cas");
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(ActorCommand::CompareAndSet {
                 key: req.key,
                 expected: req.expected,
-                new: req.new.ok_or_else(|| {
-                    tonic::Status::invalid_argument("missing `new` field")
-                })?,
+                new: req
+                    .new
+                    .ok_or_else(|| tonic::Status::invalid_argument("missing `new` field"))?,
                 reply: reply_tx,
             })
             .await
@@ -188,6 +194,7 @@ impl ConsensusService for ConsensusGrpcService {
         request: tonic::Request<ProtoScanRequest>,
     ) -> Result<tonic::Response<ProtoScanResponse>, tonic::Status> {
         let req = request.into_inner();
+        info!(key = %req.key, from = req.from, limit = req.limit, "scan");
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(ActorCommand::Scan {
@@ -212,6 +219,7 @@ impl ConsensusService for ConsensusGrpcService {
         request: tonic::Request<ProtoTruncateRequest>,
     ) -> Result<tonic::Response<ProtoTruncateResponse>, tonic::Status> {
         let req = request.into_inner();
+        info!(key = %req.key, seqno = req.seqno, "truncate");
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(ActorCommand::Truncate {
@@ -237,6 +245,7 @@ impl ConsensusService for ConsensusGrpcService {
         &self,
         _request: tonic::Request<ProtoListKeysRequest>,
     ) -> Result<tonic::Response<Self::ListKeysStream>, tonic::Status> {
+        info!("list_keys");
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(ActorCommand::ListKeys { reply: reply_tx })

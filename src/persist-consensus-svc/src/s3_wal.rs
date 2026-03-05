@@ -11,7 +11,6 @@
 
 use std::collections::HashMap;
 
-use aws_sdk_s3::Client;
 use aws_sdk_s3::primitives::ByteStream;
 use prost::Message;
 
@@ -60,7 +59,7 @@ impl<W: WalWriter + Sync> WalWriter for std::sync::Arc<W> {
 
 /// S3-backed WAL and snapshot writer.
 pub struct S3WalWriter {
-    client: Client,
+    client: mz_aws_util::s3::Client,
     bucket: String,
     prefix: String,
 }
@@ -73,16 +72,13 @@ impl S3WalWriter {
         endpoint: Option<&str>,
         region: &str,
     ) -> Self {
-        let mut config_loader = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        let mut config_loader = mz_aws_util::defaults()
             .region(aws_sdk_s3::config::Region::new(region.to_owned()));
         if let Some(endpoint) = endpoint {
             config_loader = config_loader.endpoint_url(endpoint);
         }
         let config = config_loader.load().await;
-        let s3_config = aws_sdk_s3::config::Builder::from(&config)
-            .force_path_style(true)
-            .build();
-        let client = Client::from_conf(s3_config);
+        let client = mz_aws_util::s3::new_client(&config);
         S3WalWriter {
             client,
             bucket: bucket.to_owned(),

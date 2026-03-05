@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Interval;
-use tracing::warn;
+use tracing::{info, warn};
 
 use mz_persist::generated::consensus_service::{
     ProtoCompareAndSetResponse, ProtoHeadResponse, ProtoScanResponse, ProtoTruncateResponse,
@@ -333,10 +333,12 @@ impl<W: WalWriter> Actor<W> {
 
     async fn flush(&mut self) {
         let pending_ops = std::mem::take(&mut self.pending_wal_ops);
+        let num_replies = self.pending_replies.len();
 
         // Only write to WAL if there are actual ops (skip for flush with only
         // pending loser replies).
         if !pending_ops.is_empty() {
+            info!(batch = self.batch_number, ops = pending_ops.len(), replies = num_replies, "flush");
             let ops: Vec<ProtoWalOp> = pending_ops
                 .into_iter()
                 .map(|op| match op {
