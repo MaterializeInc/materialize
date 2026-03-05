@@ -51,11 +51,15 @@ cargo run -p mz-persist-consensus-svc -- \
 ### 2. Start environmentd
 
 ```bash
-./bin/environmentd --reset -- --persist-consensus-url='rpc://localhost:6890'
+./bin/environmentd --reset -- \
+  --persist-consensus-url='rpc://localhost:6890' \
+  --system-parameter-default=default_timestamp_interval=100ms
 ```
 
 The `--reset` flag clears previous state. Omit it on subsequent runs to keep
-data across restarts.
+data across restarts. The `--system-parameter-default` flag sets the timestamp
+interval to 100ms (default 1s), which controls how frequently tables and sources
+commit data through the consensus service.
 
 ### 3. Connect
 
@@ -84,8 +88,9 @@ Each flush produces one S3 PUT regardless of how many shards wrote.
 
 ### Source/table timestamp interval
 
-By default, sources and tables advance timestamps every 1s. To reduce this
-(increasing write frequency through the consensus service):
+By default, sources and tables advance timestamps every 1s. This can be set at
+startup via `--system-parameter-default=default_timestamp_interval=100ms` (as
+shown above), or changed at runtime:
 
 ```sql
 ALTER SYSTEM SET default_timestamp_interval = '100ms';
