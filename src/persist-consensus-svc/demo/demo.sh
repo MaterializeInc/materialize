@@ -5,7 +5,7 @@
 #   1. Start a local Postgres instance with logical replication
 #   2. Create the source database, table, and publication
 #   3. Set up the Materialize PG source
-#   4. Run a background INSERT loop
+#   4. Run a background UPDATE loop (single row)
 #   5. Create materialized views in stages to show shard scaling
 #
 # Before running, start the other three services:
@@ -27,7 +27,7 @@
 #   # Terminal 4: This script
 #   src/persist-consensus-svc/demo/demo.sh
 #
-# Then open Grafana: http://localhost:3000/d/consensus-svc-demo
+# Then open Grafana: http://localhost:3001/d/consensus-svc-demo
 
 set -euo pipefail
 
@@ -53,7 +53,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "=== Group Commit Consensus Demo ==="
-echo "Grafana: http://localhost:3000/d/consensus-svc-demo"
+echo "Grafana: http://localhost:3001/d/consensus-svc-demo"
 echo ""
 
 # =======================================================================
@@ -108,13 +108,17 @@ PGCONF
     echo "  Postgres started."
 fi
 
-# Create database and table.
+# Create database and table — single row, updated in place.
 psql postgres://localhost:${PG_PORT}/postgres -c "CREATE DATABASE demo;" 2>/dev/null || true
-$PSQL_PG -c "CREATE TABLE IF NOT EXISTS events (id SERIAL PRIMARY KEY, name TEXT NOT NULL, ts TIMESTAMPTZ DEFAULT now());"
-$PSQL_PG -c "ALTER TABLE events REPLICA IDENTITY FULL;"
-$PSQL_PG -c "CREATE PUBLICATION mz_source FOR TABLE events;" 2>/dev/null || true
-$PSQL_PG -c "INSERT INTO events (name) SELECT 'init-' || i FROM generate_series(1, 10) AS i;" 2>/dev/null || true
-echo "  Postgres ready (database: demo, table: events, publication: mz_source)."
+# Drop stale replication slots from previous runs.
+$PSQL_PG -c "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots;" 2>/dev/null || true
+$PSQL_PG -c "DROP PUBLICATION IF EXISTS mz_source;" 2>/dev/null || true
+$PSQL_PG -c "DROP TABLE IF EXISTS events;" 2>/dev/null || true
+$PSQL_PG -c "CREATE TABLE IF NOT EXISTS tick (id INT PRIMARY KEY, val INT NOT NULL);"
+$PSQL_PG -c "ALTER TABLE tick REPLICA IDENTITY FULL;"
+$PSQL_PG -c "INSERT INTO tick VALUES (1, 0) ON CONFLICT DO NOTHING;"
+$PSQL_PG -c "CREATE PUBLICATION mz_source FOR TABLE tick;"
+echo "  Postgres ready (database: demo, table: tick, publication: mz_source)."
 
 # =======================================================================
 # Stage 0b: Create Materialize source
@@ -132,17 +136,19 @@ CREATE CONNECTION IF NOT EXISTS pg_conn TO POSTGRES (
 );
 SQL
 
-$PSQL_MZ -c "CREATE SOURCE IF NOT EXISTS pg_source FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source') FOR TABLES (events);" 2>/dev/null || true
+# Drop stale source from previous runs (may reference old table).
+$PSQL_MZ -c "DROP SOURCE IF EXISTS pg_source CASCADE;" 2>/dev/null || true
+$PSQL_MZ -c "CREATE SOURCE pg_source FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source') FOR TABLES (tick);" 2>/dev/null || true
 echo "  Source ready."
 
 # =======================================================================
-# Background INSERT loop
+# Background UPDATE loop
 # =======================================================================
-echo "  Starting background INSERT loop (~1 row/sec)..."
+echo "  Starting background UPDATE loop (~20 updates/sec)..."
 (
     while true; do
-        $PSQL_PG -c "INSERT INTO events (name) VALUES ('demo-' || extract(epoch from now())::int);" 2>/dev/null || true
-        sleep 1
+        $PSQL_PG -c "UPDATE tick SET val = val + 1;" 2>/dev/null || true
+        sleep 0.05
     done
 ) &
 PIDS_TO_KILL+=($!)
@@ -155,30 +161,37 @@ sleep 3  # Let the source catch up.
 echo ""
 echo "Stage 1: Creating 5 materialized views..."
 for i in $(seq 1 5); do
-    $PSQL_MZ -c "CREATE MATERIALIZED VIEW IF NOT EXISTS demo_mv_${i} AS SELECT count(*) AS c FROM events WHERE id % ${i} = 0;"
+    $PSQL_MZ -c "CREATE MATERIALIZED VIEW IF NOT EXISTS demo_mv_${i} AS SELECT upper(val::text) AS v FROM tick;"
 done
 echo "  5 MVs active. Watch the dashboard for 30s..."
 sleep 30
 
 echo "Stage 2: Adding 15 more MVs (20 total)..."
 for i in $(seq 6 20); do
-    $PSQL_MZ -c "CREATE MATERIALIZED VIEW IF NOT EXISTS demo_mv_${i} AS SELECT count(*) AS c FROM events WHERE id % ${i} = 0;"
+    $PSQL_MZ -c "CREATE MATERIALIZED VIEW IF NOT EXISTS demo_mv_${i} AS SELECT upper(val::text) AS v FROM tick;"
 done
 echo "  20 MVs active. Watch the dashboard for 30s..."
 sleep 30
 
 echo "Stage 3: Adding 30 more MVs (50 total)..."
 for i in $(seq 21 50); do
-    $PSQL_MZ -c "CREATE MATERIALIZED VIEW IF NOT EXISTS demo_mv_${i} AS SELECT count(*) AS c FROM events WHERE id % ${i} = 0;"
+    $PSQL_MZ -c "CREATE MATERIALIZED VIEW IF NOT EXISTS demo_mv_${i} AS SELECT upper(val::text) AS v FROM tick;"
 done
 echo "  50 MVs active. Watch the dashboard for 30s..."
 sleep 30
 
 echo "Stage 4: Adding 50 more MVs (100 total)..."
 for i in $(seq 51 100); do
-    $PSQL_MZ -c "CREATE MATERIALIZED VIEW IF NOT EXISTS demo_mv_${i} AS SELECT count(*) AS c FROM events WHERE id % ${i} = 0;"
+    $PSQL_MZ -c "CREATE MATERIALIZED VIEW IF NOT EXISTS demo_mv_${i} AS SELECT upper(val::text) AS v FROM tick;"
 done
-echo "  100 MVs active!"
+echo "  100 MVs active. Watch the dashboard for 30s..."
+sleep 30
+
+echo "Stage 5: Adding 100 more MVs (200 total)..."
+for i in $(seq 101 200); do
+    $PSQL_MZ -c "CREATE MATERIALIZED VIEW IF NOT EXISTS demo_mv_${i} AS SELECT upper(val::text) AS v FROM tick;"
+done
+echo "  200 MVs active!"
 echo ""
 echo "  The S3 PUTs/s line should be FLAT while Active Shards climbed."
 echo "  Press Ctrl+C to stop."

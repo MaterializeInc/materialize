@@ -10,7 +10,7 @@
   "panels": [
     {
       "id": 1,
-      "title": "S3 WAL Writes/s (the money chart)",
+      "title": "S3 WAL Writes/s",
       "description": "Should stay FLAT regardless of shard count. Each tick = one S3 PUT for all shards combined.",
       "type": "timeseries",
       "gridPos": { "h": 10, "w": 8, "x": 0, "y": 0 },
@@ -21,9 +21,11 @@
           "custom": {
             "lineWidth": 3,
             "fillOpacity": 20,
-            "spanNulls": true
+            "spanNulls": true,
+            "axisSoftMin": 0
           },
-          "unit": "ops"
+          "unit": "ops",
+          "min": 0
         },
         "overrides": []
       },
@@ -123,10 +125,10 @@
     },
     {
       "id": 4,
-      "title": "S3 PUT Latency",
-      "description": "S3 Express One Zone PUT latency for WAL writes. p50 and p99.",
+      "title": "S3 WAL PUT Latency",
+      "description": "S3 Express One Zone PUT latency for WAL batch writes.",
       "type": "timeseries",
-      "gridPos": { "h": 10, "w": 8, "x": 0, "y": 10 },
+      "gridPos": { "h": 10, "w": 6, "x": 0, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": {
         "defaults": {
@@ -145,18 +147,52 @@
       "targets": [
         {
           "expr": "histogram_quantile(0.5, rate(mz_consensus_svc_s3_wal_write_latency_seconds_bucket[1m]))",
-          "legendFormat": "WAL p50",
+          "legendFormat": "p50",
           "refId": "A"
         },
         {
           "expr": "histogram_quantile(0.99, rate(mz_consensus_svc_s3_wal_write_latency_seconds_bucket[1m]))",
-          "legendFormat": "WAL p99",
+          "legendFormat": "p99",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.5, rate(mz_consensus_svc_s3_snapshot_write_latency_seconds_bucket[1m]))",
-          "legendFormat": "Snapshot p50",
+          "expr": "histogram_quantile(0.9999, rate(mz_consensus_svc_s3_wal_write_latency_seconds_bucket[1m]))",
+          "legendFormat": "p99.99",
           "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "S3 Snapshot PUT Latency",
+      "description": "S3 Express One Zone PUT latency for snapshot writes.",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 6, "x": 6, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "spanNulls": true
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, rate(mz_consensus_svc_s3_snapshot_write_latency_seconds_bucket[1m]))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(mz_consensus_svc_s3_snapshot_write_latency_seconds_bucket[1m]))",
+          "legendFormat": "p99",
+          "refId": "B"
         }
       ]
     },
@@ -165,7 +201,7 @@
       "title": "Ops per Flush Batch (p50)",
       "description": "How many WAL ops are batched per flush. Should grow with shard count — this is the batching efficiency.",
       "type": "timeseries",
-      "gridPos": { "h": 10, "w": 8, "x": 8, "y": 10 },
+      "gridPos": { "h": 10, "w": 6, "x": 12, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": {
         "defaults": {
@@ -201,7 +237,7 @@
       "title": "In-Memory State",
       "description": "Total entries and approximate bytes held across all shards.",
       "type": "timeseries",
-      "gridPos": { "h": 10, "w": 8, "x": 16, "y": 10 },
+      "gridPos": { "h": 10, "w": 6, "x": 18, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "fieldConfig": {
         "defaults": {
@@ -240,6 +276,42 @@
         {
           "expr": "mz_consensus_svc_approx_bytes",
           "legendFormat": "bytes",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "S3 Bytes Written/s",
+      "description": "Rate of bytes written to S3, split by WAL and snapshot.",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 8, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "stacking": { "mode": "normal" },
+            "spanNulls": true
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "expr": "rate(mz_consensus_svc_s3_wal_write_bytes_total[30s])",
+          "legendFormat": "WAL",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(mz_consensus_svc_s3_snapshot_write_bytes_total[30s])",
+          "legendFormat": "Snapshot",
           "refId": "B"
         }
       ]

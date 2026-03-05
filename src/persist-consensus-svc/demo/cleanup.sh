@@ -7,7 +7,7 @@ PSQL_MZ="psql postgres://materialize@localhost:${MZ_PORT}/materialize"
 
 echo "Cleaning up demo objects..."
 
-for i in $(seq 1 100); do
+for i in $(seq 1 200); do
     $PSQL_MZ -c "DROP MATERIALIZED VIEW IF EXISTS demo_mv_${i};" 2>/dev/null || true
 done
 
