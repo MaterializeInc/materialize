@@ -449,6 +449,10 @@ true zero downtime.
 
 ## Potential Incremental Step: Lame-Duck Upgrades
 
+> [!NOTE]
+> This is something we considered but discussion by now is that this will
+> probably not be possible to do in a safe way.
+
 As a potential incremental step that we can decide on taking as we develop the
 full solution, we could implement a "lame-duck" upgrade procedure that achieves
 true zero-downtime for DML and DQL queries but not DDL. This is not a detour
