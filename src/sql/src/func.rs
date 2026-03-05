@@ -3048,7 +3048,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 // overload accordingly.
                 ecx.require_feature_flag(&ENABLE_TIME_AT_TIME_ZONE)?;
                 Ok(HirScalarExpr::call_variadic(
-                    variadic::TimezoneTime,
+                    variadic::TimezoneTimeVariadic,
                     vec![
                         lhs,
                         rhs,

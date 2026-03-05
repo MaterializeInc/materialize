@@ -1,0 +1,58 @@
+---
+source: src/expr-derive-impl/src/lib.rs
+expression: "#[sqlfunc(Replace, sqlname = \"replace\")]\nfn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {\n    Ok(text.replace(from, to))\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect,
+)]
+pub struct Replace;
+impl crate::func::variadic::EagerVariadicFunc for Replace {
+    type Input<'a> = (&'a str, &'a str, &'a str);
+    type Output<'a> = Result<String, EvalError>;
+    fn call<'a>(
+        &self,
+        (text, from, to): Self::Input<'a>,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
+        replace(text, from, to)
+    }
+    fn output_type(
+        &self,
+        input_types: &[mz_repr::SqlColumnType],
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::variadic::EagerVariadicFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        let non_nullable_input_is_nullable = false
+            || input_types.get(0usize).map_or(false, |t| t.nullable)
+            || input_types.get(1usize).map_or(false, |t| t.nullable)
+            || input_types.get(2usize).map_or(false, |t| t.nullable);
+        let inputs_nullable = input_types.iter().any(|it| it.nullable);
+        output
+            .nullable(
+                nullable || non_nullable_input_is_nullable
+                    || (propagates_nulls && inputs_nullable),
+            )
+    }
+}
+impl std::fmt::Display for Replace {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("replace")
+    }
+}
+fn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {
+    Ok(text.replace(from, to))
+}

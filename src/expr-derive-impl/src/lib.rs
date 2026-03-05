@@ -151,4 +151,78 @@ mod test {
         let (output, input) = super::test_sqlfunc(attr, item);
         insta::assert_snapshot!("binary_arena_fn", output, &input);
     }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn insta_test_variadic_tuple() {
+        let attr = quote! {
+            Replace,
+            sqlname = "replace",
+        };
+        let item = quote! {
+            fn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {
+                Ok(text.replace(from, to))
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("variadic_tuple", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn insta_test_variadic_variadic_type() {
+        let attr = quote! {
+            Concat,
+            sqlname = "concat",
+            is_associative = true,
+        };
+        let item = quote! {
+            fn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError> {
+                Ok(strs.into_iter().flatten().collect())
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("variadic_variadic_type", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn insta_test_variadic_arena() {
+        let attr = quote! {
+            ArrayFill,
+            sqlname = "array_fill",
+            introduces_nulls = false,
+        };
+        let item = quote! {
+            fn array_fill<'a>(
+                &self,
+                fill: Datum<'a>,
+                dims: Datum<'a>,
+                lb: OptionalArg<Datum<'a>>,
+                temp_storage: &RowArena,
+            ) -> Result<Datum<'a>, EvalError> {
+                unimplemented!()
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("variadic_arena", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn insta_test_variadic_modifiers() {
+        let attr = quote! {
+            Greatest,
+            sqlname = "greatest",
+            could_error = false,
+            is_monotone = true,
+        };
+        let item = quote! {
+            fn greatest<'a>(datums: Variadic<Datum<'a>>) -> Datum<'a> {
+                datums.into_iter().max().unwrap_or(Datum::Null)
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("variadic_modifiers", output, &input);
+    }
 }
