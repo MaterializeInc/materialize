@@ -93,6 +93,12 @@ helm upgrade -n materialize my-demo materialize/operator \
 
 ## Upgrading Materialize Instances
 
+{{< note >}}
+If you are running Materialize Operator versions before v26.15, refer to the
+[v1alpha1 upgrade instructions](/self-managed-deployments/upgrading/v1alpha1-upgrade-instructions/)
+instead.
+{{< /note >}}
+
 **After** you have upgraded your Materialize Operator, upgrade your Materialize
 instance(s) to the **APP Version** of the Operator. To find the version of your
 currently deployed Materialize Operator:
@@ -148,9 +154,9 @@ kubectl apply -f materialize.yaml
 
 ## Rollout Configuration
 
-#### `forcedRollouts`
+#### `forceRollout`
 
-Specify a new `UUID` value for `forcedRollout` to roll out even when there are
+Specify a new `UUID` value for `forceRollout` to roll out even when there are
 no other changes to the instance.
 
 ```shell
@@ -212,6 +218,10 @@ kubectl apply -f previous_materialize_configuration.yaml'
 ```
 
 ## Version Specific Upgrade Notes
+
+### Upgrading to `v26.15` and later versions
+
+{{< include-md file="shared-content/self-managed/upgrade-notes/v26.15.md" >}}
 
 ### Upgrading to `v26.1` and later versions
 
