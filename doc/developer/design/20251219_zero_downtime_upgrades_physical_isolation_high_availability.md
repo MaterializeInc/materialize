@@ -191,6 +191,13 @@ read-write mode during the overlap window**. This is possible because the new
 version defers catalog migrations and constrains itself to only write data that
 the old version can understand.
 
+This is a staged rollout within a single upgrade: read-only → read-write with
+old catalog version → full read-write with new catalog version. Each stage
+gates on the previous one succeeding. The read-only phase lets us validate that
+the new version can boot, open the catalog, spawn cluster processes, and
+hydrate dataflows before it writes anything. If something goes wrong, we can
+abort without having touched any state.
+
 We cut over network routes once the new deployment is fully ready, so any
 residual downtime is the route change itself. During that window the old
 deployment still accepts connections. When cutting over, we drop connections
