@@ -1,0 +1,111 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+package mz_persist.gen.consensus_service;
+
+// --- gRPC Service ---
+
+service ConsensusService {
+    rpc Head(ProtoHeadRequest) returns (ProtoHeadResponse);
+    rpc CompareAndSet(ProtoCompareAndSetRequest) returns (ProtoCompareAndSetResponse);
+    rpc Scan(ProtoScanRequest) returns (ProtoScanResponse);
+    rpc Truncate(ProtoTruncateRequest) returns (ProtoTruncateResponse);
+    rpc ListKeys(ProtoListKeysRequest) returns (stream ProtoListKeysResponse);
+}
+
+// --- Request/Response messages ---
+
+message ProtoVersionedData {
+    uint64 seqno = 1;
+    bytes data = 2;
+}
+
+message ProtoHeadRequest {
+    string key = 1;
+}
+
+message ProtoHeadResponse {
+    // Absent if no data at this key.
+    optional ProtoVersionedData data = 1;
+}
+
+message ProtoCompareAndSetRequest {
+    string key = 1;
+    // Absent means the caller expects no data at this key yet.
+    optional uint64 expected = 2;
+    ProtoVersionedData new = 3;
+}
+
+message ProtoCompareAndSetResponse {
+    bool committed = 1;
+}
+
+message ProtoScanRequest {
+    string key = 1;
+    uint64 from = 2;
+    uint64 limit = 3;
+}
+
+message ProtoScanResponse {
+    repeated ProtoVersionedData data = 1;
+}
+
+message ProtoTruncateRequest {
+    string key = 1;
+    uint64 seqno = 2;
+}
+
+message ProtoTruncateResponse {
+    // Absent if the operation returned None (should not happen in practice).
+    optional uint64 deleted = 1;
+}
+
+message ProtoListKeysRequest {}
+
+message ProtoListKeysResponse {
+    string key = 1;
+}
+
+// --- WAL serialization ---
+
+message ProtoWalWrite {
+    string key = 1;
+    uint64 seqno = 2;
+    bytes data = 3;
+}
+
+message ProtoWalTruncate {
+    string key = 1;
+    uint64 seqno = 2;
+}
+
+message ProtoWalOp {
+    oneof op {
+        ProtoWalWrite write = 1;
+        ProtoWalTruncate truncate = 2;
+    }
+}
+
+message ProtoWalBatch {
+    uint64 batch_number = 1;
+    repeated ProtoWalOp ops = 2;
+}
+
+// --- Snapshot serialization ---
+
+message ProtoShardState {
+    repeated ProtoVersionedData entries = 1;
+}
+
+message ProtoSnapshot {
+    uint64 through_batch = 1;
+    map<string, ProtoShardState> shards = 2;
+}

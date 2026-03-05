@@ -7327,6 +7327,9 @@ dependencies = [
  "timely",
  "tokio",
  "tokio-postgres",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
  "tracing",
  "turmoil",
  "url",
@@ -7384,6 +7387,26 @@ dependencies = [
  "tonic-prost-build",
  "tracing",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-persist-consensus-svc"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "aws-config",
+ "aws-sdk-s3",
+ "bytes",
+ "clap",
+ "mz-persist",
+ "prost",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tracing",
+ "tracing-subscriber",
  "workspace-hack",
 ]
 

@@ -65,6 +65,8 @@ serde_json = { version = "1.0.149", optional = true }
 timely = "0.27.0"
 tokio = { version = "1.49.0", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
 tokio-postgres = { version = "0.7.15" }
+tonic = "0.14.2"
+tonic-prost = "0.14.2"
 tracing = "0.1.44"
 turmoil = { version = "0.7.0", optional = true }
 url = "2.5.8"
@@ -88,6 +90,7 @@ tempfile = "3.23.0"
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build = "0.14.3"
+tonic-prost-build = "0.14.2"
 
 [features]
 default = ["mz-build-tools/default", "workspace-hack"]

@@ -14,3 +14,10 @@
 pub mod persist {
     include!(concat!(env!("OUT_DIR"), "/mz_persist.r#gen.persist.rs"));
 }
+
+pub mod consensus_service {
+    include!(concat!(
+        env!("OUT_DIR"),
+        "/mz_persist.r#gen.consensus_service.rs"
+    ));
+}

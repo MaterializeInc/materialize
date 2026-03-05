@@ -31,6 +31,7 @@ pub mod mem;
 pub mod metrics;
 pub mod postgres;
 pub mod retry;
+pub mod rpc;
 pub mod s3;
 #[cfg(feature = "turmoil")]
 pub mod turmoil;
