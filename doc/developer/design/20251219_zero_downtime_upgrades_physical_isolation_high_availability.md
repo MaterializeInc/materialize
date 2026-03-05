@@ -161,18 +161,18 @@ GitHub issue.
 
 The change from the current upgrade procedure would be this flow:
 
-1. New `environmentd` starts with higher `deploy_generation`/`version`
+1. New `environmentd` starts at a newer code version
 2. Boots in read-only mode: opens catalog in read-only mode, spawns `clusterd`
    processes at new version, hydrates dataflows, everything is kept in
    read-only mode
 3. Signals readiness: once clusters report hydrated and caught up
-4. Orchestrator triggers promotion: new `environmentd` enters read/write mode,
-   writes its `deploy_generation`/`version` to the catalog. The new version
-   constrains itself to only write catalog data that is backward-compatible
-   with the old version.
-5. Old `environmentd` notices the new version in the catalog but **continues in
-   full read-write mode**: it does not halt, and none of its cluster processes
-   are reaped, it continues to serve DQL, DML, and DDL
+4. Orchestrator triggers promotion: new `environmentd` enters read/write mode.
+   The new version constrains itself to only write catalog data that is
+   backward-compatible with the old version (the catalog version has not been
+   upgraded yet).
+5. Old `environmentd` **continues in full read-write mode**: it does not halt,
+   and none of its cluster processes are reaped, it continues to serve DQL,
+   DML, and DDL
 6. New `environmentd` re-establishes connection to clusters, brings them out of
    read-only mode. Both versions now serve traffic in full read-write mode.
 7. Cutover: once orchestration determines that the new-version `environmentd`
@@ -181,7 +181,7 @@ The change from the current upgrade procedure would be this flow:
 8. Orchestration reaps old-version deployment processes. Note that old
    processes may not terminate instantly.
 9. Catalog upgrade: once the old version is fully gone, the new version
-   upgrades the catalog format (applies catalog migrations) and activates
+   upgrades the catalog version, applies catalog migrations, and activates
    features gated on the newer catalog version. This step also serves as the
    fencing mechanism: any old-version process that may still be lingering will
    be unable to read or write the migrated catalog.
@@ -203,12 +203,19 @@ catalog version from the code version of any running `environmentd`. The
 catalog carries its own version, and a newer `environmentd` can run against a
 catalog that is still at an older version.
 
+The `deploy_generation` and code `version` that are currently stored in the
+catalog are no longer needed there. The `deploy_generation` remains useful for
+orchestration (e.g., orchestratord knowing which deployment is old vs. new) but
+is not a catalog concern. The only version-related field in the catalog is the
+`catalog_version`, which controls what schema and features are active.
+
 New features and catalog schema changes are gated on the catalog version: they
 are only activated once the catalog has been upgraded to a version that
 includes them. The catalog version is only upgraded after the old version's
 processes have been reaped and the new version has been signaled that it is
-safe to do so. Until that point, the new version runs with all the capabilities
-of the older catalog version.
+safe to do so (step 9 of the upgrade flow). Until that point, the new version
+runs with all the capabilities of the older catalog version. Upgrading the
+catalog version is also what fences out any lingering old-version processes.
 
 This is directly analogous to how persist already handles forward and backward
 compatibility: it tracks what versions are still "touching" a shard and defers
