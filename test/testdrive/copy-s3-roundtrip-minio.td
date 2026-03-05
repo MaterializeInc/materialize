@@ -12,10 +12,6 @@
 # COPY TO expressions should immediately succeed or fail on their first runs
 $ set-max-tries max-tries=1
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_copy_to_expr = true;
-ALTER SYSTEM SET enable_copy_from_remote = true;
-
 # Prepare table data
 > CREATE TABLE t (a int);
 > INSERT INTO t VALUES (1);

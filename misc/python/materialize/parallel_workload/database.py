@@ -794,6 +794,34 @@ class SqlServerSource(DBObject):
     def create(self, exe: Executor) -> None:
         self.executor.create(logging_exe=exe)
 
+class S3Object(DBObject):
+    key: str
+    bucket: str
+    format: str
+
+    def __init__(
+        self,
+        key: str,
+        bucket: str,
+        format: str,
+    ):
+        super().__init__()
+        self.key = key
+        self.bucket = bucket
+        self.format = format
+
+    def name(self) -> str:
+        return f"{self.bucket}/{self.key}"
+    
+    def __str__(self) -> str:
+        return self.name()
+    
+    def create(self, exe: Executor) -> None:
+        query = f"CREATE TABLE '{self.key}'("
+        query += ",\n    ".join(column.create() for column in self.columns)
+        query += ")"
+        exe.execute(query)
+
 
 class Index:
     _name: str
