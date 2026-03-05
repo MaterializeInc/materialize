@@ -247,7 +247,16 @@ the catalog format.
 ### Get Orchestration Ready for Managing Version Cutover
 
 We need to update the orchestration logic to manage the new flow where both
-versions serve traffic concurrently.
+versions serve traffic concurrently. This includes:
+
+- Marking the point of no return in the Materialize CR status once cutover
+  begins (we currently have a "promoting" reason in the `UpToDate` condition
+  for this). From this point, we must not apply any changes to the Materialize
+  CR and must complete the current upgrade.
+- Ensuring the service's EndpointSlice points only at the new version before
+  tearing down the old generation.
+- Waiting for DNS TTL to expire so that clients can immediately reconnect to
+  the new version after the old generation is torn down.
 
 TODO: What's the latency incurred by us cutting over between `environmentd`s
 when everything is ready. That's how close to zero we will get with this
