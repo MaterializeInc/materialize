@@ -21,8 +21,7 @@ use prost::Message;
 
 use mz_persist::generated::consensus_service::{
     ProtoCompareAndSetResponse, ProtoHeadResponse, ProtoScanResponse, ProtoTruncateResponse,
-    ProtoVersionedData, ProtoWalBatch, ProtoWalOp, ProtoWalTruncate, ProtoWalWrite,
-    proto_wal_op,
+    ProtoVersionedData, ProtoWalBatch, ProtoWalOp, ProtoWalTruncate, ProtoWalWrite, proto_wal_op,
 };
 
 use crate::metrics::ConsensusMetrics;
@@ -71,9 +70,7 @@ pub enum ActorCommand {
     /// Explicitly trigger a flush. Used in tests; in production the flush
     /// interval timer drives flushes.
     #[allow(dead_code)]
-    Flush {
-        reply: oneshot::Sender<()>,
-    },
+    Flush { reply: oneshot::Sender<()> },
 }
 
 /// A WAL operation that can be either a CAS write or a truncate.
@@ -136,6 +133,11 @@ impl<W: WalWriter> Actor<W> {
                 running_byte_count += entry.data.len() as i64;
             }
         }
+        // Set gauges immediately so metrics reflect recovered state.
+        metrics.active_shards.set(shards.len() as i64);
+        metrics.total_entries.set(running_entry_count);
+        metrics.approx_bytes.set(running_byte_count);
+
         Actor {
             shards,
             rx,
@@ -286,21 +288,20 @@ impl<W: WalWriter> Actor<W> {
                 .or_default()
                 .entries
                 .push(entry);
-            self.pending_wal_ops.push(PendingWalOp::Write(ProtoWalWrite {
-                key,
-                seqno: new.seqno,
-                data: new.data,
-            }));
+            self.pending_wal_ops
+                .push(PendingWalOp::Write(ProtoWalWrite {
+                    key,
+                    seqno: new.seqno,
+                    data: new.data,
+                }));
         } else {
             self.metrics.cas_rejected.inc();
         }
 
         // Both winners and losers wait for flush so all callers experience
         // the same latency.
-        self.pending_replies.push(PendingReply::Cas {
-            committed,
-            reply,
-        });
+        self.pending_replies
+            .push(PendingReply::Cas { committed, reply });
     }
 
     fn handle_truncate(
@@ -313,19 +314,13 @@ impl<W: WalWriter> Actor<W> {
         let shard = match self.shards.get_mut(&key) {
             Some(s) => s,
             None => {
-                let _ = reply.send(Err(format!(
-                    "upper bound too high for truncate: {}",
-                    seqno
-                )));
+                let _ = reply.send(Err(format!("upper bound too high for truncate: {}", seqno)));
                 return;
             }
         };
         let head_seqno = shard.entries.last().map(|e| e.seqno);
         if head_seqno.map_or(true, |h| h < seqno) {
-            let _ = reply.send(Err(format!(
-                "upper bound too high for truncate: {}",
-                seqno
-            )));
+            let _ = reply.send(Err(format!("upper bound too high for truncate: {}", seqno)));
             return;
         }
         // Compute bytes being deleted for running counter.
@@ -342,14 +337,10 @@ impl<W: WalWriter> Actor<W> {
         self.running_byte_count -= deleted_bytes;
 
         // Record truncate in WAL so it survives crash/recovery.
-        self.pending_wal_ops.push(PendingWalOp::Truncate(ProtoWalTruncate {
-            key,
-            seqno,
-        }));
-        self.pending_replies.push(PendingReply::Truncate {
-            deleted,
-            reply,
-        });
+        self.pending_wal_ops
+            .push(PendingWalOp::Truncate(ProtoWalTruncate { key, seqno }));
+        self.pending_replies
+            .push(PendingReply::Truncate { deleted, reply });
     }
 
     fn handle_scan(&self, key: &str, from: u64, limit: u64) -> ProtoScanResponse {
@@ -390,7 +381,13 @@ impl<W: WalWriter> Actor<W> {
                 .collect::<HashSet<_>>()
                 .len();
 
-            info!(batch = self.batch_number, ops = num_ops, shards = distinct_shards, replies = num_replies, "flush");
+            debug!(
+                batch = self.batch_number,
+                ops = num_ops,
+                shards = distinct_shards,
+                replies = num_replies,
+                "flush"
+            );
             let ops: Vec<ProtoWalOp> = pending_ops
                 .into_iter()
                 .map(|op| match op {
@@ -417,7 +414,10 @@ impl<W: WalWriter> Actor<W> {
                 Err(WalWriteError::AlreadyExists) => {
                     // Batch already exists — shouldn't happen without a prior
                     // retry, but safe to treat as success.
-                    warn!(batch = self.batch_number, "batch already exists, treating as success");
+                    warn!(
+                        batch = self.batch_number,
+                        "batch already exists, treating as success"
+                    );
                 }
                 Err(WalWriteError::Failed(e)) => {
                     warn!("WAL write failed: {}, retrying", e);
@@ -427,7 +427,10 @@ impl<W: WalWriter> Actor<W> {
                         Ok(()) => {}
                         Err(WalWriteError::AlreadyExists) => {
                             // Original write landed after all.
-                            info!(batch = self.batch_number, "retry conflict: original write landed");
+                            info!(
+                                batch = self.batch_number,
+                                "retry conflict: original write landed"
+                            );
                             self.metrics.s3_write_retry_already_exists.inc();
                         }
                         Err(WalWriteError::Failed(e2)) => {
@@ -451,7 +454,9 @@ impl<W: WalWriter> Actor<W> {
                 }
             }
 
-            self.metrics.s3_wal_write_latency_seconds.observe(s3_start.elapsed().as_secs_f64());
+            self.metrics
+                .s3_wal_write_latency_seconds
+                .observe(s3_start.elapsed().as_secs_f64());
             self.metrics.s3_wal_writes.inc();
             self.metrics.s3_wal_write_bytes.inc_by(batch_bytes as u64);
             self.batch_number += 1;
@@ -460,7 +465,9 @@ impl<W: WalWriter> Actor<W> {
             // Record flush metrics.
             self.metrics.flush_count.inc();
             self.metrics.flush_ops_per_batch.observe(num_ops as f64);
-            self.metrics.flush_shards_per_batch.observe(distinct_shards as f64);
+            self.metrics
+                .flush_shards_per_batch
+                .observe(distinct_shards as f64);
 
             // Write snapshot every N batches.
             if self.batches_since_snapshot >= self.snapshot_interval {
@@ -475,7 +482,8 @@ impl<W: WalWriter> Actor<W> {
                         warn!("snapshot write failed: {}", e);
                     }
                     Ok(()) => {
-                        self.metrics.s3_snapshot_write_latency_seconds
+                        self.metrics
+                            .s3_snapshot_write_latency_seconds
                             .observe(snap_start.elapsed().as_secs_f64());
                         self.metrics.s3_snapshot_writes.inc();
                         self.batches_since_snapshot = 0;
@@ -503,7 +511,9 @@ impl<W: WalWriter> Actor<W> {
         self.metrics.active_shards.set(self.shards.len() as i64);
         self.metrics.total_entries.set(self.running_entry_count);
         self.metrics.approx_bytes.set(self.running_byte_count);
-        self.metrics.flush_latency_seconds.observe(flush_start.elapsed().as_secs_f64());
+        self.metrics
+            .flush_latency_seconds
+            .observe(flush_start.elapsed().as_secs_f64());
     }
 }
 
