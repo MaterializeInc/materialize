@@ -22,7 +22,7 @@ use std::net::SocketAddr;
 
 use clap::Parser;
 use tonic::transport::Server;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::actor::{Actor, ActorCommand};
 use crate::metrics::ConsensusMetrics;
@@ -134,7 +134,9 @@ async fn run(args: Args) {
             .await
             .expect("failed to bind metrics listener");
         info!(addr = %metrics_addr, "starting metrics HTTP server");
-        axum::serve(listener, app).await.expect("metrics server failed");
+        axum::serve(listener, app)
+            .await
+            .expect("metrics server failed");
     });
 
     let grpc_service = ConsensusGrpcService { tx };
@@ -171,7 +173,7 @@ impl ConsensusService for ConsensusGrpcService {
         request: tonic::Request<ProtoHeadRequest>,
     ) -> Result<tonic::Response<ProtoHeadResponse>, tonic::Status> {
         let req = request.into_inner();
-        info!(key = %req.key, "head");
+        debug!(key = %req.key, "head");
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(ActorCommand::Head {
@@ -194,7 +196,7 @@ impl ConsensusService for ConsensusGrpcService {
         request: tonic::Request<ProtoCompareAndSetRequest>,
     ) -> Result<tonic::Response<ProtoCompareAndSetResponse>, tonic::Status> {
         let req = request.into_inner();
-        info!(key = %req.key, expected = req.expected, new_seqno = req.new.as_ref().map(|v| v.seqno), "cas");
+        debug!(key = %req.key, expected = req.expected, new_seqno = req.new.as_ref().map(|v| v.seqno), "cas");
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(ActorCommand::CompareAndSet {
@@ -221,7 +223,7 @@ impl ConsensusService for ConsensusGrpcService {
         request: tonic::Request<ProtoScanRequest>,
     ) -> Result<tonic::Response<ProtoScanResponse>, tonic::Status> {
         let req = request.into_inner();
-        info!(key = %req.key, from = req.from, limit = req.limit, "scan");
+        debug!(key = %req.key, from = req.from, limit = req.limit, "scan");
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(ActorCommand::Scan {
@@ -246,7 +248,7 @@ impl ConsensusService for ConsensusGrpcService {
         request: tonic::Request<ProtoTruncateRequest>,
     ) -> Result<tonic::Response<ProtoTruncateResponse>, tonic::Status> {
         let req = request.into_inner();
-        info!(key = %req.key, seqno = req.seqno, "truncate");
+        debug!(key = %req.key, seqno = req.seqno, "truncate");
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(ActorCommand::Truncate {
@@ -272,7 +274,7 @@ impl ConsensusService for ConsensusGrpcService {
         &self,
         _request: tonic::Request<ProtoListKeysRequest>,
     ) -> Result<tonic::Response<Self::ListKeysStream>, tonic::Status> {
-        info!("list_keys");
+        debug!("list_keys");
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(ActorCommand::ListKeys { reply: reply_tx })
