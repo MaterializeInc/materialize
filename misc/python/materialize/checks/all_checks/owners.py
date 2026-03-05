@@ -199,20 +199,20 @@ class Owners(Check):
             + dedent(
                 """
                 $ psql-execute command="\\l owner_db*"
-                \\                                                 List of databases
-                    Name    |     Owner     | Encoding | Locale Provider | Collate | Ctype | Locale | ICU Rules | Access privileges
-                ------------+---------------+----------+-----------------+---------+-------+--------+-----------+-------------------
-                 owner_db1  | owner_role_01 | UTF8     | libc            | C       | C     |        |           |
-                 owner_db10 | owner_role_02 | UTF8     | libc            | C       | C     |        |           |
-                 owner_db11 | owner_role_03 | UTF8     | libc            | C       | C     |        |           |
-                 owner_db2  | other_owner   | UTF8     | libc            | C       | C     |        |           |
-                 owner_db3  | owner_role_01 | UTF8     | libc            | C       | C     |        |           |
-                 owner_db4  | other_owner   | UTF8     | libc            | C       | C     |        |           |
-                 owner_db5  | owner_role_01 | UTF8     | libc            | C       | C     |        |           |
-                 owner_db6  | other_owner   | UTF8     | libc            | C       | C     |        |           |
-                 owner_db7  | owner_role_02 | UTF8     | libc            | C       | C     |        |           |
-                 owner_db8  | other_owner   | UTF8     | libc            | C       | C     |        |           |
-                 owner_db9  | owner_role_01 | UTF8     | libc            | C       | C     |        |           |
+                \\                                                   List of databases
+                    Name    |     Owner     | Encoding | Locale Provider | Collate | Ctype | ICU Locale | ICU Rules | Access privileges
+                ------------+---------------+----------+-----------------+---------+-------+------------+-----------+-------------------
+                 owner_db1  | owner_role_01 | UTF8     | libc            | C       | C     |            |           |
+                 owner_db10 | owner_role_02 | UTF8     | libc            | C       | C     |            |           |
+                 owner_db11 | owner_role_03 | UTF8     | libc            | C       | C     |            |           |
+                 owner_db2  | other_owner   | UTF8     | libc            | C       | C     |            |           |
+                 owner_db3  | owner_role_01 | UTF8     | libc            | C       | C     |            |           |
+                 owner_db4  | other_owner   | UTF8     | libc            | C       | C     |            |           |
+                 owner_db5  | owner_role_01 | UTF8     | libc            | C       | C     |            |           |
+                 owner_db6  | other_owner   | UTF8     | libc            | C       | C     |            |           |
+                 owner_db7  | owner_role_02 | UTF8     | libc            | C       | C     |            |           |
+                 owner_db8  | other_owner   | UTF8     | libc            | C       | C     |            |           |
+                 owner_db9  | owner_role_01 | UTF8     | libc            | C       | C     |            |           |
 
 
                 $ psql-execute command="\\dn owner_schema*"
@@ -232,7 +232,7 @@ class Owners(Check):
                  owner_schema9  | owner_role_01
 
                 $ psql-execute command="\\dt owner_t*"
-                \\               List of tables
+                \\             List of relations
                  Schema |   Name    | Type  |     Owner
                 --------+-----------+-------+---------------
                  public | owner_t1  | table | owner_role_01
@@ -248,7 +248,7 @@ class Owners(Check):
                  public | owner_t9  | table | owner_role_01
 
                 $ psql-execute command="\\di owner_i*"
-                \\                    List of indexes
+                \\                   List of relations
                  Schema |   Name    | Type  |     Owner     |   Table
                 --------+-----------+-------+---------------+-----------
                  public | owner_i1  | index | owner_role_01 | owner_t1
@@ -264,7 +264,7 @@ class Owners(Check):
                  public | owner_i9  | index | owner_role_01 | owner_t9
 
                 $ psql-execute command="\\dv owner_v*"
-                \\               List of views
+                \\             List of relations
                  Schema |   Name    | Type |     Owner
                 --------+-----------+------+---------------
                  public | owner_v1  | view | owner_role_01
