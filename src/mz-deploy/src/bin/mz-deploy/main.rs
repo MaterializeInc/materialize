@@ -1,3 +1,8 @@
+//! Binary entry point for `mz-deploy`.
+//!
+//! Parses CLI arguments via `clap`, loads project and profile configuration,
+//! and dispatches to the appropriate command in [`mz_deploy::cli`].
+
 use clap::CommandFactory;
 use clap::{Parser, Subcommand};
 use mz_build_info::{BuildInfo, build_info};

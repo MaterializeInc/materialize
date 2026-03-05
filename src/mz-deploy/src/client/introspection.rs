@@ -1,7 +1,9 @@
-//! Database introspection operations.
+//! Read-only catalog introspection queries.
 //!
-//! This module contains methods for querying database metadata,
-//! such as checking for existence of schemas, clusters, and objects.
+//! Methods on [`IntrospectionClient`] query the `mz_catalog` and
+//! `information_schema` to inspect the live environment without modifying it.
+//! Provides batch existence checks for schemas, clusters, and objects, as well
+//! as dependency lookups used during deployment planning and sink repointing.
 
 use crate::client::connection::{Client, IntrospectionClient};
 use crate::client::errors::ConnectionError;

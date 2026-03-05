@@ -1,3 +1,9 @@
+//! Scaffold a new mz-deploy project directory.
+//!
+//! Creates the standard directory layout (`models/`, `clusters/`, `roles/`),
+//! writes starter `project.toml` and `profiles.toml` files, and optionally
+//! initializes a git repository.
+
 use crate::cli::CliError;
 use crate::utils::progress;
 use std::fs;

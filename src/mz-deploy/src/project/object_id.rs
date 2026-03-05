@@ -1,3 +1,9 @@
+//! Fully qualified `database.schema.object` identifier type.
+//!
+//! [`ObjectId`] is the canonical way to refer to a database object throughout
+//! the project pipeline. It is used as a map key, dependency graph node, and
+//! display type in error messages.
+
 use mz_sql_parser::ast::{Ident, RawItemName, UnresolvedItemName};
 
 /// A fully qualified object identifier.

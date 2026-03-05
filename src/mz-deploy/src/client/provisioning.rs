@@ -1,4 +1,9 @@
-//! Provisioning operations for databases, schemas, and clusters.
+//! DDL provisioning operations.
+//!
+//! Methods on [`ProvisioningClient`] issue `CREATE … IF NOT EXISTS` and
+//! `ALTER` statements to ensure that the target region's databases, schemas,
+//! and clusters match the project definition. These are idempotent and run
+//! before any object-level deployment.
 
 use crate::client::connection::ProvisioningClient;
 use crate::client::errors::ConnectionError;

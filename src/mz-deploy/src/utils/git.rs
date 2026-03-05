@@ -1,3 +1,8 @@
+//! Git metadata helpers.
+//!
+//! Retrieves the current commit hash and detects uncommitted changes in the
+//! project directory. Used to tag deployments with source-control context.
+
 use std::process::Command;
 
 /// Get the current git commit hash of the project directory.

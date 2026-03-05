@@ -1,3 +1,14 @@
+//! Configuration loading for profiles and project settings.
+//!
+//! Loads connection profiles from `profiles.toml` (searched in the project's
+//! `.mz/` directory, then the global `~/.mz/` directory) and project settings
+//! from `project.toml`. Key types:
+//!
+//! - [`Profile`] — Resolved connection details (host, port, credentials).
+//! - [`ProfilesConfig`] — All profiles loaded from a single `profiles.toml`.
+//! - [`ProjectSettings`] — Per-project config: active profile name and optional
+//!   Materialize version / Docker image override.
+
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs;

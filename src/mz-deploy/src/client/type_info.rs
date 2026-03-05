@@ -1,4 +1,9 @@
-//! Type/column introspection operations for mz-deploy.
+//! Column-schema introspection for the `types.lock` system.
+//!
+//! Methods on [`TypeInfoClient`] run `SHOW COLUMNS` against external
+//! dependencies and project tables on the live region, returning their
+//! column names, types, and nullability as a [`Types`](crate::types::Types)
+//! snapshot. This is the data source for `gen-data-contracts`.
 
 use crate::client::connection::TypeInfoClient;
 use crate::client::errors::ConnectionError;

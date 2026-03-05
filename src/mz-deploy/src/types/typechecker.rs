@@ -1,4 +1,14 @@
-//! Type checking trait and error types for Materialize projects.
+//! Type checking trait and Docker-based validation for Materialize projects.
+//!
+//! The [`TypeChecker`] trait defines a single `typecheck` method that validates
+//! every object in a planned project. The default implementation (driven by
+//! [`typecheck_with_client`]) works by:
+//!
+//! 1. Creating temporary tables for external dependencies using schemas from
+//!    `types.lock`.
+//! 2. Creating temporary views for each project object in topological order.
+//! 3. Collecting per-object errors into [`TypeCheckErrors`] with rustc-style
+//!    formatting that includes file paths, SQL snippets, and database hints.
 
 use crate::client::Client;
 use crate::project::ast::Statement;

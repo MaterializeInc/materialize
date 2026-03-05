@@ -1,3 +1,9 @@
+//! SQL parsing with `mz_sql_parser`.
+//!
+//! Wraps `mz_sql_parser` to parse `.sql` files into AST statements, attaching
+//! file-path context to error messages so that parse failures point back to
+//! the originating source file.
+
 use super::error::ParseError;
 use mz_sql_parser::ast::{Raw, Statement};
 use std::path::PathBuf;

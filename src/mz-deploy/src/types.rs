@@ -1,3 +1,35 @@
+//! Data-contract system for external dependencies.
+//!
+//! When a project references objects it does not own (e.g. tables created by an
+//! upstream ingestion pipeline), mz-deploy needs to know their column schemas so
+//! it can type-check views that depend on them. This module manages that contract
+//! through the `types.lock` file.
+//!
+//! ## Key Types
+//!
+//! - [`Types`] — In-memory representation of a `types.lock` (or `types.cache`)
+//!   file: a versioned map from fully-qualified object names to column schemas.
+//! - [`ColumnType`] — A single column's type name and nullability.
+//! - [`TypeChecker`] — Trait for validating a planned project's SQL against a
+//!   real Materialize instance (implemented via a Docker container).
+//!
+//! ## Lock File Flow
+//!
+//! 1. `gen-data-contracts` queries the live region via [`client::type_info`] and
+//!    writes `types.lock`.
+//! 2. During `compile`, the lock file is loaded and its schemas are used to
+//!    resolve external dependency columns.
+//! 3. During `compile --type-check`, the [`TypeChecker`] spins up a Materialize
+//!    Docker container, stages external dependencies as temporary tables using
+//!    the lock file schemas, and validates every project view in topological
+//!    order.
+//!
+//! ## Submodules
+//!
+//! - **[`typechecker`]** — [`TypeChecker`] trait definition, the
+//!   [`typecheck_with_client`] helper, and structured error types for
+//!   per-object type-check failures.
+
 mod typechecker;
 
 pub use typechecker::{

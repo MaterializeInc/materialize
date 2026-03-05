@@ -1,7 +1,12 @@
 //! Error types for the client module.
 //!
-//! This module contains all error types used by the database client,
-//! including connection errors and validation errors.
+//! Two top-level enums cover different failure modes:
+//!
+//! - [`ConnectionError`] — Transport and query failures: connection refused,
+//!   SQL errors, missing dependencies, configuration problems, and DDL
+//!   failures.
+//! - [`DatabaseValidationError`] — Semantic mismatches detected during
+//!   pre-deployment validation (e.g., schema conflicts, unexpected objects).
 
 use crate::client::config::ConfigError;
 use crate::project::SchemaQualifier;

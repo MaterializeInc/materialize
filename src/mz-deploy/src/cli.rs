@@ -1,4 +1,22 @@
-//! CLI-specific functionality and error types.
+//! Command-line interface for mz-deploy.
+//!
+//! This module defines the CLI structure and shared types used across commands.
+//!
+//! ## Submodules
+//!
+//! - **[`commands`]** — One module per CLI subcommand (`stage`, `apply`, `compile`, etc.),
+//!   each exposing a `run()` entry point.
+//! - **[`executor`]** — Orchestrates the full command lifecycle: loads configuration,
+//!   establishes database connections, and dispatches to the appropriate command module.
+//! - **`error`** — [`CliError`] enum that unifies all user-facing errors with optional
+//!   hints, re-exported at this level for convenience.
+//!
+//! ## Top-level Items
+//!
+//! - [`TypeCheckMode`] — Controls whether SQL type checking runs against a local
+//!   Materialize Docker container.
+//! - [`display_error`] — Renders a [`CliError`] to stderr with rustc-style colored
+//!   formatting and hint messages.
 
 pub mod commands;
 mod error;
