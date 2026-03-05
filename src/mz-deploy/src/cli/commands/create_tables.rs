@@ -60,15 +60,15 @@ pub async fn run(
         .await
         .map_err(CliError::Connection)?;
 
-    (client).validate_privileges(&planned_project).await?;
-    client.validate_cluster_isolation(&planned_project).await?;
-    client.validate_sources_exist(&planned_project).await?;
+    (client).validation().validate_privileges(&planned_project).await?;
+    client.validation().validate_cluster_isolation(&planned_project).await?;
+    client.validation().validate_sources_exist(&planned_project).await?;
     verbose!("Validation successful");
 
     project::deployment_snapshot::initialize_deployment_table(&client).await?;
 
     // Validate deployment doesn't already exist
-    let existing_metadata = client.get_deployment_metadata(&deploy_id).await?;
+    let existing_metadata = client.deployments().get_deployment_metadata(&deploy_id).await?;
     if existing_metadata.is_some() {
         return Err(CliError::InvalidEnvironmentName {
             name: format!("deployment '{}' already exists", deploy_id),
@@ -85,8 +85,8 @@ pub async fn run(
     let table_objects = planned_project.get_sorted_objects_filtered(&all_object_ids)?;
     println!("Found {} table(s) in project", table_objects.len());
 
-    let existing_tables = client.check_tables_exist(&table_object_ids).await?;
-    let existing_sources = client.check_sources_exist(&source_object_ids).await?;
+    let existing_tables = client.introspection().check_tables_exist(&table_object_ids).await?;
+    let existing_sources = client.introspection().check_sources_exist(&source_object_ids).await?;
     let existing_objects: BTreeSet<_> = existing_tables.union(&existing_sources).cloned().collect();
     let tables_to_create: Vec<_> = table_objects
         .into_iter()

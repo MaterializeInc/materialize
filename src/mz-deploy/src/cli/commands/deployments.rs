@@ -28,8 +28,8 @@ pub async fn run(profile: &Profile, allowed_lag_secs: i64) -> Result<(), CliErro
         .await
         .map_err(CliError::Connection)?;
 
-    client.create_deployments().await?;
-    let deployments = client.list_staging_deployments().await?;
+    client.deployments().create_deployments().await?;
+    let deployments = client.deployments().list_staging_deployments().await?;
 
     if deployments.is_empty() {
         println!("No active staging deployments.");
@@ -82,7 +82,7 @@ pub async fn run(profile: &Profile, allowed_lag_secs: i64) -> Result<(), CliErro
 
         // Get hydration status for this deployment
         match client
-            .get_deployment_hydration_status_with_lag(env_name, allowed_lag_secs)
+            .deployments().get_deployment_hydration_status_with_lag(env_name, allowed_lag_secs)
             .await
         {
             Ok(hydration_status) if !hydration_status.is_empty() => {

@@ -70,7 +70,7 @@ async fn run_snapshot(
     allowed_lag_secs: i64,
 ) -> Result<(), CliError> {
     let statuses = client
-        .get_deployment_hydration_status_with_lag(deploy_id, allowed_lag_secs)
+        .deployments().get_deployment_hydration_status_with_lag(deploy_id, allowed_lag_secs)
         .await?;
 
     if statuses.is_empty() {
@@ -227,7 +227,7 @@ async fn run_continuous(
 ) -> Result<(), CliError> {
     // Get initial hydration status
     let initial_statuses = client
-        .get_deployment_hydration_status_with_lag(deploy_id, allowed_lag_secs)
+        .deployments().get_deployment_hydration_status_with_lag(deploy_id, allowed_lag_secs)
         .await?;
 
     if initial_statuses.is_empty() {
@@ -289,7 +289,8 @@ async fn monitor_hydration_live(
         allowed_lag_secs,
     )?;
 
-    let stream = client.subscribe_deployment_hydration(deploy_id, allowed_lag_secs);
+    let mut deployments = client.deployments_mut();
+    let stream = deployments.subscribe_deployment_hydration(deploy_id, allowed_lag_secs);
     let mut stream = pin!(stream);
 
     // Hide cursor during updates

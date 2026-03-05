@@ -4,6 +4,7 @@
 //! such as checking for existence of schemas, clusters, and objects.
 
 use crate::client::errors::ConnectionError;
+use crate::client::connection::IntrospectionClient;
 use crate::client::models::{Cluster, ClusterConfig, ClusterGrant, ClusterOptions, ClusterReplica};
 use crate::project::SchemaQualifier;
 use crate::project::object_id::ObjectId;
@@ -870,4 +871,170 @@ pub async fn drop_staging_clusters(
     }
 
     Ok(())
+}
+
+impl IntrospectionClient<'_> {
+    /// Get the current Materialize user/role.
+    pub async fn get_current_user(&self) -> Result<String, ConnectionError> {
+        get_current_user(self.client.postgres_client()).await
+    }
+
+    /// Check which objects from a set exist in the production database.
+    pub async fn check_objects_exist(
+        &self,
+        objects: &BTreeSet<ObjectId>,
+    ) -> Result<Vec<String>, ConnectionError> {
+        check_objects_exist(self.client.postgres_client(), objects).await
+    }
+
+    /// Check which tables from the given set exist in the database.
+    pub async fn check_tables_exist(
+        &self,
+        tables: &BTreeSet<ObjectId>,
+    ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
+        check_tables_exist(self.client.postgres_client(), tables).await
+    }
+
+    /// Check which sources from the given set exist in the database.
+    pub async fn check_sources_exist(
+        &self,
+        sources: &BTreeSet<ObjectId>,
+    ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
+        check_sources_exist(self.client.postgres_client(), sources).await
+    }
+
+    /// Check which sinks from the given set exist in the database.
+    pub async fn check_sinks_exist(
+        &self,
+        sinks: &BTreeSet<ObjectId>,
+    ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
+        check_sinks_exist(self.client.postgres_client(), sinks).await
+    }
+
+    /// Check which schemas from a set of (database, schema) pairs exist.
+    pub async fn check_schemas_exist(
+        &self,
+        schemas: &[(String, String)],
+    ) -> Result<BTreeSet<(String, String)>, ConnectionError> {
+        check_schemas_exist(self.client.postgres_client(), schemas).await
+    }
+
+    /// Check which clusters from a set of names exist.
+    pub async fn check_clusters_exist(
+        &self,
+        clusters: &[String],
+    ) -> Result<BTreeSet<String>, ConnectionError> {
+        check_clusters_exist(self.client.postgres_client(), clusters).await
+    }
+
+    /// Find sinks that depend on objects in the specified schemas.
+    pub async fn find_sinks_depending_on_schemas(
+        &self,
+        schemas: &[SchemaQualifier],
+    ) -> Result<Vec<DependentSink>, ConnectionError> {
+        find_sinks_depending_on_schemas(self.client.postgres_client(), schemas).await
+    }
+
+    /// Check if an object (MV, table, source) exists in the specified schema.
+    pub async fn object_exists(
+        &self,
+        database: &str,
+        schema: &str,
+        object: &str,
+    ) -> Result<bool, ConnectionError> {
+        object_exists(self.client.postgres_client(), database, schema, object).await
+    }
+
+    /// Get staging schema names for a specific deployment.
+    pub async fn get_staging_schemas(
+        &self,
+        deploy_id: &str,
+    ) -> Result<Vec<SchemaQualifier>, ConnectionError> {
+        get_staging_schemas(self.client.postgres_client(), deploy_id).await
+    }
+
+    /// Get staging cluster names for a specific deployment.
+    pub async fn get_staging_clusters(
+        &self,
+        deploy_id: &str,
+    ) -> Result<Vec<String>, ConnectionError> {
+        get_staging_clusters(self.client.postgres_client(), deploy_id).await
+    }
+
+    /// Drop all objects in a schema.
+    pub async fn drop_schema_objects(
+        &self,
+        database: &str,
+        schema: &str,
+    ) -> Result<Vec<String>, ConnectionError> {
+        drop_schema_objects(self.client.postgres_client(), database, schema).await
+    }
+
+    /// Drop specific objects by their ObjectIds.
+    pub async fn drop_objects(
+        &self,
+        objects: &BTreeSet<ObjectId>,
+    ) -> Result<Vec<String>, ConnectionError> {
+        drop_objects(self.client.postgres_client(), objects).await
+    }
+
+    /// Drop staging schemas by name.
+    pub async fn drop_staging_schemas(
+        &self,
+        schemas: &[SchemaQualifier],
+    ) -> Result<(), ConnectionError> {
+        drop_staging_schemas(self.client.postgres_client(), schemas).await
+    }
+
+    /// Drop staging clusters by name.
+    pub async fn drop_staging_clusters(&self, clusters: &[String]) -> Result<(), ConnectionError> {
+        drop_staging_clusters(self.client.postgres_client(), clusters).await
+    }
+
+    /// Check if a schema exists in the specified database.
+    pub async fn schema_exists(
+        &self,
+        database: &str,
+        schema: &str,
+    ) -> Result<bool, ConnectionError> {
+        schema_exists(self.client.postgres_client(), database, schema).await
+    }
+
+    /// Check if a role exists.
+    pub async fn role_exists(&self, name: &str) -> Result<bool, ConnectionError> {
+        role_exists(self.client.postgres_client(), name).await
+    }
+
+    /// Get the members granted to a role.
+    pub async fn get_role_members(&self, name: &str) -> Result<Vec<String>, ConnectionError> {
+        get_role_members(self.client.postgres_client(), name).await
+    }
+
+    /// Get session default parameter names for a role.
+    pub async fn get_role_parameters(&self, name: &str) -> Result<Vec<String>, ConnectionError> {
+        get_role_parameters(self.client.postgres_client(), name).await
+    }
+
+    /// Check if a cluster exists.
+    pub async fn cluster_exists(&self, name: &str) -> Result<bool, ConnectionError> {
+        cluster_exists(self.client.postgres_client(), name).await
+    }
+
+    /// Get a cluster by name.
+    pub async fn get_cluster(&self, name: &str) -> Result<Option<Cluster>, ConnectionError> {
+        get_cluster(self.client.postgres_client(), name).await
+    }
+
+    /// List all clusters.
+    pub async fn list_clusters(&self) -> Result<Vec<Cluster>, ConnectionError> {
+        list_clusters(self.client.postgres_client()).await
+    }
+
+    /// Get cluster configuration including replicas and grants.
+    pub async fn get_cluster_config(
+        &self,
+        name: &str,
+    ) -> Result<Option<ClusterConfig>, ConnectionError> {
+        get_cluster_config(self.client.postgres_client(), name).await
+    }
 }

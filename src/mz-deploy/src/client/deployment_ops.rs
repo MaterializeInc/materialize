@@ -5,14 +5,17 @@
 //! and managing deployment lifecycle (staging, promotion, abort).
 
 use crate::client::errors::ConnectionError;
+use crate::client::connection::{DeploymentsClient, DeploymentsClientMut};
 use crate::client::models::{
     ApplyState, ConflictRecord, DeploymentDetails, DeploymentHistoryEntry, DeploymentKind,
     DeploymentMetadata, DeploymentObjectRecord, PendingStatement, SchemaDeploymentRecord,
     StagingDeployment,
 };
+use async_stream::try_stream;
 use crate::project::deployment_snapshot::DeploymentSnapshot;
 use crate::project::object_id::ObjectId;
 use chrono::{DateTime, Utc};
+use futures::Stream;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use tokio_postgres::Client as PgClient;
@@ -1388,6 +1391,340 @@ pub async fn get_replacement_mvs(
             replacement_schema: row.get("replacement_schema"),
         })
         .collect())
+}
+
+impl DeploymentsClient<'_> {
+    pub async fn create_deployments(&self) -> Result<(), ConnectionError> {
+        create_deployments(self.client.postgres_client()).await
+    }
+
+    pub async fn insert_schema_deployments(
+        &self,
+        deployments: &[SchemaDeploymentRecord],
+    ) -> Result<(), ConnectionError> {
+        insert_schema_deployments(self.client.postgres_client(), deployments).await
+    }
+
+    pub async fn append_deployment_objects(
+        &self,
+        objects: &[DeploymentObjectRecord],
+    ) -> Result<(), ConnectionError> {
+        append_deployment_objects(self.client.postgres_client(), objects).await
+    }
+
+    pub async fn insert_deployment_clusters(
+        &self,
+        deploy_id: &str,
+        clusters: &[String],
+    ) -> Result<(), ConnectionError> {
+        insert_deployment_clusters(self.client.postgres_client(), deploy_id, clusters).await
+    }
+
+    pub async fn get_deployment_clusters(
+        &self,
+        deploy_id: &str,
+    ) -> Result<Vec<String>, ConnectionError> {
+        get_deployment_clusters(self.client.postgres_client(), deploy_id).await
+    }
+
+    pub async fn validate_deployment_clusters(&self, deploy_id: &str) -> Result<(), ConnectionError> {
+        validate_deployment_clusters(self.client.postgres_client(), deploy_id).await
+    }
+
+    pub async fn get_deployment_hydration_status(
+        &self,
+        deploy_id: &str,
+    ) -> Result<Vec<ClusterStatusContext>, ConnectionError> {
+        get_deployment_hydration_status(
+            self.client.postgres_client(),
+            deploy_id,
+            DEFAULT_ALLOWED_LAG_SECS,
+        )
+        .await
+    }
+
+    pub async fn get_deployment_hydration_status_with_lag(
+        &self,
+        deploy_id: &str,
+        allowed_lag_secs: i64,
+    ) -> Result<Vec<ClusterStatusContext>, ConnectionError> {
+        get_deployment_hydration_status(self.client.postgres_client(), deploy_id, allowed_lag_secs).await
+    }
+
+    pub async fn delete_deployment_clusters(&self, deploy_id: &str) -> Result<(), ConnectionError> {
+        delete_deployment_clusters(self.client.postgres_client(), deploy_id).await
+    }
+
+    pub async fn update_promoted_at(&self, deploy_id: &str) -> Result<(), ConnectionError> {
+        update_promoted_at(self.client.postgres_client(), deploy_id).await
+    }
+
+    pub async fn delete_deployment(&self, deploy_id: &str) -> Result<(), ConnectionError> {
+        delete_deployment(self.client.postgres_client(), deploy_id).await
+    }
+
+    pub async fn get_schema_deployments(
+        &self,
+        deploy_id: Option<&str>,
+    ) -> Result<Vec<SchemaDeploymentRecord>, ConnectionError> {
+        get_schema_deployments(self.client.postgres_client(), deploy_id).await
+    }
+
+    pub async fn get_deployment_objects(
+        &self,
+        deploy_id: Option<&str>,
+    ) -> Result<DeploymentSnapshot, ConnectionError> {
+        get_deployment_objects(self.client.postgres_client(), deploy_id).await
+    }
+
+    pub async fn get_deployment_metadata(
+        &self,
+        deploy_id: &str,
+    ) -> Result<Option<DeploymentMetadata>, ConnectionError> {
+        get_deployment_metadata(self.client.postgres_client(), deploy_id).await
+    }
+
+    pub async fn get_deployment_details(
+        &self,
+        deploy_id: &str,
+    ) -> Result<Option<DeploymentDetails>, ConnectionError> {
+        get_deployment_details(self.client.postgres_client(), deploy_id).await
+    }
+
+    pub async fn list_staging_deployments(
+        &self,
+    ) -> Result<BTreeMap<String, StagingDeployment>, ConnectionError> {
+        list_staging_deployments(self.client.postgres_client()).await
+    }
+
+    pub async fn list_deployment_history(
+        &self,
+        limit: Option<usize>,
+    ) -> Result<Vec<DeploymentHistoryEntry>, ConnectionError> {
+        list_deployment_history(self.client.postgres_client(), limit).await
+    }
+
+    pub async fn check_deployment_conflicts(
+        &self,
+        deploy_id: &str,
+    ) -> Result<Vec<ConflictRecord>, ConnectionError> {
+        check_deployment_conflicts(self.client.postgres_client(), deploy_id).await
+    }
+
+    pub async fn deployment_table_exists(&self) -> Result<bool, ConnectionError> {
+        deployment_table_exists(self.client.postgres_client()).await
+    }
+
+    pub async fn create_apply_state_schemas(&self, deploy_id: &str) -> Result<(), ConnectionError> {
+        create_apply_state_schemas(self.client.postgres_client(), deploy_id).await
+    }
+
+    pub async fn get_apply_state(&self, deploy_id: &str) -> Result<ApplyState, ConnectionError> {
+        get_apply_state(self.client.postgres_client(), deploy_id).await
+    }
+
+    pub async fn delete_apply_state_schemas(&self, deploy_id: &str) -> Result<(), ConnectionError> {
+        delete_apply_state_schemas(self.client.postgres_client(), deploy_id).await
+    }
+
+    pub async fn insert_pending_statements(
+        &self,
+        statements: &[PendingStatement],
+    ) -> Result<(), ConnectionError> {
+        insert_pending_statements(self.client.postgres_client(), statements).await
+    }
+
+    pub async fn get_pending_statements(
+        &self,
+        deploy_id: &str,
+    ) -> Result<Vec<PendingStatement>, ConnectionError> {
+        get_pending_statements(self.client.postgres_client(), deploy_id).await
+    }
+
+    pub async fn mark_statement_executed(
+        &self,
+        deploy_id: &str,
+        sequence_num: i32,
+    ) -> Result<(), ConnectionError> {
+        mark_statement_executed(self.client.postgres_client(), deploy_id, sequence_num).await
+    }
+
+    pub async fn delete_pending_statements(&self, deploy_id: &str) -> Result<(), ConnectionError> {
+        delete_pending_statements(self.client.postgres_client(), deploy_id).await
+    }
+
+    pub async fn insert_replacement_mvs(
+        &self,
+        records: &[super::models::ReplacementMvRecord],
+    ) -> Result<(), ConnectionError> {
+        insert_replacement_mvs(self.client.postgres_client(), records).await
+    }
+
+    pub async fn get_replacement_mvs(
+        &self,
+        deploy_id: &str,
+    ) -> Result<Vec<super::models::ReplacementMvRecord>, ConnectionError> {
+        get_replacement_mvs(self.client.postgres_client(), deploy_id).await
+    }
+
+    pub async fn delete_replacement_mvs(&self, deploy_id: &str) -> Result<(), ConnectionError> {
+        delete_replacement_mvs(self.client.postgres_client(), deploy_id).await
+    }
+}
+
+impl DeploymentsClientMut<'_> {
+    /// Subscribe to hydration status changes for a staging deployment.
+    pub fn subscribe_deployment_hydration(
+        &mut self,
+        deploy_id: &str,
+        allowed_lag_secs: i64,
+    ) -> impl Stream<Item = Result<HydrationStatusUpdate, ConnectionError>> + '_ {
+        let deploy_id = deploy_id.to_string();
+        let pg_client = self.client.postgres_client_mut();
+
+        try_stream! {
+            let txn = pg_client.transaction().await?;
+            let pattern = format!("%_{}", deploy_id);
+
+            let subscribe_sql = format!(
+                r#"
+                DECLARE c CURSOR FOR SUBSCRIBE (
+                    WITH
+                    problematic_replicas AS (
+                        SELECT replica_id
+                        FROM mz_internal.mz_cluster_replica_status_history
+                        WHERE occurred_at + INTERVAL '24 hours' > mz_now()
+                          AND reason = 'oom-killed'
+                        GROUP BY replica_id
+                        HAVING COUNT(*) >= 3
+                    ),
+                    cluster_health AS (
+                        SELECT
+                            c.name AS cluster_name,
+                            c.id AS cluster_id,
+                            COUNT(r.id) AS total_replicas,
+                            COUNT(pr.replica_id) AS problematic_replicas
+                        FROM mz_clusters c
+                        LEFT JOIN mz_cluster_replicas r ON c.id = r.cluster_id
+                        LEFT JOIN problematic_replicas pr ON r.id = pr.replica_id
+                        WHERE c.name LIKE $1
+                        GROUP BY c.name, c.id
+                    ),
+                    hydration_counts AS (
+                        SELECT
+                            c.name AS cluster_name,
+                            r.id AS replica_id,
+                            COUNT(*) FILTER (WHERE mhs.hydrated) AS hydrated,
+                            COUNT(*) AS total
+                        FROM mz_clusters c
+                        JOIN mz_cluster_replicas r ON c.id = r.cluster_id
+                        LEFT JOIN mz_internal.mz_hydration_statuses mhs ON mhs.replica_id = r.id
+                        WHERE c.name LIKE $1
+                        GROUP BY c.name, r.id
+                    ),
+                    hydration_best AS (
+                        SELECT cluster_name, MAX(hydrated) AS hydrated, MAX(total) AS total
+                        FROM hydration_counts
+                        GROUP BY cluster_name
+                    ),
+                    cluster_lag AS (
+                        SELECT
+                            c.name AS cluster_name,
+                            MAX(EXTRACT(EPOCH FROM wgl.lag)) AS max_lag_secs
+                        FROM mz_clusters c
+                        JOIN mz_cluster_replicas r ON c.id = r.cluster_id
+                        JOIN mz_internal.mz_hydration_statuses mhs ON mhs.replica_id = r.id
+                        JOIN mz_internal.mz_wallclock_global_lag wgl ON wgl.object_id = mhs.object_id
+                        WHERE c.name LIKE $1
+                        GROUP BY c.name
+                    )
+                    SELECT
+                        ch.cluster_name,
+                        ch.cluster_id,
+                        CASE
+                            WHEN ch.total_replicas = 0 THEN 'failing'
+                            WHEN ch.total_replicas = ch.problematic_replicas THEN 'failing'
+                            WHEN COALESCE(hb.hydrated, 0) < COALESCE(hb.total, 0) THEN 'hydrating'
+                            WHEN COALESCE(cl.max_lag_secs, 0) > {allowed_lag_secs} THEN 'lagging'
+                            ELSE 'ready'
+                        END AS status,
+                        CASE
+                            WHEN ch.total_replicas = 0 THEN 'no_replicas'
+                            WHEN ch.total_replicas = ch.problematic_replicas THEN 'all_replicas_problematic'
+                            ELSE NULL
+                        END AS failure_reason,
+                        COALESCE(hb.hydrated, 0) AS hydrated_count,
+                        COALESCE(hb.total, 0) AS total_count,
+                        COALESCE(cl.max_lag_secs, 0)::bigint AS max_lag_secs,
+                        ch.total_replicas,
+                        ch.problematic_replicas
+                    FROM cluster_health ch
+                    LEFT JOIN hydration_best hb ON ch.cluster_name = hb.cluster_name
+                    LEFT JOIN cluster_lag cl ON ch.cluster_name = cl.cluster_name
+                )
+            "#,
+                allowed_lag_secs = allowed_lag_secs
+            );
+
+            txn.execute(&subscribe_sql, &[&pattern]).await?;
+
+            loop {
+                let rows = txn.query("FETCH ALL c", &[]).await?;
+                if rows.is_empty() {
+                    continue;
+                }
+
+                for row in rows {
+                    let mz_diff: i64 = row.get(1);
+                    if mz_diff == -1 {
+                        continue;
+                    }
+
+                    let status_str: String = row.get(4);
+                    let failure_reason_str: Option<String> = row.get(5);
+                    let hydrated_count: i64 = row.get(6);
+                    let total_count: i64 = row.get(7);
+                    let max_lag_secs: i64 = row.get(8);
+                    let total_replicas: i64 = row.get(9);
+                    let problematic_replicas: i64 = row.get(10);
+
+                    let failure_reason = failure_reason_str.as_deref().map(|s| match s {
+                        "no_replicas" => FailureReason::NoReplicas,
+                        "all_replicas_problematic" => FailureReason::AllReplicasProblematic {
+                            problematic: problematic_replicas,
+                            total: total_replicas,
+                        },
+                        _ => FailureReason::NoReplicas,
+                    });
+
+                    let status = match status_str.as_str() {
+                        "ready" => ClusterDeploymentStatus::Ready,
+                        "hydrating" => ClusterDeploymentStatus::Hydrating {
+                            hydrated: hydrated_count,
+                            total: total_count,
+                        },
+                        "lagging" => ClusterDeploymentStatus::Lagging { max_lag_secs },
+                        "failing" => ClusterDeploymentStatus::Failing {
+                            reason: failure_reason.clone().unwrap_or(FailureReason::NoReplicas),
+                        },
+                        _ => ClusterDeploymentStatus::Ready,
+                    };
+
+                    yield HydrationStatusUpdate {
+                        cluster_name: row.get(2),
+                        cluster_id: row.get(3),
+                        status,
+                        failure_reason,
+                        hydrated_count,
+                        total_count,
+                        max_lag_secs,
+                        total_replicas,
+                        problematic_replicas,
+                    };
+            }
+        }
+    }
+}
 }
 
 /// Delete all replacement MV records for a deployment.

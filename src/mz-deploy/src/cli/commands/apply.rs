@@ -52,7 +52,7 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
     // Validate deployment exists and is not promoted
     crate::cli::helpers::validate_staging_deployment(&client, deploy_id).await?;
 
-    let apply_state = client.get_apply_state(deploy_id).await?;
+    let apply_state = client.deployments().get_apply_state(deploy_id).await?;
     verbose!("Apply state: {:?}", apply_state);
 
     let staging_snapshot = project::deployment_snapshot::load_from_database(&client, Some(deploy_id)).await?;
@@ -112,7 +112,7 @@ async fn execute_swap_phase(
     match apply_state {
         ApplyState::NotStarted => {
             verbose!("Creating apply state schemas...");
-            client.create_apply_state_schemas(deploy_id).await?;
+            client.deployments().create_apply_state_schemas(deploy_id).await?;
             verbose!("Executing atomic swap...");
             execute_atomic_swap(
                 client,
@@ -158,7 +158,7 @@ async fn run_post_swap_steps(
 
     verbose!("\nUpdating deployment table...");
     client
-        .update_promoted_at(deploy_id)
+        .deployments().update_promoted_at(deploy_id)
         .await
         .map_err(|source| CliError::DeploymentStateWriteFailed { source })?;
 
@@ -180,11 +180,11 @@ async fn run_post_swap_steps(
 /// This finalizes apply by clearing resume metadata and deferred-operation tables.
 async fn cleanup_apply_state(client: &Client, deploy_id: &str) -> Result<(), CliError> {
     verbose!("Cleaning up apply state...");
-    client.delete_apply_state_schemas(deploy_id).await?;
-    client.delete_pending_statements(deploy_id).await?;
-    client.delete_replacement_mvs(deploy_id).await?;
+    client.deployments().delete_apply_state_schemas(deploy_id).await?;
+    client.deployments().delete_pending_statements(deploy_id).await?;
+    client.deployments().delete_replacement_mvs(deploy_id).await?;
     client
-        .delete_deployment_clusters(deploy_id)
+        .deployments().delete_deployment_clusters(deploy_id)
         .await
         .map_err(|source| CliError::DeploymentStateWriteFailed { source })?;
     Ok(())
@@ -199,7 +199,7 @@ async fn gather_resources_and_check_conflicts(
     force: bool,
 ) -> Result<(BTreeSet<SchemaQualifier>, BTreeSet<String>, String), CliError> {
     verbose!("Checking for deployment conflicts...");
-    let conflicts = client.check_deployment_conflicts(deploy_id).await?;
+    let conflicts = client.deployments().check_deployment_conflicts(deploy_id).await?;
 
     if !conflicts.is_empty() {
         if force {
@@ -229,7 +229,7 @@ async fn gather_resources_and_check_conflicts(
     let mut staging_clusters = BTreeSet::new();
 
     // Get schemas from deploy.deployments table for this deployment
-    let deployment_records = client.get_schema_deployments(Some(deploy_id)).await?;
+    let deployment_records = client.deployments().get_schema_deployments(Some(deploy_id)).await?;
 
     // Build list of (database, staging_schema) pairs to check, filtering out Sinks and Replacement
     let schemas_to_check: Vec<(String, String)> = deployment_records
@@ -260,7 +260,7 @@ async fn gather_resources_and_check_conflicts(
         .collect();
 
     // Batch check which staging schemas exist
-    let existing_schemas = client.check_schemas_exist(&schemas_to_check).await?;
+    let existing_schemas = client.introspection().check_schemas_exist(&schemas_to_check).await?;
 
     for pair in schemas_to_check {
         if existing_schemas.contains(&pair) {
@@ -271,17 +271,17 @@ async fn gather_resources_and_check_conflicts(
     }
 
     // Validate that all clusters in the deployment still exist
-    client.validate_deployment_clusters(deploy_id).await?;
+    client.deployments().validate_deployment_clusters(deploy_id).await?;
 
     // Get clusters from deploy.clusters table
-    let cluster_names = client.get_deployment_clusters(deploy_id).await?;
+    let cluster_names = client.deployments().get_deployment_clusters(deploy_id).await?;
 
     // Batch check which staging clusters exist
     let staging_cluster_names: Vec<String> = cluster_names
         .iter()
         .map(|name| format!("{}{}", name, staging_suffix))
         .collect();
-    let existing_clusters = client.check_clusters_exist(&staging_cluster_names).await?;
+    let existing_clusters = client.introspection().check_clusters_exist(&staging_cluster_names).await?;
 
     for (cluster_name, staging_cluster) in cluster_names.into_iter().zip(staging_cluster_names) {
         if existing_clusters.contains(&staging_cluster) {
@@ -406,7 +406,7 @@ async fn execute_atomic_swap(
 /// start writing to external systems. Like tables, sinks are only created if
 /// they don't already exist - the hash is ignored.
 async fn execute_pending_sinks(client: &Client, deploy_id: &str) -> Result<(), CliError> {
-    let pending = client.get_pending_statements(deploy_id).await?;
+    let pending = client.deployments().get_pending_statements(deploy_id).await?;
 
     if pending.is_empty() {
         verbose!("No pending sinks to execute");
@@ -424,7 +424,7 @@ async fn execute_pending_sinks(client: &Client, deploy_id: &str) -> Result<(), C
         .collect();
 
     // Check which sinks already exist (like tables, skip existing ones)
-    let existing_sinks = client.check_sinks_exist(&sink_ids).await?;
+    let existing_sinks = client.introspection().check_sinks_exist(&sink_ids).await?;
 
     // Filter to only sinks that don't exist
     let sinks_to_create: Vec<_> = pending
@@ -488,7 +488,7 @@ async fn execute_pending_sinks(client: &Client, deploy_id: &str) -> Result<(), C
 
         // Mark the statement as executed
         client
-            .mark_statement_executed(deploy_id, stmt.sequence_num)
+            .deployments().mark_statement_executed(deploy_id, stmt.sequence_num)
             .await?;
 
         println!("  ✓ {}.{}.{}", stmt.database, stmt.schema, stmt.object);
@@ -505,7 +505,7 @@ async fn execute_pending_sinks(client: &Client, deploy_id: &str) -> Result<(), C
 /// After applying, the replacement MVs are absorbed into their targets and the
 /// replacement staging schemas become empty. Those schemas are then dropped.
 async fn apply_replacement_mvs(client: &Client, deploy_id: &str) -> Result<(), CliError> {
-    let records = client.get_replacement_mvs(deploy_id).await?;
+    let records = client.deployments().get_replacement_mvs(deploy_id).await?;
 
     if records.is_empty() {
         verbose!("No replacement MVs to apply");
@@ -599,7 +599,7 @@ async fn repoint_dependent_sinks(
 
     // Find sinks depending on objects in old schemas
     let dependent_sinks = client
-        .find_sinks_depending_on_schemas(&old_schemas)
+        .introspection().find_sinks_depending_on_schemas(&old_schemas)
         .await
         .map_err(CliError::Connection)?;
 
@@ -630,7 +630,7 @@ async fn repoint_dependent_sinks(
         .collect();
 
     let existing_fqns: BTreeSet<String> = client
-        .check_objects_exist(&replacement_ids)
+        .introspection().check_objects_exist(&replacement_ids)
         .await
         .map_err(CliError::Connection)?
         .into_iter()

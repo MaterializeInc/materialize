@@ -29,10 +29,10 @@ pub async fn run(profile: &Profile, deploy_id: &str) -> Result<(), CliError> {
         .await
         .map_err(CliError::Connection)?;
 
-    client.create_deployments().await?;
+    client.deployments().create_deployments().await?;
 
     // Get deployment metadata
-    let details = client.get_deployment_details(deploy_id).await?;
+    let details = client.deployments().get_deployment_details(deploy_id).await?;
     let Some(details) = details else {
         return Err(CliError::Message(format!(
             "Deployment '{}' not found",
@@ -41,7 +41,7 @@ pub async fn run(profile: &Profile, deploy_id: &str) -> Result<(), CliError> {
     };
 
     // Get deployment objects
-    let snapshot = client.get_deployment_objects(Some(deploy_id)).await?;
+    let snapshot = client.deployments().get_deployment_objects(Some(deploy_id)).await?;
 
     // Display deployment header
     println!(

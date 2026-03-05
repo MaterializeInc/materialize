@@ -291,7 +291,7 @@ pub async fn typecheck_with_client(
             );
 
             // Query types using flattened names (temporary views)
-            let internal_types = client.query_internal_types(&view_object_ids, true).await?;
+            let internal_types = client.types().query_internal_types(&view_object_ids, true).await?;
 
             // Write types.cache
             internal_types.write_types_cache(project_root)?;

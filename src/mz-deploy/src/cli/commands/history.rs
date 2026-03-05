@@ -32,8 +32,8 @@ pub async fn run(profile: &Profile, limit: Option<usize>) -> Result<(), CliError
         .await
         .map_err(CliError::Connection)?;
 
-    client.create_deployments().await?;
-    let history = client.list_deployment_history(limit).await?;
+    client.deployments().create_deployments().await?;
+    let history = client.deployments().list_deployment_history(limit).await?;
 
     if history.is_empty() {
         println!("No deployment history found.");

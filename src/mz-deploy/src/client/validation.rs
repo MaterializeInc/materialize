@@ -4,6 +4,7 @@
 //! including checking for required databases, schemas, clusters, and privileges.
 
 use crate::client::errors::DatabaseValidationError;
+use crate::client::connection::ValidationClient;
 use crate::project::ast::Statement;
 use crate::project::object_id::ObjectId;
 use crate::project::planned;
@@ -380,6 +381,63 @@ fn build_compilation_errors(
         }
     }
     errors
+}
+
+impl ValidationClient<'_> {
+    /// Validate that all required databases, schemas, and external dependencies exist.
+    pub async fn validate_project(
+        &self,
+        planned_project: &planned::Project,
+        project_root: &Path,
+    ) -> Result<(), DatabaseValidationError> {
+        validate_project_impl(self.client.postgres_client(), planned_project, project_root).await
+    }
+
+    /// Validate that sources and sinks don't share clusters with indexes or materialized views.
+    pub async fn validate_cluster_isolation(
+        &self,
+        planned_project: &planned::Project,
+    ) -> Result<(), DatabaseValidationError> {
+        validate_cluster_isolation_impl(self.client.postgres_client(), planned_project).await
+    }
+
+    /// Validate that the user has sufficient privileges to deploy the project.
+    pub async fn validate_privileges(
+        &self,
+        planned_project: &planned::Project,
+    ) -> Result<(), DatabaseValidationError> {
+        validate_privileges_impl(self.client.postgres_client(), planned_project).await
+    }
+
+    /// Validate that all sources referenced by CREATE TABLE FROM SOURCE statements exist.
+    pub async fn validate_sources_exist(
+        &self,
+        planned_project: &planned::Project,
+    ) -> Result<(), DatabaseValidationError> {
+        validate_sources_exist_impl(self.client.postgres_client(), planned_project).await
+    }
+
+    /// Validate that all connections referenced by CREATE SINK statements exist.
+    pub async fn validate_sink_connections_exist(
+        &self,
+        planned_project: &planned::Project,
+    ) -> Result<(), DatabaseValidationError> {
+        validate_sink_connections_exist_impl(self.client.postgres_client(), planned_project).await
+    }
+
+    /// Validate that all tables referenced by objects to be deployed exist in the database.
+    pub async fn validate_table_dependencies(
+        &self,
+        planned_project: &planned::Project,
+        objects_to_deploy: &BTreeSet<ObjectId>,
+    ) -> Result<(), DatabaseValidationError> {
+        validate_table_dependencies_impl(
+            self.client.postgres_client(),
+            planned_project,
+            objects_to_deploy,
+        )
+        .await
+    }
 }
 
 /// Internal implementation of validate_cluster_isolation.

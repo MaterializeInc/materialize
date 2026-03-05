@@ -20,7 +20,7 @@ use std::path::Path;
 /// Returns `CliError::StagingEnvironmentNotFound` if deployment doesn't exist
 /// Returns `CliError::StagingAlreadyPromoted` if already promoted
 pub async fn validate_staging_deployment(client: &Client, deploy_id: &str) -> Result<(), CliError> {
-    let metadata = client.get_deployment_metadata(deploy_id).await?;
+    let metadata = client.deployments().get_deployment_metadata(deploy_id).await?;
     match metadata {
         Some(meta) if meta.promoted_at.is_some() => Err(CliError::StagingAlreadyPromoted {
             name: deploy_id.to_string(),
@@ -48,7 +48,7 @@ pub async fn collect_deployment_metadata(
     client: &Client,
     directory: &Path,
 ) -> project::deployment_snapshot::DeploymentMetadata {
-    let deployed_by = client.get_current_user().await.unwrap_or_else(|e| {
+    let deployed_by = client.introspection().get_current_user().await.unwrap_or_else(|e| {
         eprintln!("warning: failed to get current user: {}", e);
         "unknown".to_string()
     });
