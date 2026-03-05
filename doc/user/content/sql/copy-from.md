@@ -24,6 +24,18 @@ menu:
 
 ## Details
 
+### S3 Bucket IAM Policies
+
+To prepare your S3 bucket for bulk import, follow the instructions in the [Amazon S3 Sink guide](/serve-results/sink/s3),
+but, in your IAM policy, instead allow these actions:
+
+| Action type | Action name                                                                               | Action description                                                |
+| ----------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Read        | [`s3:GetObject`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html)      | Grants permission to retrieve an object from a bucket.            |
+| List        | [`s3:ListBucket`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html) | Grants permission to list some or all of the objects in a bucket. |
+
+As we are not writing to the bucket, we do not need any write permissions, only read and list.
+
 ### Text formatting
 
 As described in the **Text Format** section of [PostgreSQL's documentation][pg-copy-from].
@@ -98,6 +110,10 @@ TODO:
 
 {{< /comment >}}
 
+### Limits
+
+You can copy up to 10 GiB of data at a time. If you need to copy more than that, please [contact support](/support/).
+
 ## Examples
 
 ### From STDIN
@@ -118,22 +134,18 @@ COPY t FROM STDIN (DELIMITER '|');
 
 #### Using AWS connection
 
-##### Set up S3 bucket
+Perform bulk import:
 
-To prepare your S3 bucket for bulk import, follow the instructions in the [Amazon S3 Sink guide](/serve-results/sink/s3),
-but, in your IAM policy, instead allow these actions:
-
-| Action type | Action name                                                                               | Action description                                                |
-| ----------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| Read        | [`s3:GetObject`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html)      | Grants permission to retrieve an object from a bucket.            |
-| List        | [`s3:ListBucket`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html) | Grants permission to list some or all of the objects in a bucket. |
-
-As we are not writing to the bucket, we do not need any write permissions, only read and list.
-
-##### Perform bulk import
+Using `FILES` option:
 
 ```mzsql
 COPY INTO csv_table FROM 's3://example_bucket' (FORMAT CSV, AWS CONNECTION = example_aws_conn, FILES = ['example_data.csv']);
+```
+
+Using the full s3 URI:
+
+```mzsql
+COPY INTO csv_table FROM 's3://example_bucket/example_data.csv' (FORMAT CSV, AWS CONNECTION = example_aws_conn);
 ```
 
 {{< comment >}}
@@ -157,7 +169,3 @@ The privileges required to execute this statement are:
 {{% include-headless "/headless/sql-command-privileges/copy-from" %}}
 
 [pg-copy-from]: https://www.postgresql.org/docs/14/sql-copy.html
-
-## Limits
-
-You can copy up to 10 GiB of data at a time. If you need this limit increased, please [chat with our team](http://materialize.com/convert-account/).

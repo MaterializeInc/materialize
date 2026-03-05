@@ -6,7 +6,7 @@
   syntax_elements:
     - name: "`<table_name>`"
       description: |
-        Name of an existing table to copy data into.
+        Name of an existing [table](/sql/create-table/) to copy data into.
     - name: "`( <column> [, ...] )`"
       description: |
         If specified, correlate the inserted rows' columns to `<table_name>`'s columns by ordinal position, i.e. the first column of the row to insert is correlated to the first named column. If not specified, all columns must have data provided, and will be referenced using their order in the table. With a partial column list, all unreferenced columns will receive their default value.
