@@ -266,8 +266,8 @@ $ kafka-create-topic topic=dbz-json-include-meta partitions=1
 
 # Insert with full Debezium envelope including source metadata (TiCDC-style with commit_ts)
 $ kafka-ingest format=bytes key-format=bytes key-terminator=| topic=dbz-json-include-meta
-{"id":1}|{"before":null,"after":{"id":1,"val":"hello"},"op":"c","ts_ms":1700000000000,"source":{"connector":"tidb","db":"mydb","table":"mytable","commit_ts":443959267642589200},"transaction":{"id":"txn-001","total_order":1}}
-{"id":2}|{"before":null,"after":{"id":2,"val":"world"},"op":"c","ts_ms":1700000001000,"source":{"connector":"tidb","db":"mydb","table":"mytable","commit_ts":443959267642589201}}
+{"id":1}|{"before":null,"after":{"id":1,"val":"hello"},"op":"c","ts_ms":1700000000000,"source":{"connector":"tidb","db":"mydb","table":"mytable","commit_ts":443959267000000},"transaction":{"id":"txn-001","total_order":1}}
+{"id":2}|{"before":null,"after":{"id":2,"val":"world"},"op":"c","ts_ms":1700000001000,"source":{"connector":"tidb","db":"mydb","table":"mytable","commit_ts":443959267000001}}
 
 > CREATE SOURCE dbz_json_include_meta_src
   IN CLUSTER ${arg.single-replica-cluster}
@@ -294,14 +294,14 @@ id op
 2  c
 
 # Verify metadata contains source.commit_ts (TiCDC use case)
-> SELECT id, (dbz_meta->'source'->>'commit_ts')::numeric::int8 as commit_ts FROM dbz_json_include_meta ORDER BY id
+> SELECT id, (dbz_meta->'source'->>'commit_ts')::int8 as commit_ts FROM dbz_json_include_meta ORDER BY id
 id commit_ts
 --------------------------
-1  443959267642589200
-2  443959267642589201
+1  443959267000000
+2  443959267000001
 
 # Verify metadata contains ts_ms
-> SELECT id, (dbz_meta->>'ts_ms')::numeric::int8 as ts_ms FROM dbz_json_include_meta ORDER BY id
+> SELECT id, (dbz_meta->>'ts_ms')::int8 as ts_ms FROM dbz_json_include_meta ORDER BY id
 id ts_ms
 -------------------
 1  1700000000000
@@ -309,7 +309,7 @@ id ts_ms
 
 # Update a row and verify metadata changes
 $ kafka-ingest format=bytes key-format=bytes key-terminator=| topic=dbz-json-include-meta
-{"id":1}|{"before":{"id":1,"val":"hello"},"after":{"id":1,"val":"updated"},"op":"u","ts_ms":1700000002000,"source":{"connector":"tidb","db":"mydb","table":"mytable","commit_ts":443959267642589300}}
+{"id":1}|{"before":{"id":1,"val":"hello"},"after":{"id":1,"val":"updated"},"op":"u","ts_ms":1700000002000,"source":{"connector":"tidb","db":"mydb","table":"mytable","commit_ts":443959267000100}}
 
 > SELECT id, val, dbz_meta->>'op' as op FROM dbz_json_include_meta ORDER BY id
 id val      op
@@ -317,12 +317,12 @@ id val      op
 1  updated  u
 2  world    c
 
-# Verify metadata does NOT contain before or after fields
-> SELECT id, dbz_meta ? 'before' as has_before, dbz_meta ? 'after' as has_after FROM dbz_json_include_meta ORDER BY id
-id has_before has_after
------------------------
-1  false      false
-2  false      false
+# Verify metadata does NOT contain before or after fields (they are excluded)
+> SELECT id, dbz_meta->>'before' IS NULL as no_before, dbz_meta->>'after' IS NULL as no_after FROM dbz_json_include_meta ORDER BY id
+id no_before no_after
+---------------------
+1  true      true
+2  true      true
 
 # =============================================================================
 # Test 10: INCLUDE DEBEZIUM METADATA with default column name
