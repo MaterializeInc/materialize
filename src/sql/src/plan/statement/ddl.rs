@@ -3191,6 +3191,7 @@ pub fn plan_create_standing_query(
             expr,
             dependencies: DependencyIds(dependencies),
             column_names,
+            desc,
             params,
             cluster_id,
         },

@@ -1919,6 +1919,8 @@ pub struct StandingQuery {
     pub dependencies: DependencyIds,
     /// Columns of this standing query's output.
     pub column_names: Vec<ColumnName>,
+    /// The output relation description.
+    pub desc: RelationDesc,
     /// Parameter names and types.
     pub params: Vec<(String, SqlScalarType)>,
     /// Cluster this standing query will get installed on.

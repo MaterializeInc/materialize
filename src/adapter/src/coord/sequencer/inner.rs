@@ -124,6 +124,7 @@ mod copy_from;
 mod create_continual_task;
 mod create_index;
 mod create_materialized_view;
+mod create_standing_query;
 mod create_view;
 mod explain_timestamp;
 mod peek;
