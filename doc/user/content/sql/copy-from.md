@@ -134,7 +134,7 @@ COPY t FROM STDIN (FORMAT CSV);
 COPY t FROM STDIN (DELIMITER '|');
 ```
 
-### From s3
+### From AWS S3
 
 #### Using AWS connection
 
@@ -163,21 +163,12 @@ COPY INTO parquet_table FROM 's3://example_bucket' (FORMAT PARQUET, AWS CONNECTI
 #### Using S3-compatible object storage
 
 You can use `COPY FROM` with any S3-compatible object storage service, such as
-Google Cloud Storage, Cloudflare R2, or MinIO. First, create an
-[AWS connection](/sql/create-connection/#s3-compatible-object-storage) with the
-endpoint and credentials for your service, then use it in the `COPY` command.
-Make sure your credentials have the necessary permissions as described in
-[S3 Bucket IAM Policies](#s3-bucket-iam-policies).
+Google Cloud Storage, Cloudflare R2, or MinIO. First,
+[create an AWS connection for S3-compatible storage](/sql/create-connection/#s3-compatible-object-storage),
+then use it in the `COPY` command. Make sure your credentials have the necessary
+permissions as described in [S3 Bucket IAM Policies](#s3-bucket-iam-policies).
 
 ```mzsql
-CREATE SECRET secret_access_key AS '...';
-CREATE CONNECTION gcs_connection TO AWS (
-    ACCESS KEY ID = 'ASIAV2KIV5LPTG6HGXG6',
-    SECRET ACCESS KEY = SECRET secret_access_key,
-    ENDPOINT = 'https://storage.googleapis.com',
-    REGION = 'us'
-);
-
 COPY INTO csv_table FROM 's3://my_bucket/my_data.csv' (FORMAT CSV, AWS CONNECTION = gcs_connection);
 ```
 
