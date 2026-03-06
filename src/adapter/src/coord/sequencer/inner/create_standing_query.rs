@@ -14,6 +14,7 @@ use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::instrument;
 use mz_repr::GlobalId;
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
+use mz_repr::{ColumnName, RelationDesc, SqlColumnType, SqlScalarType};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
 use mz_sql::plan::HirRelationExpr;
@@ -46,15 +47,25 @@ impl Coordinator {
                     dependencies,
                     column_names,
                     desc,
-                    params: _params,
+                    params,
                     cluster_id,
                 },
             if_not_exists: _if_not_exists,
         } = plan;
 
-        // Allocate IDs.
+        // Allocate IDs for the standing query and the internal parameter collection.
         let id_ts = self.get_catalog_write_ts().await;
         let (item_id, global_id) = self.catalog().allocate_user_id(id_ts).await?;
+        let (_, param_collection_id) = self.allocate_transient_id();
+
+        // Build the parameter collection's RelationDesc:
+        // (request_id UUID, param_1 T1, param_2 T2, ...)
+        let param_desc = Self::build_param_collection_desc(&params);
+
+        // TODO: Rewrite the user's query HIR to join with the parameter collection.
+        // For now, we optimize the raw expression directly (no parameter support yet).
+        let _ = &param_desc;
+        let _ = &param_collection_id;
 
         // Optimize the expression using the MV optimizer.
         let (optimized_plan, mut physical_plan, raw_metainfo, optimizer_features) =
@@ -92,6 +103,8 @@ impl Coordinator {
             raw_expr: raw_expr.into(),
             optimized_expr: optimized_expr.into(),
             desc: desc.clone(),
+            params,
+            param_collection_id,
             resolved_ids: resolved_ids.clone(),
             dependencies,
             cluster_id,
@@ -113,19 +126,30 @@ impl Coordinator {
                     catalog.set_dataflow_metainfo(global_id, metainfo);
                     catalog.cache_expressions(global_id, None, optimizer_features);
 
+                    // Create the standing query's output collection and the
+                    // internal parameter collection.
                     coord
                         .controller
                         .storage
                         .create_collections(
                             coord.catalog.state().storage_metadata(),
                             None,
-                            vec![(
-                                global_id,
-                                CollectionDescription::for_other(desc, Some(as_of)),
-                            )],
+                            vec![
+                                (
+                                    global_id,
+                                    CollectionDescription::for_other(desc, Some(as_of.clone())),
+                                ),
+                                (
+                                    param_collection_id,
+                                    CollectionDescription::for_other(
+                                        param_desc,
+                                        Some(as_of.clone()),
+                                    ),
+                                ),
+                            ],
                         )
                         .await
-                        .unwrap_or_terminate("cannot fail to append");
+                        .unwrap_or_terminate("cannot fail to create collections");
 
                     coord.ship_dataflow(physical_plan, cluster_id, None).await;
                 })
@@ -133,6 +157,30 @@ impl Coordinator {
             .await?;
 
         Ok(ExecuteResponse::CreatedStandingQuery)
+    }
+
+    /// Build the RelationDesc for a standing query's parameter collection.
+    ///
+    /// Schema: `(request_id UUID, param_1 T1, param_2 T2, ...)`
+    fn build_param_collection_desc(params: &[(String, SqlScalarType)]) -> RelationDesc {
+        let mut desc = RelationDesc::builder();
+        desc = desc.with_column(
+            ColumnName::from("request_id"),
+            SqlColumnType {
+                scalar_type: SqlScalarType::Uuid,
+                nullable: false,
+            },
+        );
+        for (param_name, param_type) in params {
+            desc = desc.with_column(
+                ColumnName::from(param_name.as_str()),
+                SqlColumnType {
+                    scalar_type: param_type.clone(),
+                    nullable: true,
+                },
+            );
+        }
+        desc.finish()
     }
 
     fn optimize_create_standing_query(

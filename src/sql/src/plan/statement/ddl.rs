@@ -38,7 +38,7 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, ColumnName, RelationDesc, RelationVersion, RelationVersionSelector,
+    CatalogItemId, ColumnName, RelationDesc, RelationVersion, RelationVersionSelector, Row,
     SqlColumnType, SqlRelationType, SqlScalarType, Timestamp, VersionedRelationDesc,
     preserves_order, strconv,
 };
@@ -160,11 +160,11 @@ use crate::plan::{
     CreateMaterializedViewPlan, CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateStandingQueryPlan, CreateTablePlan,
     CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan,
-    HirRelationExpr, Index, MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction,
-    NetworkPolicyRuleDirection, Plan, PlanClusterOption, PlanNotice, PolicyAddress, QueryContext,
-    ReplicaConfig, Secret, Sink, Source, StandingQuery, Table, TableDataSource, Type,
-    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
-    WebhookValidation, literal, plan_utils, query, transform_ast,
+    ExecuteStandingQueryPlan, HirRelationExpr, Index, MaterializedView, NetworkPolicyRule,
+    NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan, PlanClusterOption, PlanNotice,
+    PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, StandingQuery, Table,
+    TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
+    WebhookHeaders, WebhookValidation, literal, plan_utils, query, transform_ast,
 };
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
@@ -3111,11 +3111,22 @@ pub fn describe_create_standing_query(
 }
 
 pub fn describe_execute_standing_query(
-    _: &StatementContext,
-    _: ExecuteStandingQueryStatement<Aug>,
+    scx: &StatementContext,
+    stmt: ExecuteStandingQueryStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
-    // TODO: Return the standing query's result desc once catalog lookup is wired.
-    Ok(StatementDesc::new(None))
+    let item = scx.get_item_by_resolved_name(&stmt.name)?;
+    if item.item_type() != CatalogItemType::StandingQuery {
+        sql_bail!(
+            "{} is a {}, not a standing query",
+            stmt.name.full_name_str(),
+            item.item_type()
+        );
+    }
+    let desc = item
+        .relation_desc()
+        .expect("standing query must have a desc")
+        .into_owned();
+    Ok(StatementDesc::new(Some(desc)))
 }
 
 pub fn plan_create_standing_query(
@@ -3200,11 +3211,59 @@ pub fn plan_create_standing_query(
 }
 
 pub fn plan_execute_standing_query(
-    _scx: &StatementContext,
-    _stmt: ExecuteStandingQueryStatement<Aug>,
+    scx: &StatementContext,
+    stmt: ExecuteStandingQueryStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    // TODO: Resolve standing query from catalog, evaluate params, return ExecuteStandingQueryPlan.
-    bail_unsupported!("EXECUTE STANDING QUERY")
+    let item = resolve_standing_query(scx, &stmt.name)?;
+    let item_id = item.id();
+    let declared_params = item.standing_query_params()?;
+
+    if stmt.params.len() != declared_params.len() {
+        sql_bail!(
+            "EXECUTE STANDING QUERY expected {} parameters, got {}",
+            declared_params.len(),
+            stmt.params.len()
+        );
+    }
+
+    // Evaluate each parameter expression and coerce to the declared type.
+    // Follow the same pattern as plan_params() for EXECUTE (prepared stmts).
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+    let ecx = query::execute_expr_context(&qcx);
+    let temp_storage = &mz_repr::RowArena::new();
+
+    let mut evaluated_params = Vec::with_capacity(declared_params.len());
+    for (mut expr, (_param_name, param_type)) in stmt.params.into_iter().zip(declared_params.iter())
+    {
+        transform_ast::transform(scx, &mut expr)?;
+        let hir = query::plan_expr(&ecx, &expr)?.type_as(&ecx, param_type)?;
+        let mir = hir.lower_uncorrelated(scx.catalog.system_vars())?;
+        let evaled = mir.eval(&[], temp_storage)?;
+        let mut row = Row::default();
+        row.packer().push(evaled);
+        evaluated_params.push((row, param_type.clone()));
+    }
+
+    Ok(Plan::ExecuteStandingQuery(ExecuteStandingQueryPlan {
+        id: item_id,
+        params: evaluated_params,
+    }))
+}
+
+/// Resolve a standing query from a `ResolvedItemName`, returning the catalog item.
+fn resolve_standing_query<'a>(
+    scx: &'a StatementContext,
+    name: &ResolvedItemName,
+) -> Result<Box<dyn crate::catalog::CatalogCollectionItem + 'a>, PlanError> {
+    let item = scx.get_item_by_resolved_name(name)?;
+    if item.item_type() != CatalogItemType::StandingQuery {
+        sql_bail!(
+            "{} is a {}, not a standing query",
+            name.full_name_str(),
+            item.item_type()
+        );
+    }
+    Ok(item)
 }
 
 pub fn plan_create_continual_task(

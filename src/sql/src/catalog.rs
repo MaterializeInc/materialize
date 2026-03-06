@@ -35,6 +35,7 @@ use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, ColumnName, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
+    SqlScalarType,
 };
 use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
@@ -791,6 +792,11 @@ pub trait CatalogItem {
     ///
     /// If the catalog item is not a connection, it returns an error.
     fn connection(&self) -> Result<Connection<ReferencedConnection>, CatalogError>;
+
+    /// Returns the standing query's parameter names and types.
+    ///
+    /// If the catalog item is not a standing query, it returns an error.
+    fn standing_query_params(&self) -> Result<&[(String, SqlScalarType)], CatalogError>;
 
     /// Returns the type of the catalog item.
     fn item_type(&self) -> CatalogItemType;

@@ -32,7 +32,7 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, ColumnName, Diff, GlobalId, RelationDesc, RelationVersion,
-    RelationVersionSelector, SqlColumnType, Timestamp, VersionedRelationDesc,
+    RelationVersionSelector, SqlColumnType, SqlScalarType, Timestamp, VersionedRelationDesc,
 };
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
@@ -732,6 +732,10 @@ impl mz_sql::catalog::CatalogItem for CatalogCollectionEntry {
     ) -> Result<mz_storage_types::connections::Connection<ReferencedConnection>, SqlCatalogError>
     {
         mz_sql::catalog::CatalogItem::connection(&self.entry)
+    }
+
+    fn standing_query_params(&self) -> Result<&[(String, SqlScalarType)], SqlCatalogError> {
+        self.entry.standing_query_params()
     }
 
     fn create_sql(&self) -> &str {
@@ -1633,12 +1637,16 @@ pub struct StandingQuery {
     pub create_sql: String,
     /// [`GlobalId`] used to reference this standing query from outside the catalog.
     pub global_id: GlobalId,
-    /// The raw HirRelationExpr for the standing query.
+    /// The raw HirRelationExpr for the standing query (the user's original query).
     pub raw_expr: Arc<HirRelationExpr>,
-    /// The optimized MIR expression.
+    /// The optimized MIR expression (the rewritten join with parameter table).
     pub optimized_expr: Arc<OptimizedMirRelationExpr>,
-    /// Columns for this standing query's result.
+    /// Columns for this standing query's result (excludes internal request_id column).
     pub desc: RelationDesc,
+    /// Parameter names and their scalar types.
+    pub params: Vec<(String, SqlScalarType)>,
+    /// The [`GlobalId`] of the internal parameter storage collection.
+    pub param_collection_id: GlobalId,
     /// Other catalog items that this standing query references, determined at name resolution.
     pub resolved_ids: ResolvedIds,
     /// All of the catalog objects that are referenced by this standing query.
@@ -3594,6 +3602,17 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     ) -> Result<mz_storage_types::connections::Connection<ReferencedConnection>, SqlCatalogError>
     {
         Ok(self.connection()?.details.to_connection())
+    }
+
+    fn standing_query_params(&self) -> Result<&[(String, SqlScalarType)], SqlCatalogError> {
+        match self.item() {
+            CatalogItem::StandingQuery(sq) => Ok(&sq.params),
+            _ => Err(SqlCatalogError::UnexpectedType {
+                name: self.name().item.clone(),
+                actual_type: self.item_type(),
+                expected_type: CatalogItemType::StandingQuery,
+            }),
+        }
     }
 
     fn create_sql(&self) -> &str {
