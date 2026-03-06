@@ -388,6 +388,16 @@ enum ApplyCommand {
     ///   mz-deploy apply roles
     #[command(after_help = "Run 'mz-deploy help apply-roles' for a detailed usage guide.")]
     Roles,
+    /// Apply secret definitions from the project
+    ///
+    /// Creates missing secrets and updates existing ones to match the project
+    /// definitions. For each secret, executes CREATE SECRET IF NOT EXISTS
+    /// followed by ALTER SECRET to ensure the value is current.
+    ///
+    /// Example:
+    ///   mz-deploy apply secrets
+    #[command(after_help = "Run 'mz-deploy help apply-secrets' for a detailed usage guide.")]
+    Secrets,
 }
 
 #[tokio::main]
@@ -474,6 +484,9 @@ async fn run(args: Args) -> Result<(), CliError> {
                 }
                 Some(ApplyCommand::Roles) => {
                     cli::commands::roles::run(&args.directory, &profile).await
+                }
+                Some(ApplyCommand::Secrets) => {
+                    cli::commands::apply_secrets::run(&args.directory, &profile).await
                 }
                 None => {
                     let deploy_id = deploy_id.expect("deploy_id is required without subcommand");

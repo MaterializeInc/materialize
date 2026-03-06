@@ -4,6 +4,7 @@ use crate::cli::git;
 use crate::cli::{CliError, TypeCheckMode, executor};
 use crate::client::{Client, Profile};
 use crate::project::ast::Statement;
+use crate::secret_resolver::SecretResolver;
 use crate::{project, verbose};
 use chrono::Utc;
 use std::collections::{BTreeMap, BTreeSet};
@@ -87,10 +88,12 @@ pub async fn run(
         });
     }
 
-    let (table_object_ids, source_object_ids) = collect_table_and_source_ids(&planned_project);
+    let (table_object_ids, source_object_ids, secret_object_ids) =
+        collect_table_source_and_secret_ids(&planned_project);
     let all_object_ids: BTreeSet<_> = table_object_ids
         .union(&source_object_ids)
         .cloned()
+        .chain(secret_object_ids.iter().cloned())
         .collect();
     if all_object_ids.is_empty() {
         println!("No tables found in project");
@@ -108,7 +111,15 @@ pub async fn run(
         .introspection()
         .check_sources_exist(&source_object_ids)
         .await?;
-    let existing_objects: BTreeSet<_> = existing_tables.union(&existing_sources).cloned().collect();
+    let existing_secrets = client
+        .introspection()
+        .check_secrets_exist(&secret_object_ids)
+        .await?;
+    let existing_objects: BTreeSet<_> = existing_tables
+        .union(&existing_sources)
+        .cloned()
+        .chain(existing_secrets.iter().cloned())
+        .collect();
     let tables_to_create: Vec<_> = table_objects
         .into_iter()
         .filter(|(obj_id, _)| !existing_objects.contains(obj_id))
@@ -148,16 +159,18 @@ pub async fn run(
 
 /// Partitions planned objects into catalog categories used by existence checks.
 ///
-/// Tables and sources are checked in different system catalogs, so this split
-/// is the input contract for "what already exists" filtering.
-fn collect_table_and_source_ids(
+/// Tables, sources, and secrets are checked in different system catalogs, so this
+/// split is the input contract for "what already exists" filtering.
+fn collect_table_source_and_secret_ids(
     planned_project: &project::planned::Project,
 ) -> (
+    BTreeSet<project::object_id::ObjectId>,
     BTreeSet<project::object_id::ObjectId>,
     BTreeSet<project::object_id::ObjectId>,
 ) {
     let mut table_object_ids = BTreeSet::new();
     let mut source_object_ids = BTreeSet::new();
+    let mut secret_object_ids = BTreeSet::new();
     for obj in planned_project.iter_objects() {
         match &obj.typed_object.stmt {
             Statement::CreateTable(_) | Statement::CreateTableFromSource(_) => {
@@ -166,10 +179,13 @@ fn collect_table_and_source_ids(
             Statement::CreateSource(_) => {
                 source_object_ids.insert(obj.id.clone());
             }
+            Statement::CreateSecret(_) => {
+                secret_object_ids.insert(obj.id.clone());
+            }
             _ => {}
         }
     }
-    (table_object_ids, source_object_ids)
+    (table_object_ids, source_object_ids, secret_object_ids)
 }
 
 /// Emits the skip list shown to users before create execution begins.
@@ -210,7 +226,7 @@ fn collect_table_schemas(
 ///
 /// Ensures schemas exist and replays relevant database/schema module setup SQL
 /// only for the databases/schemas that contain pending table objects.
-async fn prepare_schemas_and_mod_statements(
+pub async fn prepare_schemas_and_mod_statements(
     executor: &executor::DeploymentExecutor<'_>,
     planned_project: &project::planned::Project,
     table_schemas: &BTreeMap<project::SchemaQualifier, crate::client::DeploymentKind>,
@@ -266,7 +282,16 @@ async fn prepare_schemas_and_mod_statements(
     Ok(())
 }
 
-/// Executes missing table/source objects in dependency order.
+/// Returns a sort key for object type ordering: secrets first, then sources, then tables.
+fn object_type_order(stmt: &Statement) -> u8 {
+    match stmt {
+        Statement::CreateSecret(_) => 0,
+        Statement::CreateSource(_) => 1,
+        _ => 2,
+    }
+}
+
+/// Executes missing table/source/secret objects in type order (secrets, sources, tables).
 ///
 /// Returns the count of successfully executed objects for summary and metadata reporting.
 async fn execute_table_creates(
@@ -278,15 +303,32 @@ async fn execute_table_creates(
         println!("-- Create tables --");
     }
 
+    let resolver = SecretResolver::new();
+
+    // Sort: secrets first, then sources, then tables
+    let mut sorted: Vec<_> = tables_to_create.to_vec();
+    sorted.sort_by_key(|(_, typed_obj)| object_type_order(&typed_obj.stmt));
+
     let mut success_count = 0;
-    for (idx, (object_id, typed_obj)) in tables_to_create.iter().enumerate() {
-        verbose!(
-            "Creating {}/{}: {}",
-            idx + 1,
-            tables_to_create.len(),
-            object_id
-        );
-        executor.execute_object(typed_obj).await?;
+    for (idx, (object_id, typed_obj)) in sorted.iter().enumerate() {
+        verbose!("Creating {}/{}: {}", idx + 1, sorted.len(), object_id);
+
+        // Resolve client-side secret providers, then execute
+        if let Some(resolved_stmt) = resolver.resolve_statement_for_cli(&typed_obj.stmt)? {
+            executor.execute_sql(&resolved_stmt).await?;
+        } else {
+            executor.execute_sql(&typed_obj.stmt).await?;
+        }
+        for index in &typed_obj.indexes {
+            executor.execute_sql(index).await?;
+        }
+        for grant in &typed_obj.grants {
+            executor.execute_sql(grant).await?;
+        }
+        for comment in &typed_obj.comments {
+            executor.execute_sql(comment).await?;
+        }
+
         if !dry_run {
             println!(
                 "  ✓ {}.{}.{}",

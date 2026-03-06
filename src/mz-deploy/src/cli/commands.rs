@@ -44,6 +44,7 @@ pub type ObjectRef<'a> = (
 
 pub mod abort;
 pub mod apply;
+pub mod apply_secrets;
 pub mod clusters;
 pub mod compile;
 pub mod create_tables;

@@ -53,7 +53,8 @@ fn determine_schema_type(objects: &[DatabaseObject]) -> SchemaType {
         Statement::CreateTable(_)
         | Statement::CreateTableFromSource(_)
         | Statement::CreateSource(_)
-        | Statement::CreateSink(_) => SchemaType::Storage,
+        | Statement::CreateSink(_)
+        | Statement::CreateSecret(_) => SchemaType::Storage,
         Statement::CreateView(_) | Statement::CreateMaterializedView(_) => SchemaType::Compute,
     }
 }
@@ -243,7 +244,7 @@ pub fn extract_dependencies(
             }
         }
         // These don't have dependencies on other database objects
-        Statement::CreateTable(_) => {}
+        Statement::CreateTable(_) | Statement::CreateSecret(_) => {}
     }
 
     (deps, clusters)

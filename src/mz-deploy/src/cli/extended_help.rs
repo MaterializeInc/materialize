@@ -12,6 +12,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("apply", include_str!("help/apply.md")),
     ("apply-clusters", include_str!("help/apply-clusters.md")),
     ("apply-roles", include_str!("help/apply-roles.md")),
+    ("apply-secrets", include_str!("help/apply-secrets.md")),
     ("compile", include_str!("help/compile.md")),
     ("create-tables", include_str!("help/create-tables.md")),
     ("debug", include_str!("help/debug.md")),
@@ -35,6 +36,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("clusters", "apply-clusters"),
     ("log", "history"),
     ("roles", "apply-roles"),
+    ("secrets", "apply-secrets"),
     ("show", "describe"),
 ];
 

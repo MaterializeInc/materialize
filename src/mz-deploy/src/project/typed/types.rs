@@ -200,6 +200,10 @@ impl Statement {
                 s.name = transformed_name;
                 Statement::CreateSource(s)
             }
+            Statement::CreateSecret(mut s) => {
+                s.name = transformed_name;
+                Statement::CreateSecret(s)
+            }
         }
     }
 
@@ -227,7 +231,9 @@ impl Statement {
                 Statement::CreateSink(s)
             }
             // These statements don't have dependencies on other database objects
-            Statement::CreateTable(_) | Statement::CreateSource(_) => self,
+            Statement::CreateTable(_) | Statement::CreateSource(_) | Statement::CreateSecret(_) => {
+                self
+            }
         }
     }
 
@@ -255,7 +261,8 @@ impl Statement {
             // These statements don't have cluster references
             Statement::CreateView(_)
             | Statement::CreateTable(_)
-            | Statement::CreateTableFromSource(_) => self,
+            | Statement::CreateTableFromSource(_)
+            | Statement::CreateSecret(_) => self,
         }
     }
 }
@@ -316,7 +323,8 @@ impl DatabaseObject {
             Statement::CreateSource(source) => source.in_cluster.as_ref(),
             Statement::CreateView(_)
             | Statement::CreateTable(_)
-            | Statement::CreateTableFromSource(_) => None,
+            | Statement::CreateTableFromSource(_)
+            | Statement::CreateSecret(_) => None,
         };
         if let Some(RawClusterName::Unresolved(cluster_name)) = in_cluster {
             cluster_set.insert(cluster_name.to_string());
@@ -335,8 +343,11 @@ impl DatabaseObject {
         match &self.stmt {
             Statement::CreateView(stmt) => Some(stmt.definition.query.clone()),
             Statement::CreateMaterializedView(stmt) => Some(stmt.query.clone()),
-            Statement::CreateTable(_) => None,
-            _ => None,
+            Statement::CreateTable(_)
+            | Statement::CreateSecret(_)
+            | Statement::CreateTableFromSource(_)
+            | Statement::CreateSink(_)
+            | Statement::CreateSource(_) => None,
         }
     }
 }

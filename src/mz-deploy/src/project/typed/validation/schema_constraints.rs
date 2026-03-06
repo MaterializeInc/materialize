@@ -58,7 +58,8 @@ pub(in super::super) fn validate_no_storage_and_computation_in_schema(
             Statement::CreateTable(_)
             | Statement::CreateTableFromSource(_)
             | Statement::CreateSource(_)
-            | Statement::CreateSink(_) => {
+            | Statement::CreateSink(_)
+            | Statement::CreateSecret(_) => {
                 has_storage = true;
                 let ident = obj.stmt.ident();
                 storage_names.push(ident.object.clone());

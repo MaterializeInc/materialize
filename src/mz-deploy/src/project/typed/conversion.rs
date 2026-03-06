@@ -143,6 +143,17 @@ impl TryFrom<super::super::raw::DatabaseObject> for DatabaseObject {
                         &mut errors,
                     );
                 }
+                mz_sql_parser::ast::Statement::CreateSecret(s) => {
+                    set_main_statement(
+                        &mut main_stmt,
+                        &mut object_type,
+                        Statement::CreateSecret(s),
+                        ObjectType::Secret,
+                        &value.name,
+                        &value.path,
+                        &mut errors,
+                    );
+                }
 
                 // Supporting statements
                 mz_sql_parser::ast::Statement::CreateIndex(s) => {
@@ -432,6 +443,7 @@ fn validate_replacement_schemas(
                         Statement::CreateTableFromSource(_) => "table from source",
                         Statement::CreateSink(_) => "sink",
                         Statement::CreateSource(_) => "source",
+                        Statement::CreateSecret(_) => "secret",
                         Statement::CreateMaterializedView(_) => unreachable!(),
                     };
                     errors.push(ValidationError::with_file(

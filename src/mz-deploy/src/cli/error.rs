@@ -6,6 +6,7 @@
 use crate::client::{ConflictRecord, ConnectionError, DatabaseValidationError};
 use crate::project::deployment_snapshot::DeploymentSnapshotError;
 use crate::project::error::{DependencyError, ProjectError};
+use crate::secret_resolver::SecretResolveError;
 use crate::types::{TypeCheckError, TypesError};
 use crate::unit_test::TestValidationError;
 use chrono::{DateTime, Local};
@@ -125,6 +126,13 @@ pub enum CliError {
     /// Deployment is failing due to cluster health issues
     #[error("deployment '{name}' is failing due to cluster health issues")]
     DeploymentFailing { name: String },
+
+    /// Secret resolution failed
+    #[error("failed to resolve secret '{secret_name}': {source}")]
+    SecretResolution {
+        secret_name: String,
+        source: SecretResolveError,
+    },
 
     /// Generic error message
     #[error("{0}")]
@@ -291,6 +299,10 @@ impl CliError {
                  - Missing replicas (cluster has no replicas configured)\n  \
                  - OOM-looping replicas (3+ OOM kills in 24 hours)\n\n\
                  Use 'mz-deploy ready <env>' for details"
+                    .to_string(),
+            ),
+            Self::SecretResolution { .. } => Some(
+                "check that environment variables are set and function arguments are string literals"
                     .to_string(),
             ),
             Self::Validation(_) | Self::Types(_) | Self::DeploymentSnapshot(_) | Self::Dependency(_) => {

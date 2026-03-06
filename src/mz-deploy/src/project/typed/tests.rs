@@ -2336,3 +2336,142 @@ fn test_source_with_comments_and_grants() {
         _ => panic!("Expected Source comment"),
     }
 }
+
+// ===== Secret tests =====
+
+#[test]
+fn test_valid_secret_simple() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("materialize/public/my_secret.sql");
+
+    let raw = create_raw_object("my_secret", path, "CREATE SECRET my_secret AS 'test';");
+    let result = DatabaseObject::try_from(raw);
+
+    assert!(result.is_ok());
+    let obj = result.unwrap();
+    assert!(matches!(
+        obj.stmt,
+        super::super::ast::Statement::CreateSecret(_)
+    ));
+}
+
+#[test]
+fn test_valid_secret_fully_qualified() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("materialize/public/my_secret.sql");
+
+    let raw = create_raw_object(
+        "my_secret",
+        path,
+        "CREATE SECRET materialize.public.my_secret AS 'test';",
+    );
+    let result = DatabaseObject::try_from(raw);
+
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_secret_name_mismatch_fails() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("materialize/public/my_secret.sql");
+
+    let raw = create_raw_object("my_secret", path, "CREATE SECRET wrong_name AS 'test';");
+    let result = DatabaseObject::try_from(raw);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_secret_with_grants_and_comments() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("materialize/public/my_secret.sql");
+
+    let sql = r#"
+        CREATE SECRET my_secret AS 'test';
+        GRANT USAGE ON SECRET my_secret TO reader_role;
+        COMMENT ON SECRET my_secret IS 'A test secret';
+    "#;
+
+    let raw = create_raw_object("my_secret", path, sql);
+    let result = DatabaseObject::try_from(raw);
+
+    assert!(result.is_ok());
+    let obj = result.unwrap();
+
+    assert_eq!(obj.grants.len(), 1);
+    assert_eq!(obj.comments.len(), 1);
+
+    // Verify comment reference is normalized to FQN
+    match &obj.comments[0].object {
+        CommentObjectType::Secret { name } => {
+            assert_eq!(name.to_string(), "materialize.public.my_secret");
+        }
+        _ => panic!("Expected Secret comment"),
+    }
+}
+
+#[test]
+fn test_schema_with_secrets_and_tables_succeeds() {
+    let secret_sql = "CREATE SECRET my_secret AS 'test';";
+    let table_sql = "CREATE TABLE users (id INT);";
+
+    let secret_stmts = parse_statements(vec![secret_sql]).unwrap();
+    let table_stmts = parse_statements(vec![table_sql]).unwrap();
+
+    let raw_secret = raw::DatabaseObject {
+        name: "my_secret".to_string(),
+        path: PathBuf::from("materialize/storage/my_secret.sql"),
+        statements: secret_stmts,
+    };
+
+    let raw_table = raw::DatabaseObject {
+        name: "users".to_string(),
+        path: PathBuf::from("materialize/storage/users.sql"),
+        statements: table_stmts,
+    };
+
+    let raw_schema = raw::Schema {
+        name: "storage".to_string(),
+        objects: vec![raw_secret, raw_table],
+        mod_statements: None,
+    };
+
+    let result = Schema::try_from(raw_schema);
+    assert!(
+        result.is_ok(),
+        "Schema with secrets and tables should pass validation (both storage objects)"
+    );
+}
+
+#[test]
+fn test_schema_with_secrets_and_views_fails() {
+    let secret_sql = "CREATE SECRET my_secret AS 'test';";
+    let view_sql = "CREATE VIEW user_view AS SELECT * FROM users;";
+
+    let secret_stmts = parse_statements(vec![secret_sql]).unwrap();
+    let view_stmts = parse_statements(vec![view_sql]).unwrap();
+
+    let raw_secret = raw::DatabaseObject {
+        name: "my_secret".to_string(),
+        path: PathBuf::from("materialize/mixed/my_secret.sql"),
+        statements: secret_stmts,
+    };
+
+    let raw_view = raw::DatabaseObject {
+        name: "user_view".to_string(),
+        path: PathBuf::from("materialize/mixed/user_view.sql"),
+        statements: view_stmts,
+    };
+
+    let raw_schema = raw::Schema {
+        name: "mixed".to_string(),
+        objects: vec![raw_secret, raw_view],
+        mod_statements: None,
+    };
+
+    let result = Schema::try_from(raw_schema);
+    assert!(
+        result.is_err(),
+        "Schema with secrets and views should fail validation (storage + computation)"
+    );
+}

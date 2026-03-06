@@ -2115,3 +2115,94 @@ fn test_source_and_table_from_source_dependency_ordering() {
         "Source should appear before table from source in sorted order"
     );
 }
+
+#[test]
+fn test_extract_dependencies_secret() {
+    let sql = "CREATE SECRET my_secret AS 'test'";
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateSecret(secret_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateSecret(secret_stmt.clone());
+        let (deps, clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Secrets have no object dependencies
+        assert!(deps.is_empty());
+
+        // Secrets have no cluster dependencies
+        assert!(clusters.is_empty());
+    } else {
+        panic!("Expected CreateSecret statement");
+    }
+}
+
+#[test]
+fn test_secret_determines_storage_schema_type() {
+    use crate::project::raw;
+    use crate::project::typed;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let src_dir = temp_dir.path();
+
+    let db_path = src_dir.join("models").join("test_db");
+    let schema_path = db_path.join("secrets_schema");
+    fs::create_dir_all(&schema_path).unwrap();
+
+    fs::write(
+        schema_path.join("my_secret.sql"),
+        "CREATE SECRET my_secret AS 'test';",
+    )
+    .unwrap();
+
+    let raw_project = raw::load_project(src_dir).unwrap();
+    let typed_project = typed::Project::try_from(raw_project).unwrap();
+    let planned_project = Project::from(typed_project);
+
+    let schema = &planned_project.databases[0].schemas[0];
+    assert_eq!(schema.schema_type, SchemaType::Storage);
+}
+
+#[test]
+fn test_secret_in_project_compiles_end_to_end() {
+    use crate::project::raw;
+    use crate::project::typed;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let src_dir = temp_dir.path();
+
+    let db_path = src_dir.join("models").join("test_db");
+    let schema_path = db_path.join("storage");
+    fs::create_dir_all(&schema_path).unwrap();
+
+    // Secret and table in the same schema
+    fs::write(
+        schema_path.join("my_secret.sql"),
+        "CREATE SECRET my_secret AS 'hunter2';",
+    )
+    .unwrap();
+
+    fs::write(
+        schema_path.join("users.sql"),
+        "CREATE TABLE users (id INT);",
+    )
+    .unwrap();
+
+    let raw_project = raw::load_project(src_dir).unwrap();
+    let typed_project = typed::Project::try_from(raw_project).unwrap();
+    let planned_project = Project::from(typed_project);
+
+    // Both objects should be in the project
+    let all_objects: Vec<_> = planned_project.iter_objects().collect();
+    assert_eq!(all_objects.len(), 2);
+
+    // Schema should be Storage
+    let schema = &planned_project.databases[0].schemas[0];
+    assert_eq!(schema.schema_type, SchemaType::Storage);
+
+    // Sorted objects should include both
+    let sorted = planned_project.get_sorted_objects().unwrap();
+    assert_eq!(sorted.len(), 2);
+}
