@@ -45,15 +45,19 @@ it. Use profiling, metrics, code analysis, and custom logging as needed.
 ## Setup
 
 ```bash
-# Build (prefer debug for faster compile; use --optimized only to confirm fixes)
-bin/environmentd [--optimized]
+# Build — always use --optimized for measurements. Debug builds are too slow
+# (the off-thread shard fetch dominates, starving collection cycles) so cycle
+# timing data from debug builds is unreliable. Use debug only for compilation
+# checks during development, not for running measurements.
+bin/environmentd --optimized
 
 # Connect
 psql -U materialize -h localhost -p 6875 materialize
 psql -U mz_system -h localhost -p 6877 materialize  # for ALTER SYSTEM SET
 
-# Trigger frequent collection (default is 3600s):
-ALTER SYSTEM SET storage_usage_collection_interval = '10s';
+# Trigger frequent collection (default is 3600s) — this is a startup flag, not
+# an ALTER SYSTEM SET variable:
+#   bin/environmentd --optimized -- --storage-usage-collection-interval-sec=10s
 
 # Prometheus metrics
 curl -s http://localhost:6878/metrics > /tmp/metrics.txt
@@ -111,7 +115,12 @@ curl -s http://localhost:6878/metrics | grep -E 'mz_slow_message_handling|storag
 
 ## Current Status
 
-No measurements yet. Design doc written. Prompt and log files created.
+Baseline measurements complete (optimized build):
+- ~2.4k shards: ~51ms/cycle
+- ~5k shards: ~150ms/cycle
+- ~10k shards: ~499ms/cycle
+Scaling is linear. 10k su_ tables exist in persist state (don't use --reset).
+Next: instrument storage_usage_update to identify dominant cost.
 
 ## Immediate Next Steps
 

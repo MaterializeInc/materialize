@@ -3,11 +3,9 @@
 ## Current Setup
 
 ```bash
-# Debug build (faster to compile, good for diagnosing scaling patterns)
-bin/environmentd --build-only
-bin/environmentd -- --system-parameter-default=log_filter=info
-
-# Optimized build (for confirming fixes against realistic absolute numbers)
+# Always use --optimized for measurements. Debug builds are too slow — the
+# off-thread shard fetch dominates and starves collection cycles, making cycle
+# timing data unreliable. Use debug only for compile checks during development.
 bin/environmentd --optimized --build-only
 bin/environmentd --optimized -- --system-parameter-default=log_filter=info
 
@@ -77,4 +75,23 @@ custom histograms inside `storage_usage_update` to isolate which of the 5 costs
 
 ## Optimization Log
 
-(No sessions yet)
+### Session 1 — Baseline measurements (2026-03-06)
+
+**Setup:** optimized build, `--storage-usage-collection-interval-sec=10s`,
+existing persist state with su_1..su_10000 tables.
+
+**Baseline results** (`mz_slow_message_handling{message_kind="storage_usage_update"}`):
+
+| Shards | Avg coordinator stall per cycle |
+|--------|---------------------------------|
+| ~2,441 | ~51ms |
+| ~5,087 | ~150ms |
+| ~10,087 | ~499ms |
+
+Scaling is roughly linear with shard count. At 10k shards the coordinator
+blocks for ~500ms every collection cycle.
+
+Histogram distribution at 10k shards: most cycles land in 256-512ms bucket.
+
+**Next:** Instrument `storage_usage_update` to identify which cost dominates
+(oracle, transact_op loop, persist write, persist read, group commit).
