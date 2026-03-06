@@ -115,35 +115,19 @@ curl -s http://localhost:6878/metrics | grep -E 'mz_slow_message_handling|storag
 
 ## Current Status
 
-Baseline measurements complete (optimized build):
-- ~2.4k shards: ~51ms/cycle
-- ~5k shards: ~150ms/cycle
-- ~10k shards: ~499ms/cycle
-Scaling is linear. 10k su_ tables exist in persist state (don't use --reset).
-Instrumentation shows 91% of time is in transact_inner op loop (~430ms for 10k
-shards). Persist and oracle are cheap. Next: implement fix to bypass
-catalog_transact_inner.
+All work complete. Baseline → fix → cleanup done.
+- 10k shards: ~499ms → ~20ms (25x improvement). Verified data correctness.
+- Dead code cleaned up: Op::WeirdStorageUsageUpdates, durable id allocator,
+  instrumentation logging all removed.
+- `VersionedStorageUsage` `id` field left as-is (versioned persisted type).
 
-## Immediate Next Steps
+## Completed Steps
 
-1. **Baseline measurement.** Start environmentd with many tables (1k, 5k, 10k, 20k),
-   set `storage_usage_collection_interval` to 10s, capture
-   `mz_slow_message_handling{message_kind="storage_usage_update"}` histograms
-   across several collection cycles. Establish how coordinator stall scales
-   with shard count.
-
-2. **Instrument `storage_usage_update`.** Add timing logs or histogram sub-metrics
-   to isolate which of the 5 costs dominates: oracle calls, transact_op loop,
-   persist write, persist read, or group commit.
-
-3. **Implement the fix.** Bypass `catalog_transact_inner`: pack builtin table rows
-   directly and append via `builtin_table_update().execute()`. Drop or replace
-   the durable id allocator with a cheap local counter.
-
-4. **Clean up.** Remove `Op::WeirdStorageUsageUpdates`, the durable
-   `STORAGE_USAGE_ID_ALLOC_KEY` allocator, and simplify `VersionedStorageUsage`.
-
-5. **Re-measure.** Confirm coordinator stall is reduced to just group-commit time.
+1. ~~**Baseline measurement.**~~ Done. ~499ms/cycle at 10k shards.
+2. ~~**Instrument.**~~ Done. 91% in transact_inner op loop.
+3. ~~**Implement the fix.**~~ Done. 25x speedup (499ms → 20ms).
+4. ~~**Re-measure.**~~ Done. Confirmed.
+5. ~~**Clean up dead code.**~~ Done.
 
 ## Work-in-progress log (update after each milestone)
 

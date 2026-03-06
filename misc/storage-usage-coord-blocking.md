@@ -55,7 +55,28 @@ This eliminates:
 - The persist read (sync_updates)
 - The redundant oracle timestamp
 - The N-iteration `transact_op` loop
+- Opening a catalog transaction
 
-The coord-blocking work becomes: get one write timestamp, pack N rows, submit to group commit.
+The coord-blocking work becomes: get one write timestamp (~2ms), pack N rows
+(< 1ms), submit to group commit (~18ms).
 
-The `WeirdStorageUsageUpdates` op variant (it's literally called "Weird" in the code), the durable ID allocator, and the `VersionedStorageUsage` type in the audit-log crate could all be cleaned up as part of this.
+### Results (prototype, optimized build, 10k shards)
+
+| | Before | After | Speedup |
+|--|--------|-------|---------|
+| Avg per cycle | ~499ms | ~20ms | **25x** |
+
+All cycles now land in the 16–32ms histogram bucket (previously 256–512ms).
+Data correctness verified: 10,087 rows written per collection cycle,
+`mz_storage_usage` view returns correct results.
+
+## Cleanup (done)
+
+Dead code removed:
+- `Op::WeirdStorageUsageUpdates` variant and match arms
+- `weird_builtin_table_update` return value from `transact_op`
+- `allocate_storage_usage_ids` method and `STORAGE_USAGE_ID_ALLOC_KEY` constant
+- Diagnostic `info!` log from `storage_usage_update`
+
+`VersionedStorageUsage` and its `id` field left as-is — it's a versioned
+persisted type and a V2 migration just to drop an unused field isn't worth it.

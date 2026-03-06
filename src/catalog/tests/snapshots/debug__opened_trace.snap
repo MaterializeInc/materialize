@@ -751,20 +751,6 @@ Trace {
             (
                 (
                     IdAllocKey {
-                        name: "storage_usage",
-                    },
-                    IdAllocValue {
-                        next_id: 1,
-                    },
-                ),
-                2,
-                Overflowing(
-                    1,
-                ),
-            ),
-            (
-                (
-                    IdAllocKey {
                         name: "system",
                     },
                     IdAllocValue {
