@@ -104,13 +104,13 @@ All cycles now land in the 16–32ms histogram bucket (previously 256–512ms).
 Data correctness verified: 10,087 rows written per collection cycle,
 `mz_storage_usage` view returns correct results.
 
-## Remaining cleanup
+## Cleanup (done)
 
-The `Op::WeirdStorageUsageUpdates` variant (it's literally called "Weird" in the
-code), the durable `STORAGE_USAGE_ID_ALLOC_KEY` allocator, and the
-`VersionedStorageUsage` type in the audit-log crate could all be cleaned up:
+Dead code removed:
+- `Op::WeirdStorageUsageUpdates` variant and match arms
+- `weird_builtin_table_update` return value from `transact_op`
+- `allocate_storage_usage_ids` method and `STORAGE_USAGE_ID_ALLOC_KEY` constant
+- Diagnostic `info!` log from `storage_usage_update`
 
-- Remove `Op::WeirdStorageUsageUpdates` from `transact.rs` (now dead code)
-- Remove `STORAGE_USAGE_ID_ALLOC_KEY` durable allocator
-- Simplify `VersionedStorageUsage` or remove the unused `id` field
-- Remove diagnostic `info!` log from `storage_usage_update`
+`VersionedStorageUsage` and its `id` field left as-is — it's a versioned
+persisted type and a V2 migration just to drop an unused field isn't worth it.

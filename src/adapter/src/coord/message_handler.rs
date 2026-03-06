@@ -33,7 +33,7 @@ use mz_storage_client::controller::IntrospectionType;
 use opentelemetry::trace::TraceContextExt;
 use rand::{Rng, SeedableRng, rngs};
 use serde_json::json;
-use tracing::{Instrument, Level, event, info, info_span, warn};
+use tracing::{Instrument, Level, event, info_span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
@@ -239,9 +239,6 @@ impl Coordinator {
 
     #[mz_ore::instrument(level = "debug")]
     async fn storage_usage_update(&mut self, shards_usage: ShardsUsageReferenced) {
-        let num_shards = shards_usage.by_shard.len();
-        let total_start = Instant::now();
-
         // Similar to audit events, use the oracle ts so this is guaranteed to
         // increase. This is intentionally the timestamp of when collection
         // finished, not when it started, so that we don't write data with a
@@ -277,12 +274,6 @@ impl Coordinator {
 
         // Submit directly via group commit (same path as storage_usage_prune).
         let (table_updates, _) = self.builtin_table_update().execute(updates).await;
-        let total_elapsed = total_start.elapsed();
-        info!(
-            "storage_usage_update: shards={} total={:.3}s",
-            num_shards,
-            total_elapsed.as_secs_f64(),
-        );
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let task_span = info_span!(parent: None, "coord::storage_usage_update::table_updates");

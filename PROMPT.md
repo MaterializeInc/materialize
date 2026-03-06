@@ -115,27 +115,19 @@ curl -s http://localhost:6878/metrics | grep -E 'mz_slow_message_handling|storag
 
 ## Current Status
 
-Baseline measurements complete (optimized build):
-- ~2.4k shards: ~51ms/cycle
-- ~5k shards: ~150ms/cycle
-- ~10k shards: ~499ms/cycle
-Scaling is linear. 10k su_ tables exist in persist state (don't use --reset).
-Fix implemented: bypass catalog_transact_inner, pack rows directly.
-10k shards: ~499ms → ~20ms (25x improvement). Verified data correctness.
-Next: clean up dead code (Op::WeirdStorageUsageUpdates, durable id allocator,
-instrumentation logging).
+All work complete. Baseline → fix → cleanup done.
+- 10k shards: ~499ms → ~20ms (25x improvement). Verified data correctness.
+- Dead code cleaned up: Op::WeirdStorageUsageUpdates, durable id allocator,
+  instrumentation logging all removed.
+- `VersionedStorageUsage` `id` field left as-is (versioned persisted type).
 
-## Immediate Next Steps
+## Completed Steps
 
 1. ~~**Baseline measurement.**~~ Done. ~499ms/cycle at 10k shards.
 2. ~~**Instrument.**~~ Done. 91% in transact_inner op loop.
 3. ~~**Implement the fix.**~~ Done. 25x speedup (499ms → 20ms).
 4. ~~**Re-measure.**~~ Done. Confirmed.
-5. **Clean up dead code:**
-   - Remove `Op::WeirdStorageUsageUpdates` variant from `transact.rs`
-   - Remove durable `STORAGE_USAGE_ID_ALLOC_KEY` allocator
-   - Simplify or remove `VersionedStorageUsage` / unused `id` field
-   - Remove diagnostic `info!` log from `storage_usage_update`
+5. ~~**Clean up dead code.**~~ Done.
 
 ## Work-in-progress log (update after each milestone)
 

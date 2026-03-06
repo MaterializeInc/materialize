@@ -1921,9 +1921,9 @@ pub struct Coordinator {
     storage_usage_client: StorageUsageClient,
     /// The interval at which to collect storage usage information.
     storage_usage_collection_interval: Duration,
-    /// Local counter for storage usage row IDs. This replaced the durable
-    /// `STORAGE_USAGE_ID_ALLOC_KEY` allocator — the id column is unused by
-    /// any view or query, so a cheap non-durable counter suffices.
+    /// Local counter for storage usage row IDs. The id column in
+    /// mz_storage_usage_by_shard is unused by any view or query, so a
+    /// cheap non-durable counter suffices.
     storage_usage_next_id: u64,
 
     /// Segment analytics client.

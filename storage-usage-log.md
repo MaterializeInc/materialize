@@ -139,7 +139,20 @@ All cycles now complete in the 16-32ms histogram bucket (previously 256-512ms).
 Data correctness verified: 10,087 rows per cycle, `mz_storage_usage` view works.
 
 **Remaining cleanup (not yet done):**
-- Remove `Op::WeirdStorageUsageUpdates` variant (now dead code)
-- Remove durable `STORAGE_USAGE_ID_ALLOC_KEY` allocator
-- Simplify `VersionedStorageUsage` or remove `id` field
-- Remove instrumentation logging from `catalog::transact`
+- ~~Remove `Op::WeirdStorageUsageUpdates` variant (now dead code)~~ Done
+- ~~Remove durable `STORAGE_USAGE_ID_ALLOC_KEY` allocator~~ Done
+- ~~Remove instrumentation logging from `storage_usage_update`~~ Done
+- `VersionedStorageUsage` `id` field kept as-is (versioned persisted type, migration not worth it)
+
+### Session 4 — Dead code cleanup (2026-03-06)
+
+Removed dead code left over from the bypass fix:
+- `Op::WeirdStorageUsageUpdates` variant and its match arms in `transact.rs` and `ddl.rs`
+- `weird_builtin_table_update` return value from `transact_op` (only used by that op)
+- `allocate_storage_usage_ids` method from `Transaction`
+- `STORAGE_USAGE_ID_ALLOC_KEY` constant and its initialization in new catalogs
+- Diagnostic `info!` log from `storage_usage_update`
+- Unused `VersionedStorageUsage` import from `transact.rs`, unused `info` import from `message_handler.rs`, unused `EpochMillis` import from `transact.rs`
+
+Left `VersionedStorageUsage` and its `id` field unchanged — it's a versioned persisted
+type and adding a V2 variant just to remove an unused field isn't worth the migration cost.
