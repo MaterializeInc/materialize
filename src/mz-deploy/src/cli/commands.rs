@@ -50,6 +50,7 @@ pub mod clusters;
 pub mod compile;
 pub mod create_tables;
 pub mod debug;
+pub mod delete;
 pub mod deployments;
 pub mod describe;
 pub mod gen_data_contracts;

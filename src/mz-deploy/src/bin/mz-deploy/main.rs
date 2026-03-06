@@ -7,6 +7,7 @@ use clap::CommandFactory;
 use clap::{Parser, Subcommand};
 use mz_build_info::{BuildInfo, build_info};
 use mz_deploy::cli;
+use mz_deploy::cli::commands::delete;
 use mz_deploy::cli::{CliError, TypeCheckMode};
 use mz_deploy::client::ConnectionError;
 use mz_deploy::config::{Profile, ProfilesConfig, ProjectSettings};
@@ -350,6 +351,26 @@ enum Command {
         allowed_lag: i64,
     },
 
+    /// Delete an object from Materialize and remove its project file
+    ///
+    /// Drops the specified object without CASCADE. If the object has
+    /// dependents, the drop will fail with an error listing them.
+    /// Requires confirmation unless --yes is passed.
+    ///
+    /// Examples:
+    ///   mz-deploy delete cluster analytics
+    ///   mz-deploy delete connection mydb.public.pg_conn
+    ///   mz-deploy delete table mydb.public.users --yes
+    #[command(after_help = "Run 'mz-deploy help delete' for a detailed usage guide.")]
+    Delete {
+        /// Skip confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+
+        #[command(subcommand)]
+        subcommand: DeleteCommand,
+    },
+
     /// Show detailed usage guide for a command. Useful for LLM coding agents
     ///
     /// Prints extended documentation including behavior notes, examples,
@@ -407,6 +428,40 @@ enum ApplyCommand {
     ///   mz-deploy apply connections
     #[command(after_help = "Run 'mz-deploy help apply-connections' for a detailed usage guide.")]
     Connections,
+}
+
+#[derive(Subcommand, Debug)]
+enum DeleteCommand {
+    /// Delete a cluster
+    Cluster {
+        /// Cluster name
+        #[arg(value_name = "NAME")]
+        name: String,
+    },
+    /// Delete a connection
+    Connection {
+        /// Fully-qualified connection name (database.schema.name)
+        #[arg(value_name = "NAME")]
+        name: String,
+    },
+    /// Delete a role
+    Role {
+        /// Role name
+        #[arg(value_name = "NAME")]
+        name: String,
+    },
+    /// Delete a secret
+    Secret {
+        /// Fully-qualified secret name (database.schema.name)
+        #[arg(value_name = "NAME")]
+        name: String,
+    },
+    /// Delete a table
+    Table {
+        /// Fully-qualified table name (database.schema.name)
+        #[arg(value_name = "NAME")]
+        name: String,
+    },
 }
 
 #[tokio::main]
@@ -573,6 +628,17 @@ async fn run(args: Args) -> Result<(), CliError> {
             let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
 
             cli::commands::ready::run(&profile, &name, snapshot, timeout, allowed_lag).await
+        }
+        Some(Command::Delete { yes, subcommand }) => {
+            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
+            let (kind, name) = match subcommand {
+                DeleteCommand::Cluster { name } => (delete::ObjectKind::Cluster, name),
+                DeleteCommand::Connection { name } => (delete::ObjectKind::Connection, name),
+                DeleteCommand::Role { name } => (delete::ObjectKind::Role, name),
+                DeleteCommand::Secret { name } => (delete::ObjectKind::Secret, name),
+                DeleteCommand::Table { name } => (delete::ObjectKind::Table, name),
+            };
+            delete::run(&args.directory, &profile, kind, &name, yes).await
         }
         Some(Command::Help { .. }) => unreachable!("handled above"),
         Some(Command::New { .. }) => unreachable!("handled above"),
