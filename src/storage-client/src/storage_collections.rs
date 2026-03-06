@@ -2937,36 +2937,59 @@ where
     }
 
     async fn downgrade_sinces(&mut self, cmds: BTreeMap<GlobalId, Antichain<T>>) {
+        // Process all persist calls concurrently.
+        let mut futures = Vec::with_capacity(cmds.len());
         for (id, new_since) in cmds {
-            let since_handle = if let Some(c) = self.since_handles.get_mut(&id) {
-                c
-            } else {
+            // We need to take the since handles here, to satisfy the borrow checker.
+            // We make sure to always put them back below.
+            let Some(mut since_handle) = self.since_handles.remove(&id) else {
                 // This can happen when someone concurrently drops a collection.
                 trace!("downgrade_sinces: reference to absent collection {id}");
                 continue;
             };
 
-            if id.is_user() {
-                trace!("downgrading since of {} to {:?}", id, new_since);
-            }
+            let fut = async move {
+                if id.is_user() {
+                    trace!("downgrading since of {} to {:?}", id, new_since);
+                }
 
-            let epoch = since_handle.opaque().clone();
-            let result = if new_since.is_empty() {
-                // A shard's since reaching the empty frontier is a prereq for
-                // being able to finalize a shard, so the final downgrade should
-                // never be rate-limited.
-                let res = Some(
+                let epoch = since_handle.opaque().clone();
+                let result = if new_since.is_empty() {
+                    // A shard's since reaching the empty frontier is a prereq for
+                    // being able to finalize a shard, so the final downgrade should
+                    // never be rate-limited.
+                    Some(
+                        since_handle
+                            .compare_and_downgrade_since(&epoch, (&epoch, &new_since))
+                            .await,
+                    )
+                } else {
                     since_handle
-                        .compare_and_downgrade_since(&epoch, (&epoch, &new_since))
-                        .await,
-                );
+                        .maybe_compare_and_downgrade_since(&epoch, (&epoch, &new_since))
+                        .await
+                };
+                (id, since_handle, result)
+            };
+            futures.push(fut);
+        }
 
+        for (id, since_handle, result) in futures::future::join_all(futures).await {
+            let new_since = match result {
+                Some(Ok(since)) => Some(since),
+                Some(Err(other_epoch)) => mz_ore::halt!(
+                    "fenced by envd @ {other_epoch:?}. ours = {:?}",
+                    since_handle.opaque(),
+                ),
+                None => None,
+            };
+
+            self.since_handles.insert(id, since_handle);
+
+            if new_since.is_some_and(|s| s.is_empty()) {
                 info!(%id, "removing persist handles because the since advanced to []!");
 
                 let _since_handle = self.since_handles.remove(&id).expect("known to exist");
-                let dropped_shard_id = if let Some(shard_id) = self.shard_by_id.remove(&id) {
-                    shard_id
-                } else {
+                let Some(dropped_shard_id) = self.shard_by_id.remove(&id) else {
                     panic!("missing GlobalId -> ShardId mapping for id {id}");
                 };
 
@@ -2995,16 +3018,6 @@ where
                          because enable_storage_shard_finalization parameter is false"
                     );
                 }
-
-                res
-            } else {
-                since_handle
-                    .maybe_compare_and_downgrade_since(&epoch, (&epoch, &new_since))
-                    .await
-            };
-
-            if let Some(Err(other_epoch)) = result {
-                mz_ore::halt!("fenced by envd @ {other_epoch:?}. ours = {epoch:?}");
             }
         }
     }
