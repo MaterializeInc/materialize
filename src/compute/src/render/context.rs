@@ -785,10 +785,11 @@ where
         use differential_dataflow::AsCollection;
         let (oks, errs) = stream
             .as_collection()
-            .map_fallible::<CapacityContainerBuilder<Vec<_>>, CapacityContainerBuilder<Vec<_>>, _, _, _>(
-                "OkErr",
-                |x| x,
-            );
+            .map_fallible::<
+                CapacityContainerBuilder<Vec<_>>,
+                CapacityContainerBuilder<Vec<_>>,
+                _, _, _,
+            >("OkErr", |x| x);
 
         (oks, errors.concat(errs))
     }

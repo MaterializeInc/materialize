@@ -204,10 +204,12 @@ where
                     let (result, errs) =
                         self.build_topk_stage(thinned, order_key, 1u64, 0, limit, arity, false);
                     // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
-                    let result = result.consolidate_named::<KeyBatcher<_, _, _>, ColKeyBuilder<_, _, _>, ColKeySpine<_, _, _>, _>(
-                        "Monotonic TopK final consolidate",
-                        |k, &()| k.clone(),
-                    );
+                    let result = result.consolidate_named::<
+                        KeyBatcher<_, _, _>,
+                        ColKeyBuilder<_, _, _>,
+                        ColKeySpine<_, _, _>,
+                        _,
+                    >("Monotonic TopK final consolidate", |k, &()| k.clone());
                     retractions_var.set(collection.concat(result.clone().negate()));
                     soft_assert_or_log!(
                         errs.is_none(),

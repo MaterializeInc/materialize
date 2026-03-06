@@ -604,7 +604,8 @@ where
         .expect("the planner should have enforced this")
         .clone();
 
-    let (button, errors): (_, Stream<G, Vec<Rc<anyhow::Error>>>) = builder.build_fallible(move |caps| {
+    let (button, errors): (_, Stream<G, Vec<Rc<anyhow::Error>>>) =
+        builder.build_fallible(move |caps| {
         Box::pin(async move {
             let [table_ready_capset, data_capset, capset]: &mut [_; 3] = caps.try_into().unwrap();
             *data_capset = CapabilitySet::new();
