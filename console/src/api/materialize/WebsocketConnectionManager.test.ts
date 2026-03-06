@@ -146,6 +146,44 @@ describe("WebsocketConnectionManager", () => {
       expect(mockTarget.reconnect).toHaveBeenCalledTimes(1);
     });
 
+    it("schedules another retry when reconnect throws", () => {
+      const store = getStore();
+
+      // Set up healthy environment
+      store.set(
+        environmentsWithHealth,
+        new Map([
+          ["aws/us-east-1", createHealthyEnvironment("localhost:6875")],
+        ]) as unknown as EnvironmentsWithHealth,
+      );
+
+      manager = new WebsocketConnectionManager(
+        mockTarget,
+        store,
+        reconnectionStateAtom,
+        { baseDelayMs: 1000, maxAttempts: 3 },
+      );
+
+      mockTarget.simulateOpen();
+      vi.mocked(mockTarget.reconnect).mockClear();
+
+      // Make reconnect throw on next call (e.g. network blocked)
+      vi.mocked(mockTarget.reconnect).mockImplementationOnce(() => {
+        throw new Error("Failed to construct WebSocket");
+      });
+
+      // Close triggers retry scheduling
+      mockTarget.simulateClose();
+
+      // Advance past first retry delay — reconnect throws but doesn't break the chain
+      vi.advanceTimersByTime(1500);
+      expect(mockTarget.reconnect).toHaveBeenCalledTimes(1);
+
+      // Advance past second retry — reconnect succeeds this time
+      vi.advanceTimersByTime(5000);
+      expect(mockTarget.reconnect).toHaveBeenCalledTimes(2);
+    });
+
     it("does not schedule retry when socket closes and environment is unhealthy", () => {
       const store = getStore();
 

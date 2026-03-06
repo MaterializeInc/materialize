@@ -26,11 +26,15 @@ export interface Connectable {
   registerOnOpen(callback: () => void): () => void;
 }
 
+export interface ConnectionInfo {
+  hasEverConnected: boolean;
+}
+
 export interface WebsocketConnectionManagerOptions {
   maxAttempts?: number;
   baseDelayMs?: number;
   maxDelayMs?: number;
-  sessionVariables?: SessionVariables;
+  getSessionVariables?: (info: ConnectionInfo) => SessionVariables | undefined;
 }
 
 const DEFAULT_OPTIONS = {
@@ -53,9 +57,9 @@ export interface ReconnectionState {
 }
 
 type ResolvedOptions = Required<
-  Omit<WebsocketConnectionManagerOptions, "sessionVariables">
+  Omit<WebsocketConnectionManagerOptions, "getSessionVariables">
 > &
-  Pick<WebsocketConnectionManagerOptions, "sessionVariables">;
+  Pick<WebsocketConnectionManagerOptions, "getSessionVariables">;
 
 type JotaiStore = ReturnType<typeof createStore>;
 
@@ -74,6 +78,7 @@ export class WebsocketConnectionManager {
   private isHealthy = false;
   private currentHttpAddress?: string;
   private retryAttempt = 0;
+  private hasEverConnected = false;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private initialized = false;
 
@@ -194,6 +199,7 @@ export class WebsocketConnectionManager {
   };
 
   private handleTargetOpen = () => {
+    this.hasEverConnected = true;
     this.retryAttempt = 0;
     this.clearRetryTimer();
     this.notifyStateChange();
@@ -221,10 +227,16 @@ export class WebsocketConnectionManager {
   private attemptConnection() {
     if (this.target.isConnected()) return;
     if (this.currentHttpAddress) {
-      this.target.reconnect(
-        this.currentHttpAddress,
-        this.options.sessionVariables,
-      );
+      const sessionVariables = this.options.getSessionVariables?.({
+        hasEverConnected: this.hasEverConnected,
+      });
+      try {
+        this.target.reconnect(this.currentHttpAddress, sessionVariables);
+      } catch {
+        // If the WebSocket constructor throws (e.g. network blocked),
+        // schedule another retry
+        this.scheduleRetry();
+      }
     }
   }
 
