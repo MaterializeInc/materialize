@@ -26,15 +26,12 @@ menu:
 
 ### S3 Bucket IAM Policies
 
-To prepare your S3 bucket for bulk import, follow the instructions in the [Amazon S3 Sink guide](/serve-results/sink/s3),
-but, in your IAM policy, instead allow these actions:
+To use `COPY FROM` with S3, you need to allow the following actions in your IAM policy:
 
 | Action type | Action name                                                                               | Action description                                                |
 | ----------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | Read        | [`s3:GetObject`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html)      | Grants permission to retrieve an object from a bucket.            |
 | List        | [`s3:ListBucket`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html) | Grants permission to list some or all of the objects in a bucket. |
-
-As we are not writing to the bucket, we do not need any write permissions, only read and list.
 
 ### Text formatting
 
