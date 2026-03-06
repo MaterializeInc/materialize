@@ -31,7 +31,7 @@ use mz_storage_client::controller::IntrospectionType;
 use opentelemetry::trace::TraceContextExt;
 use rand::{Rng, SeedableRng, rngs};
 use serde_json::json;
-use tracing::{Instrument, Level, event, info_span, warn};
+use tracing::{Instrument, Level, event, info, info_span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
@@ -237,10 +237,14 @@ impl Coordinator {
 
     #[mz_ore::instrument(level = "debug")]
     async fn storage_usage_update(&mut self, shards_usage: ShardsUsageReferenced) {
+        let num_shards = shards_usage.by_shard.len();
+        let total_start = Instant::now();
+
         // Similar to audit events, use the oracle ts so this is guaranteed to
         // increase. This is intentionally the timestamp of when collection
         // finished, not when it started, so that we don't write data with a
         // timestamp in the past.
+        let oracle_start = Instant::now();
         let collection_timestamp = if self.controller.read_only() {
             self.peek_local_write_ts().await.into()
         } else {
@@ -248,6 +252,7 @@ impl Coordinator {
             // oracle, which we're not allowed in read-only mode.
             self.get_local_write_ts().await.timestamp.into()
         };
+        let oracle_elapsed = oracle_start.elapsed();
 
         let ops = shards_usage
             .by_shard
@@ -259,8 +264,19 @@ impl Coordinator {
             })
             .collect();
 
+        let transact_start = Instant::now();
         match self.catalog_transact_inner(None, ops).await {
             Ok((table_updates, catalog_updates)) => {
+                let transact_elapsed = transact_start.elapsed();
+                let total_elapsed = total_start.elapsed();
+                info!(
+                    "storage_usage_update: shards={} total={:.3}s oracle={:.3}s catalog_transact={:.3}s",
+                    num_shards,
+                    total_elapsed.as_secs_f64(),
+                    oracle_elapsed.as_secs_f64(),
+                    transact_elapsed.as_secs_f64(),
+                );
+
                 assert!(
                     catalog_updates.is_empty(),
                     "applying builtin table updates does not produce catalog implications"

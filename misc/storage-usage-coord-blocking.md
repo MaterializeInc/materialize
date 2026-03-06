@@ -29,6 +29,10 @@ The shard-size fetch itself (step 1 of the overall flow in `storage_usage_fetch`
 | Persist read | `sync_updates` after commit | Drains updates from persist |
 | Group commit wait | `builtin_table_update().execute()` | Waits for builtin table append |
 
+**Measured (10k shards, optimized build):** The op loop dominates at ~430ms
+(91% of ~475ms total). Oracle (~2ms), persist commit (~6ms), and group commit
+(~15ms) are all cheap. The fix eliminates ~450ms of the ~475ms total.
+
 ## Why does it go through `catalog_transact_inner` at all?
 
 Only to increment the durable `STORAGE_USAGE_ID_ALLOC_KEY` allocator, which populates the `id` column of `mz_storage_usage_by_shard`. But this `id` column is unused:
