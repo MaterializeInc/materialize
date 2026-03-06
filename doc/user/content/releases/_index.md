@@ -21,7 +21,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 This release introduces `COPY FROM` support for CSVs in object storage, source versioning for SQL Server sources, and performance improvements to DDL.
 
-### `COPY FROM` for CSVs in object storage
+### `COPY FROM` CSVs in object storage
 
 `COPY FROM` now supports bulk importing data directly from Amazon S3 and any
 S3-compatible object storage service, such as Google Cloud Storage, Cloudflare
