@@ -57,6 +57,11 @@ pub fn success(message: &str) {
     println!("  {} {}", "✓".green(), message);
 }
 
+/// Print a warning message with yellow exclamation symbol.
+pub fn warn(message: &str) {
+    println!("  {} {}", "⚠".yellow(), message);
+}
+
 /// Print an error message with red X symbol.
 ///
 /// # Example
