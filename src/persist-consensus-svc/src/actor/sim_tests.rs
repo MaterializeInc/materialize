@@ -33,7 +33,7 @@ use mz_persist::generated::consensus_service::{
 
 use crate::actor::{Actor, ActorCommand};
 use crate::metrics::ConsensusMetrics;
-use crate::s3_wal::{SimWalWriter, SimWriteFault};
+use crate::wal::{SimWalWriter, SimWriteFault};
 
 fn test_metrics() -> ConsensusMetrics {
     ConsensusMetrics::register(&MetricsRegistry::new())

@@ -15,8 +15,7 @@
 
 mod actor;
 mod metrics;
-mod recovery;
-mod s3_wal;
+mod wal;
 
 use std::net::SocketAddr;
 
@@ -26,7 +25,7 @@ use tracing::{debug, info};
 
 use crate::actor::{Actor, ActorCommand};
 use crate::metrics::ConsensusMetrics;
-use crate::s3_wal::S3WalWriter;
+use crate::wal::s3::S3WalWriter;
 
 use mz_persist::generated::consensus_service::consensus_service_server::ConsensusServiceServer;
 

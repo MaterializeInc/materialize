@@ -19,7 +19,7 @@ use mz_persist::generated::consensus_service::ProtoVersionedData;
 
 use crate::actor::{Actor, ActorCommand};
 use crate::metrics::ConsensusMetrics;
-use crate::s3_wal::{NoopWalWriter, RecordingWalWriter, SimWalWriter};
+use crate::wal::{NoopWalWriter, RecordingWalWriter, SimWalWriter};
 
 fn test_metrics() -> ConsensusMetrics {
     ConsensusMetrics::register(&MetricsRegistry::new())

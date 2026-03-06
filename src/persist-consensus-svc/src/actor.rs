@@ -25,8 +25,7 @@ use mz_persist::generated::consensus_service::{
 };
 
 use crate::metrics::ConsensusMetrics;
-use crate::recovery;
-use crate::s3_wal::{WalWriteError, WalWriter};
+use crate::wal::{WalWriteError, WalWriter, deserialize_snapshot};
 
 /// Per-shard committed state.
 #[derive(Debug, Clone, Default)]
@@ -496,11 +495,86 @@ impl<W: WalWriter> Actor<W> {
         ProtoScanResponse { data }
     }
 
+    /// Loads snapshot then replays WAL entries to reconstruct shard state.
+    ///
+    /// Returns `(shards, next_batch_number)` — the actor should start writing
+    /// at `next_batch_number`.
+    async fn recover(wal_writer: &W) -> (BTreeMap<String, ShardState>, u64) {
+        // 1. Try loading snapshot.
+        let (mut shards, last_batch) = match wal_writer.read_snapshot().await {
+            Ok(Some(snapshot)) => {
+                let (shards, through_batch) = deserialize_snapshot(&snapshot);
+                info!(through_batch, shards = shards.len(), "loaded snapshot");
+                (shards, through_batch)
+            }
+            Ok(None) => {
+                info!("no snapshot found, starting fresh");
+                (BTreeMap::new(), 0)
+            }
+            Err(e) => {
+                // If we can't read the snapshot, start from scratch and try WAL
+                // from the beginning.
+                warn!("failed to read snapshot: {}, starting from batch 0", e);
+                (BTreeMap::new(), 0)
+            }
+        };
+
+        // 2. Replay WAL entries after the snapshot.
+        let mut next = if shards.is_empty() && last_batch == 0 {
+            // No snapshot: try from batch 0.
+            0
+        } else {
+            last_batch + 1
+        };
+
+        loop {
+            match wal_writer.read_batch(next).await {
+                Ok(Some(batch)) => {
+                    info!(
+                        batch_number = batch.batch_number,
+                        ops = batch.ops.len(),
+                        "replaying WAL batch"
+                    );
+                    for wal_op in &batch.ops {
+                        match &wal_op.op {
+                            Some(proto_wal_op::Op::Write(w)) => {
+                                let shard = shards.entry(w.key.clone()).or_default();
+                                shard.entries.push(VersionedEntry {
+                                    seqno: w.seqno,
+                                    data: Bytes::from(w.data.clone()),
+                                });
+                            }
+                            Some(proto_wal_op::Op::Truncate(t)) => {
+                                if let Some(shard) = shards.get_mut(&t.key) {
+                                    shard.entries.retain(|e| e.seqno >= t.seqno);
+                                }
+                            }
+                            None => {
+                                warn!("WAL op with no payload, skipping");
+                            }
+                        }
+                    }
+                    next += 1;
+                }
+                Ok(None) => {
+                    // No more WAL entries.
+                    break;
+                }
+                Err(e) => {
+                    warn!("error reading WAL batch {}: {}, stopping replay", next, e);
+                    break;
+                }
+            }
+        }
+
+        (shards, next)
+    }
+
     /// Recover state from the WAL, returning a fresh Actor. The struct literal
     /// ensures that adding a new field to Actor causes a compile error here,
     /// forcing the author to consider how recovery should handle it.
     async fn recover_from_snapshot(self) -> Self {
-        let (shards, next_batch) = recovery::recover(&self.wal_writer).await;
+        let (shards, next_batch) = Self::recover(&self.wal_writer).await;
 
         let mut running_entry_count: i64 = 0;
         let mut running_byte_count: i64 = 0;
