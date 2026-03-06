@@ -93,5 +93,28 @@ blocks for ~500ms every collection cycle.
 
 Histogram distribution at 10k shards: most cycles land in 256-512ms bucket.
 
-**Next:** Instrument `storage_usage_update` to identify which cost dominates
-(oracle, transact_op loop, persist write, persist read, group commit).
+### Session 2 — Instrumentation results (2026-03-06)
+
+Added timing logs to `storage_usage_update` and `catalog::transact`. Results at
+10,087 shards (optimized build):
+
+| Phase | Time | % of total |
+|-------|------|-----------|
+| Oracle call #1 (storage_usage_update) | ~2ms | 0.4% |
+| Open transaction | ~10ms | 2% |
+| **transact_inner (10k op loop)** | **~430ms** | **91%** |
+| Persist commit (write + read) | ~6ms | 1.3% |
+| Group commit (builtin_table_update.execute) | ~15ms | 3% |
+| **Total** | **~475ms** | **100%** |
+
+**Finding:** The dominant cost is the N-iteration `transact_inner` loop, not
+persist I/O or oracle calls. Each iteration allocates a storage usage id,
+packs a row, and does catalog bookkeeping. The persist commit and group commit
+are surprisingly cheap (~20ms combined).
+
+**Implication:** Bypassing `catalog_transact_inner` should reduce cost from
+~475ms to ~17ms (oracle + group commit only). The op loop, open_tx, and
+persist commit would all be eliminated.
+
+**Next:** Implement the fix — pack builtin table rows directly, bypass
+catalog_transact_inner.
