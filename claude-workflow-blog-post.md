@@ -3,10 +3,10 @@
 I have been using Claude Code for performance investigation and optimization
 work on the Materialize coordinator. Over two projects — a long DDL performance
 saga (24 sessions, 10+ optimizations) and a focused storage-usage fix (4
-sessions in one day, 25x speedup) — a workflow emerged that makes Claude
-genuinely useful for this kind of work. The key ingredients are a structured
-prompt file, a persistent session log, and a disposable VM where Claude can
-operate without permission babysitting.
+sessions in one day, 25x speedup) — a workflow emerged that makes Claude more
+useful for this kind of work. The key ingredients are a structured prompt file,
+a persistent session log, and a disposable VM where Claude can operate without
+permission babysitting.
 
 **Note:** The actual prompt files, session logs, and commit history for both
 projects are linked in the [References](#references) section at the end.
@@ -15,22 +15,23 @@ projects are linked in the [References](#references) section at the end.
 
 Performance investigation is iterative. You measure, form a hypothesis,
 instrument or fix something, measure again. Each step produces data that
-informs the next. Claude Code is good at this kind of work — it can read
-code, write instrumentation, run builds, capture metrics, and analyze
-results — but it has two problems out of the box:
+informs the next. Claude Code is good at this kind of work — it can read code,
+write instrumentation, run builds, capture metrics, and analyze results — but
+it has two problems out of the box:
 
 1. **Context loss.** Claude compresses old conversation history as it
-   approaches its context limit. A long investigation session can lose
-   earlier measurements, hypotheses, and findings. If you start a new
-   session, everything is gone.
+   approaches its context limit. A long investigation session can lose earlier
+   measurements, hypotheses, and findings. If you start a new session,
+   everything is gone.
 
-2. **Permission fatigue.** In its default mode, Claude asks for permission
-   before every shell command, file write, and process launch. For a workflow
-   where Claude needs to build the project, start it, connect via psql,
-   create 10,000 test tables, capture Prometheus metrics, wait for a
-   collection cycle, capture again, and compute deltas — clicking "approve"
-   dozens of times is not viable. You want Claude to run the full
-   measure-diagnose-fix loop autonomously.
+2. **Permission fatigue.** Claude asks for permission before commands not on
+   your allow list. For everyday coding, most engineers have a good allow list
+   — builds, tests, formatters. But performance investigations need commands
+   you'd never permanently allow: `pkill` to stop processes, `perf` for CPU
+   sampling, installing system packages, setting up databases from scratch,
+   bulk-creating thousands of test objects via `psql`. You either approve each
+   one manually or pollute your allow list with things you don't want there by
+   default.
 
 ## PROMPT.md: a file that survives context loss
 
@@ -39,56 +40,31 @@ is the first thing Claude reads when you start a session (you point it at the
 file with `@PROMPT.md`), and the file itself tells Claude to re-read it after
 every context compaction. It is the persistent brain of the investigation.
 
-The file evolved over time. It started as a simple problem statement with
-workflow rules for single-session bug fixes, then grew significantly during
-the DDL performance work (24 sessions, 223 lines). By the time I used it for
-the storage-usage fix (4 sessions, 135 lines), I knew exactly what sections
-were necessary and the structure was leaner.
+The structure below is what I arrived at after two projects.
 
-The DDL-perf prompt grew to include setup commands, key metrics, key code
-paths, a cost breakdown table, and a current-status section that Claude
-updates after each milestone. It also introduced a separate log file.
-
-The sections that matter:
-
-- **Problem statement.** What is broken and why. References to a design doc
-  and session log. This is what Claude reads to orient itself.
+- **Problem statement.** What is broken and why. References to a design doc (if
+  any) and session log. This is what Claude reads to orient itself.
 
 - **Workflow rules.** One commit per milestone. Reread the prompt after
   context compaction. Update the log after each milestone. Update the design
   doc if findings contradict it. Minimal changes — clean up to the minimum
   required fix at the end.
 
-- **Setup.** Exact build commands, connection strings, how to create test
-  data. For the storage-usage work:
-  ```bash
-  bin/environmentd --optimized -- --storage-usage-collection-interval-sec=10s
-  psql -U materialize -h localhost -p 6875 materialize
-  # Create 5000 tables (each = 1 persist shard):
-  for i in $(seq 1 5000); do echo "CREATE TABLE su_$i (a int);"; done \
-    > /tmp/bulk_create.sql
-  ```
-  Important: always use `--optimized` for measurements. I learned this the
-  hard way during DDL-perf — debug builds distort CPU vs I/O ratios so badly
-  that they lead to wrong conclusions about where time is spent.
+- **Setup.** Exact build commands, connection strings, how to create test data.
 
-- **Key metrics table.** Which Prometheus histograms to capture and what
-  they measure. For storage-usage:
+- **Key metrics table.** Which Prometheus histograms to capture and what they
+  measure. For the storage-usage investigation:
 
   | Metric | What it measures |
   |--------|-----------------|
   | `mz_slow_message_handling{message_kind="storage_usage_update"}` | Wall-clock stall on coord thread |
   | `mz_storage_usage_collection_time_seconds` | Off-thread shard scan (not the problem) |
 
-- **Key code paths table.** File and line references so Claude knows exactly
-  where to look. This saves a lot of aimless grepping.
-
 - **Cost breakdown table.** Initially predicted from reading the code, then
-  updated with actual measurements. For storage-usage, the prediction was
-  that persist I/O and oracle calls would dominate. The measurement showed
-  that the transact_inner op loop was 91% of the cost. Having both the
-  prediction and the measurement in the prompt helps Claude (and me) reason
-  about what to fix.
+  updated with actual measurements. For storage-usage, the prediction was that
+  persist I/O and oracle calls would dominate. The measurement showed that the
+  transact_inner op loop was 91% of the cost. Having both the prediction and
+  the measurement in the prompt helps Claude (and me) reason about what to fix.
 
 - **Current status and completed steps.** Claude updates these after each
   milestone. When it re-reads the prompt after a context compaction or at the
@@ -112,10 +88,10 @@ The storage-usage log had four sessions in one day:
 4. **Cleanup.** Removed dead code (the old op variant, the durable allocator,
    instrumentation logging).
 
-The DDL-perf log grew to 2,500 lines over 24 sessions. It recorded things
-like: "Session 19 showed table_register as 95% of cost in debug builds but
-only 20% in optimized builds — debug proportions are misleading for I/O-bound
-work." Findings like this, persisted in the log, prevented me from repeating
+The DDL-perf log grew to 2,500 lines over 24 sessions. It recorded things like:
+"Session 19 showed table_register as 95% of cost in debug builds but only 20%
+in optimized builds — debug proportions are misleading for I/O-bound work."
+Findings like this, persisted in the log, prevented the agent from repeating
 mistakes in later sessions.
 
 The log is what makes multi-session investigations work. Without it, each
@@ -124,60 +100,49 @@ session would start from scratch.
 ## Two examples compared
 
 **DDL performance** was a long saga. 24 sessions over multiple days. The prompt
-was updated continually as I completed optimizations and discovered new
-bottlenecks. The work produced 10+ distinct optimizations: cached snapshots,
-lightweight ID allocation, persistent catalog state with `imbl::OrdMap`,
-incremental consolidation, lazy resource limit validation, BTreeMap snapshot
-traces, incremental dry-run for DDL transactions, and more. Single-statement
-DDL latency at 100k objects went from multiple seconds to ~264ms median.
+was updated continually as we completed optimizations and discovered new
+bottlenecks. The work produced 10+ distinct optimizations — caching, batching,
+bypassing unnecessary catalog codepaths, and replacing eager validation with
+lazy alternatives. Single-statement DDL latency at 100k objects went from
+multiple seconds to ~264ms median.
 
-**Storage-usage collection** was a focused, single-day fix. I already knew
-the pattern from DDL-perf, so the setup was fast: write the prompt, measure
-the baseline, instrument, fix, clean up. Four sessions, four commits (plus
-the prompt/log bookkeeping commits). The coordinator stall at 10k shards
-dropped from ~499ms to ~20ms.
+**Storage-usage collection** was a focused, single-day fix. I already knew the
+pattern from DDL-perf, so the setup was fast: write the prompt, measure the
+baseline, instrument, fix, clean up. Four sessions, four commits (plus the
+prompt/log bookkeeping commits). The coordinator stall at 10k shards dropped
+from ~499ms to ~20ms.
 
 The same workflow pattern scales from "long saga with many bottleneck layers"
 to "quick focused investigation."
 
 ## Why `--dangerously-skip-permissions` matters
 
-In its default mode, Claude Code asks for approval before running shell
-commands, writing files, and launching processes. This is sensible for
-general-purpose coding — you want to review what it does before it does it.
-But for performance investigations, the approval loop kills the workflow.
-
-A single measure-diagnose-fix cycle involves: building the project (cargo
-build), starting it (bin/environmentd), connecting via psql, creating test
-data (thousands of CREATE TABLE statements), capturing metrics (curl to
-Prometheus endpoint), waiting for a collection cycle, capturing again,
-computing deltas, reading the results, editing code, rebuilding, restarting,
-and measuring again. That is dozens of shell commands, most of them
-mechanical. Approving each one is tedious and breaks Claude's flow of
-reasoning.
-
-With `--dangerously-skip-permissions`, Claude runs the full loop
-autonomously. You set it loose with a prompt, check in occasionally to see
-what it found, and review the commits it produces. This is where the
-structured prompt and log become essential — they are Claude's instructions
-and its notebook. You review its work through the git history, not by
-watching it type.
+For everyday coding, Claude's permission model works well — you have an allow
+list for common commands and approve the rest. Performance investigations break
+this model. A single measure-diagnose-fix cycle might involve `pkill`, `perf
+record`, bulk SQL via `psql`, `curl` to a Prometheus endpoint, editing code,
+rebuilding, and restarting — commands that don't belong on a permanent allow
+list. With `--dangerously-skip-permissions`, Claude runs the full loop
+autonomously. You set it loose with a prompt, check in occasionally to see what
+it found, and review the commits it produces. This is where the structured
+prompt and log become essential — they are Claude's instructions and its
+notebook. You review its work through the git history, not by watching it type.
 
 The tradeoff is obvious: Claude can run arbitrary commands on your machine. So
 you need a safe environment.
 
 ## Ember: cheap disposable VMs for unsandboxed Claude
 
-In the past, I used Materialize scratch instances on EC2 for this. Those
-work but they are heavyweight: they take minutes to provision, they cost real
-money while running, and they live on shared infrastructure.
+In the past, I used Materialize scratch instances on EC2 for this. Those work
+but they are heavyweight: they take minutes to provision and they cost real
+money while running.
 
-I now have my own microVM manager called [ember](https://github.com/aljoscha/ember).
-Ember wraps Firecracker (Amazon's lightweight hypervisor) with ZFS-backed
-storage. The key feature for our workflow is instant VM forking: because ZFS
-uses copy-on-write, `ember vm fork base task-1` creates a full clone of a VM
-in milliseconds, regardless of disk size. Each forked VM is fully isolated
-with its own network.
+I now have my own microVM manager called
+[ember](https://github.com/aljoscha/ember). Ember wraps Firecracker (Amazon's
+lightweight hypervisor) with ZFS-backed storage. The key feature for our
+workflow is instant VM forking: because ZFS uses copy-on-write, `ember vm fork
+base task-1` creates a full clone of a VM in milliseconds, regardless of disk
+size. Each forked VM is fully isolated.
 
 ### One-time: create a base VM
 
@@ -189,8 +154,8 @@ sudo ember vm start base
 
 The base VM ships with a Rust toolchain, Docker, and basic development tools
 already installed in the image. For Materialize-specific setup (cloning the
-repo, installing jj, setting up CockroachDB, configuring Claude Code), I
-have an idempotent provisioning script:
+repo, setting up CockroachDB, configuring Claude Code), I have an idempotent
+provisioning script:
 
 ```bash
 # Provisions the VM: SSH key, git config, repo clone, CockroachDB in Docker,
@@ -198,13 +163,9 @@ have an idempotent provisioning script:
 ./mz-provision.py --ember base
 ```
 
-The provisioning script (`mz-provision.py`) abstracts over both ember VMs and
-mz scratch instances. It is idempotent — each step checks whether it has
-already been done and skips if so. Steps include: generating and uploading an
-SSH key to GitHub, copying git config, cloning the repo, starting CockroachDB
-in Docker, installing and configuring Claude Code (including aliasing `claude`
-to `claude --dangerously-skip-permissions`), and copying agent configuration
-files.
+The script is idempotent — each step checks whether it's already been done. It
+abstracts over both ember VMs and cloud scratch instances, so the same command
+works for either.
 
 After provisioning, stop the base VM:
 ```bash
@@ -221,7 +182,7 @@ ember ssh storage-usage-fix
 # Inside the VM:
 cd ~/materialize
 git pull                        # get the branch with PROMPT.md
-claude                          # aliased to claude --dangerously-skip-permissions
+claude "follow @PROMPT.md"      # aliased to claude --dangerously-skip-permissions
 # ... Claude works autonomously, following PROMPT.md ...
 # ... commits results to git as it goes ...
 git push                        # push results out
@@ -234,9 +195,9 @@ sudo ember vm delete storage-usage-fix
 ```
 
 The git push/pull loop is how you communicate with Claude across the VM
-boundary. Push an updated PROMPT.md to adjust instructions, pull to review
-what Claude produced. The VM is disposable — if something goes wrong, delete
-it and fork a fresh one. This takes seconds, not minutes.
+boundary. Push an updated PROMPT.md to adjust instructions, pull to review what
+Claude produced. The VM is disposable — if something goes wrong, delete it and
+fork a fresh one. This takes seconds, not minutes.
 
 You can also run multiple investigations in parallel by forking multiple VMs
 from the same base. Each gets its own isolated copy of the repo and its own
@@ -244,18 +205,11 @@ running Materialize instance.
 
 ## Closing thoughts
 
-This workflow is not specific to performance investigations, but that is where
-it works best. The measure-diagnose-fix loop is naturally iterative and
-produces structured data that benefits from persistence across sessions. The
-PROMPT.md pattern gives Claude the context it needs to be useful, the session
-log prevents context loss from being a problem, and ember VMs provide a safe
-environment for autonomous operation.
-
-The key insight is that the PROMPT.md file is not just instructions — it is a
-living document that Claude updates as it works. The current status, the
-completed steps, the cost breakdown tables — these are all maintained by Claude
-as part of the workflow. When you come back to review, the prompt and the log
-tell you exactly what happened and where things stand.
+The key insight is that PROMPT.md is not just instructions — it is a living
+document that Claude updates as it works. The current status, the cost
+breakdown tables, the completed steps — these are all maintained by Claude as
+part of the workflow. When you come back to review, the prompt and the log tell
+you exactly what happened and where things stand.
 
 ## References
 
