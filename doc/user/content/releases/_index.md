@@ -21,7 +21,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 This release introduces `COPY FROM` support for CSVs from S3 and S3 compatible services, source versioning for SQL Server sources, and performance improvements to DDL.
 
-### COPY FROM S3
+### `COPY FROM` object storage
 
 `COPY FROM` now supports bulk importing data directly from Amazon S3 and any
 S3-compatible object storage service, such as Google Cloud Storage, Cloudflare
@@ -36,7 +36,7 @@ FROM 's3://my_bucket/my_data.csv'
 
 For more information, refer to:
 - [Syntax: COPY FROM](/sql/copy-from/)
-- [Guide: How to set up an S3-compatible connection](/sql/create-connection/#s3-compatible-object-storage)
+- [Syntax: CREATE CONNECTION (S3-compatible)](/sql/create-connection/#s3-compatible-object-storage)
 
 ### SQL Server: Source versioning
 
@@ -51,11 +51,11 @@ in your source SQL Server tables.
 - Changing column types is currently unsupported.
 {{< /note >}}
 
-For more information, see:
+For more information, refer to:
 - [Guide: Handling upstream schema changes with zero
   downtime](/ingest-data/sql-server/source-versioning/)
-- [`CREATE SOURCE`](/sql/create-source/sql-server-v2/)
-- [`CREATE TABLE`](/sql/create-table/)
+- [Syntax: `CREATE SOURCE`](/sql/create-source/sql-server-v2/)
+- [Syntax: `CREATE TABLE`](/sql/create-table/)
 
 ### Improvements
 
