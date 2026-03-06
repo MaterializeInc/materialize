@@ -123,6 +123,7 @@ def run_and_detect_rust_incremental_build_failure(
         incremental_build_failure_msgs = [
             "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs",
             "ld.lld: error: undefined symbol",
+            "signal: 11, SIGSEGV",
         ]
         combined = stdout_contents + stderr_contents
         if any(msg in combined for msg in incremental_build_failure_msgs):
