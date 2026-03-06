@@ -24,14 +24,23 @@ menu:
 
 ## Details
 
-### S3 Bucket IAM Policies
+### S3 permissions
 
-To use `COPY FROM` with S3, you need to allow the following actions in your IAM policy:
+#### AWS S3
+
+To use `COPY FROM` with AWS S3, you need to allow the following actions in your IAM policy:
 
 | Action type | Action name                                                                               | Action description                                                |
 | ----------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | Read        | [`s3:GetObject`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html)      | Grants permission to retrieve an object from a bucket.            |
 | List        | [`s3:ListBucket`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html) | Grants permission to list some or all of the objects in a bucket. |
+
+#### S3-compatible services
+
+To use `COPY FROM` with S3-compatible services like Google Cloud Storage (GCS),
+MinIO, or Cloudflare R2, create an AWS connection with a custom `ENDPOINT` and
+static credentials. See [S3-compatible object storage](/sql/create-connection/#s3-compatible-object-storage)
+for details on creating the connection.
 
 ### Text formatting
 
@@ -152,6 +161,18 @@ COPY INTO parquet_table FROM 's3://example_bucket' (FORMAT PARQUET, AWS CONNECTI
 ```
 
 {{< /comment >}}
+
+#### Using S3-compatible services
+
+Using a GCS connection:
+
+```mzsql
+COPY INTO csv_table FROM 's3://my-gcs-bucket/data.csv' (FORMAT CSV, AWS CONNECTION = gcs_conn);
+```
+
+{{< note >}}
+The `s3://` URI scheme is required even when targeting non-AWS services like GCS or MinIO.
+{{< /note >}}
 
 #### Using presigned URL
 
