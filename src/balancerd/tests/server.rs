@@ -22,7 +22,7 @@ use futures::StreamExt;
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_balancerd::{
     BUILD_INFO, BalancerConfig, BalancerResolver, BalancerService, CancellationResolver,
-    FronteggResolver, SniResolver,
+    FronteggResolver, SniTemplate,
 };
 use mz_environmentd::test_util::{self, Ca, make_pg_tls};
 use mz_frontegg_auth::{
@@ -152,7 +152,7 @@ async fn test_balancer() {
                     auth: frontegg_auth,
                     addr_template: envd_server.sql_local_addr().to_string(),
                 },
-                Some(SniResolver {
+                Some(SniTemplate {
                     template: envd_server.sql_local_addr().ip().to_string(),
                     port: envd_server.sql_local_addr().port(),
                 }),

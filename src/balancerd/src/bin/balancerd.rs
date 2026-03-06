@@ -21,7 +21,7 @@ use anyhow::Context;
 use jsonwebtoken::DecodingKey;
 use mz_balancerd::{
     BUILD_INFO, BalancerConfig, BalancerResolver, BalancerService, CancellationResolver,
-    FronteggResolver, SniResolver,
+    FronteggResolver, SniTemplate,
 };
 use mz_frontegg_auth::{
     Authenticator, AuthenticatorConfig, DEFAULT_REFRESH_DROP_FACTOR,
@@ -261,7 +261,7 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
                                     )
                                 })
                                 .expect("invalid port for pgwire_sni_resolver_template");
-                            Some(SniResolver { template, port })
+                            Some(SniTemplate { template, port })
                         }
                     },
                 ),

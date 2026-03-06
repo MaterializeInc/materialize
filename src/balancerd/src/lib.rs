@@ -1274,7 +1274,7 @@ impl mz_server_core::Server for HttpsBalancer {
 }
 
 #[derive(Debug)]
-pub struct SniResolver {
+pub struct SniTemplate {
     pub template: String,
     pub port: u16,
 }
@@ -1285,7 +1285,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> ClientStream for T {}
 #[derive(Debug)]
 pub enum BalancerResolver {
     Static(String),
-    MultiTenant(TenantDnsResolver, FronteggResolver, Option<SniResolver>),
+    MultiTenant(TenantDnsResolver, FronteggResolver, Option<SniTemplate>),
 }
 
 impl BalancerResolver {
@@ -1322,7 +1322,7 @@ impl BalancerResolver {
                 let resolved_addr = match (servername, sni_resolver) {
                     (
                         Some(servername),
-                        Some(SniResolver {
+                        Some(SniTemplate {
                             template: sni_addr_template,
                             port,
                         }),
@@ -1397,11 +1397,11 @@ impl BalancerResolver {
 }
 
 /// Creates a default resolver with caching enabled for DNS lookups.
-pub fn create_default_resolver() -> TokioResolver {
+fn create_default_resolver() -> TokioResolver {
     let mut resolver_opts = ResolverOpts::default();
     resolver_opts.cache_size = 10000;
     resolver_opts.positive_max_ttl = Some(Duration::from_secs(10));
-    resolver_opts.positive_min_ttl = Some(Duration::from_secs(9));
+    resolver_opts.positive_min_ttl = Some(Duration::from_secs(1));
     resolver_opts.negative_min_ttl = Some(Duration::from_secs(1));
     resolver_opts.negative_max_ttl = Some(Duration::from_secs(1));
     resolver_opts.ip_strategy = LookupIpStrategy::Ipv4thenIpv6;
@@ -1431,7 +1431,7 @@ pub fn create_default_resolver() -> TokioResolver {
 }
 
 /// Creates a resolver with caching disabled for DNS lookups.
-pub fn create_non_caching_resolver() -> TokioResolver {
+fn create_non_caching_resolver() -> TokioResolver {
     let mut resolver_opts = ResolverOpts::default();
     resolver_opts.cache_size = 0; // Disable caching
     resolver_opts.ip_strategy = LookupIpStrategy::Ipv4thenIpv6;
@@ -1473,7 +1473,7 @@ impl TenantDnsResolver {
     }
 
     /// Resolves a CNAME record using the caching resolver.
-    async fn resolve_cname(&self, hostname: &str) -> Result<Option<String>, anyhow::Error> {
+    async fn resolve_cname(&self, hostname: &str) -> Option<String> {
         match self
             .caching_resolver
             .lookup(hostname, RecordType::CNAME)
@@ -1484,14 +1484,14 @@ impl TenantDnsResolver {
                     if let Some(cname_data) = cname_record.as_cname() {
                         let cname = cname_data.to_string();
                         debug!("CNAME for {}: {}", hostname, cname);
-                        return Ok(Some(cname));
+                        return Some(cname);
                     }
                 }
-                Ok(None)
+                None
             }
             Err(e) => {
                 debug!("CNAME lookup failed for {}: {}", hostname, e);
-                Ok(None)
+                None
             }
         }
     }
@@ -1521,7 +1521,7 @@ impl TenantDnsResolver {
 
         // Resolve CNAME with caching (these are generally static).
         // Extract tenant from CNAME if present.
-        let (ip, tenant) = if let Some(cname) = self.resolve_cname(host).await? {
+        let (ip, tenant) = if let Some(cname) = self.resolve_cname(host).await {
             let tenant = extract_tenant_from_cname(&cname);
             let ip = self.resolve_arec_no_cache(&cname).await?;
             (ip, tenant)
