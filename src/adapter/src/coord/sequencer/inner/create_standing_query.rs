@@ -144,29 +144,42 @@ impl Coordinator {
                     catalog.set_dataflow_metainfo(global_id, metainfo);
                     catalog.cache_expressions(global_id, None, optimizer_features);
 
-                    // Create the standing query's output collection and the
-                    // internal parameter collection.
+                    // Create the internal parameter collection.
+                    // The standing query's output goes through a subscribe sink
+                    // (no output storage collection needed).
                     coord
                         .controller
                         .storage
                         .create_collections(
                             coord.catalog.state().storage_metadata(),
                             None,
-                            vec![
-                                (
-                                    global_id,
-                                    CollectionDescription::for_other(desc, Some(as_of.clone())),
-                                ),
-                                (
-                                    param_collection_id,
-                                    CollectionDescription::for_table(param_desc),
-                                ),
-                            ],
+                            vec![(
+                                param_collection_id,
+                                CollectionDescription::for_table(param_desc),
+                            )],
                         )
                         .await
-                        .unwrap_or_terminate("cannot fail to create collections");
+                        .unwrap_or_terminate("cannot fail to create param collection");
 
                     coord.ship_dataflow(physical_plan, cluster_id, None).await;
+
+                    // Register the standing query for subscribe response handling.
+                    // The subscribe sink ID is the standing query's global_id.
+                    use crate::coord::standing_query_state::ActiveStandingQuery;
+                    coord.active_standing_queries.insert(
+                        global_id,
+                        ActiveStandingQuery {
+                            item_id,
+                            output_id: global_id,
+                            param_collection_id,
+                            cluster_id,
+                            subscribe_sink_id: global_id,
+                            batch_buffer: Vec::new(),
+                            request_map: BTreeMap::new(),
+                            in_flight: BTreeMap::new(),
+                            result_buffer: BTreeMap::new(),
+                        },
+                    );
                 })
             })
             .await?;

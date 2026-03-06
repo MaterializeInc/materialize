@@ -700,7 +700,7 @@ impl Coordinator {
                     // sequence_execute_standing_query does NOT retire the ctx
                     // on success — it stays open until results arrive.
                     // On error, it returns the ctx so we can retire it.
-                    match self.sequence_execute_standing_query(ctx, plan) {
+                    match self.sequence_execute_standing_query(ctx, plan).await {
                         Ok(()) => {}
                         Err((err, ctx)) => ctx.retire(Err(err)),
                     }

@@ -229,6 +229,7 @@ mod introspection;
 mod message_handler;
 mod privatelink_status;
 mod sql;
+mod standing_query_handler;
 pub(crate) mod standing_query_state;
 mod validity;
 

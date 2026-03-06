@@ -8,8 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use mz_ore::instrument;
-use mz_repr::Row;
+use mz_repr::{Diff, GlobalId, Row};
 use mz_sql::plan;
+use mz_storage_client::client::TableData;
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::ExecuteContext;
@@ -20,14 +22,15 @@ use crate::error::AdapterError;
 impl Coordinator {
     /// Sequence an EXECUTE STANDING QUERY plan.
     ///
-    /// This enqueues the request into the standing query's batch buffer.
+    /// This enqueues the request into the standing query's batch buffer,
+    /// then flushes the batch by writing param rows to the param collection.
     /// The ExecuteContext is NOT retired here — it stays open until results
-    /// arrive from the SUBSCRIBE reader.
+    /// arrive from the subscribe handler.
     ///
     /// On error, returns both the error and the ExecuteContext so the caller
     /// can retire it.
     #[instrument]
-    pub(crate) fn sequence_execute_standing_query(
+    pub(crate) async fn sequence_execute_standing_query(
         &mut self,
         ctx: ExecuteContext,
         plan: plan::ExecuteStandingQueryPlan,
@@ -73,9 +76,86 @@ impl Coordinator {
         });
         asq.request_map.insert(request_id, ctx);
 
-        // TODO: Trigger a batch flush (write params to storage, track timestamps).
-        // For now, the flush will be triggered by a timer or message.
+        // Flush the batch immediately.
+        self.flush_standing_query_batch(subscribe_sink_id).await;
 
         Ok(())
+    }
+
+    /// Flush the batch buffer for a standing query by writing param rows
+    /// to the param collection.
+    ///
+    /// This obtains a write timestamp, writes all pending param rows via
+    /// `append_table`, records which request_ids are in-flight at that
+    /// timestamp, and applies the local write.
+    async fn flush_standing_query_batch(&mut self, sink_id: GlobalId) {
+        let asq = self
+            .active_standing_queries
+            .get_mut(&sink_id)
+            .expect("standing query must exist");
+
+        if asq.batch_buffer.is_empty() {
+            return;
+        }
+
+        let param_collection_id = asq.param_collection_id;
+
+        // Drain the batch buffer.
+        let pending: Vec<PendingRequest> = asq.batch_buffer.drain(..).collect();
+        let request_ids: Vec<Uuid> = pending.iter().map(|p| p.request_id).collect();
+
+        // Build table data: each param row gets diff +1.
+        let rows: Vec<(Row, Diff)> = pending
+            .into_iter()
+            .map(|p| (p.param_row, Diff::from(1i64)))
+            .collect();
+
+        debug!(
+            "standing query {sink_id}: flushing {} param rows to {}",
+            rows.len(),
+            param_collection_id,
+        );
+
+        // Get a write timestamp.
+        let write_ts = self.get_local_write_ts().await;
+        let timestamp = write_ts.timestamp;
+        let advance_to = write_ts.advance_to;
+
+        // Record in-flight request_ids at this timestamp.
+        let asq = self
+            .active_standing_queries
+            .get_mut(&sink_id)
+            .expect("standing query must exist");
+        asq.in_flight
+            .entry(timestamp)
+            .or_default()
+            .extend(request_ids);
+
+        // Write to the param collection.
+        let appends = vec![(param_collection_id, vec![TableData::Rows(rows)])];
+        let append_fut = self
+            .controller
+            .storage
+            .append_table(timestamp, advance_to, appends)
+            .expect("invalid updates");
+
+        // Apply the local write to advance the timestamp oracle.
+        let apply_write_fut = self.apply_local_write(timestamp);
+
+        // Wait for the append to complete, then apply the write.
+        match append_fut.await {
+            Ok(result) => {
+                result.unwrap_or_else(|e| {
+                    tracing::warn!("standing query {sink_id}: append failed: {e}");
+                });
+            }
+            Err(_) => {
+                tracing::warn!("standing query {sink_id}: append channel dropped");
+            }
+        }
+
+        apply_write_fut.await;
+
+        debug!("standing query {sink_id}: flush complete at ts {timestamp}");
     }
 }
