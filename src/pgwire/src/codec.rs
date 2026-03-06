@@ -315,6 +315,16 @@ impl Codec {
                 column_formats,
             } => {
                 dst.put_format_i8(overall_format);
+                if column_formats.len() > usize::try_from(i16::MAX).expect("i16::MAX is positive") {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "{} columns in COPY response, which exceeds {}",
+                            column_formats.len(),
+                            i16::MAX
+                        ),
+                    ));
+                }
                 dst.put_length_i16(column_formats.len())?;
                 for format in column_formats {
                     dst.put_format_i16(format);
@@ -357,6 +367,16 @@ impl Codec {
                 }
             }
             BackendMessage::RowDescription(fields) => {
+                if fields.len() > usize::try_from(i16::MAX).expect("i16::MAX is positive") {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "{} fields in row description, which exceeds {}",
+                            fields.len(),
+                            i16::MAX
+                        ),
+                    ));
+                }
                 dst.put_length_i16(fields.len())?;
                 for f in &fields {
                     dst.put_string(&f.name.to_string());
@@ -370,6 +390,16 @@ impl Codec {
                 }
             }
             BackendMessage::DataRow(fields) => {
+                if fields.len() > usize::try_from(i16::MAX).expect("i16::MAX is positive") {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "{} fields in data row, which exceeds {}",
+                            fields.len(),
+                            i16::MAX
+                        ),
+                    ));
+                }
                 dst.put_length_i16(fields.len())?;
                 for (f, (ty, format)) in fields.iter().zip_eq(&self.encode_state) {
                     if let Some(f) = f {
@@ -413,6 +443,16 @@ impl Codec {
                 dst.put_u32(secret_key);
             }
             BackendMessage::ParameterDescription(params) => {
+                if params.len() > usize::try_from(i16::MAX).expect("i16::MAX is positive") {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "{} params in parameter description, which exceeds {}",
+                            params.len(),
+                            i16::MAX
+                        ),
+                    ));
+                }
                 dst.put_length_i16(params.len())?;
                 for param in params {
                     dst.put_u32(param.oid());
