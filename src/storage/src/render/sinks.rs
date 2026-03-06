@@ -41,7 +41,7 @@ pub(crate) fn render_sink<G>(
     storage_state: &mut StorageState,
     sink_id: GlobalId,
     sink: &StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
-) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>)
+) -> (Stream<G, Vec<HealthStatusMessage>>, Vec<PressOnDropButton>)
 where
     G: Scope<Timestamp = ()>,
 {
@@ -206,7 +206,7 @@ where
         sink_id: GlobalId,
         sinked_collection: VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
         err_collection: VecCollection<G, DataflowError, Diff>,
-    ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>);
+    ) -> (Stream<G, Vec<HealthStatusMessage>>, Vec<PressOnDropButton>);
 }
 
 fn get_sink_render_for<G>(connection: &StorageSinkConnection) -> Box<dyn SinkRender<G>>

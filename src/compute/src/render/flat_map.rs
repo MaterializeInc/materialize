@@ -66,8 +66,8 @@ where
 
                 input.for_each(|cap, data| {
                     queue.push_back((
-                        cap.delayed_for_output(cap.time(), 0),
-                        cap.retain_for_output(1),
+                        cap.delayed(cap.time(), 0),
+                        cap.retain(1),
                         std::mem::take(data),
                     ))
                 });
@@ -131,7 +131,7 @@ where
         use differential_dataflow::AsCollection;
         let ok_collection = oks.as_collection();
         let new_err_collection = errs.as_collection();
-        let err_collection = err_collection.concat(&new_err_collection);
+        let err_collection = err_collection.concat(new_err_collection);
         CollectionBundle::from_collections(ok_collection, err_collection)
     }
 }

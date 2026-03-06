@@ -38,7 +38,7 @@ where
     let (output_buf, output_stream) = builder.new_output();
     let mut output_buf = OutputBuilder::<_, ConsolidatingContainerBuilder<_>>::from(output_buf);
 
-    let mut input = builder.new_input_connection(&coll.inner, Pipeline, []);
+    let mut input = builder.new_input_connection(coll.inner, Pipeline, []);
     builder.build(move |capabilities| {
         // This capability directly controls this operator's output frontier (because we have
         // disconnected the input above). We wrap it in an Option so we can drop it to advance to
@@ -47,7 +47,7 @@ where
         let mut capability = capabilities.into_iter().next(); // (We have 1 one input.)
         move |frontiers| {
             let mut output_handle_core = output_buf.activate();
-            input.for_each(|input_cap, data| {
+            input.for_each(|input_cap, data: &mut Vec<(D, Timestamp, Diff)>| {
                 // Note that we can't use `input_cap` to get an output session because we might have
                 // advanced our output frontier already beyond the frontier of this capability.
 

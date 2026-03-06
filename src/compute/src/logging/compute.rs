@@ -25,7 +25,6 @@ use mz_repr::{Datum, Diff, GlobalId, Row, RowRef, Timestamp};
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use mz_timely_util::replay::MzReplay;
-use timely::Data;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::OutputBuilder;
@@ -327,7 +326,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         // Build a demux operator that splits the replayed event stream up into the separate
         // logging streams.
         let mut demux = OperatorBuilder::new("Compute Logging Demux".to_string(), scope.clone());
-        let mut input = demux.new_input(&logs, Pipeline);
+        let mut input = demux.new_input(logs, Pipeline);
         let (export_out, export) = demux.new_output();
         let mut export_out = OutputBuilder::from(export_out);
         let (frontier_out, frontier) = demux.new_output();
@@ -373,7 +372,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                 let mut lir_mapping = lir_mapping_out.activate();
                 let mut dataflow_global_ids = dataflow_global_ids_out.activate();
 
-                input.for_each(|cap, data| {
+                input.for_each(|cap, data: &mut Column<(Duration, ComputeEvent)>| {
                     let mut output_sessions = DemuxOutput {
                         export: export.session_with_builder(&cap),
                         frontier: frontier.session_with_builder(&cap),
@@ -1431,13 +1430,13 @@ pub(crate) trait LogDataflowErrors {
 impl<G, D> LogDataflowErrors for VecCollection<G, D, Diff>
 where
     G: Scope,
-    D: Data,
+    D: Clone + 'static,
 {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
         self.inner
             .unary(Pipeline, "LogDataflowErrorsCollection", |_cap, _info| {
                 move |input, output| {
-                    input.for_each(|cap, data| {
+                    input.for_each(|cap, data: &mut Vec<(D, G::Timestamp, Diff)>| {
                         let diff = data.iter().map(|(_d, _t, r)| *r).sum::<Diff>();
                         logger.log(&ComputeEvent::ErrorCount(ErrorCount { export_id, diff }));
 
@@ -1449,7 +1448,7 @@ where
     }
 }
 
-impl<G, B> LogDataflowErrors for Stream<G, B>
+impl<G, B> LogDataflowErrors for Stream<G, Vec<B>>
 where
     G: Scope,
     for<'a> B: BatchReader<DiffGat<'a> = &'a Diff> + Clone + 'static,
@@ -1457,7 +1456,7 @@ where
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
         self.unary(Pipeline, "LogDataflowErrorsStream", |_cap, _info| {
             move |input, output| {
-                input.for_each(|cap, data| {
+                input.for_each(|cap, data: &mut Vec<B>| {
                     let diff = data.iter().map(sum_batch_diffs).sum::<Diff>();
                     logger.log(&ComputeEvent::ErrorCount(ErrorCount { export_id, diff }));
 

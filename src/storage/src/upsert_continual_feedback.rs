@@ -113,8 +113,8 @@ pub fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     snapshot_buffering_max: Option<usize>,
 ) -> (
     VecCollection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
-    Stream<G, Infallible>,
+    Stream<G, Vec<(Option<GlobalId>, HealthStatusUpdate)>>,
+    Stream<G, Vec<Infallible>>,
     PressOnDropButton,
 )
 where
@@ -122,7 +122,7 @@ where
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
     US: UpsertStateBackend<G::Timestamp, FromTime>,
-    FromTime: Debug + timely::ExchangeData + Ord + Sync,
+    FromTime: Debug + timely::ExchangeData + Clone + Ord + Sync,
 {
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
 
@@ -142,7 +142,7 @@ where
         };
         Some((UpsertKey::from_value(value_ref, &key_indices), value))
     });
-    let (output_handle, output) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (output_handle, output) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     // An output that just reports progress of the snapshot consolidation process upstream to the
     // persist source to ensure that backpressure is applied
@@ -636,8 +636,8 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
 where
     S: UpsertStateBackend<T, FromTime>,
     G: Scope,
-    T: TotalOrder + timely::ExchangeData + Debug + Ord + Sync,
-    FromTime: timely::ExchangeData + Ord + Sync,
+    T: TotalOrder + timely::ExchangeData + Clone + Debug + Ord + Sync,
+    FromTime: timely::ExchangeData + Clone + Ord + Sync,
     E: UpsertErrorEmitter<G>,
 {
     let mut min_remaining_time = Antichain::new();

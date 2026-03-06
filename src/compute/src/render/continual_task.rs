@@ -174,14 +174,15 @@ use mz_timely_util::builder_async::{Button, Event, OperatorBuilder as AsyncOpera
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::probe;
 use mz_timely_util::probe::ProbeNotify;
+use timely::PartialOrder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Filter, FrontierNotificator, Map, Operator};
+use timely::dataflow::operators::vec::{Filter, Map};
+use timely::dataflow::operators::{FrontierNotificator, Operator};
 use timely::dataflow::{ProbeHandle, Scope};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp as _};
-use timely::{Data, PartialOrder};
 use tracing::debug;
 
 use crate::compute_state::ComputeState;
@@ -441,7 +442,7 @@ where
 
         let to_append = oks
             .map(|x| SourceData(Ok(x)))
-            .concat(&errs.map(|x| SourceData(Err(x))));
+            .concat(errs.map(|x| SourceData(Err(x))));
         let append_times = append_times.expect("should be provided by ContinualTaskCtx");
 
         let write_handle = {
@@ -778,7 +779,7 @@ trait StepForward<G: Scope, D, R> {
 impl<G, D, R> StepForward<G, D, R> for VecCollection<G, D, R>
 where
     G: Scope<Timestamp = Timestamp>,
-    D: Data,
+    D: Clone + 'static,
     R: Semigroup + 'static,
 {
     fn step_forward(&self, name: &str) -> VecCollection<G, D, R> {
@@ -792,7 +793,7 @@ where
         // frontier, so make this promise to timely.
         let step_forward_summary = Timestamp::from(1);
         let mut input = builder.new_input_connection(
-            &self.inner,
+            self.inner.clone(),
             Pipeline,
             [(0, Antichain::from_elem(step_forward_summary))],
         );
@@ -800,11 +801,11 @@ where
         builder.build(move |_caps| {
             move |_frontiers| {
                 let mut output = output.activate();
-                input.for_each(|cap, data| {
+                input.for_each(|cap, data: &mut Vec<(D, Timestamp, R)>| {
                     for (_, ts, _) in data.iter_mut() {
                         *ts = ts.step_forward();
                     }
-                    let cap = cap.delayed(&cap.time().step_forward());
+                    let cap = cap.delayed(&cap.time().step_forward(), 0);
                     output.session(&cap).give_container(data);
                 });
             }
@@ -843,22 +844,24 @@ where
         let mut passthrough = OutputBuilder::from(passthrough);
         let (times, times_stream) = builder.new_output();
         let mut times = OutputBuilder::<_, ConsolidatingContainerBuilder<_>>::from(times);
-        let mut input = builder.new_input(&self.inner, Pipeline);
+        let mut input = builder.new_input(self.inner.clone(), Pipeline);
         builder.set_notify(false);
         builder.build(|_caps| {
             move |_frontiers| {
                 let mut passthrough = passthrough.activate();
                 let mut times = times.activate();
-                input.for_each_time(|time, data| {
-                    let mut times_session = times.session_with_builder(&time);
-                    let mut passthrough_session = passthrough.session(&time);
-                    for data in data {
-                        let times_iter =
-                            data.iter().map(|(_data, ts, diff)| ((), *ts, diff.clone()));
-                        times_session.give_iterator(times_iter);
-                        passthrough_session.give_container(data);
-                    }
-                });
+                input.for_each_time(
+                    |time, data: std::slice::IterMut<'_, Vec<(D, Timestamp, R)>>| {
+                        let mut times_session = times.session_with_builder(&time);
+                        let mut passthrough_session = passthrough.session(&time);
+                        for data in data {
+                            let times_iter =
+                                data.iter().map(|(_data, ts, diff)| ((), *ts, diff.clone()));
+                            times_session.give_iterator(times_iter);
+                            passthrough_session.give_container(data);
+                        }
+                    },
+                );
             }
         });
         (
@@ -882,13 +885,14 @@ where
     fn times_reduce(&self, name: &str) -> VecCollection<G, (), R> {
         let name = format!("ct_times_reduce({})", name);
         self.inner
+            .clone()
             .unary_frontier(Pipeline, &name, |_caps, _info| {
                 let mut notificator = FrontierNotificator::default();
                 let mut stash = HashMap::<_, R>::new();
                 move |(input, frontier), output| {
                     input.for_each(|cap, data| {
                         for ((), ts, diff) in data.drain(..) {
-                            notificator.notify_at(cap.delayed(&ts));
+                            notificator.notify_at(cap.delayed(&ts, 0));
                             if let Some(sum) = stash.get_mut(&ts) {
                                 sum.plus_equals(&diff);
                             } else {

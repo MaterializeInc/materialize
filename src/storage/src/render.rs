@@ -212,7 +212,8 @@ use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::scope_label::ScopeExt;
 use timely::communication::Allocate;
 use timely::dataflow::Scope;
-use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave, Map};
+use timely::dataflow::operators::vec::Map;
+use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave};
 use timely::dataflow::scopes::Child;
 use timely::progress::Antichain;
 use timely::worker::{AsWorker, Worker as TimelyWorker};
@@ -256,7 +257,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 
             let mut tokens = vec![];
 
-            let (feedback_handle, feedback) = mz_scope.feedback(Default::default());
+            let (feedback_handle, feedback) = mz_scope.feedback::<Vec<()>>(Default::default());
 
             let connection = description.desc.connection.clone();
             tracing::info!(
@@ -355,7 +356,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             health_streams.extend(source_health);
             for (export_id, (ok, err)) in outputs {
                 let export = &description.source_exports[&export_id];
-                let source_data = ok.map(Ok).concat(&err.map(Err));
+                let source_data = ok.map(Ok).concat(err.map(Err));
 
                 let metrics = storage_state.metrics.get_source_persist_sink_metrics(
                     export_id,

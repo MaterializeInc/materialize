@@ -44,7 +44,7 @@ use timely::container::{CapacityContainerBuilder, PushInto, SizableContainer};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::OutputBuilderSession;
 use timely::dataflow::operators::{Capability, Operator};
-use timely::dataflow::{Scope, StreamCore};
+use timely::dataflow::{Scope, Stream};
 use timely::progress::timestamp::Timestamp;
 use timely::{Container, PartialOrder};
 use tracing::trace;
@@ -59,7 +59,7 @@ pub(super) fn mz_join_core<G, Tr1, Tr2, L, I, YFn, C>(
     arranged2: &Arranged<G, Tr2>,
     result: L,
     yield_fn: YFn,
-) -> StreamCore<G, C>
+) -> Stream<G, C>
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -75,8 +75,8 @@ where
     let mut trace1 = arranged1.trace.clone();
     let mut trace2 = arranged2.trace.clone();
 
-    arranged1.stream.binary_frontier(
-        &arranged2.stream,
+    arranged1.stream.clone().binary_frontier(
+        arranged2.stream.clone(),
         Pipeline,
         Pipeline,
         "Join",
@@ -222,7 +222,7 @@ where
                     let trace2 = trace2_option
                         .as_mut()
                         .expect("we only drop a trace in response to the other input emptying");
-                    let capability = capability.retain();
+                    let capability = capability.retain(0);
                     for batch1 in data.drain(..) {
                         // Ignore any pre-loaded data.
                         if PartialOrder::less_equal(&acknowledged1, batch1.lower()) {
@@ -274,11 +274,11 @@ where
                 });
 
                 // Drain input 2, prepare work.
-                input2.for_each(|capability, data| {
+                input2.for_each(|capability, data: &mut Vec<Tr2::Batch>| {
                     let trace1 = trace1_option
                         .as_mut()
                         .expect("we only drop a trace in response to the other input emptying");
-                    let capability = capability.retain();
+                    let capability = capability.retain(0);
                     for batch2 in data.drain(..) {
                         // Ignore any pre-loaded data.
                         if PartialOrder::less_equal(&acknowledged2, batch2.lower()) {

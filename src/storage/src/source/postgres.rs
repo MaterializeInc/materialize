@@ -85,6 +85,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::AsCollection;
+use differential_dataflow::containers::TimelyStack;
 use itertools::Itertools as _;
 use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::cast::CastFrom;
@@ -102,8 +103,9 @@ use mz_storage_types::sources::{
 use mz_timely_util::builder_async::PressOnDropButton;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
+use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::core::Partition;
-use timely::dataflow::operators::{Concat, Map, ToStream};
+use timely::dataflow::operators::vec::{Map, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tokio_postgres::error::SqlState;
@@ -131,8 +133,8 @@ impl SourceRender for PostgresSourceConnection {
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, HealthStatusMessage>,
-        Stream<G, Probe<MzOffset>>,
+        Stream<G, Vec<HealthStatusMessage>>,
+        Stream<G, Vec<Probe<MzOffset>>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting into a per-table map.
@@ -194,11 +196,11 @@ impl SourceRender for PostgresSourceConnection {
             metrics,
         );
 
-        let updates = snapshot_updates.concat(&repl_updates);
+        let updates = snapshot_updates.concat(repl_updates);
         let partition_count = u64::cast_from(config.source_exports.len());
         let data_streams: Vec<_> = updates
             .inner
-            .partition::<CapacityContainerBuilder<_>, _, _>(
+            .partition::<CapacityContainerBuilder<TimelyStack<_>>, _, _>(
                 partition_count,
                 |((output, data), time, diff): &(
                     (usize, Result<SourceMessage, DataflowError>),
@@ -229,7 +231,7 @@ impl SourceRender for PostgresSourceConnection {
         // N.B. Note that we don't check ssh tunnel statuses here. We could, but immediately on
         // restart we are going to set the status to an ssh error correctly, so we don't do this
         // extra work.
-        let errs = snapshot_err.concat(&repl_err).map(move |err| {
+        let errs = snapshot_err.concat(repl_err).map(move |err| {
             // This update will cause the dataflow to restart
             let err_string = err.display_with_causes().to_string();
             let update = HealthStatusUpdate::halting(err_string.clone(), None);
@@ -254,7 +256,7 @@ impl SourceRender for PostgresSourceConnection {
             }
         });
 
-        let health = health_init.concat(&errs);
+        let health = health_init.concat(errs);
 
         (
             data_collections,

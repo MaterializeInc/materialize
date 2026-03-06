@@ -20,7 +20,7 @@ use differential_dataflow::{Collection, Data, ExchangeData, Hashable, VecCollect
 use timely::Container;
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
-use timely::dataflow::{Scope, ScopeParent, StreamCore};
+use timely::dataflow::{Scope, ScopeParent, Stream};
 
 use crate::logging::compute::{
     ArrangementHeapAllocations, ArrangementHeapCapacity, ArrangementHeapSize,
@@ -88,7 +88,7 @@ where
         Arranged<Self::Scope, TraceAgent<Tr>>: ArrangementSize;
 }
 
-impl<G, C> MzArrangeCore for StreamCore<G, C>
+impl<G, C> MzArrangeCore for Stream<G, C>
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -108,7 +108,7 @@ where
     {
         // Allow access to `arrange_named` because we're within Mz's wrapper.
         #[allow(clippy::disallowed_methods)]
-        arrange_core::<_, _, Ba, Bu, _>(self, pact, name).log_arrangement_size()
+        arrange_core::<_, _, Ba, Bu, _>(self.clone(), pact, name).log_arrangement_size()
     }
 }
 
@@ -167,7 +167,7 @@ where
 /// A specialized collection where data only has a key, but no associated value.
 ///
 /// Created by calling `collection.into()`.
-pub struct KeyCollection<G: Scope, K, R = usize>(VecCollection<G, K, R>);
+pub struct KeyCollection<G: Scope, K: 'static, R: 'static = usize>(VecCollection<G, K, R>);
 
 impl<G: Scope, K, R: Semigroup> From<VecCollection<G, K, R>> for KeyCollection<G, K, R> {
     fn from(value: VecCollection<G, K, R>) -> Self {
@@ -194,16 +194,19 @@ where
         Tr::Batch: Batch,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
-        self.0.map(|d| (d, ())).mz_arrange::<Ba, Bu, _>(name)
+        self.0
+            .clone()
+            .map(|d| (d, ()))
+            .mz_arrange::<Ba, Bu, _>(name)
     }
 }
 
 impl<G, K, R> MzArrangeCore for KeyCollection<G, K, R>
 where
     G: Scope,
-    K: Data,
+    K: Clone + 'static,
     G::Timestamp: Lattice,
-    R: Data,
+    R: Clone + 'static,
 {
     type Scope = G;
     type Input = Vec<((K, ()), G::Timestamp, R)>;
@@ -222,6 +225,7 @@ where
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         self.0
+            .clone()
             .map(|d| (d, ()))
             .mz_arrange_core::<_, Ba, Bu, _>(pact, name)
     }

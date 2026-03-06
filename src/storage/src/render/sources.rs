@@ -35,7 +35,8 @@ use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::Stream;
-use timely::dataflow::operators::{ConnectLoop, Feedback, Leave, Map, OkErr};
+use timely::dataflow::operators::vec::Map;
+use timely::dataflow::operators::{ConnectLoop, Feedback, Leave, OkErr};
 use timely::dataflow::scopes::{Child, Scope};
 use timely::progress::{Antichain, Timestamp};
 
@@ -61,7 +62,7 @@ pub fn render_source<'g, G, C>(
     dataflow_debug_name: &String,
     connection: C,
     description: IngestionDescription<CollectionMetadata>,
-    resume_stream: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
+    resume_stream: &Stream<Child<'g, G, mz_repr::Timestamp>, Vec<()>>,
     storage_state: &crate::storage_state::StorageState,
     base_source_config: RawSourceCreationConfig,
 ) -> (
@@ -72,7 +73,7 @@ pub fn render_source<'g, G, C>(
             VecCollection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
         ),
     >,
-    Vec<Stream<G, HealthStatusMessage>>,
+    Vec<Stream<G, Vec<HealthStatusMessage>>>,
     Vec<PressOnDropButton>,
 )
 where
@@ -172,7 +173,7 @@ fn render_source_stream<G, FromTime>(
 ) -> (
     VecCollection<G, Row, Diff>,
     Vec<PressOnDropButton>,
-    Vec<Stream<G, HealthStatusMessage>>,
+    Vec<Stream<G, Vec<HealthStatusMessage>>>,
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,

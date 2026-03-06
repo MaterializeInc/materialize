@@ -12,6 +12,7 @@ use std::convert::Infallible;
 use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
+use differential_dataflow::containers::TimelyStack;
 use futures::stream::StreamExt;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
@@ -25,8 +26,8 @@ use mz_timely_util::containers::stack::AccountedStackBuilder;
 use rand_8::rngs::StdRng;
 use rand_8::{RngCore, SeedableRng};
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::ToStream;
 use timely::dataflow::operators::core::Partition;
+use timely::dataflow::operators::vec::ToStream;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
 use tracing::info;
@@ -45,8 +46,8 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     idx_to_exportid: BTreeMap<usize, GlobalId>,
 ) -> (
     BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-    Stream<G, Infallible>,
-    Stream<G, HealthStatusMessage>,
+    Stream<G, Vec<Infallible>>,
+    Stream<G, Vec<HealthStatusMessage>>,
     Vec<PressOnDropButton>,
 ) {
     // known and comitted offsets are recorded in the stats operator
@@ -58,7 +59,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
     let export_ids: Vec<_> = config.source_exports.keys().copied().collect();
     let partition_count = u64::cast_from(export_ids.len());
-    let data_streams: Vec<_> = stream.partition::<CapacityContainerBuilder<_>, _, _>(
+    let data_streams: Vec<_> = stream.partition::<CapacityContainerBuilder<TimelyStack<_>>, _, _>(
         partition_count,
         |((output, data), time, diff): &(
             (usize, Result<SourceMessage, DataflowError>),
@@ -74,7 +75,8 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
         data_collections.insert(*id, data_stream.as_collection());
     }
 
-    let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (_progress_output, progress_stream) =
+        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let busy_signal = Arc::clone(&config.busy_signal);
 

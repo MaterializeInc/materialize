@@ -135,7 +135,8 @@ use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{Broadcast, CapabilitySet, Concatenate, Map, ToStream};
+use timely::dataflow::operators::vec::{Broadcast, Map, ToStream};
+use timely::dataflow::operators::{CapabilitySet, Concatenate};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
 use tracing::debug;
@@ -573,9 +574,9 @@ fn mint_batch_descriptions<G, D>(
     initial_schema: SchemaRef,
 ) -> (
     VecCollection<G, D, Diff>,
-    Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    Stream<G, Infallible>,
-    Stream<G, HealthStatusMessage>,
+    Stream<G, Vec<(Antichain<Timestamp>, Antichain<Timestamp>)>>,
+    Stream<G, Vec<Infallible>>,
+    Stream<G, Vec<HealthStatusMessage>>,
     PressOnDropButton,
 )
 where
@@ -590,10 +591,10 @@ where
 
     let hashed_id = sink_id.hashed();
     let is_active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
-    let (_, table_ready_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (_, table_ready_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let (output, output_stream) = builder.new_output();
     let (batch_desc_output, batch_desc_stream) =
-        builder.new_output::<CapacityContainerBuilder<_>>();
+        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let mut input =
         builder.new_input_for_many(&input.inner, Pipeline, [&output, &batch_desc_output]);
 
@@ -603,7 +604,7 @@ where
         .expect("the planner should have enforced this")
         .clone();
 
-    let (button, errors): (_, Stream<G, Rc<anyhow::Error>>) = builder.build_fallible(move |caps| {
+    let (button, errors): (_, Stream<G, Vec<Rc<anyhow::Error>>>) = builder.build_fallible(move |caps| {
         Box::pin(async move {
             let [table_ready_capset, data_capset, capset]: &mut [_; 3] = caps.try_into().unwrap();
             *data_capset = CapabilitySet::new();
@@ -988,8 +989,8 @@ struct BoundedDataFileSet {
 fn write_data_files<G>(
     name: String,
     input: VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
-    batch_desc_input: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    table_ready_stream: &Stream<G, Infallible>,
+    batch_desc_input: &Stream<G, Vec<(Antichain<Timestamp>, Antichain<Timestamp>)>>,
+    table_ready_stream: &Stream<G, Vec<Infallible>>,
     as_of: Antichain<Timestamp>,
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -997,8 +998,8 @@ fn write_data_files<G>(
     metrics: Arc<IcebergSinkMetrics>,
     statistics: SinkStatistics,
 ) -> (
-    Stream<G, BoundedDataFile>,
-    Stream<G, HealthStatusMessage>,
+    Stream<G, Vec<BoundedDataFile>>,
+    Stream<G, Vec<HealthStatusMessage>>,
     PressOnDropButton,
 )
 where
@@ -1008,11 +1009,11 @@ where
     let name_for_logging = name.clone();
     let mut builder = OperatorBuilder::new(name, scope.clone());
 
-    let (output, output_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (output, output_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let mut table_ready_input = builder.new_disconnected_input(table_ready_stream, Pipeline);
     let mut batch_desc_input =
-        builder.new_input_for(&batch_desc_input.broadcast(), Pipeline, &output);
+        builder.new_input_for(&batch_desc_input.clone().broadcast(), Pipeline, &output);
     let mut input = builder.new_disconnected_input(&input.inner, Pipeline);
 
     let (button, errors) = builder.build_fallible(move |caps| {
@@ -1499,9 +1500,9 @@ fn commit_to_iceberg<G>(
     name: String,
     sink_id: GlobalId,
     sink_version: u64,
-    batch_input: &Stream<G, BoundedDataFile>,
-    batch_desc_input: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    table_ready_stream: &Stream<G, Infallible>,
+    batch_input: &Stream<G, Vec<BoundedDataFile>>,
+    batch_desc_input: &Stream<G, Vec<(Antichain<Timestamp>, Antichain<Timestamp>)>>,
+    table_ready_stream: &Stream<G, Vec<Infallible>>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -1510,7 +1511,7 @@ fn commit_to_iceberg<G>(
     > + 'static,
     metrics: Arc<IcebergSinkMetrics>,
     statistics: SinkStatistics,
-) -> (Stream<G, HealthStatusMessage>, PressOnDropButton)
+) -> (Stream<G, Vec<HealthStatusMessage>>, PressOnDropButton)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -1829,7 +1830,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
         sink_id: GlobalId,
         input: VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
         _err_collection: VecCollection<G, DataflowError, Diff>,
-    ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>) {
+    ) -> (Stream<G, Vec<HealthStatusMessage>>, Vec<PressOnDropButton>) {
         let mut scope = input.scope();
 
         let write_handle = {

@@ -78,7 +78,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         // logging streams.
         let mut demux =
             OperatorBuilder::new("Differential Logging Demux".to_string(), scope.clone());
-        let mut input = demux.new_input(&logs, Pipeline);
+        let mut input = demux.new_input(logs, Pipeline);
         let (batches_out, batches) = demux.new_output();
         let (records_out, records) = demux.new_output();
         let (sharing_out, sharing) = demux.new_output();
@@ -133,7 +133,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
 
         // We're lucky and the differential logs all have the same stream format, so just implement
         // the call once.
-        let stream_to_collection = |input: &Stream<_, ((usize, ()), Timestamp, Diff)>, log| {
+        let stream_to_collection = |input: &Stream<_, Vec<((usize, ()), Timestamp, Diff)>>, log| {
             let worker_id = scope.index();
             consolidate_and_pack::<_, KeyBatcher<_, _, _>, ColumnBuilder<_>, _, _>(
                 input,

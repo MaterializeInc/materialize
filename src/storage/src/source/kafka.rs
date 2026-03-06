@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use chrono::{DateTime, NaiveDateTime};
+use differential_dataflow::containers::TimelyStack;
 use differential_dataflow::{AsCollection, Hashable};
 use futures::StreamExt;
 use itertools::Itertools;
@@ -55,8 +56,9 @@ use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::core::Partition;
-use timely::dataflow::operators::{Broadcast, Capability};
+use timely::dataflow::operators::vec::Broadcast;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::progress::Timestamp;
@@ -182,8 +184,8 @@ impl SourceRender for KafkaSourceConnection {
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, HealthStatusMessage>,
-        Stream<G, Probe<KafkaTimestamp>>,
+        Stream<G, Vec<HealthStatusMessage>>,
+        Stream<G, Vec<Probe<KafkaTimestamp>>>,
         Vec<PressOnDropButton>,
     ) {
         let (metadata, probes, metadata_token) =
@@ -198,17 +200,19 @@ impl SourceRender for KafkaSourceConnection {
         );
 
         let partition_count = u64::cast_from(config.source_exports.len());
-        let data_streams: Vec<_> = data.inner.partition::<CapacityContainerBuilder<_>, _, _>(
-            partition_count,
-            |((output, data), time, diff): &(
-                (usize, Result<SourceMessage, DataflowError>),
-                _,
-                Diff,
-            )| {
-                let output = u64::cast_from(*output);
-                (output, (data.clone(), time.clone(), diff.clone()))
-            },
-        );
+        let data_streams: Vec<_> = data
+            .inner
+            .partition::<CapacityContainerBuilder<TimelyStack<_>>, _, _>(
+                partition_count,
+                |((output, data), time, diff): &(
+                    (usize, Result<SourceMessage, DataflowError>),
+                    KafkaTimestamp,
+                    Diff,
+                )| {
+                    let output = u64::cast_from(*output);
+                    (output, (data.clone(), time.clone(), diff.clone()))
+                },
+            );
         let mut data_collections = BTreeMap::new();
         for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
             data_collections.insert(*id, data_stream.as_collection());
@@ -232,18 +236,18 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
     connection: KafkaSourceConnection,
     config: RawSourceCreationConfig,
     resume_uppers: impl futures::Stream<Item = Antichain<KafkaTimestamp>> + 'static,
-    metadata_stream: Stream<G, (mz_repr::Timestamp, MetadataUpdate)>,
+    metadata_stream: Stream<G, Vec<(mz_repr::Timestamp, MetadataUpdate)>>,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    Stream<G, HealthStatusMessage>,
+    Stream<G, Vec<HealthStatusMessage>>,
     PressOnDropButton,
 ) {
     let name = format!("KafkaReader({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(name, scope.clone());
 
     let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
-    let (health_output, health_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (health_output, health_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let mut metadata_input = builder.new_disconnected_input(&metadata_stream.broadcast(), Pipeline);
 
@@ -1555,8 +1559,8 @@ fn render_metadata_fetcher<G: Scope<Timestamp = KafkaTimestamp>>(
     connection: KafkaSourceConnection,
     config: RawSourceCreationConfig,
 ) -> (
-    Stream<G, (mz_repr::Timestamp, MetadataUpdate)>,
-    Stream<G, Probe<KafkaTimestamp>>,
+    Stream<G, Vec<(mz_repr::Timestamp, MetadataUpdate)>>,
+    Stream<G, Vec<Probe<KafkaTimestamp>>>,
     PressOnDropButton,
 ) {
     let active_worker_id = usize::cast_from(config.id.hashed());
@@ -1573,8 +1577,9 @@ fn render_metadata_fetcher<G: Scope<Timestamp = KafkaTimestamp>>(
     let name = format!("KafkaMetadataFetcher({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(name, scope.clone());
 
-    let (metadata_output, metadata_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (metadata_output, metadata_stream) =
+        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let button = builder.build(move |caps| async move {
         if !is_active_worker {

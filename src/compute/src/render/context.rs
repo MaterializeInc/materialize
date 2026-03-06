@@ -277,12 +277,12 @@ where
         };
         match &self {
             ArrangementFlavor::Local(oks, errs) => (
-                oks.as_collection(logic),
-                errs.as_collection(|k, &()| k.clone()),
+                oks.clone().as_collection(logic),
+                errs.clone().as_collection(|k, &()| k.clone()),
             ),
             ArrangementFlavor::Trace(_, oks, errs) => (
-                oks.as_collection(logic),
-                errs.as_collection(|k, &()| k.clone()),
+                oks.clone().as_collection(logic),
+                errs.clone().as_collection(|k, &()| k.clone()),
             ),
         }
     }
@@ -304,7 +304,10 @@ where
         key: Option<&Row>,
         max_demand: usize,
         mut logic: L,
-    ) -> (Stream<S, I::Item>, VecCollection<S, DataflowError, Diff>)
+    ) -> (
+        Stream<S, Vec<I::Item>>,
+        VecCollection<S, DataflowError, Diff>,
+    )
     where
         I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
         D: Data,
@@ -327,12 +330,12 @@ where
         match &self {
             ArrangementFlavor::Local(oks, errs) => {
                 let oks = CollectionBundle::<S, T>::flat_map_core(oks, key, logic, refuel);
-                let errs = errs.as_collection(|k, &()| k.clone());
+                let errs = errs.clone().as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
             ArrangementFlavor::Trace(_, oks, errs) => {
                 let oks = CollectionBundle::<S, T>::flat_map_core(oks, key, logic, refuel);
-                let errs = errs.as_collection(|k, &()| k.clone());
+                let errs = errs.clone().as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
         }
@@ -357,12 +360,15 @@ where
         region: &Child<'a, S, S::Timestamp>,
     ) -> ArrangementFlavor<Child<'a, S, S::Timestamp>, T> {
         match self {
-            ArrangementFlavor::Local(oks, errs) => {
-                ArrangementFlavor::Local(oks.enter_region(region), errs.enter_region(region))
-            }
-            ArrangementFlavor::Trace(gid, oks, errs) => {
-                ArrangementFlavor::Trace(*gid, oks.enter_region(region), errs.enter_region(region))
-            }
+            ArrangementFlavor::Local(oks, errs) => ArrangementFlavor::Local(
+                oks.clone().enter_region(region),
+                errs.clone().enter_region(region),
+            ),
+            ArrangementFlavor::Trace(gid, oks, errs) => ArrangementFlavor::Trace(
+                *gid,
+                oks.clone().enter_region(region),
+                errs.clone().enter_region(region),
+            ),
         }
     }
 }
@@ -375,11 +381,13 @@ where
     pub fn leave_region(&self) -> ArrangementFlavor<S, T> {
         match self {
             ArrangementFlavor::Local(oks, errs) => {
-                ArrangementFlavor::Local(oks.leave_region(), errs.leave_region())
+                ArrangementFlavor::Local(oks.clone().leave_region(), errs.clone().leave_region())
             }
-            ArrangementFlavor::Trace(gid, oks, errs) => {
-                ArrangementFlavor::Trace(*gid, oks.leave_region(), errs.leave_region())
-            }
+            ArrangementFlavor::Trace(gid, oks, errs) => ArrangementFlavor::Trace(
+                *gid,
+                oks.clone().leave_region(),
+                errs.clone().leave_region(),
+            ),
         }
     }
 }
@@ -461,10 +469,12 @@ where
         region: &Child<'a, S, S::Timestamp>,
     ) -> CollectionBundle<Child<'a, S, S::Timestamp>, T> {
         CollectionBundle {
-            collection: self
-                .collection
-                .as_ref()
-                .map(|(oks, errs)| (oks.enter_region(region), errs.enter_region(region))),
+            collection: self.collection.as_ref().map(|(oks, errs)| {
+                (
+                    oks.clone().enter_region(region),
+                    errs.clone().enter_region(region),
+                )
+            }),
             arranged: self
                 .arranged
                 .iter()
@@ -485,7 +495,7 @@ where
             collection: self
                 .collection
                 .as_ref()
-                .map(|(oks, errs)| (oks.leave_region(), errs.leave_region())),
+                .map(|(oks, errs)| (oks.clone().leave_region(), errs.clone().leave_region())),
             arranged: self
                 .arranged
                 .iter()
@@ -568,7 +578,10 @@ where
         key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
         max_demand: usize,
         mut logic: L,
-    ) -> (Stream<S, I::Item>, VecCollection<S, DataflowError, Diff>)
+    ) -> (
+        Stream<S, Vec<I::Item>>,
+        VecCollection<S, DataflowError, Diff>,
+    )
     where
         I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
         D: Data,
@@ -582,7 +595,7 @@ where
                 .expect("Should have ensured during planning that this arrangement exists.")
                 .flat_map(val.as_ref(), max_demand, logic)
         } else {
-            use timely::dataflow::operators::Map;
+            use timely::dataflow::operators::vec::Map;
             let (oks, errs) = self
                 .collection
                 .clone()
@@ -607,7 +620,7 @@ where
         key: Option<&Tr::KeyOwn>,
         mut logic: L,
         refuel: usize,
-    ) -> Stream<S, I::Item>
+    ) -> Stream<S, Vec<I::Item>>
     where
         Tr: for<'a> TraceReader<
                 Key<'a>: ToDatumIter,
@@ -632,7 +645,8 @@ where
         use timely::dataflow::operators::Operator;
         trace
             .stream
-            .unary::<CB<_>, _, _, _>(Pipeline, &name, move |_, info| {
+            .clone()
+            .unary::<CB<Vec<_>>, _, _, _>(Pipeline, &name, move |_, info| {
                 // Acquire an activator to reschedule the operator when it has unfinished work.
                 let activator = trace.stream.scope().activator_for(info.address);
                 // Maintain a list of work to do, cursor to navigate and process.
@@ -641,7 +655,7 @@ where
                     let key = key_con.get(0);
                     // First, dequeue all batches.
                     input.for_each(|time, data| {
-                        let capability = time.retain();
+                        let capability = time.retain(0);
                         for batch in data.iter() {
                             // enqueue a capability, cursor, and batch.
                             todo.push_back(PendingWork::new(
@@ -771,12 +785,12 @@ where
         use differential_dataflow::AsCollection;
         let (oks, errs) = stream
             .as_collection()
-            .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>(
+            .map_fallible::<CapacityContainerBuilder<Vec<_>>, CapacityContainerBuilder<Vec<_>>, _, _, _>(
                 "OkErr",
                 |x| x,
             );
 
-        (oks, errors.concat(&errs))
+        (oks, errors.concat(errs))
     }
     pub fn ensure_collections(
         mut self,
@@ -829,7 +843,7 @@ where
                     .expect("Collection constructed above");
                 let (oks, errs_keyed, passthrough) =
                     Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
-                let errs_concat: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
+                let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
                 self.collection = Some((passthrough, errs));
                 let errs =
                     errs_concat.mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
@@ -874,7 +888,7 @@ where
         let mut err_output = OutputBuilder::from(err_output);
         let (passthrough_output, passthrough_stream) = builder.new_output();
         let mut passthrough_output = OutputBuilder::from(passthrough_output);
-        let mut input = builder.new_input(&oks.inner, Pipeline);
+        let mut input = builder.new_input(oks.inner, Pipeline);
         builder.set_notify(false);
         builder.build(move |_capabilities| {
             let mut key_buf = Row::default();
@@ -885,7 +899,7 @@ where
                 let mut ok_output = ok_output.activate();
                 let mut err_output = err_output.activate();
                 let mut passthrough_output = passthrough_output.activate();
-                input.for_each(|time, data| {
+                input.for_each(|time, data: &mut Vec<(Row, S::Timestamp, Diff)>| {
                     let mut ok_session = ok_output.session_with_builder(&time);
                     let mut err_session = err_output.session(&time);
                     for (row, time, diff) in data.iter() {

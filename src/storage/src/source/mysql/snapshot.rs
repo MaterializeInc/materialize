@@ -134,18 +134,18 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     metrics: MySqlSnapshotMetrics,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    Stream<G, RewindRequest>,
-    Stream<G, ReplicationError>,
+    Stream<G, Vec<RewindRequest>>,
+    Stream<G, Vec<ReplicationError>>,
     PressOnDropButton,
 ) {
     let mut builder =
         AsyncOperatorBuilder::new(format!("MySqlSnapshotReader({})", config.id), scope.clone());
 
     let (raw_handle, raw_data) = builder.new_output::<AccountedStackBuilder<_>>();
-    let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
-        builder.new_output::<CapacityContainerBuilder<_>>();
+        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     // A global view of all outputs that will be snapshot by all workers.
     let mut all_outputs = vec![];
@@ -179,8 +179,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         }
     }
 
-    let (button, transient_errors): (_, Stream<G, Rc<TransientError>>) =
-        builder.build_fallible(move |caps| {
+    let (button, transient_errors): (_, Stream<G, Vec<Rc<TransientError>>>) = builder
+        .build_fallible(move |caps| {
             let busy_signal = Arc::clone(&config.busy_signal);
             Box::pin(SignaledFuture::new(busy_signal, async move {
                 let [data_cap_set, rewind_cap_set, definite_error_cap_set]: &mut [_; 3] =
@@ -492,7 +492,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
     // TODO: Split row decoding into a separate operator that can be distributed across all workers
 
-    let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
+    let errors = definite_errors.concat(transient_errors.map(ReplicationError::from));
 
     (
         raw_data.as_collection(),

@@ -144,7 +144,8 @@ use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, probe};
+use timely::dataflow::operators::vec::Broadcast;
+use timely::dataflow::operators::{Capability, CapabilitySet, probe};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tokio::sync::watch;
@@ -214,17 +215,17 @@ where
 
 /// Type of the `desired` stream, split into `Ok` and `Err` streams.
 type DesiredStreams<S> =
-    OkErr<Stream<S, (Row, Timestamp, Diff)>, Stream<S, (DataflowError, Timestamp, Diff)>>;
+    OkErr<Stream<S, Vec<(Row, Timestamp, Diff)>>, Stream<S, Vec<(DataflowError, Timestamp, Diff)>>>;
 
 /// Type of the `persist` stream, split into `Ok` and `Err` streams.
 type PersistStreams<S> =
-    OkErr<Stream<S, (Row, Timestamp, Diff)>, Stream<S, (DataflowError, Timestamp, Diff)>>;
+    OkErr<Stream<S, Vec<(Row, Timestamp, Diff)>>, Stream<S, Vec<(DataflowError, Timestamp, Diff)>>>;
 
 /// Type of the `descs` stream.
-type DescsStream<S> = Stream<S, BatchDescription>;
+type DescsStream<S> = Stream<S, Vec<BatchDescription>>;
 
 /// Type of the `batches` stream.
-type BatchesStream<S> = Stream<S, (BatchDescription, ProtoBatch)>;
+type BatchesStream<S> = Stream<S, Vec<(BatchDescription, ProtoBatch)>>;
 
 /// Type of the shared sink write frontier.
 type SharedSinkFrontier = Rc<RefCell<Antichain<Timestamp>>>;
@@ -499,12 +500,12 @@ mod mint {
         let name = operator_name(sink_id, "mint");
         let mut op = OperatorBuilder::new(name, scope);
 
-        let (ok_output, ok_stream) = op.new_output::<CapacityContainerBuilder<_>>();
-        let (err_output, err_stream) = op.new_output::<CapacityContainerBuilder<_>>();
+        let (ok_output, ok_stream) = op.new_output::<CapacityContainerBuilder<Vec<_>>>();
+        let (err_output, err_stream) = op.new_output::<CapacityContainerBuilder<Vec<_>>>();
         let desired_outputs = OkErr::new(ok_output, err_output);
         let desired_output_streams = OkErr::new(ok_stream, err_stream);
 
-        let (desc_output, desc_output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
+        let (desc_output, desc_output_stream) = op.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
         let mut desired_inputs = OkErr {
             ok: op.new_input_for(&desired.ok, Pipeline, &desired_outputs.ok),
@@ -757,7 +758,7 @@ mod write {
         as_of: Antichain<Timestamp>,
         desired: &DesiredStreams<S>,
         persist: &PersistStreams<S>,
-        descs: &Stream<S, BatchDescription>,
+        descs: &DescsStream<S>,
         worker_config: Rc<ConfigSet>,
     ) -> (BatchesStream<S>, PressOnDropButton)
     where
@@ -784,7 +785,7 @@ mod write {
         }
 
         let (batches_output, batches_output_stream) =
-            op.new_output::<CapacityContainerBuilder<_>>();
+            op.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
         // It is important that we exchange the `desired` and `persist` data the same way, so
         // updates that cancel each other out end up on the same worker.
@@ -799,7 +800,8 @@ mod write {
             op.new_disconnected_input(&persist.ok, Exchange::new(exchange_ok)),
             op.new_disconnected_input(&persist.err, Exchange::new(exchange_err)),
         );
-        let mut descs_input = op.new_input_for(&descs.broadcast(), Pipeline, &batches_output);
+        let mut descs_input =
+            op.new_input_for(&descs.clone().broadcast(), Pipeline, &batches_output);
 
         let button = op.build(move |capabilities| async move {
             // We will use the data capabilities from the `descs` input to produce output, so no
@@ -1133,7 +1135,7 @@ mod append {
         // Broadcast batch descriptions to all workers, regardless of whether or not they are
         // responsible for the append, to give them a chance to clean up any outdated state they
         // might still hold.
-        let mut descs_input = op.new_disconnected_input(&descs.broadcast(), Pipeline);
+        let mut descs_input = op.new_disconnected_input(&descs.clone().broadcast(), Pipeline);
         let mut batches_input = op.new_disconnected_input(
             batches,
             Exchange::new(move |(desc, _): &(BatchDescription, _)| {

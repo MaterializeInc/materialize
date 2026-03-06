@@ -157,7 +157,7 @@ where
                 .as_collection()
                 .flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>("OkErrDemux", Some);
 
-            err = err.concat(&err_input);
+            err = err.concat(err_input);
 
             // Render the reduce plan
             self.render_reduce_plan(reduce_plan, ok, err, key_arity, mfp_after)
@@ -447,7 +447,7 @@ where
                     },
                 )
                 .as_collection(|_, v| v.clone());
-            (output, validation_errs.concat(&mfp_errs))
+            (output, validation_errs.concat(mfp_errs))
         } else {
             (output, validation_errs)
         }
@@ -724,7 +724,7 @@ where
             };
 
             if let Some(e) = err_output {
-                err_output = Some(e.concat(&errs));
+                err_output = Some(e.concat(errs));
             } else {
                 err_output = Some(errs);
             }
@@ -940,8 +940,8 @@ where
                     )
                     .as_collection(|_, v| v.clone())
                     .leave_region();
-                if let Some(e) = &err_output {
-                    err_output = Some(e.concat(&errs));
+                if let Some(e) = err_output.take() {
+                    err_output = Some(e.concat(errs));
                 } else {
                     err_output = Some(errs);
                 }
@@ -1044,7 +1044,7 @@ where
         };
 
         let input = input.as_collection(|k, v| (k.to_row(), v.to_row()));
-        let oks = negated_output.concat(&input);
+        let oks = negated_output.concat(input);
         (oks, errs)
     }
 
@@ -1246,7 +1246,7 @@ where
                     },
                 )
                 .as_collection(|_k, v| v.clone());
-            (output, validation_errs.concat(&mfp_errs))
+            (output, validation_errs.concat(mfp_errs))
         } else {
             (output, validation_errs)
         }
@@ -1333,9 +1333,11 @@ where
         }
 
         // Next, collect all aggregations that require distinctness.
+        let mut collection_scope = collection.scope();
         for (datum_index, aggr) in distinct_aggrs.into_iter() {
             let pairer = Pairer::new(key_arity);
             let collection = collection
+                .clone()
                 .map(move |(key, row)| {
                     let value = row.iter().nth(datum_index).unwrap();
                     (pairer.merge(&key, std::iter::once(value)), ())
@@ -1365,7 +1367,7 @@ where
         let collection = if to_aggregate.len() == 1 {
             to_aggregate.remove(0)
         } else {
-            differential_dataflow::collection::concatenate(&mut collection.scope(), to_aggregate)
+            differential_dataflow::collection::concatenate(&mut collection_scope, to_aggregate)
         };
 
         // Allocations for the two closures.

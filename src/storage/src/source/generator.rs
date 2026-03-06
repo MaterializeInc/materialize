@@ -13,6 +13,7 @@ use std::ops::Rem;
 use std::sync::Arc;
 use std::time::Duration;
 
+use differential_dataflow::containers::TimelyStack;
 use differential_dataflow::{AsCollection, Hashable};
 use futures::StreamExt;
 use itertools::Itertools;
@@ -143,8 +144,8 @@ impl GeneratorKind {
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, Infallible>,
-        Stream<G, HealthStatusMessage>,
+        Stream<G, Vec<Infallible>>,
+        Stream<G, Vec<HealthStatusMessage>>,
         Vec<PressOnDropButton>,
     ) {
         // figure out which output types from the generator belong to which output indexes
@@ -211,8 +212,8 @@ impl SourceRender for LoadGeneratorSourceConnection {
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, HealthStatusMessage>,
-        Stream<G, Probe<MzOffset>>,
+        Stream<G, Vec<HealthStatusMessage>>,
+        Stream<G, Vec<Probe<MzOffset>>>,
         Vec<PressOnDropButton>,
     ) {
         let generator_kind = GeneratorKind::new(
@@ -246,8 +247,8 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
 ) -> (
     BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-    Stream<G, Infallible>,
-    Stream<G, HealthStatusMessage>,
+    Stream<G, Vec<Infallible>>,
+    Stream<G, Vec<HealthStatusMessage>>,
     Vec<PressOnDropButton>,
 ) {
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
@@ -255,7 +256,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
     let export_ids: Vec<_> = config.source_exports.keys().copied().collect();
     let partition_count = u64::cast_from(export_ids.len());
-    let data_streams: Vec<_> = stream.partition::<CapacityContainerBuilder<_>, _, _>(
+    let data_streams: Vec<_> = stream.partition::<CapacityContainerBuilder<TimelyStack<_>>, _, _>(
         partition_count,
         |((output, data), time, diff): &(
             (usize, Result<SourceMessage, DataflowError>),
@@ -271,8 +272,9 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
         data_collections.insert(*id, data_stream.as_collection());
     }
 
-    let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (health_output, health_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (_progress_output, progress_stream) =
+        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (health_output, health_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let busy_signal = Arc::clone(&config.busy_signal);
     let source_resume_uppers = config.source_resume_uppers.clone();
@@ -468,10 +470,10 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
 /// system.
 fn synthesize_probes<G>(
     source_id: GlobalId,
-    progress: &Stream<G, Infallible>,
+    progress: &Stream<G, Vec<Infallible>>,
     interval: Duration,
     now_fn: NowFn,
-) -> Stream<G, Probe<G::Timestamp>>
+) -> Stream<G, Vec<Probe<G::Timestamp>>>
 where
     G: Scope,
 {
@@ -481,7 +483,7 @@ where
     let is_active_worker = active_worker == scope.index();
 
     let mut op = AsyncOperatorBuilder::new("synthesize_probes".into(), scope);
-    let (output, output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
+    let (output, output_stream) = op.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let mut input = op.new_input_for(progress, Pipeline, &output);
 
     op.build(|caps| async move {

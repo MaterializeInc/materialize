@@ -35,7 +35,7 @@ use timely::dataflow::channels::pushers::Output;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo};
 use timely::dataflow::operators::{Capability, CapabilitySet, InputCapability};
-use timely::dataflow::{Scope, StreamCore};
+use timely::dataflow::{Scope, Stream as TimelyStream};
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
 use timely::{Bincode, Container, ContainerBuilder, PartialOrder};
@@ -316,7 +316,7 @@ where
 
 impl<T, D> AsyncOutputHandle<T, AccountedStackBuilder<CapacityContainerBuilder<TimelyStack<D>>>>
 where
-    D: timely::Data + Columnation,
+    D: Clone + 'static + Columnation,
     T: Timestamp,
 {
     pub const MAX_OUTSTANDING_BYTES: usize = 128 * 1024 * 1024;
@@ -392,7 +392,7 @@ impl<T: Timestamp> InputConnection<T> for ConnectedToOne {
     }
 
     fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
-        input_cap.retain_for_output(self.0)
+        input_cap.retain(self.0)
     }
 }
 
@@ -412,7 +412,7 @@ impl<const N: usize, T: Timestamp> InputConnection<T> for ConnectedToMany<N> {
 
     fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
         self.0
-            .map(|output| input_cap.delayed_for_output(input_cap.time(), output))
+            .map(|output| input_cap.delayed(input_cap.time(), output))
     }
 }
 
@@ -459,12 +459,12 @@ impl<G: Scope> OperatorBuilder<G> {
     /// Adds a new input that is connected to the specified output, returning the async input handle to use.
     pub fn new_input_for<D, P>(
         &mut self,
-        stream: &StreamCore<G, D>,
+        stream: &TimelyStream<G, D>,
         pact: P,
         output: &dyn OutputIndex,
     ) -> AsyncInputHandle<G::Timestamp, D, ConnectedToOne>
     where
-        D: Container + 'static,
+        D: Container + Clone + 'static,
         P: ParallelizationContract<G::Timestamp, D>,
     {
         let index = output.index();
@@ -475,12 +475,12 @@ impl<G: Scope> OperatorBuilder<G> {
     /// Adds a new input that is connected to the specified outputs, returning the async input handle to use.
     pub fn new_input_for_many<const N: usize, D, P>(
         &mut self,
-        stream: &StreamCore<G, D>,
+        stream: &TimelyStream<G, D>,
         pact: P,
         outputs: [&dyn OutputIndex; N],
     ) -> AsyncInputHandle<G::Timestamp, D, ConnectedToMany<N>>
     where
-        D: Container + 'static,
+        D: Container + Clone + 'static,
         P: ParallelizationContract<G::Timestamp, D>,
     {
         let indices = outputs.map(|output| output.index());
@@ -493,11 +493,11 @@ impl<G: Scope> OperatorBuilder<G> {
     /// Adds a new input that is not connected to any output, returning the async input handle to use.
     pub fn new_disconnected_input<D, P>(
         &mut self,
-        stream: &StreamCore<G, D>,
+        stream: &TimelyStream<G, D>,
         pact: P,
     ) -> AsyncInputHandle<G::Timestamp, D, Disconnected>
     where
-        D: Container + 'static,
+        D: Container + Clone + 'static,
         P: ParallelizationContract<G::Timestamp, D>,
     {
         self.new_input_connection(stream, pact, Disconnected)
@@ -506,12 +506,12 @@ impl<G: Scope> OperatorBuilder<G> {
     /// Adds a new input with connection information, returning the async input handle to use.
     pub fn new_input_connection<D, P, C>(
         &mut self,
-        stream: &StreamCore<G, D>,
+        stream: &TimelyStream<G, D>,
         pact: P,
         connection: C,
     ) -> AsyncInputHandle<G::Timestamp, D, C>
     where
-        D: Container + 'static,
+        D: Container + Clone + 'static,
         P: ParallelizationContract<G::Timestamp, D>,
         C: InputConnection<G::Timestamp> + 'static,
     {
@@ -520,7 +520,7 @@ impl<G: Scope> OperatorBuilder<G> {
 
         let outputs = self.builder.shape().outputs();
         let handle = self.builder.new_input_connection(
-            stream,
+            stream.clone(),
             pact,
             connection.describe(outputs).into_iter().enumerate(),
         );
@@ -547,7 +547,7 @@ impl<G: Scope> OperatorBuilder<G> {
         &mut self,
     ) -> (
         AsyncOutputHandle<G::Timestamp, CB>,
-        StreamCore<G, CB::Container>,
+        TimelyStream<G, CB::Container>,
     ) {
         let index = self.builder.shape().outputs();
 
@@ -683,7 +683,7 @@ impl<G: Scope> OperatorBuilder<G> {
     pub fn build_fallible<E: 'static, F>(
         mut self,
         constructor: F,
-    ) -> (Button, StreamCore<G, Vec<Rc<E>>>)
+    ) -> (Button, TimelyStream<G, Vec<Rc<E>>>)
     where
         F: for<'a> FnOnce(
                 &'a mut [CapabilitySet<G::Timestamp>],
@@ -800,8 +800,9 @@ mod test {
     use futures_util::StreamExt;
     use timely::WorkerConfig;
     use timely::dataflow::channels::pact::Pipeline;
+    use timely::dataflow::operators::Capture;
     use timely::dataflow::operators::capture::Extract;
-    use timely::dataflow::operators::{Capture, ToStream};
+    use timely::dataflow::operators::vec::ToStream;
 
     use super::*;
 
@@ -812,7 +813,8 @@ mod test {
 
             let mut op = OperatorBuilder::new("async_passthru".to_string(), input.scope());
             let (output, output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
-            let mut input_handle = op.new_input_for(&input, Pipeline, &output);
+            let mut input_handle: AsyncInputHandle<_, Vec<i32>, _> =
+                op.new_input_for(&input, Pipeline, &output);
 
             op.build(move |_capabilities| async move {
                 tokio::task::yield_now().await;

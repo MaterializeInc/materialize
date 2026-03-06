@@ -19,11 +19,11 @@ use std::rc::Rc;
 
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::{CapabilitySet, InspectCore};
-use timely::dataflow::{Scope, Stream, StreamCore};
+use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::progress::Timestamp;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::scheduling::Activator;
-use timely::{Container, Data, PartialOrder};
+use timely::{Container, PartialOrder};
 use tokio::sync::Notify;
 
 use crate::builder_async::OperatorBuilder as AsyncOperatorBuilder;
@@ -34,10 +34,10 @@ pub trait ProbeNotify<G: Scope> {
     fn probe_notify_with(&self, handles: Vec<Handle<G::Timestamp>>) -> Self;
 }
 
-impl<G, C> ProbeNotify<G> for StreamCore<G, C>
+impl<G, C> ProbeNotify<G> for Stream<G, C>
 where
     G: Scope,
-    C: Container + Data,
+    C: Container + Clone + 'static,
 {
     fn probe_notify_with(&self, mut handles: Vec<Handle<G::Timestamp>>) -> Self {
         if handles.is_empty() {
@@ -51,7 +51,7 @@ where
 
         // TODO: This operator observes but doesn't consume data.
         // Instead, it should only observe progress statements.
-        self.inspect_container(move |update| {
+        self.clone().inspect_container(move |update| {
             if let Err(frontier) = update {
                 for handle in &mut handles {
                     handle.update_frontier(frontier);
@@ -175,7 +175,7 @@ impl<T: Timestamp> Clone for Handle<T> {
 ///
 /// The returned stream is guaranteed to never yield any data updates, as is reflected by its type.
 // TODO: Replace `Infallible` with `!` once the latter stabilizes.
-pub fn source<G, T>(scope: G, name: String, handle: Handle<T>) -> Stream<G, Infallible>
+pub fn source<G, T>(scope: G, name: String, handle: Handle<T>) -> StreamVec<G, Infallible>
 where
     G: Scope<Timestamp = T>,
     T: Timestamp,

@@ -28,7 +28,7 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::Map;
+use timely::dataflow::operators::vec::Map;
 use timely::dataflow::{Scope, Stream};
 use tracing::{error, info};
 
@@ -346,7 +346,7 @@ pub(crate) fn health_operator<G, P>(
     // A description of the object type we are writing status updates about. Used in log lines.
     object_type: &'static str,
     // An indexed stream of health updates. Indexes are configured in `configs`.
-    health_stream: &Stream<G, HealthStatusMessage>,
+    health_stream: &Stream<G, Vec<HealthStatusMessage>>,
     // An impl of `HealthOperator` that configures the output behavior of this operator.
     health_operator_impl: P,
     // Whether or not we should actually write namespaced errors in the `details` column.
@@ -364,7 +364,9 @@ where
     let worker_count = scope.peers();
 
     // Inject the originating worker id to each item before exchanging to the chosen worker
-    let health_stream = health_stream.map(move |status| (healthcheck_worker_id, status));
+    let health_stream = health_stream
+        .clone()
+        .map(move |status| (healthcheck_worker_id, status));
 
     let chosen_worker_id = if let Some(index) = health_operator_impl.chosen_worker() {
         index

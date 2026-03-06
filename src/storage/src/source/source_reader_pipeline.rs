@@ -30,6 +30,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use differential_dataflow::containers::TimelyStack;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::stream::StreamExt;
@@ -54,7 +55,8 @@ use timely::dataflow::operators::capture::capture::Capture;
 use timely::dataflow::operators::core::Map as _;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
-use timely::dataflow::operators::{Broadcast, CapabilitySet, Inspect, Leave};
+use timely::dataflow::operators::vec::Broadcast;
+use timely::dataflow::operators::{CapabilitySet, Inspect, Leave};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
@@ -165,7 +167,7 @@ impl RawSourceCreationConfig {
 pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
-    committed_upper: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
+    committed_upper: &Stream<Child<'g, G, mz_repr::Timestamp>, Vec<()>>,
     config: &RawSourceCreationConfig,
     source_connection: C,
     start_signal: impl std::future::Future<Output = ()> + 'static,
@@ -178,7 +180,7 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
             Diff,
         >,
     >,
-    Stream<G, HealthStatusMessage>,
+    Stream<G, Vec<HealthStatusMessage>>,
     Vec<PressOnDropButton>,
 )
 where
@@ -241,7 +243,7 @@ where
                         }),
                         Err(err) => Err(err.clone()),
                     };
-                    (result, from_time.clone(), *diff)
+                    (result, from_time.clone(), diff.clone())
                 })
                 .capture_into(PusherCapture(reclock_pusher));
             reclocked_exports2.insert(id, reclocked);
@@ -266,7 +268,7 @@ fn source_render_operator<G, C>(
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-    Stream<G, HealthStatusMessage>,
+    Stream<G, Vec<HealthStatusMessage>>,
     Vec<PressOnDropButton>,
 )
 where
@@ -307,13 +309,13 @@ where
 
         let (health_output, derived_health) = builder.new_output();
         let mut health_output =
-            OutputBuilder::<_, CapacityContainerBuilder<_>>::from(health_output);
+            OutputBuilder::<_, CapacityContainerBuilder<Vec<_>>>::from(health_output);
         health_streams.push(derived_health);
 
         let (output, new_export) = builder.new_output();
-        let mut output = OutputBuilder::<_, CapacityContainerBuilder<_>>::from(output);
+        let mut output = OutputBuilder::<_, CapacityContainerBuilder<TimelyStack<_>>>::from(output);
 
-        let mut input = builder.new_input(&export.inner, Pipeline);
+        let mut input = builder.new_input(export.inner, Pipeline);
         export_collections.insert(id, new_export.as_collection());
 
         let bytes_read_counter = config.metrics.source_defs.bytes_read.clone();
@@ -336,7 +338,7 @@ where
                 }
                 let health_cap = health_cap.as_mut().unwrap();
 
-                input.for_each(|cap, data| {
+                input.for_each(|cap, data: &mut TimelyStack<_>| {
                     for (message, _, _) in data.iter() {
                         match message {
                             Ok(message) => {
@@ -386,7 +388,7 @@ where
 
     (
         export_collections,
-        health.concatenate_flatten::<_, CapacityContainerBuilder<_>>(health_streams),
+        health.concatenate_flatten::<_, CapacityContainerBuilder<Vec<_>>>(health_streams),
         tokens,
     )
 }
@@ -436,7 +438,7 @@ where
 
     let operator_name = format!("remap({})", id);
     let mut remap_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
-    let (remap_output, remap_stream) = remap_op.new_output::<CapacityContainerBuilder<_>>();
+    let (remap_output, remap_stream) = remap_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let button = remap_op.build(move |capabilities| async move {
         if !active_worker {
@@ -544,7 +546,7 @@ where
 fn reclock_committed_upper<G, FromTime>(
     bindings: &VecCollection<G, FromTime, Diff>,
     as_of: Antichain<G::Timestamp>,
-    committed_upper: &Stream<G, ()>,
+    committed_upper: &Stream<G, Vec<()>>,
     id: GlobalId,
     metrics: Arc<SourceMetrics>,
 ) -> impl futures::stream::Stream<Item = Antichain<FromTime>> + 'static
@@ -559,8 +561,8 @@ where
     let name = format!("ReclockCommitUpper({id})");
     let mut builder = OperatorBuilderRc::new(name, scope);
 
-    let mut bindings = builder.new_input(&bindings.inner, Pipeline);
-    let _ = builder.new_input(committed_upper, Pipeline);
+    let mut bindings = builder.new_input(bindings.inner.clone(), Pipeline);
+    let _ = builder.new_input(committed_upper.clone(), Pipeline);
 
     builder.build(move |_| {
         // Remap bindings beyond the upper
@@ -574,11 +576,13 @@ where
 
         move |frontiers| {
             // Accept new bindings
-            bindings.for_each(|_, data| {
-                accepted_times.extend(data.drain(..).map(|(from, mut into, diff)| {
-                    into.advance_by(as_of.borrow());
-                    ((into, from), diff.into_inner())
-                }));
+            bindings.for_each(|_, data: &mut Vec<(FromTime, G::Timestamp, Diff)>| {
+                accepted_times.extend(data.drain(..).map(
+                    |(from, mut into, diff): (FromTime, G::Timestamp, Diff)| {
+                        into.advance_by(as_of.borrow());
+                        ((into, from), diff.into_inner())
+                    },
+                ));
             });
             // Extract ready bindings
             let new_upper = frontiers[0].frontier();

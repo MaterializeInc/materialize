@@ -79,7 +79,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         // Build a demux operator that splits the replayed event stream up into the separate
         // logging streams.
         let mut demux = OperatorBuilder::new("Timely Logging Demux".to_string(), scope.clone());
-        let mut input = demux.new_input(&logs, Pipeline);
+        let mut input = demux.new_input(logs, Pipeline);
         let (operates_out, operates) = demux.new_output();
         let mut operates_out = OutputBuilder::from(operates_out);
         let (channels_out, channels) = demux.new_output();
@@ -118,7 +118,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                 let mut schedules_duration = schedules_duration_out.activate();
                 let mut schedules_histogram = schedules_histogram_out.activate();
 
-                input.for_each(|cap, data| {
+                input.for_each(|cap, data: &mut Vec<(Duration, TimelyEvent)>| {
                     let mut output_buffers = DemuxOutput {
                         operates: operates.session_with_builder(&cap),
                         channels: channels.session_with_builder(&cap),

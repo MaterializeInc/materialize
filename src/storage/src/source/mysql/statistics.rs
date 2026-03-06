@@ -11,7 +11,7 @@
 
 use futures::StreamExt;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::Map;
+use timely::dataflow::operators::vec::Map;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
@@ -35,14 +35,14 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     connection: MySqlSourceConnection,
     resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
 ) -> (
-    Stream<G, ReplicationError>,
-    Stream<G, Probe<GtidPartition>>,
+    Stream<G, Vec<ReplicationError>>,
+    Stream<G, Vec<Probe<GtidPartition>>>,
     PressOnDropButton,
 ) {
     let op_name = format!("MySqlStatistics({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
-    let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     // TODO: Add additional metrics
     let (button, transient_errors) = builder.build_fallible::<TransientError, _>(move |caps| {

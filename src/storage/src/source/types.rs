@@ -92,8 +92,8 @@ pub trait SourceRender {
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, HealthStatusMessage>,
-        Stream<G, Probe<Self::Time>>,
+        Stream<G, Vec<HealthStatusMessage>>,
+        Stream<G, Vec<Probe<Self::Time>>>,
         Vec<PressOnDropButton>,
     );
 }

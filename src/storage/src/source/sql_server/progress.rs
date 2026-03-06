@@ -39,7 +39,7 @@ use mz_storage_types::sources::sql_server::{
 };
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::Map;
+use timely::dataflow::operators::vec::Map;
 use timely::dataflow::{Scope, Stream as TimelyStream};
 use timely::progress::Antichain;
 
@@ -59,14 +59,14 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     committed_uppers: impl futures::Stream<Item = Antichain<Lsn>> + 'static,
     extras: SqlServerSourceExtras,
 ) -> (
-    TimelyStream<G, ReplicationError>,
-    TimelyStream<G, Probe<Lsn>>,
+    TimelyStream<G, Vec<ReplicationError>>,
+    TimelyStream<G, Vec<Probe<Lsn>>>,
     PressOnDropButton,
 ) {
     let op_name = format!("SqlServerProgress({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
-    let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let (button, transient_errors) = builder.build_fallible::<TransientError, _>(move |caps| {
         Box::pin(async move {

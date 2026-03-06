@@ -30,7 +30,7 @@ use timely::dataflow::channels::pushers::Counter as PushCounter;
 use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::capture::event::EventIterator;
 use timely::dataflow::operators::generic::builder_raw::OperatorBuilder;
-use timely::dataflow::{Scope, StreamCore};
+use timely::dataflow::{Scope, Stream};
 use timely::progress::Timestamp;
 use timely::scheduling::ActivateOnDrop;
 
@@ -42,7 +42,7 @@ where
     T: Timestamp,
     A: ActivatorTrait,
 {
-    /// Replays `self` into the provided scope, as a `StreamCore<S, CB::Container>` and provides
+    /// Replays `self` into the provided scope, as a `Stream<S, CB::Container>` and provides
     /// a cancellation token. Uses the supplied container builder `CB` to form containers.
     ///
     /// The `period` argument allows the specification of a re-activation period, where the operator
@@ -59,7 +59,7 @@ where
         name: &str,
         period: Duration,
         activator: A,
-    ) -> (StreamCore<S, C>, Rc<dyn Any>);
+    ) -> (Stream<S, C>, Rc<dyn Any>);
 }
 
 impl<T, C, I, A> MzReplay<T, C, A> for I
@@ -76,7 +76,7 @@ where
         name: &str,
         period: Duration,
         activator: A,
-    ) -> (StreamCore<S, C>, Rc<dyn Any>) {
+    ) -> (Stream<S, C>, Rc<dyn Any>) {
         let name = format!("Replay {}", name);
         let mut builder = OperatorBuilder::new(name, scope.clone());
 

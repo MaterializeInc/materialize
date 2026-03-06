@@ -37,7 +37,8 @@ use mz_timely_util::builder_async::{
 };
 use mz_timely_util::containers::stack::AccountedStackBuilder;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::{CapabilitySet, Concat, Map};
+use timely::dataflow::operators::vec::Map;
+use timely::dataflow::operators::{CapabilitySet, Concat};
 use timely::dataflow::{Scope, Stream as TimelyStream};
 use timely::progress::{Antichain, Timestamp};
 
@@ -63,7 +64,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     metrics: SqlServerSourceMetrics,
 ) -> (
     StackedCollection<G, (u64, Result<SourceMessage, DataflowError>)>,
-    TimelyStream<G, ReplicationError>,
+    TimelyStream<G, Vec<ReplicationError>>,
     PressOnDropButton,
 ) {
     let op_name = format!("SqlServerReplicationReader({})", config.id);
@@ -73,7 +74,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
-        builder.new_output::<CapacityContainerBuilder<_>>();
+        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let (button, transient_errors) = builder.build_fallible(move |caps| {
         let busy_signal = Arc::clone(&config.busy_signal);
@@ -599,7 +600,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
         }))
     });
 
-    let error_stream = definite_errors.concat(&transient_errors.map(ReplicationError::Transient));
+    let error_stream = definite_errors.concat(transient_errors.map(ReplicationError::Transient));
 
     (
         data_stream.as_collection(),

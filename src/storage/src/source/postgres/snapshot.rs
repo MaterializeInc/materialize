@@ -190,9 +190,8 @@ use timely::container::CapacityContainerBuilder;
 use timely::container::DrainContainer;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::Map;
-use timely::dataflow::operators::{
-    Broadcast, CapabilitySet, Concat, ConnectLoop, Feedback, Operator,
-};
+use timely::dataflow::operators::vec::Broadcast;
+use timely::dataflow::operators::{CapabilitySet, Concat, ConnectLoop, Feedback, Operator};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Timestamp;
 use tokio_postgres::error::SqlState;
@@ -350,9 +349,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     metrics: PgSnapshotMetrics,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    Stream<G, RewindRequest>,
-    Stream<G, Infallible>,
-    Stream<G, ReplicationError>,
+    Stream<G, Vec<RewindRequest>>,
+    Stream<G, Vec<Infallible>>,
+    Stream<G, Vec<ReplicationError>>,
     PressOnDropButton,
 ) {
     let op_name = format!("TableReader({})", config.id);
@@ -361,16 +360,16 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let (feedback_handle, feedback_data) = scope.feedback(Default::default());
 
     let (raw_handle, raw_data) = builder.new_output();
-    let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     // This output is used to signal to the replication operator that the replication slot has been
     // created. With the current state of execution serialization there isn't a lot of benefit
     // of splitting the snapshot and replication phases into two operators.
     // TODO(petrosagg): merge the two operators in one (while still maintaining separation as
     // functions/modules)
-    let (_, slot_ready) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (snapshot_handle, snapshot) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (_, slot_ready) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (snapshot_handle, snapshot) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let (definite_error_handle, definite_errors) =
-        builder.new_output::<CapacityContainerBuilder<_>>();
+        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     // This operator needs to broadcast data to itself in order to synchronize the transaction
     // snapshot. However, none of the feedback capabilities result in output messages and for the
@@ -795,7 +794,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         })
         .as_collection();
 
-    let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
+    let errors = definite_errors.concat(transient_errors.map(ReplicationError::from));
 
     (
         snapshot_updates,

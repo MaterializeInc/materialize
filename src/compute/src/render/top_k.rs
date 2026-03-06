@@ -19,7 +19,7 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::operators::iterate::SemigroupVariable;
+use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
 use differential_dataflow::trace::implementations::merge_batcher::container::MergerChunk;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
@@ -47,6 +47,7 @@ use crate::render::errors::MaybeValidatingRow;
 use crate::row_spine::{
     DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
 };
+use crate::typedefs::spines::{ColKeyBuilder, ColKeySpine};
 use crate::typedefs::{KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
@@ -86,7 +87,7 @@ where
                     // thus needs to be checked.
                     let expr = expr.clone();
                     let mut datum_vec = mz_repr::DatumVec::new();
-                    let errors = ok_input.flat_map(move |row| {
+                    let errors = ok_input.clone().flat_map(move |row| {
                         let temp_storage = mz_repr::RowArena::new();
                         let datums = datum_vec.borrow_with(&row);
                         match expr.eval(&datums[..], &temp_storage) {
@@ -97,7 +98,7 @@ where
                             Err(e) => Some(e.into()),
                         }
                     });
-                    err_collection = err_collection.concat(&errors);
+                    err_collection = err_collection.concat(errors);
                 }
             }
 
@@ -113,7 +114,7 @@ where
                         order_key,
                         must_consolidate,
                     );
-                    err_collection = err_collection.concat(&errs);
+                    err_collection = err_collection.concat(errs);
                     oks
                 }
                 TopKPlan::MonotonicTopK(MonotonicTopKPlan {
@@ -134,6 +135,7 @@ where
 
                     // Map the group key along with the row and consolidate if required to do so.
                     let mut datum_vec = mz_repr::DatumVec::new();
+                    let mut ok_scope = ok_input.scope();
                     let collection = ok_input
                         .map(move |row| {
                             let group_row = {
@@ -157,7 +159,7 @@ where
                         let m = "tried to build monotonic top-k on non-monotonic input".into();
                         (DataflowError::from(EvalError::Internal(m)), Diff::ONE)
                     });
-                    err_collection = err_collection.concat(&errs);
+                    err_collection = err_collection.concat(errs);
 
                     // For monotonic inputs, we are able to thin the input relation in two stages:
                     // 1. First, we can do an intra-timestamp thinning which has the advantage of
@@ -186,13 +188,13 @@ where
                     // of `offset` and `limit`, discarding only the records not produced in the intermediate
                     // stage.
                     let delay = std::time::Duration::from_secs(10);
-                    let retractions = SemigroupVariable::new(
-                        &mut ok_input.scope(),
+                    let (retractions_var, retractions) = SemigroupVariable::new(
+                        &mut ok_scope,
                         <G::Timestamp as crate::render::RenderTimestamp>::system_delay(
                             delay.try_into().expect("must fit"),
                         ),
                     );
-                    let thinned = collection.concat(&retractions.negate());
+                    let thinned = collection.clone().concat(retractions.negate());
 
                     // As an additional optimization, we can skip creating the full topk hierachy
                     // here since we now have an upper bound on the number records due to the
@@ -202,10 +204,11 @@ where
                     let (result, errs) =
                         self.build_topk_stage(thinned, order_key, 1u64, 0, limit, arity, false);
                     // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
-                    let result = result.consolidate_named::<KeyBatcher<_, _, _>>(
+                    let result = result.consolidate_named::<KeyBatcher<_, _, _>, ColKeyBuilder<_, _, _>, ColKeySpine<_, _, _>, _>(
                         "Monotonic TopK final consolidate",
+                        |k, &()| k.clone(),
                     );
-                    retractions.set(&collection.concat(&result.negate()));
+                    retractions_var.set(collection.concat(result.clone().negate()));
                     soft_assert_or_log!(
                         errs.is_none(),
                         "requested no validation, but received error collection"
@@ -233,7 +236,7 @@ where
                     let (oks, errs) = self.build_topk(
                         ok_input, group_key, order_key, offset, limit, arity, buckets,
                     );
-                    err_collection = err_collection.concat(&errs);
+                    err_collection = err_collection.concat(errs);
                     oks
                 }
             };
@@ -335,7 +338,7 @@ where
             collection, order_key, 1u64, offset, limit, arity, validating,
         );
         // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
-        let oks = oks.consolidate_named::<KeyBatcher<_, _, _>>("TopK final consolidate");
+        let oks = oks.consolidate_named::<KeyBatcher<_, _, _>, ColKeyBuilder<_, _, _>, ColKeySpine<_, _, _>, _>("TopK final consolidate", |k, &()| k.clone());
         collection = oks;
         if validating {
             err_collection = errs;
@@ -443,7 +446,7 @@ where
             (input, stage, None)
         };
         let input = input.as_collection(|k, v| (k.to_row(), v.to_row()));
-        (oks.concat(&input), errs)
+        (oks.concat(input), errs)
     }
 
     fn render_top1_monotonic<S>(
@@ -730,7 +733,7 @@ where
                             .or_insert_with(move || topk_agg::TopKBatch::new(limit));
                         topk.update(monoid, diff.into_inner());
                     }
-                    notificator.notify_at(time.retain());
+                    notificator.notify_at(time.retain(0));
                 });
 
                 notificator.for_each(|time, _, _| {

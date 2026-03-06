@@ -135,7 +135,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{CapabilitySet, Concatenate, Map, ToStream};
+use timely::dataflow::operators::vec::{Map, ToStream};
+use timely::dataflow::operators::{CapabilitySet, Concatenate};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::sync::watch;
@@ -162,7 +163,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
         _err_collection: VecCollection<G, DataflowError, Diff>,
-    ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>) {
+    ) -> (Stream<G, Vec<HealthStatusMessage>>, Vec<PressOnDropButton>) {
         let mut scope = input.scope();
 
         let write_handle = {
@@ -638,7 +639,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
         Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
     > + 'static,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
-) -> (Stream<G, HealthStatusMessage>, PressOnDropButton) {
+) -> (Stream<G, Vec<HealthStatusMessage>>, PressOnDropButton) {
     let scope = input.scope();
     let mut builder = AsyncOperatorBuilder::new(name.clone(), input.inner.scope());
 
@@ -1363,12 +1364,12 @@ fn encode_collection<G: Scope>(
     storage_configuration: StorageConfiguration,
 ) -> (
     VecCollection<G, KafkaMessage, Diff>,
-    Stream<G, HealthStatusMessage>,
+    Stream<G, Vec<HealthStatusMessage>>,
     PressOnDropButton,
 ) {
     let mut builder = AsyncOperatorBuilder::new(name, input.inner.scope());
 
-    let (output, stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (output, stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let mut input = builder.new_input_for(&input.inner, Pipeline, &output);
 
     let (button, errors) = builder.build_fallible(move |caps| {

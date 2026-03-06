@@ -77,7 +77,8 @@ where
     {
         // Allow access to `reduce_abelian` since we're within Mz's wrapper and force arrangement size logging.
         #[allow(clippy::disallowed_methods)]
-        Arranged::<_, _>::reduce_abelian::<_, Bu, T2>(self, name, logic).log_arrangement_size()
+        Arranged::<_, _>::reduce_abelian::<_, Bu, T2>(self.clone(), name, logic)
+            .log_arrangement_size()
     }
 }
 
