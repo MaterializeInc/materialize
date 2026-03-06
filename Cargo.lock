@@ -7402,6 +7402,7 @@ dependencies = [
  "axum",
  "bytes",
  "clap",
+ "criterion",
  "mz-aws-util",
  "mz-http-util",
  "mz-ore",

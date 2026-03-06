@@ -170,7 +170,7 @@ impl EnvelopeEncryption {
 }
 
 /// Encrypt using a raw AES-256-GCM key. Builds the envelope format.
-fn encrypt_with_dek(
+pub fn encrypt_with_dek(
     key: &[u8; 32],
     wrapped_dek: &[u8],
     plaintext: &[u8],
@@ -205,7 +205,7 @@ fn encrypt_with_dek(
 }
 
 /// Parse the envelope header, returning (wrapped_dek, nonce_and_ciphertext_with_tag).
-fn parse_envelope(data: &[u8]) -> Result<(&[u8], &[u8]), anyhow::Error> {
+pub fn parse_envelope(data: &[u8]) -> Result<(&[u8], &[u8]), anyhow::Error> {
     if data.is_empty() {
         return Err(anyhow::anyhow!("encrypted data is empty"));
     }
@@ -230,7 +230,7 @@ fn parse_envelope(data: &[u8]) -> Result<(&[u8], &[u8]), anyhow::Error> {
 }
 
 /// Decrypt using a raw AES-256-GCM key. Input is nonce || ciphertext || tag.
-fn decrypt_with_key(key: &[u8; 32], nonce_and_ciphertext: &[u8]) -> Result<Vec<u8>, anyhow::Error> {
+pub fn decrypt_with_key(key: &[u8; 32], nonce_and_ciphertext: &[u8]) -> Result<Vec<u8>, anyhow::Error> {
     if nonce_and_ciphertext.len() < NONCE_LEN + GCM_TAG_LEN {
         return Err(anyhow::anyhow!("ciphertext too short"));
     }

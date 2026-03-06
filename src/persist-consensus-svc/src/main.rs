@@ -14,7 +14,6 @@
 //! O(shards).
 
 mod actor;
-mod crypto;
 mod metrics;
 mod recovery;
 mod s3_wal;
@@ -27,7 +26,7 @@ use tonic::transport::Server;
 use tracing::{debug, info};
 
 use crate::actor::{Actor, ActorCommand};
-use crate::crypto::EnvelopeEncryption;
+use mz_persist_consensus_svc::crypto::EnvelopeEncryption;
 use crate::metrics::ConsensusMetrics;
 use crate::recovery::recover;
 use crate::s3_wal::S3WalWriter;

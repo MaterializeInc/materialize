@@ -20,7 +20,7 @@ use mz_persist::generated::consensus_service::{
 };
 
 use crate::actor::{ShardState, VersionedEntry};
-use crate::crypto::EnvelopeEncryption;
+use mz_persist_consensus_svc::crypto::EnvelopeEncryption;
 
 /// Error type for WAL write operations that distinguishes recoverable states.
 #[derive(Debug)]

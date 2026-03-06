@@ -12,9 +12,16 @@ autobenches = false
 [lints]
 workspace = true
 
+[lib]
+bench = false
+
 [[bin]]
 name = "mz-persist-consensus-svc"
 bench = false
+
+[[bench]]
+name = "benches"
+harness = false
 
 [dependencies]
 anyhow = "1.0.101"
@@ -39,6 +46,9 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
+aws-lc-rs = "1.12.6"
+criterion = { version = "0.8.2", features = ["html_reports"] }
+mz-ore = { path = "../ore", default-features = false }
 tokio = { version = "1.49.0", features = ["test-util"] }
 
 [features]
