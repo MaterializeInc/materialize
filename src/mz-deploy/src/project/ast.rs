@@ -136,6 +136,8 @@ pub enum Statement {
     CreateSource(CreateSourceStatement<Raw>),
     /// CREATE SECRET statement
     CreateSecret(CreateSecretStatement<Raw>),
+    /// CREATE CONNECTION statement
+    CreateConnection(CreateConnectionStatement<Raw>),
 }
 
 impl Statement {
@@ -156,6 +158,7 @@ impl Statement {
             Statement::CreateTableFromSource(t) => t.name.clone().into(),
             Statement::CreateSource(s) => s.name.clone().into(),
             Statement::CreateSecret(s) => s.name.clone().into(),
+            Statement::CreateConnection(c) => c.name.clone().into(),
         }
     }
 }
@@ -170,6 +173,7 @@ impl std::fmt::Display for Statement {
             Statement::CreateTableFromSource(s) => write!(f, "{}", s),
             Statement::CreateSource(s) => write!(f, "{}", s),
             Statement::CreateSecret(s) => write!(f, "{}", s),
+            Statement::CreateConnection(c) => write!(f, "{}", c),
         }
     }
 }

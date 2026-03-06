@@ -9,8 +9,8 @@
 //! - `introspection` - Database metadata queries
 //! - `validation` - Project validation against the database
 
-use crate::config::Profile;
 use crate::client::errors::ConnectionError;
+use crate::config::Profile;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use postgres_openssl::MakeTlsConnector;
 use tokio_postgres::types::ToSql;

@@ -44,10 +44,10 @@ pub fn quote_identifier(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 pub use deployment_ops::{
-    ClusterDeploymentStatus, ClusterStatusContext, FailureReason, HydrationStatusUpdate,
-    DEFAULT_ALLOWED_LAG_SECS,
+    ClusterDeploymentStatus, ClusterStatusContext, DEFAULT_ALLOWED_LAG_SECS, FailureReason,
+    HydrationStatusUpdate,
 };
-pub use errors::{format_relative_path, ConnectionError, DatabaseValidationError};
+pub use errors::{ConnectionError, DatabaseValidationError, format_relative_path};
 pub use models::{
     ApplyState, Cluster, ClusterConfig, ClusterGrant, ClusterOptions, ClusterReplica,
     ConflictRecord, DeploymentDetails, DeploymentHistoryEntry, DeploymentKind, DeploymentMetadata,

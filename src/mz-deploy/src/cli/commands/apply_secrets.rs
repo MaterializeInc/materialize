@@ -1,8 +1,8 @@
 //! Apply secrets command - create missing secrets and update existing ones.
 
 use crate::cli::{CliError, TypeCheckMode, executor};
-use crate::config::ProjectSettings;
 use crate::client::{Client, Profile};
+use crate::config::ProjectSettings;
 use crate::project;
 use crate::project::ast::Statement;
 use crate::project::planned;

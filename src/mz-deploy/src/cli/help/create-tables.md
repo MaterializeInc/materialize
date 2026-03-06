@@ -1,7 +1,7 @@
-# create-tables — Create tables, sources, and secrets that don't already exist
+# create-tables — Create tables, sources, secrets, and connections that don't already exist
 
-Identifies tables, sources, and secrets defined in the project, checks
-which ones already exist in the target database, and creates only the
+Identifies tables, sources, secrets, and connections defined in the project,
+checks which ones already exist in the target database, and creates only the
 missing ones. Each run is tracked as a deployment record marked as
 "promoted."
 
@@ -13,20 +13,20 @@ missing ones. Each run is tracked as a deployment record marked as
 
 1. Validates the git working tree is clean (unless `--allow-dirty`).
 2. Compiles and validates the project (same as `compile`).
-3. Identifies all table, source, and secret objects in the plan.
+3. Identifies all table, source, secret, and connection objects in the plan.
 4. Queries the database to determine which already exist — existing objects
    are silently skipped.
 5. Creates missing schemas if needed.
 6. Applies schema setup statements for affected schemas.
-7. Creates objects in dependency order: secrets first, then sources, then
-   tables. Secret values that use client-side providers (e.g.
+7. Creates objects in dependency order: secrets first, then connections, then
+   sources, then tables. Secret values that use client-side providers (e.g.
    `env_var('MY_VAR')`) are resolved at execution time.
 8. Records created objects in a deployment snapshot marked as "promoted,"
    so future `stage` runs treat them as existing production objects.
 9. Automatically runs `gen-data-contracts` to update `types.lock`.
 
-Tables, sources, and secrets are created separately from views and
-materialized views because they represent durable state. Once created,
+Tables, sources, secrets, and connections are created separately from views
+and materialized views because they represent durable state. Once created,
 `stage` and `apply` will not attempt to recreate them.
 
 ## Flags

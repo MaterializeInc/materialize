@@ -67,15 +67,16 @@ impl SecretProvider for AwsSecretProvider {
                 reason: format!("failed to fetch secret '{}': {}", secret_name, e),
             })?;
 
-        result.secret_string().map(|s| s.to_string()).ok_or_else(|| {
-            SecretResolveError::ResolutionFailed {
+        result
+            .secret_string()
+            .map(|s| s.to_string())
+            .ok_or_else(|| SecretResolveError::ResolutionFailed {
                 name: self.name().to_string(),
                 reason: format!(
                     "secret '{}' is a binary secret; only text secrets are supported",
                     secret_name
                 ),
-            }
-        })
+            })
     }
 }
 

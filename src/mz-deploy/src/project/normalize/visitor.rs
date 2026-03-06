@@ -118,6 +118,59 @@ impl<T: NameTransformer> NormalizingVisitor<T> {
         }
     }
 
+    /// Normalize the connection reference in CREATE SOURCE statements.
+    ///
+    /// Sources reference a connection (Kafka, Postgres, etc.) that needs to be
+    /// normalized to a fully qualified name.
+    pub fn normalize_source_connection(&self, connection: &mut CreateSourceConnection<Raw>) {
+        match connection {
+            CreateSourceConnection::Kafka { connection, .. }
+            | CreateSourceConnection::Postgres { connection, .. }
+            | CreateSourceConnection::SqlServer { connection, .. }
+            | CreateSourceConnection::MySql { connection, .. } => {
+                self.normalize_raw_item_name(connection);
+            }
+            CreateSourceConnection::LoadGenerator { .. } => {}
+        }
+    }
+
+    /// Normalize connection option references in CREATE CONNECTION statements.
+    ///
+    /// Handles secret references, item references, AWS PrivateLink connections,
+    /// and Kafka broker tunnels within connection options.
+    pub fn normalize_connection_options(&self, options: &mut [ConnectionOption<Raw>]) {
+        for option in options {
+            if let Some(ref mut value) = option.value {
+                self.normalize_with_option_value(value);
+            }
+        }
+    }
+
+    /// Normalize a single WithOptionValue, recursing into nested structures.
+    fn normalize_with_option_value(&self, value: &mut WithOptionValue<Raw>) {
+        match value {
+            WithOptionValue::Secret(name) | WithOptionValue::Item(name) => {
+                self.normalize_raw_item_name(name);
+            }
+            WithOptionValue::ConnectionAwsPrivatelink(pl) => {
+                self.normalize_raw_item_name(&mut pl.connection);
+            }
+            WithOptionValue::ConnectionKafkaBroker(broker) => match &mut broker.tunnel {
+                KafkaBrokerTunnel::SshTunnel(name) => self.normalize_raw_item_name(name),
+                KafkaBrokerTunnel::AwsPrivatelink(aws) => {
+                    self.normalize_raw_item_name(&mut aws.connection)
+                }
+                KafkaBrokerTunnel::Direct => {}
+            },
+            WithOptionValue::Sequence(items) => {
+                for item in items {
+                    self.normalize_with_option_value(item);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Normalize all table references in a query (used for views and materialized views).
     ///
     /// Recursively traverses the query AST to find and normalize all object references

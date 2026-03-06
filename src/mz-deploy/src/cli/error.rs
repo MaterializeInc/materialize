@@ -3,8 +3,8 @@
 //! This module provides error types for high-level CLI commands that wrap
 //! lower-level errors from the client and project modules.
 
-use crate::config::ConfigError;
 use crate::client::{ConflictRecord, ConnectionError, DatabaseValidationError};
+use crate::config::ConfigError;
 use crate::project::deployment_snapshot::DeploymentSnapshotError;
 use crate::project::error::{DependencyError, ProjectError};
 use crate::secret_resolver::SecretResolveError;

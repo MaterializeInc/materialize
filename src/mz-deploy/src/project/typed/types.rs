@@ -204,6 +204,10 @@ impl Statement {
                 s.name = transformed_name;
                 Statement::CreateSecret(s)
             }
+            Statement::CreateConnection(mut s) => {
+                s.name = transformed_name;
+                Statement::CreateConnection(s)
+            }
         }
     }
 
@@ -230,10 +234,16 @@ impl Statement {
                 visitor.normalize_sink_connection(&mut s.connection);
                 Statement::CreateSink(s)
             }
-            // These statements don't have dependencies on other database objects
-            Statement::CreateTable(_) | Statement::CreateSource(_) | Statement::CreateSecret(_) => {
-                self
+            Statement::CreateConnection(mut s) => {
+                visitor.normalize_connection_options(&mut s.values);
+                Statement::CreateConnection(s)
             }
+            Statement::CreateSource(mut s) => {
+                visitor.normalize_source_connection(&mut s.connection);
+                Statement::CreateSource(s)
+            }
+            // These statements don't have dependencies on other database objects
+            Statement::CreateTable(_) | Statement::CreateSecret(_) => self,
         }
     }
 
@@ -262,7 +272,8 @@ impl Statement {
             Statement::CreateView(_)
             | Statement::CreateTable(_)
             | Statement::CreateTableFromSource(_)
-            | Statement::CreateSecret(_) => self,
+            | Statement::CreateSecret(_)
+            | Statement::CreateConnection(_) => self,
         }
     }
 }
@@ -324,7 +335,8 @@ impl DatabaseObject {
             Statement::CreateView(_)
             | Statement::CreateTable(_)
             | Statement::CreateTableFromSource(_)
-            | Statement::CreateSecret(_) => None,
+            | Statement::CreateSecret(_)
+            | Statement::CreateConnection(_) => None,
         };
         if let Some(RawClusterName::Unresolved(cluster_name)) = in_cluster {
             cluster_set.insert(cluster_name.to_string());
@@ -345,6 +357,7 @@ impl DatabaseObject {
             Statement::CreateMaterializedView(stmt) => Some(stmt.query.clone()),
             Statement::CreateTable(_)
             | Statement::CreateSecret(_)
+            | Statement::CreateConnection(_)
             | Statement::CreateTableFromSource(_)
             | Statement::CreateSink(_)
             | Statement::CreateSource(_) => None,

@@ -502,6 +502,16 @@ pub async fn check_secrets_exist(
     check_catalog_objects_exist(client, secrets, "mz_secrets").await
 }
 
+/// Check which connections from the given set exist in the database.
+///
+/// Returns a BTreeSet of ObjectIds for connections that already exist.
+pub async fn check_connections_exist(
+    client: &Client,
+    connections: &BTreeSet<ObjectId>,
+) -> Result<BTreeSet<ObjectId>, ConnectionError> {
+    check_catalog_objects_exist(client, connections, "mz_connections").await
+}
+
 /// Check which sinks from the given set exist in the database.
 ///
 /// Returns a BTreeSet of ObjectIds for sinks that already exist.
@@ -847,6 +857,14 @@ impl IntrospectionClient<'_> {
         secrets: &BTreeSet<ObjectId>,
     ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
         check_secrets_exist(self.client, secrets).await
+    }
+
+    /// Check which connections from the given set exist in the database.
+    pub async fn check_connections_exist(
+        &self,
+        connections: &BTreeSet<ObjectId>,
+    ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
+        check_connections_exist(self.client, connections).await
     }
 
     /// Check which sinks from the given set exist in the database.

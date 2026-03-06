@@ -17,7 +17,6 @@ use thiserror::Error;
 
 pub const DEFAULT_DOCKER_IMAGE: &str = "materialize/materialized:latest";
 
-
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct SecretResolverConfig {
     /// AWS profile name for loading secrets from AWS Secrets Manager.

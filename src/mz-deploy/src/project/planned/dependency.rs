@@ -54,7 +54,8 @@ fn determine_schema_type(objects: &[DatabaseObject]) -> SchemaType {
         | Statement::CreateTableFromSource(_)
         | Statement::CreateSource(_)
         | Statement::CreateSink(_)
-        | Statement::CreateSecret(_) => SchemaType::Storage,
+        | Statement::CreateSecret(_)
+        | Statement::CreateConnection(_) => SchemaType::Storage,
         Statement::CreateView(_) | Statement::CreateMaterializedView(_) => SchemaType::Compute,
     }
 }
@@ -239,9 +240,20 @@ pub fn extract_dependencies(
             }
         }
         Statement::CreateSource(s) => {
+            // Source depends on its connection
+            extract_source_connection_dep(
+                &s.connection,
+                default_database,
+                default_schema,
+                &mut deps,
+            );
+
             if let Some(ref cluster_name) = s.in_cluster {
                 clusters.insert(Cluster::new(cluster_name.to_string()));
             }
+        }
+        Statement::CreateConnection(s) => {
+            extract_connection_option_deps(&s.values, default_database, default_schema, &mut deps);
         }
         // These don't have dependencies on other database objects
         Statement::CreateTable(_) | Statement::CreateSecret(_) => {}
@@ -681,6 +693,90 @@ fn extract_expr_dependencies_with_ctes(
             }
         }
         // Other expression types don't contain subqueries
+        _ => {}
+    }
+}
+
+/// Extract the connection dependency from a source's connection clause.
+fn extract_source_connection_dep(
+    connection: &CreateSourceConnection<Raw>,
+    default_database: &str,
+    default_schema: &str,
+    deps: &mut BTreeSet<ObjectId>,
+) {
+    match connection {
+        CreateSourceConnection::Kafka { connection, .. }
+        | CreateSourceConnection::Postgres { connection, .. }
+        | CreateSourceConnection::SqlServer { connection, .. }
+        | CreateSourceConnection::MySql { connection, .. } => {
+            deps.insert(ObjectId::from_raw_item_name(
+                connection,
+                default_database,
+                default_schema,
+            ));
+        }
+        CreateSourceConnection::LoadGenerator { .. } => {}
+    }
+}
+
+/// Extract dependencies from connection options (secrets, other connections).
+fn extract_connection_option_deps(
+    options: &[ConnectionOption<Raw>],
+    default_database: &str,
+    default_schema: &str,
+    deps: &mut BTreeSet<ObjectId>,
+) {
+    for option in options {
+        if let Some(ref value) = option.value {
+            extract_with_option_value_deps(value, default_database, default_schema, deps);
+        }
+    }
+}
+
+/// Extract dependencies from a single WithOptionValue, recursing into nested structures.
+fn extract_with_option_value_deps(
+    value: &WithOptionValue<Raw>,
+    default_database: &str,
+    default_schema: &str,
+    deps: &mut BTreeSet<ObjectId>,
+) {
+    match value {
+        WithOptionValue::Secret(name) | WithOptionValue::Item(name) => {
+            deps.insert(ObjectId::from_raw_item_name(
+                name,
+                default_database,
+                default_schema,
+            ));
+        }
+        WithOptionValue::ConnectionAwsPrivatelink(pl) => {
+            deps.insert(ObjectId::from_raw_item_name(
+                &pl.connection,
+                default_database,
+                default_schema,
+            ));
+        }
+        WithOptionValue::ConnectionKafkaBroker(broker) => match &broker.tunnel {
+            KafkaBrokerTunnel::SshTunnel(name) => {
+                deps.insert(ObjectId::from_raw_item_name(
+                    name,
+                    default_database,
+                    default_schema,
+                ));
+            }
+            KafkaBrokerTunnel::AwsPrivatelink(aws) => {
+                deps.insert(ObjectId::from_raw_item_name(
+                    &aws.connection,
+                    default_database,
+                    default_schema,
+                ));
+            }
+            KafkaBrokerTunnel::Direct => {}
+        },
+        WithOptionValue::Sequence(items) => {
+            for item in items {
+                extract_with_option_value_deps(item, default_database, default_schema, deps);
+            }
+        }
         _ => {}
     }
 }

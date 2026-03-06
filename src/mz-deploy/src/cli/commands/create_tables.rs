@@ -2,8 +2,8 @@
 
 use crate::cli::git;
 use crate::cli::{CliError, TypeCheckMode, executor};
-use crate::config::ProjectSettings;
 use crate::client::{Client, Profile};
+use crate::config::ProjectSettings;
 use crate::project::ast::Statement;
 use crate::secret_resolver::SecretResolver;
 use crate::{project, verbose};
@@ -91,12 +91,14 @@ pub async fn run(
         });
     }
 
-    let (table_object_ids, source_object_ids, secret_object_ids) =
-        collect_table_source_and_secret_ids(&planned_project);
+    let (table_object_ids, source_object_ids, secret_object_ids, connection_object_ids) =
+        collect_table_source_secret_and_connection_ids(&planned_project);
     let all_object_ids: BTreeSet<_> = table_object_ids
-        .union(&source_object_ids)
+        .iter()
+        .chain(source_object_ids.iter())
+        .chain(secret_object_ids.iter())
+        .chain(connection_object_ids.iter())
         .cloned()
-        .chain(secret_object_ids.iter().cloned())
         .collect();
     if all_object_ids.is_empty() {
         println!("No tables found in project");
@@ -106,22 +108,19 @@ pub async fn run(
     let table_objects = planned_project.get_sorted_objects_filtered(&all_object_ids)?;
     println!("Found {} table(s) in project", table_objects.len());
 
-    let existing_tables = client
-        .introspection()
-        .check_tables_exist(&table_object_ids)
-        .await?;
-    let existing_sources = client
-        .introspection()
-        .check_sources_exist(&source_object_ids)
-        .await?;
-    let existing_secrets = client
-        .introspection()
-        .check_secrets_exist(&secret_object_ids)
-        .await?;
+    let introspection = client.introspection();
+    let (existing_tables, existing_sources, existing_secrets, existing_connections) = tokio::try_join!(
+        introspection.check_tables_exist(&table_object_ids),
+        introspection.check_sources_exist(&source_object_ids),
+        introspection.check_secrets_exist(&secret_object_ids),
+        introspection.check_connections_exist(&connection_object_ids),
+    )?;
     let existing_objects: BTreeSet<_> = existing_tables
-        .union(&existing_sources)
+        .iter()
+        .chain(existing_sources.iter())
+        .chain(existing_secrets.iter())
+        .chain(existing_connections.iter())
         .cloned()
-        .chain(existing_secrets.iter().cloned())
         .collect();
     let tables_to_create: Vec<_> = table_objects
         .into_iter()
@@ -145,7 +144,8 @@ pub async fn run(
     prepare_schemas_and_mod_statements(&executor, &planned_project, &table_schemas, dry_run)
         .await?;
     let resolver = SecretResolver::new(&settings.secret_config);
-    let success_count = execute_table_creates(&executor, &resolver, &tables_to_create, dry_run).await?;
+    let success_count =
+        execute_table_creates(&executor, &resolver, &tables_to_create, dry_run).await?;
     finalize_table_deployment(
         &client,
         directory,
@@ -163,11 +163,12 @@ pub async fn run(
 
 /// Partitions planned objects into catalog categories used by existence checks.
 ///
-/// Tables, sources, and secrets are checked in different system catalogs, so this
-/// split is the input contract for "what already exists" filtering.
-fn collect_table_source_and_secret_ids(
+/// Tables, sources, secrets, and connections are checked in different system catalogs,
+/// so this split is the input contract for "what already exists" filtering.
+fn collect_table_source_secret_and_connection_ids(
     planned_project: &project::planned::Project,
 ) -> (
+    BTreeSet<project::object_id::ObjectId>,
     BTreeSet<project::object_id::ObjectId>,
     BTreeSet<project::object_id::ObjectId>,
     BTreeSet<project::object_id::ObjectId>,
@@ -175,6 +176,7 @@ fn collect_table_source_and_secret_ids(
     let mut table_object_ids = BTreeSet::new();
     let mut source_object_ids = BTreeSet::new();
     let mut secret_object_ids = BTreeSet::new();
+    let mut connection_object_ids = BTreeSet::new();
     for obj in planned_project.iter_objects() {
         match &obj.typed_object.stmt {
             Statement::CreateTable(_) | Statement::CreateTableFromSource(_) => {
@@ -186,10 +188,18 @@ fn collect_table_source_and_secret_ids(
             Statement::CreateSecret(_) => {
                 secret_object_ids.insert(obj.id.clone());
             }
+            Statement::CreateConnection(_) => {
+                connection_object_ids.insert(obj.id.clone());
+            }
             _ => {}
         }
     }
-    (table_object_ids, source_object_ids, secret_object_ids)
+    (
+        table_object_ids,
+        source_object_ids,
+        secret_object_ids,
+        connection_object_ids,
+    )
 }
 
 /// Emits the skip list shown to users before create execution begins.
@@ -240,9 +250,19 @@ pub async fn prepare_schemas_and_mod_statements(
         return Ok(());
     }
     if !dry_run {
-        println!("Preparing schemas...");
+        println!("Preparing databases and schemas...");
     } else {
-        println!("-- Create schemas --");
+        println!("-- Create databases and schemas --");
+    }
+
+    // Create databases first (schemas can't exist without their database)
+    let databases: BTreeSet<&str> = table_schemas
+        .keys()
+        .map(|sq| sq.database.as_str())
+        .collect();
+    for db in databases {
+        let create_db_sql = format!("CREATE DATABASE IF NOT EXISTS {}", db);
+        executor.execute_sql(&create_db_sql).await?;
     }
 
     for sq in table_schemas.keys() {
@@ -286,12 +306,13 @@ pub async fn prepare_schemas_and_mod_statements(
     Ok(())
 }
 
-/// Returns a sort key for object type ordering: secrets first, then sources, then tables.
+/// Returns a sort key for object type ordering: secrets, connections, sources, then tables.
 fn object_type_order(stmt: &Statement) -> u8 {
     match stmt {
         Statement::CreateSecret(_) => 0,
-        Statement::CreateSource(_) => 1,
-        _ => 2,
+        Statement::CreateConnection(_) => 1,
+        Statement::CreateSource(_) => 2,
+        _ => 3,
     }
 }
 

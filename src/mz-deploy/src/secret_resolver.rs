@@ -18,6 +18,7 @@ mod aws_secret;
 mod env_var;
 
 use crate::cli::CliError;
+use crate::config::SecretResolverConfig;
 use crate::project::ast::Statement;
 use async_trait::async_trait;
 use aws_secret::{AwsSecretProvider, UnconfiguredAwsProvider};
@@ -25,7 +26,6 @@ use env_var::EnvVarProvider;
 use mz_sql_parser::ast::{CreateSecretStatement, Expr, FunctionArgs, Raw, RawItemName, Value};
 use std::collections::BTreeMap;
 use thiserror::Error;
-use crate::config::SecretResolverConfig;
 
 /// Errors that can occur during secret resolution.
 #[derive(Debug, Error)]
@@ -179,10 +179,7 @@ impl SecretResolver {
     ///
     /// Secret statements have their provider functions resolved;
     /// all other statements are returned unchanged.
-    pub async fn resolve_statement_for_cli(
-        &self,
-        stmt: &Statement,
-    ) -> Result<Statement, CliError> {
+    pub async fn resolve_statement_for_cli(&self, stmt: &Statement) -> Result<Statement, CliError> {
         match stmt {
             Statement::CreateSecret(create_stmt) => {
                 let resolved = self.resolve_secret_for_cli(create_stmt).await?;
@@ -388,8 +385,7 @@ mod tests {
     #[tokio::test]
     async fn test_unconfigured_aws_provider_error() {
         let resolver = SecretResolver::new(&Default::default());
-        let expr =
-            make_function_expr("aws_secret", vec![Expr::Value(Value::String("foo".into()))]);
+        let expr = make_function_expr("aws_secret", vec![Expr::Value(Value::String("foo".into()))]);
         let err = resolver.resolve_expr(expr).await.unwrap_err();
         match err {
             SecretResolveError::ResolutionFailed { name, reason } => {

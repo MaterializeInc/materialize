@@ -1996,8 +1996,13 @@ fn test_extract_dependencies_source_with_cluster() {
         let stmt = Statement::CreateSource(source_stmt.clone());
         let (deps, clusters) = extract_dependencies(&stmt, "db", "public");
 
-        // Sources have no object dependencies
-        assert!(deps.is_empty());
+        // Source depends on its connection
+        assert_eq!(deps.len(), 1);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "kafka_conn".to_string()
+        )));
 
         // Should have one cluster dependency
         assert_eq!(clusters.len(), 1);
@@ -2017,8 +2022,13 @@ fn test_extract_dependencies_source_without_cluster() {
         let stmt = Statement::CreateSource(source_stmt.clone());
         let (deps, clusters) = extract_dependencies(&stmt, "db", "public");
 
-        // Sources have no object dependencies
-        assert!(deps.is_empty());
+        // Source depends on its connection
+        assert_eq!(deps.len(), 1);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "kafka_conn".to_string()
+        )));
 
         // No cluster
         assert!(clusters.is_empty());
@@ -2205,4 +2215,211 @@ fn test_secret_in_project_compiles_end_to_end() {
     // Sorted objects should include both
     let sorted = planned_project.get_sorted_objects().unwrap();
     assert_eq!(sorted.len(), 2);
+}
+
+#[test]
+fn test_extract_dependencies_connection_no_deps() {
+    let sql =
+        "CREATE CONNECTION ssh_conn TO SSH TUNNEL (HOST 'bastion.example.com', PORT 22, USER 'mz')";
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateConnection(conn_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateConnection(conn_stmt.clone());
+        let (deps, clusters) = extract_dependencies(&stmt, "db", "public");
+
+        assert!(deps.is_empty());
+        assert!(clusters.is_empty());
+    } else {
+        panic!("Expected CreateConnection statement");
+    }
+}
+
+#[test]
+fn test_extract_dependencies_connection_with_secret() {
+    let sql = "CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'localhost:9092', SASL MECHANISMS = 'PLAIN', SASL USERNAME = 'user', SASL PASSWORD = SECRET my_password)";
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateConnection(conn_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateConnection(conn_stmt.clone());
+        let (deps, clusters) = extract_dependencies(&stmt, "db", "public");
+
+        assert_eq!(deps.len(), 1);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "my_password".to_string()
+        )));
+        assert!(clusters.is_empty());
+    } else {
+        panic!("Expected CreateConnection statement");
+    }
+}
+
+#[test]
+fn test_extract_dependencies_connection_with_ssh_tunnel() {
+    let sql =
+        "CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'localhost:9092', SSH TUNNEL = ssh_bastion)";
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateConnection(conn_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateConnection(conn_stmt.clone());
+        let (deps, clusters) = extract_dependencies(&stmt, "db", "public");
+
+        assert_eq!(deps.len(), 1);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "ssh_bastion".to_string()
+        )));
+    } else {
+        panic!("Expected CreateConnection statement");
+    }
+}
+
+#[test]
+fn test_extract_dependencies_connection_with_aws_privatelink() {
+    let sql = "CREATE CONNECTION pg_conn TO POSTGRES (HOST 'db.example.com', DATABASE postgres, AWS PRIVATELINK aws_pl)";
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateConnection(conn_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateConnection(conn_stmt.clone());
+        let (deps, clusters) = extract_dependencies(&stmt, "db", "public");
+
+        assert_eq!(deps.len(), 1);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "aws_pl".to_string()
+        )));
+    } else {
+        panic!("Expected CreateConnection statement");
+    }
+}
+
+#[test]
+fn test_extract_dependencies_connection_with_multiple_deps() {
+    let sql = "CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'localhost:9092', SSH TUNNEL = ssh_bastion, SASL PASSWORD = SECRET my_password)";
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateConnection(conn_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateConnection(conn_stmt.clone());
+        let (deps, clusters) = extract_dependencies(&stmt, "db", "public");
+
+        assert_eq!(deps.len(), 2);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "my_password".to_string()
+        )));
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "ssh_bastion".to_string()
+        )));
+        assert!(clusters.is_empty());
+    } else {
+        panic!("Expected CreateConnection statement");
+    }
+}
+
+#[test]
+fn test_connection_determines_storage_schema_type() {
+    use crate::project::raw;
+    use crate::project::typed;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let src_dir = temp_dir.path();
+
+    let db_path = src_dir.join("models").join("test_db");
+    let schema_path = db_path.join("conn_schema");
+    fs::create_dir_all(&schema_path).unwrap();
+
+    fs::write(
+        schema_path.join("ssh_conn.sql"),
+        "CREATE CONNECTION ssh_conn TO SSH TUNNEL (HOST 'bastion.example.com', PORT 22, USER 'mz');",
+    )
+    .unwrap();
+
+    let raw_project = raw::load_project(src_dir).unwrap();
+    let typed_project = typed::Project::try_from(raw_project).unwrap();
+    let planned_project = Project::from(typed_project);
+
+    let schema = &planned_project.databases[0].schemas[0];
+    assert_eq!(schema.schema_type, SchemaType::Storage);
+}
+
+#[test]
+fn test_connection_in_project_compiles_end_to_end() {
+    use crate::project::raw;
+    use crate::project::typed;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let src_dir = temp_dir.path();
+
+    let db_path = src_dir.join("models").join("test_db");
+    let schema_path = db_path.join("storage");
+    fs::create_dir_all(&schema_path).unwrap();
+
+    fs::write(
+        schema_path.join("ssh_conn.sql"),
+        "CREATE CONNECTION ssh_conn TO SSH TUNNEL (HOST 'bastion.example.com', PORT 22, USER 'mz');",
+    )
+    .unwrap();
+
+    fs::write(
+        schema_path.join("users.sql"),
+        "CREATE TABLE users (id INT);",
+    )
+    .unwrap();
+
+    let raw_project = raw::load_project(src_dir).unwrap();
+    let typed_project = typed::Project::try_from(raw_project).unwrap();
+    let planned_project = Project::from(typed_project);
+
+    let all_objects: Vec<_> = planned_project.iter_objects().collect();
+    assert_eq!(all_objects.len(), 2);
+
+    let schema = &planned_project.databases[0].schemas[0];
+    assert_eq!(schema.schema_type, SchemaType::Storage);
+
+    let sorted = planned_project.get_sorted_objects().unwrap();
+    assert_eq!(sorted.len(), 2);
+}
+
+#[test]
+fn test_connection_in_compute_schema_fails_validation() {
+    use crate::project::raw;
+    use crate::project::typed;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let src_dir = temp_dir.path();
+
+    let db_path = src_dir.join("models").join("test_db");
+    let schema_path = db_path.join("mixed_schema");
+    fs::create_dir_all(&schema_path).unwrap();
+
+    fs::write(
+        schema_path.join("ssh_conn.sql"),
+        "CREATE CONNECTION ssh_conn TO SSH TUNNEL (HOST 'bastion.example.com', PORT 22, USER 'mz');",
+    )
+    .unwrap();
+
+    fs::write(
+        schema_path.join("my_view.sql"),
+        "CREATE VIEW my_view AS SELECT 1 AS x;",
+    )
+    .unwrap();
+
+    let raw_project = raw::load_project(src_dir).unwrap();
+    let result = typed::Project::try_from(raw_project);
+    assert!(
+        result.is_err(),
+        "Should fail with storage+compute mix error"
+    );
 }
