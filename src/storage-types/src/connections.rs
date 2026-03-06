@@ -31,7 +31,8 @@ use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader, vpc_endpoint_host};
 use mz_dyncfg::ConfigSet;
 use mz_kafka_util::client::{
-    BrokerAddr, BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
+    BrokerAddr, BrokerRewrite, HostMappingRules, MzClientContext, MzKafkaError, TunnelConfig,
+    TunnelingClientContext,
 };
 use mz_mysql_util::{MySqlConn, MySqlError};
 use mz_ore::assert_none;
@@ -41,6 +42,7 @@ use mz_ore::netio::resolve_address;
 use mz_ore::num::NonNeg;
 use mz_repr::{CatalogItemId, GlobalId};
 use mz_secrets::SecretsReader;
+use mz_sql_parser::ast::ConnectionRulePattern;
 use mz_ssh_util::keys::SshKeyPair;
 use mz_ssh_util::tunnel::SshTunnelConfig;
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
@@ -939,7 +941,8 @@ impl KafkaConnection {
         options.insert("allow.auto.create.topics".into(), "false".into());
 
         let brokers = match &self.default_tunnel {
-            Tunnel::AwsPrivatelink(t) => {
+            Tunnel::AwsPrivatelink(t)
+            | Tunnel::AwsPrivatelinks(AwsPrivatelinks { default: t, .. }) => {
                 assert!(&self.brokers.is_empty());
 
                 let algo = KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM
@@ -1067,10 +1070,15 @@ impl KafkaConnection {
                 // By default, don't offer a default override for broker address lookup.
             }
             Tunnel::AwsPrivatelink(pl) => {
-                context.set_default_tunnel(TunnelConfig::StaticHost(vpc_endpoint_host(
-                    pl.connection_id,
-                    None, // Default tunnel does not support availability zones.
-                )));
+                context.set_default_tunnel(TunnelConfig::StaticHost(
+                    // Possible bug: We have been ignoring the configured port.
+                    KafkaConnection::from_default_aws_privatelink(pl).host,
+                ));
+            }
+            Tunnel::AwsPrivatelinks(pl) => {
+                context.set_default_tunnel(TunnelConfig::Rules(
+                    KafkaConnection::from_aws_privatelinks(pl),
+                ));
             }
             Tunnel::Ssh(ssh_tunnel) => {
                 let secret = storage_configuration
@@ -1098,6 +1106,8 @@ impl KafkaConnection {
             }
         }
 
+        // Here, we preemptively rewrite broker addresses.
+        // In concept, this overlaps with 'TunnelingClientContext::resolve_broker_addr'.
         for broker in &self.brokers {
             let mut addr_parts = broker.address.splitn(2, ':');
             let addr = BrokerAddr {
@@ -1124,19 +1134,14 @@ impl KafkaConnection {
                     // in the `TunnelingClientContext`.
                 }
                 Tunnel::AwsPrivatelink(aws_privatelink) => {
-                    let host = mz_cloud_resources::vpc_endpoint_host(
-                        aws_privatelink.connection_id,
-                        aws_privatelink.availability_zone.as_deref(),
-                    );
-                    let port = aws_privatelink.port;
                     context.add_broker_rewrite(
                         addr,
-                        BrokerRewrite {
-                            host: host.clone(),
-                            port,
-                        },
+                        KafkaConnection::from_aws_privatelink(aws_privatelink),
                     );
                 }
+                Tunnel::AwsPrivatelinks(_) => unreachable!(
+                    "Individually predefined brokers do not use rule-based PrivateLinks routing."
+                ),
                 Tunnel::Ssh(ssh_tunnel) => {
                     // Ensure any SSH bastion address we connect to is resolved to an external address.
                     let ssh_host_resolved = resolve_address(
@@ -1234,6 +1239,49 @@ impl KafkaConnection {
                     None => Err(err.into()),
                 }
             }
+        }
+    }
+
+    /// The "default" PrivateLink connection is used for bootstrapping Kafka.
+    fn from_default_aws_privatelink(pl: &AwsPrivatelink) -> BrokerRewrite {
+        BrokerRewrite {
+            host: vpc_endpoint_host(
+                pl.connection_id,
+                None, // Default tunnel does not support availability zones.
+            ),
+            port: pl.port,
+        }
+    }
+
+    /// The "not default" PrivateLink connections are used for routing to specific Kafka brokers.
+    fn from_aws_privatelink(pl: &AwsPrivatelink) -> BrokerRewrite {
+        BrokerRewrite {
+            host: vpc_endpoint_host(pl.connection_id, pl.availability_zone.as_deref()),
+            port: pl.port,
+        }
+    }
+
+    fn from_aws_privatelink_rule(
+        AwsPrivatelinkRule { pattern, to }: &AwsPrivatelinkRule,
+    ) -> (mz_kafka_util::client::ConnectionRulePattern, BrokerRewrite) {
+        (
+            mz_kafka_util::client::ConnectionRulePattern {
+                prefix_wildcard: pattern.prefix_wildcard,
+                literal_match: pattern.literal_match.clone(),
+                suffix_wildcard: pattern.suffix_wildcard,
+            },
+            KafkaConnection::from_aws_privatelink(to),
+        )
+    }
+
+    fn from_aws_privatelinks(pl: &AwsPrivatelinks) -> HostMappingRules {
+        HostMappingRules {
+            rules: pl
+                .rules
+                .iter()
+                .map(KafkaConnection::from_aws_privatelink_rule)
+                .collect_vec(),
+            default: KafkaConnection::from_default_aws_privatelink(&pl.default),
         }
     }
 }
@@ -1453,6 +1501,9 @@ impl CsrConnection {
                     .context("resolving PrivateLink host")?
                     .collect();
                 client_config = client_config.resolve_to_addrs(host, &addrs)
+            }
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("AWS PRIVATELINKS syntax is only available for Kafka connections.");
             }
         }
 
@@ -1712,6 +1763,9 @@ impl PostgresConnection<InlinedConnection> {
                     connection_id: connection.connection_id,
                 }
             }
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("AWS PRIVATELINKS syntax is only available for Kafka connections.");
+            }
         };
 
         Ok(mz_postgres_util::Config::new(
@@ -1847,6 +1901,7 @@ pub enum Tunnel<C: ConnectionAccess = InlinedConnection> {
     Ssh(SshTunnel<C>),
     /// Via the specified AWS PrivateLink connection.
     AwsPrivatelink(AwsPrivatelink),
+    AwsPrivatelinks(AwsPrivatelinks),
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<Tunnel, R> for Tunnel<ReferencedConnection> {
@@ -1855,6 +1910,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<Tunnel, R> for Tunnel<Reference
             Tunnel::Direct => Tunnel::Direct,
             Tunnel::Ssh(ssh) => Tunnel::Ssh(ssh.into_inline_connection(r)),
             Tunnel::AwsPrivatelink(awspl) => Tunnel::AwsPrivatelink(awspl),
+            Tunnel::AwsPrivatelinks(x) => Tunnel::AwsPrivatelinks(x),
         }
     }
 }
@@ -2063,6 +2119,9 @@ impl MySqlConnection<InlinedConnection> {
                 mz_mysql_util::TunnelConfig::AwsPrivatelink {
                     connection_id: connection.connection_id,
                 }
+            }
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("AWS PRIVATELINKS syntax is only available for Kafka connections.");
             }
         };
 
@@ -2390,6 +2449,9 @@ impl SqlServerConnectionDetails<InlinedConnection> {
                     port: self.port,
                 }
             }
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("AWS PRIVATELINKS syntax is only available for Kafka connections.");
+            }
         };
 
         Ok(mz_sql_server_util::Config::new(
@@ -2551,6 +2613,23 @@ impl AlterCompatible for AwsPrivatelink {
 
         Ok(())
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct AwsPrivatelinks {
+    /// Route to brokers through PrivateLink connections according to these rules.
+    /// First applicable rule wins.
+    pub rules: Vec<AwsPrivatelinkRule>,
+    /// Bootstrap through this PrivateLink connection.
+    pub default: AwsPrivatelink,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct AwsPrivatelinkRule {
+    /// Given a broker's host:port, should we use this route?
+    pub pattern: ConnectionRulePattern,
+    /// Route to the broker through this PrivateLink connection.
+    pub to: AwsPrivatelink,
 }
 
 /// Specifies an SSH tunnel connection.

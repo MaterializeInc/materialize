@@ -806,6 +806,7 @@ pub enum ConnectionOptionName {
     AvailabilityZones,
     AwsConnection,
     AwsPrivatelink,
+    AwsPrivatelinks,
     Broker,
     Brokers,
     Credential,
@@ -845,6 +846,7 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::AvailabilityZones => "AVAILABILITY ZONES",
             ConnectionOptionName::AwsConnection => "AWS CONNECTION",
             ConnectionOptionName::AwsPrivatelink => "AWS PRIVATELINK",
+            ConnectionOptionName::AwsPrivatelinks => "AWS PRIVATELINKS",
             ConnectionOptionName::Broker => "BROKER",
             ConnectionOptionName::Brokers => "BROKERS",
             ConnectionOptionName::Credential => "CREDENTIAL",
@@ -896,6 +898,7 @@ impl WithOptionName for ConnectionOptionName {
             | ConnectionOptionName::AvailabilityZones
             | ConnectionOptionName::AwsConnection
             | ConnectionOptionName::AwsPrivatelink
+            | ConnectionOptionName::AwsPrivatelinks
             | ConnectionOptionName::Broker
             | ConnectionOptionName::Brokers
             | ConnectionOptionName::Credential

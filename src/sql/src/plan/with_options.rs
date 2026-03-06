@@ -16,8 +16,9 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::bytes::ByteSize;
 use mz_repr::{CatalogItemId, RelationVersionSelector, strconv};
 use mz_sql_parser::ast::{
-    ClusterAlterOptionValue, ClusterScheduleOptionValue, ConnectionDefaultAwsPrivatelink, Expr,
-    Ident, KafkaBroker, NetworkPolicyRuleDefinition, RefreshOptionValue, ReplicaDefinition,
+    ClusterAlterOptionValue, ClusterScheduleOptionValue, ConnectionAwsPrivatelinkRule,
+    ConnectionDefaultAwsPrivatelink, Expr, Ident, KafkaBroker, NetworkPolicyRuleDefinition,
+    RefreshOptionValue, ReplicaDefinition,
 };
 use mz_storage_types::connections::IcebergCatalogType;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
@@ -700,6 +701,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             | WithOptionValue::ClusterReplicas(_)
             | WithOptionValue::ConnectionKafkaBroker(_)
             | WithOptionValue::ConnectionAwsPrivatelink(_)
+            | WithOptionValue::ConnectionAwsPrivatelinkRule(_)
             | WithOptionValue::ClusterAlterStrategy(_)
             | WithOptionValue::Refresh(_)
             | WithOptionValue::ClusterScheduleOptionValue(_)
@@ -720,7 +722,9 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
                     WithOptionValue::Expr(_) => "exprs",
                     WithOptionValue::ClusterReplicas(_) => "cluster replicas",
                     WithOptionValue::ConnectionKafkaBroker(_) => "connection kafka brokers",
-                    WithOptionValue::ConnectionAwsPrivatelink(_) => "connection kafka brokers",
+                    WithOptionValue::ConnectionAwsPrivatelink(_) => "connection privatelink",
+                    WithOptionValue::ConnectionAwsPrivatelinkRule(_) =>
+                        "connection privatelink rule",
                     WithOptionValue::Refresh(_) => "refresh option values",
                     WithOptionValue::ClusterScheduleOptionValue(_) => "cluster schedule",
                     WithOptionValue::NetworkPolicyRules(_) => "network policy rules",
@@ -857,7 +861,31 @@ impl TryFromValue<WithOptionValue<Aug>> for ConnectionDefaultAwsPrivatelink<Aug>
     }
 }
 
+impl TryFromValue<WithOptionValue<Aug>> for ConnectionAwsPrivatelinkRule<Aug> {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        if let WithOptionValue::ConnectionAwsPrivatelinkRule(r) = v {
+            Ok(r)
+        } else {
+            sql_bail!("cannot use value `{}` for a privatelink rule", v)
+        }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::ConnectionAwsPrivatelinkRule(self))
+    }
+
+    fn name() -> String {
+        "privatelink rule option value".to_string()
+    }
+}
+
 impl ImpliedValue for ConnectionDefaultAwsPrivatelink<Aug> {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a value")
+    }
+}
+
+impl ImpliedValue for ConnectionAwsPrivatelinkRule<Aug> {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide a value")
     }
