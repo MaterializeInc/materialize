@@ -257,3 +257,94 @@ $ kafka-create-topic topic=dbz-json-no-cols partitions=1
   KEY FORMAT JSON VALUE FORMAT JSON
   ENVELOPE DEBEZIUM
 contains:ENVELOPE DEBEZIUM with FORMAT JSON requires explicit column definitions
+
+# =============================================================================
+# Test 9: INCLUDE DEBEZIUM METADATA
+# =============================================================================
+
+$ kafka-create-topic topic=dbz-json-include-meta partitions=1
+
+# Insert with full Debezium envelope including source metadata (TiCDC-style with commit_ts)
+$ kafka-ingest format=bytes key-format=bytes key-terminator=| topic=dbz-json-include-meta
+{"id":1}|{"before":null,"after":{"id":1,"val":"hello"},"op":"c","ts_ms":1700000000000,"source":{"connector":"tidb","db":"mydb","table":"mytable","commit_ts":443959267642589200},"transaction":{"id":"txn-001","total_order":1}}
+{"id":2}|{"before":null,"after":{"id":2,"val":"world"},"op":"c","ts_ms":1700000001000,"source":{"connector":"tidb","db":"mydb","table":"mytable","commit_ts":443959267642589201}}
+
+> CREATE SOURCE dbz_json_include_meta_src
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbz-json-include-meta-${testdrive.seed}');
+
+> CREATE TABLE dbz_json_include_meta (id int4 NOT NULL, val text NOT NULL, PRIMARY KEY (id))
+  FROM SOURCE dbz_json_include_meta_src (REFERENCE "testdrive-dbz-json-include-meta-${testdrive.seed}")
+  KEY FORMAT JSON VALUE FORMAT JSON
+  ENVELOPE DEBEZIUM
+  INCLUDE DEBEZIUM METADATA AS dbz_meta
+
+# Verify data columns are correct
+> SELECT id, val FROM dbz_json_include_meta ORDER BY id
+id val
+-------
+1  hello
+2  world
+
+# Verify metadata column contains op field
+> SELECT id, dbz_meta->>'op' as op FROM dbz_json_include_meta ORDER BY id
+id op
+----
+1  c
+2  c
+
+# Verify metadata contains source.commit_ts (TiCDC use case)
+> SELECT id, (dbz_meta->'source'->>'commit_ts')::numeric::int8 as commit_ts FROM dbz_json_include_meta ORDER BY id
+id commit_ts
+--------------------------
+1  443959267642589200
+2  443959267642589201
+
+# Verify metadata contains ts_ms
+> SELECT id, (dbz_meta->>'ts_ms')::numeric::int8 as ts_ms FROM dbz_json_include_meta ORDER BY id
+id ts_ms
+-------------------
+1  1700000000000
+2  1700000001000
+
+# Update a row and verify metadata changes
+$ kafka-ingest format=bytes key-format=bytes key-terminator=| topic=dbz-json-include-meta
+{"id":1}|{"before":{"id":1,"val":"hello"},"after":{"id":1,"val":"updated"},"op":"u","ts_ms":1700000002000,"source":{"connector":"tidb","db":"mydb","table":"mytable","commit_ts":443959267642589300}}
+
+> SELECT id, val, dbz_meta->>'op' as op FROM dbz_json_include_meta ORDER BY id
+id val      op
+--------------
+1  updated  u
+2  world    c
+
+# Verify metadata does NOT contain before or after fields
+> SELECT id, dbz_meta ? 'before' as has_before, dbz_meta ? 'after' as has_after FROM dbz_json_include_meta ORDER BY id
+id has_before has_after
+-----------------------
+1  false      false
+2  false      false
+
+# =============================================================================
+# Test 10: INCLUDE DEBEZIUM METADATA with default column name
+# =============================================================================
+
+$ kafka-create-topic topic=dbz-json-meta-default partitions=1
+
+$ kafka-ingest format=bytes key-format=bytes key-terminator=| topic=dbz-json-meta-default
+{"id":1}|{"before":null,"after":{"id":1,"val":"test"},"op":"c","ts_ms":1700000000000}
+
+> CREATE SOURCE dbz_json_meta_default_src
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbz-json-meta-default-${testdrive.seed}');
+
+> CREATE TABLE dbz_json_meta_default (id int4 NOT NULL, val text NOT NULL, PRIMARY KEY (id))
+  FROM SOURCE dbz_json_meta_default_src (REFERENCE "testdrive-dbz-json-meta-default-${testdrive.seed}")
+  KEY FORMAT JSON VALUE FORMAT JSON
+  ENVELOPE DEBEZIUM
+  INCLUDE DEBEZIUM METADATA
+
+# Default column name should be "debezium_metadata"
+> SELECT id, debezium_metadata->>'op' as op FROM dbz_json_meta_default
+id op
+----
+1  c

@@ -625,26 +625,30 @@ impl std::fmt::Display for DebeziumJsonError {
 
 impl std::error::Error for DebeziumJsonError {}
 
-/// Decodes a Debezium JSON message into a Row with `[before, after]` structure.
+/// Decodes a Debezium JSON message into a Row with `[before, after]` structure,
+/// optionally followed by a jsonb column containing envelope-level metadata.
 ///
 /// The output Row must match the layout that the Avro Debezium path produces:
 /// `[before: Datum::List|Null, after: Datum::List|Null]`. The `after_idx` in
 /// `UpsertStyle::Debezium { after_idx }` is hardcoded to 1 for JSON (the index
-/// of the `after` column in this two-column Row).
+/// of the `after` column).
+///
+/// When `include_metadata` is true, a third column is appended containing all
+/// envelope-level fields (op, ts_ms, source, transaction) as a jsonb value.
+/// This is triggered by `INCLUDE DEBEZIUM METADATA` in the SQL.
 ///
 /// The `desc` parameter is the user-declared table schema (not the synthetic
 /// before/after desc). Each `before`/`after` JSON object is decoded against
 /// this schema to produce a typed Record (List of datums).
 ///
 /// Auto-detects wrapped vs unwrapped Debezium format by checking for a
-/// top-level `"payload"` key. Extra envelope fields (`source`, `ts_ms`,
-/// `transaction`) are silently ignored.
+/// top-level `"payload"` key.
 ///
 /// Returns `Ok(None)` for tombstone messages (empty bytes).
-/// Returns `Ok(Some(row))` where row contains `[before_record_or_null, after_record_or_null]`.
 pub fn decode_debezium_json(
     bytes: &[u8],
     desc: &RelationDesc,
+    include_metadata: bool,
 ) -> Result<Option<Row>, DebeziumJsonError> {
     if bytes.is_empty() {
         // Tombstone message: null value
@@ -713,6 +717,22 @@ pub fn decode_debezium_json(
             .as_object()
             .ok_or(DebeziumJsonError::MissingField("after"))?;
         packer.push_list_with(|inner| pack_json_object_as_record(inner, after_obj, &columns))?;
+    }
+
+    // Pack envelope-level metadata as jsonb if requested.
+    if include_metadata {
+        let envelope_obj = envelope
+            .as_object()
+            .ok_or(DebeziumJsonError::MissingField("envelope object"))?;
+        let mut meta = serde_json::Map::new();
+        for (k, v) in envelope_obj {
+            if k != "before" && k != "after" {
+                meta.insert(k.clone(), v.clone());
+            }
+        }
+        mz_repr::adt::jsonb::JsonbPacker::new(&mut packer)
+            .pack_serde_json(serde_json::Value::Object(meta))
+            .map_err(DebeziumJsonError::InvalidJson)?;
     }
 
     Ok(Some(row))
@@ -936,7 +956,7 @@ mod tests {
     #[mz_ore::test]
     fn test_tombstone() {
         let desc = test_desc();
-        let result = decode_debezium_json(b"", &desc).unwrap();
+        let result = decode_debezium_json(b"", &desc, false).unwrap();
         assert!(result.is_none());
     }
 
@@ -944,7 +964,7 @@ mod tests {
     fn test_insert_unwrapped() {
         let desc = test_desc();
         let msg = br#"{"before":null,"after":{"id":1,"name":"Alice"},"op":"c"}"#;
-        let row = decode_debezium_json(msg, &desc).unwrap().unwrap();
+        let row = decode_debezium_json(msg, &desc, false).unwrap().unwrap();
         let mut iter = row.iter();
         // before is null
         assert_eq!(iter.next(), Some(Datum::Null));
@@ -959,7 +979,7 @@ mod tests {
     fn test_delete_unwrapped() {
         let desc = test_desc();
         let msg = br#"{"before":{"id":1,"name":"Alice"},"after":null,"op":"d"}"#;
-        let row = decode_debezium_json(msg, &desc).unwrap().unwrap();
+        let row = decode_debezium_json(msg, &desc, false).unwrap().unwrap();
         let mut iter = row.iter();
         // before is a list
         let before = iter.next().unwrap();
@@ -974,7 +994,7 @@ mod tests {
     fn test_update_unwrapped() {
         let desc = test_desc();
         let msg = br#"{"before":{"id":1,"name":"Alice"},"after":{"id":1,"name":"Bob"},"op":"u"}"#;
-        let row = decode_debezium_json(msg, &desc).unwrap().unwrap();
+        let row = decode_debezium_json(msg, &desc, false).unwrap().unwrap();
         let mut iter = row.iter();
         let before_list: Vec<_> = iter.next().unwrap().unwrap_list().iter().collect();
         assert_eq!(before_list[1], Datum::String("Alice"));
@@ -986,7 +1006,7 @@ mod tests {
     fn test_snapshot_op() {
         let desc = test_desc();
         let msg = br#"{"before":null,"after":{"id":1,"name":"snap"},"op":"r"}"#;
-        let row = decode_debezium_json(msg, &desc).unwrap().unwrap();
+        let row = decode_debezium_json(msg, &desc, false).unwrap().unwrap();
         let mut iter = row.iter();
         assert_eq!(iter.next(), Some(Datum::Null));
         let after_list: Vec<_> = iter.next().unwrap().unwrap_list().iter().collect();
@@ -997,7 +1017,7 @@ mod tests {
     fn test_wrapped_form() {
         let desc = test_desc();
         let msg = br#"{"schema":{},"payload":{"before":null,"after":{"id":1,"name":"wrapped"},"op":"c"}}"#;
-        let row = decode_debezium_json(msg, &desc).unwrap().unwrap();
+        let row = decode_debezium_json(msg, &desc, false).unwrap().unwrap();
         let mut iter = row.iter();
         assert_eq!(iter.next(), Some(Datum::Null));
         let after_list: Vec<_> = iter.next().unwrap().unwrap_list().iter().collect();
@@ -1008,7 +1028,7 @@ mod tests {
     fn test_unsupported_op() {
         let desc = test_desc();
         let msg = br#"{"before":null,"after":{"id":1,"name":"x"},"op":"t"}"#;
-        let err = decode_debezium_json(msg, &desc).unwrap_err();
+        let err = decode_debezium_json(msg, &desc, false).unwrap_err();
         assert!(matches!(err, DebeziumJsonError::UnsupportedOp(_)));
     }
 
@@ -1016,7 +1036,7 @@ mod tests {
     fn test_missing_op() {
         let desc = test_desc();
         let msg = br#"{"before":null,"after":{"id":1,"name":"x"}}"#;
-        let err = decode_debezium_json(msg, &desc).unwrap_err();
+        let err = decode_debezium_json(msg, &desc, false).unwrap_err();
         assert!(matches!(err, DebeziumJsonError::MissingField("op")));
     }
 
@@ -1024,14 +1044,14 @@ mod tests {
     fn test_both_null() {
         let desc = test_desc();
         let msg = br#"{"before":null,"after":null,"op":"c"}"#;
-        let err = decode_debezium_json(msg, &desc).unwrap_err();
+        let err = decode_debezium_json(msg, &desc, false).unwrap_err();
         assert!(matches!(err, DebeziumJsonError::BothNull));
     }
 
     #[mz_ore::test]
     fn test_invalid_json() {
         let desc = test_desc();
-        let err = decode_debezium_json(b"not json", &desc).unwrap_err();
+        let err = decode_debezium_json(b"not json", &desc, false).unwrap_err();
         assert!(matches!(err, DebeziumJsonError::InvalidJson(_)));
     }
 
@@ -1039,7 +1059,7 @@ mod tests {
     fn test_nullable_column_null() {
         let desc = test_desc();
         let msg = br#"{"before":null,"after":{"id":1,"name":null},"op":"c"}"#;
-        let row = decode_debezium_json(msg, &desc).unwrap().unwrap();
+        let row = decode_debezium_json(msg, &desc, false).unwrap().unwrap();
         let after_list: Vec<_> = row.iter().nth(1).unwrap().unwrap_list().iter().collect();
         assert_eq!(after_list[0], Datum::Int32(1));
         assert_eq!(after_list[1], Datum::Null);
@@ -1050,7 +1070,7 @@ mod tests {
         let desc = test_desc();
         // "id" expects int32 but gets a string
         let msg = br#"{"before":null,"after":{"id":"not_a_number","name":"x"},"op":"c"}"#;
-        let err = decode_debezium_json(msg, &desc).unwrap_err();
+        let err = decode_debezium_json(msg, &desc, false).unwrap_err();
         assert!(matches!(err, DebeziumJsonError::TypeMismatch { .. }));
     }
 
@@ -1080,7 +1100,7 @@ mod tests {
         // This is common for insert-only sources like TiCDC.
         let desc = test_desc();
         let msg = br#"{"after":{"id":1,"name":"ok"},"op":"c"}"#;
-        let row = decode_debezium_json(msg, &desc).unwrap().unwrap();
+        let row = decode_debezium_json(msg, &desc, false).unwrap().unwrap();
         let mut iter = row.iter();
         assert_eq!(iter.next(), Some(Datum::Null));
         let after_list: Vec<_> = iter.next().unwrap().unwrap_list().iter().collect();
@@ -1109,7 +1129,7 @@ mod tests {
             .with_column("flag", SqlScalarType::Bool.nullable(false))
             .finish();
         let msg = br#"{"before":null,"after":{"id":1,"flag":true},"op":"c"}"#;
-        let row = decode_debezium_json(msg, &desc).unwrap().unwrap();
+        let row = decode_debezium_json(msg, &desc, false).unwrap().unwrap();
         let after_list: Vec<_> = row.iter().nth(1).unwrap().unwrap_list().iter().collect();
         assert_eq!(after_list[1], Datum::True);
     }
@@ -1122,7 +1142,7 @@ mod tests {
             .with_column("name", SqlScalarType::String.nullable(false))
             .finish();
         let msg = br#"{"before":null,"after":{"id":1,"name":null},"op":"c"}"#;
-        let err = decode_debezium_json(msg, &desc).unwrap_err();
+        let err = decode_debezium_json(msg, &desc, false).unwrap_err();
         assert!(matches!(err, DebeziumJsonError::TypeMismatch { .. }));
     }
 
@@ -1131,9 +1151,51 @@ mod tests {
         let desc = test_desc();
         // Extra metadata fields (source, ts_ms) in the envelope should not cause errors
         let msg = br#"{"before":null,"after":{"id":1,"name":"ok"},"op":"c","ts_ms":123,"source":{"db":"test"}}"#;
-        let row = decode_debezium_json(msg, &desc).unwrap().unwrap();
+        let row = decode_debezium_json(msg, &desc, false).unwrap().unwrap();
         let after_list: Vec<_> = row.iter().nth(1).unwrap().unwrap_list().iter().collect();
         assert_eq!(after_list[0], Datum::Int32(1));
         assert_eq!(after_list[1], Datum::String("ok"));
+    }
+
+    #[mz_ore::test]
+    fn test_include_metadata() {
+        let desc = test_desc();
+        let msg = br#"{"before":null,"after":{"id":1,"name":"hello"},"op":"c","ts_ms":1234567890,"source":{"connector":"TiCDC","db":"mydb","commit_ts":445048562585600000},"transaction":{"id":"txn-001"}}"#;
+        let row = decode_debezium_json(msg, &desc, true).unwrap().unwrap();
+
+        // Row should have 3 columns: before, after, metadata
+        let datums: Vec<_> = row.iter().collect();
+        assert_eq!(datums.len(), 3);
+
+        // before is null
+        assert_eq!(datums[0], Datum::Null);
+
+        // after has the data
+        let after_list: Vec<_> = datums[1].unwrap_list().iter().collect();
+        assert_eq!(after_list[0], Datum::Int32(1));
+        assert_eq!(after_list[1], Datum::String("hello"));
+
+        // metadata is a jsonb object containing op, ts_ms, source, transaction (but not before/after)
+        let meta_jsonb = datums[2];
+        assert!(!meta_jsonb.is_null());
+        let meta_json = mz_repr::adt::jsonb::JsonbRef::from_datum(meta_jsonb).to_serde_json();
+        assert_eq!(meta_json["op"], "c");
+        assert_eq!(meta_json["ts_ms"], 1234567890);
+        assert_eq!(meta_json["source"]["connector"], "TiCDC");
+        assert_eq!(meta_json["source"]["commit_ts"], 445048562585600000u64);
+        assert_eq!(meta_json["transaction"]["id"], "txn-001");
+        // before and after should NOT be in the metadata
+        assert!(meta_json.get("before").is_none());
+        assert!(meta_json.get("after").is_none());
+    }
+
+    #[mz_ore::test]
+    fn test_include_metadata_without_flag_has_two_columns() {
+        let desc = test_desc();
+        let msg = br#"{"before":null,"after":{"id":1,"name":"ok"},"op":"c","ts_ms":123}"#;
+        let row = decode_debezium_json(msg, &desc, false).unwrap().unwrap();
+        // Without include_metadata, Row should have exactly 2 columns
+        let datums: Vec<_> = row.iter().collect();
+        assert_eq!(datums.len(), 2);
     }
 }

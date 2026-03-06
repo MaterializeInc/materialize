@@ -548,10 +548,17 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
 
         let value = match result.value {
             Some(Ok(ref row)) => match upsert_envelope.style {
-                UpsertStyle::Debezium { after_idx } => match row.iter().nth(after_idx).unwrap() {
+                UpsertStyle::Debezium {
+                    after_idx,
+                    debezium_metadata_idx,
+                } => match row.iter().nth(after_idx).unwrap() {
                     Datum::List(after) => {
                         let mut packer = row_buf.packer();
                         packer.extend(after.iter());
+                        // Append debezium envelope metadata (jsonb) if requested.
+                        if let Some(meta_idx) = debezium_metadata_idx {
+                            packer.push(row.iter().nth(meta_idx).unwrap());
+                        }
                         packer.extend_by_row(&metadata);
                         Some(Ok(row_buf.clone()))
                     }

@@ -1270,8 +1270,9 @@ fn plan_kafka_source_connection(
                     use_bytes: *use_bytes,
                 },
             )),
-            SourceIncludeMetadata::Key { .. } => {
-                // handled below
+            SourceIncludeMetadata::Key { .. } | SourceIncludeMetadata::DebeziumMetadata { .. } => {
+                // Key is handled below.
+                // DebeziumMetadata is handled in the decoder, not as Kafka metadata.
                 None
             }
         })
@@ -1437,11 +1438,27 @@ fn apply_source_envelope_encoding(
                     fields: fields.into(),
                     custom_id: None,
                 };
-                value_desc = RelationDesc::builder()
+                // Check if INCLUDE DEBEZIUM METADATA was requested.
+                let dbz_meta_alias: Option<String> =
+                    include_metadata.iter().find_map(|m| match m {
+                        SourceIncludeMetadata::DebeziumMetadata { alias } => Some(
+                            alias
+                                .as_ref()
+                                .map_or("debezium_metadata".to_owned(), |a| a.to_string()),
+                        ),
+                        _ => None,
+                    });
+                let dbz_include_metadata = dbz_meta_alias.is_some();
+
+                let mut vd_builder = RelationDesc::builder()
                     .with_column("before", record_type.clone().nullable(true))
-                    .with_column("after", record_type.nullable(true))
-                    .finish();
-                let after_idx = 1; // "after" is at index 1 in [before, after]
+                    .with_column("after", record_type.nullable(true));
+                if let Some(ref col_name) = dbz_meta_alias {
+                    vd_builder = vd_builder
+                        .with_column(col_name.as_str(), SqlScalarType::Jsonb.nullable(true));
+                }
+                value_desc = vd_builder.finish();
+                let after_idx = 1; // "after" is at index 1 in [before, after, ...]
 
                 // Build key_desc from user-declared primary key columns so
                 // match_key_indices can find key columns in the output.
@@ -1460,14 +1477,26 @@ fn apply_source_envelope_encoding(
                 // Update the value encoding to carry the table schema for the decoder.
                 // Also update key encoding to TypedJson so upsert key hashes match.
                 if let Some(ref mut enc) = encoding {
-                    enc.value = DataEncoding::DebeziumJson(table_desc);
+                    enc.value = DataEncoding::DebeziumJson {
+                        desc: table_desc,
+                        include_metadata: dbz_include_metadata,
+                    };
                     if let Some(ref kd) = key_desc {
                         enc.key = Some(DataEncoding::TypedJson(kd.clone()));
                     }
                 }
 
+                let debezium_metadata_idx = if dbz_include_metadata {
+                    Some(2) // [before, after, metadata] — metadata is at index 2
+                } else {
+                    None
+                };
+
                 UnplannedSourceEnvelope::Upsert {
-                    style: UpsertStyle::Debezium { after_idx },
+                    style: UpsertStyle::Debezium {
+                        after_idx,
+                        debezium_metadata_idx,
+                    },
                 }
             } else {
                 // Avro Debezium path (unchanged)
@@ -1482,7 +1511,10 @@ fn apply_source_envelope_encoding(
                 }?;
 
                 UnplannedSourceEnvelope::Upsert {
-                    style: UpsertStyle::Debezium { after_idx },
+                    style: UpsertStyle::Debezium {
+                        after_idx,
+                        debezium_metadata_idx: None,
+                    },
                 }
             }
         }
@@ -1972,8 +2004,10 @@ pub fn plan_create_table_from_source(
                             use_bytes: *use_bytes,
                         },
                     )),
-                    SourceIncludeMetadata::Key { .. } => {
-                        // handled below
+                    SourceIncludeMetadata::Key { .. }
+                    | SourceIncludeMetadata::DebeziumMetadata { .. } => {
+                        // Key is handled below.
+                        // DebeziumMetadata is handled in the decoder, not as Kafka metadata.
                         None
                     }
                 })
@@ -2606,7 +2640,7 @@ fn get_unnamed_key_envelope(
         Some(
             DataEncoding::Avro(_)
             | DataEncoding::Csv(_)
-            | DataEncoding::DebeziumJson(_)
+            | DataEncoding::DebeziumJson { .. }
             | DataEncoding::TypedJson(_)
             | DataEncoding::Protobuf(_)
             | DataEncoding::Regex { .. },

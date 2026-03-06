@@ -101,10 +101,16 @@ pub enum DataEncoding<C: ConnectionAccess = InlinedConnection> {
     /// JSON `before`/`after` objects into typed Record datums matching the Avro
     /// Debezium Row layout: `[before: Record|Null, after: Record|Null]`.
     ///
+    /// When `include_metadata` is true, the decoder packs a third column containing
+    /// all envelope-level fields (source, ts_ms, op, transaction) as jsonb.
+    ///
     /// Design: Unlike Avro where the schema is intrinsic, JSON has no schema, so
     /// we require the user to declare columns in CREATE TABLE and thread that
     /// RelationDesc through to the decoder at runtime.
-    DebeziumJson(RelationDesc),
+    DebeziumJson {
+        desc: RelationDesc,
+        include_metadata: bool,
+    },
     /// Schema-aware JSON key encoding for Debezium JSON sources. Decodes a flat
     /// JSON object into typed columns so that `UpsertKey::from_key` produces
     /// hashes consistent with `UpsertKey::from_value` (which extracts typed
@@ -125,7 +131,13 @@ impl<R: ConnectionResolver> IntoInlineConnection<DataEncoding, R>
             Self::Regex(conn) => DataEncoding::Regex(conn),
             Self::Bytes => DataEncoding::Bytes,
             Self::Json => DataEncoding::Json,
-            Self::DebeziumJson(desc) => DataEncoding::DebeziumJson(desc),
+            Self::DebeziumJson {
+                desc,
+                include_metadata,
+            } => DataEncoding::DebeziumJson {
+                desc,
+                include_metadata,
+            },
             Self::TypedJson(desc) => DataEncoding::TypedJson(desc),
             Self::Text => DataEncoding::Text,
         }
@@ -149,7 +161,7 @@ impl<C: ConnectionAccess> DataEncoding<C> {
             Self::Csv(_) => "csv",
             Self::Regex(_) => "regex",
             Self::Bytes => "bytes",
-            Self::Json | Self::DebeziumJson(_) | Self::TypedJson(_) => "json",
+            Self::Json | Self::DebeziumJson { .. } | Self::TypedJson(_) => "json",
             Self::Text => "text",
         }
     }
@@ -165,7 +177,10 @@ impl<C: ConnectionAccess> DataEncoding<C> {
             Self::Json => RelationDesc::builder()
                 .with_column("data", SqlScalarType::Jsonb.nullable(false))
                 .finish(),
-            Self::DebeziumJson(desc) => {
+            Self::DebeziumJson {
+                desc,
+                include_metadata,
+            } => {
                 let fields: Vec<(ColumnName, SqlColumnType)> = desc
                     .iter()
                     .map(|(name, typ)| (name.clone(), typ.clone()))
@@ -174,10 +189,14 @@ impl<C: ConnectionAccess> DataEncoding<C> {
                     fields: fields.clone().into(),
                     custom_id: None,
                 };
-                RelationDesc::builder()
+                let mut builder = RelationDesc::builder()
                     .with_column("before", record_type.clone().nullable(true))
-                    .with_column("after", record_type.nullable(true))
-                    .finish()
+                    .with_column("after", record_type.nullable(true));
+                if *include_metadata {
+                    builder = builder
+                        .with_column("debezium_metadata", SqlScalarType::Jsonb.nullable(true));
+                }
+                builder.finish()
             }
             Self::TypedJson(desc) => {
                 // The schema IS the output schema — each column becomes
@@ -247,7 +266,7 @@ impl<C: ConnectionAccess> DataEncoding<C> {
     pub fn op_name(&self) -> &'static str {
         match self {
             Self::Bytes => "Bytes",
-            Self::Json | Self::DebeziumJson(_) | Self::TypedJson(_) => "Json",
+            Self::Json | Self::DebeziumJson { .. } | Self::TypedJson(_) => "Json",
             Self::Avro(_) => "Avro",
             Self::Protobuf(_) => "Protobuf",
             Self::Regex { .. } => "Regex",
@@ -267,9 +286,16 @@ impl<C: ConnectionAccess> AlterCompatible for DataEncoding<C> {
             (DataEncoding::Avro(avro), DataEncoding::Avro(other_avro)) => {
                 avro.alter_compatible(id, other_avro).is_ok()
             }
-            (DataEncoding::DebeziumJson(desc), DataEncoding::DebeziumJson(other_desc)) => {
-                desc == other_desc
-            }
+            (
+                DataEncoding::DebeziumJson {
+                    desc,
+                    include_metadata,
+                },
+                DataEncoding::DebeziumJson {
+                    desc: other_desc,
+                    include_metadata: other_include_metadata,
+                },
+            ) => desc == other_desc && include_metadata == other_include_metadata,
             (DataEncoding::TypedJson(desc), DataEncoding::TypedJson(other_desc)) => {
                 desc == other_desc
             }

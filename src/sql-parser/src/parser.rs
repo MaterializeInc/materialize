@@ -4816,9 +4816,9 @@ impl<'a> Parser<'a> {
     fn parse_source_include_metadata(&mut self) -> Result<Vec<SourceIncludeMetadata>, ParserError> {
         if self.parse_keyword(INCLUDE) {
             self.parse_comma_separated(|parser| {
-                let metadata = match parser
-                    .expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, OFFSET, HEADERS, HEADER])?
-                {
+                let metadata = match parser.expect_one_of_keywords(&[
+                    KEY, TIMESTAMP, PARTITION, OFFSET, HEADERS, HEADER, DEBEZIUM,
+                ])? {
                     KEY => SourceIncludeMetadata::Key {
                         alias: parser.parse_alias()?,
                     },
@@ -4843,6 +4843,12 @@ impl<'a> Parser<'a> {
                             alias,
                             key,
                             use_bytes,
+                        }
+                    }
+                    DEBEZIUM => {
+                        parser.expect_keyword(METADATA)?;
+                        SourceIncludeMetadata::DebeziumMetadata {
+                            alias: parser.parse_alias()?,
                         }
                     }
                     _ => unreachable!("only explicitly allowed items can be parsed"),

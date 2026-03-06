@@ -211,7 +211,10 @@ pub(crate) enum PreDelimitedFormat {
     Json,
     /// Debezium JSON: parses Debezium envelope and decodes before/after records
     /// against the declared table schema.
-    DebeziumJson(RelationDesc),
+    DebeziumJson {
+        desc: RelationDesc,
+        include_metadata: bool,
+    },
     /// Schema-aware JSON: decodes a flat JSON object into typed columns matching the schema.
     /// Used for keys in Debezium JSON sources.
     TypedJson(RelationDesc),
@@ -231,10 +234,11 @@ impl PreDelimitedFormat {
                 })?;
                 Ok(Some(j.into_row()))
             }
-            PreDelimitedFormat::DebeziumJson(desc) => {
-                mz_interchange::json::decode_debezium_json(bytes, desc)
-                    .map_err(|e| DecodeErrorKind::Bytes(e.to_string().into()))
-            }
+            PreDelimitedFormat::DebeziumJson {
+                desc,
+                include_metadata,
+            } => mz_interchange::json::decode_debezium_json(bytes, desc, *include_metadata)
+                .map_err(|e| DecodeErrorKind::Bytes(e.to_string().into())),
             PreDelimitedFormat::TypedJson(desc) => {
                 mz_interchange::json::decode_json_typed_row(bytes, desc)
                     .map_err(|e| DecodeErrorKind::Bytes(e.to_string().into()))
@@ -389,7 +393,7 @@ async fn get_decoder(
         DataEncoding::Text
         | DataEncoding::Bytes
         | DataEncoding::Json
-        | DataEncoding::DebeziumJson(_)
+        | DataEncoding::DebeziumJson { .. }
         | DataEncoding::TypedJson(_)
         | DataEncoding::Protobuf(_)
         | DataEncoding::Regex(_) => {
@@ -405,7 +409,13 @@ async fn get_decoder(
                 }
                 DataEncoding::Bytes => PreDelimitedFormat::Bytes,
                 DataEncoding::Json => PreDelimitedFormat::Json,
-                DataEncoding::DebeziumJson(desc) => PreDelimitedFormat::DebeziumJson(desc),
+                DataEncoding::DebeziumJson {
+                    desc,
+                    include_metadata,
+                } => PreDelimitedFormat::DebeziumJson {
+                    desc,
+                    include_metadata,
+                },
                 DataEncoding::TypedJson(desc) => PreDelimitedFormat::TypedJson(desc),
                 DataEncoding::Text => PreDelimitedFormat::Text,
                 _ => unreachable!(),

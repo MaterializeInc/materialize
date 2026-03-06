@@ -73,7 +73,13 @@ pub enum UpsertStyle {
     /// `KeyEnvelope`
     Default(KeyEnvelope),
     /// `ENVELOPE DEBEZIUM UPSERT`
-    Debezium { after_idx: usize },
+    Debezium {
+        after_idx: usize,
+        /// When `Some`, the decoded Row contains an extra jsonb column at this
+        /// index with Debezium envelope metadata (source, ts_ms, op, transaction).
+        /// Populated by `INCLUDE DEBEZIUM METADATA`.
+        debezium_metadata_idx: Option<usize>,
+    },
     /// `ENVELOPE UPSERT` where any decode errors will get serialized into a
     /// SqlScalarType::Record column named `error_column`, and all value columns are
     /// nullable. The key shape depends on the independent `KeyEnvelope`.
@@ -228,7 +234,11 @@ impl UnplannedSourceEnvelope {
                 )
             }
             UnplannedSourceEnvelope::Upsert {
-                style: UpsertStyle::Debezium { after_idx },
+                style:
+                    UpsertStyle::Debezium {
+                        after_idx,
+                        debezium_metadata_idx,
+                    },
                 ..
             } => match &value_desc.typ().column_types[*after_idx].scalar_type {
                 SqlScalarType::Record { fields, .. } => {
@@ -236,6 +246,17 @@ impl UnplannedSourceEnvelope {
                     let key = key_desc.map(|k| match_key_indices(&k, &desc)).transpose()?;
                     if let Some(key) = key.clone() {
                         desc = desc.with_key(key);
+                    }
+
+                    // If INCLUDE DEBEZIUM METADATA is active, add the metadata column
+                    // from the value_desc (it was placed there by the planner).
+                    if let Some(meta_idx) = debezium_metadata_idx {
+                        let (name, typ) = value_desc.iter().nth(*meta_idx).unwrap();
+                        desc = desc.concat(
+                            RelationDesc::builder()
+                                .with_column(name.clone(), typ.clone())
+                                .finish(),
+                        );
                     }
 
                     let desc = match self {
