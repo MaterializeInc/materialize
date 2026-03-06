@@ -241,13 +241,13 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
             }
 
             (
-                BalancerResolver::MultiTenant(
-                    mz_balancerd::TenantDnsResolver::new(),
-                    FronteggResolver {
+                BalancerResolver::MultiTenant {
+                    dns: std::sync::Arc::new(mz_balancerd::TenantDnsResolver::new()),
+                    frontegg: FronteggResolver {
                         auth,
                         addr_template,
                     },
-                    match args.pgwire_sni_resolver_template {
+                    sni: match args.pgwire_sni_resolver_template {
                         None => None,
                         Some(template) => {
                             let (template, port) = template
@@ -264,7 +264,7 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
                             Some(SniTemplate { template, port })
                         }
                     },
-                ),
+                },
                 CancellationResolver::Directory(cancellation_resolver_dir),
             )
         }
