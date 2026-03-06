@@ -2956,7 +2956,7 @@ where
                 // our tracking.
                 self.txns_shards.remove(&id);
 
-                if !self
+                if self
                     .config
                     .lock()
                     .expect("lock poisoned")
@@ -2964,14 +2964,17 @@ where
                     .finalize_shards
                 {
                     info!(
-                        "not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false"
+                        %id, %dropped_shard_id,
+                        "enqueuing shard finalization due to dropped collection and dropped \
+                         persist handle",
                     );
-                    return;
+                    self.finalizable_shards.lock().insert(dropped_shard_id);
+                } else {
+                    info!(
+                        "not triggering shard finalization due to dropped storage object \
+                         because enable_storage_shard_finalization parameter is false"
+                    );
                 }
-
-                info!(%id, %dropped_shard_id, "enqueing shard finalization due to dropped collection and dropped persist handle");
-
-                self.finalizable_shards.lock().insert(dropped_shard_id);
 
                 res
             } else {
