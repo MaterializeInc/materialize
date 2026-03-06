@@ -100,6 +100,9 @@ pub struct Actor<W: WalWriter> {
     batch_number: u64,
     pending_replies: Vec<PendingReply>,
     pending_wal_ops: Vec<PendingWalOp>,
+    /// Tracks the latest accepted seqno per shard within the current batch,
+    /// just enough for CAS conflict detection. Cleared after flush.
+    pending_heads: HashMap<String, u64>,
     flush_interval: Interval,
     /// Write a snapshot every this many WAL batches.
     snapshot_interval: u64,
@@ -145,6 +148,7 @@ impl<W: WalWriter> Actor<W> {
             batch_number: next_batch_number,
             pending_replies: Vec::new(),
             pending_wal_ops: Vec::new(),
+            pending_heads: HashMap::new(),
             flush_interval,
             snapshot_interval,
             batches_since_snapshot: 0,
@@ -277,28 +281,25 @@ impl<W: WalWriter> Actor<W> {
             return;
         }
 
+        // Check pending heads first (for intra-batch CAS chaining), then
+        // fall back to committed state.
         let current_head_seqno = self
-            .shards
+            .pending_heads
             .get(&key)
-            .and_then(|s| s.entries.last())
-            .map(|e| e.seqno);
+            .copied()
+            .or_else(|| {
+                self.shards
+                    .get(&key)
+                    .and_then(|s| s.entries.last())
+                    .map(|e| e.seqno)
+            });
 
         let committed = current_head_seqno == expected;
         if committed {
             self.metrics.cas_committed.inc();
-            // CAS matches: apply to in-memory state immediately so subsequent
-            // CAS operations in the same batch see the updated state.
-            self.running_entry_count += 1;
-            self.running_byte_count += new.data.len() as i64;
-            let entry = VersionedEntry {
-                seqno: new.seqno,
-                data: Bytes::from(new.data.clone()),
-            };
-            self.shards
-                .entry(key.clone())
-                .or_default()
-                .entries
-                .push(entry);
+            // Record in pending overlay — committed state is NOT mutated
+            // until the S3 PUT confirms.
+            self.pending_heads.insert(key.clone(), new.seqno);
             self.pending_wal_ops
                 .push(PendingWalOp::Write(ProtoWalWrite {
                     key,
@@ -322,36 +323,147 @@ impl<W: WalWriter> Actor<W> {
         reply: oneshot::Sender<Result<ProtoTruncateResponse, String>>,
     ) {
         self.metrics.truncate_ops.inc();
-        let shard = match self.shards.get_mut(&key) {
-            Some(s) => s,
-            None => {
-                let _ = reply.send(Err(format!("upper bound too high for truncate: {}", seqno)));
-                return;
-            }
-        };
-        let head_seqno = shard.entries.last().map(|e| e.seqno);
+
+        // Check head from pending overlay first, then committed state.
+        let head_seqno = self
+            .pending_heads
+            .get(&key)
+            .copied()
+            .or_else(|| {
+                self.shards
+                    .get(&key)
+                    .and_then(|s| s.entries.last())
+                    .map(|e| e.seqno)
+            });
+
         if head_seqno.map_or(true, |h| h < seqno) {
             let _ = reply.send(Err(format!("upper bound too high for truncate: {}", seqno)));
             return;
         }
-        // Compute bytes being deleted for running counter.
-        let deleted_bytes: i64 = shard
-            .entries
-            .iter()
-            .filter(|e| e.seqno < seqno)
-            .map(|e| e.data.len() as i64)
-            .sum();
-        let count_before = shard.entries.len();
-        shard.entries.retain(|e| e.seqno >= seqno);
-        let deleted = (count_before - shard.entries.len()) as u64;
-        self.running_entry_count -= deleted as i64;
-        self.running_byte_count -= deleted_bytes;
 
-        // Record truncate in WAL so it survives crash/recovery.
+        // Count entries that will be deleted: from committed state...
+        let mut deleted: u64 = self
+            .shards
+            .get(&key)
+            .map(|s| s.entries.iter().filter(|e| e.seqno < seqno).count() as u64)
+            .unwrap_or(0);
+        // ...plus pending writes to this shard with seqno < truncate_seqno.
+        deleted += self
+            .pending_wal_ops
+            .iter()
+            .filter(|op| matches!(op, PendingWalOp::Write(w) if w.key == key && w.seqno < seqno))
+            .count() as u64;
+
+        // Record truncate in WAL — committed state is NOT mutated until
+        // the S3 PUT confirms.
         self.pending_wal_ops
-            .push(PendingWalOp::Truncate(ProtoWalTruncate { key, seqno }));
+            .push(PendingWalOp::Truncate(ProtoWalTruncate {
+                key,
+                seqno,
+            }));
         self.pending_replies
             .push(PendingReply::Truncate { deleted, reply });
+    }
+
+    /// Attempts to handle a read-only command from committed state.
+    /// Returns `Ok(())` if the command was a read and was handled, or
+    /// `Err(cmd)` if the command is a write that needs the mutable path.
+    fn try_handle_read(&self, cmd: ActorCommand) -> Result<(), ActorCommand> {
+        Self::serve_read(&self.shards, &self.metrics, cmd)
+    }
+
+    /// Serve a read command from committed state and metrics references.
+    ///
+    /// This is a static helper so it can be called with split borrows during
+    /// flush (where `&mut self.rx` and `&self.wal_writer` are held by the
+    /// select loop, preventing a `&self` call).
+    fn serve_read(
+        shards: &HashMap<String, ShardState>,
+        metrics: &ConsensusMetrics,
+        cmd: ActorCommand,
+    ) -> Result<(), ActorCommand> {
+        match cmd {
+            ActorCommand::Head { key, reply } => {
+                metrics.head_ops.inc();
+                let data = shards
+                    .get(&key)
+                    .and_then(|s| s.entries.last())
+                    .map(|e| ProtoVersionedData {
+                        seqno: e.seqno,
+                        data: e.data.to_vec(),
+                    });
+                let _ = reply.send(Ok(ProtoHeadResponse { data }));
+                Ok(())
+            }
+            ActorCommand::Scan {
+                key,
+                from,
+                limit,
+                reply,
+            } => {
+                metrics.scan_ops.inc();
+                let data = if let Some(shard) = shards.get(&key) {
+                    let from_idx = shard.entries.partition_point(|e| e.seqno < from);
+                    let lim = usize::try_from(limit).unwrap_or(usize::MAX);
+                    let slice = &shard.entries[from_idx..];
+                    let slice = &slice[..usize::min(lim, slice.len())];
+                    slice
+                        .iter()
+                        .map(|e| ProtoVersionedData {
+                            seqno: e.seqno,
+                            data: e.data.to_vec(),
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let _ = reply.send(Ok(ProtoScanResponse { data }));
+                Ok(())
+            }
+            ActorCommand::ListKeys { reply } => {
+                metrics.list_keys_ops.inc();
+                let keys = shards.keys().cloned().collect();
+                let _ = reply.send(Ok(keys));
+                Ok(())
+            }
+            other => Err(other),
+        }
+    }
+
+    /// Applies pending WAL ops to committed state. Called after the S3 PUT
+    /// confirms so that `self.shards` only reflects durable data.
+    fn apply_pending_ops(&mut self, ops: &[PendingWalOp]) {
+        for op in ops {
+            match op {
+                PendingWalOp::Write(w) => {
+                    self.running_entry_count += 1;
+                    self.running_byte_count += w.data.len() as i64;
+                    let entry = VersionedEntry {
+                        seqno: w.seqno,
+                        data: Bytes::from(w.data.clone()),
+                    };
+                    self.shards
+                        .entry(w.key.clone())
+                        .or_default()
+                        .entries
+                        .push(entry);
+                }
+                PendingWalOp::Truncate(t) => {
+                    if let Some(shard) = self.shards.get_mut(&t.key) {
+                        let deleted_bytes: i64 = shard
+                            .entries
+                            .iter()
+                            .filter(|e| e.seqno < t.seqno)
+                            .map(|e| e.data.len() as i64)
+                            .sum();
+                        let before = shard.entries.len();
+                        shard.entries.retain(|e| e.seqno >= t.seqno);
+                        self.running_entry_count -= (before - shard.entries.len()) as i64;
+                        self.running_byte_count -= deleted_bytes;
+                    }
+                }
+            }
+        }
     }
 
     fn handle_scan(&self, key: &str, from: u64, limit: u64) -> ProtoScanResponse {
@@ -381,6 +493,10 @@ impl<W: WalWriter> Actor<W> {
         // Only write to WAL if there are actual ops (skip for flush with only
         // pending loser replies).
         let had_work = !pending_ops.is_empty();
+        // Commands (writes, flushes) that arrive while the S3 PUT is in
+        // flight. Processed after the batch commits.
+        let mut buffered_cmds: Vec<ActorCommand> = Vec::new();
+
         if had_work {
             let num_ops = pending_ops.len();
             // Count distinct shards in this batch.
@@ -400,14 +516,15 @@ impl<W: WalWriter> Actor<W> {
                 replies = num_replies,
                 "flush"
             );
+            // Clone into proto ops so pending_ops survives for apply_pending_ops.
             let ops: Vec<ProtoWalOp> = pending_ops
-                .into_iter()
+                .iter()
                 .map(|op| match op {
                     PendingWalOp::Write(w) => ProtoWalOp {
-                        op: Some(proto_wal_op::Op::Write(w)),
+                        op: Some(proto_wal_op::Op::Write(w.clone())),
                     },
                     PendingWalOp::Truncate(t) => ProtoWalOp {
-                        op: Some(proto_wal_op::Op::Truncate(t)),
+                        op: Some(proto_wal_op::Op::Truncate(t.clone())),
                     },
                 })
                 .collect();
@@ -424,6 +541,13 @@ impl<W: WalWriter> Actor<W> {
             // an error to clients on a transient S3 failure is unacceptable.
             // Only Ok and AlreadyExists are definite results.
             //
+            // While the S3 PUT is in flight, we serve reads from committed
+            // state via a select loop. Write commands are buffered and
+            // processed after the batch commits. This is safe because no
+            // write in this batch has completed yet (no caller has received
+            // `Committed`), so readers are not "after" any in-flight write
+            // in real-time ordering.
+            //
             // TODO: Writer fencing. Today, AlreadyExists (412) is assumed to
             // mean our own prior attempt landed. But if a second service
             // instance wrote this batch number (e.g. during a failover race),
@@ -437,9 +561,33 @@ impl<W: WalWriter> Actor<W> {
             let mut attempt = 0u64;
             let mut backoff = std::time::Duration::from_millis(125);
             let max_backoff = std::time::Duration::from_secs(2);
-            loop {
-                match self.wal_writer.write_batch(&batch).await {
-                    Ok(()) => break,
+            'retry: loop {
+                // The write+select block uses split borrows so we can serve
+                // reads (from &self.shards + &self.metrics) while the write
+                // future holds &self.wal_writer and recv holds &mut self.rx.
+                let write_result: Result<(), WalWriteError> = {
+                    let wal_writer = &self.wal_writer;
+                    let rx = &mut self.rx;
+                    let shards = &self.shards;
+                    let metrics = &self.metrics;
+                    let mut write_fut = std::pin::pin!(wal_writer.write_batch(&batch));
+                    loop {
+                        tokio::select! {
+                            biased;
+                            result = &mut write_fut => break result,
+                            cmd = rx.recv() => {
+                                if let Some(cmd) = cmd {
+                                    if let Err(cmd) = Self::serve_read(shards, metrics, cmd) {
+                                        buffered_cmds.push(cmd);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+
+                match write_result {
+                    Ok(()) => break 'retry,
                     Err(WalWriteError::AlreadyExists) => {
                         // TODO: Read back the batch and verify writer_id before
                         // assuming this is our own write. See above.
@@ -455,7 +603,7 @@ impl<W: WalWriter> Actor<W> {
                                 "batch already exists, treating as success"
                             );
                         }
-                        break;
+                        break 'retry;
                     }
                     Err(WalWriteError::Failed(e)) => {
                         warn!(
@@ -463,12 +611,32 @@ impl<W: WalWriter> Actor<W> {
                             attempt, "WAL write failed: {}, retrying in {:?}", e, backoff
                         );
                         self.metrics.s3_write_retries.inc();
-                        tokio::time::sleep(backoff).await;
+                        // Serve reads during backoff. Split borrows are
+                        // released so we can use self.try_handle_read here.
+                        let sleep = tokio::time::sleep(backoff);
+                        tokio::pin!(sleep);
+                        loop {
+                            tokio::select! {
+                                biased;
+                                _ = &mut sleep => break,
+                                cmd = self.rx.recv() => {
+                                    if let Some(cmd) = cmd {
+                                        if let Err(cmd) = self.try_handle_read(cmd) {
+                                            buffered_cmds.push(cmd);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         backoff = (backoff * 2).min(max_backoff);
                         attempt += 1;
                     }
                 }
             }
+
+            // S3 write succeeded — apply pending ops to committed state.
+            self.apply_pending_ops(&pending_ops);
+            self.pending_heads.clear();
 
             self.metrics
                 .s3_wal_write_latency_seconds
@@ -484,7 +652,6 @@ impl<W: WalWriter> Actor<W> {
             self.metrics
                 .flush_shards_per_batch
                 .observe(distinct_shards as f64);
-
         }
 
         // Resolve all pending replies (both winners and losers) BEFORE the
@@ -511,6 +678,13 @@ impl<W: WalWriter> Actor<W> {
         self.metrics
             .flush_latency_seconds
             .observe(flush_start.elapsed().as_secs_f64());
+
+        // Process write commands that arrived during the S3 write. At this
+        // point pending_heads is clear and self.shards reflects the just-
+        // committed batch, so buffered CAS ops evaluate against correct state.
+        for cmd in buffered_cmds {
+            self.handle_command(cmd);
+        }
 
         // Write snapshot every N batches. This happens after replies are
         // resolved so the snapshot latency doesn't add to client-visible

@@ -504,12 +504,18 @@ async fn no_snapshot_before_interval() {
 }
 
 #[tokio::test]
-async fn reads_are_immediate() {
+async fn reads_return_committed_state() {
     let a = spawn_test_actor();
-    let _rx = send_cas_no_flush(&a.tx, "s", None, 1, b"v1").await;
 
+    // CAS accepted but not yet flushed — head should return None because
+    // committed state hasn't been updated.
+    let rx = send_cas_no_flush(&a.tx, "s", None, 1, b"v1").await;
+    let head = send_head(&a.tx, "s").await;
+    assert_eq!(head, None);
+
+    // After flush, committed state includes the write.
+    send_flush(&a.tx).await;
+    assert!(rx.await.unwrap().unwrap().committed);
     let head = send_head(&a.tx, "s").await;
     assert_eq!(head, Some((1, b"v1".to_vec())));
-
-    send_flush(&a.tx).await;
 }
