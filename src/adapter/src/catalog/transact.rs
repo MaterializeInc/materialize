@@ -1281,7 +1281,9 @@ impl Catalog {
                         storage_collections_to_create.insert(ct.global_id());
                     }
                     CatalogItem::StandingQuery(sq) => {
-                        storage_collections_to_create.insert(sq.global_id());
+                        // The standing query itself uses a subscribe sink (no storage collection).
+                        // But the internal parameter collection needs a storage collection.
+                        storage_collections_to_create.insert(sq.param_collection_id);
                     }
                     CatalogItem::Sink(sink) => {
                         storage_collections_to_create.insert(sink.global_id());
@@ -1619,7 +1621,13 @@ impl Catalog {
                     // collection.
                     if entry.item().is_storage_collection() && entry.replacement_target().is_none()
                     {
-                        storage_collections_to_drop.extend(entry.global_ids());
+                        // For standing queries, the storage collection is the param collection,
+                        // not the standing query's own global_id (which is a subscribe sink).
+                        if let CatalogItem::StandingQuery(sq) = entry.item() {
+                            storage_collections_to_drop.insert(sq.param_collection_id);
+                        } else {
+                            storage_collections_to_drop.extend(entry.global_ids());
+                        }
                     }
 
                     if state.source_references.contains_key(&item_id) {

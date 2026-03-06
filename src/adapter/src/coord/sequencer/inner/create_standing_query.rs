@@ -28,7 +28,6 @@ use mz_transform::dataflow::DataflowMetainfo;
 use crate::command::ExecuteResponse;
 use crate::coord::Coordinator;
 use crate::error::AdapterError;
-use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::util::ResultExt;
 use crate::{ExecuteContext, catalog};
@@ -58,8 +57,9 @@ impl Coordinator {
 
         // Allocate IDs for the standing query and the internal parameter collection.
         let id_ts = self.get_catalog_write_ts().await;
-        let (item_id, global_id) = self.catalog().allocate_user_id(id_ts).await?;
-        let (_param_item_id, param_collection_id) = self.catalog().allocate_user_id(id_ts).await?;
+        let ids = self.catalog().allocate_user_ids(2, id_ts).await?;
+        let (item_id, global_id) = ids[0];
+        let (_param_item_id, param_collection_id) = ids[1];
 
         // Build the parameter collection's RelationDesc and SqlRelationType.
         let param_desc = Self::build_param_collection_desc(&params);
@@ -98,13 +98,9 @@ impl Coordinator {
             .catalog()
             .render_notices(raw_metainfo, notice_ids, Some(global_id));
 
-        // Timestamp selection.
-        let mut id_bundle = dataflow_import_id_bundle(&physical_plan, cluster_id);
-        id_bundle.storage_ids.remove(&global_id);
-        let read_holds = self.acquire_read_holds(&id_bundle);
-        let as_of = read_holds.least_valid_read();
-        physical_plan.set_as_of(as_of.clone());
-        physical_plan.set_initial_as_of(as_of.clone());
+        // Note: timestamp selection is deferred to after param collection creation
+        // in the side effects callback, because the param collection's since
+        // is set at creation time and must be included in the as_of.
 
         // Extract the optimized MIR expression from the dataflow.
         let optimized_expr = optimized_plan
@@ -144,15 +140,14 @@ impl Coordinator {
                     catalog.set_dataflow_metainfo(global_id, metainfo);
                     catalog.cache_expressions(global_id, None, optimizer_features);
 
-                    // Create the internal parameter collection.
-                    // The standing query's output goes through a subscribe sink
-                    // (no output storage collection needed).
+                    // Create the internal parameter collection (a table-like collection).
+                    let register_ts = coord.get_local_write_ts().await.timestamp;
                     coord
                         .controller
                         .storage
                         .create_collections(
                             coord.catalog.state().storage_metadata(),
-                            None,
+                            Some(register_ts),
                             vec![(
                                 param_collection_id,
                                 CollectionDescription::for_table(param_desc),
@@ -160,6 +155,17 @@ impl Coordinator {
                         )
                         .await
                         .unwrap_or_terminate("cannot fail to create param collection");
+                    coord.apply_local_write(register_ts).await;
+
+                    // Now that the param collection exists, compute the as_of.
+                    use crate::optimize::dataflows::dataflow_import_id_bundle;
+                    let mut id_bundle = dataflow_import_id_bundle(&physical_plan, cluster_id);
+                    // The standing query's own ID is not a storage collection.
+                    id_bundle.storage_ids.remove(&global_id);
+                    let read_holds = coord.acquire_read_holds(&id_bundle);
+                    let as_of = read_holds.least_valid_read();
+                    physical_plan.set_as_of(as_of.clone());
+                    physical_plan.set_initial_as_of(as_of);
 
                     coord.ship_dataflow(physical_plan, cluster_id, None).await;
 

@@ -32,15 +32,15 @@ use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
     Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
-    NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences, Table,
-    TableDataSource, Type, View,
+    NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences,
+    StandingQuery as CatalogStandingQuery, Table, TableDataSource, Type, View,
 };
 use mz_controller::clusters::{
     ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation,
     UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
+use mz_expr::{CollectionPlan, MirRelationExpr, OptimizedMirRelationExpr};
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::DiskLimit;
 use mz_ore::collections::CollectionExt;
@@ -77,8 +77,8 @@ use mz_sql::names::{
 };
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext,
+    CreateSinkPlan, CreateSourcePlan, CreateStandingQueryPlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, Params, Plan, PlanContext,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -1479,6 +1479,43 @@ impl CatalogState {
                 details,
                 resolved_ids,
             }),
+            Plan::CreateStandingQuery(CreateStandingQueryPlan {
+                standing_query:
+                    mz_sql::plan::StandingQuery {
+                        create_sql,
+                        expr,
+                        dependencies,
+                        column_names: _,
+                        desc,
+                        params,
+                        cluster_id,
+                    },
+                ..
+            }) => {
+                // TODO: persist param_collection_id properly in the SQL.
+                // For now, derive it as global_id + 1 (they are allocated together).
+                let param_collection_id = match global_id {
+                    GlobalId::User(n) => GlobalId::User(n + 1),
+                    _ => unreachable!("standing query must have User global_id"),
+                };
+                CatalogItem::StandingQuery(CatalogStandingQuery {
+                    create_sql,
+                    global_id,
+                    raw_expr: expr.into(),
+                    // Placeholder — will be overwritten by cached expressions on boot.
+                    optimized_expr: OptimizedMirRelationExpr(MirRelationExpr::Constant {
+                        rows: Ok(vec![]),
+                        typ: mz_repr::ReprRelationType::empty(),
+                    })
+                    .into(),
+                    desc,
+                    params,
+                    param_collection_id,
+                    resolved_ids,
+                    dependencies,
+                    cluster_id,
+                })
+            }
             _ => {
                 return Err((
                     Error::new(ErrorKind::Corruption {

@@ -42,6 +42,7 @@ use mz_repr::{
     SqlColumnType, SqlRelationType, SqlScalarType, Timestamp, VersionedRelationDesc,
     preserves_order, strconv,
 };
+use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     self, AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
     AlterConnectionOptionName, AlterConnectionStatement, AlterIndexAction, AlterIndexStatement,
@@ -3143,10 +3144,7 @@ pub fn plan_create_standing_query(
         print_name: None,
     });
 
-    let create_sql =
-        normalize::create_statement(scx, Statement::CreateStandingQuery(stmt.clone()))?;
-
-    let partial_name = normalize::unresolved_item_name(stmt.name)?;
+    let partial_name = normalize::unresolved_item_name(stmt.name.clone())?;
     let name = scx.allocate_qualified_name(partial_name.clone())?;
 
     // Resolve parameter types.
@@ -3158,6 +3156,19 @@ pub fn plan_create_standing_query(
             Ok((normalize::ident(p.name.clone()), scalar_type))
         })
         .collect::<Result<_, PlanError>>()?;
+
+    // Rewrite named param references in the query AST to positional $N parameters.
+    // E.g. `WHERE customer_id = cid` → `WHERE customer_id = $1`
+    let param_names: BTreeMap<String, usize> = params
+        .iter()
+        .enumerate()
+        .map(|(i, (name, _))| (name.clone(), i + 1))
+        .collect();
+    rewrite_standing_query_params(&mut stmt.query, &param_names);
+
+    // Generate create_sql after param rewriting so the persisted SQL uses $N.
+    let create_sql =
+        normalize::create_statement(scx, Statement::CreateStandingQuery(stmt.clone()))?;
 
     // Plan the query body.
     let query::PlannedRootQuery {
@@ -3208,6 +3219,37 @@ pub fn plan_create_standing_query(
         },
         if_not_exists: stmt.if_not_exists,
     }))
+}
+
+/// Rewrite named parameter references in a standing query's AST to positional
+/// `$N` parameters. Walks the query and replaces any `Expr::Identifier([name])`
+/// where `name` matches a declared parameter with `Expr::Parameter(N)`.
+fn rewrite_standing_query_params(
+    query: &mut ast::Query<Aug>,
+    param_names: &BTreeMap<String, usize>,
+) {
+    struct ParamRewriter<'a> {
+        param_names: &'a BTreeMap<String, usize>,
+    }
+
+    impl<'a> VisitMut<'_, Aug> for ParamRewriter<'a> {
+        fn visit_expr_mut(&mut self, expr: &mut Expr<Aug>) {
+            // First recurse into child expressions.
+            visit_mut::visit_expr_mut(self, expr);
+            // Then check if this is a single-element identifier matching a param name.
+            if let Expr::Identifier(idents) = expr {
+                if idents.len() == 1 {
+                    let name = idents[0].as_str().to_lowercase();
+                    if let Some(&idx) = self.param_names.get(&name) {
+                        *expr = Expr::Parameter(idx);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut rewriter = ParamRewriter { param_names };
+    rewriter.visit_query_mut(query);
 }
 
 pub fn plan_execute_standing_query(
