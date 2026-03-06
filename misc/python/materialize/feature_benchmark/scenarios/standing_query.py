@@ -18,7 +18,7 @@ class StandingQuery(Scenario):
 
     @classmethod
     def can_run(cls, version: MzVersion) -> bool:
-        return version >= MzVersion.create(26, 16, 0)
+        return version > MzVersion.create(26, 15, 0)
 
 
 class StandingQueryExecute(StandingQuery):

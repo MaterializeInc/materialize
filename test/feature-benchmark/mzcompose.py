@@ -633,7 +633,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         scenario_classes_remaining = [
             scenario_class
             for scenario_class in scenario_classes_remaining
-            if report.has_scenario_regression(scenario_class.__name__)
+            if report.has_scenario_result(scenario_class.__name__)
+            and report.has_scenario_regression(scenario_class.__name__)
         ]
         if not scenario_classes_remaining:
             if run_number < args.runs_per_scenario:
