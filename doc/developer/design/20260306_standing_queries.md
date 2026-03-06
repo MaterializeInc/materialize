@@ -75,14 +75,13 @@ Standard RBAC applies (USAGE on the standing query, SELECT on the underlying obj
 
 #### Catalog objects
 
-Creating a standing query produces three internal objects:
+Creating a standing query produces two catalog objects:
 
-1. **The standing query itself** — a first-class catalog item with name, parameter types, result schema, cluster, and references to the internal objects below.
+1. **The standing query itself** — a first-class catalog item with name, parameter types, result schema, cluster, and an embedded view definition (the rewritten join query). This follows the same pattern as materialized views, which embed their expression directly rather than referencing a separate view.
 2. **Parameter table** — `mz_standing_queries.params_<id>(request_id UUID, param_1 <T1>, param_2 <T2>, ...)`. A regular table in a dedicated `mz_standing_queries` schema to avoid namespace collisions. The `request_id` is a coordinator-generated unique ID that maps to `(session_id, request_id)` on the coordinator side.
-3. **Internal view** — encodes the join between the parameter table and the target object.
 
-The parameter table and view are not user-modifiable.
-They are dropped when the standing query is dropped.
+The parameter table is not user-modifiable.
+It is dropped when the standing query is dropped.
 Dependency tracking reuses the existing cascade infrastructure: dropping the underlying object cascades to the standing query.
 
 #### Query rewrite
@@ -94,7 +93,7 @@ SELECT order_id, customer, amount FROM orders
 WHERE order_id = $1 AND region = $2 AND status = 'shipped'
 ```
 
-Is rewritten to an internal view:
+Is rewritten to the standing query's embedded expression:
 
 ```sql
 SELECT p.request_id, o.order_id, o.customer, o.amount
@@ -163,7 +162,7 @@ The coordinator demuxes by timestamp and request_id.
 * One long-lived SUBSCRIBE per standing query, started when the standing query is created.
 * Runs on the standing query's cluster.
 * Modeled after existing introspection subscribes, extended for this use case.
-* On cluster restart: the controller automatically resumes the SUBSCRIBE. The coordinator clears the parameter table (removes all rows) to avoid processing stale requests. Clients with pending requests at the time of crash receive an error.
+* The SUBSCRIBE is not replica-targeted; cluster restarts are invisible to the coordinator. On environmentd restart, the coordinator clears all parameter tables (removes stale rows from the previous incarnation) and re-establishes the SUBSCRIBE for each standing query.
 * When idle (no parameter rows), the SUBSCRIBE consumes minimal resources.
 
 #### Observability
@@ -426,7 +425,7 @@ There are no pending `ExecuteContext`s to error since environmentd restarted —
 
 **DROP sequencing.**
 Handled by the existing `DropObjectsPlan` path.
-The cascade infrastructure drops the internal view and parameter table.
+The cascade infrastructure drops the parameter table.
 The coordinator must also: cancel the SUBSCRIBE, drain and error any pending requests, and clean up the batch manager state.
 
 **Message types** in `src/adapter/src/coord.rs`:
@@ -464,7 +463,7 @@ Suggested implementation phases:
 2. **Phase 2 — Catalog**: new item type, persistence, builtin table, internal object creation.
    Testable by verifying `CREATE STANDING QUERY` creates the expected catalog entries.
 3. **Phase 3 — CREATE/DROP sequencing**: wire up catalog writes, internal table/view creation, SUBSCRIBE startup.
-   Testable by creating a standing query and inspecting `mz_standing_queries`, the parameter table, and the internal view.
+   Testable by creating a standing query and inspecting `mz_standing_queries` and the parameter table.
 4. **Phase 4 — EXECUTE path**: batch manager, SUBSCRIBE reader, result demux, response delivery.
    Testable end-to-end with `EXECUTE STANDING QUERY`.
 5. **Phase 5 — Edge cases**: cluster restart recovery, concurrent batches, empty results, error propagation, DROP with in-flight requests.
