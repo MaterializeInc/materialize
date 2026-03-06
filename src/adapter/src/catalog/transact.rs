@@ -12,7 +12,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
@@ -447,15 +447,12 @@ impl Catalog {
         let mut builtin_table_updates = vec![];
         let mut catalog_updates = vec![];
         let mut audit_events = vec![];
-        let transact_start = Instant::now();
         let mut storage = self.storage().await;
         let mut tx = storage
             .transaction()
             .await
             .unwrap_or_terminate("starting catalog transaction");
-        let open_tx_elapsed = transact_start.elapsed();
 
-        let inner_start = Instant::now();
         let new_state = Self::transact_inner(
             TransactInnerMode::Commit,
             storage_collections,
@@ -470,29 +467,18 @@ impl Catalog {
             &self.state,
         )
         .await?;
-        let inner_elapsed = inner_start.elapsed();
 
         // The user closure was successful, apply the updates. Terminate the
         // process if this fails, because we have to restart envd due to
         // indeterminate catalog state, which we only reconcile during catalog
         // init.
-        let commit_start = Instant::now();
         tx.commit(oracle_write_ts)
             .await
             .unwrap_or_terminate("catalog storage transaction commit must succeed");
-        let commit_elapsed = commit_start.elapsed();
 
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
         drop(storage);
-
-        info!(
-            "catalog::transact: ops={} open_tx={:.3}s inner={:.3}s commit={:.3}s",
-            builtin_table_updates.len() + catalog_updates.len(),
-            open_tx_elapsed.as_secs_f64(),
-            inner_elapsed.as_secs_f64(),
-            commit_elapsed.as_secs_f64(),
-        );
         if let Some(new_state) = new_state {
             self.transient_revision += 1;
             self.state = new_state;

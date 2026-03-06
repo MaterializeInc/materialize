@@ -120,9 +120,10 @@ Baseline measurements complete (optimized build):
 - ~5k shards: ~150ms/cycle
 - ~10k shards: ~499ms/cycle
 Scaling is linear. 10k su_ tables exist in persist state (don't use --reset).
-Instrumentation shows 91% of time is in transact_inner op loop (~430ms for 10k
-shards). Persist and oracle are cheap. Next: implement fix to bypass
-catalog_transact_inner.
+Fix implemented: bypass catalog_transact_inner, pack rows directly.
+10k shards: ~499ms → ~20ms (25x improvement). Verified data correctness.
+Next: clean up dead code (Op::WeirdStorageUsageUpdates, durable id allocator,
+instrumentation logging).
 
 ## Immediate Next Steps
 

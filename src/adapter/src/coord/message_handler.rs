@@ -13,6 +13,8 @@
 use std::collections::{BTreeMap, BTreeSet, btree_map};
 use std::time::{Duration, Instant};
 
+use mz_audit_log::VersionedStorageUsage;
+
 use futures::FutureExt;
 use maplit::btreemap;
 use mz_catalog::memory::objects::ClusterReplicaProcessStatus;
@@ -35,7 +37,7 @@ use tracing::{Instrument, Level, event, info, info_span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
-use crate::catalog::{BuiltinTableUpdate, Op};
+use crate::catalog::BuiltinTableUpdate;
 use crate::command::Command;
 use crate::coord::{
     AlterConnectionValidationReady, ClusterReplicaStatuses, Coordinator,
@@ -244,58 +246,54 @@ impl Coordinator {
         // increase. This is intentionally the timestamp of when collection
         // finished, not when it started, so that we don't write data with a
         // timestamp in the past.
-        let oracle_start = Instant::now();
-        let collection_timestamp = if self.controller.read_only() {
+        let collection_timestamp: EpochMillis = if self.controller.read_only() {
             self.peek_local_write_ts().await.into()
         } else {
             // Getting a write timestamp bumps the write timestamp in the
             // oracle, which we're not allowed in read-only mode.
             self.get_local_write_ts().await.timestamp.into()
         };
-        let oracle_elapsed = oracle_start.elapsed();
 
-        let ops = shards_usage
+        // Pack builtin table rows directly, bypassing catalog_transact_inner.
+        // The old path routed N ops through catalog_transact_inner which incurred
+        // a durable transaction (persist write/read) just to bump the storage usage
+        // id allocator. That id is unused — no view or query references it — so we
+        // use a cheap local counter instead.
+        let updates: Vec<_> = shards_usage
             .by_shard
             .into_iter()
-            .map(|(shard_id, shard_usage)| Op::WeirdStorageUsageUpdates {
-                object_id: Some(shard_id.to_string()),
-                size_bytes: shard_usage.size_bytes(),
-                collection_timestamp,
+            .map(|(shard_id, shard_usage)| {
+                let id = self.storage_usage_next_id;
+                self.storage_usage_next_id += 1;
+                let event = VersionedStorageUsage::new(
+                    id,
+                    Some(shard_id.to_string()),
+                    shard_usage.size_bytes(),
+                    collection_timestamp,
+                );
+                self.catalog().pack_storage_usage_update(event, Diff::ONE)
             })
             .collect();
 
-        let transact_start = Instant::now();
-        match self.catalog_transact_inner(None, ops).await {
-            Ok((table_updates, catalog_updates)) => {
-                let transact_elapsed = transact_start.elapsed();
-                let total_elapsed = total_start.elapsed();
-                info!(
-                    "storage_usage_update: shards={} total={:.3}s oracle={:.3}s catalog_transact={:.3}s",
-                    num_shards,
-                    total_elapsed.as_secs_f64(),
-                    oracle_elapsed.as_secs_f64(),
-                    transact_elapsed.as_secs_f64(),
-                );
+        // Submit directly via group commit (same path as storage_usage_prune).
+        let (table_updates, _) = self.builtin_table_update().execute(updates).await;
+        let total_elapsed = total_start.elapsed();
+        info!(
+            "storage_usage_update: shards={} total={:.3}s",
+            num_shards,
+            total_elapsed.as_secs_f64(),
+        );
 
-                assert!(
-                    catalog_updates.is_empty(),
-                    "applying builtin table updates does not produce catalog implications"
-                );
-
-                let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let task_span =
-                    info_span!(parent: None, "coord::storage_usage_update::table_updates");
-                OpenTelemetryContext::obtain().attach_as_parent_to(&task_span);
-                task::spawn(|| "storage_usage_update_table_updates", async move {
-                    table_updates.instrument(task_span).await;
-                    // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
-                    if let Err(e) = internal_cmd_tx.send(Message::StorageUsageSchedule) {
-                        warn!("internal_cmd_rx dropped before we could send: {e:?}");
-                    }
-                });
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let task_span = info_span!(parent: None, "coord::storage_usage_update::table_updates");
+        OpenTelemetryContext::obtain().attach_as_parent_to(&task_span);
+        task::spawn(|| "storage_usage_update_table_updates", async move {
+            table_updates.instrument(task_span).await;
+            // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
+            if let Err(e) = internal_cmd_tx.send(Message::StorageUsageSchedule) {
+                warn!("internal_cmd_rx dropped before we could send: {e:?}");
             }
-            Err(err) => tracing::warn!("Failed to update storage metrics: {:?}", err),
-        }
+        });
     }
 
     #[mz_ore::instrument(level = "debug")]
