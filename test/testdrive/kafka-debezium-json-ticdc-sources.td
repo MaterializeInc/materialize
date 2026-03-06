@@ -39,6 +39,7 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=dbz-ticdc
 
 > CREATE TABLE dbz_ticdc_tbl FROM SOURCE dbz_ticdc_src (REFERENCE "testdrive-dbz-ticdc-${testdrive.seed}")
   KEY FORMAT JSON VALUE FORMAT JSON
+  INCLUDE DEBEZIUM METADATA AS dbz_meta
   ENVELOPE DEBEZIUM (MODE = 'TICDC')
 > COMMIT
 
@@ -46,15 +47,15 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=dbz-ticdc
 1 alice_updated
 2 bob
 
-# --- Verify envelope column preserves CDC metadata ---
-# The envelope column contains the full Debezium envelope including source metadata.
+# --- Verify INCLUDE DEBEZIUM METADATA preserves CDC metadata ---
+# The dbz_meta column contains the full Debezium envelope including source metadata.
 # This is critical for TiCDC users who need commit_ts to correlate with Dumpling snapshots.
-> SELECT key, envelope->'source'->>'commit_ts' FROM dbz_ticdc_tbl ORDER BY key
+> SELECT key, dbz_meta->'source'->>'commit_ts' FROM dbz_ticdc_tbl ORDER BY key
 1 1002
 2 1001
 
 # ts_ms is also available
-> SELECT key, envelope->>'ts_ms' FROM dbz_ticdc_tbl ORDER BY key
+> SELECT key, dbz_meta->>'ts_ms' FROM dbz_ticdc_tbl ORDER BY key
 1 1609459200002
 2 1609459200001
 

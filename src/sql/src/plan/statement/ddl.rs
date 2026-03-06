@@ -1275,6 +1275,10 @@ fn plan_kafka_source_connection(
                 // handled below
                 None
             }
+            SourceIncludeMetadata::DebeziumMetadata { .. } => {
+                // handled in apply_source_envelope_encoding
+                None
+            }
         })
         .collect();
     Ok(KafkaSourceConnection {
@@ -1411,8 +1415,23 @@ fn apply_source_envelope_encoding(
                         ast::DebeziumMode::TiCdc => DebeziumJsonMode::TiCdc,
                         ast::DebeziumMode::None => DebeziumJsonMode::Generic,
                     };
+                    // Extract INCLUDE DEBEZIUM METADATA column name if specified
+                    let envelope_column = include_metadata
+                        .iter()
+                        .find_map(|m| match m {
+                            SourceIncludeMetadata::DebeziumMetadata { alias } => {
+                                Some(alias.as_ref().map_or_else(
+                                    || "debezium_metadata".to_string(),
+                                    |a| a.to_string(),
+                                ))
+                            }
+                            _ => None,
+                        });
                     UnplannedSourceEnvelope::Upsert {
-                        style: UpsertStyle::DebeziumJson { mode: storage_mode },
+                        style: UpsertStyle::DebeziumJson {
+                            mode: storage_mode,
+                            envelope_column,
+                        },
                     }
                 }
                 _ => {
@@ -1482,6 +1501,21 @@ fn apply_source_envelope_encoding(
             UnplannedSourceEnvelope::CdcV2
         }
     };
+
+    // Validate INCLUDE DEBEZIUM METADATA is only used with ENVELOPE DEBEZIUM + JSON
+    let has_dbz_metadata = include_metadata
+        .iter()
+        .any(|m| matches!(m, SourceIncludeMetadata::DebeziumMetadata { .. }));
+    if has_dbz_metadata {
+        match &envelope {
+            UnplannedSourceEnvelope::Upsert {
+                style: UpsertStyle::DebeziumJson { .. },
+            } => {} // valid
+            _ => sql_bail!(
+                "INCLUDE DEBEZIUM METADATA requires ENVELOPE DEBEZIUM with VALUE FORMAT JSON"
+            ),
+        }
+    }
 
     let metadata_desc = included_column_desc(metadata_columns_desc);
     let (envelope, desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
@@ -1921,6 +1955,10 @@ pub fn plan_create_table_from_source(
                     )),
                     SourceIncludeMetadata::Key { .. } => {
                         // handled below
+                        None
+                    }
+                    SourceIncludeMetadata::DebeziumMetadata { .. } => {
+                        // handled in apply_source_envelope_encoding
                         None
                     }
                 })

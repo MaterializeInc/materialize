@@ -39,15 +39,11 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=dbz-json
   ENVELOPE DEBEZIUM
 > COMMIT
 
-# Output schema is [key: jsonb, data: jsonb, envelope: jsonb]
+# Output schema is [key: jsonb, data: jsonb]
 # The last update for key=1 should win (lizard)
 # Use ->> to extract fields since JSON key order is non-deterministic
 > SELECT key, data->>'id', data->>'creature' FROM dbz_json_tbl
 1 1 lizard
-
-# The envelope column contains the full Debezium envelope
-> SELECT envelope->>'op' FROM dbz_json_tbl
-u
 
 # --- Insert a second row ---
 
@@ -158,3 +154,48 @@ contains:ENVELOPE [DEBEZIUM] UPSERT requires that KEY FORMAT be specified
   KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE DEBEZIUM
 contains:ENVELOPE DEBEZIUM requires that VALUE FORMAT is set to AVRO or JSON
+
+# --- Test INCLUDE DEBEZIUM METADATA ---
+
+$ kafka-create-topic topic=dbz-json-dbzmeta partitions=1
+
+$ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=dbz-json-dbzmeta
+1:{"before":null,"after":{"id":1,"val":"hello"},"op":"c","ts_ms":1000,"source":{"connector":"test"}}
+
+> BEGIN
+> CREATE SOURCE dbz_json_dbzmeta_src
+  IN CLUSTER dbz_json_cluster
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbz-json-dbzmeta-${testdrive.seed}');
+
+> CREATE TABLE dbz_json_dbzmeta_tbl FROM SOURCE dbz_json_dbzmeta_src (REFERENCE "testdrive-dbz-json-dbzmeta-${testdrive.seed}")
+  KEY FORMAT JSON VALUE FORMAT JSON
+  INCLUDE DEBEZIUM METADATA AS dbz_envelope
+  ENVELOPE DEBEZIUM
+> COMMIT
+
+> SELECT key, data->>'val', dbz_envelope->>'op', dbz_envelope->>'ts_ms' FROM dbz_json_dbzmeta_tbl
+1 hello c 1000
+
+# --- Test INCLUDE DEBEZIUM METADATA with default column name ---
+
+> BEGIN
+> CREATE SOURCE dbz_json_dbzmeta_default_src
+  IN CLUSTER dbz_json_cluster
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbz-json-dbzmeta-${testdrive.seed}');
+
+> CREATE TABLE dbz_json_dbzmeta_default_tbl FROM SOURCE dbz_json_dbzmeta_default_src (REFERENCE "testdrive-dbz-json-dbzmeta-${testdrive.seed}")
+  KEY FORMAT JSON VALUE FORMAT JSON
+  INCLUDE DEBEZIUM METADATA
+  ENVELOPE DEBEZIUM
+> COMMIT
+
+> SELECT key, debezium_metadata->>'op' FROM dbz_json_dbzmeta_default_tbl
+1 c
+
+# --- Error case: INCLUDE DEBEZIUM METADATA without ENVELOPE DEBEZIUM ---
+
+! CREATE TABLE dbz_json_nokey_tbl FROM SOURCE dbz_json_nokey_src (REFERENCE "testdrive-dbz-json-nokey-${testdrive.seed}")
+  KEY FORMAT JSON VALUE FORMAT JSON
+  INCLUDE DEBEZIUM METADATA
+  ENVELOPE UPSERT
+contains:INCLUDE DEBEZIUM METADATA requires ENVELOPE DEBEZIUM with VALUE FORMAT JSON

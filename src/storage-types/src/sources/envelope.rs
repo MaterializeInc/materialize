@@ -85,7 +85,12 @@ pub enum UpsertStyle {
     Debezium { after_idx: usize },
     /// `ENVELOPE DEBEZIUM` with JSON encoding. Envelope extraction happens at
     /// render time by parsing the Jsonb datum to extract `op` and `after` fields.
-    DebeziumJson { mode: DebeziumJsonMode },
+    /// If `envelope_column` is set (via `INCLUDE DEBEZIUM METADATA`), the full
+    /// Debezium envelope is exposed as an additional jsonb column.
+    DebeziumJson {
+        mode: DebeziumJsonMode,
+        envelope_column: Option<String>,
+    },
     /// `ENVELOPE UPSERT` where any decode errors will get serialized into a
     /// SqlScalarType::Record column named `error_column`, and all value columns are
     /// nullable. The key shape depends on the independent `KeyEnvelope`.
@@ -240,21 +245,24 @@ impl UnplannedSourceEnvelope {
                 )
             }
             UnplannedSourceEnvelope::Upsert {
-                style: UpsertStyle::DebeziumJson { .. },
+                style: UpsertStyle::DebeziumJson { envelope_column, .. },
                 ..
             } => {
-                // JSON Debezium: output is [key: Jsonb, data: Jsonb, envelope: Jsonb, ...metadata]
+                // JSON Debezium: output is [key: Jsonb, data: Jsonb, ...metadata]
                 // Key is included as a separate column (unlike Avro Debezium).
                 // `data` contains the `after` field (the row payload).
-                // `envelope` contains the full Debezium envelope for CDC metadata
-                // access (e.g., source.commit_ts for TiCDC correlation).
+                // If INCLUDE DEBEZIUM METADATA is specified, an additional jsonb column
+                // contains the full Debezium envelope for CDC metadata access.
                 let key_desc = RelationDesc::builder()
                     .with_column("key", SqlScalarType::Jsonb.nullable(false))
                     .finish();
-                let value_desc = RelationDesc::builder()
-                    .with_column("data", SqlScalarType::Jsonb.nullable(false))
-                    .with_column("envelope", SqlScalarType::Jsonb.nullable(false))
-                    .finish();
+                let mut value_builder = RelationDesc::builder()
+                    .with_column("data", SqlScalarType::Jsonb.nullable(false));
+                if let Some(col_name) = envelope_column {
+                    value_builder =
+                        value_builder.with_column(col_name.as_str(), SqlScalarType::Jsonb.nullable(false));
+                }
+                let value_desc = value_builder.finish();
                 // key_indices = [0]: points to the key column for UpsertKey::from_value rehydration
                 let key_indices = vec![0usize];
                 let desc = key_desc

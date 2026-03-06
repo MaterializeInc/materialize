@@ -47,14 +47,15 @@ Lift the Avro-only restriction on `ENVELOPE DEBEZIUM` to also accept `VALUE FORM
 - JSON Debezium envelope parsing (extract `before`/`after`/`op` from `payload`)
 - TiCDC dialect via `MODE` parameter (e.g., `ENVELOPE DEBEZIUM (MODE = 'TICDC')`)
 - Insert (`c`), update (`u`), delete (`d`) operation handling
-- Output columns: `data` (jsonb, the "after" payload) and `envelope` (jsonb, the full Debezium envelope for CDC metadata access)
+- Output columns: `key` (jsonb) and `data` (jsonb, the "after" payload)
+- `INCLUDE DEBEZIUM METADATA [AS alias]` to expose the full Debezium envelope as an opt-in jsonb column for CDC metadata access (e.g., `commit_ts`, `ts_ms`, `source`)
 - Support both `payload`-wrapped and flat envelope formats
 - Error handling for malformed Debezium JSON messages
 
 **Out of Scope:**
 - Schema-aware column projection from JSON payloads
 - Keyless / upsert-from-payload sources
-- `commit_ts`-based ordering from TiCDC source metadata (note: `commit_ts` is preserved in the `envelope` column for user queries, but not used for ordering)
+- `commit_ts`-based ordering from TiCDC source metadata (note: `commit_ts` is preserved via `INCLUDE DEBEZIUM METADATA` for user queries, but not used for ordering)
 - Spatial type handling for TiCDC
 
 ## Context for Development
