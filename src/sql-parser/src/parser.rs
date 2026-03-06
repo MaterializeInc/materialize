@@ -3955,7 +3955,7 @@ impl<'a> Parser<'a> {
     fn parse_create_standing_query(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keywords(&[STANDING, QUERY])?;
         let if_not_exists = self.parse_if_not_exists()?;
-        let name = self.parse_raw_name()?;
+        let name = self.parse_item_name()?;
 
         // Parse parameter list: (param_name type, ...)
         self.expect_token(&Token::LParen)?;

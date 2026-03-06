@@ -554,6 +554,8 @@ pub enum ExecuteResponse {
     CreatedMaterializedView,
     /// The requested continual task was created.
     CreatedContinualTask,
+    /// The requested standing query was created.
+    CreatedStandingQuery,
     /// The requested type was created.
     CreatedType,
     /// The requested network policy was created.
@@ -725,6 +727,7 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             }
             ExecuteResponseKind::CreatedNetworkPolicy => Ok(ExecuteResponse::CreatedNetworkPolicy),
             ExecuteResponseKind::CreatedContinualTask => Ok(ExecuteResponse::CreatedContinualTask),
+            ExecuteResponseKind::CreatedStandingQuery => Ok(ExecuteResponse::CreatedStandingQuery),
             ExecuteResponseKind::CreatedType => Ok(ExecuteResponse::CreatedType),
             ExecuteResponseKind::Deallocate => Err(()),
             ExecuteResponseKind::DeclaredCursor => Ok(ExecuteResponse::DeclaredCursor),
@@ -787,6 +790,7 @@ impl ExecuteResponse {
             CreatedViews { .. } => Some("CREATE VIEWS".into()),
             CreatedMaterializedView { .. } => Some("CREATE MATERIALIZED VIEW".into()),
             CreatedContinualTask { .. } => Some("CREATE CONTINUAL TASK".into()),
+            CreatedStandingQuery { .. } => Some("CREATE STANDING QUERY".into()),
             CreatedType => Some("CREATE TYPE".into()),
             CreatedNetworkPolicy => Some("CREATE NETWORKPOLICY".into()),
             Deallocate { all } => Some(format!("DEALLOCATE{}", if *all { " ALL" } else { "" })),
@@ -879,6 +883,7 @@ impl ExecuteResponse {
             CreateView => &[CreatedView],
             CreateMaterializedView => &[CreatedMaterializedView],
             CreateContinualTask => &[CreatedContinualTask],
+            CreateStandingQuery => &[CreatedStandingQuery],
             CreateIndex => &[CreatedIndex],
             CreateType => &[CreatedType],
             PlanKind::Deallocate => &[ExecuteResponseKind::Deallocate],
@@ -895,6 +900,7 @@ impl ExecuteResponse {
                 SendingRowsStreaming,
                 SendingRowsImmediate,
             ],
+            ExecuteStandingQuery => &[SendingRowsStreaming, SendingRowsImmediate],
             Execute | ReadThenWrite => &[
                 Deleted,
                 Inserted,

@@ -2255,6 +2255,7 @@ where
             | ExecuteResponse::CreatedIntrospectionSubscribe
             | ExecuteResponse::CreatedMaterializedView { .. }
             | ExecuteResponse::CreatedContinualTask { .. }
+            | ExecuteResponse::CreatedStandingQuery
             | ExecuteResponse::CreatedRole
             | ExecuteResponse::CreatedSchema { .. }
             | ExecuteResponse::CreatedSecret { .. }

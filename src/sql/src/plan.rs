@@ -145,6 +145,7 @@ pub enum Plan {
     CreateView(CreateViewPlan),
     CreateMaterializedView(CreateMaterializedViewPlan),
     CreateContinualTask(CreateContinualTaskPlan),
+    CreateStandingQuery(CreateStandingQueryPlan),
     CreateNetworkPolicy(CreateNetworkPolicyPlan),
     CreateIndex(CreateIndexPlan),
     CreateType(CreateTypePlan),
@@ -201,6 +202,7 @@ pub enum Plan {
     ReadThenWrite(ReadThenWritePlan),
     Prepare(PreparePlan),
     Execute(ExecutePlan),
+    ExecuteStandingQuery(ExecuteStandingQueryPlan),
     Deallocate(DeallocatePlan),
     Raise(RaisePlan),
     GrantRole(GrantRolePlan),
@@ -277,10 +279,8 @@ impl Plan {
             StatementKind::CreateNetworkPolicy => &[PlanKind::CreateNetworkPolicy],
             StatementKind::CreateMaterializedView => &[PlanKind::CreateMaterializedView],
             StatementKind::CreateContinualTask => &[PlanKind::CreateContinualTask],
-            // TODO: Add PlanKind::CreateStandingQuery when implemented.
-            StatementKind::CreateStandingQuery => &[],
-            // TODO: Add PlanKind::ExecuteStandingQuery when implemented.
-            StatementKind::ExecuteStandingQuery => &[],
+            StatementKind::CreateStandingQuery => &[PlanKind::CreateStandingQuery],
+            StatementKind::ExecuteStandingQuery => &[PlanKind::ExecuteStandingQuery],
             StatementKind::CreateRole => &[PlanKind::CreateRole],
             StatementKind::CreateSchema => &[PlanKind::CreateSchema],
             StatementKind::CreateSecret => &[PlanKind::CreateSecret],
@@ -353,6 +353,7 @@ impl Plan {
             Plan::CreateView(_) => "create view",
             Plan::CreateMaterializedView(_) => "create materialized view",
             Plan::CreateContinualTask(_) => "create continual task",
+            Plan::CreateStandingQuery(_) => "create standing query",
             Plan::CreateIndex(_) => "create index",
             Plan::CreateType(_) => "create type",
             Plan::CreateNetworkPolicy(_) => "create network policy",
@@ -472,6 +473,7 @@ impl Plan {
             },
             Plan::Prepare(_) => "prepare",
             Plan::Execute(_) => "execute",
+            Plan::ExecuteStandingQuery(_) => "execute standing query",
             Plan::Deallocate(_) => "deallocate",
             Plan::Raise(_) => "raise",
             Plan::GrantRole(_) => "grant role",
@@ -785,6 +787,19 @@ pub struct CreateContinualTaskPlan {
     pub with_snapshot: bool,
     /// Definition for the continual task.
     pub continual_task: MaterializedView,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateStandingQueryPlan {
+    pub name: QualifiedItemName,
+    pub standing_query: StandingQuery,
+    pub if_not_exists: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExecuteStandingQueryPlan {
+    pub id: CatalogItemId,
+    pub params: Vec<(Row, SqlScalarType)>,
 }
 
 #[derive(Debug, Clone)]
@@ -1892,6 +1907,22 @@ pub struct MaterializedView {
     pub compaction_window: Option<CompactionWindow>,
     pub refresh_schedule: Option<RefreshSchedule>,
     pub as_of: Option<Timestamp>,
+}
+
+#[derive(Clone, Debug)]
+pub struct StandingQuery {
+    /// Parse-able SQL that is stored durably and defines this standing query.
+    pub create_sql: String,
+    /// Unoptimized high-level expression from parsing the `create_sql`.
+    pub expr: HirRelationExpr,
+    /// All of the catalog objects that are referenced by this standing query.
+    pub dependencies: DependencyIds,
+    /// Columns of this standing query's output.
+    pub column_names: Vec<ColumnName>,
+    /// Parameter names and types.
+    pub params: Vec<(String, SqlScalarType)>,
+    /// Cluster this standing query will get installed on.
+    pub cluster_id: ClusterId,
 }
 
 #[derive(Clone, Debug)]

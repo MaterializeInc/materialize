@@ -165,10 +165,7 @@ pub fn describe(
             ddl::describe_create_materialized_view(&scx, stmt)?
         }
         Statement::CreateContinualTask(stmt) => ddl::describe_create_continual_task(&scx, stmt)?,
-        Statement::CreateStandingQuery(_) => {
-            // CREATE STANDING QUERY returns no rows.
-            StatementDesc::new(None)
-        }
+        Statement::CreateStandingQuery(stmt) => ddl::describe_create_standing_query(&scx, stmt)?,
         Statement::CreateNetworkPolicy(stmt) => ddl::describe_create_network_policy(&scx, stmt)?,
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
         Statement::DropOwned(stmt) => ddl::describe_drop_owned(&scx, stmt)?,
@@ -225,10 +222,7 @@ pub fn describe(
         Statement::Declare(stmt) => scl::describe_declare(&scx, stmt, param_types_in)?,
         Statement::Discard(stmt) => scl::describe_discard(&scx, stmt)?,
         Statement::Execute(stmt) => scl::describe_execute(&scx, stmt)?,
-        Statement::ExecuteStandingQuery(_) => {
-            // EXECUTE STANDING QUERY returns rows; describe will be refined later.
-            StatementDesc::new(None)
-        }
+        Statement::ExecuteStandingQuery(stmt) => ddl::describe_execute_standing_query(&scx, stmt)?,
         Statement::Fetch(stmt) => scl::describe_fetch(&scx, stmt)?,
         Statement::Prepare(stmt) => scl::describe_prepare(&scx, stmt)?,
         Statement::ResetVariable(stmt) => scl::describe_reset_variable(&scx, stmt)?,
@@ -368,9 +362,7 @@ pub fn plan(
         Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt),
         Statement::CreateMaterializedView(stmt) => ddl::plan_create_materialized_view(scx, stmt),
         Statement::CreateContinualTask(stmt) => ddl::plan_create_continual_task(scx, stmt),
-        Statement::CreateStandingQuery(_stmt) => {
-            bail_unsupported!("CREATE STANDING QUERY")
-        }
+        Statement::CreateStandingQuery(stmt) => ddl::plan_create_standing_query(scx, stmt),
         Statement::CreateNetworkPolicy(stmt) => ddl::plan_create_network_policy(scx, stmt),
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
         Statement::DropOwned(stmt) => ddl::plan_drop_owned(scx, stmt),
@@ -439,9 +431,7 @@ pub fn plan(
         Statement::Declare(stmt) => scl::plan_declare(scx, stmt, params),
         Statement::Discard(stmt) => scl::plan_discard(scx, stmt),
         Statement::Execute(stmt) => scl::plan_execute(scx, stmt),
-        Statement::ExecuteStandingQuery(_stmt) => {
-            bail_unsupported!("EXECUTE STANDING QUERY")
-        }
+        Statement::ExecuteStandingQuery(stmt) => ddl::plan_execute_standing_query(scx, stmt),
         Statement::Fetch(stmt) => scl::plan_fetch(scx, stmt),
         Statement::Prepare(stmt) => scl::plan_prepare(scx, stmt),
         Statement::ResetVariable(stmt) => scl::plan_reset_variable(scx, stmt),

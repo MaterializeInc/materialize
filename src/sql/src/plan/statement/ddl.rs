@@ -62,25 +62,26 @@ use mz_sql_parser::ast::{
     CreateMaterializedViewStatement, CreateNetworkPolicyStatement, CreateRoleStatement,
     CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
     CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceOption,
-    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
-    CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableFromSourceStatement,
-    CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
-    CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
-    CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
-    CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
-    DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format,
-    FormatSpecifier, IcebergSinkConfigOption, Ident, IfExistsBehavior, IndexOption,
-    IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
-    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
-    MySqlConfigOptionName, NetworkPolicyOption, NetworkPolicyOptionName,
-    NetworkPolicyRuleDefinition, NetworkPolicyRuleOption, NetworkPolicyRuleOptionName,
-    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
-    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
-    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableConstraint,
-    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, TableOption,
-    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
+    CreateSourceOptionName, CreateSourceStatement, CreateStandingQueryStatement,
+    CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
+    CreateTableFromSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeListOption,
+    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement,
+    CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName,
+    CsrConnection, CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns,
+    DeferredItemName, DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement,
+    ExecuteStandingQueryStatement, Expr, Format, FormatSpecifier, IcebergSinkConfigOption, Ident,
+    IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
+    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
+    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, NetworkPolicyOption,
+    NetworkPolicyOptionName, NetworkPolicyRuleDefinition, NetworkPolicyRuleOption,
+    NetworkPolicyRuleOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema,
+    QualifiedReplica, RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue,
+    ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar,
+    SourceErrorPolicy, SourceIncludeMetadata, SqlServerConfigOption, SqlServerConfigOptionName,
+    Statement, TableConstraint, TableFromSourceColumns, TableFromSourceOption,
+    TableFromSourceOptionName, TableOption, TableOptionName, UnresolvedDatabaseName,
+    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
+    WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -157,13 +158,13 @@ use crate::plan::{
     CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
     CreateConnectionPlan, CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan,
     CreateMaterializedViewPlan, CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index,
-    MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan,
-    PlanClusterOption, PlanNotice, PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink,
-    Source, Table, TableDataSource, Type, VariableValue, View, WebhookBodyFormat,
-    WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal, plan_utils, query,
-    transform_ast,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateStandingQueryPlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan,
+    HirRelationExpr, Index, MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction,
+    NetworkPolicyRuleDirection, Plan, PlanClusterOption, PlanNotice, PolicyAddress, QueryContext,
+    ReplicaConfig, Secret, Sink, Source, StandingQuery, Table, TableDataSource, Type,
+    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
+    WebhookValidation, literal, plan_utils, query, transform_ast,
 };
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
@@ -3101,6 +3102,109 @@ generate_extracted_config!(
     (RetainHistory, OptionalDuration),
     (Refresh, RefreshOptionValue<Aug>, AllowMultiple)
 );
+
+pub fn describe_create_standing_query(
+    _: &StatementContext,
+    _: CreateStandingQueryStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn describe_execute_standing_query(
+    _: &StatementContext,
+    _: ExecuteStandingQueryStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    // TODO: Return the standing query's result desc once catalog lookup is wired.
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_standing_query(
+    scx: &StatementContext,
+    mut stmt: CreateStandingQueryStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    // Resolve cluster.
+    let cluster_id = match &stmt.in_cluster {
+        None => scx.catalog.resolve_cluster(None)?.id(),
+        Some(in_cluster) => in_cluster.id,
+    };
+    stmt.in_cluster = Some(ResolvedClusterName {
+        id: cluster_id,
+        print_name: None,
+    });
+
+    let create_sql =
+        normalize::create_statement(scx, Statement::CreateStandingQuery(stmt.clone()))?;
+
+    let partial_name = normalize::unresolved_item_name(stmt.name)?;
+    let name = scx.allocate_qualified_name(partial_name.clone())?;
+
+    // Resolve parameter types.
+    let params: Vec<(String, SqlScalarType)> = stmt
+        .params
+        .iter()
+        .map(|p| {
+            let scalar_type = scalar_type_from_sql(scx, &p.data_type)?;
+            Ok((normalize::ident(p.name.clone()), scalar_type))
+        })
+        .collect::<Result<_, PlanError>>()?;
+
+    // Plan the query body.
+    let query::PlannedRootQuery {
+        expr,
+        desc,
+        finishing,
+        scope: _,
+    } = query::plan_root_query(scx, stmt.query, QueryLifetime::MaterializedView)?;
+    assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
+        &finishing,
+        expr.arity()
+    ));
+
+    let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
+
+    if let Some(dup) = column_names.iter().duplicates().next() {
+        sql_bail!("column {} specified more than once", dup.quoted());
+    }
+
+    // Check for name conflicts.
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if !stmt.if_not_exists {
+        if let Ok(item) = scx.catalog.resolve_item_or_type(&partial_name) {
+            return Err(PlanError::ItemAlreadyExists {
+                name: full_name.to_string(),
+                item_type: item.item_type(),
+            });
+        }
+    }
+
+    let dependencies: BTreeSet<_> = expr
+        .depends_on()
+        .into_iter()
+        .map(|gid| scx.catalog.resolve_item_id(&gid))
+        .collect();
+
+    Ok(Plan::CreateStandingQuery(CreateStandingQueryPlan {
+        name,
+        standing_query: StandingQuery {
+            create_sql,
+            expr,
+            dependencies: DependencyIds(dependencies),
+            column_names,
+            params,
+            cluster_id,
+        },
+        if_not_exists: stmt.if_not_exists,
+    }))
+}
+
+pub fn plan_execute_standing_query(
+    _scx: &StatementContext,
+    _stmt: ExecuteStandingQueryStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    // TODO: Resolve standing query from catalog, evaluate params, return ExecuteStandingQueryPlan.
+    bail_unsupported!("EXECUTE STANDING QUERY")
+}
 
 pub fn plan_create_continual_task(
     scx: &StatementContext,

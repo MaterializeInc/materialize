@@ -1559,7 +1559,7 @@ impl_display_t!(CreateContinualTaskStatement);
 /// `CREATE STANDING QUERY`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateStandingQueryStatement<T: AstInfo> {
-    pub name: T::ItemName,
+    pub name: UnresolvedItemName,
     /// Named, typed parameters: `(param_name type, ...)`
     pub params: Vec<StandingQueryParam<T>>,
     pub in_cluster: Option<T::ClusterName>,

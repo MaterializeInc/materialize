@@ -690,6 +690,12 @@ impl Coordinator {
                     let result = self.sequence_reassign_owned(ctx.session_mut(), plan).await;
                     ctx.retire(result);
                 }
+                Plan::CreateStandingQuery(_) => {
+                    ctx.retire(Err(AdapterError::Unsupported("CREATE STANDING QUERY")));
+                }
+                Plan::ExecuteStandingQuery(_) => {
+                    ctx.retire(Err(AdapterError::Unsupported("EXECUTE STANDING QUERY")));
+                }
                 Plan::ValidateConnection(plan) => {
                     let connection = plan
                         .connection
