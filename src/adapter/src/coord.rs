@@ -229,6 +229,7 @@ mod introspection;
 mod message_handler;
 mod privatelink_status;
 mod sql;
+pub(crate) mod standing_query_state;
 mod validity;
 
 #[derive(Debug)]
@@ -1802,6 +1803,8 @@ pub struct Coordinator {
     staged_cancellation: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
     /// Active introspection subscribes.
     introspection_subscribes: BTreeMap<GlobalId, IntrospectionSubscribe>,
+    /// Active standing queries, keyed by the SUBSCRIBE sink GlobalId.
+    active_standing_queries: BTreeMap<GlobalId, standing_query_state::ActiveStandingQuery>,
 
     /// Locks that grant access to a specific object, populated lazily as objects are written to.
     write_locks: BTreeMap<CatalogItemId, Arc<tokio::sync::Mutex<()>>>,
@@ -4515,6 +4518,7 @@ pub fn serve(
                     active_copies: BTreeMap::new(),
                     staged_cancellation: BTreeMap::new(),
                     introspection_subscribes: BTreeMap::new(),
+                    active_standing_queries: BTreeMap::new(),
                     write_locks: BTreeMap::new(),
                     deferred_write_ops: BTreeMap::new(),
                     pending_writes: Vec::new(),

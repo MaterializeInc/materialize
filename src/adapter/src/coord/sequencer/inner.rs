@@ -126,6 +126,7 @@ mod create_index;
 mod create_materialized_view;
 mod create_standing_query;
 mod create_view;
+mod execute_standing_query;
 mod explain_timestamp;
 mod peek;
 mod secret;

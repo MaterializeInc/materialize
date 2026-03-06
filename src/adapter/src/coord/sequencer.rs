@@ -696,8 +696,14 @@ impl Coordinator {
                         .await;
                     ctx.retire(res);
                 }
-                Plan::ExecuteStandingQuery(_) => {
-                    ctx.retire(Err(AdapterError::Unsupported("EXECUTE STANDING QUERY")));
+                Plan::ExecuteStandingQuery(plan) => {
+                    // sequence_execute_standing_query does NOT retire the ctx
+                    // on success — it stays open until results arrive.
+                    // On error, it returns the ctx so we can retire it.
+                    match self.sequence_execute_standing_query(ctx, plan) {
+                        Ok(()) => {}
+                        Err((err, ctx)) => ctx.retire(Err(err)),
+                    }
                 }
                 Plan::ValidateConnection(plan) => {
                     let connection = plan
