@@ -2270,6 +2270,36 @@ impl Coordinator {
                     self.ship_dataflow(df_desc, ct.cluster_id, None).await;
                     self.allow_writes(ct.cluster_id, ct.global_id());
                 }
+                CatalogItem::StandingQuery(sq) => {
+                    policies_to_set
+                        .entry(policy.expect("standing queries have a compaction window"))
+                        .or_insert_with(Default::default)
+                        .storage_ids
+                        .insert(sq.global_id());
+
+                    let df_desc = self
+                        .catalog()
+                        .try_get_physical_plan(&sq.global_id())
+                        .expect("added in `bootstrap_dataflow_plans`")
+                        .clone();
+
+                    let df_meta = self
+                        .catalog()
+                        .try_get_dataflow_metainfo(&sq.global_id())
+                        .expect("added in `bootstrap_dataflow_plans`");
+
+                    if self.catalog().state().system_config().enable_mz_notices() {
+                        // Collect optimization hint updates.
+                        self.catalog().state().pack_optimizer_notices(
+                            &mut builtin_table_updates,
+                            df_meta.optimizer_notices.iter(),
+                            Diff::ONE,
+                        );
+                    }
+
+                    self.ship_dataflow(df_desc, sq.cluster_id, None).await;
+                    self.allow_writes(sq.cluster_id, sq.global_id());
+                }
                 // Nothing to do for these cases
                 CatalogItem::Log(_)
                 | CatalogItem::Type(_)
@@ -3372,6 +3402,7 @@ impl Coordinator {
                 CatalogItem::Index(idx) => idx.global_id(),
                 CatalogItem::MaterializedView(mv) => mv.global_id_writes(),
                 CatalogItem::ContinualTask(ct) => ct.global_id(),
+                CatalogItem::StandingQuery(sq) => sq.global_id(),
                 CatalogItem::Table(_)
                 | CatalogItem::Source(_)
                 | CatalogItem::Log(_)

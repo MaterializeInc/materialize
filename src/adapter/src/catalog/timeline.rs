@@ -94,6 +94,9 @@ impl Catalog {
                                 .or_default()
                                 .insert(index.global_id());
                         }
+                        CatalogItem::StandingQuery(sq) => {
+                            id_bundle.storage_ids.insert(sq.global_id());
+                        }
                         CatalogItem::View(_)
                         | CatalogItem::Sink(_)
                         | CatalogItem::Type(_)
@@ -222,6 +225,16 @@ impl Catalog {
                         // See comment in MaterializedView
                         timelines.insert(TimelineContext::TimestampDependent);
                         let item_ids = raw_expr
+                            .depends_on()
+                            .into_iter()
+                            .map(|gid| self.resolve_item_id(&gid));
+                        ids.extend(item_ids);
+                    }
+                    CatalogItem::StandingQuery(sq) => {
+                        // See comment in MaterializedView
+                        timelines.insert(TimelineContext::TimestampDependent);
+                        let item_ids = sq
+                            .raw_expr
                             .depends_on()
                             .into_iter()
                             .map(|gid| self.resolve_item_id(&gid));

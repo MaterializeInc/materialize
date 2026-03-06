@@ -2711,7 +2711,7 @@ impl Coordinator {
                         }
                     }
                     match entry.item().typ() {
-                        typ @ (Func | View | MaterializedView | ContinualTask) => {
+                        typ @ (Func | View | MaterializedView | ContinualTask | StandingQuery) => {
                             ids_to_check.extend(entry.uses());
                             let valid_id = id.is_user() || matches!(typ, Func);
                             valid_id
@@ -3116,7 +3116,8 @@ impl Coordinator {
                     CatalogItem::Table(_)
                     | CatalogItem::MaterializedView(_)
                     | CatalogItem::Source(_)
-                    | CatalogItem::ContinualTask(_) => None,
+                    | CatalogItem::ContinualTask(_)
+                    | CatalogItem::StandingQuery(_) => None,
                     CatalogItem::Index(index) => Some(index.cluster_id),
                     CatalogItem::Log(_)
                     | CatalogItem::View(_)

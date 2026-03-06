@@ -1579,6 +1579,7 @@ impl CatalogImplication {
                 CatalogItem::Connection(connection) => {
                     self.absorb_connection(connection, None, catalog_update.diff);
                 }
+                CatalogItem::StandingQuery(_) => {}
                 CatalogItem::Log(_) => {}
                 CatalogItem::Type(_) => {}
                 CatalogItem::Func(_) => {}
@@ -1620,6 +1621,7 @@ impl CatalogImplication {
                 CatalogItem::Connection(connection) => {
                     self.absorb_connection(connection, None, catalog_update.diff);
                 }
+                CatalogItem::StandingQuery(_) => {}
                 CatalogItem::Log(_) => {}
                 CatalogItem::Type(_) => {}
                 CatalogItem::Func(_) => {}

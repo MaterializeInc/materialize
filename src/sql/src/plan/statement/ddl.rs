@@ -3267,7 +3267,8 @@ pub fn plan_create_continual_task(
         | CatalogItemType::Type
         | CatalogItemType::Func
         | CatalogItemType::Secret
-        | CatalogItemType::Connection => {
+        | CatalogItemType::Connection
+        | CatalogItemType::StandingQuery => {
             sql_bail!(
                 "CONTINUAL TASK cannot use {} as an input",
                 input.item_type()
@@ -3607,7 +3608,7 @@ fn plan_sink(
                     });
                 }
             }
-            Sink | View | Index | Type | Func | Secret | Connection => {
+            Sink | View | Index | Type | Func | Secret | Connection | StandingQuery => {
                 let name = scx.catalog.minimal_qualification(from.name());
                 return Err(PlanError::InvalidSinkFrom {
                     name: name.to_string(),
@@ -4327,7 +4328,7 @@ pub fn plan_create_index(
                     );
                 }
             }
-            Sink | Index | Type | Func | Secret | Connection => {
+            Sink | Index | Type | Func | Secret | Connection | StandingQuery => {
                 sql_bail!(
                     "index cannot be created on {} because it is a {}",
                     on_name.full_name_str(),
@@ -5881,7 +5882,8 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
             | CatalogItemType::Type
             | CatalogItemType::Secret
             | CatalogItemType::Connection
-            | CatalogItemType::ContinualTask => true,
+            | CatalogItemType::ContinualTask
+            | CatalogItemType::StandingQuery => true,
             CatalogItemType::Index => false,
         },
     }

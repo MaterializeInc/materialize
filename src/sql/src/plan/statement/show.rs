@@ -718,7 +718,8 @@ pub fn show_columns<'a>(
         | CatalogItemType::Table
         | CatalogItemType::View
         | CatalogItemType::MaterializedView
-        | CatalogItemType::ContinualTask => (),
+        | CatalogItemType::ContinualTask
+        | CatalogItemType::StandingQuery => (),
         ty @ CatalogItemType::Connection
         | ty @ CatalogItemType::Index
         | ty @ CatalogItemType::Func

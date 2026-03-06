@@ -1352,6 +1352,10 @@ pub fn item_type(create_sql: &str) -> CatalogItemType {
             assert_eq!(tokens.next(), Some("TASK"));
             CatalogItemType::ContinualTask
         }
+        Some("STANDING") => {
+            assert_eq!(tokens.next(), Some("QUERY"));
+            CatalogItemType::StandingQuery
+        }
         Some("INDEX") => CatalogItemType::Index,
         Some("TYPE") => CatalogItemType::Type,
         Some("FUNCTION") => CatalogItemType::Func,

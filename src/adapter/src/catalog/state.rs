@@ -425,7 +425,8 @@ impl CatalogState {
             item @ (CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_)) => {
+            | CatalogItem::ContinualTask(_)
+            | CatalogItem::StandingQuery(_)) => {
                 // TODO(jkosh44) Unclear if this table wants to include all uses or only references.
                 for item_id in item.references().items() {
                     self.introspection_dependencies_inner(*item_id, out);
@@ -1834,7 +1835,8 @@ impl CatalogState {
             | CatalogItemType::Index
             | CatalogItemType::Secret
             | CatalogItemType::Connection
-            | CatalogItemType::ContinualTask => schema.items[builtin.name()],
+            | CatalogItemType::ContinualTask
+            | CatalogItemType::StandingQuery => schema.items[builtin.name()],
         }
     }
 
@@ -2643,7 +2645,8 @@ impl CatalogState {
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
             | CommentObjectId::Secret(id)
-            | CommentObjectId::ContinualTask(id) => Some(*id),
+            | CommentObjectId::ContinualTask(id)
+            | CommentObjectId::StandingQuery(id) => Some(*id),
             CommentObjectId::Role(_)
             | CommentObjectId::Database(_)
             | CommentObjectId::Schema(_)
@@ -2673,7 +2676,8 @@ impl CatalogState {
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
             | CommentObjectId::Secret(id)
-            | CommentObjectId::ContinualTask(id) => {
+            | CommentObjectId::ContinualTask(id)
+            | CommentObjectId::StandingQuery(id) => {
                 let item = self.get_entry(&id);
                 let name = self.resolve_full_name(item.name(), Some(conn_id));
                 name.to_string()

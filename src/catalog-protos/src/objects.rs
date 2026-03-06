@@ -566,6 +566,7 @@ pub enum CommentObject {
     Type(CatalogItemId),
     Secret(CatalogItemId),
     ContinualTask(CatalogItemId),
+    StandingQuery(CatalogItemId),
     Role(RoleId),
     Database(DatabaseId),
     Schema(ResolvedSchema),
@@ -2894,6 +2895,7 @@ pub enum CatalogItemType {
     Secret = 9,
     Connection = 10,
     ContinualTask = 11,
+    StandingQuery = 12,
 }
 
 #[derive(

@@ -1712,7 +1712,10 @@ fn generate_read_privileges_inner(
                 CatalogItemType::Type | CatalogItemType::Secret | CatalogItemType::Connection => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::USAGE, role_id));
                 }
-                CatalogItemType::Sink | CatalogItemType::Index | CatalogItemType::Func => {}
+                CatalogItemType::Sink
+                | CatalogItemType::Index
+                | CatalogItemType::Func
+                | CatalogItemType::StandingQuery => {}
             }
         }
     }

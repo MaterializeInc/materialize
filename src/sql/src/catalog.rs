@@ -917,6 +917,8 @@ pub enum CatalogItemType {
     Connection,
     /// A continual task.
     ContinualTask,
+    /// A standing query.
+    StandingQuery,
 }
 
 impl CatalogItemType {
@@ -951,6 +953,7 @@ impl CatalogItemType {
             CatalogItemType::Secret => false,
             CatalogItemType::Connection => false,
             CatalogItemType::ContinualTask => true,
+            CatalogItemType::StandingQuery => true,
         }
     }
 }
@@ -969,6 +972,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Secret => f.write_str("secret"),
             CatalogItemType::Connection => f.write_str("connection"),
             CatalogItemType::ContinualTask => f.write_str("continual task"),
+            CatalogItemType::StandingQuery => f.write_str("standing query"),
         }
     }
 }
@@ -987,6 +991,7 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::Secret => ObjectType::Secret,
             CatalogItemType::Connection => ObjectType::Connection,
             CatalogItemType::ContinualTask => ObjectType::ContinualTask,
+            CatalogItemType::StandingQuery => ObjectType::StandingQuery,
         }
     }
 }
@@ -1005,6 +1010,7 @@ impl From<CatalogItemType> for mz_audit_log::ObjectType {
             CatalogItemType::Secret => mz_audit_log::ObjectType::Secret,
             CatalogItemType::Connection => mz_audit_log::ObjectType::Connection,
             CatalogItemType::ContinualTask => mz_audit_log::ObjectType::ContinualTask,
+            CatalogItemType::StandingQuery => mz_audit_log::ObjectType::StandingQuery,
         }
     }
 }
@@ -1607,6 +1613,7 @@ impl From<CommentObjectId> for ObjectType {
             CommentObjectId::Cluster(_) => ObjectType::Cluster,
             CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
             CommentObjectId::ContinualTask(_) => ObjectType::ContinualTask,
+            CommentObjectId::StandingQuery(_) => ObjectType::StandingQuery,
             CommentObjectId::NetworkPolicy(_) => ObjectType::NetworkPolicy,
         }
     }
