@@ -23,6 +23,7 @@ use mz_postgres_client::PostgresClientKnobs;
 use mz_postgres_client::metrics::PostgresClientMetrics;
 
 use crate::azure::{AzureBlob, AzureBlobConfig};
+use crate::crypto::{BlobEncryptionConfig, EncryptedBlob, EncryptedConsensus, EncryptionConfig};
 use crate::file::{FileBlob, FileBlobConfig};
 use crate::hedge::HedgeSibling;
 use crate::location::{Blob, Consensus, Determinate, ExternalError};
@@ -78,7 +79,7 @@ pub async fn open_hedge_sibling(
     match config {
         // A second S3/Azure config builds its own SDK client and therefore
         // its own connection pool, with DNS resolved per connect.
-        config @ (BlobConfig::S3(_) | BlobConfig::Azure(_)) => match config.open().await {
+        config @ (BlobConfig::S3(..) | BlobConfig::Azure(_)) => match config.open().await {
             Ok(blob) => HedgeSibling::Isolated(blob),
             Err(err) => {
                 warn!(
@@ -104,8 +105,8 @@ pub async fn open_hedge_sibling(
 pub enum BlobConfig {
     /// Config for [FileBlob].
     File(FileBlobConfig),
-    /// Config for [S3Blob].
-    S3(S3BlobConfig),
+    /// Config for [S3Blob], with optional envelope encryption.
+    S3(S3BlobConfig, Option<BlobEncryptionConfig>),
     /// Config for [MemBlob], only available in testing to prevent
     /// footguns.
     Mem(bool),
@@ -135,7 +136,29 @@ impl BlobConfig {
     pub async fn open(self) -> Result<Arc<dyn Blob>, ExternalError> {
         match self {
             BlobConfig::File(config) => Ok(Arc::new(FileBlob::open(config).await?)),
-            BlobConfig::S3(config) => Ok(Arc::new(S3Blob::open(config).await?)),
+            BlobConfig::S3(config, encryption) => {
+                let blob: Arc<dyn Blob> = Arc::new(S3Blob::open(config).await?);
+                match encryption {
+                    None => Ok(blob),
+                    Some(enc_cfg) => {
+                        let kms_client = enc_cfg.build_kms_client().await?;
+                        let customer_kms_client =
+                            enc_cfg.build_customer_kms_client().await?;
+                        let customer_kms_key_id = enc_cfg.customer_kms_key_id.clone();
+                        Ok(Arc::new(
+                            EncryptedBlob::new(
+                                blob,
+                                kms_client,
+                                enc_cfg.kms_key_id,
+                                enc_cfg.dek_rotation_interval,
+                                customer_kms_client,
+                                customer_kms_key_id,
+                            )
+                            .await?,
+                        ))
+                    }
+                }
+            }
             BlobConfig::Azure(config) => Ok(Arc::new(AzureBlob::open(config).await?)),
             BlobConfig::Mem(tombstone) => {
                 Ok(Arc::new(MemBlob::open(MemBlobConfig::new(tombstone))))
@@ -187,6 +210,35 @@ impl BlobConfig {
                     )),
                 };
 
+                let kms_key_id = query_params.remove("kms_key_id").map(|x| x.into_owned());
+                let kms_region = query_params.remove("kms_region").map(|x| x.into_owned());
+                let dek_rotation_interval_secs = query_params
+                    .remove("dek_rotation_interval_secs")
+                    .and_then(|x| x.parse::<u64>().ok());
+
+                let customer_kms_key_id =
+                    query_params.remove("customer_kms_key_id").map(|x| x.into_owned());
+                let customer_kms_region =
+                    query_params.remove("customer_kms_region").map(|x| x.into_owned());
+                let customer_kms_endpoint =
+                    query_params.remove("customer_kms_endpoint").map(|x| x.into_owned());
+                let customer_kms_role_arn =
+                    query_params.remove("customer_kms_role_arn").map(|x| x.into_owned());
+
+                let encryption = kms_key_id.map(|key_id| BlobEncryptionConfig {
+                    kms_key_id: key_id,
+                    kms_region: kms_region.or_else(|| region.clone()),
+                    endpoint: endpoint.clone(),
+                    role_arn: role_arn.clone(),
+                    dek_rotation_interval: Duration::from_secs(
+                        dek_rotation_interval_secs.unwrap_or(300),
+                    ),
+                    customer_kms_key_id,
+                    customer_kms_region,
+                    customer_kms_endpoint,
+                    customer_kms_role_arn,
+                });
+
                 let config = S3BlobConfig::new(
                     bucket,
                     prefix,
@@ -199,7 +251,7 @@ impl BlobConfig {
                 )
                 .await?;
 
-                Ok(BlobConfig::S3(config))
+                Ok(BlobConfig::S3(config, encryption))
             }
             "mem" => {
                 if !cfg!(debug_assertions) {
@@ -275,8 +327,8 @@ impl BlobConfig {
 /// Config for an implementation of [Consensus].
 #[derive(Debug, Clone)]
 pub enum ConsensusConfig {
-    /// Config for [PostgresConsensus].
-    Postgres(PostgresConsensusConfig),
+    /// Config for [PostgresConsensus], with optional envelope encryption.
+    Postgres(PostgresConsensusConfig, Option<EncryptionConfig>),
     /// Config for [MemConsensus], only available in testing.
     Mem,
     #[cfg(feature = "turmoil")]
@@ -288,8 +340,29 @@ impl ConsensusConfig {
     /// Opens the associated implementation of [Consensus].
     pub async fn open(self) -> Result<Arc<dyn Consensus>, ExternalError> {
         match self {
-            ConsensusConfig::Postgres(config) => {
-                Ok(Arc::new(PostgresConsensus::open(config).await?))
+            ConsensusConfig::Postgres(config, encryption) => {
+                let consensus: Arc<dyn Consensus> =
+                    Arc::new(PostgresConsensus::open(config).await?);
+                match encryption {
+                    None => Ok(consensus),
+                    Some(enc_cfg) => {
+                        let kms_client = enc_cfg.build_kms_client().await?;
+                        let customer_kms_client =
+                            enc_cfg.build_customer_kms_client().await?;
+                        let customer_kms_key_id = enc_cfg.customer_kms_key_id.clone();
+                        Ok(Arc::new(
+                            EncryptedConsensus::new(
+                                consensus,
+                                kms_client,
+                                enc_cfg.kms_key_id,
+                                enc_cfg.dek_rotation_interval,
+                                customer_kms_client,
+                                customer_kms_key_id,
+                            )
+                            .await?,
+                        ))
+                    }
+                }
             }
             ConsensusConfig::Mem => Ok(Arc::new(MemConsensus::default())),
             #[cfg(feature = "turmoil")]
@@ -307,9 +380,52 @@ impl ConsensusConfig {
         dyncfg: Arc<ConfigSet>,
     ) -> Result<Self, ExternalError> {
         let config = match url.scheme() {
-            "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(
-                PostgresConsensusConfig::new(url, knobs, metrics, dyncfg)?,
-            )),
+            "postgres" | "postgresql" => {
+                let mut query_params = url.query_pairs().collect::<BTreeMap<_, _>>();
+                let kms_key_id = query_params.remove("kms_key_id").map(|x| x.into_owned());
+                let kms_region = query_params.remove("kms_region").map(|x| x.into_owned());
+                let dek_rotation_interval_secs = query_params
+                    .remove("dek_rotation_interval_secs")
+                    .and_then(|x| x.parse::<u64>().ok());
+
+                let customer_kms_key_id =
+                    query_params.remove("customer_kms_key_id").map(|x| x.into_owned());
+                let customer_kms_region =
+                    query_params.remove("customer_kms_region").map(|x| x.into_owned());
+                let customer_kms_role_arn =
+                    query_params.remove("customer_kms_role_arn").map(|x| x.into_owned());
+
+                let encryption = kms_key_id.map(|key_id| EncryptionConfig {
+                    kms_key_id: key_id,
+                    kms_region,
+                    endpoint: None,
+                    role_arn: None,
+                    dek_rotation_interval: Duration::from_secs(
+                        dek_rotation_interval_secs.unwrap_or(300),
+                    ),
+                    customer_kms_key_id,
+                    customer_kms_region,
+                    customer_kms_endpoint: None,
+                    customer_kms_role_arn,
+                });
+
+                // Strip KMS params from URL before passing to Postgres driver.
+                let clean_url = if encryption.is_some() {
+                    let mut inner = url.0.clone();
+                    inner.set_query(None);
+                    for (k, v) in &query_params {
+                        inner.query_pairs_mut().append_pair(k, v);
+                    }
+                    SensitiveUrl(inner)
+                } else {
+                    url.clone()
+                };
+
+                Ok(ConsensusConfig::Postgres(
+                    PostgresConsensusConfig::new(&clean_url, knobs, metrics, dyncfg)?,
+                    encryption,
+                ))
+            }
             "mem" => {
                 if !cfg!(debug_assertions) {
                     warn!("persist unexpectedly using in-mem consensus in a release binary");
