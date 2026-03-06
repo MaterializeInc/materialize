@@ -46,6 +46,18 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=dbz-ticdc
 1 alice_updated
 2 bob
 
+# --- Verify envelope column preserves CDC metadata ---
+# The envelope column contains the full Debezium envelope including source metadata.
+# This is critical for TiCDC users who need commit_ts to correlate with Dumpling snapshots.
+> SELECT key, envelope->'source'->>'commit_ts' FROM dbz_ticdc_tbl ORDER BY key
+1 1002
+2 1001
+
+# ts_ms is also available
+> SELECT key, envelope->>'ts_ms' FROM dbz_ticdc_tbl ORDER BY key
+1 1609459200002
+2 1609459200001
+
 # --- Test delete ---
 
 $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=dbz-ticdc

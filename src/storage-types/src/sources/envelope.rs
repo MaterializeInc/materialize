@@ -243,13 +243,17 @@ impl UnplannedSourceEnvelope {
                 style: UpsertStyle::DebeziumJson { .. },
                 ..
             } => {
-                // JSON Debezium: output is [key: Jsonb, data: Jsonb, ...metadata]
+                // JSON Debezium: output is [key: Jsonb, data: Jsonb, envelope: Jsonb, ...metadata]
                 // Key is included as a separate column (unlike Avro Debezium).
+                // `data` contains the `after` field (the row payload).
+                // `envelope` contains the full Debezium envelope for CDC metadata
+                // access (e.g., source.commit_ts for TiCDC correlation).
                 let key_desc = RelationDesc::builder()
                     .with_column("key", SqlScalarType::Jsonb.nullable(false))
                     .finish();
                 let value_desc = RelationDesc::builder()
                     .with_column("data", SqlScalarType::Jsonb.nullable(false))
+                    .with_column("envelope", SqlScalarType::Jsonb.nullable(false))
                     .finish();
                 // key_indices = [0]: points to the key column for UpsertKey::from_value rehydration
                 let key_indices = vec![0usize];

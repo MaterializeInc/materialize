@@ -554,11 +554,12 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
             Some(Ok(ref row)) => match upsert_envelope.style {
                 UpsertStyle::DebeziumJson { ref mode } => {
                     match extract_debezium_json(row, mode) {
-                        Ok(Some(after_row)) => {
+                        Ok(Some((after_row, envelope_row))) => {
                             let mut packer = row_buf.packer();
-                            // Per DD-9: prepend key, then after payload, then metadata
+                            // key, data (after), envelope (full), then metadata
                             packer.extend_by_row(&key_row);
                             packer.extend_by_row(&after_row);
+                            packer.extend_by_row(&envelope_row);
                             packer.extend_by_row(&metadata);
                             Some(Ok(row_buf.clone()))
                         }
@@ -637,11 +638,16 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
 /// Handles both `payload`-wrapped (`{ "payload": { "op": ..., "after": ... } }`)
 /// and flat (`{ "op": ..., "after": ... }`) formats.
 ///
+/// Extracts the `after` payload and full envelope from a Debezium JSON message.
+///
 /// Returns:
-/// - `Ok(Some(row))` for insert/update/snapshot operations (op = c/u/r)
+/// - `Ok(Some((after_row, envelope_row)))` for insert/update/snapshot operations (op = c/u/r)
 /// - `Ok(None)` for delete/truncate operations (op = d/t)
 /// - `Err(DecodeError)` for malformed messages
-fn extract_debezium_json(row: &Row, _mode: &DebeziumJsonMode) -> Result<Option<Row>, DecodeError> {
+fn extract_debezium_json(
+    row: &Row,
+    _mode: &DebeziumJsonMode,
+) -> Result<Option<(Row, Row)>, DecodeError> {
     use mz_repr::adt::jsonb::JsonbRef;
 
     let datum = row.iter().next().unwrap();
@@ -706,7 +712,19 @@ fn extract_debezium_json(row: &Row, _mode: &DebeziumJsonMode) -> Result<Option<R
                         raw: vec![],
                     }
                 })?;
-            Ok(Some(after_json.into_row()))
+
+            // Preserve the full envelope as Jsonb for CDC metadata access
+            let envelope_json =
+                mz_repr::adt::jsonb::Jsonb::from_serde_json(envelope.clone()).map_err(|e| {
+                    DecodeError {
+                        kind: DecodeErrorKind::Text(
+                            format!("Failed to convert Debezium envelope to Jsonb: {}", e).into(),
+                        ),
+                        raw: vec![],
+                    }
+                })?;
+
+            Ok(Some((after_json.into_row(), envelope_json.into_row())))
         }
         other => Err(DecodeError {
             kind: DecodeErrorKind::Text(

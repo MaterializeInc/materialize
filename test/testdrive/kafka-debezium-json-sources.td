@@ -39,11 +39,15 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=dbz-json
   ENVELOPE DEBEZIUM
 > COMMIT
 
-# Output schema is [key: jsonb, data: jsonb]
+# Output schema is [key: jsonb, data: jsonb, envelope: jsonb]
 # The last update for key=1 should win (lizard)
 # Use ->> to extract fields since JSON key order is non-deterministic
 > SELECT key, data->>'id', data->>'creature' FROM dbz_json_tbl
 1 1 lizard
+
+# The envelope column contains the full Debezium envelope
+> SELECT envelope->>'op' FROM dbz_json_tbl
+u
 
 # --- Insert a second row ---
 

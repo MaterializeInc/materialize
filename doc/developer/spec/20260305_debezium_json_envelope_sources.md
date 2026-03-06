@@ -47,14 +47,14 @@ Lift the Avro-only restriction on `ENVELOPE DEBEZIUM` to also accept `VALUE FORM
 - JSON Debezium envelope parsing (extract `before`/`after`/`op` from `payload`)
 - TiCDC dialect via `MODE` parameter (e.g., `ENVELOPE DEBEZIUM (MODE = 'TICDC')`)
 - Insert (`c`), update (`u`), delete (`d`) operation handling
-- Single `jsonb` output column for the "after" payload
+- Output columns: `data` (jsonb, the "after" payload) and `envelope` (jsonb, the full Debezium envelope for CDC metadata access)
 - Support both `payload`-wrapped and flat envelope formats
 - Error handling for malformed Debezium JSON messages
 
 **Out of Scope:**
 - Schema-aware column projection from JSON payloads
 - Keyless / upsert-from-payload sources
-- `commit_ts`-based ordering from TiCDC source metadata
+- `commit_ts`-based ordering from TiCDC source metadata (note: `commit_ts` is preserved in the `envelope` column for user queries, but not used for ordering)
 - Spatial type handling for TiCDC
 
 ## Context for Development
@@ -237,7 +237,7 @@ For JSON + Debezium, the JSON decoder still produces a single Jsonb datum contai
 
 - [ ] **Task 4: Add UnplannedSourceEnvelope descriptor transform for DebeziumJson**
   - File: `src/storage-types/src/sources/envelope.rs`
-  - Action: In the `UnplannedSourceEnvelope` match that builds the output `RelationDesc` (line ~230), add a new arm for `UpsertStyle::DebeziumJson`. Per DD-9, the output schema is `[key: Jsonb, data: Jsonb, ...metadata]`:
+  - Action: In the `UnplannedSourceEnvelope` match that builds the output `RelationDesc` (line ~230), add a new arm for `UpsertStyle::DebeziumJson`. Per DD-9, the output schema is `[key: Jsonb, data: Jsonb, envelope: Jsonb, ...metadata]`:
     ```rust
     UnplannedSourceEnvelope::Upsert {
         style: UpsertStyle::DebeziumJson { .. },
@@ -372,7 +372,7 @@ For JSON + Debezium, the JSON decoder still produces a single Jsonb datum contai
 - [ ] AC-6: Given a Debezium JSON message with `"op": "r"` (snapshot/read), when ingested, then it is treated as an insert (same as `"c"`). [DD-12]
 
 **TiCDC Mode:**
-- [ ] AC-7: Given `ENVELOPE DEBEZIUM (MODE = 'TICDC')` in the CREATE SOURCE statement, when a TiCDC-formatted JSON message is published, then the source processes it correctly (same behavior as generic mode for V1, with `commit_ts`/`cluster_id` in source metadata ignored).
+- [ ] AC-7: Given `ENVELOPE DEBEZIUM (MODE = 'TICDC')` in the CREATE SOURCE statement, when a TiCDC-formatted JSON message is published, then the source processes it correctly. The full Debezium envelope (including `commit_ts`, `cluster_id`, and other TiCDC metadata) is preserved in the `envelope` column for user queries (e.g., `envelope->'source'->>'commit_ts'`).
 
 **Error Handling:**
 - [ ] AC-8: Given a JSON message with a missing `"op"` field, when ingested, then a decode error is surfaced through the source's error collection (not silently dropped).
@@ -425,7 +425,7 @@ For JSON + Debezium, the JSON decoder still produces a single Jsonb datum contai
 **Future considerations (out of scope):**
 - Schema-aware column projection (`CREATE SOURCE ... (id int, name text) FORMAT JSON ENVELOPE DEBEZIUM`)
 - Keyless upsert where key is derived from the Debezium payload
-- `commit_ts`-based ordering for TiCDC
+- `commit_ts`-based ordering for TiCDC (the field is already preserved in the `envelope` column; future work is using it for message ordering)
 - Additional MODE values: Maxwell, Canal, etc.
 - Truncate operation support (DD-13)
 
