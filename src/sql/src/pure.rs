@@ -1726,11 +1726,23 @@ async fn purify_create_table_from_source(
         with_options,
     } = &mut stmt;
 
-    // Columns and constraints cannot be specified by the user but will be populated below.
-    if matches!(columns, TableFromSourceColumns::Defined(_)) {
+    // Columns and constraints cannot be specified by the user but will be populated below,
+    // EXCEPT for JSON + ENVELOPE DEBEZIUM which requires user-declared columns since JSON
+    // has no schema introspection (unlike Avro which gets its schema from CSR or inline).
+    // The user-declared columns and PRIMARY KEY constraint are threaded through to the
+    // planner which builds the DebeziumJson/TypedJson encoding variants.
+    let is_json_debezium = matches!(envelope, Some(SourceEnvelope::Debezium))
+        && matches!(
+            format,
+            Some(FormatSpecifier::KeyValue {
+                value: Format::Json { .. },
+                ..
+            }) | Some(FormatSpecifier::Bare(Format::Json { .. }))
+        );
+    if matches!(columns, TableFromSourceColumns::Defined(_)) && !is_json_debezium {
         sql_bail!("CREATE TABLE .. FROM SOURCE column definitions cannot be specified directly");
     }
-    if !constraints.is_empty() {
+    if !constraints.is_empty() && !is_json_debezium {
         sql_bail!(
             "CREATE TABLE .. FROM SOURCE constraint definitions cannot be specified directly"
         );

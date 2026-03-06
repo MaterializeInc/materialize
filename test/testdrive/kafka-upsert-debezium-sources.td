@@ -110,7 +110,7 @@ contains:ENVELOPE [DEBEZIUM] UPSERT requires that KEY FORMAT be specified
 ! CREATE TABLE doin_upsert_tbl FROM SOURCE doin_upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   KEY FORMAT JSON VALUE FORMAT JSON
   ENVELOPE DEBEZIUM
-contains:ENVELOPE DEBEZIUM requires that VALUE FORMAT is set to AVRO
+contains:ENVELOPE DEBEZIUM with FORMAT JSON requires explicit column definitions
 
 > CREATE TABLE doin_upsert_tbl FROM SOURCE doin_upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
