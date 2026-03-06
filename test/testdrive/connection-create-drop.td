@@ -492,3 +492,85 @@ contains: unknown catalog item 'foo'
     AVAILABILITY ZONES ('use1-az1', 'use1-az4')
   )
 contains: AWS PrivateLink
+
+## AWS PRIVATELINKS (plural, dynamic broker discovery)
+
+# AWS PRIVATELINKS requires a default connection at the end
+! CREATE CONNECTION conn1 TO KAFKA (
+    AWS PRIVATELINKS (
+        '*.use1-az1.*' TO foo (AVAILABILITY ZONE = 'use1-az1')
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  );
+contains: Whoops
+
+# AWS PRIVATELINKS with unknown catalog item
+! CREATE CONNECTION conn1 TO KAFKA (
+    AWS PRIVATELINKS (
+        '*.use1-az1.*' TO foo (AVAILABILITY ZONE = 'use1-az1'),
+        foo
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  );
+contains: Whoops
+
+# AWS PRIVATELINKS cannot be combined with BROKER
+! CREATE CONNECTION conn1 TO KAFKA (
+    BROKER 'kafka:9092',
+    AWS PRIVATELINKS (
+        foo
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  );
+contains: Whoops
+
+# AWS PRIVATELINKS cannot be combined with BROKERS
+! CREATE CONNECTION conn1 TO KAFKA (
+    BROKERS ('kafka:9092'),
+    AWS PRIVATELINKS (
+        foo
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  );
+contains: Whoops
+
+# AWS PRIVATELINKS cannot be combined with AWS PRIVATELINK (singular)
+! CREATE CONNECTION conn1 TO KAFKA (
+    AWS PRIVATELINK foo,
+    AWS PRIVATELINKS (
+        foo
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  );
+contains: Whoops
+
+# AWS PRIVATELINKS with pattern rules and default connection (references
+# nonexistent connections, so expect unknown catalog item errors)
+! CREATE CONNECTION conn1 TO KAFKA (
+    AWS PRIVATELINKS (
+        '*.use1-az1.*' TO pl_svc (AVAILABILITY ZONE = 'use1-az1'),
+        '*.use1-az4.*' TO pl_svc (AVAILABILITY ZONE = 'use1-az4'),
+        pl_svc
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  );
+contains: Whoops
+
+# AWS PRIVATELINKS with PORT on pattern rule
+! CREATE CONNECTION conn1 TO KAFKA (
+    AWS PRIVATELINKS (
+        '*.use1-az1.*' TO pl_svc (PORT 9093, AVAILABILITY ZONE = 'use1-az1'),
+        pl_svc
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  );
+contains: Whoops
+
+# AWS PRIVATELINKS with PORT on default connection
+! CREATE CONNECTION conn1 TO KAFKA (
+    AWS PRIVATELINKS (
+        pl_svc (PORT 30292)
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  );
+contains: Whoops
