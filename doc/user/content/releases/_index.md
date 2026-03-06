@@ -67,7 +67,7 @@ For more information, see:
 
 - Fixed the jsonb contains operator (`?`) to correctly return NULL when
   the left operand is NULL, matching PostgreSQL behavior.
-- Internal optimization that reduces resource usage of the catalog server; this can 
+- Internal optimization that reduces resource usage of the catalog server; this can
   reduce resource consumption on restart when indexes are added.
 - Fixed a panic when using `COPY FROM` with invalid range values (e.g.,
   `[7,3)` where lower bound exceeds upper bound), now returning a
