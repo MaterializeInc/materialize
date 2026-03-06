@@ -1,0 +1,34 @@
+- name: "syntax"
+  code: |
+    COPY [INTO] <table_name> [ ( <column> [, ...] ) ] FROM [<s3 URI> | <http URL>]
+    [[WITH] ( <option1> [=] <val1> [, ...] ] )]
+    ;
+  syntax_elements:
+    - name: "`<table_name>`"
+      description: |
+        Name of an existing [table](/sql/create-table/) to copy data into.
+    - name: "`( <column> [, ...] )`"
+      description: |
+        If specified, correlate the inserted rows' columns to `<table_name>`'s columns by ordinal position, i.e. the first column of the row to insert is correlated to the first named column. If not specified, all columns must have data provided, and will be referenced using their order in the table. With a partial column list, all unreferenced columns will receive their default value.
+    - name: "`<s3 URI>`"
+      description: |
+        The unique resource identifier (URI) of the Amazon S3 bucket (and prefix) to retrieve the file(s) to be copied from. If using an s3 URI, an AWS connection must be provided in the `WITH` clause.
+    - name: "`<HTTP URL>`"
+      description: |
+        The URL (for example, s3 presigned URL) to retrieve the file(s) to be copied from.
+    - name: "`[WITH] ( <option1> [=] <val1> [, ...] )`"
+      description: |
+        The following `<options>` are supported for the `COPY FROM` operation:
+        Name | Value type | Default value | Description
+        -----|-----------------|---------------|------------
+        `FORMAT` | `CSV` | None, must be provided | Sets the input formatting method. For more information see [formatting details below](#details).
+        `DELIMITER` | Single-quoted one-byte character | Format-dependent | Overrides the format's default column delimiter. _`FORMAT CSV` only_
+        `NULL` | Single-quoted strings | Format-dependent | Specifies the string that represents a _NULL_ value. _`FORMAT CSV` only_
+        `QUOTE` | Single-quoted one-byte character | `"` | Specifies the character to signal a quoted string, which may contain the `DELIMITER` value (without beginning new columns). To include the `QUOTE` character itself in column, wrap the column's value in the `QUOTE` character and prefix all instance of the value you want to literally interpret with the `ESCAPE` value. _`FORMAT CSV` only_
+        `ESCAPE` | Single-quoted strings | `QUOTE`'s value | Specifies the character to allow instances of the `QUOTE` character to be parsed literally as part of a column's value. _`FORMAT CSV` only_
+        `HEADER`  | `boolean`   | `false`  | Specifies that the file contains a header line with the names of each column in the file. The first line is ignored on input.  _`FORMAT CSV` only._
+        `AWS CONNECTION` | _connection_name_ |  |  The name of the AWS connection to use in the `COPY FROM` command. If using an s3 URI, must be specified. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#aws) documentation page. _Only valid with S3._
+        `FILES`   | array | | A list of files to be appended to the URI. Example: `[ "top.csv", "files/a.csv", "files/b.csv" ]`.
+        `PATTERN` | string | | A glob used to identify files at at the URI. Example: `"files/**"`.
+
+        Note that `DELIMITER` and `QUOTE` must use distinct values.

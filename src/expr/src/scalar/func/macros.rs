@@ -226,8 +226,8 @@ macro_rules! derive_unary {
     }
 }
 
-/// Generates the `VariadicFunc` enum, `Display` impl (delegating to inner),
-/// and `From<InnerType>` impls for each variant.
+/// Generates the `VariadicFunc` enum, its `impl` block,
+/// `Display` impl, and `From<InnerType>` impls for each variant.
 ///
 /// All variants must use explicit `Name(Type)` syntax. When the variant name equals
 /// the inner type name, write e.g. `And(And)`.
@@ -235,15 +235,77 @@ macro_rules! derive_variadic {
     ($($name:ident ( $variant:ident )),* $(,)?) => {
         #[derive(
             Ord, PartialOrd, Clone, Debug, Eq, PartialEq,
-            serde::Serialize, serde::Deserialize, Hash,
-            mz_lowertest::MzReflect,
+            serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect,
         )]
         pub enum VariadicFunc {
             $($name($variant),)*
         }
 
-        impl std::fmt::Display for VariadicFunc {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        impl VariadicFunc {
+            pub fn eval<'a>(
+                &'a self,
+                datums: &[Datum<'a>],
+                temp_storage: &'a RowArena,
+                exprs: &'a [MirScalarExpr],
+            ) -> Result<Datum<'a>, EvalError> {
+                match self {
+                    $(Self::$name(f) => f.eval(datums, temp_storage, exprs),)*
+                }
+            }
+
+            pub fn output_sql_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+                match self {
+                    $(Self::$name(f) => LazyVariadicFunc::output_type(f, &input_types),)*
+                }
+            }
+
+            /// Computes the representation type of this variadic function.
+            ///
+            /// Wrapper around [`Self::output_sql_type`] that converts to representation types.
+            pub fn output_type(&self, input_types: Vec<ReprColumnType>) -> ReprColumnType {
+                let sql_types = input_types.iter().map(SqlColumnType::from_repr).collect();
+                ReprColumnType::from(&self.output_sql_type(sql_types))
+            }
+
+            pub fn propagates_nulls(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyVariadicFunc::propagates_nulls(f),)*
+                }
+            }
+
+            pub fn introduces_nulls(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyVariadicFunc::introduces_nulls(f),)*
+                }
+            }
+
+            pub fn could_error(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyVariadicFunc::could_error(f),)*
+                }
+            }
+
+            pub fn is_monotone(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyVariadicFunc::is_monotone(f),)*
+                }
+            }
+
+            pub fn is_associative(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyVariadicFunc::is_associative(f),)*
+                }
+            }
+
+            pub fn is_infix_op(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyVariadicFunc::is_infix_op(f),)*
+                }
+            }
+        }
+
+        impl fmt::Display for VariadicFunc {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match self {
                     $(Self::$name(func) => func.fmt(f),)*
                 }

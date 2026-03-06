@@ -12,6 +12,39 @@
 //! environmentd embeds an HTTP server for introspection into the running
 //! process. At the moment, its primary exports are Prometheus metrics, heap
 //! profiles, and catalog dumps.
+//!
+//! ## Authentication flow
+//!
+//! The server supports several authentication modes, controlled by the
+//! configured [`AuthenticatorKind`]. The general flow is:
+//!
+//! 1. **Identity resolution.** An authentication middleware runs on every
+//!    protected request and resolves the caller's identity via one of:
+//!    - **Credentials in headers.** The caller supplies a username/password or
+//!      token in the request headers. Supported by all [`AuthenticatorKind`]s.
+//!    - **Session reuse.** If the caller has an active authenticated session
+//!      (established via `POST /api/login`) and has not supplied credentials
+//!      in the request headers, the session is reused. Only available for
+//!      [`AuthenticatorKind::Password`] and [`AuthenticatorKind::Oidc`].
+//!    - **Trusted header injection.** A trusted upstream proxy (e.g. Teleport)
+//!      may inject the caller's identity into the request headers. Only available
+//!      for [`AuthenticatorKind::None`].
+//!
+//! 2. **Session initialization.** Once the caller's identity is known, an
+//!    adapter session is opened on their behalf. This happens as part of
+//!    request processing, after all middleware has run.
+//!
+//! 3. **Request handling.** The handler executes the request (e.g. runs SQL)
+//!    using the initialized adapter session.
+//!
+//! ### WebSocket
+//!
+//! The WebSocket flow is identical to the HTTP flow with two differences:
+//!
+//! - Credentials are not read from request headers. Instead, the first
+//!   message sent by the client is treated as the authentication message.
+//! - Session initialization (step 2) happens inside the WebSocket handler
+//!   itself, rather than as a separate middleware step.
 
 // Axum handlers must use async, but often don't actually use `await`.
 #![allow(clippy::unused_async)]
@@ -83,7 +116,7 @@ use tracing::warn;
 
 use crate::BUILD_INFO;
 use crate::deployment::state::DeploymentStateHandle;
-use crate::http::sql::SqlError;
+use crate::http::sql::{ExistingUser, SqlError};
 
 mod catalog;
 mod cluster;
@@ -771,7 +804,7 @@ where
 }
 
 #[derive(Debug, Error)]
-enum AuthError {
+pub(crate) enum AuthError {
     #[error("role dissallowed")]
     RoleDisallowed(String),
     #[error("{0}")]
@@ -867,35 +900,31 @@ async fn http_auth(
     oidc_rx: Delayed<mz_authenticator::GenericOidcAuthenticator>,
     adapter_client_rx: Delayed<Client>,
     allowed_roles: AllowedRoles,
-) -> impl IntoResponse + use<> {
-    // First check for session authentication
-    if let Some(session) = req.extensions().get::<TowerSession>() {
-        if let Ok(Some(session_data)) = session.get::<TowerSessionData>("data").await {
-            // Check session expiration
-            if session_data
-                .last_activity
-                .elapsed()
-                .unwrap_or(Duration::MAX)
-                > SESSION_DURATION
-            {
-                let _ = session.delete().await;
-                return Err(AuthError::SessionExpired);
-            }
-            // Update last activity
-            let mut updated_data = session_data.clone();
-            updated_data.last_activity = SystemTime::now();
-            session
-                .insert("data", &updated_data)
-                .await
-                .map_err(|_| AuthError::FailedToUpdateSession)?;
-            // User is authenticated via session
-            req.extensions_mut().insert(AuthedUser {
-                name: session_data.username,
-                external_metadata_rx: None,
-                authenticated: session_data.authenticated,
-            });
-            return Ok(next.run(req).await);
-        }
+) -> Result<impl IntoResponse, AuthError> {
+    let creds = if let Some(basic) = req.headers().typed_get::<Authorization<Basic>>() {
+        Some(Credentials::Password {
+            username: basic.username().to_owned(),
+            password: Password(basic.password().to_owned()),
+        })
+    } else if let Some(bearer) = req.headers().typed_get::<Authorization<Bearer>>() {
+        Some(Credentials::Token {
+            token: bearer.token().to_owned(),
+        })
+    } else {
+        None
+    };
+
+    // Reuses an authenticated session if one already exists.
+    // If credentials are provided, we perform a new authentication,
+    // separate from the existing session.
+    if creds.is_none()
+        && let Some((session, session_data)) =
+            maybe_get_authenticated_session(req.extensions().get::<TowerSession>()).await
+    {
+        let user = ensure_session_unexpired(session, session_data).await?;
+        // Need this to set the user of the Adapter client.
+        req.extensions_mut().insert(user);
+        return Ok(next.run(req).await);
     }
 
     // First, extract the username from the certificate, validating that the
@@ -921,18 +950,6 @@ async fn http_auth(
     if req.extensions().get::<AuthedUser>().is_some() {
         return Ok(next.run(req).await);
     }
-    let creds = if let Some(basic) = req.headers().typed_get::<Authorization<Basic>>() {
-        Some(Credentials::Password {
-            username: basic.username().to_owned(),
-            password: Password(basic.password().to_owned()),
-        })
-    } else if let Some(bearer) = req.headers().typed_get::<Authorization<Bearer>>() {
-        Some(Credentials::Token {
-            token: bearer.token().to_owned(),
-        })
-    } else {
-        None
-    };
 
     let path = req.uri().path();
     let include_www_authenticate_header = path == "/"
@@ -974,7 +991,7 @@ async fn init_ws(
         helm_chart_version,
         allowed_roles,
     }: WsState,
-    existing_user: Option<AuthedUser>,
+    existing_user: Option<ExistingUser>,
     peer_addr: IpAddr,
     ws: &mut WebSocket,
 ) -> Result<AuthedClient, anyhow::Error> {
@@ -998,45 +1015,47 @@ async fn init_ws(
         }
     };
 
-    let (user, options) = if let Some(existing_user) = existing_user {
-        match ws_auth {
-            WebSocketAuth::OptionsOnly { options } => (existing_user, options),
-            _ => {
-                warn!("Unexpected bearer or basic auth provided when using user header");
-                anyhow::bail!("unexpected")
-            }
-        }
-    } else {
-        let (creds, options) = match ws_auth {
-            WebSocketAuth::Basic {
-                user,
+    // If credentials are provided, we perform a new authentication,
+    // separate from the existing session.
+    let (creds, options) = match ws_auth {
+        WebSocketAuth::Basic {
+            user,
+            password,
+            options,
+        } => {
+            let creds = Credentials::Password {
+                username: user,
                 password,
-                options,
-            } => {
-                let creds = Credentials::Password {
-                    username: user,
-                    password,
-                };
-                (creds, options)
-            }
-            WebSocketAuth::Bearer { token, options } => {
-                let creds = Credentials::Token { token };
-                (creds, options)
-            }
-            WebSocketAuth::OptionsOnly { .. } => {
-                anyhow::bail!("expected auth information");
-            }
-        };
-        let authenticator = get_authenticator(
-            authenticator_kind,
-            Some(&creds),
-            frontegg,
-            &oidc_rx,
-            &adapter_client_rx,
-        )
-        .await;
-        let user = auth(&authenticator, Some(creds), allowed_roles, false).await?;
-        (user, options)
+            };
+            (Some(creds), options)
+        }
+        WebSocketAuth::Bearer { token, options } => {
+            let creds = Credentials::Token { token };
+            (Some(creds), options)
+        }
+        WebSocketAuth::OptionsOnly { options } => (None, options),
+    };
+
+    let user = match (existing_user, creds) {
+        (Some(ExistingUser::XMaterializeUserHeader(_)), Some(_creds)) => {
+            warn!("Unexpected bearer or basic auth provided when using user header");
+            anyhow::bail!("unexpected")
+        }
+        (Some(ExistingUser::Session(user)), None)
+        | (Some(ExistingUser::XMaterializeUserHeader(user)), None) => user,
+        (_, Some(creds)) => {
+            let authenticator = get_authenticator(
+                authenticator_kind,
+                Some(&creds),
+                frontegg,
+                &oidc_rx,
+                &adapter_client_rx,
+            )
+            .await;
+            let user = auth(&authenticator, Some(creds), allowed_roles, false).await?;
+            user
+        }
+        (None, None) => anyhow::bail!("expected auth information"),
     };
 
     let client = AuthedClient::new(
@@ -1089,6 +1108,49 @@ async fn get_authenticator(
         },
         AuthenticatorKind::None => Authenticator::None,
     }
+}
+
+/// Attempts to retrieve session data from a [`TowerSession`], if available.
+/// Session data is present only if an authenticated session has been
+/// established via [`handle_login`].
+pub(crate) async fn maybe_get_authenticated_session(
+    session: Option<&TowerSession>,
+) -> Option<(&TowerSession, TowerSessionData)> {
+    if let Some(session) = session {
+        if let Ok(Some(session_data)) = session.get::<TowerSessionData>("data").await {
+            return Some((session, session_data));
+        }
+    }
+    None
+}
+
+/// Ensures the session is still valid by checking for expiration,
+/// and returns the associated user if the session remains active.
+pub(crate) async fn ensure_session_unexpired(
+    session: &TowerSession,
+    session_data: TowerSessionData,
+) -> Result<AuthedUser, AuthError> {
+    if session_data
+        .last_activity
+        .elapsed()
+        .unwrap_or(Duration::MAX)
+        > SESSION_DURATION
+    {
+        let _ = session.delete().await;
+        return Err(AuthError::SessionExpired);
+    }
+    let mut updated_data = session_data.clone();
+    updated_data.last_activity = SystemTime::now();
+    session
+        .insert("data", &updated_data)
+        .await
+        .map_err(|_| AuthError::FailedToUpdateSession)?;
+
+    Ok(AuthedUser {
+        name: session_data.username,
+        external_metadata_rx: None,
+        authenticated: session_data.authenticated,
+    })
 }
 
 async fn auth(

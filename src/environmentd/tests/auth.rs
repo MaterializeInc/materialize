@@ -136,7 +136,9 @@ enum TestCase<'a> {
         assert: Assert<Box<dyn Fn(Option<StatusCode>, String) + 'a>>,
     },
     Ws {
+        user_reported_by_system: &'a str,
         auth: &'a WebSocketAuth,
+        headers: &'a HeaderMap,
         configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a>,
         assert: Assert<Box<dyn Fn(CloseCode, String) + 'a>>,
     },
@@ -347,6 +349,8 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
             }
             TestCase::Ws {
                 auth,
+                user_reported_by_system,
+                headers,
                 configure,
                 assert,
             } => {
@@ -362,8 +366,14 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                     .path_and_query("/api/experimental/sql")
                     .build()
                     .unwrap();
+                let mut request = ClientRequestBuilder::new(uri.clone());
+                for (k, v) in headers.iter() {
+                    request =
+                        request.with_header::<String, &str>(k.to_string(), v.to_str().unwrap());
+                }
                 let stream = make_ws_tls(&uri, configure);
-                let (mut ws, _resp) = tungstenite::client(uri, stream).unwrap();
+
+                let (mut ws, _resp) = tungstenite::client(request, stream).unwrap();
 
                 ws.send(Message::Text(serde_json::to_string(&auth).unwrap().into()))
                     .unwrap();
@@ -410,9 +420,25 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                 }
 
                 match assert {
-                    Assert::Success => assert_success_response(&mut ws, None, Some("SELECT 1")),
+                    Assert::Success => assert_success_response(
+                        &mut ws,
+                        Some(vec![
+                            serde_json::to_string(user_reported_by_system)
+                                .unwrap()
+                                .as_str(),
+                        ]),
+                        Some("SELECT 1"),
+                    ),
                     Assert::SuccessSuperuserCheck(is_superuser) => {
-                        assert_success_response(&mut ws, None, Some("SELECT 1"));
+                        assert_success_response(
+                            &mut ws,
+                            Some(vec![
+                                serde_json::to_string(user_reported_by_system)
+                                    .unwrap()
+                                    .as_str(),
+                            ]),
+                            Some("SELECT 1"),
+                        );
                         ws.send(Message::Text(r#"{"query": "SHOW is_superuser"}"#.into()))
                             .unwrap();
                         let expected = if *is_superuser { "\"on\"" } else { "\"off\"" };
@@ -832,28 +858,34 @@ async fn test_auth_base_require_tls_frontegg() {
         &server,
         &[
             TestCase::Ws {
+                user_reported_by_system: frontegg_user,
                 auth: &WebSocketAuth::Basic {
                     user: frontegg_user.to_string(),
                     password: Password(frontegg_password.to_string()),
                     options: BTreeMap::default(),
                 },
+                headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
             TestCase::Ws {
+                user_reported_by_system: frontegg_user,
                 auth: &WebSocketAuth::Bearer {
                     token: frontegg_jwt.clone(),
                     options: BTreeMap::default(),
                 },
+                headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
             TestCase::Ws {
+                user_reported_by_system: frontegg_user,
                 auth: &WebSocketAuth::Basic {
                     user: "bad user".to_string(),
                     password: Password(frontegg_password.to_string()),
                     options: BTreeMap::default(),
                 },
+                headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, CloseCode::Protocol);
@@ -897,6 +929,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 assert: Assert::Success,
             },
             TestCase::Ws {
+                user_reported_by_system: frontegg_user,
                 auth: &WebSocketAuth::Basic {
                     user: frontegg_user_lowercase.to_string(),
                     password: Password(frontegg_password.to_string()),
@@ -904,6 +937,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
+                headers: &no_headers,
             },
             // Password can be base64 encoded UUID bytes.
             TestCase::Pgwire {
@@ -1200,11 +1234,13 @@ async fn test_auth_base_require_tls_frontegg() {
                 })),
             },
             TestCase::Ws {
+                user_reported_by_system: frontegg_user,
                 auth: &WebSocketAuth::Basic {
                     user: (&*SYSTEM_USER.name).into(),
                     password: Password(frontegg_system_password.to_string()),
                     options: BTreeMap::default(),
                 },
+                headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, CloseCode::Protocol);
@@ -1237,11 +1273,13 @@ async fn test_auth_base_require_tls_frontegg() {
                 })),
             },
             TestCase::Ws {
+                user_reported_by_system: frontegg_user,
                 auth: &WebSocketAuth::Basic {
                     user: (&*SYSTEM_USER.name).into(),
                     password: Password(frontegg_service_system_user_password.to_string()),
                     options: BTreeMap::default(),
                 },
+                headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, CloseCode::Protocol);
@@ -1275,11 +1313,13 @@ async fn test_auth_base_require_tls_frontegg() {
                 })),
             },
             TestCase::Ws {
+                user_reported_by_system: frontegg_user,
                 auth: &WebSocketAuth::Basic {
                     user: (PUBLIC_ROLE_NAME.as_str()).into(),
                     password: Password(frontegg_system_password.to_string()),
                     options: BTreeMap::default(),
                 },
+                headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, CloseCode::Protocol);
@@ -1379,12 +1419,14 @@ async fn test_auth_base_require_tls_oidc() {
             },
             // Ws with bearer token should succeed.
             TestCase::Ws {
+                user_reported_by_system: oidc_user,
                 auth: &WebSocketAuth::Bearer {
                     token: jwt_token.clone(),
                     options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
+                headers: &HeaderMap::new(),
             },
             // No TLS should fail when server requires it.
             TestCase::Pgwire {
@@ -1778,11 +1820,13 @@ async fn test_auth_oidc_password_fallback() {
             },
             // Ws with basic username/password should use password authentication
             TestCase::Ws {
+                user_reported_by_system: oidc_user,
                 auth: &WebSocketAuth::Basic {
                     user: oidc_user.to_string(),
                     password: Password(user_password.to_string()),
                     options: BTreeMap::default(),
                 },
+                headers: &HeaderMap::new(),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -2701,6 +2745,7 @@ async fn test_auth_admin_non_superuser() {
                 assert: Assert::SuccessSuperuserCheck(false),
             },
             TestCase::Ws {
+                user_reported_by_system: frontegg_user,
                 auth: &WebSocketAuth::Basic {
                     user: frontegg_user.to_string(),
                     password: Password(frontegg_password.to_string()),
@@ -2708,6 +2753,7 @@ async fn test_auth_admin_non_superuser() {
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::SuccessSuperuserCheck(false),
+                headers: &HeaderMap::new(),
             },
         ],
     )
@@ -2847,6 +2893,7 @@ async fn test_auth_admin_superuser() {
                 assert: Assert::SuccessSuperuserCheck(true),
             },
             TestCase::Ws {
+                user_reported_by_system: admin_frontegg_user,
                 auth: &WebSocketAuth::Basic {
                     user: admin_frontegg_user.to_string(),
                     password: Password(admin_frontegg_password.to_string()),
@@ -2854,6 +2901,7 @@ async fn test_auth_admin_superuser() {
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::SuccessSuperuserCheck(true),
+                headers: &HeaderMap::new(),
             },
         ],
     )
@@ -4835,4 +4883,153 @@ async fn test_password_auth_http_superuser() {
         check_superuser_via_ws_basic(&ws_url, "mz_system", "mz_system_password"),
         "mz_system should have is_superuser=on via WebSocket Basic auth"
     );
+}
+
+/// Tests that session authentication does not override explicit credentials.
+///
+/// A session cookie for `password_user` is present in every request below.
+/// When no additional credentials are supplied the session should be used and
+/// `current_user` should equal `password_user`. When an OIDC bearer token for
+/// `oidc_user` is also included the explicit credential must win, so
+/// `current_user` should equal `oidc_user`.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_session_auth_does_not_override_credentials() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        "test-key-1".to_string(),
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_user = "oidc_user@example.com";
+    let oidc_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            ..Default::default()
+        },
+    );
+
+    let password_user = "password_user";
+    let password_user_password = "password_user_password";
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(Some(oidc_server.issuer), Some("sub".to_string()), None)
+        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
+        .start()
+        .await;
+
+    // Create password_user with a password
+    let admin_client = server.connect().internal().await.unwrap();
+    admin_client
+        .batch_execute(&format!(
+            "CREATE ROLE \"{password_user}\" LOGIN PASSWORD '{password_user_password}'"
+        ))
+        .await
+        .unwrap();
+
+    let login_url: Uri = format!("https://{}/api/login", server.http_local_addr())
+        .parse()
+        .unwrap();
+
+    let http_client = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
+        .pool_idle_timeout(Duration::from_secs(10))
+        .build(make_http_tls(|b| Ok(b.set_verify(SslVerifyMode::NONE))));
+
+    // password_user logs in via /api/login and receives a session cookie.
+    let login_response = http_client
+        .request(
+            Request::post(login_url)
+                .header("Content-Type", "application/json")
+                .body(format!(
+                    r#"{{"username":"{password_user}","password":"{password_user_password}"}}"#
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(login_response.status(), StatusCode::OK);
+
+    let session_cookie = login_response
+        .headers()
+        .get(SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split("; ")
+        .find(|v| v.starts_with("mz_session="))
+        .unwrap()
+        .to_owned();
+
+    let mut session_only_headers = HeaderMap::new();
+    session_only_headers.insert(COOKIE, HeaderValue::from_str(&session_cookie).unwrap());
+
+    run_tests(
+        "session cookie and no explicit credentials should authenticate as password_user",
+        &server,
+        &[
+            TestCase::Http {
+                user_to_auth_as: password_user,
+                user_reported_by_system: password_user,
+                scheme: Scheme::HTTPS,
+                headers: &session_only_headers,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            TestCase::Ws {
+                user_reported_by_system: password_user,
+                headers: &session_only_headers,
+                auth: &WebSocketAuth::OptionsOnly {
+                    options: BTreeMap::default(),
+                },
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+        ],
+    )
+    .await;
+
+    // session cookie + OIDC bearer token -> oidc_user wins.
+    let mut session_and_token_headers = HeaderMap::new();
+    session_and_token_headers.insert(COOKIE, HeaderValue::from_str(&session_cookie).unwrap());
+    session_and_token_headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {oidc_token}")).unwrap(),
+    );
+
+    run_tests(
+        "session cookie and an OIDC bearer token should authenticate as oidc_user",
+        &server,
+        &[
+            TestCase::Http {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                scheme: Scheme::HTTPS,
+                headers: &session_and_token_headers,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            TestCase::Ws {
+                user_reported_by_system: oidc_user,
+                headers: &session_only_headers,
+                auth: &WebSocketAuth::Bearer {
+                    token: oidc_token.clone(),
+                    options: BTreeMap::default(),
+                },
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+        ],
+    )
+    .await;
 }

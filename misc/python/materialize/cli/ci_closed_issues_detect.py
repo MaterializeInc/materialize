@@ -105,6 +105,7 @@ IGNORE_FILENAME_RE = re.compile(
     r"""
     ( .*\.(svg|png|jpg|jpeg|avro|ico|woff)
     | doc/developer/design/20230223_stabilize_with_mutually_recursive.md
+    | \.claude/skills/.*
     )
     """,
     re.VERBOSE,

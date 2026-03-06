@@ -28,6 +28,8 @@ class State:
         self.mz_service = "materialized"
         self.deploy_generation = 0
         self.system_parameter_defaults = get_default_system_parameters()
+        self.iceberg_username: str | None = None
+        self.iceberg_key: str | None = None
 
 
 class Capability:

@@ -71,7 +71,7 @@ def get_minimal_system_parameters(
             "true" if version >= MzVersion.parse_mz("v0.132.0-dev") else "false"
         ),
         "enable_alter_swap": "true",
-        "enable_cast_elimination": "false",
+        "enable_cast_elimination": "true",
         "enable_columnar_lgalloc": "false",
         "enable_columnation_lgalloc": "false",
         "enable_compute_correction_v2": "true",
@@ -81,6 +81,7 @@ def get_minimal_system_parameters(
         "enable_continual_task_retain": "true",
         "enable_continual_task_transform": "true",
         "enable_copy_to_expr": "true",
+        "enable_copy_from_remote": "true",
         "enable_create_table_from_source": "true",
         "enable_eager_delta_joins": "true",
         "enable_envelope_debezium_in_subscribe": "true",
@@ -187,7 +188,7 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "enable_cast_elimination",
-            "false",
+            "true",
             ["true", "false"],
         ),
         VariableSystemParameter(

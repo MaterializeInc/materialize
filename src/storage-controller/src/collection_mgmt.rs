@@ -714,8 +714,7 @@ where
     }
 
     async fn run(mut self) -> ControlFlow<String> {
-        const BATCH_SIZE: usize = 4096;
-        let mut updates = Vec::with_capacity(BATCH_SIZE);
+        let mut updates = Vec::new();
         loop {
             tokio::select! {
                 // Prefer sending actual updates over just bumping the upper,
@@ -730,15 +729,14 @@ where
                 }
 
                 // Pull a chunk of queued updates off the channel.
-                count = self.cmd_rx.recv_many(&mut updates, BATCH_SIZE) => {
-                    if count > 0 {
-                        let _ = self.handle_updates(&mut updates).await?;
-                    } else {
+                () = recv_all_commands(&mut self.cmd_rx, &mut updates) => {
+                    if updates.is_empty() {
                         // Sender has been dropped, which means the collection
                         // should have been unregistered, break out of the run
                         // loop if we weren't already aborted.
                         return ControlFlow::Break("sender has been dropped".to_string());
                     }
+                    let _ = self.handle_updates(&mut updates).await?;
                 }
 
                 // If we haven't received any updates, then we'll move the upper forward.
@@ -1315,8 +1313,7 @@ where
     async fn run(mut self) {
         let mut interval = tokio::time::interval(Duration::from_millis(DEFAULT_TICK_MS));
 
-        const BATCH_SIZE: usize = 4096;
-        let mut batch: Vec<(Vec<_>, _)> = Vec::with_capacity(BATCH_SIZE);
+        let mut batch: Vec<(Vec<_>, _)> = Vec::new();
 
         'run: loop {
             tokio::select! {
@@ -1347,80 +1344,79 @@ where
                 }
 
                 // Pull a chunk of queued updates off the channel.
-                count = self.rx.recv_many(&mut batch, BATCH_SIZE) => {
-                    if count > 0 {
-                        // To rate limit appends to persist we add artificial latency, and will
-                        // finish no sooner than this instant.
-                        let batch_duration_ms = match self.id {
-                            GlobalId::User(_) => Duration::from_millis(
-                                self.user_batch_duration_ms.load(Ordering::Relaxed),
-                            ),
-                            // For non-user collections, always just use the default.
-                            _ => STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
-                        };
-                        let use_batch_now = Instant::now();
-                        let min_time_to_complete = use_batch_now + batch_duration_ms;
-
-                        tracing::debug!(
-                            ?use_batch_now,
-                            ?batch_duration_ms,
-                            ?min_time_to_complete,
-                            "batch duration",
-                        );
-
-                        // Reset the interval which is used to periodically bump the uppers
-                        // because the uppers will get bumped with the following update. This
-                        // makes it such that we will write at most once every `interval`.
-                        //
-                        // For example, let's say our `DEFAULT_TICK` interval is 10, so at
-                        // `t + 10`, `t + 20`, ... we'll bump the uppers. If we receive an
-                        // update at `t + 3` we want to shift this window so we bump the uppers
-                        // at `t + 13`, `t + 23`, ... which resetting the interval accomplishes.
-                        interval.reset();
-
-
-                        let capacity: usize = batch
-                            .iter()
-                            .map(|(rows, _)| rows.len())
-                            .sum();
-                        let mut all_rows = Vec::with_capacity(capacity);
-                        let mut responders = Vec::with_capacity(batch.len());
-
-                        for (updates, responder) in batch.drain(..) {
-                            let rows = self.process_updates(updates);
-
-                            all_rows.extend(
-                                rows.map(|(row, diff)| TimestamplessUpdate { row, diff }),
-                            );
-                            responders.push(responder);
-                        }
-
-                        if self.read_only {
-                            tracing::warn!(%self.id, ?all_rows, "append while in read-only mode");
-                            notify_listeners(responders, || Err(StorageError::ReadOnly));
-                            continue;
-                        }
-
-                        // Append updates to persist!
-                        let at_least = T::from((self.now)());
-
-                        if !all_rows.is_empty() {
-                            monotonic_append(&mut self.write_handle, all_rows, at_least).await;
-                        }
-                        // Notify all of our listeners.
-                        notify_listeners(responders, || Ok(()));
-
-                        // Wait until our artificial latency has completed.
-                        //
-                        // Note: if writing to persist took longer than `DEFAULT_TICK` this
-                        // await will resolve immediately.
-                        tokio::time::sleep_until(min_time_to_complete).await;
-                    } else {
+                () = recv_all_commands(&mut self.rx, &mut batch) => {
+                    if batch.is_empty() {
                         // Sender has been dropped, which means the collection should have been
                         // unregistered, break out of the run loop if we weren't already
                         // aborted.
                         break 'run;
                     }
+
+                    // To rate limit appends to persist we add artificial latency, and will
+                    // finish no sooner than this instant.
+                    let batch_duration_ms = match self.id {
+                        GlobalId::User(_) => Duration::from_millis(
+                            self.user_batch_duration_ms.load(Ordering::Relaxed),
+                        ),
+                        // For non-user collections, always just use the default.
+                        _ => STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
+                    };
+                    let use_batch_now = Instant::now();
+                    let min_time_to_complete = use_batch_now + batch_duration_ms;
+
+                    tracing::debug!(
+                        ?use_batch_now,
+                        ?batch_duration_ms,
+                        ?min_time_to_complete,
+                        "batch duration",
+                    );
+
+                    // Reset the interval which is used to periodically bump the uppers
+                    // because the uppers will get bumped with the following update. This
+                    // makes it such that we will write at most once every `interval`.
+                    //
+                    // For example, let's say our `DEFAULT_TICK` interval is 10, so at
+                    // `t + 10`, `t + 20`, ... we'll bump the uppers. If we receive an
+                    // update at `t + 3` we want to shift this window so we bump the uppers
+                    // at `t + 13`, `t + 23`, ... which resetting the interval accomplishes.
+                    interval.reset();
+
+                    let capacity: usize = batch
+                        .iter()
+                        .map(|(rows, _)| rows.len())
+                        .sum();
+                    let mut all_rows = Vec::with_capacity(capacity);
+                    let mut responders = Vec::with_capacity(batch.len());
+
+                    for (updates, responder) in batch.drain(..) {
+                        let rows = self.process_updates(updates);
+
+                        all_rows.extend(
+                            rows.map(|(row, diff)| TimestamplessUpdate { row, diff }),
+                        );
+                        responders.push(responder);
+                    }
+
+                    if self.read_only {
+                        tracing::warn!(%self.id, ?all_rows, "append while in read-only mode");
+                        notify_listeners(responders, || Err(StorageError::ReadOnly));
+                        continue;
+                    }
+
+                    // Append updates to persist!
+                    let at_least = T::from((self.now)());
+
+                    if !all_rows.is_empty() {
+                        monotonic_append(&mut self.write_handle, all_rows, at_least).await;
+                    }
+                    // Notify all of our listeners.
+                    notify_listeners(responders, || Ok(()));
+
+                    // Wait until our artificial latency has completed.
+                    //
+                    // Note: if writing to persist took longer than `DEFAULT_TICK` this
+                    // await will resolve immediately.
+                    tokio::time::sleep_until(min_time_to_complete).await;
                 }
 
                 // If we haven't received any updates, then we'll move the upper forward.
@@ -1829,6 +1825,39 @@ fn notify_listeners<T>(
     for r in responders {
         // We don't care if the listener disappeared.
         let _ = r.send(result());
+    }
+}
+
+/// Receive all currently enqueued messages from a task command channel.
+///
+/// If no messages are initially enqueued, this function blocks until messages become available or
+/// the channel is closed.
+///
+/// If the `out` buffer has a large amount of free capacity at the end of this operation, it is
+/// shrunk to reclaim some of its memory.
+///
+/// # Cancel safety
+///
+/// This function is cancel safe. It only awaits `UnboundedReceiver::recv`, which is itself cancel
+/// safe.
+async fn recv_all_commands<T>(rx: &mut mpsc::UnboundedReceiver<T>, out: &mut Vec<T>) {
+    if let Some(msg) = rx.recv().await {
+        out.push(msg);
+    } else {
+        return; // channel closed
+    };
+
+    out.reserve(rx.len());
+    while let Ok(msg) = rx.try_recv() {
+        out.push(msg);
+    }
+
+    // We may have the opportunity to reclaim allocated memory.
+    // Given that `push` will at most double the capacity when the vector is more than half full,
+    // and we want to avoid entering into a resizing cycle, we choose to only shrink if the
+    // vector's length is less than one fourth of its capacity.
+    if out.capacity() > out.len() * 4 {
+        out.shrink_to_fit();
     }
 }
 

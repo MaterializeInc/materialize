@@ -1,0 +1,58 @@
+---
+source: src/expr-derive-impl/src/lib.rs
+expression: "#[sqlfunc(Concat, sqlname = \"concat\", is_associative = true)]\nfn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError> {\n    Ok(strs.into_iter().flatten().collect())\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect,
+)]
+pub struct Concat;
+impl crate::func::variadic::EagerVariadicFunc for Concat {
+    type Input<'a> = Variadic<Option<&'a str>>;
+    type Output<'a> = Result<String, EvalError>;
+    fn call<'a>(
+        &self,
+        strs: Self::Input<'a>,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
+        concat(strs)
+    }
+    fn output_type(
+        &self,
+        input_types: &[mz_repr::SqlColumnType],
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::variadic::EagerVariadicFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        let non_nullable_input_is_nullable = false;
+        let inputs_nullable = input_types.iter().any(|it| it.nullable);
+        output
+            .nullable(
+                nullable || non_nullable_input_is_nullable
+                    || (propagates_nulls && inputs_nullable),
+            )
+    }
+    fn is_associative(&self) -> bool {
+        true
+    }
+}
+impl std::fmt::Display for Concat {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("concat")
+    }
+}
+fn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError> {
+    Ok(strs.into_iter().flatten().collect())
+}

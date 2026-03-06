@@ -1,0 +1,61 @@
+---
+source: src/expr-derive-impl/src/lib.rs
+expression: "#[sqlfunc(Greatest, sqlname = \"greatest\", could_error = false, is_monotone = true)]\nfn greatest<'a>(datums: Variadic<Datum<'a>>) -> Datum<'a> {\n    datums.into_iter().max().unwrap_or(Datum::Null)\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect,
+)]
+pub struct Greatest;
+impl crate::func::variadic::EagerVariadicFunc for Greatest {
+    type Input<'a> = Variadic<Datum<'a>>;
+    type Output<'a> = Datum<'a>;
+    fn call<'a>(
+        &self,
+        datums: Self::Input<'a>,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
+        greatest(datums)
+    }
+    fn output_type(
+        &self,
+        input_types: &[mz_repr::SqlColumnType],
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::variadic::EagerVariadicFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        let non_nullable_input_is_nullable = false;
+        let inputs_nullable = input_types.iter().any(|it| it.nullable);
+        output
+            .nullable(
+                nullable || non_nullable_input_is_nullable
+                    || (propagates_nulls && inputs_nullable),
+            )
+    }
+    fn could_error(&self) -> bool {
+        false
+    }
+    fn is_monotone(&self) -> bool {
+        true
+    }
+}
+impl std::fmt::Display for Greatest {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("greatest")
+    }
+}
+fn greatest<'a>(datums: Variadic<Datum<'a>>) -> Datum<'a> {
+    datums.into_iter().max().unwrap_or(Datum::Null)
+}

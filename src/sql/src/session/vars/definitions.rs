@@ -2166,7 +2166,7 @@ feature_flags!(
     {
         name: enable_copy_from_remote,
         desc: "Whether to allow COPY FROM <url>.",
-        default: false,
+        default: true,
         enable_for_item_parsing: false,
     },
     {
@@ -2238,7 +2238,16 @@ feature_flags!(
     {
         name: enable_cast_elimination,
         desc: "Allow the optimizer to eliminate noop casts between values of equivalent representation types.",
-        default: false,
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        // Just an escape hatch for the unlikely case that we have some user who is doing such
+        // queries. Can be removed after one week in prod.
+        // https://github.com/MaterializeInc/database-issues/issues/10004
+        name: disallow_unmaterializable_functions_as_of,
+        desc: "Prohibits calling unmaterializable functions (except `mz_now`) in AS OF queries.",
+        default: true,
         enable_for_item_parsing: false,
     },
 );

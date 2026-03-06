@@ -17,24 +17,25 @@ use std::borrow::Cow;
 use std::cmp;
 use std::fmt;
 
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
 use itertools::Itertools;
 use md5::Md5;
+use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::{CastFrom, ReinterpretCast};
-use mz_ore::soft_assert_or_log;
 use mz_pgtz::timezone::TimezoneSpec;
 use mz_repr::ReprColumnType;
-use mz_repr::adt::array::{ArrayDimension, ArrayDimensions, InvalidArrayError};
+use mz_repr::adt::array::{Array, ArrayDimension, ArrayDimensions, InvalidArrayError};
 use mz_repr::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
 use mz_repr::adt::range::{InvalidRangeError, Range, RangeBound, parse_range_bound_flags};
 use mz_repr::adt::system::Oid;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    ColumnName, Datum, OutputDatumType, ReprScalarType, Row, RowArena, SqlColumnType, SqlScalarType,
+    ColumnName, Datum, DatumList, InputDatumType, OptionalArg, OutputDatumType, Row, RowArena,
+    SqlColumnType, SqlScalarType, Variadic,
 };
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
@@ -46,6 +47,9 @@ use crate::func::{
     timezone_time,
 };
 use crate::{EvalError, MirScalarExpr};
+use mz_repr::adt::date::Date;
+use mz_repr::adt::interval::Interval;
+use mz_repr::adt::jsonb::JsonbRef;
 
 #[derive(
     Ord,
@@ -140,12 +144,6 @@ pub struct ArrayCreate {
     pub elem_type: SqlScalarType,
 }
 
-impl fmt::Display for ArrayCreate {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("array_create")
-    }
-}
-
 /// Constructs a new multidimensional array out of an arbitrary number of
 /// lower-dimensional arrays.
 ///
@@ -161,6 +159,21 @@ impl fmt::Display for ArrayCreate {
 /// one and the length of the new dimension is equal to `datums.len()`.
 ///
 /// Null elements are allowed and considered to be zero-dimensional arrays.
+#[sqlfunc(
+    ArrayCreate,
+    output_type_expr = "match &self.elem_type { SqlScalarType::Array(_) => self.elem_type.clone().nullable(false), _ => SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false) }",
+    introduces_nulls = false
+)]
+fn array_create<'a>(
+    &self,
+    datums: Variadic<Datum<'a>>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    match &self.elem_type {
+        SqlScalarType::Array(_) => array_create_multidim(&datums, temp_storage),
+        _ => array_create_scalar(&datums, temp_storage),
+    }
+}
 fn array_create_multidim<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
@@ -228,21 +241,22 @@ pub struct ArrayFill {
     pub elem_type: SqlScalarType,
 }
 
-impl fmt::Display for ArrayFill {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("array_fill")
-    }
-}
-
+#[sqlfunc(
+    ArrayFill,
+    output_type_expr = "SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false)",
+    introduces_nulls = false
+)]
 fn array_fill<'a>(
-    datums: &[Datum<'a>],
+    &self,
+    fill: Datum<'a>,
+    dims: Option<Array<'a>>,
+    lower_bounds: OptionalArg<Option<Array<'a>>>,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
     const MAX_SIZE: usize = 1 << 28 - 1;
     const NULL_ARR_ERR: &str = "dimension array or low bound array";
     const NULL_ELEM_ERR: &str = "dimension values";
 
-    let fill = datums[0];
     if matches!(fill, Datum::Array(_)) {
         return Err(EvalError::Unsupported {
             feature: "array_fill with arrays".into(),
@@ -250,9 +264,8 @@ fn array_fill<'a>(
         });
     }
 
-    let arr = match datums[1] {
-        Datum::Null => return Err(EvalError::MustNotBeNull(NULL_ARR_ERR.into())),
-        o => o.unwrap_array(),
+    let Some(arr) = dims else {
+        return Err(EvalError::MustNotBeNull(NULL_ARR_ERR.into()));
     };
 
     let dimensions = arr
@@ -264,11 +277,10 @@ fn array_fill<'a>(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let lower_bounds = match datums.get(2) {
+    let lower_bounds = match *lower_bounds {
         Some(d) => {
-            let arr = match d {
-                Datum::Null => return Err(EvalError::MustNotBeNull(NULL_ARR_ERR.into())),
-                o => o.unwrap_array(),
+            let Some(arr) = d else {
+                return Err(EvalError::MustNotBeNull(NULL_ARR_ERR.into()));
             };
 
             arr.elements()
@@ -342,34 +354,36 @@ fn array_fill<'a>(
 pub struct ArrayIndex {
     pub offset: i64,
 }
-impl fmt::Display for ArrayIndex {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("array_index")
-    }
-}
+#[sqlfunc(
+    ArrayIndex,
+    sqlname = "array_index",
+    output_type_expr = "input_types[0].scalar_type.unwrap_array_element_type().clone().nullable(true)",
+    introduces_nulls = true
+)]
+fn array_index<'a>(&self, array: Array<'a>, indices: Variadic<i64>) -> Option<Datum<'a>> {
+    mz_ore::soft_assert_no_log!(
+        self.offset == 0 || self.offset == 1,
+        "offset must be either 0 or 1"
+    );
 
-fn array_index<'a>(datums: &[Datum<'a>], offset: i64) -> Datum<'a> {
-    mz_ore::soft_assert_no_log!(offset == 0 || offset == 1, "offset must be either 0 or 1");
-
-    let array = datums[0].unwrap_array();
     let dims = array.dims();
-    if dims.len() != datums.len() - 1 {
+    if dims.len() != indices.len() {
         // You missed the datums "layer"
-        return Datum::Null;
+        return None;
     }
 
     let mut final_idx = 0;
 
-    for (d, idx) in dims.into_iter().zip_eq(datums[1..].iter()) {
+    for (d, idx) in dims.into_iter().zip_eq(indices.iter()) {
         // Lower bound is written in terms of 1-based indexing, which offset accounts for.
-        let idx = isize::cast_from(idx.unwrap_int64() + offset);
+        let idx = isize::cast_from(*idx + self.offset);
 
         let (lower, upper) = d.dimension_bounds();
 
         // This index missed all of the data at this layer. The dimension bounds are inclusive,
         // while range checks are exclusive, so adjust.
         if !(lower..upper + 1).contains(&idx) {
-            return Datum::Null;
+            return None;
         }
 
         // We discover how many indices our last index represents physically.
@@ -379,65 +393,39 @@ fn array_index<'a>(datums: &[Datum<'a>], offset: i64) -> Datum<'a> {
         // difference moves us back into 0-based indexing. Similarly, if the lower bound is
         // negative, subtracting a negative value >= to itself ensures its non-negativity.
         final_idx += usize::try_from(idx - d.lower_bound)
-            .expect("previous bounds check ensures phsical index is at least 0");
+            .expect("previous bounds check ensures physical index is at least 0");
     }
 
-    array
-        .elements()
-        .iter()
-        .nth(final_idx)
-        .unwrap_or(Datum::Null)
+    array.elements().iter().nth(final_idx)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct ArrayPosition;
-
-impl fmt::Display for ArrayPosition {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("array_position")
-    }
-}
-
-fn array_position<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
-    let array = match datums[0] {
-        Datum::Null => return Ok(Datum::Null),
-        o => o.unwrap_array(),
-    };
-
+#[sqlfunc]
+fn array_position<'a>(
+    array: Array<'a>,
+    search: Datum<'a>,
+    initial_pos: OptionalArg<Option<i32>>,
+) -> Result<Option<i32>, EvalError> {
     if array.dims().len() > 1 {
         return Err(EvalError::MultiDimensionalArraySearch);
     }
 
-    let search = datums[1];
     if search == Datum::Null {
-        return Ok(Datum::Null);
+        return Ok(None);
     }
 
-    let skip: usize = match datums.get(2) {
-        Some(Datum::Null) => return Err(EvalError::MustNotBeNull("initial position".into())),
+    let skip = match initial_pos.0 {
         None => 0,
-        Some(o) => usize::try_from(o.unwrap_int32())
-            .unwrap_or(0)
-            .saturating_sub(1),
+        Some(None) => return Err(EvalError::MustNotBeNull("initial position".into())),
+        Some(Some(o)) => usize::try_from(o).unwrap_or(0).saturating_sub(1),
     };
 
-    let r = array.elements().iter().skip(skip).position(|d| d == search);
+    let Some(r) = array.elements().iter().skip(skip).position(|d| d == search) else {
+        return Ok(None);
+    };
 
-    Ok(Datum::from(r.map(|p| {
-        // Adjust count for the amount we skipped, plus 1 for adjustng to PG indexing scheme.
-        i32::try_from(p + skip + 1).expect("fewer than i32::MAX elements in array")
-    })))
+    // Adjust count for the amount we skipped, plus 1 for adjusting to PG indexing scheme.
+    let p = i32::try_from(r + skip + 1).expect("fewer than i32::MAX elements in array");
+    Ok(Some(p))
 }
 
 #[derive(
@@ -456,30 +444,16 @@ pub struct ArrayToString {
     pub elem_type: SqlScalarType,
 }
 
-impl fmt::Display for ArrayToString {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("array_to_string")
-    }
-}
-
-// WARNING: This function has potential OOM risk!
-// It is very difficult to calculate the output size ahead of time without knowing how to
-// calculate the stringified size of each element for all possible datatypes.
+#[sqlfunc]
 fn array_to_string<'a>(
-    datums: &[Datum<'a>],
-    elem_type: &SqlScalarType,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    if datums[0].is_null() || datums[1].is_null() {
-        return Ok(Datum::Null);
-    }
-    let array = datums[0].unwrap_array();
-    let delimiter = datums[1].unwrap_str();
-    let null_str = match datums.get(2) {
-        None | Some(Datum::Null) => None,
-        Some(d) => Some(d.unwrap_str()),
-    };
-
+    &self,
+    array: Array<'a>,
+    delimiter: &str,
+    null_str_arg: OptionalArg<Option<&str>>,
+) -> Result<String, EvalError> {
+    // `flatten` treats absent arguments (`None`) the same as explicit NULL
+    // (`Some(None)`), both becoming `None`.
+    let null_str = null_str_arg.flatten();
     let mut out = String::new();
     for elem in array.elements().iter() {
         if elem.is_null() {
@@ -488,7 +462,7 @@ fn array_to_string<'a>(
                 out.push_str(delimiter);
             }
         } else {
-            stringify_datum(&mut out, elem, elem_type)?;
+            stringify_datum(&mut out, elem, &self.elem_type)?;
             out.push_str(delimiter);
         }
     }
@@ -496,7 +470,7 @@ fn array_to_string<'a>(
         // Lop off last delimiter only if string is not empty
         out.truncate(out.len() - delimiter.len());
     }
-    Ok(Datum::String(temp_storage.push_string(out)))
+    Ok(out)
 }
 
 #[derive(
@@ -594,98 +568,68 @@ impl fmt::Display for RangeCreate {
     }
 }
 
-fn create_range<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let flags = match datums[2] {
-        Datum::Null => {
-            return Err(EvalError::InvalidRange(
-                InvalidRangeError::NullRangeBoundFlags,
-            ));
+impl EagerVariadicFunc for RangeCreate {
+    type Input<'a> = (Datum<'a>, Datum<'a>, Datum<'a>);
+    type Output<'a> = Result<Datum<'a>, EvalError>;
+
+    fn call<'a>(
+        &self,
+        (lower, upper, flags_datum): Self::Input<'a>,
+        temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let flags = match flags_datum {
+            Datum::Null => {
+                return Err(EvalError::InvalidRange(
+                    InvalidRangeError::NullRangeBoundFlags,
+                ));
+            }
+            o => o.unwrap_str(),
+        };
+
+        let (lower_inclusive, upper_inclusive) = parse_range_bound_flags(flags)?;
+
+        let mut range = Range::new(Some((
+            RangeBound::new(lower, lower_inclusive),
+            RangeBound::new(upper, upper_inclusive),
+        )));
+
+        range.canonicalize()?;
+
+        Ok(temp_storage.make_datum(|row| {
+            row.push_range(range).expect("errors already handled");
+        }))
+    }
+
+    fn output_type(&self, _input_types: &[SqlColumnType]) -> SqlColumnType {
+        SqlScalarType::Range {
+            element_type: Box::new(self.elem_type.clone()),
         }
-        o => o.unwrap_str(),
-    };
+        .nullable(false)
+    }
 
-    let (lower_inclusive, upper_inclusive) = parse_range_bound_flags(flags)?;
-
-    let mut range = Range::new(Some((
-        RangeBound::new(datums[0], lower_inclusive),
-        RangeBound::new(datums[1], upper_inclusive),
-    )));
-
-    range.canonicalize()?;
-
-    Ok(temp_storage.make_datum(|row| {
-        row.push_range(range).expect("errors already handled");
-    }))
-}
-
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct DateDiffDate;
-
-impl fmt::Display for DateDiffDate {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("datediff")
+    fn introduces_nulls(&self) -> bool {
+        false
     }
 }
 
-fn date_diff_date<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
-    let unit = unit.unwrap_str();
-    let unit = unit
+#[sqlfunc(sqlname = "datediff")]
+fn date_diff_date(unit_str: &str, a: Date, b: Date) -> Result<i64, EvalError> {
+    let unit = unit_str
         .parse()
-        .map_err(|_| EvalError::InvalidDatePart(unit.into()))?;
-
-    let a = a.unwrap_date();
-    let b = b.unwrap_date();
+        .map_err(|_| EvalError::InvalidDatePart(unit_str.into()))?;
 
     // Convert the Date into a timestamp so we can calculate age.
     let a_ts = CheckedTimestamp::try_from(NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap())?;
     let b_ts = CheckedTimestamp::try_from(NaiveDate::from(b).and_hms_opt(0, 0, 0).unwrap())?;
     let diff = b_ts.diff_as(&a_ts, unit)?;
-
-    Ok(Datum::Int64(diff))
+    Ok(diff)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct DateDiffTime;
-
-impl fmt::Display for DateDiffTime {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("datediff")
-    }
-}
-
-fn date_diff_time<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
-    let unit = unit.unwrap_str();
-    let unit = unit
+#[sqlfunc(sqlname = "datediff")]
+fn date_diff_time(unit_str: &str, a: NaiveTime, b: NaiveTime) -> Result<i64, EvalError> {
+    let unit = unit_str
         .parse()
-        .map_err(|_| EvalError::InvalidDatePart(unit.into()))?;
-
-    let a = a.unwrap_time();
-    let b = b.unwrap_time();
+        .map_err(|_| EvalError::InvalidDatePart(unit_str.into()))?;
 
     // Convert the Time into a timestamp so we can calculate age.
     let a_ts =
@@ -693,74 +637,35 @@ fn date_diff_time<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, Eval
     let b_ts =
         CheckedTimestamp::try_from(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap().and_time(b))?;
     let diff = b_ts.diff_as(&a_ts, unit)?;
-
-    Ok(Datum::Int64(diff))
+    Ok(diff)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct DateDiffTimestamp;
-
-impl fmt::Display for DateDiffTimestamp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("datediff")
-    }
-}
-
-fn date_diff_timestamp<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
-    let unit = unit.unwrap_str();
+#[sqlfunc(sqlname = "datediff")]
+fn date_diff_timestamp(
+    unit: &str,
+    a: CheckedTimestamp<NaiveDateTime>,
+    b: CheckedTimestamp<NaiveDateTime>,
+) -> Result<i64, EvalError> {
     let unit = unit
         .parse()
         .map_err(|_| EvalError::InvalidDatePart(unit.into()))?;
 
-    let a = a.unwrap_timestamp();
-    let b = b.unwrap_timestamp();
     let diff = b.diff_as(&a, unit)?;
-
-    Ok(Datum::Int64(diff))
+    Ok(diff)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct DateDiffTimestampTz;
-
-impl fmt::Display for DateDiffTimestampTz {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("datediff")
-    }
-}
-
-fn date_diff_timestamptz<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
-    let unit = unit.unwrap_str();
+#[sqlfunc(sqlname = "datediff")]
+fn date_diff_timestamp_tz(
+    unit: &str,
+    a: CheckedTimestamp<DateTime<Utc>>,
+    b: CheckedTimestamp<DateTime<Utc>>,
+) -> Result<i64, EvalError> {
     let unit = unit
         .parse()
         .map_err(|_| EvalError::InvalidDatePart(unit.into()))?;
 
-    let a = a.unwrap_timestamptz();
-    let b = b.unwrap_timestamptz();
     let diff = b.diff_as(&a, unit)?;
-
-    Ok(Datum::Int64(diff))
+    Ok(diff)
 }
 
 #[derive(
@@ -879,172 +784,79 @@ impl LazyVariadicFunc for Greatest {
     }
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct HmacString;
-
-impl fmt::Display for HmacString {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("hmac")
-    }
+#[sqlfunc(sqlname = "hmac")]
+fn hmac_string(to_digest: &str, key: &str, typ: &str) -> Result<Vec<u8>, EvalError> {
+    let to_digest = to_digest.as_bytes();
+    let key = key.as_bytes();
+    hmac_inner(to_digest, key, typ)
 }
 
-pub fn hmac_string<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let to_digest = datums[0].unwrap_str().as_bytes();
-    let key = datums[1].unwrap_str().as_bytes();
-    let typ = datums[2].unwrap_str();
-    hmac_inner(to_digest, key, typ, temp_storage)
+#[sqlfunc(sqlname = "hmac")]
+fn hmac_bytes(to_digest: &[u8], key: &[u8], typ: &str) -> Result<Vec<u8>, EvalError> {
+    hmac_inner(to_digest, key, typ)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct HmacBytes;
-
-impl fmt::Display for HmacBytes {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("hmac")
-    }
-}
-
-pub fn hmac_bytes<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let to_digest = datums[0].unwrap_bytes();
-    let key = datums[1].unwrap_bytes();
-    let typ = datums[2].unwrap_str();
-    hmac_inner(to_digest, key, typ, temp_storage)
-}
-
-pub fn hmac_inner<'a>(
-    to_digest: &[u8],
-    key: &[u8],
-    typ: &str,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let bytes = match typ {
+pub fn hmac_inner(to_digest: &[u8], key: &[u8], typ: &str) -> Result<Vec<u8>, EvalError> {
+    match typ {
         "md5" => {
             let mut mac = Hmac::<Md5>::new_from_slice(key).expect("HMAC accepts any key size");
             mac.update(to_digest);
-            mac.finalize().into_bytes().to_vec()
+            Ok(mac.finalize().into_bytes().to_vec())
         }
         "sha1" => {
             let mut mac = Hmac::<Sha1>::new_from_slice(key).expect("HMAC accepts any key size");
             mac.update(to_digest);
-            mac.finalize().into_bytes().to_vec()
+            Ok(mac.finalize().into_bytes().to_vec())
         }
         "sha224" => {
             let mut mac = Hmac::<Sha224>::new_from_slice(key).expect("HMAC accepts any key size");
             mac.update(to_digest);
-            mac.finalize().into_bytes().to_vec()
+            Ok(mac.finalize().into_bytes().to_vec())
         }
         "sha256" => {
             let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key size");
             mac.update(to_digest);
-            mac.finalize().into_bytes().to_vec()
+            Ok(mac.finalize().into_bytes().to_vec())
         }
         "sha384" => {
             let mut mac = Hmac::<Sha384>::new_from_slice(key).expect("HMAC accepts any key size");
             mac.update(to_digest);
-            mac.finalize().into_bytes().to_vec()
+            Ok(mac.finalize().into_bytes().to_vec())
         }
         "sha512" => {
             let mut mac = Hmac::<Sha512>::new_from_slice(key).expect("HMAC accepts any key size");
             mac.update(to_digest);
-            mac.finalize().into_bytes().to_vec()
+            Ok(mac.finalize().into_bytes().to_vec())
         }
-        other => return Err(EvalError::InvalidHashAlgorithm(other.into())),
-    };
-    Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
-}
-
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct JsonbBuildArray;
-
-impl fmt::Display for JsonbBuildArray {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("jsonb_build_array")
+        other => Err(EvalError::InvalidHashAlgorithm(other.into())),
     }
 }
 
-fn jsonb_build_array<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    temp_storage.make_datum(|packer| {
+#[sqlfunc]
+fn jsonb_build_array<'a>(datums: Variadic<Datum<'a>>, temp_storage: &'a RowArena) -> JsonbRef<'a> {
+    let datum = temp_storage.make_datum(|packer| {
         packer.push_list(datums.into_iter().map(|d| match d {
             Datum::Null => Datum::JsonNull,
-            d => *d,
+            d => d,
         }))
-    })
+    });
+    JsonbRef::from_datum(datum)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct JsonbBuildObject;
-
-impl fmt::Display for JsonbBuildObject {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("jsonb_build_object")
-    }
-}
-
+#[sqlfunc]
 fn jsonb_build_object<'a>(
-    datums: &[Datum<'a>],
+    mut kvs: Variadic<(Datum<'a>, Datum<'a>)>,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let mut kvs = datums.chunks(2).collect::<Vec<_>>();
-    kvs.sort_by(|kv1, kv2| kv1[0].cmp(&kv2[0]));
-    kvs.dedup_by(|kv1, kv2| kv1[0] == kv2[0]);
-    temp_storage.try_make_datum(|packer| {
+) -> Result<JsonbRef<'a>, EvalError> {
+    kvs.0.sort_by(|kv1, kv2| kv1.0.cmp(&kv2.0));
+    kvs.0.dedup_by(|kv1, kv2| kv1.0 == kv2.0);
+    let datum = temp_storage.try_make_datum(|packer| {
         packer.push_dict_with(|packer| {
-            for kv in kvs {
-                let k = kv[0];
+            for (k, v) in kvs {
                 if k.is_null() {
                     return Err(EvalError::KeyCannotBeNull);
-                };
-                let v = match kv[1] {
+                }
+                let v = match v {
                     Datum::Null => Datum::JsonNull,
                     d => d,
                 };
@@ -1053,7 +865,8 @@ fn jsonb_build_object<'a>(
             }
             Ok(())
         })
-    })
+    })?;
+    Ok(JsonbRef::from_datum(datum))
 }
 
 #[derive(
@@ -1131,10 +944,12 @@ pub struct ListCreate {
     pub elem_type: SqlScalarType,
 }
 
-impl fmt::Display for ListCreate {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("list_create")
-    }
+#[sqlfunc(
+    output_type_expr = "SqlScalarType::List { element_type: Box::new(self.elem_type.clone()), custom_id: None }.nullable(false)",
+    introduces_nulls = false
+)]
+fn list_create<'a>(&self, datums: Variadic<Datum<'a>>, temp_storage: &'a RowArena) -> Datum<'a> {
+    temp_storage.make_datum(|packer| packer.push_list(datums))
 }
 
 #[derive(
@@ -1153,86 +968,49 @@ pub struct RecordCreate {
     pub field_names: Vec<ColumnName>,
 }
 
-impl fmt::Display for RecordCreate {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("record_create")
-    }
-}
-
-fn list_create<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    temp_storage.make_datum(|packer| packer.push_list(datums))
-}
-
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
+#[sqlfunc(
+    output_type_expr = "SqlScalarType::Record { fields: self.field_names.clone().into_iter().zip_eq(input_types.iter().cloned()).collect(), custom_id: None }.nullable(false)",
+    introduces_nulls = false
 )]
-pub struct ListIndex;
-
-impl fmt::Display for ListIndex {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("list_index")
-    }
+fn record_create<'a>(&self, datums: Variadic<Datum<'a>>, temp_storage: &'a RowArena) -> Datum<'a> {
+    temp_storage.make_datum(|packer| packer.push_list(datums.iter().copied()))
 }
+
+#[sqlfunc(
+    output_type_expr = "input_types[0].scalar_type.unwrap_list_nth_layer_type(input_types.len() - 1).clone().nullable(true)",
+    introduces_nulls = true
+)]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
-fn list_index<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
-    let mut buf = datums[0];
-
-    for i in datums[1..].iter() {
+fn list_index<'a>(buf: DatumList<'a>, indices: Variadic<i64>) -> Datum<'a> {
+    let mut buf = Datum::List(buf);
+    for i in indices {
         if buf.is_null() {
             break;
         }
-
-        let i = i.unwrap_int64();
         if i < 1 {
             return Datum::Null;
         }
 
-        buf = buf
-            .unwrap_list()
-            .iter()
-            .nth(i as usize - 1)
-            .unwrap_or(Datum::Null);
+        buf = match buf.unwrap_list().iter().nth(i as usize - 1) {
+            Some(datum) => datum,
+            None => return Datum::Null,
+        }
     }
     buf
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct MakeAclItem;
-
-impl fmt::Display for MakeAclItem {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("makeaclitem")
-    }
-}
-
-fn make_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
-    let grantee = Oid(datums[0].unwrap_uint32());
-    let grantor = Oid(datums[1].unwrap_uint32());
-    let privileges = datums[2].unwrap_str();
+#[sqlfunc(sqlname = "makeaclitem")]
+fn make_acl_item(
+    grantee_oid: u32,
+    grantor_oid: u32,
+    privileges: &str,
+    is_grantable: bool,
+) -> Result<AclItem, EvalError> {
+    let grantee = Oid(grantee_oid);
+    let grantor = Oid(grantor_oid);
     let acl_mode = AclMode::parse_multiple_privileges(privileges)
         .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string().into()))?;
-    let is_grantable = datums[3].unwrap_bool();
     if is_grantable {
         return Err(EvalError::Unsupported {
             feature: "GRANT OPTION".into(),
@@ -1240,40 +1018,23 @@ fn make_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
         });
     }
 
-    Ok(Datum::AclItem(AclItem {
+    Ok(AclItem {
         grantee,
         grantor,
         acl_mode,
-    }))
+    })
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct MakeMzAclItem;
-
-impl fmt::Display for MakeMzAclItem {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("make_mz_aclitem")
-    }
-}
-
-fn make_mz_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
-    let grantee: RoleId = datums[0]
-        .unwrap_str()
+#[sqlfunc(sqlname = "make_mz_aclitem")]
+fn make_mz_acl_item(
+    grantee_str: &str,
+    grantor_str: &str,
+    privileges: &str,
+) -> Result<MzAclItem, EvalError> {
+    let grantee: RoleId = grantee_str
         .parse()
         .map_err(|e: anyhow::Error| EvalError::InvalidRoleId(e.to_string().into()))?;
-    let grantor: RoleId = datums[1]
-        .unwrap_str()
+    let grantor: RoleId = grantor_str
         .parse()
         .map_err(|e: anyhow::Error| EvalError::InvalidRoleId(e.to_string().into()))?;
     if grantor == RoleId::Public {
@@ -1281,72 +1042,58 @@ fn make_mz_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
             "mz_aclitem grantor cannot be PUBLIC role".into(),
         ));
     }
-    let privileges = datums[2].unwrap_str();
     let acl_mode = AclMode::parse_multiple_privileges(privileges)
         .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string().into()))?;
 
-    Ok(Datum::MzAclItem(MzAclItem {
+    Ok(MzAclItem {
         grantee,
         grantor,
         acl_mode,
-    }))
+    })
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct MakeTimestamp;
-
-impl fmt::Display for MakeTimestamp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("makets")
-    }
-}
-
+#[sqlfunc(sqlname = "makets")]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
-fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
-    let year: i32 = match datums[0].unwrap_int64().try_into() {
+fn make_timestamp(
+    year: i64,
+    month: i64,
+    day: i64,
+    hour: i64,
+    minute: i64,
+    second_float: f64,
+) -> Result<Option<CheckedTimestamp<NaiveDateTime>>, EvalError> {
+    let year: i32 = match year.try_into() {
         Ok(year) => year,
-        Err(_) => return Ok(Datum::Null),
+        Err(_) => return Ok(None),
     };
-    let month: u32 = match datums[1].unwrap_int64().try_into() {
+    let month: u32 = match month.try_into() {
         Ok(month) => month,
-        Err(_) => return Ok(Datum::Null),
+        Err(_) => return Ok(None),
     };
-    let day: u32 = match datums[2].unwrap_int64().try_into() {
+    let day: u32 = match day.try_into() {
         Ok(day) => day,
-        Err(_) => return Ok(Datum::Null),
+        Err(_) => return Ok(None),
     };
-    let hour: u32 = match datums[3].unwrap_int64().try_into() {
-        Ok(day) => day,
-        Err(_) => return Ok(Datum::Null),
+    let hour: u32 = match hour.try_into() {
+        Ok(hour) => hour,
+        Err(_) => return Ok(None),
     };
-    let minute: u32 = match datums[4].unwrap_int64().try_into() {
-        Ok(day) => day,
-        Err(_) => return Ok(Datum::Null),
+    let minute: u32 = match minute.try_into() {
+        Ok(minute) => minute,
+        Err(_) => return Ok(None),
     };
-    let second_float = datums[5].unwrap_float64();
     let second = second_float as u32;
     let micros = ((second_float - second as f64) * 1_000_000.0) as u32;
     let date = match NaiveDate::from_ymd_opt(year, month, day) {
         Some(date) => date,
-        None => return Ok(Datum::Null),
+        None => return Ok(None),
     };
     let timestamp = match date.and_hms_micro_opt(hour, minute, second, micros) {
         Some(timestamp) => timestamp,
-        None => return Ok(Datum::Null),
+        None => return Ok(None),
     };
-    Ok(timestamp.try_into()?)
+    Ok(Some(timestamp.try_into()?))
 }
 
 #[derive(
@@ -1365,24 +1112,19 @@ pub struct MapBuild {
     pub value_type: SqlScalarType,
 }
 
-impl fmt::Display for MapBuild {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("map_build")
-    }
-}
-
-fn map_build<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
+#[sqlfunc(
+    output_type_expr = "SqlScalarType::Map { value_type: Box::new(self.value_type.clone()), custom_id: None }.nullable(false)",
+    introduces_nulls = false
+)]
+fn map_build<'a>(
+    &self,
+    datums: Variadic<(Option<&str>, Datum<'a>)>,
+    temp_storage: &'a RowArena,
+) -> Datum<'a> {
     // Collect into a `BTreeMap` to provide the same semantics as it.
     let map: std::collections::BTreeMap<&str, _> = datums
         .into_iter()
-        .tuples()
-        .filter_map(|(k, v)| {
-            if k.is_null() {
-                None
-            } else {
-                Some((k.unwrap_str(), v))
-            }
-        })
+        .filter_map(|(k, v)| k.map(|k| (k, v)))
         .collect();
 
     temp_storage.make_datum(|packer| packer.push_dict(map))
@@ -1465,33 +1207,9 @@ impl LazyVariadicFunc for Or {
     }
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct PadLeading;
-
-impl fmt::Display for PadLeading {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("lpad")
-    }
-}
-
-fn pad_leading<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let string = datums[0].unwrap_str();
-
-    let len = match usize::try_from(datums[1].unwrap_int32()) {
+#[sqlfunc(sqlname = "lpad")]
+fn pad_leading(string: &str, raw_len: i32, pad: OptionalArg<&str>) -> Result<String, EvalError> {
+    let len = match usize::try_from(raw_len) {
         Ok(len) => len,
         Err(_) => {
             return Err(EvalError::InvalidParameterValue(
@@ -1503,11 +1221,7 @@ fn pad_leading<'a>(
         return Err(EvalError::LengthTooLarge);
     }
 
-    let pad_string = if datums.len() == 3 {
-        datums[2].unwrap_str()
-    } else {
-        " "
-    };
+    let pad_string = pad.unwrap_or(" ");
 
     let (end_char, end_char_byte_offset) = string
         .chars()
@@ -1522,146 +1236,60 @@ fn pad_leading<'a>(
         buf.push_str(string);
     }
 
-    Ok(Datum::String(temp_storage.push_string(buf)))
+    Ok(buf)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
+#[sqlfunc(
+    output_type_expr = "SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true)",
+    introduces_nulls = true
 )]
-pub struct RegexpMatch;
-
-impl fmt::Display for RegexpMatch {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("regexp_match")
-    }
-}
-
-fn regexp_match_dynamic<'a>(
-    datums: &[Datum<'a>],
+fn regexp_match<'a>(
+    haystack: &'a str,
+    needle: &str,
+    flags: OptionalArg<&str>,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    let haystack = datums[0];
-    let needle = datums[1].unwrap_str();
-    let flags = match datums.get(2) {
-        Some(d) => d.unwrap_str(),
-        None => "",
-    };
+    let flags = flags.unwrap_or("");
     let needle = build_regex(needle, flags)?;
-    regexp_match_static(haystack, temp_storage, &needle)
+    regexp_match_static(Datum::String(haystack), temp_storage, &needle)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
+#[sqlfunc(
+    output_type_expr = "SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)",
+    introduces_nulls = false
 )]
-pub struct RegexpSplitToArray;
-
-impl fmt::Display for RegexpSplitToArray {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("regexp_split_to_array")
-    }
-}
-
 fn regexp_split_to_array<'a>(
-    text: Datum<'a>,
-    regexp: Datum<'a>,
-    flags: Datum<'a>,
+    text: &str,
+    regexp_str: &str,
+    flags: OptionalArg<&str>,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    let text = text.unwrap_str();
-    let regexp = regexp.unwrap_str();
-    let flags = flags.unwrap_str();
-    let regexp = build_regex(regexp, flags)?;
+    let flags = flags.unwrap_or("");
+    let regexp = build_regex(regexp_str, flags)?;
     regexp_split_to_array_re(text, &regexp, temp_storage)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct RegexpReplace;
-
-impl fmt::Display for RegexpReplace {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("regexp_replace")
-    }
-}
-
-fn regexp_replace_dynamic<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let source = datums[0];
-    let pattern = datums[1];
-    let replacement = datums[2];
-    let flags = match datums.get(3) {
-        Some(d) => d.unwrap_str(),
-        None => "",
-    };
+#[sqlfunc]
+fn regexp_replace<'a>(
+    source: &'a str,
+    pattern: &str,
+    replacement: &str,
+    flags_opt: OptionalArg<&str>,
+) -> Result<Cow<'a, str>, EvalError> {
+    let flags = flags_opt.0.unwrap_or("");
     let (limit, flags) = regexp_replace_parse_flags(flags);
-    let regexp = build_regex(pattern.unwrap_str(), &flags)?;
-    let replaced = match regexp.replacen(source.unwrap_str(), limit, replacement.unwrap_str()) {
-        Cow::Borrowed(s) => s,
-        Cow::Owned(s) => temp_storage.push_string(s),
-    };
-    Ok(Datum::String(replaced))
+    let regexp = build_regex(pattern, &flags)?;
+    Ok(regexp.replacen(source, limit, replacement))
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct Replace;
-
-impl fmt::Display for Replace {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("replace")
-    }
-}
-
-fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {
+#[sqlfunc]
+fn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {
     // As a compromise to avoid always nearly duplicating the work of replace by doing size estimation,
-    // we first check if its possible for the fully replaced string to exceed the limit by assuming that
+    // we first check if it's possible for the fully replaced string to exceed the limit by assuming that
     // every possible substring is replaced.
     //
     // If that estimate exceeds the limit, we then do a more precise (and expensive) estimate by counting
     // the actual number of replacements that would occur, and using that to calculate the final size.
-    let text = datums[0].unwrap_str();
-    let from = datums[1].unwrap_str();
-    let to = datums[2].unwrap_str();
     let possible_size = text.len() * to.len();
     if possible_size > MAX_STRING_FUNC_RESULT_BYTES {
         let replacement_count = text.matches(from).count();
@@ -1671,43 +1299,20 @@ fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Result<Datum
         }
     }
 
-    Ok(Datum::String(
-        temp_storage.push_string(text.replace(from, to)),
-    ))
+    Ok(text.replace(from, to))
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
+#[sqlfunc(
+    output_type_expr = "SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)",
+    introduces_nulls = false,
+    propagates_nulls = false
 )]
-pub struct StringToArray;
-
-impl fmt::Display for StringToArray {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("string_to_array")
-    }
-}
-
 fn string_to_array<'a>(
-    string_datum: Datum<'a>,
-    delimiter: Datum<'a>,
-    null_string: Datum<'a>,
+    string: &'a str,
+    delimiter: Option<&'a str>,
+    null_string: OptionalArg<Option<&'a str>>,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    if string_datum.is_null() {
-        return Ok(Datum::Null);
-    }
-
-    let string = string_datum.unwrap_str();
-
     if string.is_empty() {
         let mut row = Row::default();
         let mut packer = row.packer();
@@ -1716,12 +1321,15 @@ fn string_to_array<'a>(
         return Ok(temp_storage.push_unary_row(row));
     }
 
-    if delimiter.is_null() {
+    let Some(delimiter) = delimiter else {
         let split_all_chars_delimiter = "";
-        return string_to_array_impl(string, split_all_chars_delimiter, null_string, temp_storage);
-    }
-
-    let delimiter = delimiter.unwrap_str();
+        return string_to_array_impl(
+            string,
+            split_all_chars_delimiter,
+            null_string.flatten(),
+            temp_storage,
+        );
+    };
 
     if delimiter.is_empty() {
         let mut row = Row::default();
@@ -1736,14 +1344,14 @@ fn string_to_array<'a>(
 
         Ok(temp_storage.push_unary_row(row))
     } else {
-        string_to_array_impl(string, delimiter, null_string, temp_storage)
+        string_to_array_impl(string, delimiter, null_string.flatten(), temp_storage)
     }
 }
 
 fn string_to_array_impl<'a>(
     string: &str,
     delimiter: &str,
-    null_string: Datum<'a>,
+    null_string: Option<&'a str>,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
     let mut row = Row::default();
@@ -1760,10 +1368,7 @@ fn string_to_array_impl<'a>(
         length: found.len(),
     }];
 
-    if null_string.is_null() {
-        packer.try_push_array(&array_dimensions, found.into_iter().map(Datum::String))?;
-    } else {
-        let null_string = null_string.unwrap_str();
+    if let Some(null_string) = null_string {
         let found_datums = found.into_iter().map(|chunk| {
             if chunk.eq(null_string) {
                 Datum::Null
@@ -1773,35 +1378,16 @@ fn string_to_array_impl<'a>(
         });
 
         packer.try_push_array(&array_dimensions, found_datums)?;
+    } else {
+        packer.try_push_array(&array_dimensions, found.into_iter().map(Datum::String))?;
     }
 
     Ok(temp_storage.push_unary_row(row))
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct Substr;
-
-impl fmt::Display for Substr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("substr")
-    }
-}
-
-fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
-    let s: &'a str = datums[0].unwrap_str();
-
-    let raw_start_idx = i64::from(datums[1].unwrap_int32()) - 1;
+#[sqlfunc]
+fn substr<'a>(s: &'a str, start: i32, length: OptionalArg<i32>) -> Result<&'a str, EvalError> {
+    let raw_start_idx = i64::from(start) - 1;
     let start_idx = match usize::try_from(cmp::max(raw_start_idx, 0)) {
         Ok(i) => i,
         Err(_) => {
@@ -1821,14 +1407,14 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     let str_len = s.len();
     let start_char_idx = char_indices.nth(start_idx).map_or(str_len, get_str_index);
 
-    if datums.len() == 3 {
-        let end_idx = match i64::from(datums[2].unwrap_int32()) {
+    if let OptionalArg(Some(len)) = length {
+        let end_idx = match i64::from(len) {
             e if e < 0 => {
                 return Err(EvalError::InvalidParameterValue(
                     "negative substring length not allowed".into(),
                 ));
             }
-            e if e == 0 || e + raw_start_idx < 1 => return Ok(Datum::String("")),
+            e if e == 0 || e + raw_start_idx < 1 => return Ok(""),
             e => {
                 let e = cmp::min(raw_start_idx + e - 1, e - 1);
                 match usize::try_from(e) {
@@ -1844,38 +1430,15 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
 
         let end_char_idx = char_indices.nth(end_idx).map_or(str_len, get_str_index);
 
-        Ok(Datum::String(&s[start_char_idx..end_char_idx]))
+        Ok(&s[start_char_idx..end_char_idx])
     } else {
-        Ok(Datum::String(&s[start_char_idx..]))
+        Ok(&s[start_char_idx..])
     }
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct SplitPart;
-
-impl fmt::Display for SplitPart {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("split_string")
-    }
-}
-
-fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
-    let string = datums[0].unwrap_str();
-    let delimiter = datums[1].unwrap_str();
-
-    // Provided index value begins at 1, not 0.
-    let index = match usize::try_from(i64::from(datums[2].unwrap_int32()) - 1) {
+#[sqlfunc(sqlname = "split_string")]
+fn split_part<'a>(string: &'a str, delimiter: &str, field: i32) -> Result<&'a str, EvalError> {
+    let index = match usize::try_from(i64::from(field) - 1) {
         Ok(index) => index,
         Err(_) => {
             return Err(EvalError::InvalidParameterValue(
@@ -1889,94 +1452,43 @@ fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     // characters. Instead, it generates the following parts: [string].
     if delimiter.is_empty() {
         if index == 0 {
-            return Ok(datums[0]);
+            return Ok(string);
         } else {
-            return Ok(Datum::String(""));
+            return Ok("");
         }
     }
 
     // If provided index is greater than the number of split parts,
     // return an empty string.
-    Ok(Datum::String(
-        string.split(delimiter).nth(index).unwrap_or(""),
-    ))
+    Ok(string.split(delimiter).nth(index).unwrap_or(""))
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct Concat;
-
-impl fmt::Display for Concat {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("concat")
-    }
-}
-
-fn text_concat_variadic<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+#[sqlfunc(is_associative = true)]
+fn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError> {
     let mut total_size = 0;
-    for d in datums {
-        if !d.is_null() {
-            total_size += d.unwrap_str().len();
+    for s in &strs {
+        if let Some(s) = s {
+            total_size += s.len();
             if total_size > MAX_STRING_FUNC_RESULT_BYTES {
                 return Err(EvalError::LengthTooLarge);
             }
         }
     }
-    let mut buf = String::new();
-    for d in datums {
-        if !d.is_null() {
-            buf.push_str(d.unwrap_str());
+    let mut buf = String::with_capacity(total_size);
+    for s in strs {
+        if let Some(s) = s {
+            buf.push_str(s);
         }
     }
-    Ok(Datum::String(temp_storage.push_string(buf)))
+    Ok(buf)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct ConcatWs;
-
-impl fmt::Display for ConcatWs {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("concat_ws")
-    }
-}
-
-fn text_concat_ws<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let ws = match datums[0] {
-        Datum::Null => return Ok(Datum::Null),
-        d => d.unwrap_str(),
-    };
-
+#[sqlfunc]
+fn concat_ws(ws: &str, rest: Variadic<Option<&str>>) -> Result<String, EvalError> {
     let mut total_size = 0;
-    for d in &datums[1..] {
-        if !d.is_null() {
-            total_size += d.unwrap_str().len();
+    for s in &rest {
+        if let Some(s) = s {
+            total_size += s.len();
             total_size += ws.len();
             if total_size > MAX_STRING_FUNC_RESULT_BYTES {
                 return Err(EvalError::LengthTooLarge);
@@ -1984,98 +1496,42 @@ fn text_concat_ws<'a>(
         }
     }
 
-    let buf = Itertools::join(
-        &mut datums[1..].iter().filter_map(|d| match d {
-            Datum::Null => None,
-            d => Some(d.unwrap_str()),
-        }),
-        ws,
-    );
+    let buf = Itertools::join(&mut rest.into_iter().filter_map(|s| s), ws);
 
-    Ok(Datum::String(temp_storage.push_string(buf)))
+    Ok(buf)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
+#[sqlfunc]
+fn translate(string: &str, from_str: &str, to_str: &str) -> String {
+    let from = from_str.chars().collect::<Vec<_>>();
+    let to = to_str.chars().collect::<Vec<_>>();
+
+    string
+        .chars()
+        .filter_map(|c| match from.iter().position(|f| f == &c) {
+            Some(idx) => to.get(idx).copied(),
+            None => Some(c),
+        })
+        .collect()
+}
+
+#[sqlfunc(
+    output_type_expr = "input_types[0].scalar_type.clone().nullable(false)",
+    introduces_nulls = false
 )]
-pub struct Translate;
-
-impl fmt::Display for Translate {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("translate")
-    }
-}
-
-fn translate<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    let string = datums[0].unwrap_str();
-    let from = datums[1].unwrap_str().chars().collect::<Vec<_>>();
-    let to = datums[2].unwrap_str().chars().collect::<Vec<_>>();
-
-    Datum::String(
-        temp_storage.push_string(
-            string
-                .chars()
-                .filter_map(|c| match from.iter().position(|f| f == &c) {
-                    Some(idx) => to.get(idx).copied(),
-                    None => Some(c),
-                })
-                .collect(),
-        ),
-    )
-}
-
-// TODO ///
-
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct ListSliceLinear;
-
-impl fmt::Display for ListSliceLinear {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("list_slice_linear")
-    }
-}
-
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
-fn list_slice_linear<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    assert_eq!(
-        datums.len() % 2,
-        1,
-        "expr::scalar::func::list_slice expects an odd number of arguments; 1 for list + 2 \
-        for each start-end pair"
-    );
-    assert!(
-        datums.len() > 2,
-        "expr::scalar::func::list_slice expects at least 3 arguments; 1 for list + at least \
-        one start-end pair"
-    );
-
+fn list_slice_linear<'a>(
+    list: DatumList<'a>,
+    first: (i64, i64),
+    remainder: Variadic<(i64, i64)>,
+    temp_storage: &'a RowArena,
+) -> Datum<'a> {
     let mut start_idx = 0;
     let mut total_length = usize::MAX;
 
-    for (start, end) in datums[1..].iter().tuples::<(_, _)>() {
-        let start = std::cmp::max(start.unwrap_int64(), 1);
-        let end = end.unwrap_int64();
+    for (start, end) in std::iter::once(first).chain(remainder) {
+        let start = std::cmp::max(start, 1);
 
         // Result should be empty list.
         if start > end {
@@ -2093,11 +1549,7 @@ fn list_slice_linear<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Da
         total_length = std::cmp::min(length_inner, total_length - start_inner);
     }
 
-    let iter = datums[0]
-        .unwrap_list()
-        .iter()
-        .skip(start_idx)
-        .take(total_length);
+    let iter = list.iter().skip(start_idx).take(total_length);
 
     temp_storage.make_datum(|row| {
         row.push_list_with(|row| {
@@ -2109,68 +1561,33 @@ fn list_slice_linear<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Da
     })
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct DateBinTimestamp;
-
-impl fmt::Display for DateBinTimestamp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("timestamp_bin")
-    }
+#[sqlfunc(sqlname = "timestamp_bin")]
+fn date_bin_timestamp(
+    stride: Interval,
+    source: CheckedTimestamp<NaiveDateTime>,
+    origin: CheckedTimestamp<NaiveDateTime>,
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    date_bin(stride, source, origin)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct DateBinTimestampTz;
-
-impl fmt::Display for DateBinTimestampTz {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("timestamptz_bin")
-    }
+#[sqlfunc(sqlname = "timestamptz_bin")]
+fn date_bin_timestamp_tz(
+    stride: Interval,
+    source: CheckedTimestamp<DateTime<Utc>>,
+    origin: CheckedTimestamp<DateTime<Utc>>,
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+    date_bin(stride, source, origin)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct TimezoneTime;
-
-impl fmt::Display for TimezoneTime {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("timezonet")
-    }
+#[sqlfunc(sqlname = "timezonet")]
+fn timezone_time_variadic(
+    tz_str: &str,
+    time: NaiveTime,
+    wall_time: CheckedTimestamp<DateTime<Utc>>,
+) -> Result<NaiveTime, EvalError> {
+    parse_timezone(tz_str, TimezoneSpec::Posix)
+        .map(|tz| timezone_time(tz, time, &wall_time.naive_utc()))
 }
-
-/// A description of an SQL variadic function that has the ability to lazy
-/// evaluate its arguments.
 pub(crate) trait LazyVariadicFunc: fmt::Display {
     fn eval<'a>(
         &'a self,
@@ -2206,6 +1623,90 @@ pub(crate) trait LazyVariadicFunc: fmt::Display {
     /// Returns true if the function is an infix operator.
     fn is_infix_op(&self) -> bool {
         false
+    }
+}
+
+pub(crate) trait EagerVariadicFunc: fmt::Display {
+    type Input<'a>: InputDatumType<'a, EvalError>;
+    type Output<'a>: OutputDatumType<'a, EvalError>;
+
+    fn call<'a>(&self, input: Self::Input<'a>, temp_storage: &'a RowArena) -> Self::Output<'a>;
+
+    fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType;
+
+    fn propagates_nulls(&self) -> bool {
+        !Self::Input::nullable()
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        Self::Output::nullable()
+    }
+
+    fn could_error(&self) -> bool {
+        Self::Output::fallible()
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
+
+    fn is_associative(&self) -> bool {
+        false
+    }
+
+    fn is_infix_op(&self) -> bool {
+        false
+    }
+}
+
+/// Blanket `LazyVariadicFunc` impl for each eager type, bridging
+/// expression evaluation and null propagation via `InputDatumType::try_from_iter`.
+impl<T: EagerVariadicFunc> LazyVariadicFunc for T {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        exprs: &'a [MirScalarExpr],
+    ) -> Result<Datum<'a>, EvalError> {
+        let mut datums = exprs.iter().map(|e| e.eval(datums, temp_storage));
+        match T::Input::try_from_iter(&mut datums) {
+            Ok(input) => self.call(input, temp_storage).into_result(temp_storage),
+            Err(Ok(None)) => Err(EvalError::Internal("missing parameter".into())),
+            Err(Ok(Some(datum))) if datum.is_null() => Ok(datum),
+            Err(Ok(Some(_datum))) => {
+                // datum is _not_ NULL
+                Err(EvalError::Internal("invalid input type".into()))
+            }
+            Err(Err(res)) => Err(res),
+        }
+    }
+
+    fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
+        self.output_type(input_types)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        self.propagates_nulls()
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        self.introduces_nulls()
+    }
+
+    fn could_error(&self) -> bool {
+        self.could_error()
+    }
+
+    fn is_monotone(&self) -> bool {
+        self.is_monotone()
+    }
+
+    fn is_associative(&self) -> bool {
+        self.is_associative()
+    }
+
+    fn is_infix_op(&self) -> bool {
+        self.is_infix_op()
     }
 }
 
@@ -2249,390 +1750,17 @@ derive_variadic! {
     ArrayPosition(ArrayPosition),
     ArrayFill(ArrayFill),
     StringToArray(StringToArray),
-    TimezoneTime(TimezoneTime),
+    TimezoneTimeVariadic(TimezoneTimeVariadic),
     RegexpSplitToArray(RegexpSplitToArray),
     RegexpReplace(RegexpReplace),
 }
 
 impl VariadicFunc {
-    pub fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        exprs: &'a [MirScalarExpr],
-    ) -> Result<Datum<'a>, EvalError> {
-        // Evaluate all non-eager functions directly
-        match self {
-            VariadicFunc::Coalesce(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::Greatest(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::And(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::Or(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::ErrorIfNull(f) => return f.eval(datums, temp_storage, exprs),
-            VariadicFunc::Least(f) => return f.eval(datums, temp_storage, exprs),
-            _ => {}
-        };
-
-        // Compute parameters to eager functions
-        let ds = exprs
-            .iter()
-            .map(|e| e.eval(datums, temp_storage))
-            .collect::<Result<Vec<_>, _>>()?;
-        // Check NULL propagation
-        if self.propagates_nulls() && ds.iter().any(|d| d.is_null()) {
-            return Ok(Datum::Null);
-        }
-
-        // Evaluate eager functions
-        match self {
-            VariadicFunc::Coalesce(_)
-            | VariadicFunc::Greatest(_)
-            | VariadicFunc::And(_)
-            | VariadicFunc::Or(_)
-            | VariadicFunc::ErrorIfNull(_)
-            | VariadicFunc::Least(_) => unreachable!(),
-            VariadicFunc::Concat(_) => text_concat_variadic(&ds, temp_storage),
-            VariadicFunc::ConcatWs(_) => text_concat_ws(&ds, temp_storage),
-            VariadicFunc::MakeTimestamp(_) => make_timestamp(&ds),
-            VariadicFunc::PadLeading(_) => pad_leading(&ds, temp_storage),
-            VariadicFunc::Substr(_) => substr(&ds),
-            VariadicFunc::Replace(_) => replace(&ds, temp_storage),
-            VariadicFunc::Translate(_) => Ok(translate(&ds, temp_storage)),
-            VariadicFunc::JsonbBuildArray(_) => Ok(jsonb_build_array(&ds, temp_storage)),
-            VariadicFunc::JsonbBuildObject(_) => jsonb_build_object(&ds, temp_storage),
-            VariadicFunc::MapBuild(..) => Ok(map_build(&ds, temp_storage)),
-            VariadicFunc::ArrayCreate(ArrayCreate {
-                elem_type: SqlScalarType::Array(_),
-            }) => array_create_multidim(&ds, temp_storage),
-            VariadicFunc::ArrayCreate(..) => array_create_scalar(&ds, temp_storage),
-            VariadicFunc::ArrayToString(ArrayToString { elem_type }) => {
-                array_to_string(&ds, elem_type, temp_storage)
-            }
-            VariadicFunc::ArrayIndex(ArrayIndex { offset }) => Ok(array_index(&ds, *offset)),
-            VariadicFunc::ListCreate(..) | VariadicFunc::RecordCreate(..) => {
-                Ok(list_create(&ds, temp_storage))
-            }
-            VariadicFunc::ListIndex(_) => Ok(list_index(&ds)),
-            VariadicFunc::ListSliceLinear(_) => Ok(list_slice_linear(&ds, temp_storage)),
-            VariadicFunc::SplitPart(_) => split_part(&ds),
-            VariadicFunc::RegexpMatch(_) => regexp_match_dynamic(&ds, temp_storage),
-            VariadicFunc::HmacString(_) => hmac_string(&ds, temp_storage),
-            VariadicFunc::HmacBytes(_) => hmac_bytes(&ds, temp_storage),
-            VariadicFunc::DateBinTimestamp(_) => date_bin(
-                ds[0].unwrap_interval(),
-                ds[1].unwrap_timestamp(),
-                ds[2].unwrap_timestamp(),
-            )
-            .into_result(temp_storage),
-            VariadicFunc::DateBinTimestampTz(_) => date_bin(
-                ds[0].unwrap_interval(),
-                ds[1].unwrap_timestamptz(),
-                ds[2].unwrap_timestamptz(),
-            )
-            .into_result(temp_storage),
-            VariadicFunc::DateDiffTimestamp(_) => date_diff_timestamp(ds[0], ds[1], ds[2]),
-            VariadicFunc::DateDiffTimestampTz(_) => date_diff_timestamptz(ds[0], ds[1], ds[2]),
-            VariadicFunc::DateDiffDate(_) => date_diff_date(ds[0], ds[1], ds[2]),
-            VariadicFunc::DateDiffTime(_) => date_diff_time(ds[0], ds[1], ds[2]),
-            VariadicFunc::RangeCreate(..) => create_range(&ds, temp_storage),
-            VariadicFunc::MakeAclItem(_) => make_acl_item(&ds),
-            VariadicFunc::MakeMzAclItem(_) => make_mz_acl_item(&ds),
-            VariadicFunc::ArrayPosition(_) => array_position(&ds),
-            VariadicFunc::ArrayFill(..) => array_fill(&ds, temp_storage),
-            VariadicFunc::TimezoneTime(_) => {
-                parse_timezone(ds[0].unwrap_str(), TimezoneSpec::Posix).map(|tz| {
-                    timezone_time(
-                        tz,
-                        ds[1].unwrap_time(),
-                        &ds[2].unwrap_timestamptz().naive_utc(),
-                    )
-                    .into()
-                })
-            }
-            VariadicFunc::RegexpSplitToArray(_) => {
-                let flags = if ds.len() == 2 {
-                    Datum::String("")
-                } else {
-                    ds[2]
-                };
-                regexp_split_to_array(ds[0], ds[1], flags, temp_storage)
-            }
-            VariadicFunc::RegexpReplace(_) => regexp_replace_dynamic(&ds, temp_storage),
-            VariadicFunc::StringToArray(_) => {
-                let null_string = if ds.len() == 2 { Datum::Null } else { ds[2] };
-
-                string_to_array(ds[0], ds[1], null_string, temp_storage)
-            }
-        }
-    }
-
-    pub fn is_associative(&self) -> bool {
-        match self {
-            VariadicFunc::And(s) => s.is_associative(),
-            VariadicFunc::Coalesce(s) => s.is_associative(),
-            VariadicFunc::Greatest(s) => s.is_associative(),
-            VariadicFunc::Least(s) => s.is_associative(),
-            VariadicFunc::Concat(_) => true,
-            VariadicFunc::Or(s) => s.is_associative(),
-            VariadicFunc::ErrorIfNull(s) => s.is_associative(),
-
-            VariadicFunc::MakeTimestamp(_)
-            | VariadicFunc::PadLeading(_)
-            | VariadicFunc::ConcatWs(_)
-            | VariadicFunc::Substr(_)
-            | VariadicFunc::Replace(_)
-            | VariadicFunc::Translate(_)
-            | VariadicFunc::JsonbBuildArray(_)
-            | VariadicFunc::JsonbBuildObject(_)
-            | VariadicFunc::MapBuild(..)
-            | VariadicFunc::ArrayCreate(..)
-            | VariadicFunc::ArrayToString(..)
-            | VariadicFunc::ArrayIndex(..)
-            | VariadicFunc::ListCreate(..)
-            | VariadicFunc::RecordCreate(..)
-            | VariadicFunc::ListIndex(_)
-            | VariadicFunc::ListSliceLinear(_)
-            | VariadicFunc::SplitPart(_)
-            | VariadicFunc::RegexpMatch(_)
-            | VariadicFunc::HmacString(_)
-            | VariadicFunc::HmacBytes(_)
-            | VariadicFunc::DateBinTimestamp(_)
-            | VariadicFunc::DateBinTimestampTz(_)
-            | VariadicFunc::DateDiffTimestamp(_)
-            | VariadicFunc::DateDiffTimestampTz(_)
-            | VariadicFunc::DateDiffDate(_)
-            | VariadicFunc::DateDiffTime(_)
-            | VariadicFunc::RangeCreate(..)
-            | VariadicFunc::MakeAclItem(_)
-            | VariadicFunc::MakeMzAclItem(_)
-            | VariadicFunc::ArrayPosition(_)
-            | VariadicFunc::ArrayFill(..)
-            | VariadicFunc::TimezoneTime(_)
-            | VariadicFunc::RegexpSplitToArray(_)
-            | VariadicFunc::StringToArray(_)
-            | VariadicFunc::RegexpReplace(_) => false,
-        }
-    }
-
-    pub fn output_sql_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
-        let in_nullable = input_types.iter().any(|t| t.nullable);
-        match self {
-            Self::And(s) => s.output_type(&input_types),
-            Self::Greatest(s) => s.output_type(&input_types),
-            Self::Least(s) => s.output_type(&input_types),
-            Self::Coalesce(s) => s.output_type(&input_types),
-            Self::Concat(_) | Self::ConcatWs(_) => SqlScalarType::String.nullable(in_nullable),
-            Self::MakeTimestamp(_) => SqlScalarType::Timestamp { precision: None }.nullable(true),
-            Self::PadLeading(_) => SqlScalarType::String.nullable(in_nullable),
-            Self::Substr(_) => SqlScalarType::String.nullable(in_nullable),
-            Self::Replace(_) => SqlScalarType::String.nullable(in_nullable),
-            Self::Translate(_) => SqlScalarType::String.nullable(in_nullable),
-            Self::JsonbBuildArray(_) | Self::JsonbBuildObject(_) => {
-                SqlScalarType::Jsonb.nullable(true)
-            }
-            Self::MapBuild(MapBuild { value_type }) => SqlScalarType::Map {
-                value_type: Box::new(value_type.clone()),
-                custom_id: None,
-            }
-            .nullable(true),
-            Self::ArrayCreate(ArrayCreate { elem_type }) => {
-                soft_assert_or_log!(
-                    input_types.iter().all(|t| {
-                        // This ensures that the types are compatiable, but nullability may vary deeply in the types.
-                        ReprScalarType::from(elem_type)
-                            .union(&ReprScalarType::from(&t.scalar_type))
-                            .is_ok()
-                    }),
-                    "Args to ArrayCreate should have types that are repr-compatible with the elem_type.\nArgs:{input_types:#?}\nelem_type:{elem_type:#?}"
-                );
-                match elem_type {
-                    SqlScalarType::Array(_) => elem_type.clone().nullable(false),
-                    _ => SqlScalarType::Array(Box::new(elem_type.clone())).nullable(false),
-                }
-            }
-            Self::ArrayToString(..) => SqlScalarType::String.nullable(in_nullable),
-            Self::ArrayIndex(..) => input_types[0]
-                .scalar_type
-                .unwrap_array_element_type()
-                .clone()
-                .nullable(true),
-            Self::ListCreate(ListCreate { elem_type }) => {
-                soft_assert_or_log!(
-                    input_types.iter().all(|t| {
-                        // This ensures that the types are compatiable, but nullability may vary deeply in the types.
-                        ReprScalarType::from(elem_type)
-                            .union(&ReprScalarType::from(&t.scalar_type))
-                            .is_ok()
-                    }),
-                    "Args to ListCreate should have types that are compatible with the elem_type.\nArgs:{input_types:#?}\nelem_type:{elem_type:#?}"
-                );
-                SqlScalarType::List {
-                    element_type: Box::new(elem_type.clone()),
-                    custom_id: None,
-                }
-                .nullable(false)
-            }
-            Self::ListIndex(_) => input_types[0]
-                .scalar_type
-                .unwrap_list_nth_layer_type(input_types.len() - 1)
-                .clone()
-                .nullable(true),
-            Self::ListSliceLinear(..) => input_types[0].scalar_type.clone().nullable(in_nullable),
-            Self::RecordCreate(RecordCreate { field_names }) => SqlScalarType::Record {
-                fields: field_names
-                    .clone()
-                    .into_iter()
-                    .zip_eq(input_types)
-                    .collect(),
-                custom_id: None,
-            }
-            .nullable(false),
-            Self::SplitPart(_) => SqlScalarType::String.nullable(in_nullable),
-            Self::RegexpMatch(_) => {
-                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true)
-            }
-            Self::HmacString(_) | Self::HmacBytes(_) => SqlScalarType::Bytes.nullable(in_nullable),
-            Self::ErrorIfNull(s) => s.output_type(&input_types),
-            Self::DateBinTimestamp(_) => {
-                SqlScalarType::Timestamp { precision: None }.nullable(in_nullable)
-            }
-            Self::DateBinTimestampTz(_) => {
-                SqlScalarType::TimestampTz { precision: None }.nullable(in_nullable)
-            }
-            Self::DateDiffTimestamp(_) => SqlScalarType::Int64.nullable(in_nullable),
-            Self::DateDiffTimestampTz(_) => SqlScalarType::Int64.nullable(in_nullable),
-            Self::DateDiffDate(_) => SqlScalarType::Int64.nullable(in_nullable),
-            Self::DateDiffTime(_) => SqlScalarType::Int64.nullable(in_nullable),
-            Self::Or(s) => s.output_type(&input_types),
-            Self::RangeCreate(RangeCreate { elem_type }) => SqlScalarType::Range {
-                element_type: Box::new(elem_type.clone()),
-            }
-            .nullable(false),
-            Self::MakeAclItem(_) => SqlScalarType::AclItem.nullable(true),
-            Self::MakeMzAclItem(_) => SqlScalarType::MzAclItem.nullable(true),
-            Self::ArrayPosition(_) => SqlScalarType::Int32.nullable(true),
-            Self::ArrayFill(ArrayFill { elem_type }) => {
-                SqlScalarType::Array(Box::new(elem_type.clone())).nullable(false)
-            }
-            Self::TimezoneTime(_) => SqlScalarType::Time.nullable(in_nullable),
-            Self::RegexpSplitToArray(_) => {
-                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(in_nullable)
-            }
-            Self::RegexpReplace(_) => SqlScalarType::String.nullable(in_nullable),
-            Self::StringToArray(_) => {
-                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true)
-            }
-        }
-    }
-
-    /// Computes the representation type of this variadic function.
-    ///
-    /// This is a wrapper around [`Self::output_sql_type`] that converts the result to a representation type.
-    pub fn output_type(&self, input_types: Vec<ReprColumnType>) -> ReprColumnType {
-        ReprColumnType::from(
-            &self.output_sql_type(input_types.iter().map(SqlColumnType::from_repr).collect()),
-        )
-    }
-
-    /// Whether the function output is NULL if any of its inputs are NULL.
-    ///
-    /// NB: if any input is NULL the output will be returned as NULL without
-    /// calling the function.
-    pub fn propagates_nulls(&self) -> bool {
-        match self {
-            VariadicFunc::And(s) => return s.propagates_nulls(),
-            VariadicFunc::Or(s) => return s.propagates_nulls(),
-            VariadicFunc::Coalesce(s) => return s.propagates_nulls(),
-            VariadicFunc::Greatest(s) => return s.propagates_nulls(),
-            VariadicFunc::Least(s) => return s.propagates_nulls(),
-            VariadicFunc::ErrorIfNull(s) => return s.propagates_nulls(),
-            _ => {}
-        }
-        // NOTE: The following is a list of the variadic functions
-        // that **DO NOT** propagate nulls, unless they've been converted
-        // to the new variadic func infrastructure.
-        !matches!(
-            self,
-            VariadicFunc::Concat(_)
-                | VariadicFunc::ConcatWs(_)
-                | VariadicFunc::JsonbBuildArray(_)
-                | VariadicFunc::JsonbBuildObject(_)
-                | VariadicFunc::MapBuild(..)
-                | VariadicFunc::ListCreate(..)
-                | VariadicFunc::RecordCreate(..)
-                | VariadicFunc::ArrayCreate(..)
-                | VariadicFunc::ArrayToString(..)
-                | VariadicFunc::RangeCreate(..)
-                | VariadicFunc::ArrayPosition(_)
-                | VariadicFunc::ArrayFill(..)
-                | VariadicFunc::StringToArray(_)
-        )
-    }
-
-    /// Whether the function might return NULL even if none of its inputs are
-    /// NULL.
-    ///
-    /// This is presently conservative, and may indicate that a function
-    /// introduces nulls even when it does not.
-    pub fn introduces_nulls(&self) -> bool {
-        match self {
-            Self::And(s) => s.introduces_nulls(),
-            Self::Or(s) => s.introduces_nulls(),
-            Self::Coalesce(s) => s.introduces_nulls(),
-            Self::Greatest(s) => s.introduces_nulls(),
-            Self::Least(s) => s.introduces_nulls(),
-            Self::ErrorIfNull(s) => s.introduces_nulls(),
-            Self::Concat(_)
-            | Self::ConcatWs(_)
-            | Self::PadLeading(_)
-            | Self::Substr(_)
-            | Self::Replace(_)
-            | Self::Translate(_)
-            | Self::JsonbBuildArray(_)
-            | Self::JsonbBuildObject(_)
-            | Self::MapBuild(..)
-            | Self::ArrayCreate(..)
-            | Self::ArrayToString(..)
-            | Self::ListCreate(..)
-            | Self::RecordCreate(..)
-            | Self::ListSliceLinear(_)
-            | Self::SplitPart(_)
-            | Self::HmacString(_)
-            | Self::HmacBytes(_)
-            | Self::DateBinTimestamp(_)
-            | Self::DateBinTimestampTz(_)
-            | Self::DateDiffTimestamp(_)
-            | Self::DateDiffTimestampTz(_)
-            | Self::DateDiffDate(_)
-            | Self::DateDiffTime(_)
-            | Self::RangeCreate(..)
-            | Self::MakeAclItem(_)
-            | Self::MakeMzAclItem(_)
-            | Self::ArrayPosition(_)
-            | Self::ArrayFill(..)
-            | Self::TimezoneTime(_)
-            | Self::RegexpSplitToArray(_)
-            | Self::RegexpReplace(_) => false,
-            Self::MakeTimestamp(_)
-            | Self::ArrayIndex(..)
-            | Self::StringToArray(_)
-            | Self::ListIndex(_)
-            | Self::RegexpMatch(_) => true,
-        }
-    }
-
     pub fn switch_and_or(&self) -> Self {
         match self {
             VariadicFunc::And(_) => Or.into(),
             VariadicFunc::Or(_) => And.into(),
             _ => unreachable!(),
-        }
-    }
-
-    pub fn is_infix_op(&self) -> bool {
-        match self {
-            VariadicFunc::And(s) => s.is_infix_op(),
-            VariadicFunc::Or(s) => s.is_infix_op(),
-            _ => false,
         }
     }
 
@@ -2652,84 +1780,6 @@ impl VariadicFunc {
             VariadicFunc::And(_) => MirScalarExpr::literal_false(),
             VariadicFunc::Or(_) => MirScalarExpr::literal_true(),
             _ => unreachable!(),
-        }
-    }
-
-    /// Returns true if the function could introduce an error on non-error inputs.
-    pub fn could_error(&self) -> bool {
-        match self {
-            VariadicFunc::And(s) => s.could_error(),
-            VariadicFunc::Or(s) => s.could_error(),
-            VariadicFunc::Coalesce(s) => s.could_error(),
-            VariadicFunc::Greatest(s) => s.could_error(),
-            VariadicFunc::ErrorIfNull(s) => s.could_error(),
-            VariadicFunc::Least(s) => s.could_error(),
-            VariadicFunc::Concat(_) | VariadicFunc::ConcatWs(_) => false,
-            VariadicFunc::Replace(_) => false,
-            VariadicFunc::Translate(_) => false,
-            VariadicFunc::ArrayIndex(..) => false,
-            VariadicFunc::ListCreate(..) | VariadicFunc::RecordCreate(..) => false,
-            // All other cases are unknown
-            _ => true,
-        }
-    }
-
-    /// Returns true if the function is monotone. (Non-strict; either increasing or decreasing.)
-    /// Monotone functions map ranges to ranges: ie. given a range of possible inputs, we can
-    /// determine the range of possible outputs just by mapping the endpoints.
-    ///
-    /// This describes the *pointwise* behaviour of the function:
-    /// ie. if more than one argument is provided, this describes the behaviour of
-    /// any specific argument as the others are held constant. (For example, `COALESCE(a, b)` is
-    /// monotone in `a` because for any particular value of `b`, increasing `a` will never
-    /// cause the result to decrease.)
-    ///
-    /// This property describes the behaviour of the function over ranges where the function is defined:
-    /// ie. the arguments and the result are non-error datums.
-    pub fn is_monotone(&self) -> bool {
-        match self {
-            VariadicFunc::Coalesce(s) => s.is_monotone(),
-            VariadicFunc::Greatest(s) => s.is_monotone(),
-            VariadicFunc::Least(s) => s.is_monotone(),
-            VariadicFunc::And(s) => s.is_monotone(),
-            VariadicFunc::Or(s) => s.is_monotone(),
-            VariadicFunc::Concat(_)
-            | VariadicFunc::ConcatWs(_)
-            | VariadicFunc::MakeTimestamp(_)
-            | VariadicFunc::PadLeading(_)
-            | VariadicFunc::Substr(_)
-            | VariadicFunc::Replace(_)
-            | VariadicFunc::JsonbBuildArray(_)
-            | VariadicFunc::JsonbBuildObject(_)
-            | VariadicFunc::MapBuild(..)
-            | VariadicFunc::ArrayCreate(..)
-            | VariadicFunc::ArrayToString(..)
-            | VariadicFunc::ArrayIndex(..)
-            | VariadicFunc::ListCreate(..)
-            | VariadicFunc::RecordCreate(..)
-            | VariadicFunc::ListIndex(_)
-            | VariadicFunc::ListSliceLinear(_)
-            | VariadicFunc::SplitPart(_)
-            | VariadicFunc::RegexpMatch(_)
-            | VariadicFunc::HmacString(_)
-            | VariadicFunc::HmacBytes(_) => false,
-            VariadicFunc::ErrorIfNull(s) => s.is_monotone(),
-            VariadicFunc::DateBinTimestamp(_)
-            | VariadicFunc::DateBinTimestampTz(_)
-            | VariadicFunc::RangeCreate(..)
-            | VariadicFunc::MakeAclItem(_)
-            | VariadicFunc::MakeMzAclItem(_)
-            | VariadicFunc::Translate(_)
-            | VariadicFunc::ArrayPosition(_)
-            | VariadicFunc::ArrayFill(..)
-            | VariadicFunc::DateDiffTimestamp(_)
-            | VariadicFunc::DateDiffTimestampTz(_)
-            | VariadicFunc::DateDiffDate(_)
-            | VariadicFunc::DateDiffTime(_)
-            | VariadicFunc::TimezoneTime(_)
-            | VariadicFunc::RegexpSplitToArray(_)
-            | VariadicFunc::StringToArray(_)
-            | VariadicFunc::RegexpReplace(_) => false,
         }
     }
 }

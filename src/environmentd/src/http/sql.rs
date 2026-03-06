@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::pin;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -57,8 +57,8 @@ use tungstenite::protocol::frame::coding::CloseCode;
 
 use crate::http::prometheus::PrometheusSqlQuery;
 use crate::http::{
-    AuthError, AuthedClient, AuthedUser, MAX_REQUEST_SIZE, SESSION_DURATION, TowerSessionData,
-    WsState, init_ws,
+    AuthError, AuthedClient, AuthedUser, MAX_REQUEST_SIZE, WsState, ensure_session_unexpired,
+    init_ws, maybe_get_authenticated_session,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -277,46 +277,36 @@ pub async fn handle_sql(
     }
 }
 
-pub async fn handle_sql_ws(
+#[derive(Debug)]
+pub enum ExistingUser {
+    /// An AuthedUser provided by the
+    /// `x_materialize_user_header_auth` middleware
+    XMaterializeUserHeader(AuthedUser),
+    /// An AuthedUser provided by an authenticated session
+    /// established via [`crate::http::handle_login`].
+    Session(AuthedUser),
+}
+
+pub(crate) async fn handle_sql_ws(
     State(state): State<WsState>,
     existing_user: Option<Extension<AuthedUser>>,
     ws: WebSocketUpgrade,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     tower_session: Option<Extension<TowerSession>>,
-) -> impl IntoResponse {
-    // An upstream middleware may have already provided the user for us
-    let user = match (existing_user, tower_session) {
-        (Some(Extension(user)), _) => Some(user),
-        (None, Some(session)) => {
-            if let Ok(Some(session_data)) = session.get::<TowerSessionData>("data").await {
-                // Check session expiration
-                if session_data
-                    .last_activity
-                    .elapsed()
-                    .unwrap_or(Duration::MAX)
-                    > SESSION_DURATION
-                {
-                    let _ = session.delete().await;
-                    return Err(AuthError::SessionExpired);
-                }
-                // Update last activity
-                let mut updated_data = session_data.clone();
-                updated_data.last_activity = SystemTime::now();
-                session
-                    .insert("data", &updated_data)
-                    .await
-                    .map_err(|_| AuthError::FailedToUpdateSession)?;
-                // User is authenticated via session
-                Some(AuthedUser {
-                    name: session_data.username,
-                    external_metadata_rx: None,
-                    authenticated: session_data.authenticated,
-                })
+) -> Result<impl IntoResponse, AuthError> {
+    let session = tower_session.map(|Extension(session)| session);
+    // The `x_materialize_user_header_auth` middleware may have already provided the user for us
+    let user = match existing_user {
+        Some(Extension(user)) => Some(ExistingUser::XMaterializeUserHeader(user)),
+        None => {
+            let session = maybe_get_authenticated_session(session.as_ref()).await;
+            if let Some((session, session_data)) = session {
+                let user = ensure_session_unexpired(session, session_data).await?;
+                Some(ExistingUser::Session(user))
             } else {
                 None
             }
         }
-        _ => None,
     };
 
     let addr = Box::new(addr.ip());
@@ -345,7 +335,7 @@ pub enum WebSocketAuth {
     },
 }
 
-async fn run_ws(state: WsState, user: Option<AuthedUser>, peer_addr: IpAddr, mut ws: WebSocket) {
+async fn run_ws(state: WsState, user: Option<ExistingUser>, peer_addr: IpAddr, mut ws: WebSocket) {
     let mut client = match init_ws(state, user, peer_addr, &mut ws).await {
         Ok(client) => client,
         Err(e) => {

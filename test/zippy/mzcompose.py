@@ -35,6 +35,7 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.persistcli import Persistcli
+from materialize.mzcompose.services.polaris import Polaris, PolarisBootstrap
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.prometheus import Prometheus
 from materialize.mzcompose.services.redpanda import Redpanda
@@ -106,6 +107,8 @@ SERVICES = [
     Persistcli(),
     MySql(),
     SqlServer(),
+    PolarisBootstrap(),
+    Polaris(),
 ]
 
 
@@ -194,6 +197,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "redpanda",
         "ssh-bastion-host",
         "minio",
+        "postgres",
         Service("mc", idle=True),
     ]
     if args.azurite:
