@@ -135,7 +135,7 @@ use mz_repr::{Datum, DatumVec, Diff, GlobalId, ReprRelationType, Row, SharedRow}
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::operator::StreamExt;
+use mz_timely_util::operator::{CollectionExt, StreamExt};
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
 use timely::PartialOrder;
@@ -164,7 +164,6 @@ use crate::logging::compute::{
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::continual_task::ContinualTaskCtx;
 use crate::row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
-use crate::typedefs::spines::{ColKeyBuilder, ColKeySpine};
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 
 pub mod context;
@@ -952,7 +951,10 @@ where
                 let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
 
                 // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
-                let mut oks = oks.consolidate_named::<KeyBatcher<_, _, _>, ColKeyBuilder<_, _, _>, ColKeySpine<_, _, _>, _>("LetRecConsolidation", |k, &()| k.clone());
+                let mut oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                    oks,
+                    "LetRecConsolidation",
+                );
 
                 if let Some(limit) = limit {
                     // We swallow the results of the `max_iter`th iteration, because
@@ -1334,7 +1336,10 @@ where
                 }
                 let mut oks = differential_dataflow::collection::concatenate(&mut self.scope, oks);
                 if consolidate_output {
-                    oks = oks.consolidate_named::<KeyBatcher<_, _, _>, ColKeyBuilder<_, _, _>, ColKeySpine<_, _, _>, _>("UnionConsolidation", |k, &()| k.clone())
+                    oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                        oks,
+                        "UnionConsolidation",
+                    )
                 }
                 let errs = differential_dataflow::collection::concatenate(&mut self.scope, errs);
                 CollectionBundle::from_collections(oks, errs)

@@ -47,7 +47,6 @@ use crate::render::errors::MaybeValidatingRow;
 use crate::row_spine::{
     DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
 };
-use crate::typedefs::spines::{ColKeyBuilder, ColKeySpine};
 use crate::typedefs::{KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
@@ -204,12 +203,10 @@ where
                     let (result, errs) =
                         self.build_topk_stage(thinned, order_key, 1u64, 0, limit, arity, false);
                     // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
-                    let result = result.consolidate_named::<
-                        KeyBatcher<_, _, _>,
-                        ColKeyBuilder<_, _, _>,
-                        ColKeySpine<_, _, _>,
-                        _,
-                    >("Monotonic TopK final consolidate", |k, &()| k.clone());
+                    let result = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                        result,
+                        "Monotonic TopK final consolidate",
+                    );
                     retractions_var.set(collection.concat(result.clone().negate()));
                     soft_assert_or_log!(
                         errs.is_none(),
@@ -340,7 +337,8 @@ where
             collection, order_key, 1u64, offset, limit, arity, validating,
         );
         // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
-        let oks = oks.consolidate_named::<KeyBatcher<_, _, _>, ColKeyBuilder<_, _, _>, ColKeySpine<_, _, _>, _>("TopK final consolidate", |k, &()| k.clone());
+        let oks =
+            CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(oks, "TopK final consolidate");
         collection = oks;
         if validating {
             err_collection = errs;
