@@ -40,8 +40,8 @@ pdoc==15.0.4
 pg8000==1.31.5
 prettytable==3.17.0
 psutil==7.2.2
-psycopg==3.3.2
-psycopg-binary==3.3.2
+psycopg==3.3.3
+psycopg-binary==3.3.3
 pydantic==2.12.5
 pyelftools==0.32
 pyjwt==2.11.0
