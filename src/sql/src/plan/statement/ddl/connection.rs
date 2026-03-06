@@ -21,9 +21,9 @@ use mz_repr::CatalogItemId;
 use mz_sql_parser::ast::ConnectionOptionName::*;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ConnectionDefaultAwsPrivatelink, ConnectionOption, ConnectionOptionName, CreateConnectionType,
-    KafkaBroker, KafkaBrokerAwsPrivatelinkOption, KafkaBrokerAwsPrivatelinkOptionName,
-    KafkaBrokerTunnel,
+    ConnectionAwsPrivatelinkRule, ConnectionDefaultAwsPrivatelink, ConnectionOption,
+    ConnectionOptionName, CreateConnectionType, KafkaBroker, KafkaBrokerAwsPrivatelinkOption,
+    KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel,
 };
 use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::{
@@ -53,6 +53,7 @@ generate_extracted_config!(
     (AvailabilityZones, Vec<String>),
     (AwsConnection, with_options::Object),
     (AwsPrivatelink, ConnectionDefaultAwsPrivatelink<Aug>),
+    (AwsPrivatelinks, Vec<ConnectionAwsPrivatelinkRule<Aug>>),
     // (AwsPrivatelink, with_options::Object),
     (Broker, Vec<KafkaBroker<Aug>>),
     (Brokers, Vec<KafkaBroker<Aug>>),

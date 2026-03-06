@@ -1073,6 +1073,7 @@ impl KafkaConnection {
                     None, // Default tunnel does not support availability zones.
                 )));
             }
+            Tunnel::AwsPrivatelinks(x) => todo!(),
             Tunnel::Ssh(ssh_tunnel) => {
                 let secret = storage_configuration
                     .connection_context
@@ -1138,6 +1139,7 @@ impl KafkaConnection {
                         },
                     );
                 }
+                Tunnel::AwsPrivatelinks(x) => todo!(),
                 Tunnel::Ssh(ssh_tunnel) => {
                     // Ensure any SSH bastion address we connect to is resolved to an external address.
                     let ssh_host_resolved = resolve_address(
@@ -1455,6 +1457,7 @@ impl CsrConnection {
                     .collect();
                 client_config = client_config.resolve_to_addrs(host, &addrs)
             }
+            Tunnel::AwsPrivatelinks(x) => todo!(),
         }
 
         Ok(client_config.build()?)
@@ -1713,6 +1716,7 @@ impl PostgresConnection<InlinedConnection> {
                     connection_id: connection.connection_id,
                 }
             }
+            Tunnel::AwsPrivatelinks(x) => todo!(),
         };
 
         Ok(mz_postgres_util::Config::new(
@@ -1848,6 +1852,7 @@ pub enum Tunnel<C: ConnectionAccess = InlinedConnection> {
     Ssh(SshTunnel<C>),
     /// Via the specified AWS PrivateLink connection.
     AwsPrivatelink(AwsPrivatelink),
+    AwsPrivatelinks(AwsPrivatelinks),
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<Tunnel, R> for Tunnel<ReferencedConnection> {
@@ -1856,6 +1861,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<Tunnel, R> for Tunnel<Reference
             Tunnel::Direct => Tunnel::Direct,
             Tunnel::Ssh(ssh) => Tunnel::Ssh(ssh.into_inline_connection(r)),
             Tunnel::AwsPrivatelink(awspl) => Tunnel::AwsPrivatelink(awspl),
+            Tunnel::AwsPrivatelinks(x) => Tunnel::AwsPrivatelinks(x),
         }
     }
 }
@@ -2064,6 +2070,7 @@ impl MySqlConnection<InlinedConnection> {
                     connection_id: connection.connection_id,
                 }
             }
+            Tunnel::AwsPrivatelinks(aws_privatelinks) => todo!(),
         };
 
         let aws_config = match self.aws_connection.as_ref() {
@@ -2390,6 +2397,7 @@ impl SqlServerConnectionDetails<InlinedConnection> {
                     port: self.port,
                 }
             }
+            Tunnel::AwsPrivatelinks(x) => todo!(),
         };
 
         Ok(mz_sql_server_util::Config::new(
@@ -2551,6 +2559,32 @@ impl AlterCompatible for AwsPrivatelink {
 
         Ok(())
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct AwsPrivatelinks {
+    /// Route to brokers through PrivateLink connections according to these rules.
+    rules: Vec<AwsPrivatelinkRule>,
+    /// Bootstrap through this PrivateLink connection.
+    pub default: AwsPrivatelink,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct AwsPrivatelinkRule {
+    /// Given a broker's host:port, should we use this route?
+    pattern: ConnectionRulePattern,
+    /// Route to the broker through this PrivateLink connection.
+    to: AwsPrivatelink,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct ConnectionRulePattern {
+    /// If true, allow any combination of characters before the literal match.
+    pub prefix_wildcard: bool,
+    /// We expect the broker's host:port to match these characters in their entirety.
+    pub literal_match: String,
+    /// If true, allow any combination of characters after the literal match.
+    pub suffix_wildcard: bool,
 }
 
 /// Specifies an SSH tunnel connection.
