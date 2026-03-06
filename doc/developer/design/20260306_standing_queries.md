@@ -17,7 +17,7 @@ There is no mechanism to amortize execution cost across multiple clients issuing
 
 ## Out of scope
 
-* **Isolation**: v1 uses table-determined timestamps. A future design could use a future timestamp to insert the query.
+* **Isolation**: v1 uses serializable isolation (min input frontier, 1s lag). Strict serializable would use max input frontier.
 * **ALTER**: Changing the query body requires drop and recreate.
 * **Complex queries**: Multi-object joins, aggregations, GROUP BY, CTEs, subqueries.
 * **SELECT \***: v1 may require explicit column lists if it simplifies the implementation.
@@ -114,48 +114,83 @@ flowchart TD
     A["Client A: EXECUTE order_lookup(42, 'us')
     Client B: EXECUTE order_lookup(99, 'eu')"]
 
-    B["Coordinator: batch buffer
-    req_1: (42,'us') → sess_A
-    req_2: (99,'eu') → sess_B
-    Flush: timer ≥1ms or request limit"]
+    B["Session client: direct persist write
+    compare_and_append at shard upper
+    req_1: (42,'us') at T1
+    req_2: (99,'eu') at T2"]
 
-    C["Parameter table (persist)
-    INSERT (req_1, 42, 'us'), (req_2, 99, 'eu')
-    Written at timestamp T"]
+    C["Parameter shard (persist)
+    Rows written at shard's current upper
+    No coordinator involvement"]
 
     D["Dataflow: join + filters
-    Produces diffs at timestamp T"]
+    Produces diffs at T1, T2"]
 
     E["Long-lived SUBSCRIBE
-    (T, +1, req_1, 42, 'Alice', 150.00)
-    (T, +1, req_2, 99, 'Bob', 200.00)
-    progress > T"]
+    (T1, +1, req_1, 42, 'Alice', 150.00)
+    (T2, +1, req_2, 99, 'Bob', 200.00)
+    progress > T1, T2"]
 
-    F["Coordinator: demux + deliver
-    1. Collect diffs at T
-    2. progress > T → batch done
-    3. Group rows by request_id
-    4. Send results to sessions
-    5. Retract param rows
-    6. Ignore retraction diffs"]
+    F["Handler task: demux + deliver
+    1. Buffer diffs by request_id
+    2. frontier > T → deliver results
+    3. Retract param rows
+    4. Discard retraction diffs"]
+
+    G["Coordinator: advance upper
+    min(input frontiers) - 1s → handler
+    Handler advances param shard upper"]
 
     A --> B --> C --> D --> E --> F
     F -- "retract" --> C
+    G -- "watch channel" --> F
 ```
+
+#### Execution architecture
+
+The execution path bypasses the coordinator entirely.
+Each standing query has three components:
+
+1. **`StandingQueryExecuteClient`**: shared handle holding a `WriteHandle` for the param shard.
+   Session clients write param rows via direct `compare_and_append` at the shard's current upper.
+   This avoids the collection manager's idle tick (1s) and `now()`-based timestamp inflation.
+   The param collection uses `DataSource::Other` — no write task manages it.
+
+2. **Handler task**: per-standing-query async task (off the coordinator loop) that:
+   * Receives subscribe batches forwarded by the coordinator.
+   * Receives flush notifications from clients (write_ts → request_ids).
+   * Buffers result rows per request_id.
+   * When the subscribe frontier advances past a write timestamp T, delivers results via oneshot channels.
+   * Retracts delivered param rows.
+   * Advances the param shard upper when notified by the coordinator.
+
+3. **Upper tracking**: the coordinator computes the minimum write frontier of the standing query's non-param input collections (the base tables) on every `AdvanceTimelines` message.
+   It sends the target upper (lagged by 1s) to the handler task via a `watch` channel.
+   The handler advances the param shard upper to that target.
+   This breaks the circular dependency: subscribe frontier = min(all input uppers), so if param upper were driven by the subscribe frontier, it would never advance.
+
+#### Param shard upper and isolation
+
+The param shard upper determines the timestamp at which param writes land.
+The lag between input frontiers and param shard upper controls isolation:
+
+* **Serializable** (current): use min(input frontiers) - 1s. All inputs have reached this timestamp.
+* **Strict serializable** (future): use max(input frontiers). Results reflect the latest state of every input.
+
+The 1s lag provides a serializable isolation window while allowing compaction to proceed.
 
 #### Batch lifecycle
 
-1. **Buffer**: The coordinator buffers incoming EXECUTE requests per standing query.
-2. **Flush**: A timer fires (≥1ms) or the outstanding request limit is reached. The coordinator assigns a `request_id` (UUID) to each request and maps `request_id → (session_id, connection state)` in an internal lookup table.
-3. **Insert**: A single multi-row INSERT writes all parameter rows to the param table. This lands at some table-determined timestamp T.
-4. **Observe**: The long-lived SUBSCRIBE emits diffs at timestamp T containing the join results. Each result row includes the `request_id`.
-5. **Progress**: When the SUBSCRIBE frontier advances past T, the coordinator knows all results for this batch are in. Empty result sets (request_ids with no diffs) are detected at this point.
-6. **Deliver**: The coordinator groups result rows by `request_id`, looks up the corresponding session, and sends the result set using the standard SELECT response path. Only the first snapshot at timestamp T is returned; results at later timestamps are not delivered.
-7. **Retract**: The coordinator issues a DELETE to remove the parameter rows. This lands at some T' > T.
-8. **Ignore retractions**: The SUBSCRIBE emits negative diffs at T'. The coordinator recognizes these request_ids as already-fulfilled and discards the diffs.
+1. **Write**: The session client generates a `request_id` (UUID), registers a result oneshot channel, and writes `(request_id, param_1, ..., param_N)` to the param shard via `compare_and_append` at the shard's current upper T.
+2. **Notify**: The client sends a flush notification to the handler task mapping write_ts T → request_id.
+3. **Observe**: The SUBSCRIBE emits diffs at timestamp T containing the join results. Each result row includes the `request_id`.
+4. **Progress**: When the SUBSCRIBE frontier advances past T, the handler knows all results for this request are in. Empty result sets (request_ids with no diffs) are detected at this point.
+5. **Deliver**: The handler groups result rows by `request_id` and sends them via the oneshot channel.
+6. **Retract**: The handler issues a batched retraction (diff=-1) for the delivered param rows.
+7. **Ignore retractions**: The SUBSCRIBE emits negative diffs at T'. The handler discards them (only positive diffs are buffered).
 
-Multiple batches can be in-flight concurrently (batch at T1 still awaiting progress, new batch at T2 inserted).
-The coordinator demuxes by timestamp and request_id.
+Multiple requests can be in-flight concurrently.
+The handler demuxes by timestamp and request_id.
 
 #### SUBSCRIBE lifecycle
 
@@ -374,43 +409,41 @@ Dropping the target object cascades to the standing query (and its param table).
    The subscribe runs on the standing query's cluster with `emit_progress: true`.
 6. **Register handler**: install a coordinator-side handler that reads from the SUBSCRIBE channel and demuxes results.
 
-**EXECUTE sequencing** in a new file `src/adapter/src/coord/sequencer/inner/execute_standing_query.rs`:
+**EXECUTE path** — bypasses the coordinator entirely:
 
-`sequence_execute_standing_query()`:
-1. Look up the standing query and validate RBAC.
-2. Generate a `request_id` (UUID).
-3. Map `request_id → ExecuteContext` in a per-standing-query lookup table (new coordinator state).
-4. Enqueue `(request_id, param_values)` into the standing query's batch buffer.
-5. Return without retiring the `ExecuteContext` — it stays open until results arrive.
+Session clients obtain a `StandingQueryExecuteClient` handle (cached after first use) and call `execute()` directly.
+The coordinator is not involved in the hot path.
 
-**Batch manager** (new coordinator component):
+`StandingQueryExecuteClient` (`src/adapter/src/standing_query_client.rs`):
+* Holds a `WriteHandle` for the param shard (sole writer).
+* Holds an `mpsc` sender for flush notifications to the handler task.
+* Holds a shared `BTreeMap<Uuid, oneshot::Sender<Vec<Row>>>` for result delivery.
+* `execute()`:
+  1. Generate `request_id` (UUID).
+  2. Build param row: `(request_id, param_1, ..., param_N)`.
+  3. Register result oneshot channel.
+  4. `compare_and_append` the param row at the shard's current upper.
+  5. Send flush notification (write_ts → request_id) to the handler task.
+  6. Await results on the oneshot channel.
 
-A single task per standing query is responsible for flushing pending requests and retractions.
-This provides natural elasticity: more incoming requests mean larger batches, which increases throughput at the cost of higher latency.
+**Handler task** (`src/adapter/src/coord/standing_query_handler.rs`):
 
-Per standing query, the coordinator maintains:
-* A **batch buffer**: `Vec<(Uuid, Row)>` of pending requests.
-* A **request map**: `BTreeMap<Uuid, ExecuteContext>` mapping request IDs to open sessions.
-* An **in-flight set**: `BTreeMap<Timestamp, Vec<Uuid>>` tracking which request IDs were written at which timestamp.
+One async task per standing query, runs off the coordinator loop.
+Uses `tokio::select!` over three channels:
+1. **Subscribe batches** (from coordinator): buffer positive diffs by request_id. When frontier advances past a write_ts, deliver results via oneshot and retract param rows.
+2. **Flush notifications** (from clients): register write_ts → request_id mappings.
+3. **Advance upper** (from coordinator via `watch` channel): advance param shard upper to keep it in sync with input frontiers.
 
-The flush task runs in a loop:
-1. Wait for at least one pending request (or a minimum interval since the last flush).
-2. Drain the batch buffer.
-3. Build a multi-row INSERT into the parameter table (reuse existing `insert_constant()` path from `src/adapter/src/coord/sequencer/inner.rs:2486`).
-4. Record the set of request IDs against the write timestamp in the in-flight set.
-5. After results are delivered, issue a batched DELETE for the parameter rows (retractions can be coalesced across multiple batches).
+**Coordinator state** (`src/adapter/src/coord/standing_query_state.rs`):
 
-**SUBSCRIBE reader** (new coordinator component):
+`ActiveStandingQuery` per standing query:
+* `input_ids: BTreeSet<GlobalId>` — non-param input collections for upper tracking.
+* `subscribe_tx` — forwards subscribe batches to the handler task.
+* `advance_upper_tx: watch::Sender<Timestamp>` — sends target upper to handler.
+* `client: StandingQueryExecuteClient` — shared with session clients via `GetStandingQueryClient` command.
 
-A task that reads from the `ActiveSubscribe` channel (`mpsc::UnboundedReceiver<PeekResponseUnary>`).
-For each batch of rows received:
-1. **Positive diffs** (diff = +1): group rows by `request_id` column, buffer them per request.
-2. **Progress message** (frontier advances past timestamp T): for each request_id written at T, deliver results.
-   * Look up the `ExecuteContext` from the request map.
-   * Send results using `ExecuteResponse::SendingRowsImmediate` (rows are already materialized).
-   * For request IDs with no rows at T, send empty result sets.
-   * Issue a DELETE for the parameter rows at T (batch the retraction).
-3. **Negative diffs** (retractions at T'): discard — the request IDs are already fulfilled.
+`advance_standing_query_uppers()` runs on every `AdvanceTimelines` message:
+computes min(input write frontiers) - 1s and sends it via the watch channel.
 
 **Response path.**
 The standing query's `ExecuteResponse` uses `SendingRowsImmediate { rows }` to return results like a normal SELECT.
@@ -471,5 +504,7 @@ Suggested implementation phases:
 ## Open questions
 
 * **Error propagation**: A single error taints the entire collection in Materialize's current model. Standing queries amplify this since many clients share one dataflow. Should we add error detection and dataflow restart as a mitigation?
-* **Retraction batching**: Every batch requires two persist writes (INSERT and DELETE). Can retractions be batched across multiple execution batches to reduce write frequency?
-* **Persist write latency floor**: The minimum persist write latency (~5-10ms) dominates the end-to-end budget. How much can this be improved, and does it change the batching strategy?
+* **Retraction batching**: Every execution requires two persist writes (param insert and retraction). Can retractions be batched across multiple executions to reduce write frequency?
+* **Persist write latency floor**: The minimum persist write latency (~5-10ms) dominates the end-to-end budget. How much can this be improved?
+* **Isolation level**: Currently serializable (min input frontier - 1s). Strict serializable would use max input frontier. Should this be configurable?
+* **Request batching**: Currently each `execute()` call does its own `compare_and_append`. Batching multiple param writes into a single persist append could improve throughput at the cost of latency.
