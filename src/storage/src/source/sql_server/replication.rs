@@ -39,7 +39,7 @@ use mz_timely_util::containers::stack::AccountedStackBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::vec::Map;
 use timely::dataflow::operators::{CapabilitySet, Concat};
-use timely::dataflow::{Scope, Stream as TimelyStream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 
 use crate::metrics::source::sql_server::SqlServerSourceMetrics;
@@ -64,7 +64,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     metrics: SqlServerSourceMetrics,
 ) -> (
     StackedCollection<G, (u64, Result<SourceMessage, DataflowError>)>,
-    TimelyStream<G, Vec<ReplicationError>>,
+    StreamVec<G, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("SqlServerReplicationReader({})", config.id);

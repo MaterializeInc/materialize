@@ -192,7 +192,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::vec::Broadcast;
 use timely::dataflow::operators::{CapabilitySet, Concat, ConnectLoop, Feedback, Operator};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Timestamp;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::{Oid, PgLsn};
@@ -349,9 +349,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     metrics: PgSnapshotMetrics,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    Stream<G, Vec<RewindRequest>>,
-    Stream<G, Vec<Infallible>>,
-    Stream<G, Vec<ReplicationError>>,
+    StreamVec<G, RewindRequest>,
+    StreamVec<G, Infallible>,
+    StreamVec<G, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("TableReader({})", config.id);

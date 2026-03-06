@@ -35,7 +35,7 @@ use timely::dataflow::channels::pushers::Output;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo};
 use timely::dataflow::operators::{Capability, CapabilitySet, InputCapability};
-use timely::dataflow::{Scope, Stream as TimelyStream};
+use timely::dataflow::{Scope, Stream as TimelyStream, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
 use timely::{Bincode, Container, ContainerBuilder, PartialOrder};
@@ -679,10 +679,7 @@ impl<G: Scope> OperatorBuilder<G> {
     ///     *cap_set = CapabilitySet::new(); // DO NOT DO THIS
     /// }));
     /// ```
-    pub fn build_fallible<E: 'static, F>(
-        mut self,
-        constructor: F,
-    ) -> (Button, TimelyStream<G, Vec<Rc<E>>>)
+    pub fn build_fallible<E: 'static, F>(mut self, constructor: F) -> (Button, StreamVec<G, Rc<E>>)
     where
         F: for<'a> FnOnce(
                 &'a mut [CapabilitySet<G::Timestamp>],

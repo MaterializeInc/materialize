@@ -37,7 +37,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Capability, InputCapability, Operator};
-use timely::dataflow::{Scope, ScopeParent, Stream};
+use timely::dataflow::{Scope, ScopeParent, StreamVec};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
@@ -185,7 +185,7 @@ pub fn rehydration_finished<G, T>(
     // A token that we can drop to signal we are finished rehydrating.
     token: impl std::any::Any + 'static,
     resume_upper: Antichain<T>,
-    input: Stream<G, Vec<Infallible>>,
+    input: StreamVec<G, Infallible>,
 ) where
     G: Scope<Timestamp = T>,
     T: Timestamp,
@@ -233,8 +233,8 @@ pub(crate) fn upsert<G: Scope, FromTime>(
     backpressure_metrics: Option<BackpressureMetrics>,
 ) -> (
     VecCollection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, Vec<(Option<GlobalId>, HealthStatusUpdate)>>,
-    Stream<G, Vec<Infallible>>,
+    StreamVec<G, (Option<GlobalId>, HealthStatusUpdate)>,
+    StreamVec<G, Infallible>,
     PressOnDropButton,
 )
 where
@@ -365,8 +365,8 @@ fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
     snapshot_buffering_max: Option<usize>,
 ) -> (
     VecCollection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, Vec<(Option<GlobalId>, HealthStatusUpdate)>>,
-    Stream<G, Vec<Infallible>>,
+    StreamVec<G, (Option<GlobalId>, HealthStatusUpdate)>,
+    StreamVec<G, Infallible>,
     PressOnDropButton,
 )
 where
@@ -682,8 +682,8 @@ fn upsert_classic<G: Scope, FromTime, F, Fut, US>(
     snapshot_buffering_max: Option<usize>,
 ) -> (
     VecCollection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, Vec<(Option<GlobalId>, HealthStatusUpdate)>>,
-    Stream<G, Vec<Infallible>>,
+    StreamVec<G, (Option<GlobalId>, HealthStatusUpdate)>,
+    StreamVec<G, Infallible>,
     PressOnDropButton,
 )
 where

@@ -121,7 +121,7 @@ use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -782,7 +782,7 @@ fn generator_source<G>(
     scope: &G,
     source_id: usize,
     generator_rxs: Arc<Mutex<BTreeMap<usize, UnboundedReceiver<GeneratorEvent>>>>,
-) -> Stream<G, Vec<(Vec<u8>, Vec<u8>)>>
+) -> StreamVec<G, (Vec<u8>, Vec<u8>)>
 where
     G: Scope<Timestamp = u64>,
 {
@@ -837,12 +837,12 @@ where
 /// A representative upsert operator.
 fn upsert<G>(
     scope: &G,
-    source_stream: Stream<G, Vec<(Vec<u8>, Vec<u8>)>>,
+    source_stream: StreamVec<G, (Vec<u8>, Vec<u8>)>,
     source_id: usize,
     instance_dir: &PathBuf,
     args: Args,
     rocksdb_options: &rocksdb::Options,
-) -> Stream<G, Vec<(Vec<u8>, Vec<u8>, i32)>>
+) -> StreamVec<G, (Vec<u8>, Vec<u8>, i32)>
 where
     G: Scope<Timestamp = u64>,
 {
@@ -910,17 +910,17 @@ where
 
 fn upsert_core_pre_reduce<G, M: Map + 'static>(
     scope: &G,
-    source_stream: Stream<G, Vec<(Vec<u8>, Vec<u8>)>>,
+    source_stream: StreamVec<G, (Vec<u8>, Vec<u8>)>,
     source_id: usize,
     mut current_values: M,
-) -> Stream<G, Vec<(Vec<u8>, Vec<u8>, i32)>>
+) -> StreamVec<G, (Vec<u8>, Vec<u8>, i32)>
 where
     G: Scope<Timestamp = u64>,
 {
     let mut upsert_op =
         AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
 
-    let (output, output_stream): (_, Stream<_, Vec<(Vec<u8>, Vec<u8>, i32)>>) =
+    let (output, output_stream): (_, StreamVec<_, (Vec<u8>, Vec<u8>, i32)>) =
         upsert_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let mut input = upsert_op.new_input_for(
         source_stream,
@@ -1009,17 +1009,17 @@ where
 
 fn upsert_core<G, M: Map + 'static>(
     scope: &G,
-    source_stream: Stream<G, Vec<(Vec<u8>, Vec<u8>)>>,
+    source_stream: StreamVec<G, (Vec<u8>, Vec<u8>)>,
     source_id: usize,
     mut current_values: M,
-) -> Stream<G, Vec<(Vec<u8>, Vec<u8>, i32)>>
+) -> StreamVec<G, (Vec<u8>, Vec<u8>, i32)>
 where
     G: Scope<Timestamp = u64>,
 {
     let mut upsert_op =
         AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
 
-    let (output, output_stream): (_, Stream<_, Vec<(Vec<u8>, Vec<u8>, i32)>>) =
+    let (output, output_stream): (_, StreamVec<_, (Vec<u8>, Vec<u8>, i32)>) =
         upsert_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let mut input = upsert_op.new_input_for(
         source_stream,

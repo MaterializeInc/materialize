@@ -56,7 +56,7 @@ use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
 use timely::dataflow::operators::{Capability, Leave, OkErr};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
@@ -159,8 +159,8 @@ pub fn persist_source<G>(
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
 ) -> (
-    Stream<G, Vec<(Row, Timestamp, Diff)>>,
-    Stream<G, Vec<(DataflowError, Timestamp, Diff)>>,
+    StreamVec<G, (Row, Timestamp, Diff)>,
+    StreamVec<G, (DataflowError, Timestamp, Diff)>,
     Vec<PressOnDropButton>,
 )
 where
@@ -435,11 +435,11 @@ fn filter_result(
 
 pub fn decode_and_mfp<G>(
     cfg: PersistConfig,
-    fetched: Stream<G, Vec<FetchedBlob<SourceData, (), Timestamp, StorageDiff>>>,
+    fetched: StreamVec<G, FetchedBlob<SourceData, (), Timestamp, StorageDiff>>,
     name: &str,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
-) -> Stream<G, Vec<(Result<Row, DataflowError>, G::Timestamp, Diff)>>
+) -> StreamVec<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>
 where
     G: Scope<Timestamp = (mz_repr::Timestamp, Subtime)>,
 {
@@ -708,7 +708,7 @@ pub struct FlowControl<G: Scope> {
     /// As implied by its type, this stream never emits data, only progress updates.
     ///
     /// TODO: Replace `Infallible` with `!` once the latter is stabilized.
-    pub progress_stream: Stream<G, Vec<Infallible>>,
+    pub progress_stream: StreamVec<G, Infallible>,
     /// Maximum number of in-flight bytes.
     pub max_inflight_bytes: usize,
     /// The minimum range of timestamps (be they granular or not) that must be emitted,
@@ -734,12 +734,12 @@ pub struct FlowControl<G: Scope> {
 pub fn backpressure<T, G, O>(
     scope: &mut G,
     name: &str,
-    data: Stream<G, Vec<O>>,
+    data: StreamVec<G, O>,
     flow_control: FlowControl<G>,
     chosen_worker: usize,
     // A probe used to inspect this operator during unit-testing
     probe: Option<UnboundedSender<(Antichain<(T, Subtime)>, usize, usize)>>,
-) -> (Stream<G, Vec<O>>, PressOnDropButton)
+) -> (StreamVec<G, O>, PressOnDropButton)
 where
     T: TimelyTimestamp + Lattice + Codec64 + TotalOrder,
     G: Scope<Timestamp = (T, Subtime)>,
@@ -1410,7 +1410,7 @@ mod tests {
     >(
         scope: G,
         mut input: I,
-    ) -> (Stream<G, Vec<Part>>, oneshot::Sender<()>) {
+    ) -> (StreamVec<G, Part>, oneshot::Sender<()>) {
         let (finalizer_tx, finalizer_rx) = oneshot::channel();
         let mut iterator = AsyncOperatorBuilder::new("iterator".to_string(), scope);
         let (output_handle, output) = iterator.new_output::<CapacityContainerBuilder<Vec<Part>>>();
@@ -1443,7 +1443,7 @@ mod tests {
     /// being processed. Also connects the `feedback` handle to its output.
     fn consumer_operator<G: Scope, O: Backpressureable + std::fmt::Debug>(
         scope: G,
-        input: Stream<G, Vec<O>>,
+        input: StreamVec<G, O>,
         feedback: timely::dataflow::operators::feedback::Handle<G, Vec<std::convert::Infallible>>,
     ) -> UnboundedSender<()> {
         let (tx, mut rx) = unbounded_channel::<()>();

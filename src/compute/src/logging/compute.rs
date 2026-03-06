@@ -30,7 +30,7 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator::empty;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::scheduling::Scheduler;
 use tracing::error;
 use uuid::Uuid;
@@ -1448,7 +1448,7 @@ where
     }
 }
 
-impl<G, B> LogDataflowErrors for Stream<G, Vec<B>>
+impl<G, B> LogDataflowErrors for StreamVec<G, B>
 where
     G: Scope,
     for<'a> B: BatchReader<DiffGat<'a> = &'a Diff> + Clone + 'static,

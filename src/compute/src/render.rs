@@ -146,7 +146,7 @@ use timely::dataflow::operators::vec::ToStream;
 use timely::dataflow::operators::vec::{BranchWhen, Filter};
 use timely::dataflow::operators::{Capability, Operator, Probe, probe};
 use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::order::{Product, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
@@ -1761,7 +1761,7 @@ trait LimitProgress<T: Timestamp> {
 
 // TODO: We could make this generic over a `T` that can be converted to and from a u64 millisecond
 // number.
-impl<G, D, R> LimitProgress<mz_repr::Timestamp> for Stream<G, Vec<(D, mz_repr::Timestamp, R)>>
+impl<G, D, R> LimitProgress<mz_repr::Timestamp> for StreamVec<G, (D, mz_repr::Timestamp, R)>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     D: Clone + 'static,

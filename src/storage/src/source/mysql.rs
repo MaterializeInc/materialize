@@ -70,7 +70,7 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::core::Partition;
 use timely::dataflow::operators::vec::{Map, ToStream};
 use timely::dataflow::operators::{CapabilitySet, Concat};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use uuid::Uuid;
 
@@ -110,8 +110,8 @@ impl SourceRender for MySqlSourceConnection {
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, Vec<HealthStatusMessage>>,
-        Stream<G, Vec<Probe<GtidPartition>>>,
+        StreamVec<G, HealthStatusMessage>,
+        StreamVec<G, Probe<GtidPartition>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting.

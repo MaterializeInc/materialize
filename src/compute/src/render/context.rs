@@ -37,7 +37,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
 use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
@@ -304,10 +304,7 @@ where
         key: Option<&Row>,
         max_demand: usize,
         mut logic: L,
-    ) -> (
-        Stream<S, Vec<I::Item>>,
-        VecCollection<S, DataflowError, Diff>,
-    )
+    ) -> (StreamVec<S, I::Item>, VecCollection<S, DataflowError, Diff>)
     where
         I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
         D: Data,
@@ -578,10 +575,7 @@ where
         key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
         max_demand: usize,
         mut logic: L,
-    ) -> (
-        Stream<S, Vec<I::Item>>,
-        VecCollection<S, DataflowError, Diff>,
-    )
+    ) -> (StreamVec<S, I::Item>, VecCollection<S, DataflowError, Diff>)
     where
         I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
         D: Data,
@@ -620,7 +614,7 @@ where
         key: Option<&Tr::KeyOwn>,
         mut logic: L,
         refuel: usize,
-    ) -> Stream<S, Vec<I::Item>>
+    ) -> StreamVec<S, I::Item>
     where
         Tr: for<'a> TraceReader<
                 Key<'a>: ToDatumIter,

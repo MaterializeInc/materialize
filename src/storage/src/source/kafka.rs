@@ -58,7 +58,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::core::Partition;
 use timely::dataflow::operators::vec::Broadcast;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use timely::progress::Timestamp;
 use tokio::sync::{Notify, mpsc};
@@ -183,8 +183,8 @@ impl SourceRender for KafkaSourceConnection {
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, Vec<HealthStatusMessage>>,
-        Stream<G, Vec<Probe<KafkaTimestamp>>>,
+        StreamVec<G, HealthStatusMessage>,
+        StreamVec<G, Probe<KafkaTimestamp>>,
         Vec<PressOnDropButton>,
     ) {
         let (metadata, probes, metadata_token) =
@@ -229,11 +229,11 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
     connection: KafkaSourceConnection,
     config: RawSourceCreationConfig,
     resume_uppers: impl futures::Stream<Item = Antichain<KafkaTimestamp>> + 'static,
-    metadata_stream: Stream<G, Vec<(mz_repr::Timestamp, MetadataUpdate)>>,
+    metadata_stream: StreamVec<G, (mz_repr::Timestamp, MetadataUpdate)>,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    Stream<G, Vec<HealthStatusMessage>>,
+    StreamVec<G, HealthStatusMessage>,
     PressOnDropButton,
 ) {
     let name = format!("KafkaReader({})", config.id);
@@ -1552,8 +1552,8 @@ fn render_metadata_fetcher<G: Scope<Timestamp = KafkaTimestamp>>(
     connection: KafkaSourceConnection,
     config: RawSourceCreationConfig,
 ) -> (
-    Stream<G, Vec<(mz_repr::Timestamp, MetadataUpdate)>>,
-    Stream<G, Vec<Probe<KafkaTimestamp>>>,
+    StreamVec<G, (mz_repr::Timestamp, MetadataUpdate)>,
+    StreamVec<G, Probe<KafkaTimestamp>>,
     PressOnDropButton,
 ) {
     let active_worker_id = usize::cast_from(config.id.hashed());

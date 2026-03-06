@@ -35,7 +35,7 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::vec::Map;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Timestamp;
 use timely::scheduling::SyncActivator;
 use tracing::error;
@@ -466,7 +466,7 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
     storage_configuration: StorageConfiguration,
 ) -> (
     VecCollection<G, DecodeResult<FromTime>, Diff>,
-    Stream<G, Vec<HealthStatusMessage>>,
+    StreamVec<G, HealthStatusMessage>,
 ) {
     let op_name = format!(
         "{}{}DecodeDelimited",

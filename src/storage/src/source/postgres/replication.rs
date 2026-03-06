@@ -106,7 +106,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::core::Map;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, watch};
 use tokio_postgres::error::SqlState;
@@ -147,14 +147,14 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     config: RawSourceCreationConfig,
     connection: PostgresSourceConnection,
     table_info: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
-    rewind_stream: Stream<G, Vec<RewindRequest>>,
-    slot_ready_stream: Stream<G, Vec<Infallible>>,
+    rewind_stream: StreamVec<G, RewindRequest>,
+    slot_ready_stream: StreamVec<G, Infallible>,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     metrics: PgSourceMetrics,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    Stream<G, Vec<Probe<MzOffset>>>,
-    Stream<G, Vec<ReplicationError>>,
+    StreamVec<G, Probe<MzOffset>>,
+    StreamVec<G, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("ReplicationReader({})", config.id);

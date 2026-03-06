@@ -57,7 +57,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as Operato
 use timely::dataflow::operators::vec::Broadcast;
 use timely::dataflow::operators::{CapabilitySet, Inspect, Leave};
 use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
@@ -166,7 +166,7 @@ impl RawSourceCreationConfig {
 pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
-    committed_upper: Stream<Child<'g, G, mz_repr::Timestamp>, Vec<()>>,
+    committed_upper: StreamVec<Child<'g, G, mz_repr::Timestamp>, ()>,
     config: &RawSourceCreationConfig,
     source_connection: C,
     start_signal: impl std::future::Future<Output = ()> + 'static,
@@ -179,7 +179,7 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
             Diff,
         >,
     >,
-    Stream<G, Vec<HealthStatusMessage>>,
+    StreamVec<G, HealthStatusMessage>,
     Vec<PressOnDropButton>,
 )
 where
@@ -268,7 +268,7 @@ fn source_render_operator<G, C>(
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-    Stream<G, Vec<HealthStatusMessage>>,
+    StreamVec<G, HealthStatusMessage>,
     Vec<PressOnDropButton>,
 )
 where
@@ -546,7 +546,7 @@ where
 fn reclock_committed_upper<G, FromTime>(
     bindings: VecCollection<G, FromTime, Diff>,
     as_of: Antichain<G::Timestamp>,
-    committed_upper: Stream<G, Vec<()>>,
+    committed_upper: StreamVec<G, ()>,
     id: GlobalId,
     metrics: Arc<SourceMetrics>,
 ) -> impl futures::stream::Stream<Item = Antichain<FromTime>> + 'static

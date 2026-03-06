@@ -95,7 +95,7 @@ use std::fmt::{Debug, Display};
 use std::future::Future;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::{Scope, Stream as TimelyStream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use tracing::info;
 
@@ -233,7 +233,7 @@ pub fn render_discover_objects<G, S>(
     source: S,
     filter: ContentFilter,
 ) -> (
-    TimelyStream<G, Vec<Result<(S::Object, S::Checksum), StorageErrorX>>>,
+    StreamVec<G, Result<(S::Object, S::Checksum), StorageErrorX>>,
     PressOnDropButton,
 )
 where
@@ -293,11 +293,11 @@ where
 pub fn render_split_work<G, S, F>(
     scope: G,
     collection_id: GlobalId,
-    objects: TimelyStream<G, Vec<Result<(S::Object, S::Checksum), StorageErrorX>>>,
+    objects: StreamVec<G, Result<(S::Object, S::Checksum), StorageErrorX>>,
     source: S,
     format: F,
 ) -> (
-    TimelyStream<G, Vec<Result<F::WorkRequest<S>, StorageErrorX>>>,
+    StreamVec<G, Result<F::WorkRequest<S>, StorageErrorX>>,
     PressOnDropButton,
 )
 where
@@ -367,9 +367,9 @@ pub fn render_fetch_work<G, S, F>(
     collection_id: GlobalId,
     source: S,
     format: F,
-    work_requests: TimelyStream<G, Vec<Result<F::WorkRequest<S>, StorageErrorX>>>,
+    work_requests: StreamVec<G, Result<F::WorkRequest<S>, StorageErrorX>>,
 ) -> (
-    TimelyStream<G, Vec<Result<F::RecordChunk, StorageErrorX>>>,
+    StreamVec<G, Result<F::RecordChunk, StorageErrorX>>,
     PressOnDropButton,
 )
 where
@@ -433,12 +433,9 @@ where
 pub fn render_decode_chunk<G, F>(
     scope: G,
     format: F,
-    record_chunks: TimelyStream<G, Vec<Result<F::RecordChunk, StorageErrorX>>>,
+    record_chunks: StreamVec<G, Result<F::RecordChunk, StorageErrorX>>,
     mfp: SafeMfpPlan,
-) -> (
-    TimelyStream<G, Vec<Result<Row, StorageErrorX>>>,
-    PressOnDropButton,
-)
+) -> (StreamVec<G, Result<Row, StorageErrorX>>, PressOnDropButton)
 where
     G: Scope,
     F: OneshotFormat + 'static,
@@ -512,9 +509,9 @@ pub fn render_stage_batches_operator<G>(
     collection_id: GlobalId,
     collection_meta: &CollectionMetadata,
     persist_clients: Arc<PersistClientCache>,
-    rows_stream: TimelyStream<G, Vec<Result<Row, StorageErrorX>>>,
+    rows_stream: StreamVec<G, Result<Row, StorageErrorX>>,
 ) -> (
-    TimelyStream<G, Vec<Result<ProtoBatch, StorageErrorX>>>,
+    StreamVec<G, Result<ProtoBatch, StorageErrorX>>,
     PressOnDropButton,
 )
 where
@@ -625,7 +622,7 @@ where
 /// report the results upstream.
 pub fn render_completion_operator<G, F>(
     scope: G,
-    results_stream: TimelyStream<G, Vec<Result<ProtoBatch, StorageErrorX>>>,
+    results_stream: StreamVec<G, Result<ProtoBatch, StorageErrorX>>,
     worker_callback: F,
 ) where
     G: Scope,

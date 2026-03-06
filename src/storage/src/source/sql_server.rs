@@ -31,7 +31,7 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::core::Partition;
 use timely::dataflow::operators::vec::{Map, ToStream};
-use timely::dataflow::{Scope, Stream as TimelyStream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
@@ -113,8 +113,8 @@ impl SourceRender for SqlServerSourceConnection {
     ) -> (
         // Timely Collection for each Source Export defined in the provided `config`.
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        TimelyStream<G, Vec<HealthStatusMessage>>,
-        TimelyStream<G, Vec<Probe<Self::Time>>>,
+        StreamVec<G, HealthStatusMessage>,
+        StreamVec<G, Probe<Self::Time>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting.

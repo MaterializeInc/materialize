@@ -35,7 +35,7 @@ use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::vec::Broadcast;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use tracing::debug;
 
@@ -59,8 +59,8 @@ mod pgcopy;
 /// The `input_collection` must be a stream of chains, partitioned and exchanged by the row's hash
 /// modulo the number of batches.
 pub fn copy_to<G, F>(
-    input_collection: Stream<G, Vec<Vec<TimelyStack<((Row, ()), G::Timestamp, Diff)>>>>,
-    err_stream: Stream<G, Vec<(DataflowError, G::Timestamp, Diff)>>,
+    input_collection: StreamVec<G, Vec<TimelyStack<((Row, ()), G::Timestamp, Diff)>>>,
+    err_stream: StreamVec<G, (DataflowError, G::Timestamp, Diff)>,
     up_to: Antichain<G::Timestamp>,
     connection_details: S3UploadInfo,
     connection_context: ConnectionContext,
@@ -137,8 +137,8 @@ fn render_initialization_operator<G>(
     scope: G,
     sink_id: GlobalId,
     up_to: Antichain<G::Timestamp>,
-    err_stream: Stream<G, Vec<(DataflowError, G::Timestamp, Diff)>>,
-) -> (Stream<G, Vec<Result<(), String>>>, PressOnDropButton)
+    err_stream: StreamVec<G, (DataflowError, G::Timestamp, Diff)>,
+) -> (StreamVec<G, Result<(), String>>, PressOnDropButton)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -213,7 +213,7 @@ fn render_completion_operator<G, F>(
     connection_id: CatalogItemId,
     sink_id: GlobalId,
     s3_key_manager: S3KeyManager,
-    completion_stream: Stream<G, Vec<Result<u64, String>>>,
+    completion_stream: StreamVec<G, Result<u64, String>>,
     worker_callback: F,
 ) -> PressOnDropButton
 where
@@ -297,12 +297,12 @@ fn render_upload_operator<G, T>(
     connection_id: CatalogItemId,
     connection_details: S3UploadInfo,
     sink_id: GlobalId,
-    input_collection: Stream<G, Vec<Vec<TimelyStack<((Row, ()), G::Timestamp, Diff)>>>>,
+    input_collection: StreamVec<G, Vec<TimelyStack<((Row, ()), G::Timestamp, Diff)>>>,
     up_to: Antichain<G::Timestamp>,
-    start_stream: Stream<G, Vec<Result<(), String>>>,
+    start_stream: StreamVec<G, Result<(), String>>,
     params: CopyToParameters,
     output_batch_count: u64,
-) -> (Stream<G, Vec<Result<u64, String>>>, PressOnDropButton)
+) -> (StreamVec<G, Result<u64, String>>, PressOnDropButton)
 where
     G: Scope<Timestamp = Timestamp>,
     T: CopyToS3Uploader,

@@ -27,7 +27,7 @@ use rand_8::{RngCore, SeedableRng};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::core::Partition;
 use timely::dataflow::operators::vec::ToStream;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 use tracing::info;
 
@@ -45,8 +45,8 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     idx_to_exportid: BTreeMap<usize, GlobalId>,
 ) -> (
     BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-    Stream<G, Vec<Infallible>>,
-    Stream<G, Vec<HealthStatusMessage>>,
+    StreamVec<G, Infallible>,
+    StreamVec<G, HealthStatusMessage>,
     Vec<PressOnDropButton>,
 ) {
     // known and comitted offsets are recorded in the stats operator

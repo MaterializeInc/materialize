@@ -28,7 +28,7 @@ use timely::dataflow::operators::InputCapability;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator::empty;
 use timely::dataflow::operators::generic::{OutputBuilder, Session};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::compute::{ArrangementHeapSizeOperatorDrop, ComputeEvent};
@@ -133,7 +133,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
 
         // We're lucky and the differential logs all have the same stream format, so just implement
         // the call once.
-        let stream_to_collection = |input: Stream<_, Vec<((usize, ()), Timestamp, Diff)>>, log| {
+        let stream_to_collection = |input: StreamVec<_, ((usize, ()), Timestamp, Diff)>, log| {
             let worker_id = scope.index();
             consolidate_and_pack::<_, KeyBatcher<_, _, _>, ColumnBuilder<_>, _, _>(
                 input,

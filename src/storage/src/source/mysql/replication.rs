@@ -57,7 +57,7 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::core::Map;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 use tracing::trace;
 use uuid::Uuid;
@@ -104,11 +104,11 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
     source_outputs: Vec<SourceOutputInfo>,
-    rewind_stream: Stream<G, Vec<RewindRequest>>,
+    rewind_stream: StreamVec<G, RewindRequest>,
     metrics: MySqlSourceMetrics,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    Stream<G, Vec<ReplicationError>>,
+    StreamVec<G, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("MySqlReplicationReader({})", config.id);

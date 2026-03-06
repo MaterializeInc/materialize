@@ -122,7 +122,7 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::vec::Broadcast;
 use timely::dataflow::operators::{Capability, CapabilitySet, Inspect};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::Semaphore;
 use tracing::trace;
@@ -283,8 +283,8 @@ pub(crate) fn render<G>(
     metrics: SourcePersistSinkMetrics,
     busy_signal: Arc<Semaphore>,
 ) -> (
-    Stream<G, Vec<()>>,
-    Stream<G, Vec<Rc<anyhow::Error>>>,
+    StreamVec<G, ()>,
+    StreamVec<G, Rc<anyhow::Error>>,
     Vec<PressOnDropButton>,
 )
 where
@@ -351,8 +351,8 @@ fn mint_batch_descriptions<G>(
     desired_collection: VecCollection<G, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
 ) -> (
-    Stream<G, Vec<(Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>>,
-    Stream<G, Vec<(Result<Row, DataflowError>, mz_repr::Timestamp, Diff)>>,
+    StreamVec<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
+    StreamVec<G, (Result<Row, DataflowError>, mz_repr::Timestamp, Diff)>,
     PressOnDropButton,
 )
 where
@@ -540,7 +540,7 @@ fn write_batches<G>(
     storage_state: &StorageState,
     busy_signal: Arc<Semaphore>,
 ) -> (
-    Stream<G, Vec<HollowBatchAndMetadata<mz_repr::Timestamp>>>,
+    StreamVec<G, HollowBatchAndMetadata<mz_repr::Timestamp>>,
     PressOnDropButton,
 )
 where
@@ -878,14 +878,14 @@ fn append_batches<G>(
         G,
         Vec<(Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
     >,
-    batches: Stream<G, Vec<HollowBatchAndMetadata<mz_repr::Timestamp>>>,
+    batches: StreamVec<G, HollowBatchAndMetadata<mz_repr::Timestamp>>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &StorageState,
     metrics: SourcePersistSinkMetrics,
     busy_signal: Arc<Semaphore>,
 ) -> (
-    Stream<G, Vec<()>>,
-    Stream<G, Vec<Rc<anyhow::Error>>>,
+    StreamVec<G, ()>,
+    StreamVec<G, Rc<anyhow::Error>>,
     PressOnDropButton,
 )
 where

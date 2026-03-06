@@ -110,7 +110,7 @@ use mz_timely_util::containers::stack::AccountedStackBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::{CapabilitySet, Concat};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Timestamp;
 use tracing::{error, trace};
 
@@ -134,8 +134,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     metrics: MySqlSnapshotMetrics,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    Stream<G, Vec<RewindRequest>>,
-    Stream<G, Vec<ReplicationError>>,
+    StreamVec<G, RewindRequest>,
+    StreamVec<G, ReplicationError>,
     PressOnDropButton,
 ) {
     let mut builder =
@@ -179,8 +179,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         }
     }
 
-    let (button, transient_errors): (_, Stream<G, Vec<Rc<TransientError>>>) = builder
-        .build_fallible(move |caps| {
+    let (button, transient_errors): (_, StreamVec<G, Rc<TransientError>>) =
+        builder.build_fallible(move |caps| {
             let busy_signal = Arc::clone(&config.busy_signal);
             Box::pin(SignaledFuture::new(busy_signal, async move {
                 let [data_cap_set, rewind_cap_set, definite_error_cap_set]: &mut [_; 3] =

@@ -105,7 +105,7 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::core::Partition;
 use timely::dataflow::operators::vec::{Map, ToStream};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
@@ -132,8 +132,8 @@ impl SourceRender for PostgresSourceConnection {
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, Vec<HealthStatusMessage>>,
-        Stream<G, Vec<Probe<MzOffset>>>,
+        StreamVec<G, HealthStatusMessage>,
+        StreamVec<G, Probe<MzOffset>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting into a per-table map.

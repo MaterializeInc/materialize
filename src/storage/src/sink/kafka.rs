@@ -137,7 +137,7 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::vec::{Map, ToStream};
 use timely::dataflow::operators::{CapabilitySet, Concatenate};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::sync::watch;
 use tokio::time::{self, MissedTickBehavior};
@@ -163,7 +163,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
         _err_collection: VecCollection<G, DataflowError, Diff>,
-    ) -> (Stream<G, Vec<HealthStatusMessage>>, Vec<PressOnDropButton>) {
+    ) -> (StreamVec<G, HealthStatusMessage>, Vec<PressOnDropButton>) {
         let mut scope = input.scope();
 
         let write_handle = {
@@ -639,7 +639,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
         Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
     > + 'static,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
-) -> (Stream<G, Vec<HealthStatusMessage>>, PressOnDropButton) {
+) -> (StreamVec<G, HealthStatusMessage>, PressOnDropButton) {
     let scope = input.scope();
     let mut builder = AsyncOperatorBuilder::new(name.clone(), input.inner.scope());
 
@@ -1364,7 +1364,7 @@ fn encode_collection<G: Scope>(
     storage_configuration: StorageConfiguration,
 ) -> (
     VecCollection<G, KafkaMessage, Diff>,
-    Stream<G, Vec<HealthStatusMessage>>,
+    StreamVec<G, HealthStatusMessage>,
     PressOnDropButton,
 ) {
     let mut builder = AsyncOperatorBuilder::new(name, input.inner.scope());

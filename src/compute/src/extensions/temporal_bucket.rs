@@ -22,7 +22,7 @@ use mz_timely_util::temporal::{Bucket, BucketChain, BucketTimestamp};
 use timely::container::PushInto;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, PathSummary, Timestamp};
 use timely::{ContainerBuilder, ExchangeData, PartialOrder};
@@ -47,7 +47,7 @@ pub trait TemporalBucketing<G: Scope, O> {
 
 /// Implementation for streams in scopes where timestamps define a total order.
 impl<G, D> TemporalBucketing<G, (D, G::Timestamp, mz_repr::Diff)>
-    for Stream<G, Vec<(D, G::Timestamp, mz_repr::Diff)>>
+    for StreamVec<G, (D, G::Timestamp, mz_repr::Diff)>
 where
     G: Scope<Timestamp: ExchangeData + MzData + BucketTimestamp + TotalOrder + Lattice>,
     D: ExchangeData + MzData + Ord + Clone + std::fmt::Debug + Hashable,

@@ -27,7 +27,7 @@ use std::convert::Infallible;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Capability, CapabilitySet};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
@@ -113,8 +113,8 @@ pub fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     snapshot_buffering_max: Option<usize>,
 ) -> (
     VecCollection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, Vec<(Option<GlobalId>, HealthStatusUpdate)>>,
-    Stream<G, Vec<Infallible>>,
+    StreamVec<G, (Option<GlobalId>, HealthStatusUpdate)>,
+    StreamVec<G, Infallible>,
     PressOnDropButton,
 )
 where

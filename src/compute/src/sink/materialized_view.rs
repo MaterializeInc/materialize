@@ -146,7 +146,7 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::vec::Broadcast;
 use timely::dataflow::operators::{Capability, CapabilitySet, probe};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use tokio::sync::watch;
 use tracing::trace;
@@ -215,17 +215,17 @@ where
 
 /// Type of the `desired` stream, split into `Ok` and `Err` streams.
 type DesiredStreams<S> =
-    OkErr<Stream<S, Vec<(Row, Timestamp, Diff)>>, Stream<S, Vec<(DataflowError, Timestamp, Diff)>>>;
+    OkErr<StreamVec<S, (Row, Timestamp, Diff)>, StreamVec<S, (DataflowError, Timestamp, Diff)>>;
 
 /// Type of the `persist` stream, split into `Ok` and `Err` streams.
 type PersistStreams<S> =
-    OkErr<Stream<S, Vec<(Row, Timestamp, Diff)>>, Stream<S, Vec<(DataflowError, Timestamp, Diff)>>>;
+    OkErr<StreamVec<S, (Row, Timestamp, Diff)>, StreamVec<S, (DataflowError, Timestamp, Diff)>>;
 
 /// Type of the `descs` stream.
-type DescsStream<S> = Stream<S, Vec<BatchDescription>>;
+type DescsStream<S> = StreamVec<S, BatchDescription>;
 
 /// Type of the `batches` stream.
-type BatchesStream<S> = Stream<S, Vec<(BatchDescription, ProtoBatch)>>;
+type BatchesStream<S> = StreamVec<S, (BatchDescription, ProtoBatch)>;
 
 /// Type of the shared sink write frontier.
 type SharedSinkFrontier = Rc<RefCell<Antichain<Timestamp>>>;
