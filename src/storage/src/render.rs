@@ -178,7 +178,7 @@
 //!
 //! However, regardless of whether the output is the main source or a subsource it is treated
 //! identically by the pipeline. Each output is demultiplexed into its own timely stream using
-//! [`timely::dataflow::operators::partition::Partition`] and the rest of the ingestion pipeline is
+//! [`timely::dataflow::operators::core::partition::Partition`] and the rest of the ingestion pipeline is
 //! rendered independently.
 //!
 //! #### Resumption frontier
