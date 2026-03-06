@@ -1167,7 +1167,7 @@ mod tests {
     fn producer<G: Scope<Timestamp = ()>>(
         scope: G,
         mut input: UnboundedReceiver<TestUpdate>,
-    ) -> Stream<G, HealthStatusMessage> {
+    ) -> Stream<G, Vec<HealthStatusMessage>> {
         let mut iterator = AsyncOperatorBuilder::new("iterator".to_string(), scope.clone());
         let (output_handle, output) = iterator.new_output::<CapacityContainerBuilder<Vec<_>>>();
 

@@ -37,7 +37,7 @@ pub trait TemporalBucketing<G: Scope, O> {
     /// not in advance of the frontier. Data that is within `threshold` distance of the input
     /// frontier or the `as_of` is passed through without being stored in the chain.
     fn bucket<CB>(
-        &self,
+        self,
         as_of: Antichain<G::Timestamp>,
         threshold: <G::Timestamp as Timestamp>::Summary,
     ) -> Stream<G, CB::Container>
@@ -53,7 +53,7 @@ where
     D: ExchangeData + MzData + Ord + Clone + std::fmt::Debug + Hashable,
 {
     fn bucket<CB>(
-        &self,
+        self,
         as_of: Antichain<G::Timestamp>,
         threshold: <G::Timestamp as Timestamp>::Summary,
     ) -> Stream<G, CB::Container>

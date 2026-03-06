@@ -65,11 +65,7 @@ where
                 let mut budget = budget;
 
                 input.for_each(|cap, data| {
-                    queue.push_back((
-                        cap.delayed(cap.time(), 0),
-                        cap.retain(1),
-                        std::mem::take(data),
-                    ))
+                    queue.push_back((cap.retain(0), cap.retain(1), std::mem::take(data)))
                 });
 
                 while let Some((ok_cap, err_cap, data)) = queue.pop_front() {

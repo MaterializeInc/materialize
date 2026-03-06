@@ -828,7 +828,7 @@ trait TimesExtract<G: Scope, D, R> {
     ///
     /// The output may be partially consolidated, but no consolidation
     /// guarantees are made.
-    fn times_extract(&self, name: &str) -> (VecCollection<G, D, R>, VecCollection<G, (), R>);
+    fn times_extract(self, name: &str) -> (VecCollection<G, D, R>, VecCollection<G, (), R>);
 }
 
 impl<G, D, R> TimesExtract<G, D, R> for VecCollection<G, D, R>
@@ -837,14 +837,14 @@ where
     D: Clone + 'static,
     R: Semigroup + 'static + std::fmt::Debug,
 {
-    fn times_extract(&self, name: &str) -> (VecCollection<G, D, R>, VecCollection<G, (), R>) {
+    fn times_extract(self, name: &str) -> (VecCollection<G, D, R>, VecCollection<G, (), R>) {
         let name = format!("ct_times_extract({})", name);
         let mut builder = OperatorBuilder::new(name, self.scope());
         let (passthrough, passthrough_stream) = builder.new_output();
         let mut passthrough = OutputBuilder::from(passthrough);
         let (times, times_stream) = builder.new_output();
         let mut times = OutputBuilder::<_, ConsolidatingContainerBuilder<_>>::from(times);
-        let mut input = builder.new_input(self.inner.clone(), Pipeline);
+        let mut input = builder.new_input(self.inner, Pipeline);
         builder.set_notify(false);
         builder.build(|_caps| {
             move |_frontiers| {
@@ -874,7 +874,7 @@ where
 trait TimesReduce<G: Scope, R> {
     /// This is essentially a specialized impl of consolidate, with a HashMap
     /// instead of the Trace.
-    fn times_reduce(&self, name: &str) -> VecCollection<G, (), R>;
+    fn times_reduce(self, name: &str) -> VecCollection<G, (), R>;
 }
 
 impl<G, R> TimesReduce<G, R> for VecCollection<G, (), R>
@@ -882,10 +882,9 @@ where
     G: Scope<Timestamp = Timestamp>,
     R: Semigroup + 'static + std::fmt::Debug,
 {
-    fn times_reduce(&self, name: &str) -> VecCollection<G, (), R> {
+    fn times_reduce(self, name: &str) -> VecCollection<G, (), R> {
         let name = format!("ct_times_reduce({})", name);
         self.inner
-            .clone()
             .unary_frontier(Pipeline, &name, |_caps, _info| {
                 let mut notificator = FrontierNotificator::default();
                 let mut stash = HashMap::<_, R>::new();

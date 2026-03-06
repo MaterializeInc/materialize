@@ -1079,6 +1079,7 @@ where
         // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
         // view mz_introspection.mz_expected_group_size_advice.
         let arranged_input = input
+            .clone()
             .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                 "Arranged MinsMaxesHierarchical input",
             );

@@ -1191,12 +1191,8 @@ mod test {
                         );
                         std::mem::forget(button);
 
-                        (
-                            input_handle,
-                            persist_handle,
-                            output.inner.probe(),
-                            output.inner.capture(),
-                        )
+                        let (probe, stream) = output.inner.probe();
+                        (input_handle, persist_handle, probe, stream.capture())
                     })
                 });
 

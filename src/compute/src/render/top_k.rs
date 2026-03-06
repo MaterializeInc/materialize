@@ -560,9 +560,11 @@ where
     // such that `input.concat(&negated_output)` yields the correct TopK
     // NOTE(vmarcos): The arranged input operator name below is used in the tuning advice
     // built-in view mz_introspection.mz_expected_group_size_advice.
-    let arranged = input.mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-        "Arranged TopK input",
-    );
+    let arranged = input
+        .clone()
+        .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+            "Arranged TopK input",
+        );
 
     // Eagerly evaluate literal limits.
     let limit = limit.map(|l| match l.as_literal() {

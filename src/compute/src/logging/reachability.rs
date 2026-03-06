@@ -123,6 +123,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                     columnar_exchange::<Row, Row, Timestamp, Diff>,
                 );
                 let trace = updates
+                    .clone()
                     .mz_arrange_core::<
                         _,
                         Col2ValBatcher<_, _, _, _>,

@@ -40,7 +40,7 @@ where
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times marked completed in the output stream, and probing this stream
     /// is the correct way to determine that times in the shared trace are committed.
-    fn mz_arrange<Ba, Bu, Tr>(&self, name: &str) -> Arranged<Self::Scope, TraceAgent<Tr>>
+    fn mz_arrange<Ba, Bu, Tr>(self, name: &str) -> Arranged<Self::Scope, TraceAgent<Tr>>
     where
         Ba: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Bu: Builder<
@@ -70,7 +70,7 @@ where
     /// This trace is current for all times marked completed in the output stream, and probing this stream
     /// is the correct way to determine that times in the shared trace are committed.
     fn mz_arrange_core<P, Ba, Bu, Tr>(
-        &self,
+        self,
         pact: P,
         name: &str,
     ) -> Arranged<Self::Scope, TraceAgent<Tr>>
@@ -97,7 +97,7 @@ where
     type Scope = G;
     type Input = C;
 
-    fn mz_arrange_core<P, Ba, Bu, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange_core<P, Ba, Bu, Tr>(self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         P: ParallelizationContract<G::Timestamp, Self::Input>,
         Ba: Batcher<Input = Self::Input, Time = G::Timestamp> + 'static,
@@ -108,7 +108,7 @@ where
     {
         // Allow access to `arrange_named` because we're within Mz's wrapper.
         #[allow(clippy::disallowed_methods)]
-        arrange_core::<_, _, Ba, Bu, _>(self.clone(), pact, name).log_arrangement_size()
+        arrange_core::<_, _, Ba, Bu, _>(self, pact, name).log_arrangement_size()
     }
 }
 
@@ -120,7 +120,7 @@ where
     V: ExchangeData,
     R: ExchangeData,
 {
-    fn mz_arrange<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange<Ba, Bu, Tr>(self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         Ba: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Bu: Builder<
@@ -147,7 +147,7 @@ where
     type Scope = G;
     type Input = C;
 
-    fn mz_arrange_core<P, Ba, Bu, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange_core<P, Ba, Bu, Tr>(self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         P: ParallelizationContract<G::Timestamp, Self::Input>,
         Ba: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
@@ -182,7 +182,7 @@ where
     G::Timestamp: Lattice,
     R: ExchangeData,
 {
-    fn mz_arrange<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange<Ba, Bu, Tr>(self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         Ba: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Bu: Builder<
@@ -194,10 +194,7 @@ where
         Tr::Batch: Batch,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
-        self.0
-            .clone()
-            .map(|d| (d, ()))
-            .mz_arrange::<Ba, Bu, _>(name)
+        self.0.map(|d| (d, ())).mz_arrange::<Ba, Bu, _>(name)
     }
 }
 
@@ -211,7 +208,7 @@ where
     type Scope = G;
     type Input = Vec<((K, ()), G::Timestamp, R)>;
 
-    fn mz_arrange_core<P, Ba, Bu, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange_core<P, Ba, Bu, Tr>(self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         P: ParallelizationContract<G::Timestamp, Self::Input>,
         Ba: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
