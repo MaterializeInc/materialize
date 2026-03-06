@@ -75,7 +75,7 @@ where
         >,
         P: ParallelizationContract<G::Timestamp, C1>;
 
-    /// Like [`timely::dataflow::operators::map::Map::flat_map`], but `logic`
+    /// Like [`timely::dataflow::operators::vec::Map::flat_map`], but `logic`
     /// is allowed to fail. The first returned stream will contain the
     /// successful applications of `logic`, while the second returned stream
     /// will contain the failed applications.
