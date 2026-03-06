@@ -398,6 +398,15 @@ enum ApplyCommand {
     ///   mz-deploy apply secrets
     #[command(after_help = "Run 'mz-deploy help apply-secrets' for a detailed usage guide.")]
     Secrets,
+    /// Apply connection definitions from the project
+    ///
+    /// Creates missing connections and reconciles existing ones whose
+    /// configuration has drifted. Grants and comments are applied idempotently.
+    ///
+    /// Example:
+    ///   mz-deploy apply connections
+    #[command(after_help = "Run 'mz-deploy help apply-connections' for a detailed usage guide.")]
+    Connections,
 }
 
 #[tokio::main]
@@ -493,6 +502,10 @@ async fn run(args: Args) -> Result<(), CliError> {
                 }
                 Some(ApplyCommand::Secrets) => {
                     cli::commands::apply_secrets::run(&args.directory, &profile, &settings).await
+                }
+                Some(ApplyCommand::Connections) => {
+                    cli::commands::apply_connections::run(&args.directory, &profile, &settings)
+                        .await
                 }
                 None => {
                     let deploy_id = deploy_id.expect("deploy_id is required without subcommand");

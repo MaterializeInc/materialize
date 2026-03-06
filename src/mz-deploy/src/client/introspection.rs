@@ -821,6 +821,37 @@ pub async fn drop_staging_clusters(
     Ok(())
 }
 
+/// Get the `CREATE CONNECTION` SQL for an existing connection.
+///
+/// Uses `SHOW CREATE CONNECTION` which returns the canonical, non-redacted SQL
+/// including fully-qualified secret references. Returns `None` if the
+/// connection does not exist.
+pub async fn get_connection_create_sql(
+    client: &Client,
+    database: &str,
+    schema: &str,
+    name: &str,
+) -> Result<Option<String>, ConnectionError> {
+    let fqn = format!(
+        "{}.{}.{}",
+        quote_identifier(database),
+        quote_identifier(schema),
+        quote_identifier(name)
+    );
+    let query = format!("SHOW CREATE CONNECTION {}", fqn);
+    match client.query(&query, &[]).await {
+        Ok(rows) => Ok(rows.first().map(|row| row.get("create_sql"))),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("unknown connection") {
+                Ok(None)
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
 impl IntrospectionClient<'_> {
     /// Get the current Materialize user/role.
     pub async fn get_current_user(&self) -> Result<String, ConnectionError> {
@@ -1000,5 +1031,15 @@ impl IntrospectionClient<'_> {
         name: &str,
     ) -> Result<Option<ClusterConfig>, ConnectionError> {
         get_cluster_config(self.client, name).await
+    }
+
+    /// Get the `CREATE CONNECTION` SQL for an existing connection.
+    pub async fn get_connection_create_sql(
+        &self,
+        database: &str,
+        schema: &str,
+        name: &str,
+    ) -> Result<Option<String>, ConnectionError> {
+        get_connection_create_sql(self.client, database, schema, name).await
     }
 }
