@@ -26,7 +26,6 @@ use tracing::{debug, info};
 
 use crate::actor::{Actor, ActorCommand};
 use crate::metrics::ConsensusMetrics;
-use crate::recovery::recover;
 use crate::s3_wal::S3WalWriter;
 
 use mz_persist::generated::consensus_service::consensus_service_server::ConsensusServiceServer;
@@ -101,10 +100,6 @@ async fn run(args: Args) {
     )
     .await;
 
-    info!("recovering state from S3...");
-    let (shards, next_batch) = recover(&wal_writer).await;
-    info!(shards = shards.len(), next_batch, "recovery complete");
-
     // Use MissedTickBehavior::Delay so the interval represents the collection
     // window — the time spent accumulating CAS ops — not the total period.
     // With Delay, the cycle is: collect for flush_interval → flush (S3 PUT) →
@@ -118,16 +113,19 @@ async fn run(args: Args) {
 
     let (tx, rx) = tokio::sync::mpsc::channel::<ActorCommand>(4096);
 
-    let actor = Actor::new(
-        shards,
-        rx,
-        wal_writer,
-        next_batch,
-        flush_interval,
-        args.snapshot_interval,
-        metrics,
-    );
+    let actor = Actor::new(rx, wal_writer, flush_interval, args.snapshot_interval, metrics);
     tokio::task::spawn_local(actor.run());
+
+    // Recover state from S3 via the actor's command channel.
+    info!("recovering state from S3...");
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    tx.send(ActorCommand::RecoverFromSnapshot { reply: reply_tx })
+        .await
+        .expect("actor channel closed during recovery");
+    reply_rx
+        .await
+        .expect("actor dropped recovery reply")
+        .expect("recovery failed");
 
     // Spawn HTTP metrics server (Send-compatible, uses regular tokio::spawn).
     let metrics_addr = args.metrics_listen_addr;

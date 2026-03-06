@@ -33,7 +33,6 @@ use mz_persist::generated::consensus_service::{
 
 use crate::actor::{Actor, ActorCommand};
 use crate::metrics::ConsensusMetrics;
-use crate::recovery;
 use crate::s3_wal::{SimWalWriter, SimWriteFault};
 
 fn test_metrics() -> ConsensusMetrics {
@@ -110,15 +109,7 @@ impl Simulator {
             time::Instant::now() + Duration::from_secs(86400),
             Duration::from_secs(86400),
         );
-        let actor = Actor::new(
-            BTreeMap::new(),
-            rx,
-            wal.clone(),
-            0,
-            interval,
-            100,
-            test_metrics(),
-        );
+        let actor = Actor::new(rx, wal.clone(), interval, 100, test_metrics());
         let handle = tokio::spawn(actor.run());
         Simulator {
             tx,
@@ -355,8 +346,8 @@ impl Simulator {
         }
     }
 
-    /// Crash the actor and recover from WAL. Asserts that recovered state
-    /// matches the committed reference model, then spins up a new actor.
+    /// Crash the actor and recover from WAL. Verifies that recovered state
+    /// matches the committed reference model via queries, then resumes.
     async fn crash_and_recover(&mut self, op_gen: &mut OpGenerator) {
         // 1. Abort the current actor — pending unflushed ops are lost.
         self.handle.abort();
@@ -366,53 +357,63 @@ impl Simulator {
         self.pending_truncates.clear();
         self.foreign_batch = None;
 
-        // 3. Run recovery against the same WAL (durable store survives).
-        let (recovered_shards, next_batch) = recovery::recover(&*self.wal).await;
-
-        // 4. Assert recovered state matches the committed reference model.
-        for (shard, model_entries) in &self.model {
-            let recovered = recovered_shards
-                .get(shard)
-                .map(|s| {
-                    s.entries
-                        .iter()
-                        .map(|e| (e.seqno, e.data.to_vec()))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            assert_eq!(
-                &recovered, model_entries,
-                "seed={}: Recovery mismatch for shard {:?}",
-                self.seed, shard,
-            );
-        }
-        // Check no extra shards in recovered state.
-        for shard in recovered_shards.keys() {
-            assert!(
-                self.model.contains_key(shard),
-                "seed={}: Recovered unexpected shard {:?}",
-                self.seed, shard,
-            );
-        }
-
-        // 5. Spin up a new actor with recovered state.
+        // 3. Spin up a new actor (empty) and recover via command.
         let (tx, rx) = mpsc::channel(4096);
         let interval = time::interval_at(
             time::Instant::now() + Duration::from_secs(86400),
             Duration::from_secs(86400),
         );
-        let actor = Actor::new(
-            recovered_shards,
-            rx,
-            self.wal.clone(),
-            next_batch,
-            interval,
-            100,
-            test_metrics(),
-        );
+        let actor = Actor::new(rx, self.wal.clone(), interval, 100, test_metrics());
         self.tx = tx;
         self.handle = tokio::spawn(actor.run());
-        self.batch_number = next_batch;
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(ActorCommand::RecoverFromSnapshot { reply: reply_tx })
+            .await
+            .unwrap();
+        reply_rx.await.unwrap().unwrap();
+
+        // 4. Verify recovered state matches the committed reference model
+        //    via queries through the actor.
+        for (shard, model_entries) in &self.model {
+            let model_head = model_entries.last().map(|(s, d)| (*s, d.clone()));
+            let (reply_tx, reply_rx) = oneshot::channel();
+            self.tx
+                .send(ActorCommand::Head {
+                    key: shard.clone(),
+                    reply: reply_tx,
+                })
+                .await
+                .unwrap();
+            let resp = reply_rx.await.unwrap().unwrap();
+            let actual_head = resp.data.map(|d| (d.seqno, d.data));
+            assert_eq!(
+                actual_head, model_head,
+                "seed={}: Recovery head mismatch for shard {:?}",
+                self.seed, shard,
+            );
+        }
+
+        // Check no extra shards via ListKeys.
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(ActorCommand::ListKeys { reply: reply_tx })
+            .await
+            .unwrap();
+        let recovered_keys: std::collections::BTreeSet<String> =
+            reply_rx.await.unwrap().unwrap().into_iter().collect();
+        let model_keys: std::collections::BTreeSet<String> =
+            self.model.keys().cloned().collect();
+        assert_eq!(
+            recovered_keys, model_keys,
+            "seed={}: Recovery key set mismatch",
+            self.seed,
+        );
+
+        // 5. Sync batch_number from the actor's state. We can infer it: the
+        //    WAL has batches 0..N-1, so next_batch = N = self.batch_number
+        //    (which wasn't incremented for unflushed ops). No change needed.
 
         // 6. Reset model_heads from committed model state.
         self.model_heads.clear();

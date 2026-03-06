@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,7 +19,7 @@ use mz_persist::generated::consensus_service::ProtoVersionedData;
 
 use crate::actor::{Actor, ActorCommand};
 use crate::metrics::ConsensusMetrics;
-use crate::s3_wal::{NoopWalWriter, RecordingWalWriter};
+use crate::s3_wal::{NoopWalWriter, RecordingWalWriter, SimWalWriter};
 
 fn test_metrics() -> ConsensusMetrics {
     ConsensusMetrics::register(&MetricsRegistry::new())
@@ -44,7 +43,7 @@ impl Drop for TestActor {
 fn spawn_test_actor() -> TestActor {
     let (tx, rx) = mpsc::channel(256);
     let interval = time::interval(Duration::from_secs(86400));
-    let actor = Actor::new(BTreeMap::new(), rx, NoopWalWriter, 0, interval, 100, test_metrics());
+    let actor = Actor::new(rx, NoopWalWriter, interval, 100, test_metrics());
     let handle = tokio::spawn(actor.run());
     TestActor { tx, handle }
 }
@@ -54,7 +53,7 @@ fn spawn_recording_actor() -> (TestActor, Arc<RecordingWalWriter>) {
     let (tx, rx) = mpsc::channel(256);
     let interval = time::interval(Duration::from_secs(86400));
     let writer = Arc::new(RecordingWalWriter::new());
-    let actor = Actor::new(BTreeMap::new(), rx, writer.clone(), 0, interval, 100, test_metrics());
+    let actor = Actor::new(rx, writer.clone(), interval, 100, test_metrics());
     let handle = tokio::spawn(actor.run());
     (TestActor { tx, handle }, writer)
 }
@@ -66,9 +65,18 @@ fn spawn_recording_actor_with_snapshot_interval(
     let (tx, rx) = mpsc::channel(256);
     let interval = time::interval(Duration::from_secs(86400));
     let writer = Arc::new(RecordingWalWriter::new());
-    let actor = Actor::new(BTreeMap::new(), rx, writer.clone(), 0, interval, snapshot_interval, test_metrics());
+    let actor = Actor::new(rx, writer.clone(), interval, snapshot_interval, test_metrics());
     let handle = tokio::spawn(actor.run());
     (TestActor { tx, handle }, writer)
+}
+
+/// Helper: spawn an actor with a SimWalWriter (supports reads for recovery).
+fn spawn_sim_actor(wal: Arc<SimWalWriter>) -> TestActor {
+    let (tx, rx) = mpsc::channel(256);
+    let interval = time::interval(Duration::from_secs(86400));
+    let actor = Actor::new(rx, wal, interval, 100, test_metrics());
+    let handle = tokio::spawn(actor.run());
+    TestActor { tx, handle }
 }
 
 /// Send a CAS, then flush, then return the result.
@@ -205,6 +213,15 @@ async fn truncate_and_flush(
     send_flush(tx).await;
     let resp = reply_rx.await.unwrap()?;
     Ok(resp.deleted)
+}
+
+/// Send a RecoverFromSnapshot command and wait for completion.
+async fn send_recover(tx: &mpsc::Sender<ActorCommand>) {
+    let (reply_tx, reply_rx) = oneshot::channel();
+    tx.send(ActorCommand::RecoverFromSnapshot { reply: reply_tx })
+        .await
+        .unwrap();
+    reply_rx.await.unwrap().unwrap();
 }
 
 /// Send a truncate that should be rejected with a validation error (reply is
@@ -518,4 +535,135 @@ async fn reads_return_committed_state() {
     assert!(rx.await.unwrap().unwrap().committed);
     let head = send_head(&a.tx, "s").await;
     assert_eq!(head, Some((1, b"v1".to_vec())));
+}
+
+// --- RecoverFromSnapshot ---
+
+#[tokio::test]
+async fn recover_from_snapshot_empty_wal() {
+    let wal = Arc::new(SimWalWriter::new());
+    let a = spawn_sim_actor(wal);
+    send_recover(&a.tx).await;
+    assert_eq!(send_head(&a.tx, "s").await, None);
+    assert!(send_list_keys(&a.tx).await.is_empty());
+}
+
+#[tokio::test]
+async fn recover_from_snapshot_replays_wal() {
+    let wal = Arc::new(SimWalWriter::new());
+
+    // Build up state via a first actor, then shut it down.
+    {
+        let a = spawn_sim_actor(wal.clone());
+        assert!(cas_and_flush(&a.tx, "s1", None, 1, b"v1").await.unwrap());
+        assert!(cas_and_flush(&a.tx, "s1", Some(1), 2, b"v2").await.unwrap());
+        assert!(cas_and_flush(&a.tx, "s2", None, 1, b"a").await.unwrap());
+        drop(a);
+    }
+
+    // New actor recovers from WAL.
+    let a = spawn_sim_actor(wal);
+    send_recover(&a.tx).await;
+    assert_eq!(send_head(&a.tx, "s1").await, Some((2, b"v2".to_vec())));
+    assert_eq!(send_head(&a.tx, "s2").await, Some((1, b"a".to_vec())));
+    assert_eq!(send_list_keys(&a.tx).await, vec!["s1", "s2"]);
+
+    // Can continue operating after recovery.
+    assert!(cas_and_flush(&a.tx, "s1", Some(2), 3, b"v3").await.unwrap());
+    assert_eq!(send_head(&a.tx, "s1").await, Some((3, b"v3".to_vec())));
+}
+
+#[tokio::test]
+async fn recover_from_snapshot_replays_truncates() {
+    let wal = Arc::new(SimWalWriter::new());
+
+    {
+        let a = spawn_sim_actor(wal.clone());
+        assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
+        assert!(cas_and_flush(&a.tx, "s", Some(1), 2, b"v2").await.unwrap());
+        assert!(cas_and_flush(&a.tx, "s", Some(2), 3, b"v3").await.unwrap());
+        truncate_and_flush(&a.tx, "s", 2).await.unwrap();
+        drop(a);
+    }
+
+    let a = spawn_sim_actor(wal);
+    send_recover(&a.tx).await;
+    let entries = send_scan(&a.tx, "s", 0, u64::MAX).await;
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].0, 2);
+    assert_eq!(entries[1].0, 3);
+}
+
+#[tokio::test]
+async fn recover_from_snapshot_clears_pending() {
+    let wal = Arc::new(SimWalWriter::new());
+
+    // Write some durable state.
+    {
+        let a = spawn_sim_actor(wal.clone());
+        assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
+        drop(a);
+    }
+
+    let a = spawn_sim_actor(wal);
+    send_recover(&a.tx).await;
+
+    // CAS accepted but NOT flushed — pending state.
+    let _rx = send_cas_no_flush(&a.tx, "s", Some(1), 2, b"v2").await;
+
+    // RecoverFromSnapshot wipes pending state, replaces with WAL contents.
+    send_recover(&a.tx).await;
+    assert_eq!(send_head(&a.tx, "s").await, Some((1, b"v1".to_vec())));
+}
+
+#[tokio::test]
+async fn recover_from_snapshot_with_snapshot_and_wal() {
+    use mz_persist::generated::consensus_service::{
+        ProtoShardState, ProtoSnapshot, ProtoVersionedData, ProtoWalBatch, ProtoWalOp,
+        ProtoWalWrite, proto_wal_op,
+    };
+
+    let wal = Arc::new(SimWalWriter::new());
+
+    // Pre-seed a snapshot (through batch 1).
+    wal.set_snapshot(ProtoSnapshot {
+        through_batch: 1,
+        shards: [("s".to_string(), ProtoShardState {
+            entries: vec![
+                ProtoVersionedData { seqno: 1, data: b"v1".to_vec() },
+                ProtoVersionedData { seqno: 2, data: b"v2".to_vec() },
+            ],
+        })]
+        .into(),
+    });
+
+    // Pre-seed a WAL batch after the snapshot.
+    wal.write_batch_direct(
+        2,
+        ProtoWalBatch {
+            batch_number: 2,
+            ops: vec![ProtoWalOp {
+                op: Some(proto_wal_op::Op::Write(ProtoWalWrite {
+                    key: "s".to_string(),
+                    seqno: 3,
+                    data: b"v3".to_vec(),
+                })),
+            }],
+        },
+    );
+
+    let a = spawn_sim_actor(wal);
+    send_recover(&a.tx).await;
+
+    // Should have snapshot state (seqno 1, 2) plus WAL replay (seqno 3).
+    let entries = send_scan(&a.tx, "s", 0, u64::MAX).await;
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0], (1, b"v1".to_vec()));
+    assert_eq!(entries[1], (2, b"v2".to_vec()));
+    assert_eq!(entries[2], (3, b"v3".to_vec()));
+
+    // batch_number should be 3 (next after the replayed batch 2).
+    // Verify by doing a CAS+flush and checking the WAL.
+    assert!(cas_and_flush(&a.tx, "s", Some(3), 4, b"v4").await.unwrap());
+    assert_eq!(send_head(&a.tx, "s").await, Some((4, b"v4".to_vec())));
 }

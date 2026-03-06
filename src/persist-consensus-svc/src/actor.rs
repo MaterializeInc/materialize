@@ -25,6 +25,7 @@ use mz_persist::generated::consensus_service::{
 };
 
 use crate::metrics::ConsensusMetrics;
+use crate::recovery;
 use crate::s3_wal::{WalWriteError, WalWriter};
 
 /// Per-shard committed state.
@@ -71,6 +72,12 @@ pub enum ActorCommand {
     /// interval timer drives flushes.
     #[allow(dead_code)]
     Flush { reply: oneshot::Sender<()> },
+    /// Recover state from the WAL (snapshot + replay). Replaces all in-memory
+    /// state. Expected to run once at boot before serving traffic, but modeled
+    /// as a command so all state mutations go through the actor loop.
+    RecoverFromSnapshot {
+        reply: oneshot::Sender<Result<(), String>>,
+    },
 }
 
 /// A WAL operation that can be either a CAS write or a truncate.
@@ -117,35 +124,24 @@ pub struct Actor<W: WalWriter> {
 }
 
 impl<W: WalWriter> Actor<W> {
-    /// Creates a new actor with recovered state.
+    /// Creates a new actor with empty state. Call `RecoverFromSnapshot` after
+    /// spawning to load persisted state from the WAL.
     pub fn new(
-        shards: BTreeMap<String, ShardState>,
         rx: mpsc::Receiver<ActorCommand>,
         wal_writer: W,
-        next_batch_number: u64,
         flush_interval: Interval,
         snapshot_interval: u64,
         metrics: ConsensusMetrics,
     ) -> Self {
-        // Compute initial running counters from recovered state.
-        let mut running_entry_count: i64 = 0;
-        let mut running_byte_count: i64 = 0;
-        for state in shards.values() {
-            running_entry_count += state.entries.len() as i64;
-            for entry in &state.entries {
-                running_byte_count += entry.data.len() as i64;
-            }
-        }
-        // Set gauges immediately so metrics reflect recovered state.
-        metrics.active_shards.set(shards.len() as i64);
-        metrics.total_entries.set(running_entry_count);
-        metrics.approx_bytes.set(running_byte_count);
+        metrics.active_shards.set(0);
+        metrics.total_entries.set(0);
+        metrics.approx_bytes.set(0);
 
         Actor {
-            shards,
+            shards: BTreeMap::new(),
             rx,
             wal_writer,
-            batch_number: next_batch_number,
+            batch_number: 0,
             pending_replies: Vec::new(),
             pending_wal_ops: Vec::new(),
             pending_heads: BTreeMap::new(),
@@ -153,8 +149,8 @@ impl<W: WalWriter> Actor<W> {
             snapshot_interval,
             batches_since_snapshot: 0,
             metrics,
-            running_entry_count,
-            running_byte_count,
+            running_entry_count: 0,
+            running_byte_count: 0,
         }
     }
 
@@ -177,6 +173,10 @@ impl<W: WalWriter> Actor<W> {
                                 self.flush().await;
                             }
                             let _ = reply.send(());
+                        }
+                        Some(ActorCommand::RecoverFromSnapshot { reply }) => {
+                            self = self.recover_from_snapshot().await;
+                            let _ = reply.send(Ok(()));
                         }
                         Some(cmd) => self.handle_command(cmd),
                         None => {
@@ -240,6 +240,9 @@ impl<W: WalWriter> Actor<W> {
             }
             ActorCommand::Flush { .. } => {
                 unreachable!("Flush handled in run() loop")
+            }
+            ActorCommand::RecoverFromSnapshot { .. } => {
+                unreachable!("RecoverFromSnapshot handled in run() loop")
             }
         }
     }
@@ -483,6 +486,48 @@ impl<W: WalWriter> Actor<W> {
             Vec::new()
         };
         ProtoScanResponse { data }
+    }
+
+    /// Recover state from the WAL, returning a fresh Actor. The struct literal
+    /// ensures that adding a new field to Actor causes a compile error here,
+    /// forcing the author to consider how recovery should handle it.
+    async fn recover_from_snapshot(self) -> Self {
+        let (shards, next_batch) = recovery::recover(&self.wal_writer).await;
+
+        let mut running_entry_count: i64 = 0;
+        let mut running_byte_count: i64 = 0;
+        for state in shards.values() {
+            running_entry_count += state.entries.len() as i64;
+            for entry in &state.entries {
+                running_byte_count += entry.data.len() as i64;
+            }
+        }
+
+        self.metrics.active_shards.set(shards.len() as i64);
+        self.metrics.total_entries.set(running_entry_count);
+        self.metrics.approx_bytes.set(running_byte_count);
+
+        info!(
+            shards = shards.len(),
+            next_batch,
+            "recovered from snapshot"
+        );
+
+        Actor {
+            shards,
+            rx: self.rx,
+            wal_writer: self.wal_writer,
+            batch_number: next_batch,
+            pending_replies: Vec::new(),
+            pending_wal_ops: Vec::new(),
+            pending_heads: BTreeMap::new(),
+            flush_interval: self.flush_interval,
+            snapshot_interval: self.snapshot_interval,
+            batches_since_snapshot: 0,
+            metrics: self.metrics,
+            running_entry_count,
+            running_byte_count,
+        }
     }
 
     async fn flush(&mut self) {
