@@ -1532,6 +1532,7 @@ pub enum ObjectType {
     Schema,
     Func,
     ContinualTask,
+    StandingQuery,
     NetworkPolicy,
 }
 
@@ -1543,7 +1544,8 @@ impl ObjectType {
             | ObjectType::View
             | ObjectType::MaterializedView
             | ObjectType::Source
-            | ObjectType::ContinualTask => true,
+            | ObjectType::ContinualTask
+            | ObjectType::StandingQuery => true,
             ObjectType::Sink
             | ObjectType::Index
             | ObjectType::Type
@@ -1580,6 +1582,7 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Schema => ObjectType::Schema,
             mz_sql_parser::ast::ObjectType::Func => ObjectType::Func,
             mz_sql_parser::ast::ObjectType::ContinualTask => ObjectType::ContinualTask,
+            mz_sql_parser::ast::ObjectType::StandingQuery => ObjectType::StandingQuery,
             mz_sql_parser::ast::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
         }
     }
@@ -1628,6 +1631,7 @@ impl Display for ObjectType {
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
             ObjectType::ContinualTask => "CONTINUAL TASK",
+            ObjectType::StandingQuery => "STANDING QUERY",
             ObjectType::NetworkPolicy => "NETWORK POLICY",
         })
     }

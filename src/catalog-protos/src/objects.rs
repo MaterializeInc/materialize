@@ -2402,6 +2402,7 @@ pub mod audit_log_event_v1 {
         System = 16,
         ContinualTask = 17,
         NetworkPolicy = 18,
+        StandingQuery = 19,
     }
 
     #[derive(
@@ -2928,4 +2929,5 @@ pub enum ObjectType {
     Func = 15,
     ContinualTask = 16,
     NetworkPolicy = 17,
+    StandingQuery = 18,
 }

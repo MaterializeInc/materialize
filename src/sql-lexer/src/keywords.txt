@@ -367,6 +367,7 @@ Public
 Publication
 Pushdown
 Qualify
+Queries
 Query
 Quote
 Raise
@@ -446,6 +447,7 @@ Sources
 Sql
 Ssh
 Ssl
+Standing
 Start
 Stdin
 Stdout

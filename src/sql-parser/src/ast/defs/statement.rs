@@ -56,6 +56,7 @@ pub enum Statement<T: AstInfo> {
     CreateView(CreateViewStatement<T>),
     CreateMaterializedView(CreateMaterializedViewStatement<T>),
     CreateContinualTask(CreateContinualTaskStatement<T>),
+    CreateStandingQuery(CreateStandingQueryStatement<T>),
     CreateTable(CreateTableStatement<T>),
     CreateTableFromSource(CreateTableFromSourceStatement<T>),
     CreateIndex(CreateIndexStatement<T>),
@@ -105,6 +106,7 @@ pub enum Statement<T: AstInfo> {
     Close(CloseStatement),
     Prepare(PrepareStatement<T>),
     Execute(ExecuteStatement<T>),
+    ExecuteStandingQuery(ExecuteStandingQueryStatement<T>),
     Deallocate(DeallocateStatement),
     Raise(RaiseStatement),
     GrantRole(GrantRoleStatement<T>),
@@ -135,6 +137,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateView(stmt) => f.write_node(stmt),
             Statement::CreateMaterializedView(stmt) => f.write_node(stmt),
             Statement::CreateContinualTask(stmt) => f.write_node(stmt),
+            Statement::CreateStandingQuery(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
             Statement::CreateTableFromSource(stmt) => f.write_node(stmt),
             Statement::CreateIndex(stmt) => f.write_node(stmt),
@@ -184,6 +187,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Fetch(stmt) => f.write_node(stmt),
             Statement::Prepare(stmt) => f.write_node(stmt),
             Statement::Execute(stmt) => f.write_node(stmt),
+            Statement::ExecuteStandingQuery(stmt) => f.write_node(stmt),
             Statement::Deallocate(stmt) => f.write_node(stmt),
             Statement::Raise(stmt) => f.write_node(stmt),
             Statement::GrantRole(stmt) => f.write_node(stmt),
@@ -217,6 +221,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateView => "create_view",
         StatementKind::CreateMaterializedView => "create_materialized_view",
         StatementKind::CreateContinualTask => "create_continual_task",
+        StatementKind::CreateStandingQuery => "create_standing_query",
         StatementKind::CreateTable => "create_table",
         StatementKind::CreateTableFromSource => "create_table_from_source",
         StatementKind::CreateIndex => "create_index",
@@ -268,6 +273,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::Close => "close",
         StatementKind::Prepare => "prepare",
         StatementKind::Execute => "execute",
+        StatementKind::ExecuteStandingQuery => "execute_standing_query",
         StatementKind::Deallocate => "deallocate",
         StatementKind::Raise => "raise",
         StatementKind::GrantRole => "grant_role",
@@ -1549,6 +1555,76 @@ impl<T: AstInfo> AstDisplay for CreateContinualTaskStatement<T> {
     }
 }
 impl_display_t!(CreateContinualTaskStatement);
+
+/// `CREATE STANDING QUERY`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateStandingQueryStatement<T: AstInfo> {
+    pub name: T::ItemName,
+    /// Named, typed parameters: `(param_name type, ...)`
+    pub params: Vec<StandingQueryParam<T>>,
+    pub in_cluster: Option<T::ClusterName>,
+    /// The `AS SELECT ...` body
+    pub query: Query<T>,
+    pub if_not_exists: bool,
+}
+
+/// A parameter declaration in a `CREATE STANDING QUERY` statement.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StandingQueryParam<T: AstInfo> {
+    pub name: Ident,
+    pub data_type: T::DataType,
+}
+
+impl<T: AstInfo> AstDisplay for StandingQueryParam<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        f.write_str(" ");
+        f.write_node(&self.data_type);
+    }
+}
+impl_display_t!(StandingQueryParam);
+
+impl<T: AstInfo> AstDisplay for CreateStandingQueryStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE ");
+        if self.if_not_exists {
+            f.write_str("STANDING QUERY IF NOT EXISTS ");
+        } else {
+            f.write_str("STANDING QUERY ");
+        }
+        f.write_node(&self.name);
+        f.write_str("(");
+        f.write_node(&display::comma_separated(&self.params));
+        f.write_str(")");
+        if let Some(cluster) = &self.in_cluster {
+            f.write_str(" IN CLUSTER ");
+            f.write_node(cluster);
+        }
+        f.write_str(" AS ");
+        f.write_node(&self.query);
+    }
+}
+impl_display_t!(CreateStandingQueryStatement);
+
+/// `EXECUTE STANDING QUERY`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExecuteStandingQueryStatement<T: AstInfo> {
+    pub name: T::ItemName,
+    pub params: Vec<Expr<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for ExecuteStandingQueryStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("EXECUTE STANDING QUERY ");
+        f.write_node(&self.name);
+        if !self.params.is_empty() {
+            f.write_str("(");
+            f.write_node(&display::comma_separated(&self.params));
+            f.write_str(")");
+        }
+    }
+}
+impl_display_t!(ExecuteStandingQueryStatement);
 
 /// `ALTER SET CLUSTER`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -3473,6 +3549,9 @@ pub enum ShowObjectType<T: AstInfo> {
         in_cluster: Option<T::ClusterName>,
     },
     NetworkPolicy,
+    StandingQuery {
+        in_cluster: Option<T::ClusterName>,
+    },
 }
 /// `SHOW <object>S`
 ///
@@ -3516,6 +3595,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::RoleMembership { .. } => "ROLE MEMBERSHIP",
             ShowObjectType::ContinualTask { .. } => "CONTINUAL TASKS",
             ShowObjectType::NetworkPolicy => "NETWORK POLICIES",
+            ShowObjectType::StandingQuery { .. } => "STANDING QUERIES",
         });
 
         if let ShowObjectType::Index { on_object, .. } = &self.object_type {
@@ -3541,7 +3621,8 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             | ShowObjectType::Index { in_cluster, .. }
             | ShowObjectType::Sink { in_cluster }
             | ShowObjectType::Source { in_cluster }
-            | ShowObjectType::ContinualTask { in_cluster } => {
+            | ShowObjectType::ContinualTask { in_cluster }
+            | ShowObjectType::StandingQuery { in_cluster } => {
                 if let Some(cluster) = in_cluster {
                     f.write_str(" IN CLUSTER ");
                     f.write_node(cluster);
@@ -4270,6 +4351,7 @@ pub enum ObjectType {
     Subsource,
     ContinualTask,
     NetworkPolicy,
+    StandingQuery,
 }
 
 impl ObjectType {
@@ -4286,7 +4368,8 @@ impl ObjectType {
             | ObjectType::Connection
             | ObjectType::Func
             | ObjectType::Subsource
-            | ObjectType::ContinualTask => true,
+            | ObjectType::ContinualTask
+            | ObjectType::StandingQuery => true,
             ObjectType::Database
             | ObjectType::Schema
             | ObjectType::Cluster
@@ -4318,6 +4401,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Subsource => "SUBSOURCE",
             ObjectType::ContinualTask => "CONTINUAL TASK",
             ObjectType::NetworkPolicy => "NETWORK POLICY",
+            ObjectType::StandingQuery => "STANDING QUERY",
         })
     }
 }

@@ -245,6 +245,7 @@ impl RustType<crate::objects::ObjectType> for ObjectType {
             ObjectType::Schema => crate::objects::ObjectType::Schema,
             ObjectType::Func => crate::objects::ObjectType::Func,
             ObjectType::ContinualTask => crate::objects::ObjectType::ContinualTask,
+            ObjectType::StandingQuery => crate::objects::ObjectType::StandingQuery,
             ObjectType::NetworkPolicy => crate::objects::ObjectType::NetworkPolicy,
         }
     }
@@ -267,6 +268,7 @@ impl RustType<crate::objects::ObjectType> for ObjectType {
             crate::objects::ObjectType::Schema => Ok(ObjectType::Schema),
             crate::objects::ObjectType::Func => Ok(ObjectType::Func),
             crate::objects::ObjectType::ContinualTask => Ok(ObjectType::ContinualTask),
+            crate::objects::ObjectType::StandingQuery => Ok(ObjectType::StandingQuery),
             crate::objects::ObjectType::NetworkPolicy => Ok(ObjectType::NetworkPolicy),
             crate::objects::ObjectType::Unknown => Err(TryFromProtoError::unknown_enum_variant(
                 "ObjectType::Unknown",

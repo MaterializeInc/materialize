@@ -397,6 +397,7 @@ pub(crate) async fn initialize(
             ObjectType::Schema => mz_audit_log::ObjectType::Schema,
             ObjectType::Func => mz_audit_log::ObjectType::Func,
             ObjectType::ContinualTask => mz_audit_log::ObjectType::ContinualTask,
+            ObjectType::StandingQuery => mz_audit_log::ObjectType::StandingQuery,
             ObjectType::NetworkPolicy => mz_audit_log::ObjectType::NetworkPolicy,
         };
         audit_events.push((

@@ -1823,6 +1823,7 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::Schema) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::Func) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::ContinualTask) => AclMode::SELECT,
+        SystemObjectType::Object(ObjectType::StandingQuery) => AclMode::SELECT,
         SystemObjectType::System => ALL_SYSTEM_PRIVILEGES,
     }
 }
@@ -1841,7 +1842,8 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         | ObjectType::View
         | ObjectType::MaterializedView
         | ObjectType::Source
-        | ObjectType::ContinualTask => AclMode::SELECT,
+        | ObjectType::ContinualTask
+        | ObjectType::StandingQuery => AclMode::SELECT,
         ObjectType::Type | ObjectType::Schema => AclMode::USAGE,
         ObjectType::Sink
         | ObjectType::Index
