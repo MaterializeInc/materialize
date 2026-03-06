@@ -171,6 +171,24 @@ linearly probe WAL entries starting from snapshot+1 until a 404 signals the end.
                                           (exactly one object either way)
 ```
 
+### Writer Fencing (not yet implemented)
+
+The design assumes a single writer at any given time, but distributed environments can violate this. During a
+failover, Kubernetes may schedule a replacement instance (Svc B) while the original (Svc A) is still running — for
+example, if Svc A is partitioned from the API server but not from S3. This creates a window where two instances race
+on the same WAL slot.
+
+The conditional PUT (`If-None-Match: *`) guarantees that exactly one writer wins each WAL slot, so S3 data is never
+corrupted. But the losing instance doesn't know it lost — a 412 is indistinguishable from "my own earlier attempt
+landed" vs "someone else wrote this slot." If the loser assumes success, it resolves pending CAS callers as committed
+for writes that never durably landed. This is silent data loss.
+
+This needs to be solved before production use. A possible solution would involve fencing with a writer identity stamped
+into each WAL entry — either a UUID generated at startup, or an epoch number itself obtained via CAS against S3. On
+412, the service would read the batch back and compare identities: a match means our earlier attempt landed, a mismatch
+means we've been fenced and must halt (or, more ambitiously, roll back in-memory state, replay the foreign batch, and
+return `ExpectationMismatch` to pending callers so persist retries cleanly). The exact mechanism needs more design work.
+
 ## The Cost Story
 
 | Tick Rate | Postgres Writes/s | S3 PUTs/s (Group Commit) |
@@ -216,8 +234,9 @@ need `rpc://host:port`.
   and multi-tenancy.
 - **Single-threaded actor**: No locks, no races. The simplest possible concurrency model for a correctness-critical
   component.
-- **S3 conditional writes provide fencing**: `If-None-Match: *` guarantees exactly-once WAL entries without implementing
-  our own consensus protocol. This also enables a future path to multi-instance (active-standby) if needed.
+- **S3 conditional writes provide slot-level safety**: `If-None-Match: *` guarantees exactly-once WAL entries without
+  implementing our own consensus protocol. Writer fencing to detect concurrent instances is not yet implemented but is
+  a prerequisite for production (see "Writer Fencing" above).
 - **Opaque data**: The service stores `(shard_id, seqno, bytes)` tuples and never decodes the bytes. Same contract as
   Postgres today.
 - **Infinite retry on S3 failure**: WAL writes retry indefinitely with exponential backoff. Only `Ok` and

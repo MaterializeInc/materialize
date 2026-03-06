@@ -423,6 +423,16 @@ impl<W: WalWriter> Actor<W> {
             // retry indefinitely with exponential backoff because returning
             // an error to clients on a transient S3 failure is unacceptable.
             // Only Ok and AlreadyExists are definite results.
+            //
+            // TODO: Writer fencing. Today, AlreadyExists (412) is assumed to
+            // mean our own prior attempt landed. But if a second service
+            // instance wrote this batch number (e.g. during a failover race),
+            // we'd incorrectly treat a foreign write as our own — silent data
+            // loss. A possible fix: stamp a writer identity (UUID or epoch)
+            // into each WAL entry, read the batch back on 412, and compare.
+            // Match = our write landed. Mismatch = we've been fenced. The
+            // exact fencing mechanism needs more design work. See the "Writer
+            // Fencing" section in the design doc.
             let s3_start = std::time::Instant::now();
             let mut attempt = 0u64;
             let mut backoff = std::time::Duration::from_millis(125);
@@ -431,6 +441,8 @@ impl<W: WalWriter> Actor<W> {
                 match self.wal_writer.write_batch(&batch).await {
                     Ok(()) => break,
                     Err(WalWriteError::AlreadyExists) => {
+                        // TODO: Read back the batch and verify writer_id before
+                        // assuming this is our own write. See above.
                         if attempt > 0 {
                             info!(
                                 batch = self.batch_number,
