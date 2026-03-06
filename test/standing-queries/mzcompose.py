@@ -155,7 +155,7 @@ def parse_duration_ms(s: str) -> float:
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run all standing query performance workflows."""
-    for workflow in ["throughput", "target_qps"]:
+    for workflow in ["throughput", "target-qps"]:
         with c.test_case(workflow):
             c.workflow(workflow)
 
