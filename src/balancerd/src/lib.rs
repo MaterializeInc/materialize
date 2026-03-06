@@ -322,6 +322,15 @@ impl BalancerService {
         let https_addr = self.https.0.local_addr();
         let internal_http_addr = self.internal_http.0.local_addr();
 
+        // Extract shared DNS resolver before moving the resolver into PgwireBalancer.
+        // In multi-tenant mode, this allows HTTPS and pgwire to share the same resolver.
+        // In static mode, HTTPS creates its own resolver (though it won't be used for SNI).
+        let shared_dns = self
+            .cfg
+            .resolver
+            .shared_dns()
+            .unwrap_or_else(|| Arc::new(TenantDnsResolver::new()));
+
         {
             let pgwire = PgwireBalancer {
                 resolver: Arc::new(self.cfg.resolver),
@@ -356,7 +365,7 @@ impl BalancerService {
             let port: u16 = port.parse().expect("unexpected port");
 
             let https = HttpsBalancer {
-                resolver: Arc::from(TenantDnsResolver::new()),
+                resolver: shared_dns,
                 tls: https_tls,
                 resolve_template: Arc::from(addr),
                 port,
@@ -1103,13 +1112,15 @@ impl HttpsBalancer {
         port: u16,
         servername: Option<&str>,
     ) -> Result<ResolvedAddr, anyhow::Error> {
-        let hostname = match &servername {
-            Some(servername) => resolve_template.replace("{}", servername),
-            None => resolve_template.to_string(),
+        let (addr, tenant) = match servername {
+            Some(sni) => resolver.resolve_sni(resolve_template, port, sni).await?,
+            None => {
+                // No SNI - use template directly (shouldn't happen for HTTPS in practice)
+                let hostname = format!("{}:{}", resolve_template, port);
+                debug!("https hostname (no SNI): {hostname}");
+                resolver.resolve(&hostname).await?
+            }
         };
-        debug!("https hostname: {hostname}");
-
-        let (addr, tenant) = resolver.resolve(&format!("{hostname}:{port}")).await?;
 
         Ok(ResolvedAddr {
             addr,
@@ -1285,10 +1296,23 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> ClientStream for T {}
 #[derive(Debug)]
 pub enum BalancerResolver {
     Static(String),
-    MultiTenant(TenantDnsResolver, FronteggResolver, Option<SniTemplate>),
+    MultiTenant {
+        dns: Arc<TenantDnsResolver>,
+        frontegg: FronteggResolver,
+        sni: Option<SniTemplate>,
+    },
 }
 
 impl BalancerResolver {
+    /// Returns a clone of the shared DNS resolver if in multi-tenant mode.
+    /// This allows sharing the resolver with other components like HttpsBalancer.
+    pub fn shared_dns(&self) -> Option<Arc<TenantDnsResolver>> {
+        match self {
+            BalancerResolver::Static(_) => None,
+            BalancerResolver::MultiTenant { dns, .. } => Some(Arc::clone(dns)),
+        }
+    }
+
     async fn resolve<A>(
         &self,
         conn: &mut FramedConn<A>,
@@ -1299,14 +1323,15 @@ impl BalancerResolver {
         A: AsyncRead + AsyncWrite + Unpin,
     {
         match self {
-            BalancerResolver::MultiTenant(
-                dns_resolver,
-                FronteggResolver {
-                    auth,
-                    addr_template,
-                },
-                sni_resolver,
-            ) => {
+            BalancerResolver::MultiTenant {
+                dns: dns_resolver,
+                frontegg:
+                    FronteggResolver {
+                        auth,
+                        addr_template,
+                    },
+                sni: sni_resolver,
+            } => {
                 let servername = match conn.inner() {
                     Conn::Ssl(ssl_stream) => {
                         ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
@@ -1319,18 +1344,12 @@ impl BalancerResolver {
                     Conn::Unencrypted(_) => None,
                 };
                 let has_sni = servername.is_some();
-                let resolved_addr = match (servername, sni_resolver) {
-                    (
-                        Some(servername),
-                        Some(SniTemplate {
-                            template: sni_addr_template,
-                            port,
-                        }),
-                    ) => {
-                        let sni_addr = sni_addr_template.replace("{}", servername);
-                        let (addr, tenant) =
-                            dns_resolver.resolve(&format!("{sni_addr}:{port}")).await?;
-                        debug!("SNI resolved tenant: {:?}", tenant);
+                let resolved_addr = match (servername, sni_resolver.as_ref()) {
+                    (Some(servername), Some(SniTemplate { template, port })) => {
+                        let (addr, tenant) = dns_resolver
+                            .resolve_sni(template, *port, servername)
+                            .await?;
+                        debug!("pgwire SNI resolved tenant: {:?}", tenant);
                         ResolvedAddr {
                             addr,
                             password: None,
@@ -1415,6 +1434,7 @@ fn create_default_resolver() -> TokioResolver {
             opts.positive_min_ttl = resolver_opts.positive_min_ttl;
             opts.negative_min_ttl = resolver_opts.negative_min_ttl;
             opts.negative_max_ttl = resolver_opts.negative_max_ttl;
+            opts.ip_strategy = resolver_opts.ip_strategy;
             (config, opts)
         })
         .unwrap_or_else(|err| {
@@ -1441,6 +1461,7 @@ fn create_non_caching_resolver() -> TokioResolver {
         .map(|(config, mut opts)| {
             // Override specific options while keeping system DNS servers
             opts.cache_size = resolver_opts.cache_size;
+            opts.ip_strategy = resolver_opts.ip_strategy;
             (config, opts)
         })
         .unwrap_or_else(|err| {
@@ -1505,6 +1526,21 @@ impl TenantDnsResolver {
             .lookup_ip(hostname)
             .await
             .with_context(|| format!("Failed to resolve A record for hostname: {}", hostname))
+    }
+
+    /// Resolves an address using SNI-based lookup.
+    ///
+    /// Takes a template (e.g., "blncr-{}") and servername from TLS SNI,
+    /// substitutes the servername into the template, and resolves to an address and tenant.
+    pub async fn resolve_sni(
+        &self,
+        template: &str,
+        port: u16,
+        servername: &str,
+    ) -> Result<(SocketAddr, Option<String>), anyhow::Error> {
+        let hostname = template.replace("{}", servername);
+        debug!("SNI hostname: {}", hostname);
+        self.resolve(&format!("{}:{}", hostname, port)).await
     }
 
     /// Resolves the address and tenant from a hostname:port string.
