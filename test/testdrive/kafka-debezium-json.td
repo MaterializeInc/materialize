@@ -257,4 +257,3 @@ $ kafka-create-topic topic=dbz-json-no-cols partitions=1
   KEY FORMAT JSON VALUE FORMAT JSON
   ENVELOPE DEBEZIUM
 contains:ENVELOPE DEBEZIUM with FORMAT JSON requires explicit column definitions
-
