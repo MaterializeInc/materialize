@@ -3275,7 +3275,8 @@ pub fn plan_execute_standing_query(
     let temp_storage = &mz_repr::RowArena::new();
 
     let mut evaluated_params = Vec::with_capacity(declared_params.len());
-    for (mut expr, (_param_name, param_type)) in stmt.params.into_iter().zip(declared_params.iter())
+    for (mut expr, (_param_name, param_type)) in
+        stmt.params.into_iter().zip_eq(declared_params.iter())
     {
         transform_ast::transform(scx, &mut expr)?;
         let hir = query::plan_expr(&ecx, &expr)?.type_as(&ecx, param_type)?;

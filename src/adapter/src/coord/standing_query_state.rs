@@ -29,12 +29,15 @@ pub(crate) struct ActiveStandingQuery {
     /// The CatalogItemId of this standing query.
     pub item_id: CatalogItemId,
     /// The GlobalId of the standing query's output collection.
+    #[allow(dead_code)]
     pub output_id: GlobalId,
     /// The GlobalId of the parameter storage collection.
     pub param_collection_id: GlobalId,
     /// The cluster on which the standing query's dataflow runs.
+    #[allow(dead_code)]
     pub cluster_id: ClusterId,
     /// The GlobalId of the SUBSCRIBE sink for this standing query.
+    #[allow(dead_code)]
     pub subscribe_sink_id: GlobalId,
     /// Pending requests waiting to be flushed (inserted into the param collection).
     pub batch_buffer: Vec<PendingRequest>,

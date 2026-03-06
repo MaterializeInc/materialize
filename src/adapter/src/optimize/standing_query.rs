@@ -104,6 +104,7 @@ pub struct LocalMirPlan {
 }
 
 impl LocalMirPlan {
+    #[allow(dead_code)]
     pub fn expr(&self) -> OptimizedMirRelationExpr {
         OptimizedMirRelationExpr(self.expr.clone())
     }
@@ -135,14 +136,17 @@ pub struct GlobalLirPlan {
 }
 
 impl GlobalLirPlan {
+    #[allow(dead_code)]
     pub fn df_desc(&self) -> &LirDataflowDescription {
         &self.df_desc
     }
 
+    #[allow(dead_code)]
     pub fn df_meta(&self) -> &DataflowMetainfo {
         &self.df_meta
     }
 
+    #[allow(dead_code)]
     pub fn desc(&self) -> &RelationDesc {
         let sink_exports = &self.df_desc.sink_exports;
         let sink = sink_exports.values().next().expect("valid sink");

@@ -198,6 +198,7 @@ impl Coordinator {
         debug!("standing query {sink_id}: retraction flush complete at ts {timestamp}");
     }
 
+    #[allow(dead_code)]
     fn handle_standing_query_dropped(&mut self, sink_id: GlobalId) {
         let Some(asq) = self.active_standing_queries.get_mut(&sink_id) else {
             return;
