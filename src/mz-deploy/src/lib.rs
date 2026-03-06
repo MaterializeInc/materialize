@@ -33,3 +33,4 @@ pub mod project;
 pub mod secret_resolver;
 pub mod types;
 pub mod unit_test;
+pub mod config;

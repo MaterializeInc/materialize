@@ -2,10 +2,12 @@
 
 use crate::cli::git;
 use crate::cli::{CliError, TypeCheckMode, executor};
+use crate::config::ProjectSettings;
 use crate::client::{Client, Profile};
 use crate::project::ast::Statement;
 use crate::secret_resolver::SecretResolver;
 use crate::{project, verbose};
+
 use chrono::Utc;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -38,6 +40,7 @@ use super::ObjectRef;
 pub async fn run(
     profile: &Profile,
     directory: &Path,
+    settings: &ProjectSettings,
     deploy_id: Option<&str>,
     allow_dirty: bool,
     dry_run: bool,
@@ -141,7 +144,8 @@ pub async fn run(
     let table_schemas = collect_table_schemas(&tables_to_create);
     prepare_schemas_and_mod_statements(&executor, &planned_project, &table_schemas, dry_run)
         .await?;
-    let success_count = execute_table_creates(&executor, &tables_to_create, dry_run).await?;
+    let resolver = SecretResolver::new(&settings.secret_config);
+    let success_count = execute_table_creates(&executor, &resolver, &tables_to_create, dry_run).await?;
     finalize_table_deployment(
         &client,
         directory,
@@ -296,14 +300,13 @@ fn object_type_order(stmt: &Statement) -> u8 {
 /// Returns the count of successfully executed objects for summary and metadata reporting.
 async fn execute_table_creates(
     executor: &executor::DeploymentExecutor<'_>,
+    resolver: &SecretResolver,
     tables_to_create: &[ObjectRef<'_>],
     dry_run: bool,
 ) -> Result<usize, CliError> {
     if dry_run {
         println!("-- Create tables --");
     }
-
-    let resolver = SecretResolver::new();
 
     // Sort: secrets first, then sources, then tables
     let mut sorted: Vec<_> = tables_to_create.to_vec();
@@ -314,11 +317,8 @@ async fn execute_table_creates(
         verbose!("Creating {}/{}: {}", idx + 1, sorted.len(), object_id);
 
         // Resolve client-side secret providers, then execute
-        if let Some(resolved_stmt) = resolver.resolve_statement_for_cli(&typed_obj.stmt)? {
-            executor.execute_sql(&resolved_stmt).await?;
-        } else {
-            executor.execute_sql(&typed_obj.stmt).await?;
-        }
+        let resolved_stmt = resolver.resolve_statement_for_cli(&typed_obj.stmt).await?;
+        executor.execute_sql(&resolved_stmt).await?;
         for index in &typed_obj.indexes {
             executor.execute_sql(index).await?;
         }

@@ -8,7 +8,7 @@
 //! - [`DatabaseValidationError`] — Semantic mismatches detected during
 //!   pre-deployment validation (e.g., schema conflicts, unexpected objects).
 
-use crate::client::config::ConfigError;
+use crate::config::ConfigError;
 use crate::project::SchemaQualifier;
 use crate::project::object_id::ObjectId;
 use owo_colors::OwoColorize;

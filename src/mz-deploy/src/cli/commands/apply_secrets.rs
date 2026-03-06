@@ -1,6 +1,7 @@
 //! Apply secrets command - create missing secrets and update existing ones.
 
 use crate::cli::{CliError, TypeCheckMode, executor};
+use crate::config::ProjectSettings;
 use crate::client::{Client, Profile};
 use crate::project;
 use crate::project::ast::Statement;
@@ -17,7 +18,11 @@ use std::time::Instant;
 /// 1. Executes `CREATE SECRET IF NOT EXISTS` (idempotent create)
 /// 2. Executes `ALTER SECRET` (always update the value to match the file)
 /// 3. Applies any associated grants and comments
-pub async fn run(directory: &Path, profile: &Profile) -> Result<(), CliError> {
+pub async fn run(
+    directory: &Path,
+    profile: &Profile,
+    settings: &ProjectSettings,
+) -> Result<(), CliError> {
     let start_time = Instant::now();
 
     let planned_project = super::compile::run(directory, TypeCheckMode::Disabled).await?;
@@ -50,7 +55,7 @@ pub async fn run(directory: &Path, profile: &Profile) -> Result<(), CliError> {
     )
     .await?;
 
-    let resolver = SecretResolver::new();
+    let resolver = SecretResolver::new(&settings.secret_config);
 
     for obj in &secrets {
         let typed_obj = &obj.typed_object;
@@ -58,7 +63,7 @@ pub async fn run(directory: &Path, profile: &Profile) -> Result<(), CliError> {
             let name = &create_stmt.name;
 
             // Resolve client-side secret providers (e.g. env_var)
-            let resolved_stmt = resolver.resolve_secret_for_cli(create_stmt)?;
+            let resolved_stmt = resolver.resolve_secret_for_cli(create_stmt).await?;
 
             // CREATE SECRET IF NOT EXISTS
             let mut create_if_not_exists = resolved_stmt.clone();

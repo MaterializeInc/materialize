@@ -3,7 +3,7 @@
 //! This module manages a persistent Docker container and provides a connected database client
 //! with external dependencies already staged as temporary tables.
 
-use crate::client::config::DEFAULT_DOCKER_IMAGE;
+use crate::config::DEFAULT_DOCKER_IMAGE;
 use crate::client::{Client, Profile};
 use crate::types::{TypeCheckError, Types};
 use crate::verbose;

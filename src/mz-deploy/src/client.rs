@@ -27,7 +27,6 @@
 //! Most sub-client types are internal; this module re-exports the key public
 //! types so that consumers only need `use crate::client::*`.
 
-pub mod config;
 mod connection;
 mod deployment_ops;
 mod errors;
@@ -37,7 +36,7 @@ mod provisioning;
 mod type_info;
 mod validation;
 
-pub use config::Profile;
+pub use crate::config::Profile;
 pub use connection::Client;
 
 /// Double-quote a SQL identifier, escaping any embedded double quotes.
@@ -45,10 +44,10 @@ pub fn quote_identifier(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 pub use deployment_ops::{
-    ClusterDeploymentStatus, ClusterStatusContext, DEFAULT_ALLOWED_LAG_SECS, FailureReason,
-    HydrationStatusUpdate,
+    ClusterDeploymentStatus, ClusterStatusContext, FailureReason, HydrationStatusUpdate,
+    DEFAULT_ALLOWED_LAG_SECS,
 };
-pub use errors::{ConnectionError, DatabaseValidationError, format_relative_path};
+pub use errors::{format_relative_path, ConnectionError, DatabaseValidationError};
 pub use models::{
     ApplyState, Cluster, ClusterConfig, ClusterGrant, ClusterOptions, ClusterReplica,
     ConflictRecord, DeploymentDetails, DeploymentHistoryEntry, DeploymentKind, DeploymentMetadata,

@@ -3,6 +3,7 @@
 //! This module provides error types for high-level CLI commands that wrap
 //! lower-level errors from the client and project modules.
 
+use crate::config::ConfigError;
 use crate::client::{ConflictRecord, ConnectionError, DatabaseValidationError};
 use crate::project::deployment_snapshot::DeploymentSnapshotError;
 use crate::project::error::{DependencyError, ProjectError};
@@ -22,6 +23,10 @@ pub enum CliError {
     /// Error during project compilation/loading
     #[error(transparent)]
     Project(#[from] ProjectError),
+
+    /// Configuration loading error
+    #[error(transparent)]
+    Config(#[from] ConfigError),
 
     /// Database connection error
     #[error(transparent)]
@@ -305,7 +310,7 @@ impl CliError {
                 "check that environment variables are set and function arguments are string literals"
                     .to_string(),
             ),
-            Self::Validation(_) | Self::Types(_) | Self::DeploymentSnapshot(_) | Self::Dependency(_) => {
+            Self::Config(_) | Self::Validation(_) | Self::Types(_) | Self::DeploymentSnapshot(_) | Self::Dependency(_) => {
                 // These errors provide their own context via transparent wrapping
                 None
             }

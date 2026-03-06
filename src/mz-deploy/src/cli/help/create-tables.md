@@ -57,10 +57,15 @@ strings. Providers are resolved at execution time so that `compile` works
 without access to secret values.
 
     CREATE SECRET my_secret AS env_var('MY_SECRET_VAR');
+    CREATE SECRET my_secret AS aws_secret('my-secret-name');
 
 Supported providers:
 
 - `env_var('NAME')` — Reads from the environment variable `NAME`.
+- `aws_secret('NAME')` — Reads from AWS Secrets Manager. Requires
+  `aws_profile` to be set in `project.toml`:
+
+      aws_profile = "my-aws-profile"
 
 Unknown functions are passed through to Materialize unchanged.
 

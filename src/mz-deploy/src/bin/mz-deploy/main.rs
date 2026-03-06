@@ -9,7 +9,7 @@ use mz_build_info::{BuildInfo, build_info};
 use mz_deploy::cli;
 use mz_deploy::cli::{CliError, TypeCheckMode};
 use mz_deploy::client::ConnectionError;
-use mz_deploy::client::config::{Profile, ProfilesConfig, ProjectSettings};
+use mz_deploy::config::{Profile, ProfilesConfig, ProjectSettings};
 use mz_deploy::log;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -429,6 +429,11 @@ async fn run(args: Args) -> Result<(), CliError> {
         return Ok(());
     }
 
+    if args.command.is_none() {
+        Args::command().print_help().unwrap();
+        return Ok(());
+    }
+
     if let Some(Command::New { name, no_git }) = &args.command {
         return cli::commands::new_project::run(name, !no_git).await;
     }
@@ -458,6 +463,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             cli::commands::create_tables::run(
                 &profile,
                 &args.directory,
+                &settings,
                 deploy_id.as_deref(),
                 allow_dirty,
                 dry_run,
@@ -486,7 +492,7 @@ async fn run(args: Args) -> Result<(), CliError> {
                     cli::commands::roles::run(&args.directory, &profile).await
                 }
                 Some(ApplyCommand::Secrets) => {
-                    cli::commands::apply_secrets::run(&args.directory, &profile).await
+                    cli::commands::apply_secrets::run(&args.directory, &profile, &settings).await
                 }
                 None => {
                     let deploy_id = deploy_id.expect("deploy_id is required without subcommand");
@@ -557,10 +563,7 @@ async fn run(args: Args) -> Result<(), CliError> {
         }
         Some(Command::Help { .. }) => unreachable!("handled above"),
         Some(Command::New { .. }) => unreachable!("handled above"),
-        None => {
-            Args::command().print_help().unwrap();
-            Ok(())
-        }
+        None => unreachable!("handled above"),
     }
 }
 
@@ -570,7 +573,7 @@ fn load_project_settings(
 ) -> Result<ProjectSettings, CliError> {
     ProjectSettings::load(directory)
         .map(|s| s.with_docker_image_override(docker_image))
-        .map_err(|e| CliError::Message(format!("failed to load project settings: {}", e)))
+        .map_err(CliError::Config)
 }
 
 fn load_profile(

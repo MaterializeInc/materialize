@@ -17,13 +17,23 @@ use thiserror::Error;
 
 pub const DEFAULT_DOCKER_IMAGE: &str = "materialize/materialized:latest";
 
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct SecretResolverConfig {
+    /// AWS profile name for loading secrets from AWS Secrets Manager.
+    /// When set, enables the `aws_secret()` provider in secret resolution.
+    pub aws_profile: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct ProjectSettings {
     pub profile: String,
     pub mz_version: Option<String>,
-    /// CLI override for the Docker image. Takes precedence over `mz_version`.
     #[serde(skip)]
     docker_image_override: Option<String>,
+
+    #[serde(flatten)]
+    pub secret_config: SecretResolverConfig,
 }
 
 impl ProjectSettings {

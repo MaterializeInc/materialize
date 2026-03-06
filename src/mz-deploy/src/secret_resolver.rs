@@ -5,12 +5,27 @@
 //! time (not compile time), so `mz-deploy compile` works without access to secrets.
 //!
 //! Unknown functions and other expressions pass through unchanged to Materialize.
+//!
+//! ## Providers
+//!
+//! Each provider is a submodule that implements [`SecretProvider`]:
+//!
+//! - [`env_var::EnvVarProvider`] — reads from environment variables
+//! - [`aws_secret::AwsSecretProvider`] — reads from AWS Secrets Manager
+//! - [`aws_secret::UnconfiguredAwsProvider`] — placeholder when `aws_profile` is not set
+
+mod aws_secret;
+mod env_var;
 
 use crate::cli::CliError;
 use crate::project::ast::Statement;
+use async_trait::async_trait;
+use aws_secret::{AwsSecretProvider, UnconfiguredAwsProvider};
+use env_var::EnvVarProvider;
 use mz_sql_parser::ast::{CreateSecretStatement, Expr, FunctionArgs, Raw, RawItemName, Value};
 use std::collections::BTreeMap;
 use thiserror::Error;
+use crate::config::SecretResolverConfig;
 
 /// Errors that can occur during secret resolution.
 #[derive(Debug, Error)]
@@ -31,35 +46,14 @@ pub enum SecretResolveError {
 }
 
 /// A provider that can resolve secret values from an external source.
-pub trait SecretProvider {
+#[async_trait]
+pub trait SecretProvider: Send + Sync {
     /// The function name this provider handles (e.g. `"env_var"`).
     fn name(&self) -> &str;
     /// The number of arguments this provider expects.
     fn expected_args(&self) -> usize;
     /// Resolve the secret value from the given arguments.
-    fn resolve(&self, args: &[String]) -> Result<String, SecretResolveError>;
-}
-
-/// Resolves secrets from environment variables.
-///
-/// Usage in SQL: `CREATE SECRET x AS env_var('MY_ENV_VAR')`
-pub struct EnvVarProvider;
-
-impl SecretProvider for EnvVarProvider {
-    fn name(&self) -> &str {
-        "env_var"
-    }
-
-    fn expected_args(&self) -> usize {
-        1
-    }
-
-    fn resolve(&self, args: &[String]) -> Result<String, SecretResolveError> {
-        std::env::var(&args[0]).map_err(|_| SecretResolveError::ResolutionFailed {
-            name: self.name().to_string(),
-            reason: format!("environment variable '{}' is not set", args[0]),
-        })
-    }
+    async fn resolve(&self, args: &[String]) -> Result<String, SecretResolveError>;
 }
 
 /// Resolves client-side secret provider functions in SQL expressions.
@@ -71,12 +65,23 @@ pub struct SecretResolver {
 }
 
 impl SecretResolver {
-    /// Creates a new resolver with the default providers (`env_var`).
-    pub fn new() -> Self {
+    /// Creates a new resolver with providers configured from the given AWS profile.
+    ///
+    /// Always registers `env_var`. If `aws_profile` is `Some`, registers the
+    /// real AWS Secrets Manager provider (credentials are loaded lazily on
+    /// first use); otherwise registers a placeholder that gives a clear error.
+    pub fn new(config: &SecretResolverConfig) -> Self {
         let mut resolver = Self {
             providers: BTreeMap::new(),
         };
         resolver.register(Box::new(EnvVarProvider));
+
+        if let Some(ref profile) = config.aws_profile {
+            resolver.register(Box::new(AwsSecretProvider::new(&profile)));
+        } else {
+            resolver.register(Box::new(UnconfiguredAwsProvider));
+        }
+
         resolver
     }
 
@@ -88,7 +93,7 @@ impl SecretResolver {
     ///
     /// - `Expr::Function` matching a registered provider: validate and resolve to `Expr::Value(Value::String(...))`
     /// - Everything else: pass through unchanged
-    pub fn resolve_expr(&self, expr: Expr<Raw>) -> Result<Expr<Raw>, SecretResolveError> {
+    pub async fn resolve_expr(&self, expr: Expr<Raw>) -> Result<Expr<Raw>, SecretResolveError> {
         match &expr {
             Expr::Function(func) => {
                 let func_name = match &func.name {
@@ -138,7 +143,7 @@ impl SecretResolver {
                     }
                 }
 
-                let resolved = provider.resolve(&string_args)?;
+                let resolved = provider.resolve(&string_args).await?;
                 Ok(Expr::Value(Value::String(resolved)))
             }
             _ => Ok(expr),
@@ -148,40 +153,42 @@ impl SecretResolver {
     /// Resolves client-side provider functions in a `CREATE SECRET` statement.
     ///
     /// Returns a new statement with the value field resolved.
-    pub fn resolve_create_secret(
+    pub async fn resolve_create_secret(
         &self,
         stmt: &CreateSecretStatement<Raw>,
     ) -> Result<CreateSecretStatement<Raw>, SecretResolveError> {
         let mut resolved = stmt.clone();
-        resolved.value = self.resolve_expr(stmt.value.clone())?;
+        resolved.value = self.resolve_expr(stmt.value.clone()).await?;
         Ok(resolved)
     }
 
     /// Resolves a `CREATE SECRET` statement and maps errors to [`CliError`].
-    pub fn resolve_secret_for_cli(
+    pub async fn resolve_secret_for_cli(
         &self,
         stmt: &CreateSecretStatement<Raw>,
     ) -> Result<CreateSecretStatement<Raw>, CliError> {
         self.resolve_create_secret(stmt)
+            .await
             .map_err(|e| CliError::SecretResolution {
                 secret_name: stmt.name.to_string(),
                 source: e,
             })
     }
 
-    /// Resolves a [`Statement::CreateSecret`] in place, returning the resolved statement.
+    /// Resolves a [`Statement`], returning the resolved version.
     ///
-    /// Non-secret statements are returned unchanged.
-    pub fn resolve_statement_for_cli(
+    /// Secret statements have their provider functions resolved;
+    /// all other statements are returned unchanged.
+    pub async fn resolve_statement_for_cli(
         &self,
         stmt: &Statement,
-    ) -> Result<Option<Statement>, CliError> {
+    ) -> Result<Statement, CliError> {
         match stmt {
             Statement::CreateSecret(create_stmt) => {
-                let resolved = self.resolve_secret_for_cli(create_stmt)?;
-                Ok(Some(Statement::CreateSecret(resolved)))
+                let resolved = self.resolve_secret_for_cli(create_stmt).await?;
+                Ok(Statement::CreateSecret(resolved))
             }
-            _ => Ok(None),
+            _ => Ok(stmt.clone()),
         }
     }
 }
@@ -218,66 +225,66 @@ mod tests {
         })
     }
 
-    #[test]
-    fn test_resolve_string_literal_passthrough() {
-        let resolver = SecretResolver::new();
+    #[tokio::test]
+    async fn test_resolve_string_literal_passthrough() {
+        let resolver = SecretResolver::new(&Default::default());
         let expr = Expr::Value(Value::String("hello".to_string()));
         let original = format!("{}", expr);
-        let resolved = resolver.resolve_expr(expr).unwrap();
+        let resolved = resolver.resolve_expr(expr).await.unwrap();
         assert_eq!(format!("{}", resolved), original);
     }
 
-    #[test]
-    fn test_resolve_env_var_success() {
+    #[tokio::test]
+    async fn test_resolve_env_var_success() {
         // SAFETY: test-only; no other thread reads this variable.
         unsafe { std::env::set_var("MZ_TEST_SECRET_123", "my_secret_value") };
-        let resolver = SecretResolver::new();
+        let resolver = SecretResolver::new(&Default::default());
         let expr = make_env_var_expr("MZ_TEST_SECRET_123");
-        let resolved = resolver.resolve_expr(expr).unwrap();
+        let resolved = resolver.resolve_expr(expr).await.unwrap();
         match resolved {
             Expr::Value(Value::String(s)) => assert_eq!(s, "my_secret_value"),
             other => panic!("expected string literal, got: {:?}", other),
         }
     }
 
-    #[test]
-    fn test_resolve_env_var_not_set() {
-        let resolver = SecretResolver::new();
+    #[tokio::test]
+    async fn test_resolve_env_var_not_set() {
+        let resolver = SecretResolver::new(&Default::default());
         let expr = make_env_var_expr("MZ_DEFINITELY_NOT_SET_XYZ_999");
-        let err = resolver.resolve_expr(expr).unwrap_err();
+        let err = resolver.resolve_expr(expr).await.unwrap_err();
         assert!(matches!(err, SecretResolveError::ResolutionFailed { .. }));
     }
 
-    #[test]
-    fn test_resolve_unknown_function_passthrough() {
-        let resolver = SecretResolver::new();
+    #[tokio::test]
+    async fn test_resolve_unknown_function_passthrough() {
+        let resolver = SecretResolver::new(&Default::default());
         let expr = make_function_expr("vault", vec![Expr::Value(Value::String("foo".to_string()))]);
         let original = format!("{}", expr);
-        let resolved = resolver.resolve_expr(expr).unwrap();
+        let resolved = resolver.resolve_expr(expr).await.unwrap();
         assert_eq!(format!("{}", resolved), original);
     }
 
-    #[test]
-    fn test_resolve_arbitrary_expr_passthrough() {
-        let resolver = SecretResolver::new();
+    #[tokio::test]
+    async fn test_resolve_arbitrary_expr_passthrough() {
+        let resolver = SecretResolver::new(&Default::default());
 
         // Number literal
         let expr = Expr::Value(Value::Number("42".to_string()));
-        let resolved = resolver.resolve_expr(expr).unwrap();
+        let resolved = resolver.resolve_expr(expr).await.unwrap();
         assert_eq!(format!("{}", resolved), "42");
 
         // Identifier
         let expr = Expr::Identifier(vec![Ident::new("some_col").unwrap()]);
         let original = format!("{}", expr);
-        let resolved = resolver.resolve_expr(expr).unwrap();
+        let resolved = resolver.resolve_expr(expr).await.unwrap();
         assert_eq!(format!("{}", resolved), original);
     }
 
-    #[test]
-    fn test_resolve_wrong_arg_count_zero() {
-        let resolver = SecretResolver::new();
+    #[tokio::test]
+    async fn test_resolve_wrong_arg_count_zero() {
+        let resolver = SecretResolver::new(&Default::default());
         let expr = make_function_expr("env_var", vec![]);
-        let err = resolver.resolve_expr(expr).unwrap_err();
+        let err = resolver.resolve_expr(expr).await.unwrap_err();
         match err {
             SecretResolveError::WrongArgCount {
                 name,
@@ -292,9 +299,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_resolve_wrong_arg_count_two() {
-        let resolver = SecretResolver::new();
+    #[tokio::test]
+    async fn test_resolve_wrong_arg_count_two() {
+        let resolver = SecretResolver::new(&Default::default());
         let expr = make_function_expr(
             "env_var",
             vec![
@@ -302,7 +309,7 @@ mod tests {
                 Expr::Value(Value::String("B".to_string())),
             ],
         );
-        let err = resolver.resolve_expr(expr).unwrap_err();
+        let err = resolver.resolve_expr(expr).await.unwrap_err();
         match err {
             SecretResolveError::WrongArgCount {
                 name,
@@ -317,20 +324,20 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_resolve_non_literal_arg() {
-        let resolver = SecretResolver::new();
+    #[tokio::test]
+    async fn test_resolve_non_literal_arg() {
+        let resolver = SecretResolver::new(&Default::default());
         let expr = make_function_expr(
             "env_var",
             vec![Expr::Identifier(vec![Ident::new("col").unwrap()])],
         );
-        let err = resolver.resolve_expr(expr).unwrap_err();
+        let err = resolver.resolve_expr(expr).await.unwrap_err();
         assert!(matches!(err, SecretResolveError::NonLiteralArg { .. }));
     }
 
-    #[test]
-    fn test_resolve_star_args() {
-        let resolver = SecretResolver::new();
+    #[tokio::test]
+    async fn test_resolve_star_args() {
+        let resolver = SecretResolver::new(&Default::default());
         let expr = Expr::Function(Function {
             name: RawItemName::Name(UnresolvedItemName(vec![Ident::new("env_var").unwrap()])),
             args: FunctionArgs::Star,
@@ -338,24 +345,24 @@ mod tests {
             over: None,
             distinct: false,
         });
-        let err = resolver.resolve_expr(expr).unwrap_err();
+        let err = resolver.resolve_expr(expr).await.unwrap_err();
         match err {
             SecretResolveError::WrongArgCount { got: 0, .. } => {}
             other => panic!("expected WrongArgCount with got=0, got: {:?}", other),
         }
     }
 
-    #[test]
-    fn test_resolve_create_secret_with_env_var() {
+    #[tokio::test]
+    async fn test_resolve_create_secret_with_env_var() {
         // SAFETY: test-only; no other thread reads this variable.
         unsafe { std::env::set_var("MZ_TEST_SECRET_456", "resolved_value") };
-        let resolver = SecretResolver::new();
+        let resolver = SecretResolver::new(&Default::default());
         let stmt = CreateSecretStatement::<Raw> {
             name: UnresolvedItemName(vec![Ident::new("my_secret").unwrap()]),
             if_not_exists: false,
             value: make_env_var_expr("MZ_TEST_SECRET_456"),
         };
-        let resolved = resolver.resolve_create_secret(&stmt).unwrap();
+        let resolved = resolver.resolve_create_secret(&stmt).await.unwrap();
         match &resolved.value {
             Expr::Value(Value::String(s)) => assert_eq!(s, "resolved_value"),
             other => panic!("expected string literal, got: {:?}", other),
@@ -363,17 +370,49 @@ mod tests {
         assert_eq!(resolved.name.0[0].as_str(), stmt.name.0[0].as_str());
     }
 
-    #[test]
-    fn test_resolve_create_secret_plain_string() {
-        let resolver = SecretResolver::new();
+    #[tokio::test]
+    async fn test_resolve_create_secret_plain_string() {
+        let resolver = SecretResolver::new(&Default::default());
         let stmt = CreateSecretStatement::<Raw> {
             name: UnresolvedItemName(vec![Ident::new("my_secret").unwrap()]),
             if_not_exists: false,
             value: Expr::Value(Value::String("plain_value".to_string())),
         };
-        let resolved = resolver.resolve_create_secret(&stmt).unwrap();
+        let resolved = resolver.resolve_create_secret(&stmt).await.unwrap();
         match &resolved.value {
             Expr::Value(Value::String(s)) => assert_eq!(s, "plain_value"),
+            other => panic!("expected string literal, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_unconfigured_aws_provider_error() {
+        let resolver = SecretResolver::new(&Default::default());
+        let expr =
+            make_function_expr("aws_secret", vec![Expr::Value(Value::String("foo".into()))]);
+        let err = resolver.resolve_expr(expr).await.unwrap_err();
+        match err {
+            SecretResolveError::ResolutionFailed { name, reason } => {
+                assert_eq!(name, "aws_secret");
+                assert!(
+                    reason.contains("aws_profile"),
+                    "error should mention aws_profile, got: {}",
+                    reason
+                );
+            }
+            other => panic!("expected ResolutionFailed, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_aws_secret_passthrough_when_unconfigured() {
+        // env_var still works even when AWS is unconfigured
+        unsafe { std::env::set_var("MZ_TEST_AWS_PASSTHROUGH", "works") };
+        let resolver = SecretResolver::new(&Default::default());
+        let expr = make_env_var_expr("MZ_TEST_AWS_PASSTHROUGH");
+        let resolved = resolver.resolve_expr(expr).await.unwrap();
+        match resolved {
+            Expr::Value(Value::String(s)) => assert_eq!(s, "works"),
             other => panic!("expected string literal, got: {:?}", other),
         }
     }

@@ -9,7 +9,7 @@
 //! - `introspection` - Database metadata queries
 //! - `validation` - Project validation against the database
 
-use crate::client::config::Profile;
+use crate::config::Profile;
 use crate::client::errors::ConnectionError;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use postgres_openssl::MakeTlsConnector;
