@@ -17,10 +17,10 @@ There is no mechanism to amortize execution cost across multiple clients issuing
 
 ## Out of scope
 
-* **Strict serializable isolation**: v1 uses table-determined timestamps. Inserting parameters at a coordinator-chosen future timestamp is deferred.
+* **Isolation**: v1 uses table-determined timestamps. A future design could use a future timestamp to insert the query.
 * **ALTER**: Changing the query body requires drop and recreate.
 * **Complex queries**: Multi-object joins, aggregations, GROUP BY, CTEs, subqueries.
-* **SELECT \***: v1 requires explicit column lists.
+* **SELECT \***: v1 may require explicit column lists if it simplifies the implementation.
 * **Expression support in SELECT list**: v1 requires column references only; expressions are a fast follow-up.
 * **Per-row error reporting**: A single error taints the entire collection (existing Materialize limitation).
 * **Backpressure**: The coordinator buffers without rejecting requests.
@@ -176,9 +176,7 @@ A system table `mz_standing_queries` exposes:
 | name | text | User-given name |
 | cluster_id | text | Cluster the dataflow runs on |
 | parameter_types | text[] | Parameter type names |
-| target_object_id | text | ID of the queried object |
-| pending_requests | int | Current in-flight requests |
-| total_executions | bigint | Total executions since creation |
+| statement | text | The standing query's SQL statement |
 
 ## Minimal viable prototype
 
@@ -208,9 +206,20 @@ This was rejected because prepared statements are inherently session-scoped and 
 Users could create a materialized view for each parameter combination they care about.
 This was rejected because it requires knowing parameter values in advance, doesn't scale to arbitrary parameter spaces, and wastes resources maintaining arrangements for all combinations.
 
+## Evaluation
+
+Benchmark the standing query path against the equivalent SELECT path using the following methodology:
+
+* **Varying parallelism**: Test with 1, 10, 50, 100, 500 concurrent connections, each issuing standing query executions in a tight loop.
+* **Throughput**: Measure total executions/s at each concurrency level. Compare against the same query issued as individual SELECTs.
+* **Latency**: Measure end-to-end latency (client sends EXECUTE to client receives last result row). Report as a CCDF (complementary cumulative distribution function) to reveal tail latency behavior.
+* **Batch efficiency**: Vary the batch window (1ms, 5ms, 10ms) and measure the throughput/latency tradeoff.
+* **Query complexity**: Test with simple key lookups and with additional static filters to understand how query complexity affects the pipeline.
+
+The parameter table size under load is O(outstanding requests), bounded by the batch window and processing latency.
+
 ## Open questions
 
 * **Error propagation**: A single error taints the entire collection in Materialize's current model. Standing queries amplify this since many clients share one dataflow. Should we add error detection and dataflow restart as a mitigation?
 * **Retraction batching**: Every batch requires two persist writes (INSERT and DELETE). Can retractions be batched across multiple execution batches to reduce write frequency?
 * **Persist write latency floor**: The minimum persist write latency (~5-10ms) dominates the end-to-end budget. How much can this be improved, and does it change the batching strategy?
-* **Parameter table growth**: Under sustained load with retraction delays, the parameter table could grow. What is the acceptable bound on parameter table size, and should there be a cleanup mechanism?
