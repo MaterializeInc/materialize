@@ -1240,3 +1240,123 @@ mod tests {
         Ok(())
     }
 }
+
+// Kani bounded model checking proofs for envelope encryption.
+//
+// These harnesses use `#[cfg(kani)]` and are only compiled by `cargo kani`.
+// They prove correctness properties of `parse_envelope` and the envelope
+// header format that hold for *all* inputs within bounds — not just specific
+// test cases.
+//
+// Run with: `cargo kani -p mz-persist --harness <name>`
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+
+    // Maximum input size for parse_envelope proofs. Large enough to cover
+    // valid envelopes with small wrapped DEKs (min valid = 31 bytes),
+    // small enough for solver tractability.
+    const MAX_INPUT_LEN: usize = 64;
+
+    // -----------------------------------------------------------------------
+    // Proof 1: parse_envelope never panics on arbitrary input.
+    // -----------------------------------------------------------------------
+    #[kani::proof]
+    fn parse_envelope_no_panic() {
+        let data: [u8; MAX_INPUT_LEN] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= MAX_INPUT_LEN);
+        // Must not panic for any input — returning Err is fine.
+        let _ = parse_envelope(&data[..len]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Proof 2: If parse_envelope returns Ok, the version is V1 or V2.
+    // -----------------------------------------------------------------------
+    #[kani::proof]
+    fn parse_envelope_version_valid() {
+        let data: [u8; MAX_INPUT_LEN] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= MAX_INPUT_LEN);
+        if let Ok((version, _, _)) = parse_envelope(&data[..len]) {
+            assert!(version == ENVELOPE_VERSION_V1 || version == ENVELOPE_VERSION_V2);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Proof 3: If parse_envelope returns Ok, the returned slices satisfy:
+    //   - nonce_ct.len() >= NONCE_LEN + GCM_TAG_LEN
+    //   - header + wrapped_dek + nonce_ct exactly spans the input
+    // -----------------------------------------------------------------------
+    #[kani::proof]
+    fn parse_envelope_slice_bounds() {
+        let data: [u8; MAX_INPUT_LEN] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= MAX_INPUT_LEN);
+        if let Ok((_version, wrapped_dek, nonce_ct)) = parse_envelope(&data[..len]) {
+            assert!(nonce_ct.len() >= NONCE_LEN + GCM_TAG_LEN);
+            // The three components (header, wrapped_dek, nonce_ct) partition the input.
+            assert_eq!(
+                1 + WRAPPED_DEK_LEN_SIZE + wrapped_dek.len() + nonce_ct.len(),
+                len
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Proof 4: Envelope header roundtrip — constructing an envelope by hand
+    // and parsing it recovers the original version and wrapped DEK.
+    // (Avoids AEAD FFI by constructing the byte layout directly.)
+    // -----------------------------------------------------------------------
+    #[kani::proof]
+    #[kani::unwind(50)]
+    fn envelope_header_roundtrip() {
+        let version: u8 = kani::any();
+        kani::assume(version == ENVELOPE_VERSION_V1 || version == ENVELOPE_VERSION_V2);
+
+        let wrapped_len: usize = kani::any();
+        kani::assume(wrapped_len <= 8);
+        let wrapped_dek: [u8; 8] = kani::any();
+
+        let fake_ct_len: usize = kani::any();
+        kani::assume(fake_ct_len >= GCM_TAG_LEN && fake_ct_len <= 24);
+
+        // Build envelope: version || wrapped_len (LE u16) || wrapped_dek || nonce || ct+tag
+        let total = 1 + WRAPPED_DEK_LEN_SIZE + wrapped_len + NONCE_LEN + fake_ct_len;
+        let mut envelope = Vec::with_capacity(total);
+        envelope.push(version);
+        envelope.extend_from_slice(&(wrapped_len as u16).to_le_bytes());
+        envelope.extend_from_slice(&wrapped_dek[..wrapped_len]);
+        envelope.resize(envelope.len() + NONCE_LEN, 0u8);
+        envelope.resize(envelope.len() + fake_ct_len, 0u8);
+
+        let (parsed_ver, parsed_wrapped, parsed_nonce_ct) = parse_envelope(&envelope).unwrap();
+        assert_eq!(parsed_ver, version);
+        assert_eq!(parsed_wrapped, &wrapped_dek[..wrapped_len]);
+        assert_eq!(parsed_nonce_ct.len(), NONCE_LEN + fake_ct_len);
+    }
+
+    // -----------------------------------------------------------------------
+    // Proof 5: The version byte is written as the first byte of the envelope
+    // and is recovered by parse_envelope.
+    // -----------------------------------------------------------------------
+    #[kani::proof]
+    #[kani::unwind(40)]
+    fn version_byte_written_correctly() {
+        let version: u8 = kani::any();
+        kani::assume(version == ENVELOPE_VERSION_V1 || version == ENVELOPE_VERSION_V2);
+
+        let wrapped_dek = [0u8; 6];
+        let wrapped_len = wrapped_dek.len() as u16;
+        let total = 1 + WRAPPED_DEK_LEN_SIZE + wrapped_dek.len() + NONCE_LEN + GCM_TAG_LEN;
+        let mut output = Vec::with_capacity(total);
+        output.push(version);
+        output.extend_from_slice(&wrapped_len.to_le_bytes());
+        output.extend_from_slice(&wrapped_dek);
+        output.resize(output.len() + NONCE_LEN + GCM_TAG_LEN, 0u8);
+
+        assert_eq!(output[0], version);
+        let (parsed_ver, _, _) = parse_envelope(&output).unwrap();
+        assert_eq!(parsed_ver, version);
+    }
+}
