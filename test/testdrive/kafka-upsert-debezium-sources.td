@@ -108,9 +108,9 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 contains:ENVELOPE [DEBEZIUM] UPSERT requires that KEY FORMAT be specified
 
 ! CREATE TABLE doin_upsert_tbl FROM SOURCE doin_upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
-  KEY FORMAT JSON VALUE FORMAT JSON
+  KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE DEBEZIUM
-contains:ENVELOPE DEBEZIUM requires that VALUE FORMAT is set to AVRO
+contains:ENVELOPE DEBEZIUM requires that VALUE FORMAT is set to AVRO or JSON
 
 > CREATE TABLE doin_upsert_tbl FROM SOURCE doin_upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

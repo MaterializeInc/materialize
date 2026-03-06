@@ -1033,7 +1033,8 @@ impl DataSourceDesc {
                 SourceEnvelope::None(_) => "none",
                 SourceEnvelope::Upsert(upsert_envelope) => match upsert_envelope.style {
                     mz_storage_types::sources::envelope::UpsertStyle::Default(_) => "upsert",
-                    mz_storage_types::sources::envelope::UpsertStyle::Debezium { .. } => {
+                    mz_storage_types::sources::envelope::UpsertStyle::Debezium { .. }
+                    | mz_storage_types::sources::envelope::UpsertStyle::DebeziumJson { .. } => {
                         // NOTE(aljoscha): Should we somehow mark that this is
                         // using upsert internally? See note above about
                         // DEBEZIUM.

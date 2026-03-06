@@ -67,13 +67,25 @@ pub struct UpsertEnvelope {
     pub key_indices: Vec<usize>,
 }
 
+/// Mode for JSON Debezium envelope processing.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub enum DebeziumJsonMode {
+    /// Generic Debezium JSON format.
+    Generic,
+    /// TiCDC dialect of Debezium format.
+    TiCdc,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum UpsertStyle {
     /// `ENVELOPE UPSERT`, where the key shape depends on the independent
     /// `KeyEnvelope`
     Default(KeyEnvelope),
-    /// `ENVELOPE DEBEZIUM UPSERT`
+    /// `ENVELOPE DEBEZIUM UPSERT` with Avro encoding
     Debezium { after_idx: usize },
+    /// `ENVELOPE DEBEZIUM` with JSON encoding. Envelope extraction happens at
+    /// render time by parsing the Jsonb datum to extract `op` and `after` fields.
+    DebeziumJson { mode: DebeziumJsonMode },
     /// `ENVELOPE UPSERT` where any decode errors will get serialized into a
     /// SqlScalarType::Record column named `error_column`, and all value columns are
     /// nullable. The key shape depends on the independent `KeyEnvelope`.
@@ -224,6 +236,29 @@ impl UnplannedSourceEnvelope {
                 };
                 (
                     self.into_source_envelope(key, key_arity, Some(desc.arity())),
+                    desc,
+                )
+            }
+            UnplannedSourceEnvelope::Upsert {
+                style: UpsertStyle::DebeziumJson { .. },
+                ..
+            } => {
+                // JSON Debezium: output is [key: Jsonb, data: Jsonb, ...metadata]
+                // Key is included as a separate column (unlike Avro Debezium).
+                let key_desc = RelationDesc::builder()
+                    .with_column("key", SqlScalarType::Jsonb.nullable(false))
+                    .finish();
+                let value_desc = RelationDesc::builder()
+                    .with_column("data", SqlScalarType::Jsonb.nullable(false))
+                    .finish();
+                // key_indices = [0]: points to the key column for UpsertKey::from_value rehydration
+                let key_indices = vec![0usize];
+                let desc = key_desc
+                    .with_key(key_indices.clone())
+                    .concat(value_desc)
+                    .concat(metadata_desc);
+                (
+                    self.into_source_envelope(Some(key_indices), None, Some(desc.arity())),
                     desc,
                 )
             }

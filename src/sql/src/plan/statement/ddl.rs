@@ -95,7 +95,8 @@ use mz_storage_types::sources::encoding::{
     SourceDataEncoding, included_column_desc,
 };
 use mz_storage_types::sources::envelope::{
-    KeyEnvelope, NoneEnvelope, SourceEnvelope, UnplannedSourceEnvelope, UpsertStyle,
+    DebeziumJsonMode, KeyEnvelope, NoneEnvelope, SourceEnvelope, UnplannedSourceEnvelope,
+    UpsertStyle,
 };
 use mz_storage_types::sources::kafka::{
     KafkaMetadataKind, KafkaSourceConnection, KafkaSourceExportDetails, kafka_metadata_columns_desc,
@@ -812,7 +813,7 @@ pub fn plan_create_source(
             envelope,
             ast::SourceEnvelope::Upsert { .. }
                 | ast::SourceEnvelope::None
-                | ast::SourceEnvelope::Debezium
+                | ast::SourceEnvelope::Debezium { .. }
         )
     {
         sql_bail!("INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)");
@@ -1375,9 +1376,17 @@ fn apply_source_envelope_encoding(
         key_envelope_no_encoding,
     )?;
 
-    match (&envelope, &key_envelope) {
-        (ast::SourceEnvelope::Debezium, KeyEnvelope::None) => {}
-        (ast::SourceEnvelope::Debezium, _) => sql_bail!(
+    match (
+        &envelope,
+        &key_envelope,
+        encoding.as_ref().map(|e| &e.value),
+    ) {
+        // Avro Debezium: keys are in the unpacked `after` record, reject INCLUDE KEY
+        (ast::SourceEnvelope::Debezium { .. }, KeyEnvelope::None, _) => {}
+        (ast::SourceEnvelope::Debezium { .. }, _, Some(DataEncoding::Json)) => {
+            // JSON Debezium: key is included as a separate column, INCLUDE KEY is fine
+        }
+        (ast::SourceEnvelope::Debezium { .. }, _, _) => sql_bail!(
             "Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys."
         ),
         _ => {}
@@ -1394,20 +1403,34 @@ fn apply_source_envelope_encoding(
     let envelope = match &envelope {
         // TODO: fixup key envelope
         ast::SourceEnvelope::None => UnplannedSourceEnvelope::None(key_envelope),
-        ast::SourceEnvelope::Debezium => {
-            //TODO check that key envelope is not set
-            let after_idx = match typecheck_debezium(&value_desc) {
-                Ok((_before_idx, after_idx)) => Ok(after_idx),
-                Err(type_err) => match encoding.as_ref().map(|e| &e.value) {
-                    Some(DataEncoding::Avro(_)) => Err(type_err),
-                    _ => Err(sql_err!(
-                        "ENVELOPE DEBEZIUM requires that VALUE FORMAT is set to AVRO"
-                    )),
-                },
-            }?;
+        ast::SourceEnvelope::Debezium { mode } => {
+            match encoding.as_ref().map(|e| &e.value) {
+                Some(DataEncoding::Json) => {
+                    // JSON path: skip typecheck_debezium, use DebeziumJson style
+                    let storage_mode = match mode {
+                        ast::DebeziumMode::TiCdc => DebeziumJsonMode::TiCdc,
+                        ast::DebeziumMode::None => DebeziumJsonMode::Generic,
+                    };
+                    UnplannedSourceEnvelope::Upsert {
+                        style: UpsertStyle::DebeziumJson { mode: storage_mode },
+                    }
+                }
+                _ => {
+                    // Existing Avro path
+                    let after_idx = match typecheck_debezium(&value_desc) {
+                        Ok((_before_idx, after_idx)) => Ok(after_idx),
+                        Err(type_err) => match encoding.as_ref().map(|e| &e.value) {
+                            Some(DataEncoding::Avro(_)) => Err(type_err),
+                            _ => Err(sql_err!(
+                                "ENVELOPE DEBEZIUM requires that VALUE FORMAT is set to AVRO or JSON"
+                            )),
+                        },
+                    }?;
 
-            UnplannedSourceEnvelope::Upsert {
-                style: UpsertStyle::Debezium { after_idx },
+                    UnplannedSourceEnvelope::Upsert {
+                        style: UpsertStyle::Debezium { after_idx },
+                    }
+                }
             }
         }
         ast::SourceEnvelope::Upsert {
@@ -1847,7 +1870,7 @@ pub fn plan_create_table_from_source(
                     envelope,
                     ast::SourceEnvelope::Upsert { .. }
                         | ast::SourceEnvelope::None
-                        | ast::SourceEnvelope::Debezium
+                        | ast::SourceEnvelope::Debezium { .. }
                 )
             {
                 // TODO(guswynn): should this be `bail_unsupported!`?
@@ -2247,7 +2270,7 @@ fn get_encoding(
 
     let requires_keyvalue = matches!(
         envelope,
-        ast::SourceEnvelope::Debezium | ast::SourceEnvelope::Upsert { .. }
+        ast::SourceEnvelope::Debezium { .. } | ast::SourceEnvelope::Upsert { .. }
     );
     let is_keyvalue = encoding.key.is_some();
     if requires_keyvalue && !is_keyvalue {
