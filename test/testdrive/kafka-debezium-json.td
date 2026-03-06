@@ -276,8 +276,8 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=| topic=dbz-json-inc
 > CREATE TABLE dbz_json_include_meta (id int4 NOT NULL, val text NOT NULL, PRIMARY KEY (id))
   FROM SOURCE dbz_json_include_meta_src (REFERENCE "testdrive-dbz-json-include-meta-${testdrive.seed}")
   KEY FORMAT JSON VALUE FORMAT JSON
-  ENVELOPE DEBEZIUM
   INCLUDE DEBEZIUM METADATA AS dbz_meta
+  ENVELOPE DEBEZIUM
 
 # Verify data columns are correct
 > SELECT id, val FROM dbz_json_include_meta ORDER BY id
@@ -340,8 +340,8 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=| topic=dbz-json-met
 > CREATE TABLE dbz_json_meta_default (id int4 NOT NULL, val text NOT NULL, PRIMARY KEY (id))
   FROM SOURCE dbz_json_meta_default_src (REFERENCE "testdrive-dbz-json-meta-default-${testdrive.seed}")
   KEY FORMAT JSON VALUE FORMAT JSON
-  ENVELOPE DEBEZIUM
   INCLUDE DEBEZIUM METADATA
+  ENVELOPE DEBEZIUM
 
 # Default column name should be "debezium_metadata"
 > SELECT id, debezium_metadata->>'op' as op FROM dbz_json_meta_default
