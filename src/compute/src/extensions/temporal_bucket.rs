@@ -64,115 +64,113 @@ where
         let logger = scope.logger_for("differential/arrange").map(Into::into);
 
         let pact = Exchange::new(|(d, _, _): &(D, G::Timestamp, mz_repr::Diff)| d.hashed().into());
-        self.clone()
-            .unary_frontier::<CB, _, _, _>(pact, "Temporal delay", |cap, info| {
-                let mut chain = BucketChain::new(MergeBatcherWrapper::new(logger, info.global_id));
-                let activator = scope.activator_for(info.address);
+        self.unary_frontier::<CB, _, _, _>(pact, "Temporal delay", |cap, info| {
+            let mut chain = BucketChain::new(MergeBatcherWrapper::new(logger, info.global_id));
+            let activator = scope.activator_for(info.address);
 
-                // Cap tracking the lower bound of potentially outstanding data.
-                let mut cap = Some(cap);
+            // Cap tracking the lower bound of potentially outstanding data.
+            let mut cap = Some(cap);
 
-                // Buffer for data to be inserted into the chain.
-                let mut buffer = Vec::new();
+            // Buffer for data to be inserted into the chain.
+            let mut buffer = Vec::new();
 
-                move |(input, frontier), output| {
-                    // The upper frontier is the join of the input frontier and the `as_of` frontier,
-                    // with the `threshold` summary applied to it.
-                    let mut upper = Antichain::new();
-                    for time1 in &frontier.frontier() {
-                        for time2 in as_of.elements() {
-                            // TODO: Use `join_assign` if we ever use a timestamp with allocations.
-                            if let Some(time) = threshold.results_in(&time1.join(time2)) {
-                                upper.insert(time);
-                            }
+            move |(input, frontier), output| {
+                // The upper frontier is the join of the input frontier and the `as_of` frontier,
+                // with the `threshold` summary applied to it.
+                let mut upper = Antichain::new();
+                for time1 in &frontier.frontier() {
+                    for time2 in as_of.elements() {
+                        // TODO: Use `join_assign` if we ever use a timestamp with allocations.
+                        if let Some(time) = threshold.results_in(&time1.join(time2)) {
+                            upper.insert(time);
                         }
-                    }
-
-                    input.for_each_time(|time, data| {
-                        let mut session = output.session_with_builder(&time);
-                        for data in data {
-                            // Skip data that is about to be revealed.
-                            let pass_through =
-                                data.extract_if(.., |(_, t, _)| !upper.less_equal(t));
-                            session.give_iterator(pass_through);
-
-                            // Sort data by time, then drain it into a buffer that contains data for a
-                            // single bucket. We scan the data for ranges of time that fall into the same
-                            // bucket so we can push batches of data at once.
-                            data.sort_unstable_by(|(_, t, _), (_, t2, _)| t.cmp(t2));
-
-                            let mut drain = data.drain(..);
-                            if let Some((datum, time, diff)) = drain.next() {
-                                let mut range = chain.range_of(&time).expect("Must exist");
-                                buffer.push((datum, time, diff));
-                                for (datum, time, diff) in drain {
-                                    // If we have a range, check if the time is not within it.
-                                    if !range.contains(&time) {
-                                        // If the time is outside the range, push the current buffer
-                                        // to the chain and reset the range.
-                                        if !buffer.is_empty() {
-                                            let bucket =
-                                                chain.find_mut(&range.start).expect("Must exist");
-                                            bucket.inner.push_container(&mut buffer);
-                                            buffer.clear();
-                                        }
-                                        range = chain.range_of(&time).expect("Must exist");
-                                    }
-                                    buffer.push((datum, time, diff));
-                                }
-
-                                // Handle leftover data in the buffer.
-                                if !buffer.is_empty() {
-                                    let bucket = chain.find_mut(&range.start).expect("Must exist");
-                                    bucket.inner.push_container(&mut buffer);
-                                    buffer.clear();
-                                }
-                            }
-                        }
-                    });
-
-                    // Check for data that is ready to be revealed.
-                    let peeled = chain.peel(upper.borrow());
-                    if let Some(cap) = cap.as_ref() {
-                        let mut session = output.session_with_builder(cap);
-                        for stack in peeled.into_iter().flat_map(
-                            |x: MergeBatcherWrapper<D, G::Timestamp, mz_repr::Diff>| x.done(),
-                        ) {
-                            // TODO: If we have a columnar merge batcher, cloning won't be necessary.
-                            session.give_iterator(stack.iter().cloned());
-                        }
-                    } else {
-                        // If we don't have a cap, we should not have any data to reveal.
-                        assert_eq!(
-                            peeled
-                                .into_iter()
-                                .flat_map(
-                                    |x: MergeBatcherWrapper<D, G::Timestamp, mz_repr::Diff>| x
-                                        .done()
-                                )
-                                .next(),
-                            None,
-                            "Unexpected data revealed without a cap."
-                        );
-                    }
-
-                    // Downgrade the cap to the current input frontier.
-                    if frontier.is_empty() || upper.is_empty() {
-                        cap = None;
-                    } else if let Some(cap) = cap.as_mut() {
-                        // TODO: This assumes that the time is total ordered.
-                        cap.downgrade(&upper[0]);
-                    }
-
-                    // Maintain the bucket chain by restoring it with fuel.
-                    let mut fuel = 1_000_000;
-                    chain.restore(&mut fuel);
-                    if fuel <= 0 {
-                        // If we run out of fuel, we activate the operator to continue processing.
-                        activator.activate();
                     }
                 }
-            })
+
+                input.for_each_time(|time, data| {
+                    let mut session = output.session_with_builder(&time);
+                    for data in data {
+                        // Skip data that is about to be revealed.
+                        let pass_through = data.extract_if(.., |(_, t, _)| !upper.less_equal(t));
+                        session.give_iterator(pass_through);
+
+                        // Sort data by time, then drain it into a buffer that contains data for a
+                        // single bucket. We scan the data for ranges of time that fall into the same
+                        // bucket so we can push batches of data at once.
+                        data.sort_unstable_by(|(_, t, _), (_, t2, _)| t.cmp(t2));
+
+                        let mut drain = data.drain(..);
+                        if let Some((datum, time, diff)) = drain.next() {
+                            let mut range = chain.range_of(&time).expect("Must exist");
+                            buffer.push((datum, time, diff));
+                            for (datum, time, diff) in drain {
+                                // If we have a range, check if the time is not within it.
+                                if !range.contains(&time) {
+                                    // If the time is outside the range, push the current buffer
+                                    // to the chain and reset the range.
+                                    if !buffer.is_empty() {
+                                        let bucket =
+                                            chain.find_mut(&range.start).expect("Must exist");
+                                        bucket.inner.push_container(&mut buffer);
+                                        buffer.clear();
+                                    }
+                                    range = chain.range_of(&time).expect("Must exist");
+                                }
+                                buffer.push((datum, time, diff));
+                            }
+
+                            // Handle leftover data in the buffer.
+                            if !buffer.is_empty() {
+                                let bucket = chain.find_mut(&range.start).expect("Must exist");
+                                bucket.inner.push_container(&mut buffer);
+                                buffer.clear();
+                            }
+                        }
+                    }
+                });
+
+                // Check for data that is ready to be revealed.
+                let peeled = chain.peel(upper.borrow());
+                if let Some(cap) = cap.as_ref() {
+                    let mut session = output.session_with_builder(cap);
+                    for stack in peeled
+                        .into_iter()
+                        .flat_map(|x: MergeBatcherWrapper<D, G::Timestamp, mz_repr::Diff>| x.done())
+                    {
+                        // TODO: If we have a columnar merge batcher, cloning won't be necessary.
+                        session.give_iterator(stack.iter().cloned());
+                    }
+                } else {
+                    // If we don't have a cap, we should not have any data to reveal.
+                    assert_eq!(
+                        peeled
+                            .into_iter()
+                            .flat_map(
+                                |x: MergeBatcherWrapper<D, G::Timestamp, mz_repr::Diff>| x.done()
+                            )
+                            .next(),
+                        None,
+                        "Unexpected data revealed without a cap."
+                    );
+                }
+
+                // Downgrade the cap to the current input frontier.
+                if frontier.is_empty() || upper.is_empty() {
+                    cap = None;
+                } else if let Some(cap) = cap.as_mut() {
+                    // TODO: This assumes that the time is total ordered.
+                    cap.downgrade(&upper[0]);
+                }
+
+                // Maintain the bucket chain by restoring it with fuel.
+                let mut fuel = 1_000_000;
+                chain.restore(&mut fuel);
+                if fuel <= 0 {
+                    // If we run out of fuel, we activate the operator to continue processing.
+                    activator.activate();
+                }
+            }
+        })
     }
 }
 

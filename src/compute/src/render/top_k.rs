@@ -573,107 +573,109 @@ where
         _ => Err(l),
     });
 
-    let reduced = arranged.mz_reduce_abelian::<_, Bu, Tr>("Reduced TopK input", {
-        move |mut hash_key, source, target: &mut Vec<(Tr::ValOwn, Diff)>| {
-            // Unpack the limit, either into an integer literal or an expression to evaluate.
-            let limit = match &limit {
-                Some(Ok(lit)) => Some(*lit),
-                Some(Err(expr)) => {
-                    // Unpack `key` after skipping the hash and determine the limit.
-                    // If the limit errors, use a zero limit; errors are surfaced elsewhere.
-                    let temp_storage = mz_repr::RowArena::new();
-                    let _hash = hash_key.next();
-                    let mut key_datums = datum_vec.borrow();
-                    key_datums.extend(hash_key);
-                    let datum_limit = expr
-                        .eval(&key_datums, &temp_storage)
-                        .unwrap_or(Datum::Int64(0));
-                    Some(match datum_limit {
-                        Datum::Null => Diff::MAX,
-                        d => Diff::from(d.unwrap_int64()),
-                    })
-                }
-                None => None,
-            };
-
-            if let Some(err) = Tr::ValOwn::into_error() {
-                for (datums, diff) in source.iter() {
-                    if diff.is_positive() {
-                        continue;
+    let reduced = arranged
+        .clone()
+        .mz_reduce_abelian::<_, Bu, Tr>("Reduced TopK input", {
+            move |mut hash_key, source, target: &mut Vec<(Tr::ValOwn, Diff)>| {
+                // Unpack the limit, either into an integer literal or an expression to evaluate.
+                let limit = match &limit {
+                    Some(Ok(lit)) => Some(*lit),
+                    Some(Err(expr)) => {
+                        // Unpack `key` after skipping the hash and determine the limit.
+                        // If the limit errors, use a zero limit; errors are surfaced elsewhere.
+                        let temp_storage = mz_repr::RowArena::new();
+                        let _hash = hash_key.next();
+                        let mut key_datums = datum_vec.borrow();
+                        key_datums.extend(hash_key);
+                        let datum_limit = expr
+                            .eval(&key_datums, &temp_storage)
+                            .unwrap_or(Datum::Int64(0));
+                        Some(match datum_limit {
+                            Datum::Null => Diff::MAX,
+                            d => Diff::from(d.unwrap_int64()),
+                        })
                     }
-                    target.push((err((*datums).to_row()), Diff::ONE));
+                    None => None,
+                };
+
+                if let Some(err) = Tr::ValOwn::into_error() {
+                    for (datums, diff) in source.iter() {
+                        if diff.is_positive() {
+                            continue;
+                        }
+                        target.push((err((*datums).to_row()), Diff::ONE));
+                        return;
+                    }
+                }
+
+                // Determine if we must actually shrink the result set.
+                let must_shrink = offset > 0
+                    || limit
+                        .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() > l)
+                        .unwrap_or(false);
+                if !must_shrink {
                     return;
                 }
-            }
 
-            // Determine if we must actually shrink the result set.
-            let must_shrink = offset > 0
-                || limit
-                    .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() > l)
-                    .unwrap_or(false);
-            if !must_shrink {
-                return;
-            }
-
-            // First go ahead and emit all records. Note that we ensure target
-            // has the capacity to hold at least these records, and avoid any
-            // dependencies on the user-provided (potentially unbounded) limit.
-            target.reserve(source.len());
-            for (datums, diff) in source.iter() {
-                target.push((Tr::ValOwn::ok((*datums).to_row()), -diff));
-            }
-            // local copies that may count down to zero.
-            let mut offset = offset;
-            let mut limit = limit;
-
-            // The order in which we should produce rows.
-            let mut indexes = (0..source.len()).collect::<Vec<_>>();
-            // We decode the datums once, into a common buffer for efficiency.
-            // Each row should contain `arity` columns; we should check that.
-            let mut buffer = datum_vec.borrow();
-            for (index, (datums, _)) in source.iter().enumerate() {
-                buffer.extend(*datums);
-                assert_eq!(buffer.len(), arity * (index + 1));
-            }
-            let width = buffer.len() / source.len();
-
-            //todo: use arrangements or otherwise make the sort more performant?
-            indexes.sort_by(|left, right| {
-                let left = &buffer[left * width..][..width];
-                let right = &buffer[right * width..][..width];
-                // Note: source was originally ordered by the u8 array representation
-                // of rows, but left.cmp(right) uses Datum::cmp.
-                mz_expr::compare_columns(&order_key, left, right, || left.cmp(right))
-            });
-
-            // We now need to lay out the data in order of `buffer`, but respecting
-            // the `offset` and `limit` constraints.
-            for index in indexes.into_iter() {
-                let (datums, mut diff) = source[index];
-                if !diff.is_positive() {
-                    continue;
+                // First go ahead and emit all records. Note that we ensure target
+                // has the capacity to hold at least these records, and avoid any
+                // dependencies on the user-provided (potentially unbounded) limit.
+                target.reserve(source.len());
+                for (datums, diff) in source.iter() {
+                    target.push((Tr::ValOwn::ok((*datums).to_row()), -diff));
                 }
-                // If we are still skipping early records ...
-                if offset > 0 {
-                    let to_skip =
-                        std::cmp::min(offset, usize::try_from(diff.into_inner()).unwrap());
-                    offset -= to_skip;
-                    diff -= Diff::try_from(to_skip).unwrap();
+                // local copies that may count down to zero.
+                let mut offset = offset;
+                let mut limit = limit;
+
+                // The order in which we should produce rows.
+                let mut indexes = (0..source.len()).collect::<Vec<_>>();
+                // We decode the datums once, into a common buffer for efficiency.
+                // Each row should contain `arity` columns; we should check that.
+                let mut buffer = datum_vec.borrow();
+                for (index, (datums, _)) in source.iter().enumerate() {
+                    buffer.extend(*datums);
+                    assert_eq!(buffer.len(), arity * (index + 1));
                 }
-                // We should produce at most `limit` records.
-                if let Some(limit) = &mut limit {
-                    diff = std::cmp::min(diff, Diff::from(*limit));
-                    *limit -= diff;
-                }
-                // Output the indicated number of rows.
-                if diff.is_positive() {
-                    // Emit retractions for the elements actually part of
-                    // the set of TopK elements.
-                    target.push((Tr::ValOwn::ok(datums.to_row()), diff));
+                let width = buffer.len() / source.len();
+
+                //todo: use arrangements or otherwise make the sort more performant?
+                indexes.sort_by(|left, right| {
+                    let left = &buffer[left * width..][..width];
+                    let right = &buffer[right * width..][..width];
+                    // Note: source was originally ordered by the u8 array representation
+                    // of rows, but left.cmp(right) uses Datum::cmp.
+                    mz_expr::compare_columns(&order_key, left, right, || left.cmp(right))
+                });
+
+                // We now need to lay out the data in order of `buffer`, but respecting
+                // the `offset` and `limit` constraints.
+                for index in indexes.into_iter() {
+                    let (datums, mut diff) = source[index];
+                    if !diff.is_positive() {
+                        continue;
+                    }
+                    // If we are still skipping early records ...
+                    if offset > 0 {
+                        let to_skip =
+                            std::cmp::min(offset, usize::try_from(diff.into_inner()).unwrap());
+                        offset -= to_skip;
+                        diff -= Diff::try_from(to_skip).unwrap();
+                    }
+                    // We should produce at most `limit` records.
+                    if let Some(limit) = &mut limit {
+                        diff = std::cmp::min(diff, Diff::from(*limit));
+                        *limit -= diff;
+                    }
+                    // Output the indicated number of rows.
+                    if diff.is_positive() {
+                        // Emit retractions for the elements actually part of
+                        // the set of TopK elements.
+                        target.push((Tr::ValOwn::ok(datums.to_row()), diff));
+                    }
                 }
             }
-        }
-    });
+        });
     (arranged, reduced)
 }
 

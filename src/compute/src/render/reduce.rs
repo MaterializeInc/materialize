@@ -398,9 +398,9 @@ where
                 "Arranged ReduceFuseBasic input",
             );
 
-        let output = arranged.mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-            "ReduceFuseBasic",
-            {
+        let output = arranged
+            .clone()
+            .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>("ReduceFuseBasic", {
                 move |key, input, output| {
                     let temp_storage = RowArena::new();
                     let datum_iter = key.to_datum_iter();
@@ -418,8 +418,7 @@ where
                         output.push((row, Diff::ONE));
                     }
                 }
-            },
-        );
+            });
         // If `mfp_after` can error, then we need to render a paired reduction
         // to scan for these potential errors. Note that we cannot directly use
         // `mz_timely_util::reduce::ReduceExt::reduce_pair` here because we only
@@ -553,24 +552,26 @@ where
                 "Arranged {name}"
             ));
         let oks = if !fused_unnest_list {
-            arranged.mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name, {
-                move |key, source, target| {
-                    // We respect the multiplicity here (unlike in hierarchical aggregation)
-                    // because we don't know that the aggregation method is not sensitive
-                    // to the number of records.
-                    let iter = source.iter().flat_map(|(v, w)| {
-                        // Note that in the non-positive case, this is wrong, but harmless because
-                        // our other reduction will produce an error.
-                        let count = usize::try_from(w.into_inner()).unwrap_or(0);
-                        std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
-                    });
+            arranged
+                .clone()
+                .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name, {
+                    move |key, source, target| {
+                        // We respect the multiplicity here (unlike in hierarchical aggregation)
+                        // because we don't know that the aggregation method is not sensitive
+                        // to the number of records.
+                        let iter = source.iter().flat_map(|(v, w)| {
+                            // Note that in the non-positive case, this is wrong, but harmless because
+                            // our other reduction will produce an error.
+                            let count = usize::try_from(w.into_inner()).unwrap_or(0);
+                            std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
+                        });
 
-                    let temp_storage = RowArena::new();
-                    let datum_iter = key.to_datum_iter();
-                    let mut datums_local = datums1.borrow();
-                    datums_local.extend(datum_iter);
-                    let key_len = datums_local.len();
-                    datums_local.push(
+                        let temp_storage = RowArena::new();
+                        let datum_iter = key.to_datum_iter();
+                        let mut datums_local = datums1.borrow();
+                        datums_local.extend(datum_iter);
+                        let key_len = datums_local.len();
+                        datums_local.push(
                         // Note that this is not necessarily a window aggregation, in which case
                         // `eval_with_fast_window_agg` delegates to the normal `eval`.
                         func.eval_with_fast_window_agg::<_, window_agg_helpers::OneByOneAggrImpls>(
@@ -579,35 +580,6 @@ where
                         ),
                     );
 
-                    if let Some(row) =
-                        evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
-                    {
-                        target.push((row, Diff::ONE));
-                    }
-                }
-            })
-        } else {
-            arranged.mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name, {
-                move |key, source, target| {
-                    // This part is the same as in the `!fused_unnest_list` if branch above.
-                    let iter = source.iter().flat_map(|(v, w)| {
-                        let count = usize::try_from(w.into_inner()).unwrap_or(0);
-                        std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
-                    });
-
-                    // This is the part that is specific to the `fused_unnest_list` branch.
-                    let temp_storage = RowArena::new();
-                    let mut datums_local = datums_key_1.borrow();
-                    datums_local.extend(key.to_datum_iter());
-                    let key_len = datums_local.len();
-                    for datum in func
-                        .eval_with_unnest_list::<_, window_agg_helpers::OneByOneAggrImpls>(
-                            iter,
-                            &temp_storage,
-                        )
-                    {
-                        datums_local.truncate(key_len);
-                        datums_local.push(datum);
                         if let Some(row) = evaluate_mfp_after(
                             &mfp_after1,
                             &mut datums_local,
@@ -617,8 +589,42 @@ where
                             target.push((row, Diff::ONE));
                         }
                     }
-                }
-            })
+                })
+        } else {
+            arranged
+                .clone()
+                .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name, {
+                    move |key, source, target| {
+                        // This part is the same as in the `!fused_unnest_list` if branch above.
+                        let iter = source.iter().flat_map(|(v, w)| {
+                            let count = usize::try_from(w.into_inner()).unwrap_or(0);
+                            std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
+                        });
+
+                        // This is the part that is specific to the `fused_unnest_list` branch.
+                        let temp_storage = RowArena::new();
+                        let mut datums_local = datums_key_1.borrow();
+                        datums_local.extend(key.to_datum_iter());
+                        let key_len = datums_local.len();
+                        for datum in func
+                            .eval_with_unnest_list::<_, window_agg_helpers::OneByOneAggrImpls>(
+                                iter,
+                                &temp_storage,
+                            )
+                        {
+                            datums_local.truncate(key_len);
+                            datums_local.push(datum);
+                            if let Some(row) = evaluate_mfp_after(
+                                &mfp_after1,
+                                &mut datums_local,
+                                &temp_storage,
+                                key_len,
+                            ) {
+                                target.push((row, Diff::ONE));
+                            }
+                        }
+                    }
+                })
         };
 
         // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here, but
@@ -892,6 +898,7 @@ where
             let must_validate = err_output.is_none();
             if must_validate || mfp_after2.is_some() {
                 let errs = arranged
+                    .clone()
                     .mz_reduce_abelian::<_, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
                         "ReduceMinsMaxes Error Check",
                         move |key, source, target| {
@@ -1084,7 +1091,7 @@ where
                 "Arranged MinsMaxesHierarchical input",
             );
 
-        let reduced = arranged_input.mz_reduce_abelian::<_, Bu, Tr>(
+        let reduced = arranged_input.clone().mz_reduce_abelian::<_, Bu, Tr>(
             "Reduced Fallibly MinsMaxesHierarchical",
             move |key, source, target| {
                 if let Some(err) = Tr::ValOwn::into_error() {
@@ -1200,9 +1207,9 @@ where
             .mz_arrange::<RowBatcher<_, _>, RowBuilder<_, _>, RowSpine<_, Vec<ReductionMonoid>>>(
                 "ArrangeMonotonic [val: empty]",
             );
-        let output = arranged.mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-            "ReduceMonotonic",
-            {
+        let output = arranged
+            .clone()
+            .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>("ReduceMonotonic", {
                 move |key, input, output| {
                     let temp_storage = RowArena::new();
                     let datum_iter = key.to_datum_iter();
@@ -1220,8 +1227,7 @@ where
                         output.push((row, Diff::ONE));
                     }
                 }
-            },
-        );
+            });
 
         // If `mfp_after` can error, then we need to render a paired reduction
         // to scan for these potential errors. Note that we cannot directly use
