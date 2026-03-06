@@ -124,9 +124,11 @@ type DifferentialWriteChannel<T> =
     mpsc::UnboundedSender<(StorageWriteOp, oneshot::Sender<Result<(), StorageError<T>>>)>;
 
 /// A channel for sending writes to an append-only collection.
+///
+/// The response contains the timestamp at which the updates were written.
 type AppendOnlyWriteChannel<T> = mpsc::UnboundedSender<(
     Vec<AppendOnlyUpdate>,
-    oneshot::Sender<Result<(), StorageError<T>>>,
+    oneshot::Sender<Result<T, StorageError<T>>>,
 )>;
 
 type WriteTask = AbortOnDropHandle<()>;
@@ -1064,7 +1066,7 @@ where
     /// Receiver for write commands.
     rx: mpsc::UnboundedReceiver<(
         Vec<AppendOnlyUpdate>,
-        oneshot::Sender<Result<(), StorageError<T>>>,
+        oneshot::Sender<Result<T, StorageError<T>>>,
     )>,
 
     /// We have to shut down when receiving from this.
@@ -1406,11 +1408,13 @@ where
                     // Append updates to persist!
                     let at_least = T::from((self.now)());
 
-                    if !all_rows.is_empty() {
-                        monotonic_append(&mut self.write_handle, all_rows, at_least).await;
-                    }
-                    // Notify all of our listeners.
-                    notify_listeners(responders, || Ok(()));
+                    let write_ts = if !all_rows.is_empty() {
+                        monotonic_append(&mut self.write_handle, all_rows, at_least.clone()).await
+                    } else {
+                        at_least
+                    };
+                    // Notify all of our listeners with the write timestamp.
+                    notify_listeners(responders, || Ok(write_ts.clone()));
 
                     // Wait until our artificial latency has completed.
                     //
@@ -1764,18 +1768,21 @@ where
         .collect()
 }
 
+/// Append updates to a persist shard at a monotonically increasing timestamp.
+///
+/// Returns the timestamp at which the updates were written.
 async fn monotonic_append<T: Timestamp + Lattice + Codec64 + TimestampManipulation>(
     write_handle: &mut WriteHandle<SourceData, (), T, StorageDiff>,
     updates: Vec<TimestamplessUpdate>,
     at_least: T,
-) {
+) -> T {
     let mut expected_upper = write_handle.shared_upper();
     loop {
         if updates.is_empty() && expected_upper.is_empty() {
             // Ignore timestamp advancement for
             // closed collections. TODO? Make this a
             // correctable error
-            return;
+            return at_least;
         }
 
         let upper = expected_upper
@@ -1808,7 +1815,7 @@ async fn monotonic_append<T: Timestamp + Lattice + Codec64 + TimestampManipulati
             .await
             .expect("valid usage");
         match res {
-            Ok(()) => return,
+            Ok(()) => return lower,
             Err(err) => {
                 expected_upper = err.current;
                 continue;

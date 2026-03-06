@@ -152,6 +152,11 @@ pub enum Command {
         tx: oneshot::Sender<Result<AppendWebhookResponse, AppendWebhookError>>,
     },
 
+    GetStandingQueryClient {
+        item_id: mz_repr::CatalogItemId,
+        tx: oneshot::Sender<Option<crate::standing_query_client::StandingQueryExecuteClient>>,
+    },
+
     GetSystemVars {
         tx: oneshot::Sender<SystemVars>,
     },
@@ -340,6 +345,7 @@ impl Command {
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::GetWebhook { .. }
+            | Command::GetStandingQueryClient { .. }
             | Command::Terminate { .. }
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
@@ -375,6 +381,7 @@ impl Command {
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::GetWebhook { .. }
+            | Command::GetStandingQueryClient { .. }
             | Command::Terminate { .. }
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }

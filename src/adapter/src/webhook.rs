@@ -268,7 +268,7 @@ impl WebhookAppender {
             .updates_staged
             .fetch_add(count, Ordering::Relaxed);
         let updates = updates.into_iter().map(|update| update.into()).collect();
-        self.tx.append(updates).await?;
+        let _ = self.tx.append(updates).await?;
         self.stats
             .updates_committed
             .fetch_add(count, Ordering::Relaxed);

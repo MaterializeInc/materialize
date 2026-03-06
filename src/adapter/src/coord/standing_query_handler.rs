@@ -7,213 +7,206 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Handler for standing query subscribe batches.
+//! Standing query handler task.
 //!
-//! When the standing query's dataflow (a subscribe sink) produces batches,
-//! this handler:
-//! 1. Extracts `request_id` from the first column of each result row.
-//! 2. Buffers rows per request_id in the standing query's result_buffer.
-//! 3. When the subscribe frontier advances past a write timestamp T,
-//!    delivers results for all request_ids written at T.
-//! 4. Retracts delivered param rows from the param collection.
+//! Each standing query runs an independent handler task that:
+//! 1. Receives subscribe batches forwarded by the coordinator.
+//! 2. Receives flush notifications from clients (write_ts → request_ids).
+//! 3. Buffers result rows per request_id.
+//! 4. When the subscribe frontier advances past a write timestamp T,
+//!    delivers results via oneshot channels in the shared client.
+//! 5. Retracts delivered param rows.
+//! 6. Advances the param shard's upper to track the subscribe frontier,
+//!    keeping it in sync with the rest of the system.
+//!
+//! This task runs entirely off the coordinator loop.
+
+use std::collections::BTreeMap;
 
 use mz_compute_client::protocol::response::SubscribeBatch;
-use mz_repr::IntoRowIterator;
-use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
-use mz_storage_client::client::TableData;
-use tracing::{debug, warn};
+use mz_repr::{Datum, GlobalId, Row, Timestamp};
+use tokio::sync::{mpsc, watch};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::command::ExecuteResponse;
-use crate::coord::Coordinator;
+use crate::standing_query_client::{StandingQueryExecuteClient, StandingQueryFlush};
 
-impl Coordinator {
-    /// Handle a subscribe batch from a standing query's dataflow.
-    ///
-    /// Processes the batch, delivers completed results, and retracts
-    /// delivered param rows from the param collection.
-    pub(crate) async fn handle_standing_query_subscribe_batch(
-        &mut self,
-        sink_id: GlobalId,
-        batch: SubscribeBatch,
-    ) {
-        let needs_retraction = self.process_standing_query_batch(sink_id, batch);
+/// Spawn a handler task for a standing query.
+///
+/// The caller creates the channels and the client beforehand, then passes
+/// the receive halves to the handler and the send halves to the coordinator
+/// and client respectively.
+pub(crate) fn spawn_standing_query_handler(
+    sink_id: GlobalId,
+    client: StandingQueryExecuteClient,
+    subscribe_rx: mpsc::UnboundedReceiver<SubscribeBatch>,
+    flush_rx: mpsc::UnboundedReceiver<StandingQueryFlush>,
+    advance_upper_rx: watch::Receiver<Timestamp>,
+) {
+    mz_ore::task::spawn(
+        || format!("standing-query-handler-{sink_id}"),
+        standing_query_handler_task(sink_id, client, subscribe_rx, flush_rx, advance_upper_rx),
+    );
+}
 
-        if needs_retraction {
-            self.flush_standing_query_retractions(sink_id).await;
+async fn standing_query_handler_task(
+    sink_id: GlobalId,
+    client: StandingQueryExecuteClient,
+    mut subscribe_rx: mpsc::UnboundedReceiver<SubscribeBatch>,
+    mut flush_rx: mpsc::UnboundedReceiver<StandingQueryFlush>,
+    mut advance_upper_rx: watch::Receiver<Timestamp>,
+) {
+    info!("standing query {sink_id}: handler task started");
+
+    let mut in_flight: BTreeMap<Timestamp, Vec<Uuid>> = BTreeMap::new();
+    let mut result_buffer: BTreeMap<Uuid, Vec<Row>> = BTreeMap::new();
+    let mut param_rows: BTreeMap<Uuid, Row> = BTreeMap::new();
+
+    loop {
+        tokio::select! {
+            batch = subscribe_rx.recv() => {
+                let Some(batch) = batch else {
+                    // Coordinator dropped the sender — standing query is being dropped.
+                    break;
+                };
+                // Before processing the batch, drain all available flush notifications.
+                drain_flushes(&mut flush_rx, &mut in_flight, &mut param_rows);
+
+                process_batch(
+                    sink_id,
+                    &client,
+                    batch,
+                    &mut in_flight,
+                    &mut result_buffer,
+                    &mut param_rows,
+                );
+            }
+            flush = flush_rx.recv() => {
+                let Some(flush) = flush else {
+                    // All clients dropped — but we keep running until subscribe_rx closes.
+                    continue;
+                };
+                apply_flush(flush, &mut in_flight, &mut param_rows);
+            }
+            result = advance_upper_rx.changed() => {
+                if result.is_err() {
+                    // Coordinator dropped the sender.
+                    break;
+                }
+                let target = *advance_upper_rx.borrow_and_update();
+                client.advance_upper(target).await;
+            }
         }
     }
 
-    /// Process a subscribe batch: buffer results and deliver completed requests.
-    ///
-    /// Returns true if there are pending retractions to flush.
-    fn process_standing_query_batch(&mut self, sink_id: GlobalId, batch: SubscribeBatch) -> bool {
-        let SubscribeBatch {
-            lower: _,
-            upper,
-            updates,
-        } = batch;
+    info!("standing query {sink_id}: handler task shutting down");
+}
 
-        let Some(asq) = self.active_standing_queries.get_mut(&sink_id) else {
-            return false;
-        };
+fn drain_flushes(
+    flush_rx: &mut mpsc::UnboundedReceiver<StandingQueryFlush>,
+    in_flight: &mut BTreeMap<Timestamp, Vec<Uuid>>,
+    param_rows: &mut BTreeMap<Uuid, Row>,
+) {
+    while let Ok(flush) = flush_rx.try_recv() {
+        apply_flush(flush, in_flight, param_rows);
+    }
+}
 
-        // Process updates: buffer positive diffs per request_id.
-        match updates {
-            Ok(rows) => {
-                for (_ts, row, diff) in rows {
-                    if !diff.is_positive() {
-                        // Negative diffs are retractions (from param deletions).
-                        // Ignore them — the request was already fulfilled.
+fn apply_flush(
+    flush: StandingQueryFlush,
+    in_flight: &mut BTreeMap<Timestamp, Vec<Uuid>>,
+    param_rows: &mut BTreeMap<Uuid, Row>,
+) {
+    in_flight
+        .entry(flush.write_ts)
+        .or_default()
+        .extend(flush.request_ids);
+    for (request_id, param_row) in flush.param_rows {
+        param_rows.insert(request_id, param_row);
+    }
+}
+
+fn process_batch(
+    sink_id: GlobalId,
+    client: &StandingQueryExecuteClient,
+    batch: SubscribeBatch,
+    in_flight: &mut BTreeMap<Timestamp, Vec<Uuid>>,
+    result_buffer: &mut BTreeMap<Uuid, Vec<Row>>,
+    param_rows: &mut BTreeMap<Uuid, Row>,
+) {
+    let SubscribeBatch {
+        lower: _,
+        upper,
+        updates,
+    } = batch;
+
+    // Buffer positive diffs per request_id.
+    match updates {
+        Ok(rows) => {
+            for (_ts, row, diff) in rows {
+                if !diff.is_positive() {
+                    continue;
+                }
+
+                let mut datums = row.iter();
+                let request_id = match datums.next() {
+                    Some(Datum::Uuid(id)) => id,
+                    other => {
+                        warn!(
+                            "standing query {sink_id}: expected UUID request_id, got {:?}",
+                            other
+                        );
                         continue;
                     }
+                };
 
-                    // The first column is request_id (UUID).
-                    let mut datums = row.iter();
-                    let request_id = match datums.next() {
-                        Some(Datum::Uuid(id)) => id,
-                        other => {
-                            warn!(
-                                "standing query {sink_id}: expected UUID request_id, got {:?}",
-                                other
-                            );
-                            continue;
-                        }
-                    };
+                let result_row = {
+                    let remaining: Vec<Datum> = datums.collect();
+                    let mut row = Row::default();
+                    row.packer().extend(remaining.iter());
+                    row
+                };
 
-                    // Build a result row without the request_id column.
-                    let result_row = {
-                        let remaining: Vec<Datum> = datums.collect();
-                        let mut row = Row::default();
-                        row.packer().extend(remaining.iter());
-                        row
-                    };
-
-                    debug!("standing query {sink_id}: buffering result for request {request_id}");
-                    asq.result_buffer
-                        .entry(request_id)
-                        .or_default()
-                        .push(result_row);
-                }
-            }
-            Err(err) => {
-                warn!("standing query {sink_id}: subscribe error: {err}");
-                // TODO: Error all in-flight requests.
-                return false;
+                debug!("standing query {sink_id}: buffering result for request {request_id}");
+                result_buffer
+                    .entry(request_id)
+                    .or_default()
+                    .push(result_row);
             }
         }
+        Err(err) => {
+            warn!("standing query {sink_id}: subscribe error: {err}");
+            return;
+        }
+    }
 
-        // Check if the frontier has advanced past any in-flight timestamps.
-        // When upper > T, all results at T have been delivered.
-        let completed_timestamps: Vec<Timestamp> = asq
-            .in_flight
-            .keys()
-            .copied()
-            .take_while(|ts| !upper.less_equal(ts))
-            .collect();
+    // Deliver completed requests whose timestamps the frontier has advanced past.
+    let completed_timestamps: Vec<Timestamp> = in_flight
+        .keys()
+        .copied()
+        .take_while(|ts| !upper.less_equal(ts))
+        .collect();
 
-        let mut had_deliveries = false;
-        for ts in completed_timestamps {
-            if let Some(request_ids) = asq.in_flight.remove(&ts) {
-                for request_id in request_ids {
-                    let results = asq.result_buffer.remove(&request_id).unwrap_or_default();
-                    if let Some(ctx) = asq.request_map.remove(&request_id) {
-                        debug!(
-                            "standing query {sink_id}: delivering {} rows for request {request_id}",
-                            results.len()
-                        );
-                        Self::deliver_standing_query_results(ctx, results);
-                    }
-                    // Queue retraction for the param row.
-                    if let Some(param_row) = asq.param_rows.remove(&request_id) {
-                        asq.pending_retractions.push(param_row);
-                        had_deliveries = true;
-                    }
+    let mut retraction_rows = Vec::new();
+    for ts in completed_timestamps {
+        if let Some(request_ids) = in_flight.remove(&ts) {
+            for request_id in request_ids {
+                let results = result_buffer.remove(&request_id).unwrap_or_default();
+                if let Some(tx) = client.take_result_sender(&request_id) {
+                    debug!(
+                        "standing query {sink_id}: delivering {} rows for request {request_id}",
+                        results.len()
+                    );
+                    let _ = tx.send(results);
+                }
+                if let Some(param_row) = param_rows.remove(&request_id) {
+                    retraction_rows.push(param_row);
                 }
             }
         }
-
-        had_deliveries
     }
 
-    fn deliver_standing_query_results(ctx: crate::ExecuteContext, rows: Vec<Row>) {
-        ctx.retire(Ok(ExecuteResponse::SendingRowsImmediate {
-            rows: Box::new(rows.into_row_iter()),
-        }));
-    }
-
-    /// Flush pending retractions for a standing query by writing diff=-1 rows
-    /// to the param collection.
-    async fn flush_standing_query_retractions(&mut self, sink_id: GlobalId) {
-        let asq = self
-            .active_standing_queries
-            .get_mut(&sink_id)
-            .expect("standing query must exist");
-
-        if asq.pending_retractions.is_empty() {
-            return;
-        }
-
-        let param_collection_id = asq.param_collection_id;
-        let retractions: Vec<Row> = asq.pending_retractions.drain(..).collect();
-
-        let rows: Vec<(Row, Diff)> = retractions
-            .into_iter()
-            .map(|row| (row, Diff::from(-1i64)))
-            .collect();
-
-        debug!(
-            "standing query {sink_id}: retracting {} param rows from {}",
-            rows.len(),
-            param_collection_id,
-        );
-
-        // Get a write timestamp for the retraction.
-        let write_ts = self.get_local_write_ts().await;
-        let timestamp = write_ts.timestamp;
-        let advance_to = write_ts.advance_to;
-
-        let appends = vec![(param_collection_id, vec![TableData::Rows(rows)])];
-        let append_fut = self
-            .controller
-            .storage
-            .append_table(timestamp, advance_to, appends)
-            .expect("invalid updates");
-
-        let apply_write_fut = self.apply_local_write(timestamp);
-
-        match append_fut.await {
-            Ok(result) => {
-                result.unwrap_or_else(|e| {
-                    tracing::warn!("standing query {sink_id}: retraction append failed: {e}");
-                });
-            }
-            Err(_) => {
-                tracing::warn!("standing query {sink_id}: retraction append channel dropped");
-            }
-        }
-
-        apply_write_fut.await;
-
-        debug!("standing query {sink_id}: retraction flush complete at ts {timestamp}");
-    }
-
-    #[allow(dead_code)]
-    fn handle_standing_query_dropped(&mut self, sink_id: GlobalId) {
-        let Some(asq) = self.active_standing_queries.get_mut(&sink_id) else {
-            return;
-        };
-
-        // Error all pending requests.
-        let request_ids: Vec<Uuid> = asq.request_map.keys().copied().collect();
-        for request_id in request_ids {
-            if let Some(ctx) = asq.request_map.remove(&request_id) {
-                ctx.retire(Err(crate::AdapterError::Unsupported(
-                    "standing query subscribe was dropped",
-                )));
-            }
-        }
-        asq.in_flight.clear();
-        asq.result_buffer.clear();
+    if !retraction_rows.is_empty() {
+        client.retract(retraction_rows);
     }
 }

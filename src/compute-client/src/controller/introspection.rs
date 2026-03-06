@@ -35,9 +35,12 @@ pub fn spawn_introspection_sink<T: Timestamp>(
     });
 }
 
-type Notifier<T> = oneshot::Sender<Result<(), StorageError<T>>>;
-type AppendOnlySender<T> = mpsc::UnboundedSender<(Vec<AppendOnlyUpdate>, Notifier<T>)>;
-type DifferentialSender<T> = mpsc::UnboundedSender<(StorageWriteOp, Notifier<T>)>;
+type AppendOnlySender<T> = mpsc::UnboundedSender<(
+    Vec<AppendOnlyUpdate>,
+    oneshot::Sender<Result<T, StorageError<T>>>,
+)>;
+type DifferentialSender<T> =
+    mpsc::UnboundedSender<(StorageWriteOp, oneshot::Sender<Result<(), StorageError<T>>>)>;
 
 /// A sink for introspection updates produced by the compute controller.
 ///

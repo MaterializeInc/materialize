@@ -38,7 +38,17 @@ NUM_ROWS = 100_000
 def setup_standing_query(c: Composition) -> None:
     """Create a table with test data and a standing query."""
     c.sql(
+        """
+        ALTER SYSTEM SET max_result_size = '10GB';
+        ALTER SYSTEM SET default_timestamp_interval = '100ms';
+        """,
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
         f"""
+        DROP STANDING QUERY IF EXISTS orders_by_customer;
+        DROP TABLE IF EXISTS orders CASCADE;
         CREATE TABLE orders (id INT, customer_id INT, amount INT);
         INSERT INTO orders
             SELECT g, g % 100, g * 10
@@ -96,7 +106,6 @@ def run_dbbench(
     ]
     quoted_flags = " ".join(shlex.quote(x) for x in flags)
     script = (
-        "set -euo pipefail; "
         'tmp="$(mktemp -t dbbench.XXXXXX)"; '
         'cat > "$tmp"; '
         f'exec dbbench {quoted_flags} -intermediate-stats=false "$tmp"'
@@ -155,7 +164,7 @@ def parse_duration_ms(s: str) -> float:
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run all standing query performance workflows."""
-    for workflow in ["throughput", "target-qps"]:
+    for workflow in ["throughput", "target-qps", "target-qps-single-row"]:
         with c.test_case(workflow):
             c.workflow(workflow)
 
@@ -198,9 +207,11 @@ def workflow_target_qps(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # Target QPS levels with latency budgets (ms).
     targets = [
-        {"rate": 10, "max_latency_ms": 500},
-        {"rate": 50, "max_latency_ms": 500},
-        {"rate": 100, "max_latency_ms": 1000},
+        {"rate": 256, "max_latency_ms": 500},
+        {"rate": 512, "max_latency_ms": 500},
+        {"rate": 1024, "max_latency_ms": 1000},
+        {"rate": 2048, "max_latency_ms": 1000},
+        {"rate": 4096, "max_latency_ms": 2000},
     ]
 
     for target in targets:
@@ -211,6 +222,78 @@ def workflow_target_qps(c: Composition, parser: WorkflowArgumentParser) -> None:
             c,
             name=f"target_qps_{rate}",
             query="EXECUTE STANDING QUERY orders_by_customer (42)",
+            duration="20s",
+            rate=float(rate),
+        )
+
+        latency_str = stats.get("latency_mean")
+        if latency_str is None:
+            raise RuntimeError(f"rate={rate}: dbbench did not report latency")
+
+        latency_ms = parse_duration_ms(latency_str)
+        qps = stats.get("qps", 0)
+        print(
+            f"  rate={rate}: achieved {qps:.1f} QPS, latency={latency_str} ({latency_ms:.1f}ms)"
+        )
+
+        if latency_ms > max_lat:
+            raise RuntimeError(
+                f"rate={rate}: latency {latency_ms:.1f}ms exceeds budget {max_lat}ms"
+            )
+
+    c.kill("materialized")
+    c.rm("materialized")
+    c.rm_volumes("mzdata")
+
+
+def workflow_target_qps_single_row(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Like target-qps but each execute returns exactly 1 row (filter on unique id)."""
+    c.up("materialized")
+
+    c.sql(
+        """
+        ALTER SYSTEM SET max_result_size = '10GB';
+        ALTER SYSTEM SET default_timestamp_interval = '100ms';
+        """,
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        f"""
+        DROP STANDING QUERY IF EXISTS order_by_id;
+        DROP TABLE IF EXISTS orders CASCADE;
+        CREATE TABLE orders (id INT, customer_id INT, amount INT);
+        INSERT INTO orders
+            SELECT g, g % 100, g * 10
+            FROM generate_series(1, {NUM_ROWS}) AS g;
+        CREATE STANDING QUERY order_by_id (oid INT)
+            AS SELECT id, customer_id, amount
+            FROM orders
+            WHERE id = oid;
+        """,
+        port=6875,
+    )
+    c.sql("SELECT 1", port=6875)
+
+    # Target QPS levels with latency budgets (ms).
+    targets = [
+        {"rate": 256, "max_latency_ms": 500},
+        {"rate": 512, "max_latency_ms": 500},
+        {"rate": 1024, "max_latency_ms": 1000},
+        {"rate": 2048, "max_latency_ms": 1000},
+        {"rate": 4096, "max_latency_ms": 2000},
+    ]
+
+    for target in targets:
+        rate = target["rate"]
+        max_lat = target["max_latency_ms"]
+
+        stats = run_dbbench(
+            c,
+            name=f"target_qps_single_row_{rate}",
+            query="EXECUTE STANDING QUERY order_by_id (42)",
             duration="20s",
             rate=float(rate),
         )

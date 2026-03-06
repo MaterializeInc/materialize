@@ -425,14 +425,9 @@ impl Coordinator {
                     compute_sinks_to_drop.push((sq.cluster_id, sq.global_id));
                     sources_to_drop.push((catalog_id, sq.param_collection_id));
                     // Clean up the active standing query state.
-                    if let Some(asq) = self.active_standing_queries.remove(&sq.global_id) {
-                        // Error all pending requests.
-                        for (_request_id, ctx) in asq.request_map {
-                            ctx.retire(Err(crate::AdapterError::Unsupported(
-                                "standing query was dropped",
-                            )));
-                        }
-                    }
+                    // Dropping the ActiveStandingQuery drops the client,
+                    // which causes pending oneshot receivers to get RecvError.
+                    self.active_standing_queries.remove(&sq.global_id);
                 }
                 CatalogImplication::Secret(CatalogImplicationKind::Added(_secret)) => {
                     // No action needed: the secret payload is stored in

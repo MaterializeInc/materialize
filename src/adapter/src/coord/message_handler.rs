@@ -103,6 +103,7 @@ impl Coordinator {
             }
             Message::AdvanceTimelines => {
                 self.advance_timelines().boxed_local().await;
+                self.advance_standing_query_uppers();
             }
             Message::ClusterEvent(event) => self.message_cluster_event(event).boxed_local().await,
             Message::CancelPendingPeeks { conn_id } => {
@@ -372,9 +373,9 @@ impl Coordinator {
                 } else if self.introspection_subscribes.contains_key(&sink_id) {
                     self.handle_introspection_subscribe_batch(sink_id, response)
                         .await;
-                } else if self.active_standing_queries.contains_key(&sink_id) {
-                    self.handle_standing_query_subscribe_batch(sink_id, response)
-                        .await;
+                } else if let Some(asq) = self.active_standing_queries.get(&sink_id) {
+                    // Forward to the handler task — no processing on the coordinator.
+                    let _ = asq.subscribe_tx.send(response);
                 } else {
                     // Cancellation may cause us to receive responses for subscribes no longer
                     // tracked, so we quietly ignore them.

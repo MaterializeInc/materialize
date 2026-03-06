@@ -140,7 +140,11 @@ impl Coordinator {
                     catalog.set_dataflow_metainfo(global_id, metainfo);
                     catalog.cache_expressions(global_id, None, optimizer_features);
 
-                    // Create the internal parameter collection (a table-like collection).
+                    // Create the internal parameter collection. We use DataSource::Other
+                    // so it is NOT registered with the collection manager's append-only
+                    // write task. Instead we hold a WriteHandle directly and do our own
+                    // compare_and_append at the shard's current upper, avoiding the 1s
+                    // idle tick and now()-based timestamp inflation.
                     let register_ts = coord.get_local_write_ts().await.timestamp;
                     coord
                         .controller
@@ -150,42 +154,90 @@ impl Coordinator {
                             Some(register_ts),
                             vec![(
                                 param_collection_id,
-                                CollectionDescription::for_table(param_desc),
+                                CollectionDescription {
+                                    desc: param_desc.clone(),
+                                    data_source: mz_storage_client::controller::DataSource::Other,
+                                    since: None,
+                                    timeline: Some(
+                                        mz_storage_types::sources::Timeline::EpochMilliseconds,
+                                    ),
+                                    primary: None,
+                                },
                             )],
                         )
                         .await
                         .unwrap_or_terminate("cannot fail to create param collection");
                     coord.apply_local_write(register_ts).await;
 
+                    // Open our own WriteHandle for the param collection shard.
+                    let param_metadata = coord
+                        .controller
+                        .storage
+                        .collection_metadata(param_collection_id)
+                        .expect("param collection must exist");
+                    let param_write_handle = coord
+                        .persist_client
+                        .open_writer(
+                            param_metadata.data_shard,
+                            std::sync::Arc::new(param_desc),
+                            std::sync::Arc::new(mz_persist_types::codec_impls::UnitSchema),
+                            mz_persist_client::Diagnostics {
+                                shard_name: param_collection_id.to_string(),
+                                handle_purpose: format!(
+                                    "standing query param writer for {}",
+                                    param_collection_id
+                                ),
+                            },
+                        )
+                        .await
+                        .expect("valid persist usage");
+                    let (subscribe_tx, subscribe_rx) = tokio::sync::mpsc::unbounded_channel();
+                    let (flush_tx, flush_rx) = tokio::sync::mpsc::unbounded_channel();
+                    let (advance_upper_tx, advance_upper_rx) = tokio::sync::watch::channel({
+                        use timely::progress::Timestamp as _;
+                        mz_repr::Timestamp::minimum()
+                    });
+                    let sq_client = crate::standing_query_client::StandingQueryExecuteClient::new(
+                        item_id,
+                        global_id,
+                        param_write_handle,
+                        flush_tx,
+                    );
+                    crate::coord::standing_query_handler::spawn_standing_query_handler(
+                        global_id,
+                        sq_client.clone(),
+                        subscribe_rx,
+                        flush_rx,
+                        advance_upper_rx,
+                    );
+
                     // Now that the param collection exists, compute the as_of.
                     use crate::optimize::dataflows::dataflow_import_id_bundle;
                     let mut id_bundle = dataflow_import_id_bundle(&physical_plan, cluster_id);
-                    // The standing query's own ID is not a storage collection.
                     id_bundle.storage_ids.remove(&global_id);
                     let read_holds = coord.acquire_read_holds(&id_bundle);
                     let as_of = read_holds.least_valid_read();
                     physical_plan.set_as_of(as_of.clone());
                     physical_plan.set_initial_as_of(as_of);
 
+                    // Collect non-param input IDs for upper tracking.
+                    let mut input_ids = id_bundle.storage_ids.clone();
+                    input_ids.remove(&param_collection_id);
+
                     coord.ship_dataflow(physical_plan, cluster_id, None).await;
 
-                    // Register the standing query for subscribe response handling.
-                    // The subscribe sink ID is the standing query's global_id.
+                    // Register the active standing query state.
                     use crate::coord::standing_query_state::ActiveStandingQuery;
                     coord.active_standing_queries.insert(
                         global_id,
                         ActiveStandingQuery {
                             item_id,
-                            output_id: global_id,
                             param_collection_id,
                             cluster_id,
-                            subscribe_sink_id: global_id,
-                            batch_buffer: Vec::new(),
-                            request_map: BTreeMap::new(),
-                            in_flight: BTreeMap::new(),
-                            result_buffer: BTreeMap::new(),
-                            param_rows: BTreeMap::new(),
-                            pending_retractions: Vec::new(),
+                            input_ids,
+                            client: sq_client,
+                            subscribe_tx,
+                            advance_upper_tx,
                         },
                     );
                 })
@@ -221,7 +273,7 @@ impl Coordinator {
     ///   columns `0..base_arity` are from the base relation (e.g. orders)
     ///   column `base_arity + 0` is `request_id`
     ///   column `base_arity + N` is `param_N` (corresponding to `$N`)
-    fn rewrite_standing_query_hir(
+    pub(crate) fn rewrite_standing_query_hir(
         raw_expr: &HirRelationExpr,
         column_names: &[ColumnName],
         param_collection_id: GlobalId,
@@ -361,7 +413,7 @@ impl Coordinator {
     /// Build the RelationDesc for a standing query's parameter collection.
     ///
     /// Schema: `(request_id UUID, param_1 T1, param_2 T2, ...)`
-    fn build_param_collection_desc(params: &[(String, SqlScalarType)]) -> RelationDesc {
+    pub(crate) fn build_param_collection_desc(params: &[(String, SqlScalarType)]) -> RelationDesc {
         let mut desc = RelationDesc::builder();
         desc = desc.with_column(
             ColumnName::from("request_id"),
@@ -382,7 +434,7 @@ impl Coordinator {
         desc.finish()
     }
 
-    fn optimize_create_standing_query(
+    pub(crate) fn optimize_create_standing_query(
         &self,
         raw_expr: &HirRelationExpr,
         column_names: &[mz_repr::ColumnName],
