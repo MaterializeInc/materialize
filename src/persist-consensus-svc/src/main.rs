@@ -59,8 +59,9 @@ struct Args {
     #[arg(long, env = "CONSENSUS_S3_REGION", default_value = "us-east-1")]
     s3_region: String,
 
-    /// Flush interval in milliseconds.
-    #[arg(long, default_value = "20")]
+    /// Flush collection window in milliseconds. This is the time spent
+    /// accumulating CAS ops between S3 writes, not the total period.
+    #[arg(long, default_value = "5")]
     flush_interval_ms: u64,
 
     /// Write a snapshot every this many WAL batches.
@@ -104,8 +105,16 @@ async fn run(args: Args) {
     let (shards, next_batch) = recover(&wal_writer).await;
     info!(shards = shards.len(), next_batch, "recovery complete");
 
-    let flush_interval =
+    // Use MissedTickBehavior::Delay so the interval represents the collection
+    // window — the time spent accumulating CAS ops — not the total period.
+    // With Delay, the cycle is: collect for flush_interval → flush (S3 PUT) →
+    // collect for flush_interval → flush → ... This makes throughput
+    // predictable: 1 / (flush_interval + flush_time). The default Burst
+    // behavior would degenerate into continuous flushing with no collection
+    // window if flush_time approaches the interval.
+    let mut flush_interval =
         tokio::time::interval(std::time::Duration::from_millis(args.flush_interval_ms));
+    flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     let (tx, rx) = tokio::sync::mpsc::channel::<ActorCommand>(4096);
 

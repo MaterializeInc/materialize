@@ -45,7 +45,7 @@ RAM.
   │              │──┼─────┼─▶│ Actor (single-threaded)  │──┼────▶│   S3    │
   │              │──┤gRPC │  │                          │  │     │ Express │
   │              │  │     │  │  Batch all CAS ops       │  │     │One Zone │
-  │              │──┘     │  │  Flush every 20ms        │  │     └─────────┘
+  │              │──┘     │  │  Flush every 5ms        │  │     └─────────┘
   └──────────────┘        │  └──────────────────────────┘  │     ~50 PUTs/s
                           └────────────────────────────────┘    regardless of
                                                                 shard count
@@ -62,7 +62,7 @@ Internally, it runs a single-threaded actor that:
 
 - Accepts CAS operations from all shards via a channel
 - Evaluates each CAS against in-memory committed state (first writer for a shard wins per batch, all others wait)
-- On a 20ms flush timer, serializes the entire batch into a single protobuf WAL entry and writes it to S3 Express One
+- On a 5ms collection window, serializes the entire batch into a single protobuf WAL entry and writes it to S3 Express One
   Zone with a conditional PUT (`If-None-Match: *`)
 - On S3 success, resolves all waiting callers: winners get `Committed`, losers get `ExpectationMismatch`
 - All callers — winners and losers — experience the same latency, making the system predictable
@@ -83,7 +83,7 @@ Reads (`head`, `scan`, `list_keys`) are served immediately from in-memory state 
          │                              │  shard_C: accept  │
          │                              └────────┬─────────┘
          │                                       │
-         │                              ── 20ms tick ──
+         │                              ── 5ms collect ──
          │                                       │
          │                              ┌────────▼─────────┐
          │                              │ Serialize batch:  │
@@ -202,7 +202,7 @@ consensus — down from a dedicated Postgres/CRDB instance.
 ```
     Writes/s vs. Shard Count
 
-    Postgres (1s tick)          Group Commit (20ms flush)
+    Postgres (1s tick)          Group Commit (5ms collect)
     ──────────────────          ─────────────────────────
      8000 │         ╱            8000 │
           │       ╱                   │
