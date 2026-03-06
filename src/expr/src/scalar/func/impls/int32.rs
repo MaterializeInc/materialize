@@ -20,8 +20,10 @@ use serde::{Deserialize, Serialize};
 use crate::EvalError;
 use crate::scalar::func::EagerUnaryFunc;
 
+/// Negates the value.
 #[sqlfunc(
     sqlname = "-",
+    category = "Numbers",
     preserves_uniqueness = true,
     inverse = to_unary!(NegInt32),
     is_monotone = true
@@ -31,8 +33,10 @@ fn neg_int32(a: i32) -> Result<i32, EvalError> {
         .ok_or_else(|| EvalError::Int32OutOfRange(a.to_string().into()))
 }
 
+/// Computes the bitwise NOT.
 #[sqlfunc(
     sqlname = "~",
+    category = "Numbers",
     preserves_uniqueness = true,
     inverse = to_unary!(BitNotInt32)
 )]
@@ -40,14 +44,17 @@ fn bit_not_int32(a: i32) -> i32 {
     !a
 }
 
-#[sqlfunc(sqlname = "abs")]
+/// Returns the absolute value.
+#[sqlfunc(sqlname = "abs", category = "Numbers")]
 fn abs_int32(a: i32) -> Result<i32, EvalError> {
     a.checked_abs()
         .ok_or_else(|| EvalError::Int32OutOfRange(a.to_string().into()))
 }
 
+/// Converts int4 to bool.
 #[sqlfunc(
     sqlname = "integer_to_boolean",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastBoolToInt32)
 )]
@@ -55,8 +62,10 @@ fn cast_int32_to_bool(a: i32) -> bool {
     a != 0
 }
 
+/// Converts int4 to float4.
 #[sqlfunc(
     sqlname = "integer_to_real",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastFloat32ToInt32),
     is_monotone = true
@@ -69,8 +78,10 @@ fn cast_int32_to_float32(a: i32) -> f32 {
     }
 }
 
+/// Converts int4 to float8.
 #[sqlfunc(
     sqlname = "integer_to_double",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastFloat64ToInt32),
     is_monotone = true
@@ -79,8 +90,10 @@ fn cast_int32_to_float64(a: i32) -> f64 {
     f64::from(a)
 }
 
+/// Converts int4 to int2.
 #[sqlfunc(
     sqlname = "integer_to_smallint",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastInt16ToInt32),
     is_monotone = true
@@ -89,8 +102,10 @@ fn cast_int32_to_int16(a: i32) -> Result<i16, EvalError> {
     i16::try_from(a).or_else(|_| Err(EvalError::Int16OutOfRange(a.to_string().into())))
 }
 
+/// Converts int4 to int8.
 #[sqlfunc(
     sqlname = "integer_to_bigint",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastInt64ToInt32),
     is_monotone = true
@@ -99,8 +114,10 @@ fn cast_int32_to_int64(a: i32) -> i64 {
     i64::from(a)
 }
 
+/// Converts int4 to text.
 #[sqlfunc(
     sqlname = "integer_to_text",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastStringToInt32)
 )]
@@ -110,8 +127,10 @@ fn cast_int32_to_string(a: i32) -> String {
     buf
 }
 
+/// Converts int4 to uint2.
 #[sqlfunc(
     sqlname = "integer_to_uint2",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastUint16ToInt32),
     is_monotone = true
@@ -120,8 +139,10 @@ fn cast_int32_to_uint16(a: i32) -> Result<u16, EvalError> {
     u16::try_from(a).or_else(|_| Err(EvalError::UInt16OutOfRange(a.to_string().into())))
 }
 
+/// Converts int4 to uint4.
 #[sqlfunc(
     sqlname = "integer_to_uint4",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastUint32ToInt32),
     is_monotone = true
@@ -130,8 +151,10 @@ fn cast_int32_to_uint32(a: i32) -> Result<u32, EvalError> {
     u32::try_from(a).or_else(|_| Err(EvalError::UInt32OutOfRange(a.to_string().into())))
 }
 
+/// Converts int4 to uint8.
 #[sqlfunc(
     sqlname = "integer_to_uint8",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastUint64ToInt32),
     is_monotone = true
@@ -198,8 +221,10 @@ impl fmt::Display for CastInt32ToNumeric {
     }
 }
 
+/// Converts int4 to oid.
 #[sqlfunc(
     sqlname = "integer_to_oid",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastOidToInt32)
 )]
@@ -214,8 +239,10 @@ fn cast_int32_to_oid(a: i32) -> Oid {
     Oid(u32::reinterpret_cast(a))
 }
 
+/// Converts int4 to "char".
 #[sqlfunc(
     sqlname = "integer_to_\"char\"",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastPgLegacyCharToInt32)
 )]

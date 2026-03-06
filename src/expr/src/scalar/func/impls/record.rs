@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
+/// Converts a record to text.
 #[sqldoc(unique_name = "recordtostr", category = "Cast")]
 #[derive(
     Ord,

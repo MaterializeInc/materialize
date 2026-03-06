@@ -18,8 +18,10 @@ use serde::{Deserialize, Serialize};
 use crate::EvalError;
 use crate::scalar::func::EagerUnaryFunc;
 
+/// Negates the value.
 #[sqlfunc(
     sqlname = "-",
+    category = "Numbers",
     preserves_uniqueness = false,
     inverse = to_unary!(NegFloat32),
     is_monotone = true
@@ -28,33 +30,40 @@ fn neg_float32(a: f32) -> f32 {
     -a
 }
 
-#[sqlfunc(sqlname = "abs")]
+/// Returns the absolute value.
+#[sqlfunc(sqlname = "abs", category = "Numbers")]
 fn abs_float32(a: f32) -> f32 {
     a.abs()
 }
 
-#[sqlfunc(sqlname = "roundf32")]
+/// Rounds to the nearest integer.
+#[sqlfunc(sqlname = "roundf32", category = "Numbers")]
 fn round_float32(a: f32) -> f32 {
     a.round_ties_even()
 }
 
-#[sqlfunc(sqlname = "truncf32")]
+/// Truncates toward zero.
+#[sqlfunc(sqlname = "truncf32", category = "Numbers")]
 fn trunc_float32(a: f32) -> f32 {
     a.trunc()
 }
 
-#[sqlfunc(sqlname = "ceilf32")]
+/// Returns the smallest integer not less than the value.
+#[sqlfunc(sqlname = "ceilf32", category = "Numbers")]
 fn ceil_float32(a: f32) -> f32 {
     a.ceil()
 }
 
-#[sqlfunc(sqlname = "floorf32")]
+/// Returns the largest integer not greater than the value.
+#[sqlfunc(sqlname = "floorf32", category = "Numbers")]
 fn floor_float32(a: f32) -> f32 {
     a.floor()
 }
 
+/// Converts float4 to int2.
 #[sqlfunc(
     sqlname = "real_to_smallint",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastInt16ToFloat32),
     is_monotone = true
@@ -70,8 +79,10 @@ fn cast_float32_to_int16(a: f32) -> Result<i16, EvalError> {
     }
 }
 
+/// Converts float4 to int4.
 #[sqlfunc(
     sqlname = "real_to_integer",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastInt32ToFloat32),
     is_monotone = true
@@ -91,8 +102,10 @@ fn cast_float32_to_int32(a: f32) -> Result<i32, EvalError> {
     }
 }
 
+/// Converts float4 to int8.
 #[sqlfunc(
     sqlname = "real_to_bigint",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastInt64ToFloat32),
     is_monotone = true
@@ -112,8 +125,10 @@ fn cast_float32_to_int64(a: f32) -> Result<i64, EvalError> {
     }
 }
 
+/// Converts float4 to float8.
 #[sqlfunc(
     sqlname = "real_to_double",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastFloat64ToFloat32),
     is_monotone = true
@@ -122,8 +137,10 @@ fn cast_float32_to_float64(a: f32) -> f64 {
     a.into()
 }
 
+/// Converts float4 to text.
 #[sqlfunc(
     sqlname = "real_to_text",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastStringToFloat32)
 )]
@@ -133,8 +150,10 @@ fn cast_float32_to_string(a: f32) -> String {
     s
 }
 
+/// Converts float4 to uint2.
 #[sqlfunc(
     sqlname = "real_to_uint2",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastUint16ToFloat32),
     is_monotone = true
@@ -150,8 +169,10 @@ fn cast_float32_to_uint16(a: f32) -> Result<u16, EvalError> {
     }
 }
 
+/// Converts float4 to uint4.
 #[sqlfunc(
     sqlname = "real_to_uint4",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastUint32ToFloat32),
     is_monotone = true
@@ -167,8 +188,10 @@ fn cast_float32_to_uint32(a: f32) -> Result<u32, EvalError> {
     }
 }
 
+/// Converts float4 to uint8.
 #[sqlfunc(
     sqlname = "real_to_uint8",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastUint64ToFloat32),
     is_monotone = true
@@ -184,6 +207,7 @@ fn cast_float32_to_uint64(a: f32) -> Result<u64, EvalError> {
     }
 }
 
+/// Converts float4 to numeric.
 #[sqldoc(unique_name = "real_to_numeric", category = "Cast")]
 #[derive(
     Ord,

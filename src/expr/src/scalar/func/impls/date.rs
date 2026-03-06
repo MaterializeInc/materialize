@@ -26,7 +26,9 @@ use crate::scalar::func::EagerUnaryFunc;
 #[sqlfunc(
     sqlname = "date_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToDate)
+    inverse = to_unary!(super::CastStringToDate),
+    category = "Cast",
+    doc = "Converts date to text."
 )]
 fn cast_date_to_string(a: Date) -> String {
     let mut buf = String::new();
@@ -34,6 +36,7 @@ fn cast_date_to_string(a: Date) -> String {
     buf
 }
 
+/// Converts date to timestamp.
 #[sqldoc(unique_name = "date_to_timestamp", category = "Cast")]
 #[derive(
     Ord,
@@ -83,6 +86,7 @@ impl fmt::Display for CastDateToTimestamp {
     }
 }
 
+/// Converts date to timestamptz.
 #[sqldoc(unique_name = "date_to_timestamp_with_timezone", category = "Cast")]
 #[derive(
     Ord,
@@ -167,9 +171,10 @@ pub fn extract_date_inner(units: DateTimeUnits, date: NaiveDate) -> Result<Numer
     }
 }
 
+/// Extracts a date/time field from a date.
 #[sqldoc(
     unique_name = "extract_date",
-    category = "Extract",
+    category = "Date and time",
     url = "/sql/functions/extract/"
 )]
 #[derive(

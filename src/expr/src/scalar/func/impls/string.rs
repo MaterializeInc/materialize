@@ -37,114 +37,143 @@ use crate::scalar::func::{
 };
 use crate::{EvalError, MirScalarExpr, UnaryFunc, like_pattern};
 
+/// Converts text to bool.
 #[sqlfunc(
     sqlname = "text_to_boolean",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastBoolToString)
+    inverse = to_unary!(super::CastBoolToString),
+    category = "Cast"
 )]
 fn cast_string_to_bool<'a>(a: &'a str) -> Result<bool, EvalError> {
     strconv::parse_bool(a).err_into()
 }
 
+/// Converts text to "char".
 #[sqlfunc(
     sqlname = "text_to_\"char\"",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastPgLegacyCharToString)
+    inverse = to_unary!(super::CastPgLegacyCharToString),
+    category = "Cast"
 )]
 fn cast_string_to_pg_legacy_char<'a>(a: &'a str) -> PgLegacyChar {
     PgLegacyChar(a.as_bytes().get(0).copied().unwrap_or(0))
 }
 
-#[sqlfunc(sqlname = "text_to_name", preserves_uniqueness = true)]
+/// Converts text to name.
+#[sqlfunc(
+    sqlname = "text_to_name",
+    preserves_uniqueness = true,
+    category = "Cast"
+)]
 fn cast_string_to_pg_legacy_name<'a>(a: &'a str) -> PgLegacyName<String> {
     PgLegacyName(strconv::parse_pg_legacy_name(a))
 }
 
+/// Converts text to bytea.
 #[sqlfunc(
     sqlname = "text_to_bytea",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastBytesToString)
+    inverse = to_unary!(super::CastBytesToString),
+    category = "Cast"
 )]
 fn cast_string_to_bytes<'a>(a: &'a str) -> Result<Vec<u8>, EvalError> {
     strconv::parse_bytes(a).err_into()
 }
 
+/// Converts text to int2.
 #[sqlfunc(
     sqlname = "text_to_smallint",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastInt16ToString)
+    inverse = to_unary!(super::CastInt16ToString),
+    category = "Cast"
 )]
 fn cast_string_to_int16<'a>(a: &'a str) -> Result<i16, EvalError> {
     strconv::parse_int16(a).err_into()
 }
 
+/// Converts text to int4.
 #[sqlfunc(
     sqlname = "text_to_integer",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastInt32ToString)
+    inverse = to_unary!(super::CastInt32ToString),
+    category = "Cast"
 )]
 fn cast_string_to_int32<'a>(a: &'a str) -> Result<i32, EvalError> {
     strconv::parse_int32(a).err_into()
 }
 
+/// Converts text to int8.
 #[sqlfunc(
     sqlname = "text_to_bigint",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastInt64ToString)
+    inverse = to_unary!(super::CastInt64ToString),
+    category = "Cast"
 )]
 fn cast_string_to_int64<'a>(a: &'a str) -> Result<i64, EvalError> {
     strconv::parse_int64(a).err_into()
 }
 
+/// Converts text to real.
 #[sqlfunc(
     sqlname = "text_to_real",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastFloat32ToString)
+    inverse = to_unary!(super::CastFloat32ToString),
+    category = "Cast"
 )]
 fn cast_string_to_float32<'a>(a: &'a str) -> Result<f32, EvalError> {
     strconv::parse_float32(a).err_into()
 }
 
+/// Converts text to double.
 #[sqlfunc(
     sqlname = "text_to_double",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastFloat64ToString)
+    inverse = to_unary!(super::CastFloat64ToString),
+    category = "Cast"
 )]
 fn cast_string_to_float64<'a>(a: &'a str) -> Result<f64, EvalError> {
     strconv::parse_float64(a).err_into()
 }
 
+/// Converts text to oid.
 #[sqlfunc(
     sqlname = "text_to_oid",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastOidToString)
+    inverse = to_unary!(super::CastOidToString),
+    category = "Cast"
 )]
 fn cast_string_to_oid<'a>(a: &'a str) -> Result<Oid, EvalError> {
     Ok(Oid(strconv::parse_oid(a)?))
 }
 
+/// Converts text to uint2.
 #[sqlfunc(
     sqlname = "text_to_uint2",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastUint16ToString)
+    inverse = to_unary!(super::CastUint16ToString),
+    category = "Cast"
 )]
 fn cast_string_to_uint16(a: &str) -> Result<u16, EvalError> {
     strconv::parse_uint16(a).err_into()
 }
 
+/// Converts text to uint4.
 #[sqlfunc(
     sqlname = "text_to_uint4",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastUint32ToString)
+    inverse = to_unary!(super::CastUint32ToString),
+    category = "Cast"
 )]
 fn cast_string_to_uint32(a: &str) -> Result<u32, EvalError> {
     strconv::parse_uint32(a).err_into()
 }
 
+/// Converts text to uint8.
 #[sqlfunc(
     sqlname = "text_to_uint8",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastUint64ToString)
+    inverse = to_unary!(super::CastUint64ToString),
+    category = "Cast"
 )]
 fn cast_string_to_uint64(a: &str) -> Result<u64, EvalError> {
     strconv::parse_uint64(a).err_into()
@@ -156,6 +185,7 @@ fn reverse<'a>(a: &'a str) -> String {
     a.chars().rev().collect()
 }
 
+/// Converts text to numeric.
 #[sqldoc(unique_name = "text_to_numeric", category = "Cast")]
 #[derive(
     Ord,
@@ -200,24 +230,29 @@ impl fmt::Display for CastStringToNumeric {
     }
 }
 
+/// Converts text to date.
 #[sqlfunc(
     sqlname = "text_to_date",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastDateToString)
+    inverse = to_unary!(super::CastDateToString),
+    category = "Cast"
 )]
 fn cast_string_to_date<'a>(a: &'a str) -> Result<Date, EvalError> {
     strconv::parse_date(a).err_into()
 }
 
+/// Converts text to time.
 #[sqlfunc(
     sqlname = "text_to_time",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastTimeToString)
+    inverse = to_unary!(super::CastTimeToString),
+    category = "Cast"
 )]
 fn cast_string_to_time<'a>(a: &'a str) -> Result<NaiveTime, EvalError> {
     strconv::parse_time(a).err_into()
 }
 
+/// Converts text to timestamp.
 #[sqldoc(unique_name = "text_to_timestamp", category = "Cast")]
 #[derive(
     Ord,
@@ -275,6 +310,7 @@ fn try_parse_monotonic_iso8601_timestamp<'a>(
     Some(ts)
 }
 
+/// Converts text to timestamptz.
 #[sqldoc(unique_name = "text_to_timestamp_with_time_zone", category = "Cast")]
 #[derive(
     Ord,
@@ -315,24 +351,29 @@ impl fmt::Display for CastStringToTimestampTz {
     }
 }
 
+/// Converts text to interval.
 #[sqlfunc(
     sqlname = "text_to_interval",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastIntervalToString)
+    inverse = to_unary!(super::CastIntervalToString),
+    category = "Cast"
 )]
 fn cast_string_to_interval<'a>(a: &'a str) -> Result<Interval, EvalError> {
     strconv::parse_interval(a).err_into()
 }
 
+/// Converts text to uuid.
 #[sqlfunc(
     sqlname = "text_to_uuid",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastUuidToString)
+    inverse = to_unary!(super::CastUuidToString),
+    category = "Cast"
 )]
 fn cast_string_to_uuid<'a>(a: &'a str) -> Result<Uuid, EvalError> {
     strconv::parse_uuid(a).err_into()
 }
 
+/// Converts text to an array.
 #[sqldoc(
     unique_name = "strtoarray",
     category = "Cast",
@@ -422,6 +463,7 @@ impl fmt::Display for CastStringToArray {
     }
 }
 
+/// Converts text to a list.
 #[sqldoc(unique_name = "strtolist", category = "Cast")]
 #[derive(
     Ord,
@@ -513,6 +555,7 @@ impl fmt::Display for CastStringToList {
     }
 }
 
+/// Converts text to a map.
 #[sqldoc(unique_name = "strtomap", category = "Cast")]
 #[derive(
     Ord,
@@ -610,6 +653,7 @@ impl fmt::Display for CastStringToMap {
     }
 }
 
+/// Converts text to char.
 #[sqldoc(unique_name = "text_to_char", category = "Cast")]
 #[derive(
     Ord,
@@ -676,6 +720,7 @@ impl fmt::Display for CastStringToChar {
     }
 }
 
+/// Converts text to a range.
 #[sqldoc(unique_name = "strtorange", category = "Cast")]
 #[derive(
     Ord,
@@ -765,6 +810,7 @@ impl fmt::Display for CastStringToRange {
     }
 }
 
+/// Converts text to varchar.
 #[sqldoc(unique_name = "text_to_varchar", category = "Cast")]
 #[derive(
     Ord,
@@ -843,6 +889,7 @@ static INT2VECTOR_CAST_EXPR: LazyLock<MirScalarExpr> = LazyLock::new(|| MirScala
     expr: Box::new(MirScalarExpr::column(0)),
 });
 
+/// Converts text to an int2vector.
 #[sqldoc(unique_name = "strtoint2vector", category = "Cast")]
 #[derive(
     Ord,
@@ -915,10 +962,12 @@ impl fmt::Display for CastStringToInt2Vector {
     }
 }
 
+/// Converts text to jsonb.
 #[sqlfunc(
     sqlname = "text_to_jsonb",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastJsonbToString)
+    inverse = to_unary!(super::CastJsonbToString),
+    category = "Cast"
 )]
 // TODO(jamii): it would be much more efficient to skip the intermediate repr::jsonb::Jsonb.
 fn cast_string_to_jsonb<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
@@ -1008,7 +1057,8 @@ fn lower(s: &str) -> String {
     s.to_lowercase()
 }
 
-#[sqlfunc]
+/// Normalizes the string to the specified Unicode form.
+#[sqlfunc(category = "String", url = "/sql/functions/normalize")]
 fn normalize(text: &str, form_str: &str) -> Result<String, EvalError> {
     use unicode_normalization::UnicodeNormalization;
 
@@ -1023,6 +1073,7 @@ fn normalize(text: &str, form_str: &str) -> Result<String, EvalError> {
     }
 }
 
+/// Tests if a string matches a LIKE pattern.
 #[sqldoc(unique_name = "is_like_match", category = "String")]
 #[derive(
     Ord,
@@ -1062,6 +1113,7 @@ impl fmt::Display for IsLikeMatch {
     }
 }
 
+/// Tests if a string matches a POSIX regular expression.
 #[sqldoc(unique_name = "is_regexp_match", category = "String")]
 #[derive(
     Ord,
@@ -1106,8 +1158,9 @@ impl fmt::Display for IsRegexpMatch {
 /// `needle`, in order. If `flags` is set to the string `i` matches
 /// case-insensitively.
 #[sqldoc(
-    unique_name = "regexp_match",
+    unique_name = "regexp_match_compiled",
     category = "String",
+    url = "/sql/functions/regexp-match",
     signature = "regexp_match(haystack: str, needle: str [, flags: str]]) -> str[]"
 )]
 #[derive(
@@ -1182,7 +1235,7 @@ impl fmt::Display for RegexpMatch {
 /// Splits `text` by the regular expression `pattern` into an array.
 /// If `flags` is set to `i`, matches case-insensitively.
 #[sqldoc(
-    unique_name = "regexp_split_to_array",
+    unique_name = "regexp_split_to_array_compiled",
     category = "String",
     signature = "regexp_split_to_array(text: str, pattern: str [, flags: str]]) -> str[]"
 )]
@@ -1254,7 +1307,8 @@ impl fmt::Display for RegexpSplitToArray {
     }
 }
 
-#[sqlfunc(sqlname = "mz_panic")]
+/// Triggers an internal panic (for testing only).
+#[sqlfunc(sqlname = "mz_panic", category = "System information")]
 fn panic<'a>(a: &'a str) -> String {
     print!("{}", a);
     panic!("{}", a)
@@ -1276,7 +1330,7 @@ fn quote_ident<'a>(a: &'a str) -> Result<String, EvalError> {
 
 /// Replaces substrings matching a POSIX regular expression.
 #[sqldoc(
-    unique_name = "regexp_replace",
+    unique_name = "regexp_replace_compiled",
     category = "String",
     signature = "regexp_replace(source text, pattern text, replacement text) -> text"
 )]

@@ -19,8 +19,10 @@ use serde::{Deserialize, Serialize};
 use crate::EvalError;
 use crate::scalar::func::EagerUnaryFunc;
 
+/// Negates the value.
 #[sqlfunc(
     sqlname = "-",
+    category = "Numbers",
     preserves_uniqueness = true,
     inverse = to_unary!(NegInt64),
     is_monotone = true
@@ -30,8 +32,10 @@ fn neg_int64(a: i64) -> Result<i64, EvalError> {
         .ok_or_else(|| EvalError::Int64OutOfRange(a.to_string().into()))
 }
 
+/// Computes the bitwise NOT.
 #[sqlfunc(
     sqlname = "~",
+    category = "Numbers",
     preserves_uniqueness = true,
     inverse = to_unary!(BitNotInt64)
 )]
@@ -39,14 +43,17 @@ fn bit_not_int64(a: i64) -> i64 {
     !a
 }
 
-#[sqlfunc(sqlname = "abs")]
+/// Returns the absolute value.
+#[sqlfunc(sqlname = "abs", category = "Numbers")]
 fn abs_int64(a: i64) -> Result<i64, EvalError> {
     a.checked_abs()
         .ok_or_else(|| EvalError::Int64OutOfRange(a.to_string().into()))
 }
 
+/// Converts int8 to bool.
 #[sqlfunc(
     sqlname = "bigint_to_boolean",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastBoolToInt64)
 )]
@@ -54,8 +61,10 @@ fn cast_int64_to_bool(a: i64) -> bool {
     a != 0
 }
 
+/// Converts int8 to int2.
 #[sqlfunc(
     sqlname = "bigint_to_smallint",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastInt16ToInt64),
     is_monotone = true
@@ -64,8 +73,10 @@ fn cast_int64_to_int16(a: i64) -> Result<i16, EvalError> {
     i16::try_from(a).or_else(|_| Err(EvalError::Int16OutOfRange(a.to_string().into())))
 }
 
+/// Converts int8 to int4.
 #[sqlfunc(
     sqlname = "bigint_to_integer",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastInt32ToInt64),
     is_monotone = true
@@ -74,8 +85,10 @@ fn cast_int64_to_int32(a: i64) -> Result<i32, EvalError> {
     i32::try_from(a).or_else(|_| Err(EvalError::Int32OutOfRange(a.to_string().into())))
 }
 
+/// Converts int8 to oid.
 #[sqlfunc(
     sqlname = "bigint_to_oid",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastOidToInt64)
 )]
@@ -87,8 +100,10 @@ fn cast_int64_to_oid(a: i64) -> Result<Oid, EvalError> {
         .or_else(|_| Err(EvalError::OidOutOfRange(a.to_string().into())))
 }
 
+/// Converts int8 to uint2.
 #[sqlfunc(
     sqlname = "bigint_to_uint2",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastUint16ToInt64),
     is_monotone = true
@@ -97,8 +112,10 @@ fn cast_int64_to_uint16(a: i64) -> Result<u16, EvalError> {
     u16::try_from(a).or_else(|_| Err(EvalError::UInt16OutOfRange(a.to_string().into())))
 }
 
+/// Converts int8 to uint4.
 #[sqlfunc(
     sqlname = "bigint_to_uint4",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastUint32ToInt64),
     is_monotone = true
@@ -107,8 +124,10 @@ fn cast_int64_to_uint32(a: i64) -> Result<u32, EvalError> {
     u32::try_from(a).or_else(|_| Err(EvalError::UInt32OutOfRange(a.to_string().into())))
 }
 
+/// Converts int8 to uint8.
 #[sqlfunc(
     sqlname = "bigint_to_uint8",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastUint64ToInt64),
     is_monotone = true
@@ -117,6 +136,7 @@ fn cast_int64_to_uint64(a: i64) -> Result<u64, EvalError> {
     u64::try_from(a).or_else(|_| Err(EvalError::UInt64OutOfRange(a.to_string().into())))
 }
 
+/// Converts int8 to numeric.
 #[sqldoc(unique_name = "bigint_to_numeric", category = "Cast")]
 #[derive(
     Ord,
@@ -170,8 +190,10 @@ impl fmt::Display for CastInt64ToNumeric {
     }
 }
 
+/// Converts int8 to float4.
 #[sqlfunc(
     sqlname = "bigint_to_real",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastFloat32ToInt64),
     is_monotone = true
@@ -182,8 +204,10 @@ fn cast_int64_to_float32(a: i64) -> f32 {
     a as f32
 }
 
+/// Converts int8 to float8.
 #[sqlfunc(
     sqlname = "bigint_to_double",
+    category = "Cast",
     preserves_uniqueness = false, // Witness: (1111111111111111111, 1111111111111111112).
     inverse = to_unary!(super::CastFloat64ToInt64),
     is_monotone = true
@@ -194,8 +218,10 @@ fn cast_int64_to_float64(a: i64) -> f64 {
     a as f64
 }
 
+/// Converts int8 to text.
 #[sqlfunc(
     sqlname = "bigint_to_text",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastStringToInt64)
 )]

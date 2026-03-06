@@ -51,6 +51,7 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbRef;
 
+/// Computes the logical AND of all arguments.
 #[sqldoc(unique_name = "and", category = "Boolean")]
 #[derive(
     Ord,
@@ -160,10 +161,12 @@ pub struct ArrayCreate {
 /// one and the length of the new dimension is equal to `datums.len()`.
 ///
 /// Null elements are allowed and considered to be zero-dimensional arrays.
+/// Creates a new array from the given elements.
 #[sqlfunc(
     ArrayCreate,
     output_type_expr = "match &self.elem_type { SqlScalarType::Array(_) => self.elem_type.clone().nullable(false), _ => SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false) }",
-    introduces_nulls = false
+    introduces_nulls = false,
+    category = "Array"
 )]
 fn array_create<'a>(
     &self,
@@ -242,10 +245,12 @@ pub struct ArrayFill {
     pub elem_type: SqlScalarType,
 }
 
+/// Returns an array filled with the given value.
 #[sqlfunc(
     ArrayFill,
     output_type_expr = "SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false)",
-    introduces_nulls = false
+    introduces_nulls = false,
+    category = "Array"
 )]
 fn array_fill<'a>(
     &self,
@@ -355,11 +360,13 @@ fn array_fill<'a>(
 pub struct ArrayIndex {
     pub offset: i64,
 }
+/// Returns the element at the given index of the array.
 #[sqlfunc(
     ArrayIndex,
     sqlname = "array_index",
     output_type_expr = "input_types[0].scalar_type.unwrap_array_element_type().clone().nullable(true)",
-    introduces_nulls = true
+    introduces_nulls = true,
+    category = "Array"
 )]
 fn array_index<'a>(&self, array: Array<'a>, indices: Variadic<i64>) -> Option<Datum<'a>> {
     mz_ore::soft_assert_no_log!(
@@ -400,7 +407,8 @@ fn array_index<'a>(&self, array: Array<'a>, indices: Variadic<i64>) -> Option<Da
     array.elements().iter().nth(final_idx)
 }
 
-#[sqlfunc]
+/// Returns the subscript of the first occurrence of a value in the array.
+#[sqlfunc(category = "Array")]
 fn array_position<'a>(
     array: Array<'a>,
     search: Datum<'a>,
@@ -445,7 +453,8 @@ pub struct ArrayToString {
     pub elem_type: SqlScalarType,
 }
 
-#[sqlfunc]
+/// Concatenates array elements using the specified separator.
+#[sqlfunc(category = "Array", url = "/sql/functions/array_to_string")]
 fn array_to_string<'a>(
     &self,
     array: Array<'a>,
@@ -545,6 +554,7 @@ impl LazyVariadicFunc for Coalesce {
     }
 }
 
+/// Creates a new range from lower and upper bounds.
 #[sqldoc(unique_name = "range_create", category = "Range")]
 #[derive(
     Ord,
@@ -620,7 +630,12 @@ impl EagerVariadicFunc for RangeCreate {
     }
 }
 
-#[sqlfunc(sqlname = "datediff")]
+/// Returns the number of date part boundaries between two dates.
+#[sqlfunc(
+    sqlname = "datediff",
+    category = "Date and time",
+    url = "/sql/functions/datediff"
+)]
 fn date_diff_date(unit_str: &str, a: Date, b: Date) -> Result<i64, EvalError> {
     let unit = unit_str
         .parse()
@@ -633,7 +648,12 @@ fn date_diff_date(unit_str: &str, a: Date, b: Date) -> Result<i64, EvalError> {
     Ok(diff)
 }
 
-#[sqlfunc(sqlname = "datediff")]
+/// Returns the number of date part boundaries between two times.
+#[sqlfunc(
+    sqlname = "datediff",
+    category = "Date and time",
+    url = "/sql/functions/datediff"
+)]
 fn date_diff_time(unit_str: &str, a: NaiveTime, b: NaiveTime) -> Result<i64, EvalError> {
     let unit = unit_str
         .parse()
@@ -648,7 +668,12 @@ fn date_diff_time(unit_str: &str, a: NaiveTime, b: NaiveTime) -> Result<i64, Eva
     Ok(diff)
 }
 
-#[sqlfunc(sqlname = "datediff")]
+/// Returns the number of date part boundaries between two timestamps.
+#[sqlfunc(
+    sqlname = "datediff",
+    category = "Date and time",
+    url = "/sql/functions/datediff"
+)]
 fn date_diff_timestamp(
     unit: &str,
     a: CheckedTimestamp<NaiveDateTime>,
@@ -662,7 +687,12 @@ fn date_diff_timestamp(
     Ok(diff)
 }
 
-#[sqlfunc(sqlname = "datediff")]
+/// Returns the number of date part boundaries between two timestamptz values.
+#[sqlfunc(
+    sqlname = "datediff",
+    category = "Date and time",
+    url = "/sql/functions/datediff"
+)]
 fn date_diff_timestamp_tz(
     unit: &str,
     a: CheckedTimestamp<DateTime<Utc>>,
@@ -676,6 +706,7 @@ fn date_diff_timestamp_tz(
     Ok(diff)
 }
 
+/// Returns the value if non-null, otherwise raises an error.
 #[sqldoc(unique_name = "error_if_null", category = "Boolean")]
 #[derive(
     Ord,
@@ -795,14 +826,16 @@ impl LazyVariadicFunc for Greatest {
     }
 }
 
-#[sqlfunc(sqlname = "hmac")]
+/// Computes a keyed-hash message authentication code (HMAC) of the given text.
+#[sqlfunc(sqlname = "hmac", category = "Hash")]
 fn hmac_string(to_digest: &str, key: &str, typ: &str) -> Result<Vec<u8>, EvalError> {
     let to_digest = to_digest.as_bytes();
     let key = key.as_bytes();
     hmac_inner(to_digest, key, typ)
 }
 
-#[sqlfunc(sqlname = "hmac")]
+/// Computes a keyed-hash message authentication code (HMAC) of the given bytes.
+#[sqlfunc(sqlname = "hmac", category = "Hash")]
 fn hmac_bytes(to_digest: &[u8], key: &[u8], typ: &str) -> Result<Vec<u8>, EvalError> {
     hmac_inner(to_digest, key, typ)
 }
@@ -843,7 +876,8 @@ pub fn hmac_inner(to_digest: &[u8], key: &[u8], typ: &str) -> Result<Vec<u8>, Ev
     }
 }
 
-#[sqlfunc]
+/// Builds a JSON array from a variadic list of arguments.
+#[sqlfunc(category = "JSON")]
 fn jsonb_build_array<'a>(datums: Variadic<Datum<'a>>, temp_storage: &'a RowArena) -> JsonbRef<'a> {
     let datum = temp_storage.make_datum(|packer| {
         packer.push_list(datums.into_iter().map(|d| match d {
@@ -854,7 +888,8 @@ fn jsonb_build_array<'a>(datums: Variadic<Datum<'a>>, temp_storage: &'a RowArena
     JsonbRef::from_datum(datum)
 }
 
-#[sqlfunc]
+/// Builds a JSON object from a variadic list of key-value pairs.
+#[sqlfunc(category = "JSON")]
 fn jsonb_build_object<'a>(
     mut kvs: Variadic<(Datum<'a>, Datum<'a>)>,
     temp_storage: &'a RowArena,
@@ -957,9 +992,11 @@ pub struct ListCreate {
     pub elem_type: SqlScalarType,
 }
 
+/// Creates a new list from the given elements.
 #[sqlfunc(
     output_type_expr = "SqlScalarType::List { element_type: Box::new(self.elem_type.clone()), custom_id: None }.nullable(false)",
-    introduces_nulls = false
+    introduces_nulls = false,
+    category = "List"
 )]
 fn list_create<'a>(&self, datums: Variadic<Datum<'a>>, temp_storage: &'a RowArena) -> Datum<'a> {
     temp_storage.make_datum(|packer| packer.push_list(datums))
@@ -981,17 +1018,21 @@ pub struct RecordCreate {
     pub field_names: Vec<ColumnName>,
 }
 
+/// Creates a new record from the given values.
 #[sqlfunc(
     output_type_expr = "SqlScalarType::Record { fields: self.field_names.clone().into_iter().zip_eq(input_types.iter().cloned()).collect(), custom_id: None }.nullable(false)",
-    introduces_nulls = false
+    introduces_nulls = false,
+    category = "Record"
 )]
 fn record_create<'a>(&self, datums: Variadic<Datum<'a>>, temp_storage: &'a RowArena) -> Datum<'a> {
     temp_storage.make_datum(|packer| packer.push_list(datums.iter().copied()))
 }
 
+/// Returns the element at the given index of the list.
 #[sqlfunc(
     output_type_expr = "input_types[0].scalar_type.unwrap_list_nth_layer_type(input_types.len() - 1).clone().nullable(true)",
-    introduces_nulls = true
+    introduces_nulls = true,
+    category = "List"
 )]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
@@ -1013,7 +1054,8 @@ fn list_index<'a>(buf: DatumList<'a>, indices: Variadic<i64>) -> Datum<'a> {
     buf
 }
 
-#[sqlfunc(sqlname = "makeaclitem")]
+/// Creates a new ACL item.
+#[sqlfunc(sqlname = "makeaclitem", category = "Access control")]
 fn make_acl_item(
     grantee_oid: u32,
     grantor_oid: u32,
@@ -1038,7 +1080,8 @@ fn make_acl_item(
     })
 }
 
-#[sqlfunc(sqlname = "make_mz_aclitem")]
+/// Creates a new Materialize ACL item.
+#[sqlfunc(sqlname = "make_mz_aclitem", category = "Access control")]
 fn make_mz_acl_item(
     grantee_str: &str,
     grantor_str: &str,
@@ -1065,7 +1108,8 @@ fn make_mz_acl_item(
     })
 }
 
-#[sqlfunc(sqlname = "makets")]
+/// Creates a timestamp from individual date and time fields.
+#[sqlfunc(sqlname = "makets", category = "Date and time")]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn make_timestamp(
@@ -1125,9 +1169,11 @@ pub struct MapBuild {
     pub value_type: SqlScalarType,
 }
 
+/// Builds a map from a list of key-value records.
 #[sqlfunc(
     output_type_expr = "SqlScalarType::Map { value_type: Box::new(self.value_type.clone()), custom_id: None }.nullable(false)",
-    introduces_nulls = false
+    introduces_nulls = false,
+    category = "Map"
 )]
 fn map_build<'a>(
     &self,
@@ -1143,6 +1189,7 @@ fn map_build<'a>(
     temp_storage.make_datum(|packer| packer.push_dict(map))
 }
 
+/// Computes the logical OR of all arguments.
 #[sqldoc(unique_name = "or", category = "Boolean")]
 #[derive(
     Ord,
@@ -1221,7 +1268,8 @@ impl LazyVariadicFunc for Or {
     }
 }
 
-#[sqlfunc(sqlname = "lpad")]
+/// Pads the string on the left to the specified length.
+#[sqlfunc(sqlname = "lpad", category = "String")]
 fn pad_leading(string: &str, raw_len: i32, pad: OptionalArg<&str>) -> Result<String, EvalError> {
     let len = match usize::try_from(raw_len) {
         Ok(len) => len,
@@ -1253,9 +1301,12 @@ fn pad_leading(string: &str, raw_len: i32, pad: OptionalArg<&str>) -> Result<Str
     Ok(buf)
 }
 
+/// Returns the first match of a POSIX regular expression.
 #[sqlfunc(
     output_type_expr = "SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true)",
-    introduces_nulls = true
+    introduces_nulls = true,
+    category = "String",
+    url = "/sql/functions/regexp-match"
 )]
 fn regexp_match<'a>(
     haystack: &'a str,
@@ -1268,9 +1319,11 @@ fn regexp_match<'a>(
     regexp_match_static(Datum::String(haystack), temp_storage, &needle)
 }
 
+/// Splits the string by the regular expression and returns an array.
 #[sqlfunc(
     output_type_expr = "SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)",
-    introduces_nulls = false
+    introduces_nulls = false,
+    category = "String"
 )]
 fn regexp_split_to_array<'a>(
     text: &str,
@@ -1283,7 +1336,8 @@ fn regexp_split_to_array<'a>(
     regexp_split_to_array_re(text, &regexp, temp_storage)
 }
 
-#[sqlfunc]
+/// Replaces substrings matching a POSIX regular expression.
+#[sqlfunc(category = "String", url = "/sql/functions/regexp-replace")]
 fn regexp_replace<'a>(
     source: &'a str,
     pattern: &str,
@@ -1296,7 +1350,8 @@ fn regexp_replace<'a>(
     Ok(regexp.replacen(source, limit, replacement))
 }
 
-#[sqlfunc]
+/// Replaces all occurrences of a substring with another string.
+#[sqlfunc(category = "String")]
 fn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {
     // As a compromise to avoid always nearly duplicating the work of replace by doing size estimation,
     // we first check if it's possible for the fully replaced string to exceed the limit by assuming that
@@ -1316,10 +1371,12 @@ fn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {
     Ok(text.replace(from, to))
 }
 
+/// Splits the string at occurrences of a delimiter into an array.
 #[sqlfunc(
     output_type_expr = "SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)",
     introduces_nulls = false,
-    propagates_nulls = false
+    propagates_nulls = false,
+    category = "String"
 )]
 fn string_to_array<'a>(
     string: &'a str,
@@ -1451,7 +1508,8 @@ fn substr<'a>(s: &'a str, start: i32, length: OptionalArg<i32>) -> Result<&'a st
     }
 }
 
-#[sqlfunc(sqlname = "split_string")]
+/// Splits the string on a delimiter and returns the specified field.
+#[sqlfunc(sqlname = "split_string", category = "String")]
 fn split_part<'a>(string: &'a str, delimiter: &str, field: i32) -> Result<&'a str, EvalError> {
     let index = match usize::try_from(i64::from(field) - 1) {
         Ok(index) => index,
@@ -1499,7 +1557,8 @@ fn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError> {
     Ok(buf)
 }
 
-#[sqlfunc]
+/// Concatenates values with a separator, skipping nulls.
+#[sqlfunc(category = "String")]
 fn concat_ws(ws: &str, rest: Variadic<Option<&str>>) -> Result<String, EvalError> {
     let mut total_size = 0;
     for s in &rest {
@@ -1517,7 +1576,8 @@ fn concat_ws(ws: &str, rest: Variadic<Option<&str>>) -> Result<String, EvalError
     Ok(buf)
 }
 
-#[sqlfunc]
+/// Replaces characters in the string according to a mapping.
+#[sqlfunc(category = "String")]
 fn translate(string: &str, from_str: &str, to_str: &str) -> String {
     let from = from_str.chars().collect::<Vec<_>>();
     let to = to_str.chars().collect::<Vec<_>>();
@@ -1531,9 +1591,11 @@ fn translate(string: &str, from_str: &str, to_str: &str) -> String {
         .collect()
 }
 
+/// Returns a contiguous slice of the list.
 #[sqlfunc(
     output_type_expr = "input_types[0].scalar_type.clone().nullable(false)",
-    introduces_nulls = false
+    introduces_nulls = false,
+    category = "List"
 )]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
@@ -1577,7 +1639,12 @@ fn list_slice_linear<'a>(
     })
 }
 
-#[sqlfunc(sqlname = "timestamp_bin")]
+/// Bins a timestamp into the specified interval.
+#[sqlfunc(
+    sqlname = "timestamp_bin",
+    category = "Date and time",
+    url = "/sql/functions/date-bin"
+)]
 fn date_bin_timestamp(
     stride: Interval,
     source: CheckedTimestamp<NaiveDateTime>,
@@ -1586,7 +1653,12 @@ fn date_bin_timestamp(
     date_bin(stride, source, origin)
 }
 
-#[sqlfunc(sqlname = "timestamptz_bin")]
+/// Bins a timestamptz into the specified interval.
+#[sqlfunc(
+    sqlname = "timestamptz_bin",
+    category = "Date and time",
+    url = "/sql/functions/date-bin"
+)]
 fn date_bin_timestamp_tz(
     stride: Interval,
     source: CheckedTimestamp<DateTime<Utc>>,
@@ -1595,7 +1667,12 @@ fn date_bin_timestamp_tz(
     date_bin(stride, source, origin)
 }
 
-#[sqlfunc(sqlname = "timezonet")]
+/// Converts a time to the specified timezone.
+#[sqlfunc(
+    sqlname = "timezonet",
+    category = "Date and time",
+    url = "/sql/functions/timezone-and-at-time-zone"
+)]
 fn timezone_time_variadic(
     tz_str: &str,
     time: NaiveTime,

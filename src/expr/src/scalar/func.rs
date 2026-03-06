@@ -241,7 +241,7 @@ fn add_float64(a: f64, b: f64) -> Result<f64, EvalError> {
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "+",
-    category = "Date/Time"
+    category = "Date and time"
 )]
 fn add_timestamp_interval(
     a: CheckedTimestamp<NaiveDateTime>,
@@ -255,7 +255,7 @@ fn add_timestamp_interval(
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "+",
-    category = "Date/Time"
+    category = "Date and time"
 )]
 fn add_timestamp_tz_interval(
     a: CheckedTimestamp<DateTime<Utc>>,
@@ -279,7 +279,13 @@ where
     Ok(CheckedTimestamp::from_timestamplike(T::from_date_time(dt))?)
 }
 
-#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
+/// Subtracts an interval from a timestamp.
+#[sqlfunc(
+    is_monotone = "(true, true)",
+    is_infix_op = true,
+    sqlname = "-",
+    category = "Date and time"
+)]
 fn sub_timestamp_interval(
     a: CheckedTimestamp<NaiveDateTime>,
     b: Interval,
@@ -287,7 +293,13 @@ fn sub_timestamp_interval(
     sub_timestamplike_interval(a, b)
 }
 
-#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
+/// Subtracts an interval from a timestamptz.
+#[sqlfunc(
+    is_monotone = "(true, true)",
+    is_infix_op = true,
+    sqlname = "-",
+    category = "Date and time"
+)]
 fn sub_timestamp_tz_interval(
     a: CheckedTimestamp<DateTime<Utc>>,
     b: Interval,
@@ -310,7 +322,7 @@ where
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "+",
-    category = "Date/Time"
+    category = "Date and time"
 )]
 fn add_date_time(
     date: Date,
@@ -327,7 +339,7 @@ fn add_date_time(
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "+",
-    category = "Date/Time"
+    category = "Date and time"
 )]
 fn add_date_interval(
     date: Date,
@@ -347,7 +359,7 @@ fn add_date_interval(
     is_monotone = "(false, false)",
     is_infix_op = true,
     sqlname = "+",
-    category = "Date/Time"
+    category = "Date and time"
 )]
 fn add_time_interval(time: chrono::NaiveTime, interval: Interval) -> chrono::NaiveTime {
     let (t, _) = time.overflowing_add_signed(interval.duration_as_chrono());
@@ -569,7 +581,7 @@ fn add_numeric(
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "+",
-    category = "Date/Time"
+    category = "Date and time"
 )]
 fn add_interval(a: Interval, b: Interval) -> Result<Interval, EvalError> {
     a.checked_add(&b)
@@ -922,7 +934,7 @@ fn sub_numeric(
     is_monotone = "(true, true)",
     output_type = "Interval",
     sqlname = "age",
-    category = "Date/Time"
+    category = "Date and time"
 )]
 fn age_timestamp(
     a: CheckedTimestamp<chrono::NaiveDateTime>,
@@ -932,7 +944,11 @@ fn age_timestamp(
 }
 
 /// Subtracts two timestamptz values and returns an interval. Errors if the result is out of range.
-#[sqlfunc(is_monotone = "(true, true)", sqlname = "age", category = "Date/Time")]
+#[sqlfunc(
+    is_monotone = "(true, true)",
+    sqlname = "age",
+    category = "Date and time"
+)]
 fn age_timestamp_tz(
     a: CheckedTimestamp<chrono::DateTime<Utc>>,
     b: CheckedTimestamp<chrono::DateTime<Utc>>,
@@ -945,7 +961,7 @@ fn age_timestamp_tz(
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "-",
-    category = "Date/Time"
+    category = "Date and time"
 )]
 fn sub_timestamp(
     a: CheckedTimestamp<NaiveDateTime>,
@@ -960,7 +976,7 @@ fn sub_timestamp(
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "-",
-    category = "Date/Time"
+    category = "Date and time"
 )]
 fn sub_timestamp_tz(
     a: CheckedTimestamp<chrono::DateTime<Utc>>,
@@ -975,7 +991,7 @@ fn sub_timestamp_tz(
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "-",
-    category = "Date/Time"
+    category = "Date and time"
 )]
 fn sub_date(a: Date, b: Date) -> i32 {
     a - b
@@ -986,7 +1002,7 @@ fn sub_date(a: Date, b: Date) -> i32 {
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "-",
-    category = "Date/Time"
+    category = "Date and time"
 )]
 fn sub_time(a: chrono::NaiveTime, b: chrono::NaiveTime) -> Result<Interval, EvalError> {
     Interval::from_chrono_duration(a - b)
@@ -998,7 +1014,7 @@ fn sub_time(a: chrono::NaiveTime, b: chrono::NaiveTime) -> Result<Interval, Eval
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "-",
-    category = "Date/Time"
+    category = "Date and time"
 )]
 fn sub_interval(a: Interval, b: Interval) -> Result<Interval, EvalError> {
     b.checked_neg()
@@ -1011,7 +1027,7 @@ fn sub_interval(a: Interval, b: Interval) -> Result<Interval, EvalError> {
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "-",
-    category = "Date/Time"
+    category = "Date and time"
 )]
 fn sub_date_interval(
     date: Date,
@@ -1034,7 +1050,7 @@ fn sub_date_interval(
     is_monotone = "(false, false)",
     is_infix_op = true,
     sqlname = "-",
-    category = "Date/Time"
+    category = "Date and time"
 )]
 fn sub_time_interval(time: chrono::NaiveTime, interval: Interval) -> chrono::NaiveTime {
     let (t, _) = time.overflowing_sub_signed(interval.duration_as_chrono());
@@ -1172,7 +1188,7 @@ fn mul_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {
     is_monotone = "(false, false)",
     is_infix_op = true,
     sqlname = "*",
-    category = "Date/Time"
+    category = "Date and time"
 )]
 fn mul_interval(a: Interval, b: f64) -> Result<Interval, EvalError> {
     a.checked_mul(b)
@@ -1348,7 +1364,7 @@ fn div_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {
     is_monotone = "(false, false)",
     is_infix_op = true,
     sqlname = "/",
-    category = "Date/Time"
+    category = "Date and time"
 )]
 fn div_interval(a: Interval, b: f64) -> Result<Interval, EvalError> {
     if b == 0.0 {
@@ -1901,14 +1917,22 @@ fn gte<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
 }
 
 /// Converts a timestamp into a string using the specified format.
-#[sqlfunc(sqlname = "tocharts", category = "Date/Time")]
+#[sqlfunc(
+    sqlname = "tocharts",
+    category = "Date and time",
+    url = "/sql/functions/to_char"
+)]
 fn to_char_timestamp_format(ts: CheckedTimestamp<chrono::NaiveDateTime>, format: &str) -> String {
     let fmt = DateTimeFormat::compile(format);
     fmt.render(&*ts)
 }
 
 /// Converts a timestamptz into a string using the specified format.
-#[sqlfunc(sqlname = "tochartstz", category = "Date/Time")]
+#[sqlfunc(
+    sqlname = "tochartstz",
+    category = "Date and time",
+    url = "/sql/functions/to_char"
+)]
 fn to_char_timestamp_tz_format(
     ts: CheckedTimestamp<chrono::DateTime<Utc>>,
     format: &str,
@@ -2216,7 +2240,11 @@ fn jsonb_delete_string<'a>(a: Datum<'a>, k: &str, temp_storage: &'a RowArena) ->
 }
 
 /// Extracts a subfield from an interval value as a numeric. Errors if the units are unknown.
-#[sqlfunc(sqlname = "extractiv", category = "Date/Time")]
+#[sqlfunc(
+    sqlname = "extractiv",
+    category = "Date and time",
+    url = "/sql/functions/date-part"
+)]
 fn date_part_interval_numeric(units: &str, b: Interval) -> Result<Numeric, EvalError> {
     match units.parse() {
         Ok(units) => Ok(date_part_interval_inner::<Numeric>(units, b)?),
@@ -2225,7 +2253,11 @@ fn date_part_interval_numeric(units: &str, b: Interval) -> Result<Numeric, EvalE
 }
 
 /// Extracts a subfield from an interval value as a float8. Errors if the units are unknown.
-#[sqlfunc(sqlname = "date_partiv", category = "Date/Time")]
+#[sqlfunc(
+    sqlname = "date_partiv",
+    category = "Date and time",
+    url = "/sql/functions/date-part"
+)]
 fn date_part_interval_f64(units: &str, b: Interval) -> Result<f64, EvalError> {
     match units.parse() {
         Ok(units) => Ok(date_part_interval_inner::<f64>(units, b)?),
@@ -2234,7 +2266,11 @@ fn date_part_interval_f64(units: &str, b: Interval) -> Result<f64, EvalError> {
 }
 
 /// Extracts a subfield from a time value as a numeric. Errors if the units are unknown.
-#[sqlfunc(sqlname = "extractt", category = "Date/Time")]
+#[sqlfunc(
+    sqlname = "extractt",
+    category = "Date and time",
+    url = "/sql/functions/date-part"
+)]
 fn date_part_time_numeric(units: &str, b: chrono::NaiveTime) -> Result<Numeric, EvalError> {
     match units.parse() {
         Ok(units) => Ok(date_part_time_inner::<Numeric>(units, b)?),
@@ -2243,7 +2279,11 @@ fn date_part_time_numeric(units: &str, b: chrono::NaiveTime) -> Result<Numeric, 
 }
 
 /// Extracts a subfield from a time value as a float8. Errors if the units are unknown.
-#[sqlfunc(sqlname = "date_partt", category = "Date/Time")]
+#[sqlfunc(
+    sqlname = "date_partt",
+    category = "Date and time",
+    url = "/sql/functions/date-part"
+)]
 fn date_part_time_f64(units: &str, b: chrono::NaiveTime) -> Result<f64, EvalError> {
     match units.parse() {
         Ok(units) => Ok(date_part_time_inner::<f64>(units, b)?),
@@ -2252,7 +2292,11 @@ fn date_part_time_f64(units: &str, b: chrono::NaiveTime) -> Result<f64, EvalErro
 }
 
 /// Extracts a subfield from a timestamp value as a numeric. Errors if the units are unknown.
-#[sqlfunc(sqlname = "extractts", category = "Date/Time")]
+#[sqlfunc(
+    sqlname = "extractts",
+    category = "Date and time",
+    url = "/sql/functions/date-part"
+)]
 fn date_part_timestamp_timestamp_numeric(
     units: &str,
     ts: CheckedTimestamp<NaiveDateTime>,
@@ -2264,7 +2308,11 @@ fn date_part_timestamp_timestamp_numeric(
 }
 
 /// Extracts a subfield from a timestamptz value as a numeric. Errors if the units are unknown.
-#[sqlfunc(sqlname = "extracttstz", category = "Date/Time")]
+#[sqlfunc(
+    sqlname = "extracttstz",
+    category = "Date and time",
+    url = "/sql/functions/date-part"
+)]
 fn date_part_timestamp_timestamp_tz_numeric(
     units: &str,
     ts: CheckedTimestamp<DateTime<Utc>>,
@@ -2276,7 +2324,11 @@ fn date_part_timestamp_timestamp_tz_numeric(
 }
 
 /// Extracts a subfield from a timestamp value as a float8. Errors if the units are unknown.
-#[sqlfunc(sqlname = "date_partts", category = "Date/Time")]
+#[sqlfunc(
+    sqlname = "date_partts",
+    category = "Date and time",
+    url = "/sql/functions/date-part"
+)]
 fn date_part_timestamp_timestamp_f64(
     units: &str,
     ts: CheckedTimestamp<NaiveDateTime>,
@@ -2288,7 +2340,11 @@ fn date_part_timestamp_timestamp_f64(
 }
 
 /// Extracts a subfield from a timestamptz value as a float8. Errors if the units are unknown.
-#[sqlfunc(sqlname = "date_parttstz", category = "Date/Time")]
+#[sqlfunc(
+    sqlname = "date_parttstz",
+    category = "Date and time",
+    url = "/sql/functions/date-part"
+)]
 fn date_part_timestamp_timestamp_tz_f64(
     units: &str,
     ts: CheckedTimestamp<DateTime<Utc>>,
@@ -2300,7 +2356,11 @@ fn date_part_timestamp_timestamp_tz_f64(
 }
 
 /// Extracts a subfield from a date value as a numeric. Errors if the units are unknown.
-#[sqlfunc(sqlname = "extractd", category = "Date/Time")]
+#[sqlfunc(
+    sqlname = "extractd",
+    category = "Date and time",
+    url = "/sql/functions/extract"
+)]
 fn extract_date_units(units: &str, b: Date) -> Result<Numeric, EvalError> {
     match units.parse() {
         Ok(units) => Ok(extract_date_inner(units, b.into())?),
@@ -2359,9 +2419,9 @@ where
 #[sqlfunc(
     is_monotone = "(true, true)",
     sqlname = "bin_unix_epoch_timestamp",
-    category = "Date/Time"
+    category = "Date and time"
 )]
-fn date_bin_timestamp(
+fn bin_unix_epoch_timestamp(
     stride: Interval,
     source: CheckedTimestamp<NaiveDateTime>,
 ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
@@ -2375,9 +2435,9 @@ fn date_bin_timestamp(
 #[sqlfunc(
     is_monotone = "(true, true)",
     sqlname = "bin_unix_epoch_timestamptz",
-    category = "Date/Time"
+    category = "Date and time"
 )]
-fn date_bin_timestamp_tz(
+fn bin_unix_epoch_timestamp_tz(
     stride: Interval,
     source: CheckedTimestamp<DateTime<Utc>>,
 ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
@@ -2387,7 +2447,11 @@ fn date_bin_timestamp_tz(
 }
 
 /// Truncates a timestamp to the specified unit. Errors if the units are unknown or unsupported.
-#[sqlfunc(sqlname = "date_truncts", category = "Date/Time")]
+#[sqlfunc(
+    sqlname = "date_truncts",
+    category = "Date and time",
+    url = "/sql/functions/date-trunc"
+)]
 fn date_trunc_units_timestamp(
     units: &str,
     ts: CheckedTimestamp<NaiveDateTime>,
@@ -2399,7 +2463,11 @@ fn date_trunc_units_timestamp(
 }
 
 /// Truncates a timestamptz to the specified unit. Errors if the units are unknown or unsupported.
-#[sqlfunc(sqlname = "date_trunctstz", category = "Date/Time")]
+#[sqlfunc(
+    sqlname = "date_trunctstz",
+    category = "Date and time",
+    url = "/sql/functions/date-trunc"
+)]
 fn date_trunc_units_timestamp_tz(
     units: &str,
     ts: CheckedTimestamp<DateTime<Utc>>,
@@ -2411,7 +2479,11 @@ fn date_trunc_units_timestamp_tz(
 }
 
 /// Truncates an interval to the specified unit. Errors if the units are unknown.
-#[sqlfunc(sqlname = "date_trunciv", category = "Date/Time")]
+#[sqlfunc(
+    sqlname = "date_trunciv",
+    category = "Date and time",
+    url = "/sql/functions/date-trunc"
+)]
 fn date_trunc_interval(units: &str, mut interval: Interval) -> Result<Interval, EvalError> {
     let dtf = units
         .parse()
@@ -2436,7 +2508,11 @@ pub(crate) fn parse_timezone(tz: &str, spec: TimezoneSpec) -> Result<Timezone, E
 /// Converts the time datum `b`, which is assumed to be in UTC, to the timezone that the interval datum `a` is assumed
 /// to represent. The interval is not allowed to hold months, but there are no limits on the amount of seconds.
 /// The interval acts like a `chrono::FixedOffset`, without the `-86,400 < x < 86,400` limitation.
-#[sqlfunc(sqlname = "timezoneit")]
+#[sqlfunc(
+    sqlname = "timezoneit",
+    category = "Date and time",
+    url = "/sql/functions/timezone-and-at-time-zone"
+)]
 fn timezone_interval_time_binary(
     interval: Interval,
     time: chrono::NaiveTime,
@@ -2451,7 +2527,11 @@ fn timezone_interval_time_binary(
 /// Converts the timestamp datum `b`, which is assumed to be in the time of the timezone datum `a` to a timestamptz
 /// in UTC. The interval is not allowed to hold months, but there are no limits on the amount of seconds.
 /// The interval acts like a `chrono::FixedOffset`, without the `-86,400 < x < 86,400` limitation.
-#[sqlfunc(sqlname = "timezoneits")]
+#[sqlfunc(
+    sqlname = "timezoneits",
+    category = "Date and time",
+    url = "/sql/functions/timezone-and-at-time-zone"
+)]
 fn timezone_interval_timestamp_binary(
     interval: Interval,
     ts: CheckedTimestamp<NaiveDateTime>,
@@ -2469,7 +2549,11 @@ fn timezone_interval_timestamp_binary(
 /// Converts the UTC timestamptz datum `b`, to the local timestamp of the timezone datum `a`.
 /// The interval is not allowed to hold months, but there are no limits on the amount of seconds.
 /// The interval acts like a `chrono::FixedOffset`, without the `-86,400 < x < 86,400` limitation.
-#[sqlfunc(sqlname = "timezoneitstz")]
+#[sqlfunc(
+    sqlname = "timezoneitstz",
+    category = "Date and time",
+    url = "/sql/functions/timezone-and-at-time-zone"
+)]
 fn timezone_interval_timestamp_tz_binary(
     interval: Interval,
     tstz: CheckedTimestamp<DateTime<Utc>>,
@@ -2497,7 +2581,8 @@ fn timezone_interval_timestamp_tz_binary(
                 custom_id: None,
             }.nullable(true)"#,
     introduces_nulls = false,
-    category = "Date/Time"
+    category = "Date and time",
+    url = "/sql/functions/timezone-and-at-time-zone"
 )]
 fn timezone_offset<'a>(
     tz_str: &str,
@@ -2520,7 +2605,11 @@ fn timezone_offset<'a>(
 
 /// Determines if an mz_aclitem contains one of the specified privileges. This will return true if
 /// any of the listed privileges are contained in the mz_aclitem.
-#[sqlfunc(sqlname = "mz_aclitem_contains_privilege", output_type = "bool")]
+#[sqlfunc(
+    sqlname = "mz_aclitem_contains_privilege",
+    output_type = "bool",
+    category = "Access control"
+)]
 fn mz_acl_item_contains_privilege(
     mz_acl_item: MzAclItem,
     privileges: &str,
@@ -2652,6 +2741,7 @@ fn starts_with(a: &str, b: &str) -> bool {
     a.starts_with(b)
 }
 
+/// Concatenates two text values.
 #[sqlfunc(
     sqlname = "||",
     is_infix_op = true,
@@ -2675,7 +2765,8 @@ fn text_concat_binary(a: &str, b: &str) -> Result<String, EvalError> {
     Ok(buf)
 }
 
-#[sqlfunc(propagates_nulls = true, introduces_nulls = false)]
+/// Applies an escape character to a LIKE pattern.
+#[sqlfunc(propagates_nulls = true, introduces_nulls = false, category = "String")]
 fn like_escape<'a>(
     pattern: &str,
     b: &str,
@@ -2698,13 +2789,15 @@ fn is_like_match_case_insensitive(haystack: &str, pattern: &str) -> Result<bool,
     like_pattern::compile(pattern, true).map(|needle| needle.is_match(haystack))
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "~")]
+/// Tests if the string matches the regular expression (case-sensitive).
+#[sqlfunc(is_infix_op = true, sqlname = "~", category = "String")]
 fn is_regexp_match_case_sensitive(haystack: &str, needle: &str) -> Result<bool, EvalError> {
     let regex = build_regex(needle, "")?;
     Ok(regex.is_match(haystack))
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "~*")]
+/// Tests if the string matches the regular expression (case-insensitive).
+#[sqlfunc(is_infix_op = true, sqlname = "~*", category = "String")]
 fn is_regexp_match_case_insensitive(haystack: &str, needle: &str) -> Result<bool, EvalError> {
     let regex = build_regex(needle, "i")?;
     Ok(regex.is_match(haystack))
@@ -2784,7 +2877,8 @@ pub fn build_regex(needle: &str, flags: &str) -> Result<Regex, EvalError> {
     Ok(Regex::new(needle, case_insensitive)?)
 }
 
-#[sqlfunc(sqlname = "repeat")]
+/// Repeats the string the specified number of times.
+#[sqlfunc(sqlname = "repeat", category = "String")]
 fn repeat_string(string: &str, count: i32) -> Result<String, EvalError> {
     let len = usize::try_from(count).unwrap_or(0);
     if (len * string.len()) > MAX_STRING_FUNC_RESULT_BYTES {
@@ -2925,7 +3019,8 @@ fn position(substring: &str, string: &str) -> Result<i32, EvalError> {
     }
 }
 
-#[sqlfunc]
+/// Returns the position of the first occurrence of a substring.
+#[sqlfunc(category = "String")]
 fn strpos(string: &str, substring: &str) -> Result<i32, EvalError> {
     position(substring, string)
 }
@@ -2936,7 +3031,8 @@ fn strpos(string: &str, substring: &str) -> Result<i32, EvalError> {
     propagates_nulls = true,
     // `left` is unfortunately not monotonic (at least for negative second arguments),
     // because 'aa' < 'z', but `left(_, -1)` makes 'a' > ''.
-    is_monotone = (false, false)
+    is_monotone = (false, false),
+    category = "String"
 )]
 fn left<'a>(string: &'a str, n: i32) -> Result<&'a str, EvalError> {
     let n = i64::from(n);
@@ -2963,7 +3059,8 @@ fn left<'a>(string: &'a str, n: i32) -> Result<&'a str, EvalError> {
     Ok(&string[..end_in_bytes])
 }
 
-#[sqlfunc(propagates_nulls = true)]
+/// Returns the last n characters of the string.
+#[sqlfunc(propagates_nulls = true, category = "String")]
 fn right<'a>(string: &'a str, n: i32) -> Result<&'a str, EvalError> {
     let mut byte_indices = string.char_indices().map(|(i, _)| i);
 
@@ -3072,7 +3169,8 @@ fn array_remove<'a>(
     Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, elems))?)
 }
 
-#[sqlfunc]
+/// Returns the upper bound of the specified array dimension.
+#[sqlfunc(category = "Array")]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn array_upper<'a>(a: Array<'a>, i: i64) -> Result<Option<i32>, EvalError> {
@@ -3321,11 +3419,13 @@ fn element_list_concat<'a>(
     datum.unwrap_list()
 }
 
+/// Removes all occurrences of the given element from the list.
 #[sqlfunc(
     output_type_expr = "input_types[0].scalar_type.without_modifiers().nullable(true)",
     sqlname = "list_remove",
     propagates_nulls = false,
-    introduces_nulls = false
+    introduces_nulls = false,
+    category = "List"
 )]
 fn list_remove<'a>(a: DatumList<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> DatumList<'a> {
     temp_storage
@@ -3341,12 +3441,14 @@ fn list_remove<'a>(a: DatumList<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -
         .unwrap_list()
 }
 
-#[sqlfunc(sqlname = "digest")]
+/// Computes a binary hash of the given text data.
+#[sqlfunc(sqlname = "digest", category = "Hash")]
 fn digest_string(to_digest: &str, digest_fn: &str) -> Result<Vec<u8>, EvalError> {
     digest_inner(to_digest.as_bytes(), digest_fn)
 }
 
-#[sqlfunc(sqlname = "digest")]
+/// Computes a binary hash of the given bytea data.
+#[sqlfunc(sqlname = "digest", category = "Hash")]
 fn digest_bytes(to_digest: &[u8], digest_fn: &str) -> Result<Vec<u8>, EvalError> {
     digest_inner(to_digest, digest_fn)
 }
@@ -3363,7 +3465,8 @@ fn digest_inner(bytes: &[u8], digest_fn: &str) -> Result<Vec<u8>, EvalError> {
     }
 }
 
-#[sqlfunc]
+/// Renders a type modifier as a human-readable string.
+#[sqlfunc(category = "PostgreSQL compatibility")]
 fn mz_render_typmod(oid: u32, typmod: i32) -> String {
     match Type::from_oid_and_typmod(oid, typmod) {
         Ok(typ) => typ.constraint().display_or("").to_string(),

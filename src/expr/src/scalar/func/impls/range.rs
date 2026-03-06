@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
+/// Converts a range to text.
 #[sqldoc(unique_name = "rangetostr", category = "Cast")]
 #[derive(
     Ord,
@@ -106,12 +107,14 @@ fn range_upper<'a>(a: Range<Datum<'a>>) -> Option<Datum<'a>> {
     a.inner.map(|inner| inner.upper.bound).flatten()
 }
 
-#[sqlfunc(sqlname = "range_empty")]
+/// Returns true if the range is empty.
+#[sqlfunc(sqlname = "range_empty", category = "Range")]
 fn range_empty<'a>(a: Range<Datum<'a>>) -> bool {
     a.inner.is_none()
 }
 
-#[sqlfunc(sqlname = "range_lower_inc")]
+/// Returns true if the range's lower bound is inclusive.
+#[sqlfunc(sqlname = "range_lower_inc", category = "Range")]
 fn range_lower_inc<'a>(a: Range<Datum<'a>>) -> bool {
     match a.inner {
         None => false,
@@ -119,7 +122,8 @@ fn range_lower_inc<'a>(a: Range<Datum<'a>>) -> bool {
     }
 }
 
-#[sqlfunc(sqlname = "range_upper_inc")]
+/// Returns true if the range's upper bound is inclusive.
+#[sqlfunc(sqlname = "range_upper_inc", category = "Range")]
 fn range_upper_inc<'a>(a: Range<Datum<'a>>) -> bool {
     match a.inner {
         None => false,
@@ -127,7 +131,8 @@ fn range_upper_inc<'a>(a: Range<Datum<'a>>) -> bool {
     }
 }
 
-#[sqlfunc(sqlname = "range_lower_inf")]
+/// Returns true if the range's lower bound is infinite.
+#[sqlfunc(sqlname = "range_lower_inf", category = "Range")]
 fn range_lower_inf<'a>(a: Range<Datum<'a>>) -> bool {
     match a.inner {
         None => false,
@@ -135,7 +140,8 @@ fn range_lower_inf<'a>(a: Range<Datum<'a>>) -> bool {
     }
 }
 
-#[sqlfunc(sqlname = "range_upper_inf")]
+/// Returns true if the range's upper bound is infinite.
+#[sqlfunc(sqlname = "range_upper_inf", category = "Range")]
 fn range_upper_inf<'a>(a: Range<Datum<'a>>) -> bool {
     match a.inner {
         None => false,

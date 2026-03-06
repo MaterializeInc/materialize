@@ -25,7 +25,9 @@ use crate::EvalError;
 #[sqlfunc(
     sqlname = "mz_timestamp_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToMzTimestamp)
+    inverse = to_unary!(super::CastStringToMzTimestamp),
+    category = "Cast",
+    doc = "Converts mz_timestamp to text."
 )]
 fn cast_mz_timestamp_to_string(a: Timestamp) -> String {
     let mut buf = String::new();
@@ -36,7 +38,9 @@ fn cast_mz_timestamp_to_string(a: Timestamp) -> String {
 #[sqlfunc(
     sqlname = "text_to_mz_timestamp",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastMzTimestampToString)
+    inverse = to_unary!(super::CastMzTimestampToString),
+    category = "Cast",
+    doc = "Converts text to mz_timestamp."
 )]
 fn cast_string_to_mz_timestamp(a: String) -> Result<Timestamp, EvalError> {
     strconv::parse_mz_timestamp(&a).err_into()
@@ -45,7 +49,9 @@ fn cast_string_to_mz_timestamp(a: String) -> Result<Timestamp, EvalError> {
 #[sqlfunc(
     sqlname = "numeric_to_mz_timestamp",
     preserves_uniqueness = true,
-    is_monotone = true
+    is_monotone = true,
+    category = "Cast",
+    doc = "Converts numeric to mz_timestamp."
 )]
 fn cast_numeric_to_mz_timestamp(a: Numeric) -> Result<Timestamp, EvalError> {
     // The try_into will error if the conversion is lossy (out of range or fractional).
@@ -56,7 +62,9 @@ fn cast_numeric_to_mz_timestamp(a: Numeric) -> Result<Timestamp, EvalError> {
 #[sqlfunc(
     sqlname = "uint8_to_mz_timestamp",
     preserves_uniqueness = true,
-    is_monotone = true
+    is_monotone = true,
+    category = "Cast",
+    doc = "Converts uint8 to mz_timestamp."
 )]
 fn cast_uint64_to_mz_timestamp(a: u64) -> Timestamp {
     a.into()
@@ -65,7 +73,9 @@ fn cast_uint64_to_mz_timestamp(a: u64) -> Timestamp {
 #[sqlfunc(
     sqlname = "uint4_to_mz_timestamp",
     preserves_uniqueness = true,
-    is_monotone = true
+    is_monotone = true,
+    category = "Cast",
+    doc = "Converts uint4 to mz_timestamp."
 )]
 fn cast_uint32_to_mz_timestamp(a: u32) -> Timestamp {
     u64::from(a).into()
@@ -74,7 +84,9 @@ fn cast_uint32_to_mz_timestamp(a: u32) -> Timestamp {
 #[sqlfunc(
     sqlname = "bigint_to_mz_timestamp",
     preserves_uniqueness = true,
-    is_monotone = true
+    is_monotone = true,
+    category = "Cast",
+    doc = "Converts int8 to mz_timestamp."
 )]
 fn cast_int64_to_mz_timestamp(a: i64) -> Result<Timestamp, EvalError> {
     a.try_into()
@@ -84,7 +96,9 @@ fn cast_int64_to_mz_timestamp(a: i64) -> Result<Timestamp, EvalError> {
 #[sqlfunc(
     sqlname = "integer_to_mz_timestamp",
     preserves_uniqueness = true,
-    is_monotone = true
+    is_monotone = true,
+    category = "Cast",
+    doc = "Converts int4 to mz_timestamp."
 )]
 fn cast_int32_to_mz_timestamp(a: i32) -> Result<Timestamp, EvalError> {
     i64::from(a)
@@ -92,7 +106,12 @@ fn cast_int32_to_mz_timestamp(a: i32) -> Result<Timestamp, EvalError> {
         .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string().into()))
 }
 
-#[sqlfunc(sqlname = "timestamp_tz_to_mz_timestamp", is_monotone = true)]
+#[sqlfunc(
+    sqlname = "timestamp_tz_to_mz_timestamp",
+    is_monotone = true,
+    category = "Cast",
+    doc = "Converts timestamptz to mz_timestamp."
+)]
 fn cast_timestamp_tz_to_mz_timestamp(
     a: CheckedTimestamp<DateTime<Utc>>,
 ) -> Result<Timestamp, EvalError> {
@@ -101,7 +120,12 @@ fn cast_timestamp_tz_to_mz_timestamp(
         .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string().into()))
 }
 
-#[sqlfunc(sqlname = "timestamp_to_mz_timestamp", is_monotone = true)]
+#[sqlfunc(
+    sqlname = "timestamp_to_mz_timestamp",
+    is_monotone = true,
+    category = "Cast",
+    doc = "Converts timestamp to mz_timestamp."
+)]
 fn cast_timestamp_to_mz_timestamp(
     a: CheckedTimestamp<NaiveDateTime>,
 ) -> Result<Timestamp, EvalError> {
@@ -114,7 +138,9 @@ fn cast_timestamp_to_mz_timestamp(
 #[sqlfunc(
     sqlname = "date_to_mz_timestamp",
     preserves_uniqueness = true,
-    is_monotone = true
+    is_monotone = true,
+    category = "Cast",
+    doc = "Converts date to mz_timestamp."
 )]
 fn cast_date_to_mz_timestamp(a: Date) -> Result<Timestamp, EvalError> {
     let ts = CheckedTimestamp::try_from(NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap())?;
@@ -127,7 +153,9 @@ fn cast_date_to_mz_timestamp(a: Date) -> Result<Timestamp, EvalError> {
 #[sqlfunc(
     sqlname = "mz_timestamp_to_timestamp",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastTimestampToMzTimestamp)
+    inverse = to_unary!(super::CastTimestampToMzTimestamp),
+    category = "Cast",
+    doc = "Converts mz_timestamp to timestamp."
 )]
 fn cast_mz_timestamp_to_timestamp(
     a: Timestamp,
@@ -143,7 +171,9 @@ fn cast_mz_timestamp_to_timestamp(
 #[sqlfunc(
     sqlname = "mz_timestamp_to_timestamp_tz",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastTimestampTzToMzTimestamp)
+    inverse = to_unary!(super::CastTimestampTzToMzTimestamp),
+    category = "Cast",
+    doc = "Converts mz_timestamp to timestamptz."
 )]
 fn cast_mz_timestamp_to_timestamp_tz(
     a: Timestamp,
@@ -159,7 +189,9 @@ fn cast_mz_timestamp_to_timestamp_tz(
 #[sqlfunc(
     sqlname = "step_mz_timestamp",
     preserves_uniqueness = true,
-    is_monotone = true
+    is_monotone = true,
+    category = "System information",
+    doc = "Advances the mz_timestamp by one."
 )]
 fn step_mz_timestamp(a: Timestamp) -> Result<Timestamp, EvalError> {
     a.checked_add(1).ok_or(EvalError::MzTimestampStepOverflow)

@@ -20,6 +20,7 @@ use mz_expr_derive::sqldoc;
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
+/// Converts a one-dimensional array to a list.
 #[sqlfunc(
     sqlname = "arraytolist",
     preserves_uniqueness = true,
@@ -45,6 +46,7 @@ fn cast_array_to_list_one_dim<'a>(a: Array<'a>) -> Result<DatumList<'a>, EvalErr
     Ok(a.elements())
 }
 
+/// Converts an array to text.
 #[sqldoc(unique_name = "arraytostr", category = "Cast")]
 #[derive(
     Ord,
@@ -111,6 +113,7 @@ impl fmt::Display for CastArrayToString {
     }
 }
 
+/// Converts an array to jsonb.
 #[sqldoc(unique_name = "arraytojsonb", category = "Cast")]
 #[derive(
     Ord,

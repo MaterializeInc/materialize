@@ -13,10 +13,12 @@ use mz_repr::strconv;
 
 use crate::EvalError;
 
+/// Converts bytea to text.
 #[sqlfunc(
     sqlname = "bytea_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToBytes)
+    inverse = to_unary!(super::CastStringToBytes),
+    category = "Cast"
 )]
 fn cast_bytes_to_string(a: &[u8]) -> String {
     let mut buf = String::new();

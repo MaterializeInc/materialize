@@ -2124,11 +2124,11 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "date_bin" => Scalar {
             params!(Interval, Timestamp) => Operation::binary(|ecx, stride, source| {
                 ecx.require_feature_flag(&vars::ENABLE_BINARY_DATE_BIN)?;
-                Ok(stride.call_binary(source, func::DateBinTimestamp))
+                Ok(stride.call_binary(source, func::BinUnixEpochTimestamp))
             }) => Timestamp, oid::FUNC_MZ_DATE_BIN_UNIX_EPOCH_TS_OID;
             params!(Interval, TimestampTz) => Operation::binary(|ecx, stride, source| {
                 ecx.require_feature_flag(&vars::ENABLE_BINARY_DATE_BIN)?;
-                Ok(stride.call_binary(source, func::DateBinTimestampTz))
+                Ok(stride.call_binary(source, func::BinUnixEpochTimestampTz))
             }) => TimestampTz, oid::FUNC_MZ_DATE_BIN_UNIX_EPOCH_TSTZ_OID;
             params!(Interval, Timestamp, Timestamp)
                 => VariadicFunc::from(variadic::DateBinTimestamp) => Timestamp, 6177;

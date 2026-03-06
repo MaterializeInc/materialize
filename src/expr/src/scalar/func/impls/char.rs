@@ -20,7 +20,7 @@ use crate::scalar::func::EagerUnaryFunc;
 /// All Char data is stored in Datum::String with its blank padding removed
 /// (i.e. trimmed), so this function provides a means of restoring any
 /// removed padding.
-#[sqldoc(unique_name = "padchar", category = "Char")]
+#[sqldoc(unique_name = "padchar", category = "String")]
 #[derive(
     Ord,
     PartialOrd,
@@ -59,15 +59,15 @@ impl fmt::Display for PadChar {
     }
 }
 
-// This function simply allows the expression of changing a's type from char to
-// string
+/// Converts char to text.
 #[sqlfunc(
     sqlname = "char_to_text",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastStringToChar{
         length: None,
         fail_on_len: false,
-    })
+    }),
+    category = "Cast"
 )]
 fn cast_char_to_string<'a>(a: Char<&'a str>) -> &'a str {
     a.0

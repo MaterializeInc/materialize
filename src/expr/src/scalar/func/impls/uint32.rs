@@ -18,20 +18,24 @@ use serde::{Deserialize, Serialize};
 use crate::EvalError;
 use crate::scalar::func::EagerUnaryFunc;
 
+/// Computes the bitwise NOT.
 #[sqlfunc(
     sqlname = "~",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::BitNotUint32)
+    inverse = to_unary!(super::BitNotUint32),
+    category = "Numbers"
 )]
 fn bit_not_uint32(a: u32) -> u32 {
     !a
 }
 
+/// Converts uint4 to float4.
 #[sqlfunc(
     sqlname = "uint4_to_real",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastFloat32ToUint32),
-    is_monotone = true
+    is_monotone = true,
+    category = "Cast"
 )]
 fn cast_uint32_to_float32(a: u32) -> f32 {
     // TODO(benesch): remove potentially dangerous usage of `as`.
@@ -41,70 +45,84 @@ fn cast_uint32_to_float32(a: u32) -> f32 {
     }
 }
 
+/// Converts uint4 to float8.
 #[sqlfunc(
     sqlname = "uint4_to_double",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastFloat64ToUint32),
-    is_monotone = true
+    is_monotone = true,
+    category = "Cast"
 )]
 fn cast_uint32_to_float64(a: u32) -> f64 {
     f64::from(a)
 }
 
+/// Converts uint4 to uint2.
 #[sqlfunc(
     sqlname = "uint4_to_uint2",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastUint16ToUint32),
-    is_monotone = true
+    is_monotone = true,
+    category = "Cast"
 )]
 fn cast_uint32_to_uint16(a: u32) -> Result<u16, EvalError> {
     u16::try_from(a).or_else(|_| Err(EvalError::UInt16OutOfRange(a.to_string().into())))
 }
 
+/// Converts uint4 to uint8.
 #[sqlfunc(
     sqlname = "uint4_to_uint8",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastUint64ToUint32),
-    is_monotone = true
+    is_monotone = true,
+    category = "Cast"
 )]
 fn cast_uint32_to_uint64(a: u32) -> u64 {
     u64::from(a)
 }
 
+/// Converts uint4 to int2.
 #[sqlfunc(
     sqlname = "uint4_to_smallint",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastInt16ToUint32),
-    is_monotone = true
+    is_monotone = true,
+    category = "Cast"
 )]
 fn cast_uint32_to_int16(a: u32) -> Result<i16, EvalError> {
     i16::try_from(a).or_else(|_| Err(EvalError::Int16OutOfRange(a.to_string().into())))
 }
 
+/// Converts uint4 to int4.
 #[sqlfunc(
     sqlname = "uint4_to_integer",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastInt32ToUint32),
-    is_monotone = true
+    is_monotone = true,
+    category = "Cast"
 )]
 fn cast_uint32_to_int32(a: u32) -> Result<i32, EvalError> {
     i32::try_from(a).or_else(|_| Err(EvalError::Int32OutOfRange(a.to_string().into())))
 }
 
+/// Converts uint4 to int8.
 #[sqlfunc(
     sqlname = "uint4_to_bigint",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastInt64ToUint32),
-    is_monotone = true
+    is_monotone = true,
+    category = "Cast"
 )]
 fn cast_uint32_to_int64(a: u32) -> i64 {
     i64::from(a)
 }
 
+/// Converts uint4 to text.
 #[sqlfunc(
     sqlname = "uint4_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToUint32)
+    inverse = to_unary!(super::CastStringToUint32),
+    category = "Cast"
 )]
 fn cast_uint32_to_string(a: u32) -> String {
     let mut buf = String::new();
@@ -112,6 +130,7 @@ fn cast_uint32_to_string(a: u32) -> String {
     buf
 }
 
+/// Converts uint4 to numeric.
 #[sqldoc(unique_name = "uint4_to_numeric", category = "Cast")]
 #[derive(
     Ord,

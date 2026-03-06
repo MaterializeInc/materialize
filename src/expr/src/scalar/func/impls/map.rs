@@ -20,6 +20,7 @@ use mz_expr_derive::sqldoc;
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
+/// Converts a map to text.
 #[sqldoc(unique_name = "maptostr", category = "Cast")]
 #[derive(
     Ord,
@@ -94,7 +95,8 @@ fn map_length<'a>(a: DatumMap<'a>) -> Result<i32, EvalError> {
         .map_err(|_| EvalError::Int32OutOfRange(count.to_string().into()))
 }
 
-#[sqldoc(unique_name = "map_build", category = "Map")]
+/// Builds a map from a list of key-value records.
+#[sqldoc(unique_name = "map_build_from_record_list", category = "Map")]
 #[derive(
     Ord,
     PartialOrd,

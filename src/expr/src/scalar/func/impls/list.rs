@@ -20,6 +20,7 @@ use crate::func::binary::EagerBinaryFunc;
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
+/// Converts a list to text.
 #[sqldoc(unique_name = "listtostr", category = "Cast")]
 #[derive(
     Ord,
@@ -85,6 +86,7 @@ impl fmt::Display for CastListToString {
     }
 }
 
+/// Converts a list to jsonb.
 #[sqldoc(unique_name = "listtojsonb", category = "Cast")]
 #[derive(
     Ord,

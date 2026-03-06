@@ -62,6 +62,8 @@ pub(crate) struct Modifiers {
     side_effecting: Option<Expr>,
     /// Optional alias for documentation purposes.
     alias: Option<Expr>,
+    /// Optional documentation string. Overrides `///` doc comments if present.
+    doc: Option<String>,
 }
 
 /// A name for the SQL function. It can be either a literal or a macro, thus we
@@ -571,7 +573,10 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         .iter()
         .filter(|a| a.path().is_ident("doc"))
         .collect();
-    let description = documentation_string(&func.attrs);
+    let description = modifiers
+        .doc
+        .clone()
+        .unwrap_or_else(|| documentation_string(&func.attrs));
     let sqlname_str = modifiers
         .sqlname
         .as_ref()
@@ -646,6 +651,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         known_time_zone_limitation_cast: _,
         side_effecting: _,
         alias: _,
+        doc: _,
     } = modifiers;
 
     if is_infix_op.is_some() {
@@ -805,7 +811,10 @@ fn binary_func(
         .iter()
         .filter(|a| a.path().is_ident("doc"))
         .collect();
-    let description = documentation_string(&func.attrs);
+    let description = modifiers
+        .doc
+        .clone()
+        .unwrap_or_else(|| documentation_string(&func.attrs));
     let sqlname_str = modifiers
         .sqlname
         .as_ref()
@@ -893,6 +902,7 @@ fn binary_func(
         known_time_zone_limitation_cast: _,
         side_effecting: _,
         alias: _,
+        doc: _,
     } = modifiers;
 
     if preserves_uniqueness.is_some() {
@@ -1088,7 +1098,10 @@ fn variadic_func(
         .iter()
         .filter(|a| a.path().is_ident("doc"))
         .collect();
-    let description = documentation_string(&func.attrs);
+    let description = modifiers
+        .doc
+        .clone()
+        .unwrap_or_else(|| documentation_string(&func.attrs));
     let sqlname_str = modifiers
         .sqlname
         .as_ref()
@@ -1119,7 +1132,7 @@ fn variadic_func(
 
     let Modifiers {
         is_monotone,
-        sqlname,
+        sqlname: _,
         preserves_uniqueness,
         inverse,
         is_infix_op,
@@ -1139,6 +1152,7 @@ fn variadic_func(
         known_time_zone_limitation_cast: _,
         side_effecting: _,
         alias: _,
+        doc: _,
     } = modifiers;
 
     // Reject modifiers that don't apply to variadic functions.
@@ -1237,11 +1251,6 @@ fn variadic_func(
         quote! { #fn_name(#(#param_names),* #arena_arg) }
     };
 
-    // Build modifier functions.
-    let name = sqlname
-        .as_ref()
-        .map_or_else(|| quote! { stringify!(#fn_name) }, |name| quote! { #name });
-
     let (mut output_type_code, mut introduces_nulls_fn) = if let Some(output_type) = output_type {
         let introduces_nulls_fn = quote! {
             fn introduces_nulls(&self) -> bool {
@@ -1312,11 +1321,12 @@ fn variadic_func(
 
     // Build doc signature from parameter types.
     let output_static = staticify_lifetimes(output_ty);
-    let param_statics: Vec<_> = param_types.iter().map(|t| staticify_lifetimes(t)).collect();
+    let param_statics: Vec<_> = param_types.iter().map(staticify_lifetimes).collect();
     let param_name_strs: Vec<String> = param_names.iter().map(|n| n.to_string()).collect();
     let signature_expr = if let Some(ref sig) = explicit_signature {
         quote! { #sig.to_string() }
     } else {
+        #[allow(clippy::disallowed_methods)] // compile-time zip, lengths always match
         let param_parts: Vec<_> = param_name_strs
             .iter()
             .zip(param_statics.iter())
