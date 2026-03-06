@@ -161,9 +161,10 @@ CREATE CONNECTION aws_credentials TO AWS (
 {{< /tabs >}}
 
 ### S3 compatible object storage
-You can use an AWS connection to perform bulk exports to any S3 compatible object storage service,
-such as Google Cloud Storage. While connecting to S3 compatible object storage, you need to provide
-static access key credentials, specify the endpoint, and the region.
+You can use an AWS connection to perform bulk exports and bulk imports with any S3 compatible object
+storage service, such as Google Cloud Storage, Cloudflare R2, or MinIO. While connecting to S3
+compatible object storage, you need to provide static access key credentials, specify the endpoint,
+and the region.
 
 To create a connection that uses static access key credentials:
 
