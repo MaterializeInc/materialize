@@ -313,7 +313,7 @@ The build script auto-generates the `Keyword` enum from this file.
 **New item type** in `src/catalog/src/memory/objects.rs`:
 
 * Add `CatalogItem::StandingQuery(StandingQuery)` variant to the `CatalogItem` enum.
-* Define `StandingQuery` struct:
+* Define `StandingQuery` struct (modeled after `MaterializedView`):
   ```
   create_sql: String
   global_id: GlobalId
@@ -321,13 +321,14 @@ The build script auto-generates the `Keyword` enum from this file.
   result_desc: RelationDesc               // output columns
   target_id: GlobalId                     // the FROM object
   param_table_id: CatalogItemId           // internal parameter table
-  internal_view_id: CatalogItemId         // internal join view
-  raw_expr: Arc<HirRelationExpr>
+  raw_expr: Arc<HirRelationExpr>          // the rewritten join query
+  optimized_expr: Arc<OptimizedMirRelationExpr>
   resolved_ids: ResolvedIds
   dependencies: DependencyIds
   cluster_id: ClusterId
   ```
-* Wire through all `CatalogItem` match arms: `typ()`, `uses()`, `references()`, `relation_desc()` (returns `None` — the standing query itself is not a relation), `into_serialized()`, `global_id_for_version()`.
+  The standing query embeds the view definition directly (like materialized views) rather than referencing a separate catalog view.
+* Wire through all `CatalogItem` match arms: `typ()`, `uses()`, `references()`, `relation_desc()` (returns the result desc), `into_serialized()`, `global_id_for_version()`.
 
 **Persistence** in `src/catalog-protos/src/objects.rs`:
 
@@ -342,11 +343,12 @@ The build script auto-generates the `Keyword` enum from this file.
 * Add `CatalogItemType::StandingQuery` variant to the SQL-layer enum.
 
 **Internal objects.**
-The parameter table and internal view are standard `CatalogItem::Table` and `CatalogItem::View` items, created in the `mz_standing_queries` schema.
-No new schema constant is needed; the schema is a regular user-invisible schema created during catalog initialization (similar to how `mz_catalog` hosts builtin tables).
-Dependency edges: standing query → param table, standing query → internal view, internal view → param table, internal view → target object.
-Dropping the standing query cascades to the param table and internal view.
-Dropping the target object cascades to the internal view, then to the standing query.
+The parameter table is a standard `CatalogItem::Table` created in the `mz_standing_queries` schema.
+The internal view is not a separate catalog item; instead, the standing query itself holds the view definition (the rewritten join query as `raw_expr` / `optimized_expr`), following the same pattern as materialized views.
+The standing query's dataflow is rendered from this embedded expression, not from a separate view.
+Dependency edges: standing query → param table, standing query → target object.
+Dropping the standing query cascades to the param table.
+Dropping the target object cascades to the standing query (and its param table).
 
 **Builtin table** in `src/catalog/src/builtin.rs`:
 
@@ -361,17 +363,17 @@ Dropping the target object cascades to the internal view, then to the standing q
 **CREATE sequencing** in a new file `src/adapter/src/coord/sequencer/inner/create_standing_query.rs`:
 
 `sequence_create_standing_query()`:
-1. Allocate `CatalogItemId`s for the standing query, parameter table, and internal view.
+1. Allocate `CatalogItemId`s for the standing query and parameter table.
 2. **Create parameter table**: build a `CreateTablePlan` for `mz_standing_queries.params_<id>` with columns `(request_id UUID, param_1 <T1>, param_2 <T2>, ...)`.
-3. **Rewrite query to internal view**: transform the user's query into a join between the parameter table and the target object.
+3. **Rewrite query**: transform the user's query into a join between the parameter table and the target object.
    Parameter equality predicates (`col = $N`) become join conditions (`target.col = params.param_N`).
    Static filters remain as WHERE clauses.
    Project `request_id` as the first output column.
-4. **Create internal view**: build a `CreateViewPlan` for `mz_standing_queries.view_<id>` with the rewritten query.
-5. **Create standing query catalog entry**: insert the `StandingQuery` item referencing both internal objects.
-6. **Start SUBSCRIBE**: create a long-lived `ActiveSubscribe` on the internal view, modeled after introspection subscribes (`src/adapter/src/coord/introspection.rs`).
+   The rewritten expression is stored directly in the standing query catalog item (like a materialized view's expression).
+4. **Create standing query catalog entry**: insert the `StandingQuery` item with the rewritten expression and a reference to the parameter table.
+5. **Start SUBSCRIBE**: create a long-lived `ActiveSubscribe` on the standing query's dataflow, modeled after introspection subscribes (`src/adapter/src/coord/introspection.rs`).
    The subscribe runs on the standing query's cluster with `emit_progress: true`.
-7. **Register handler**: install a coordinator-side handler that reads from the SUBSCRIBE channel and demuxes results.
+6. **Register handler**: install a coordinator-side handler that reads from the SUBSCRIBE channel and demuxes results.
 
 **EXECUTE sequencing** in a new file `src/adapter/src/coord/sequencer/inner/execute_standing_query.rs`:
 
@@ -384,16 +386,20 @@ Dropping the target object cascades to the internal view, then to the standing q
 
 **Batch manager** (new coordinator component):
 
+A single task per standing query is responsible for flushing pending requests and retractions.
+This provides natural elasticity: more incoming requests mean larger batches, which increases throughput at the cost of higher latency.
+
 Per standing query, the coordinator maintains:
-* A **batch buffer**: `Vec<(Uuid, Vec<Datum>)>` of pending requests.
+* A **batch buffer**: `Vec<(Uuid, Row)>` of pending requests.
 * A **request map**: `BTreeMap<Uuid, ExecuteContext>` mapping request IDs to open sessions.
-* A **flush timer**: fires every ≥1ms or when the buffer reaches a size limit.
 * An **in-flight set**: `BTreeMap<Timestamp, Vec<Uuid>>` tracking which request IDs were written at which timestamp.
 
-On flush:
-1. Drain the batch buffer.
-2. Build a multi-row INSERT into the parameter table (reuse existing `insert_constant()` path from `src/adapter/src/coord/sequencer/inner.rs:2486`).
-3. Record the set of request IDs against the write timestamp in the in-flight set.
+The flush task runs in a loop:
+1. Wait for at least one pending request (or a minimum interval since the last flush).
+2. Drain the batch buffer.
+3. Build a multi-row INSERT into the parameter table (reuse existing `insert_constant()` path from `src/adapter/src/coord/sequencer/inner.rs:2486`).
+4. Record the set of request IDs against the write timestamp in the in-flight set.
+5. After results are delivered, issue a batched DELETE for the parameter rows (retractions can be coalesced across multiple batches).
 
 **SUBSCRIBE reader** (new coordinator component):
 
@@ -411,11 +417,12 @@ For each batch of rows received:
 The standing query's `ExecuteResponse` uses `SendingRowsImmediate { rows }` to return results like a normal SELECT.
 The row description is the standing query's result schema (fixed at CREATE time), excluding the internal `request_id` column.
 
-**Cluster restart.**
-On replica creation / SUBSCRIBE restart (modeled after `IntrospectionSubscribe::install_on_replica` in `src/adapter/src/coord/introspection.rs`):
-1. Clear the parameter table (DELETE all rows).
-2. Error all pending `ExecuteContext`s in the request map with `AdapterError::ClusterRestart` or similar.
-3. Re-establish the long-lived SUBSCRIBE.
+**Environmentd restart.**
+The SUBSCRIBE is not replica-targeted; cluster restarts are invisible to the coordinator.
+On environmentd startup:
+1. Clear all parameter tables (DELETE all rows) to remove stale requests from a previous incarnation.
+2. Re-establish the long-lived SUBSCRIBE for each standing query.
+There are no pending `ExecuteContext`s to error since environmentd restarted — all client connections are gone.
 
 **DROP sequencing.**
 Handled by the existing `DropObjectsPlan` path.
@@ -424,8 +431,7 @@ The coordinator must also: cancel the SUBSCRIBE, drain and error any pending req
 
 **Message types** in `src/adapter/src/coord.rs`:
 
-* Add `Message::StandingQueryBatchFlush { standing_query_id }` — sent by the flush timer.
-* Add `Message::StandingQueryResults { standing_query_id, rows }` — sent by the SUBSCRIBE reader task.
+* Add `Message::StandingQueryResults { standing_query_id, rows }` — sent by the SUBSCRIBE reader task to the coordinator for result delivery.
 
 Wire these through `message_handler.rs`.
 
