@@ -845,6 +845,7 @@ pub fn plan_create_source(
         include_metadata,
         metadata_columns_desc,
         &external_connection,
+        false, // CREATE SOURCE uses default schema, not user-declared columns
     )?;
     plan_utils::maybe_rename_columns(format!("source {}", name), &mut desc, col_names)?;
 
@@ -1297,6 +1298,7 @@ fn apply_source_envelope_encoding(
     include_metadata: &[SourceIncludeMetadata],
     metadata_columns_desc: Vec<(&str, SqlColumnType)>,
     source_connection: &GenericSourceConnection<ReferencedConnection>,
+    user_declared_columns: bool,
 ) -> Result<
     (
         RelationDesc,
@@ -1322,14 +1324,20 @@ fn apply_source_envelope_encoding(
         // Debezium JSON requires explicit user-declared columns to know how to decode
         // the before/after JSON objects. If the value_desc is just the source default
         // (e.g. a single bytes column from Kafka), reject with a clear error.
-        let cols: Vec<_> = value_desc.iter().collect();
-        if cols.len() == 1
-            && matches!(
-                cols[0].1.scalar_type,
-                SqlScalarType::Bytes | SqlScalarType::Jsonb
-            )
-        {
-            sql_bail!("ENVELOPE DEBEZIUM with FORMAT JSON requires explicit column definitions");
+        // Only apply this heuristic when columns were not user-declared, since a user
+        // could legitimately declare a single-column table with bytea or jsonb.
+        if !user_declared_columns {
+            let cols: Vec<_> = value_desc.iter().collect();
+            if cols.len() == 1
+                && matches!(
+                    cols[0].1.scalar_type,
+                    SqlScalarType::Bytes | SqlScalarType::Jsonb
+                )
+            {
+                sql_bail!(
+                    "ENVELOPE DEBEZIUM with FORMAT JSON requires explicit column definitions"
+                );
+            }
         }
         Some(value_desc.clone())
     } else {
@@ -2023,19 +2031,20 @@ pub fn plan_create_table_from_source(
     // during purification and define the `columns` and `constraints` fields for the statement,
     // whereas other source-types (e.g. kafka, single-output load-gen sources) do not, so instead
     // we use the source connection's default schema.
-    let (key_desc, value_desc) =
-        if matches!(columns, TableFromSourceColumns::Defined(_)) || !constraints.is_empty() {
-            let columns = match columns {
-                TableFromSourceColumns::Defined(columns) => columns,
-                _ => unreachable!(),
-            };
-            let desc = plan_source_export_desc(scx, name, columns, constraints)?;
-            (None, desc)
-        } else {
-            let key_desc = source_connection.default_key_desc();
-            let value_desc = source_connection.default_value_desc();
-            (Some(key_desc), value_desc)
+    let user_declared_columns =
+        matches!(columns, TableFromSourceColumns::Defined(_)) || !constraints.is_empty();
+    let (key_desc, value_desc) = if user_declared_columns {
+        let columns = match columns {
+            TableFromSourceColumns::Defined(columns) => columns,
+            _ => unreachable!(),
         };
+        let desc = plan_source_export_desc(scx, name, columns, constraints)?;
+        (None, desc)
+    } else {
+        let key_desc = source_connection.default_key_desc();
+        let value_desc = source_connection.default_value_desc();
+        (Some(key_desc), value_desc)
+    };
 
     let metadata_columns_desc = match &details {
         SourceExportDetails::Kafka(KafkaSourceExportDetails {
@@ -2053,6 +2062,7 @@ pub fn plan_create_table_from_source(
         include_metadata,
         metadata_columns_desc,
         source_connection,
+        user_declared_columns,
     )?;
     if let TableFromSourceColumns::Named(col_names) = columns {
         plan_utils::maybe_rename_columns(format!("source table {}", name), &mut desc, col_names)?;

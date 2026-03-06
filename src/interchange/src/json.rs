@@ -683,9 +683,11 @@ pub fn decode_debezium_json(
     let after_val = envelope.get("after");
 
     // Check for both-null case.
+    // For delete operations ("d"), both being null is valid when the source
+    // doesn't provide before-images (e.g., TiCDC without before-image support).
     let before_is_null = before_val.is_none() || before_val == Some(&serde_json::Value::Null);
     let after_is_null = after_val.is_none() || after_val == Some(&serde_json::Value::Null);
-    if before_is_null && after_is_null {
+    if before_is_null && after_is_null && op != "d" {
         return Err(DebeziumJsonError::BothNull);
     }
 
@@ -930,12 +932,13 @@ fn pack_json_value(
             let u: uuid::Uuid = s.parse().map_err(|_| type_err("uuid", val))?;
             packer.push(Datum::from(u));
         }
-        // For any other type, try to coerce from a string representation.
+        // Unsupported types should return an error rather than silently coercing.
         other => {
-            let s = val
-                .as_str()
-                .ok_or_else(|| type_err(&format!("{other:?}"), val))?;
-            packer.push(Datum::String(s));
+            return Err(DebeziumJsonError::TypeMismatch {
+                column: col_name.to_string(),
+                expected: format!("supported type, got {:?}", other),
+                got: format!("{}", val),
+            });
         }
     }
     Ok(())
