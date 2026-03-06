@@ -7,15 +7,18 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from textwrap import dedent
-
 from materialize.feature_benchmark.action import Action, TdAction
 from materialize.feature_benchmark.measurement_source import MeasurementSource, Td
 from materialize.feature_benchmark.scenario import Scenario
+from materialize.mz_version import MzVersion
 
 
 class StandingQuery(Scenario):
     """Feature benchmarks related to standing queries."""
+
+    @classmethod
+    def can_run(cls, version: MzVersion) -> bool:
+        return version >= MzVersion.create(26, 16, 0)
 
 
 class StandingQueryExecute(StandingQuery):
@@ -28,14 +31,12 @@ class StandingQueryExecute(StandingQuery):
     def init(self) -> list[Action]:
         return [
             TdAction(
-                dedent(
-                    f"""
-                    > DROP TABLE IF EXISTS t1 CASCADE;
-                    > CREATE TABLE t1 (id INT, category INT, val INT);
-                    > INSERT INTO t1 SELECT g, g % 100, g * 10 FROM generate_series(1, {self.n()}) AS g;
-                    > CREATE STANDING QUERY sq1 (cat INT) AS SELECT id, category, val FROM t1 WHERE category = cat;
-                    """
-                )
+                f"""\
+> DROP TABLE IF EXISTS t1 CASCADE
+> CREATE TABLE t1 (id INT, category INT, val INT)
+> INSERT INTO t1 SELECT g, g % 100, g * 10 FROM generate_series(1, {self.n()}) AS g
+> CREATE STANDING QUERY sq1 (cat INT) AS SELECT id, category, val FROM t1 WHERE category = cat
+"""
             ),
         ]
 
@@ -46,19 +47,17 @@ class StandingQueryExecute(StandingQuery):
         )
 
         return Td(
-            dedent(
-                f"""
-                > SELECT 1;
-                  /* A */
-                1
+            f"""\
+> SELECT 1
+  /* A */
+1
 
-                {repeated_executes}
+{repeated_executes}
 
-                > SELECT 1
-                  /* B */
-                1
-                """
-            )
+> SELECT 1
+  /* B */
+1
+"""
         )
 
 
@@ -72,15 +71,13 @@ class StandingQueryExecuteVsSelect(StandingQuery):
     def init(self) -> list[Action]:
         return [
             TdAction(
-                dedent(
-                    f"""
-                    > DROP TABLE IF EXISTS t1 CASCADE;
-                    > CREATE TABLE t1 (id INT, category INT, val INT);
-                    > INSERT INTO t1 SELECT g, g % 100, g * 10 FROM generate_series(1, {self.n()}) AS g;
-                    > CREATE DEFAULT INDEX ON t1;
-                    > CREATE STANDING QUERY sq1 (cat INT) AS SELECT id, category, val FROM t1 WHERE category = cat;
-                    """
-                )
+                f"""\
+> DROP TABLE IF EXISTS t1 CASCADE
+> CREATE TABLE t1 (id INT, category INT, val INT)
+> INSERT INTO t1 SELECT g, g % 100, g * 10 FROM generate_series(1, {self.n()}) AS g
+> CREATE DEFAULT INDEX ON t1
+> CREATE STANDING QUERY sq1 (cat INT) AS SELECT id, category, val FROM t1 WHERE category = cat
+"""
             ),
         ]
 
@@ -91,17 +88,15 @@ class StandingQueryExecuteVsSelect(StandingQuery):
         )
 
         return Td(
-            dedent(
-                f"""
-                > SELECT 1;
-                  /* A */
-                1
+            f"""\
+> SELECT 1
+  /* A */
+1
 
-                {repeated_executes}
+{repeated_executes}
 
-                > SELECT 1
-                  /* B */
-                1
-                """
-            )
+> SELECT 1
+  /* B */
+1
+"""
         )
