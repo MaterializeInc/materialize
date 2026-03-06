@@ -14,17 +14,20 @@
 //! O(shards).
 
 mod actor;
+mod crypto;
 mod metrics;
 mod recovery;
 mod s3_wal;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use clap::Parser;
 use tonic::transport::Server;
 use tracing::{debug, info};
 
 use crate::actor::{Actor, ActorCommand};
+use crate::crypto::EnvelopeEncryption;
 use crate::metrics::ConsensusMetrics;
 use crate::recovery::recover;
 use crate::s3_wal::S3WalWriter;
@@ -66,6 +69,19 @@ struct Args {
     /// Write a snapshot every this many WAL batches.
     #[arg(long, default_value = "100")]
     snapshot_interval: u64,
+
+    /// AWS KMS key ARN for envelope encryption of S3 data at rest.
+    /// When unset, data is written as plaintext (no encryption).
+    #[arg(long, env = "CONSENSUS_KMS_KEY_ID")]
+    kms_key_id: Option<String>,
+
+    /// AWS region for KMS. Defaults to the S3 region if unset.
+    #[arg(long, env = "CONSENSUS_KMS_REGION")]
+    kms_region: Option<String>,
+
+    /// DEK rotation interval in seconds.
+    #[arg(long, default_value = "300")]
+    dek_rotation_interval_secs: u64,
 }
 
 fn main() {
@@ -92,11 +108,39 @@ async fn run(args: Args) {
     let metrics_registry = mz_ore::metrics::MetricsRegistry::new();
     let metrics = ConsensusMetrics::register(&metrics_registry);
 
+    let encryption = if let Some(ref kms_key_id) = args.kms_key_id {
+        let kms_region = args
+            .kms_region
+            .as_deref()
+            .unwrap_or(&args.s3_region);
+        let mut kms_config_loader = mz_aws_util::defaults()
+            .region(aws_sdk_s3::config::Region::new(kms_region.to_owned()));
+        if let Some(ref endpoint) = args.s3_endpoint {
+            kms_config_loader = kms_config_loader.endpoint_url(endpoint);
+        }
+        let kms_config = kms_config_loader.load().await;
+        let kms_client = aws_sdk_kms::Client::new(&kms_config);
+        let enc = Arc::new(
+            EnvelopeEncryption::new(kms_client, kms_key_id.clone())
+                .await
+                .expect("failed to initialize KMS envelope encryption"),
+        );
+        enc.start_rotation(std::time::Duration::from_secs(
+            args.dek_rotation_interval_secs,
+        ));
+        info!(kms_key_id = %kms_key_id, "S3 data-at-rest encryption enabled");
+        Some(enc)
+    } else {
+        info!("S3 data-at-rest encryption disabled (no --kms-key-id)");
+        None
+    };
+
     let wal_writer = S3WalWriter::new(
         &args.s3_bucket,
         &args.s3_prefix,
         args.s3_endpoint.as_deref(),
         &args.s3_region,
+        encryption,
     )
     .await;
 

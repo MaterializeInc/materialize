@@ -19,6 +19,8 @@ bench = false
 [dependencies]
 anyhow = "1.0.101"
 async-trait = "0.1.89"
+aws-lc-rs = "1.12.6"
+aws-sdk-kms = { version = "1.96.0", default-features = false, features = ["rt-tokio"] }
 aws-sdk-s3 = { version = "1.94.0", default-features = false, features = ["rt-tokio"] }
 axum = "0.8.8"
 bytes = "1.11.1"

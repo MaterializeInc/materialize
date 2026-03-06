@@ -10,6 +10,7 @@
 //! S3 WAL and snapshot read/write for the consensus service.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use aws_sdk_s3::primitives::ByteStream;
 use prost::Message;
@@ -19,6 +20,7 @@ use mz_persist::generated::consensus_service::{
 };
 
 use crate::actor::{ShardState, VersionedEntry};
+use crate::crypto::EnvelopeEncryption;
 
 /// Error type for WAL write operations that distinguishes recoverable states.
 #[derive(Debug)]
@@ -82,6 +84,7 @@ pub struct S3WalWriter {
     client: mz_aws_util::s3::Client,
     bucket: String,
     prefix: String,
+    encryption: Option<Arc<EnvelopeEncryption>>,
 }
 
 impl S3WalWriter {
@@ -91,6 +94,7 @@ impl S3WalWriter {
         prefix: &str,
         endpoint: Option<&str>,
         region: &str,
+        encryption: Option<Arc<EnvelopeEncryption>>,
     ) -> Self {
         let mut config_loader = mz_aws_util::defaults()
             .region(aws_sdk_s3::config::Region::new(region.to_owned()));
@@ -103,6 +107,7 @@ impl S3WalWriter {
             client,
             bucket: bucket.to_owned(),
             prefix: prefix.to_owned(),
+            encryption,
         }
     }
 
@@ -120,6 +125,13 @@ impl WalWriter for S3WalWriter {
     async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), WalWriteError> {
         let key = self.wal_key(batch.batch_number);
         let body = batch.encode_to_vec();
+        let body = match &self.encryption {
+            Some(enc) => enc
+                .encrypt(&body)
+                .await
+                .map_err(|e| WalWriteError::Failed(e))?,
+            None => body,
+        };
         match self
             .client
             .put_object()
@@ -156,6 +168,10 @@ impl WalWriter for S3WalWriter {
     ) -> Result<(), anyhow::Error> {
         let snapshot = serialize_snapshot(shards, through_batch);
         let body = snapshot.encode_to_vec();
+        let body = match &self.encryption {
+            Some(enc) => enc.encrypt(&body).await?,
+            None => body,
+        };
         let key = self.snapshot_key();
         self.client
             .put_object()
@@ -173,6 +189,10 @@ impl WalWriter for S3WalWriter {
         match self.client.get_object().bucket(&self.bucket).key(&key).send().await {
             Ok(output) => {
                 let body = output.body.collect().await?.into_bytes();
+                let body = match &self.encryption {
+                    Some(enc) => enc.decrypt(&body).await?.into(),
+                    None => body,
+                };
                 let snapshot = ProtoSnapshot::decode(body)?;
                 Ok(Some(snapshot))
             }
@@ -199,6 +219,10 @@ impl WalWriter for S3WalWriter {
         {
             Ok(output) => {
                 let body = output.body.collect().await?.into_bytes();
+                let body = match &self.encryption {
+                    Some(enc) => enc.decrypt(&body).await?.into(),
+                    None => body,
+                };
                 let batch = ProtoWalBatch::decode(body)?;
                 Ok(Some(batch))
             }
