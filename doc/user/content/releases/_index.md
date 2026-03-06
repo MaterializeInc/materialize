@@ -15,6 +15,72 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.14.1
+*Released to Materialize Cloud: 2026-03-05* <br>
+*Released to Materialize Self-Managed: 2026-03-06* <br>
+
+This release introduces `COPY FROM` support for CSVs in object storage, source versioning for SQL Server sources, and performance improvements to DDL.
+
+### `COPY FROM` CSVs in object storage
+
+`COPY FROM` now supports bulk importing data directly from Amazon S3 and any
+S3-compatible object storage service, such as Google Cloud Storage, Cloudflare
+R2, or MinIO. You can import CSV files using an AWS connection or a presigned
+URL.
+
+```mzsql
+COPY INTO my_table
+FROM 's3://my_bucket/my_data.csv'
+(FORMAT CSV, AWS CONNECTION = my_aws_conn);
+```
+
+For more information, refer to:
+- [Syntax: COPY FROM](/sql/copy-from/)
+- [Syntax: CREATE CONNECTION (S3-compatible)](/sql/create-connection/#s3-compatible-object-storage)
+
+### SQL Server: Source versioning
+
+{{< private-preview />}}
+
+For SQL Server sources, we've introduced new syntax
+for [`CREATE SOURCE`](/sql/create-source/sql-server-v2/) and [`CREATE
+TABLE`](/sql/create-table/). This allows you to better handle schema changes
+in your source SQL Server tables.
+
+{{< note >}}
+- Changing column types is currently unsupported.
+{{< /note >}}
+
+For more information, refer to:
+- [Guide: Handling upstream schema changes with zero
+  downtime](/ingest-data/sql-server/source-versioning/)
+- [Syntax: `CREATE SOURCE`](/sql/create-source/sql-server-v2/)
+- [Syntax: `CREATE TABLE`](/sql/create-table/)
+
+### Improvements
+
+- **Faster DDL at scale**: We've improved DDL (e.g., `CREATE VIEW`, `CREATE INDEX`, `DROP`) latency by 37-55% for environments with many objects by making the internal catalog state a persistent data structure with structural sharing.
+- **Faster Iceberg sink commits**: We've improved Iceberg sink commit performance by disabling the duplicate check for RowDelta actions, which was causing significant commit time overhead.
+- **Up to 28x faster `COPY FROM STDIN`**: We've improved `COPY FROM STDIN` performance by parallelizing ingestion and using constant memory.
+
+### Bug Fixes
+
+- Fixed the jsonb contains operator (`?`) to correctly return NULL when
+  the left operand is NULL, matching PostgreSQL behavior.
+- Internal optimization that reduces resource usage of the catalog server; this can
+  reduce resource consumption on restart when indexes are added.
+- Fixed a panic when using `COPY FROM` with invalid range values (e.g.,
+  `[7,3)` where lower bound exceeds upper bound), now returning a
+  proper error message.
+- Fixed incorrect replication lag display in the Console during
+  PostgreSQL source snapshots, where `offset_committed` was incorrectly
+  reported as zero until the snapshot completed.
+- Fixed a panic when dropping materialized views that had active
+  subscribes depending on older GlobalIds.
+- Fixed dataflows being incorrectly re-planned after an environmentd
+  restart due to missing per-cluster optimizer feature overrides.
+- Fixed query formatting for SQL Server and MySQL sources.
+
 ## v26.13.0
 *Released to Materialize Cloud: 2026-02-26* <br>
 *Released to Materialize Self-Managed: 2026-02-27* <br>
