@@ -35,7 +35,7 @@ use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{
     CatalogItem, Cluster, ClusterReplica, Connection, ContinualTask, DataSourceDesc, Index,
-    MaterializedView, Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
+    MaterializedView, Secret, Sink, Source, StandingQuery, StateDiff, Table, TableDataSource, View,
 };
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::protocol::response::PeekResponse;
@@ -408,6 +408,32 @@ impl Coordinator {
                     compute_sinks_to_drop.push((ct.cluster_id, ct.global_id()));
                     sources_to_drop.push((catalog_id, ct.global_id()));
                 }
+                CatalogImplication::StandingQuery(CatalogImplicationKind::Added(sq)) => {
+                    tracing::debug!(?sq, "not handling AddStandingQuery in here yet");
+                }
+                CatalogImplication::StandingQuery(CatalogImplicationKind::Altered {
+                    prev: _prev_sq,
+                    new: _new_sq,
+                }) => {
+                    tracing::debug!("not handling AlterStandingQuery in here yet");
+                }
+                CatalogImplication::StandingQuery(CatalogImplicationKind::Dropped(
+                    sq,
+                    _full_name,
+                )) => {
+                    // Drop the subscribe sink (compute) and the param collection (storage).
+                    compute_sinks_to_drop.push((sq.cluster_id, sq.global_id));
+                    sources_to_drop.push((catalog_id, sq.param_collection_id));
+                    // Clean up the active standing query state.
+                    if let Some(asq) = self.active_standing_queries.remove(&sq.global_id) {
+                        // Error all pending requests.
+                        for (_request_id, ctx) in asq.request_map {
+                            ctx.retire(Err(crate::AdapterError::Unsupported(
+                                "standing query was dropped",
+                            )));
+                        }
+                    }
+                }
                 CatalogImplication::Secret(CatalogImplicationKind::Added(_secret)) => {
                     // No action needed: the secret payload is stored in
                     // secrets_controller.ensure() BEFORE the catalog transaction.
@@ -486,6 +512,7 @@ impl Coordinator {
                 | CatalogImplication::MaterializedView(CatalogImplicationKind::None)
                 | CatalogImplication::View(CatalogImplicationKind::None)
                 | CatalogImplication::ContinualTask(CatalogImplicationKind::None)
+                | CatalogImplication::StandingQuery(CatalogImplicationKind::None)
                 | CatalogImplication::Secret(CatalogImplicationKind::None)
                 | CatalogImplication::Connection(CatalogImplicationKind::None) => {
                     unreachable!("will never leave None in place");
@@ -1426,6 +1453,7 @@ enum CatalogImplication {
     MaterializedView(CatalogImplicationKind<MaterializedView>),
     View(CatalogImplicationKind<View>),
     ContinualTask(CatalogImplicationKind<ContinualTask>),
+    StandingQuery(CatalogImplicationKind<StandingQuery>),
     Secret(CatalogImplicationKind<Secret>),
     Connection(CatalogImplicationKind<Connection>),
     Cluster(CatalogImplicationKind<Cluster>),
@@ -1579,7 +1607,9 @@ impl CatalogImplication {
                 CatalogItem::Connection(connection) => {
                     self.absorb_connection(connection, None, catalog_update.diff);
                 }
-                CatalogItem::StandingQuery(_) => {}
+                CatalogItem::StandingQuery(sq) => {
+                    self.absorb_standing_query(sq, Some(parsed_full_name), catalog_update.diff);
+                }
                 CatalogItem::Log(_) => {}
                 CatalogItem::Type(_) => {}
                 CatalogItem::Func(_) => {}
@@ -1621,7 +1651,9 @@ impl CatalogImplication {
                 CatalogItem::Connection(connection) => {
                     self.absorb_connection(connection, None, catalog_update.diff);
                 }
-                CatalogItem::StandingQuery(_) => {}
+                CatalogItem::StandingQuery(sq) => {
+                    self.absorb_standing_query(sq, None, catalog_update.diff);
+                }
                 CatalogItem::Log(_) => {}
                 CatalogItem::Type(_) => {}
                 CatalogItem::Func(_) => {}
@@ -1653,6 +1685,7 @@ impl CatalogImplication {
     impl_absorb_method!(absorb_view, View, View);
 
     impl_absorb_method!(absorb_continual_task, ContinualTask, ContinualTask);
+    impl_absorb_method!(absorb_standing_query, StandingQuery, StandingQuery);
     impl_absorb_method!(absorb_secret, Secret, Secret);
     impl_absorb_method!(absorb_connection, Connection, Connection);
 
