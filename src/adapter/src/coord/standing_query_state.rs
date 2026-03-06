@@ -44,6 +44,10 @@ pub(crate) struct ActiveStandingQuery {
     pub in_flight: BTreeMap<Timestamp, Vec<Uuid>>,
     /// Buffered results: request_id → accumulated result rows.
     pub result_buffer: BTreeMap<Uuid, Vec<Row>>,
+    /// Param rows for in-flight requests: request_id → param row (for retraction after delivery).
+    pub param_rows: BTreeMap<Uuid, Row>,
+    /// Param rows for delivered requests, pending retraction from the param collection.
+    pub pending_retractions: Vec<Row>,
 }
 
 /// A pending EXECUTE request waiting to be batched and flushed.

@@ -104,11 +104,12 @@ impl Coordinator {
         let pending: Vec<PendingRequest> = asq.batch_buffer.drain(..).collect();
         let request_ids: Vec<Uuid> = pending.iter().map(|p| p.request_id).collect();
 
-        // Build table data: each param row gets diff +1.
-        let rows: Vec<(Row, Diff)> = pending
-            .into_iter()
-            .map(|p| (p.param_row, Diff::from(1i64)))
-            .collect();
+        // Save param rows for later retraction and build table data.
+        let mut rows: Vec<(Row, Diff)> = Vec::with_capacity(pending.len());
+        for p in pending {
+            asq.param_rows.insert(p.request_id, p.param_row.clone());
+            rows.push((p.param_row, Diff::from(1i64)));
+        }
 
         debug!(
             "standing query {sink_id}: flushing {} param rows to {}",

@@ -178,6 +178,8 @@ impl Coordinator {
                             request_map: BTreeMap::new(),
                             in_flight: BTreeMap::new(),
                             result_buffer: BTreeMap::new(),
+                            param_rows: BTreeMap::new(),
+                            pending_retractions: Vec::new(),
                         },
                     );
                 })

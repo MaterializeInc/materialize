@@ -373,7 +373,8 @@ impl Coordinator {
                     self.handle_introspection_subscribe_batch(sink_id, response)
                         .await;
                 } else if self.active_standing_queries.contains_key(&sink_id) {
-                    self.handle_standing_query_subscribe_batch(sink_id, response);
+                    self.handle_standing_query_subscribe_batch(sink_id, response)
+                        .await;
                 } else {
                     // Cancellation may cause us to receive responses for subscribes no longer
                     // tracked, so we quietly ignore them.
