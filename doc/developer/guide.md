@@ -141,8 +141,8 @@ script, which constructs a local virtual environment and keeps necessary
 dependencies up to date.
 
 We support, as a minimum version, the default Python provided in the [most
-recent Ubuntu LTS release](https://wiki.ubuntu.com/Releases). As of October 2023
-this is Python 3.10, provided in Ubuntu "Jammy Jellyfish". Earlier versions may
+recent Ubuntu LTS release](https://wiki.ubuntu.com/Releases). As of January 2026
+this is Python 3.12, provided in Ubuntu 24.04 "Noble Numbat". Earlier versions may
 work but are not supported. Our recommended installation methods are:
 
 - macOS: [Homebrew](https://brew.sh) + [uv](https://docs.astral.sh/uv/)
@@ -188,30 +188,10 @@ documentation. Then please update this guide with the new instructions!
 
 #### macOS
 
-You will need JDK 8 or 11. The easiest way to install this is via Homebrew:
+The easiest way to install this is via Homebrew:
 
 ```shell
-brew install openjdk@11
-```
-
-Then, download and extract the Confluent Platform tarball (when using bash, replace `~/.zshrc` with `~/.bashrc`):
-
-```shell
-INSTALL_DIR=$HOME/confluent  # You can choose somewhere else if you like.
-mkdir $INSTALL_DIR
-curl http://packages.confluent.io/archive/7.0/confluent-7.0.1.tar.gz | tar -xzC $INSTALL_DIR --strip-components=1
-echo export CONFLUENT_HOME=$(cd $INSTALL_DIR && pwd) >> ~/.zshrc
-source ~/.zshrc
-confluent local services start
-```
-When using bash, note that you need to create a `.bash_profile` that sources `.bashrc` to ensure
-the above works with the Terminal app.
-
-If you have multiple JDKs installed and your current JAVA_HOME points to an incompatible version,
-you can explicitly run confluent with JDK 8 or 11:
-
-```
-JAVA_HOME=$(/usr/libexec/java_home -v 1.11) confluent local services start
+brew install confluentinc/tap/cli
 ```
 
 #### Linux
@@ -220,10 +200,10 @@ On Debian-based Linux variants, you can use APT to install Java and the
 Confluent Platform:
 
 ```shell
-curl http://packages.confluent.io/deb/6.0/archive.key | sudo apt-key add -
-sudo add-apt-repository "deb [arch=amd64] https://packages.confluent.io/deb/6.0 stable main"
+curl http://packages.confluent.io/deb/8.2/archive.key | sudo apt-key add -
+sudo add-apt-repository "deb [arch=amd64] https://packages.confluent.io/deb/8.2 stable main"
 sudo apt update
-sudo apt install openjdk-11-jre-headless confluent-community-2.13
+sudo apt install openjdk-21-jre-headless confluent-community-2.13
 echo export CONFLUENT_HOME=/ >> ~/.bashrc
 source ~/.bashrc
 confluent local services start
@@ -231,7 +211,7 @@ confluent local services start
 
 On other Linux variants, you'll need to make your own way through [Confluent's
 installation instructions][confluent-install]. Note that, at the time of
-writing, only Java 8 and 11 are supported.
+writing (last update March 2026), Java LTS 11, 17, and 21 are supported.
 
 Alternatively, it is possible to get an all-in-one tarball from
 [here](https://packages.confluent.io/archive/). Then untar this to a
