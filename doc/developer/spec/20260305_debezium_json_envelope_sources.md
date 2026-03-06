@@ -136,7 +136,7 @@ For JSON + Debezium, the JSON decoder still produces a single Jsonb datum contai
 - **Rationale:** Keeps all envelope extraction logic co-located. The JSON path parses at render time (slightly different from Avro's index-based approach) but the upsert semantics (key + value → insert/update/delete) remain identical.
 
 **DD-9: Include key as separate output column (resolves key_indices correctness) [F1, F3, F5, F6]**
-- **Decision:** Unlike Avro Debezium (which embeds key fields inside the unpacked `after` Record), JSON Debezium includes the key as a separate `key: Jsonb` column prepended to the output row. The output schema is `[key: Jsonb, data: Jsonb, ...metadata]`. `key_indices` points to position `[0]` (the key column). This is necessary because: (a) `upsert_core` uses `UpsertKey::from_value(value_ref, &key_indices)` to reconstruct keys from persisted values during rehydration — empty/wrong `key_indices` would cause data corruption after restart; (b) the `data: Jsonb` column is opaque so `match_key_indices` cannot find named key fields within it; (c) users need access to key fields since they can't be extracted from the opaque `after` payload without knowing the schema.
+- **Decision:** Unlike Avro Debezium (which embeds key fields inside the unpacked `after` Record), JSON Debezium includes the key as a separate `key: Jsonb` column prepended to the output row. The base output schema is `[key: Jsonb, data: Jsonb, ...metadata]`. `key_indices` points to position `[0]` (the key column). This is necessary because: (a) `upsert_core` uses `UpsertKey::from_value(value_ref, &key_indices)` to reconstruct keys from persisted values during rehydration — empty/wrong `key_indices` would cause data corruption after restart; (b) the `data: Jsonb` column is opaque so `match_key_indices` cannot find named key fields within it; (c) users need access to key fields since they can't be extracted from the opaque `after` payload without knowing the schema.
 - **Consequence:** `INCLUDE KEY` rejection logic (which fires for Avro Debezium because "Debezium values include all keys") must NOT fire for JSON Debezium — the key is always included as a separate column. Update the validation at `ddl.rs:1372-1384` accordingly.
 - **To revisit:** Whether the key column should be named `key` (single Jsonb blob) or flattened into multiple columns if the key JSON has multiple top-level fields.
 
@@ -173,6 +173,13 @@ For JSON + Debezium, the JSON decoder still produces a single Jsonb datum contai
 - **Decision:** For multi-partition Kafka topics, updates for the same key on different partitions can arrive out of order. This is the same limitation as existing Avro Debezium sources and is inherent to Kafka's per-partition ordering guarantee. TiCDC distributes events across partitions, so this is particularly relevant for the TiCDC use case.
 - **Known constraint:** Users must ensure same-key events are routed to the same partition (standard Kafka key-based partitioning) for correct ordering.
 - **To revisit:** Whether `commit_ts`-based ordering (DD-3) could resolve cross-partition ordering for TiCDC.
+
+**DD-18: Opt-in envelope metadata via INCLUDE DEBEZIUM METADATA**
+- **Decision:** The full Debezium envelope (including `op`, `source`, `ts_ms`, `before`, `after`, `transaction`, etc.) is exposed as an opt-in jsonb column via `INCLUDE DEBEZIUM METADATA [AS alias]`. Default column name is `debezium_metadata` when no alias is given.
+- **Rationale:** Users need CDC metadata like `commit_ts` (for TiCDC/Dumpling snapshot correlation) and `ts_ms`. Rather than always including this data (which duplicates the `after` payload and wastes storage), the `INCLUDE` mechanism follows the existing pattern of `INCLUDE OFFSET`, `INCLUDE PARTITION`, etc. — opt-in, user-named columns for metadata.
+- **Alternatives considered:** (A) Granular `INCLUDE DEBEZIUM SOURCE`, `INCLUDE DEBEZIUM TIMESTAMP` — more parser work for questionable benefit since users can use `->` on a single jsonb column. (B) Magic column names like `__debezium_source` — implicit and surprising. (C) Always-on `envelope` column — wastes storage when not needed, inconsistent with INCLUDE pattern.
+- **Validation:** `INCLUDE DEBEZIUM METADATA` is only valid with `ENVELOPE DEBEZIUM` + `VALUE FORMAT JSON`. Using it with other envelopes produces a planning error.
+- **Implementation:** The column name is stored in `UpsertStyle::DebeziumJson { envelope_column: Option<String> }`. At render time, `extract_debezium_json()` conditionally serializes the full envelope only when `envelope_column.is_some()`.
 
 **DD-17: Pseudocode is illustrative, not compilable [F7, F13]**
 - **Decision:** All pseudocode in this spec (particularly `extract_debezium_json` and the `upsert_commands` match arm) is illustrative of the intended logic, not compilable Rust. Implementation must handle Rust-specific concerns: (a) `Datum::Jsonb` wraps a borrowed `JsonbRef<'a>` — extracting and re-packing requires allocating into a `Row` via `RowPacker`; (b) the nested match structure in Task 5 should be simplified during implementation; (c) error types must use the concrete `DecodeErrorKind` variants available in the codebase.
@@ -219,6 +226,11 @@ For JSON + Debezium, the JSON decoder still produces a single Jsonb datum contai
     ```
   - Notes: The `MODE` keyword may need to be added to the keyword list if not already present.
 
+- [ ] **Task 2b: Add INCLUDE DEBEZIUM METADATA to parser**
+  - File: `src/sql-parser/src/parser.rs`, `src/sql-parser/src/ast/defs/ddl.rs`
+  - Action: Add `DebeziumMetadata { alias: Option<Ident> }` variant to `SourceIncludeMetadata` enum. In `parse_source_include_metadata()`, add `DEBEZIUM` to the keyword list; when matched, expect `METADATA` keyword, then parse optional alias. Update `AstDisplay` for the new variant.
+  - Notes: The two-keyword sequence `DEBEZIUM METADATA` avoids ambiguity with the existing `DEBEZIUM` keyword used in envelope parsing.
+
 - [ ] **Task 3: Add UpsertStyle::DebeziumJson variant**
   - File: `src/storage-types/src/sources/envelope.rs`
   - Action: Add a new variant to `UpsertStyle`:
@@ -226,7 +238,7 @@ For JSON + Debezium, the JSON decoder still produces a single Jsonb datum contai
     pub enum UpsertStyle {
         Default(KeyEnvelope),
         Debezium { after_idx: usize },
-        DebeziumJson { mode: DebeziumJsonMode },
+        DebeziumJson { mode: DebeziumJsonMode, envelope_column: Option<String> },
         ValueErrInline { key_envelope: KeyEnvelope, error_column: String },
     }
     ```
@@ -234,24 +246,29 @@ For JSON + Debezium, the JSON decoder still produces a single Jsonb datum contai
     ```rust
     pub enum DebeziumJsonMode { Generic, TiCdc }
     ```
+  - Notes: `envelope_column` is `Some(name)` when `INCLUDE DEBEZIUM METADATA [AS name]` is specified, `None` otherwise. See DD-18.
   - Notes: Must derive `Clone, Debug, Serialize, Deserialize, Eq, PartialEq` to match existing variants.
 
 - [ ] **Task 4: Add UnplannedSourceEnvelope descriptor transform for DebeziumJson**
   - File: `src/storage-types/src/sources/envelope.rs`
-  - Action: In the `UnplannedSourceEnvelope` match that builds the output `RelationDesc` (line ~230), add a new arm for `UpsertStyle::DebeziumJson`. Per DD-9, the output schema is `[key: Jsonb, data: Jsonb, envelope: Jsonb, ...metadata]`:
+  - Action: In the `UnplannedSourceEnvelope` match that builds the output `RelationDesc` (line ~230), add a new arm for `UpsertStyle::DebeziumJson`. Per DD-9, the base output schema is `[key: Jsonb, data: Jsonb, ...metadata]`. If `INCLUDE DEBEZIUM METADATA` is specified, an additional jsonb column is added between `data` and metadata:
     ```rust
     UnplannedSourceEnvelope::Upsert {
-        style: UpsertStyle::DebeziumJson { .. },
+        style: UpsertStyle::DebeziumJson { envelope_column, .. },
     } => {
-        // Key is included as a separate column (unlike Avro Debezium where keys are in the after record)
-        let mut desc = RelationDesc::builder()
+        let key_desc = RelationDesc::builder()
             .with_column("key", ScalarType::Jsonb.nullable(false))
-            .with_column("data", ScalarType::Jsonb.nullable(false))
             .finish();
-        // key_indices = [0] — points to the key column for UpsertKey::from_value rehydration
+        let mut value_builder = RelationDesc::builder()
+            .with_column("data", ScalarType::Jsonb.nullable(false));
+        if let Some(col_name) = envelope_column {
+            value_builder = value_builder
+                .with_column(col_name, ScalarType::Jsonb.nullable(false));
+        }
+        let value_desc = value_builder.finish();
         let key_indices = vec![0usize];
-        desc = desc.with_key(key_indices.clone());
-        let desc = desc.concat(metadata_desc);
+        let desc = key_desc.with_key(key_indices.clone())
+            .concat(value_desc).concat(metadata_desc);
         (
             self.into_source_envelope(Some(key_indices), None, Some(desc.arity())),
             desc,
@@ -296,21 +313,22 @@ For JSON + Debezium, the JSON decoder still produces a single Jsonb datum contai
     ```
   - Action: Update all other match arms referencing `ast::SourceEnvelope::Debezium` to use `ast::SourceEnvelope::Debezium { .. }` pattern (lines 810, 1372-1384, and any others found by the compiler).
   - Action: Per DD-9, update `INCLUDE KEY` rejection logic at `ddl.rs:1372-1384` — the "Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM" error must NOT fire when `DataEncoding::Json` is used. For JSON Debezium, key is always included as a separate column.
+  - Action: Extract `INCLUDE DEBEZIUM METADATA` from `include_metadata`, pass column name to `UpsertStyle::DebeziumJson { envelope_column }`. Filter `DebeziumMetadata` items out of Kafka metadata processing (they're not Kafka metadata). Add validation: `INCLUDE DEBEZIUM METADATA` requires `ENVELOPE DEBEZIUM` + `VALUE FORMAT JSON`. See DD-18.
   - Notes: The error message changes from "AVRO" to "AVRO or JSON". KEY FORMAT validation at line 2247 already covers Debezium and requires no changes.
 
 - [ ] **Task 6: Implement DebeziumJson extraction in upsert_commands**
   - File: `src/storage/src/render/sources.rs`
   - Action: Add a new match arm in `upsert_commands()` alongside the existing `UpsertStyle::Debezium { after_idx }` arm (line ~549):
     ```rust
-    UpsertStyle::DebeziumJson { mode } => {
-        // The row contains a single Jsonb datum with the full Debezium envelope
-        let jsonb_datum = row.iter().next().unwrap();
-        match extract_debezium_json(jsonb_datum, mode) {
-            Ok(Some(after_jsonb_row)) => {
-                // Per DD-9: prepend key, then after payload, then metadata
+    UpsertStyle::DebeziumJson { ref mode, ref envelope_column } => {
+        match extract_debezium_json(row, mode, envelope_column.is_some()) {
+            Ok(Some((after_row, envelope_row))) => {
                 let mut packer = row_buf.packer();
-                packer.extend(key_row.iter()); // key at position 0
-                packer.extend(after_jsonb_row.iter()); // data at position 1
+                packer.extend_by_row(&key_row);      // key at position 0
+                packer.extend_by_row(&after_row);     // data at position 1
+                if let Some(env_row) = envelope_row { // envelope (opt-in via DD-18)
+                    packer.extend_by_row(&env_row);
+                }
                 packer.extend_by_row(&metadata);
                 Some(Ok(row_buf.clone()))
             }
@@ -319,23 +337,25 @@ For JSON + Debezium, the JSON decoder still produces a single Jsonb datum contai
         }
     }
     ```
-  - Action: Implement `extract_debezium_json()` helper function (in same file or in `src/interchange/src/json.rs`). Per DD-12/DD-13/DD-17, pseudocode is illustrative:
+  - Action: Implement `extract_debezium_json()` helper function (in same file or in `src/interchange/src/json.rs`). Per DD-12/DD-13/DD-17/DD-18, pseudocode is illustrative:
     ```rust
     fn extract_debezium_json(
-        datum: Datum<'_>,
+        row: &Row,
         mode: &DebeziumJsonMode,
-    ) -> Result<Option<Row>, DecodeErrorKind> {
-        // 1. Convert Jsonb datum to serde_json::Value (requires Row allocation per DD-17)
+        include_envelope: bool,
+    ) -> Result<Option<(Row, Option<Row>)>, DecodeError> {
+        // 1. Convert Jsonb datum to serde_json::Value via JsonbRef::from_datum()
         // 2. Check for "payload" wrapper; if present, unwrap
         // 3. Extract "op" field:
         //    - "c" or "r" (per DD-12: snapshot reads treated as inserts) → extract after
         //    - "u" → extract after
         //    - "d" → return Ok(None)
         //    - "t" → log warning, return Ok(None) per DD-13
-        //    - missing/other → return Err(DecodeErrorKind)
+        //    - missing/other → return Err(DecodeError)
         // 4. Extract "after" field → must be non-null for c/r/u, else Err
         // 5. Serialize "after" back into a Row containing a single Jsonb datum
-        // 6. Return Ok(Some(row))
+        // 6. If include_envelope, serialize full envelope into a separate Row (DD-18)
+        // 7. Return Ok(Some((after_row, envelope_row)))
     }
     ```
   - Action: Also update the key_row match arm (line ~517) to include `UpsertStyle::DebeziumJson { .. }` alongside `UpsertStyle::Debezium { .. }` for key handling.
@@ -373,7 +393,7 @@ For JSON + Debezium, the JSON decoder still produces a single Jsonb datum contai
 - [ ] AC-6: Given a Debezium JSON message with `"op": "r"` (snapshot/read), when ingested, then it is treated as an insert (same as `"c"`). [DD-12]
 
 **TiCDC Mode:**
-- [ ] AC-7: Given `ENVELOPE DEBEZIUM (MODE = 'TICDC')` in the CREATE SOURCE statement, when a TiCDC-formatted JSON message is published, then the source processes it correctly. The full Debezium envelope (including `commit_ts`, `cluster_id`, and other TiCDC metadata) is preserved in the `envelope` column for user queries (e.g., `envelope->'source'->>'commit_ts'`).
+- [ ] AC-7: Given `ENVELOPE DEBEZIUM (MODE = 'TICDC')` with `INCLUDE DEBEZIUM METADATA AS dbz_meta` in the CREATE TABLE statement, when a TiCDC-formatted JSON message is published, then the source processes it correctly. The full Debezium envelope (including `commit_ts`, `cluster_id`, and other TiCDC metadata) is preserved in the `dbz_meta` column for user queries (e.g., `dbz_meta->'source'->>'commit_ts'`).
 
 **Error Handling:**
 - [ ] AC-8: Given a JSON message with a missing `"op"` field, when ingested, then a decode error is surfaced through the source's error collection (not silently dropped).
@@ -381,6 +401,11 @@ For JSON + Debezium, the JSON decoder still produces a single Jsonb datum contai
 - [ ] AC-10: Given a JSON message with `"op": "c"` but null `"after"`, when ingested, then a decode error is surfaced.
 - [ ] AC-11: Given a Debezium JSON message with `"op": "t"` (truncate), when ingested, then it is silently skipped (not errored). [DD-13]
 - [ ] AC-12: Given a null Kafka message value (tombstone), when ingested, then it is treated as a delete for the given key. [DD-14]
+
+**INCLUDE DEBEZIUM METADATA:**
+- [ ] AC-18: Given `INCLUDE DEBEZIUM METADATA AS dbz_envelope` with `KEY FORMAT JSON VALUE FORMAT JSON ENVELOPE DEBEZIUM`, when a message with `source`, `ts_ms`, and `op` fields is published, then the `dbz_envelope` column contains the full Debezium envelope as jsonb.
+- [ ] AC-19: Given `INCLUDE DEBEZIUM METADATA` (no alias) with `ENVELOPE DEBEZIUM`, when the table is created, then the column is named `debezium_metadata`.
+- [ ] AC-20: Given `INCLUDE DEBEZIUM METADATA` with `ENVELOPE UPSERT` (not DEBEZIUM), when CREATE TABLE is executed, then it fails with an error requiring ENVELOPE DEBEZIUM with VALUE FORMAT JSON.
 
 **SQL Validation:**
 - [ ] AC-13: Given `VALUE FORMAT JSON, ENVELOPE DEBEZIUM` without `KEY FORMAT`, when CREATE SOURCE is executed, then it fails with an error requiring KEY FORMAT.
@@ -404,8 +429,8 @@ For JSON + Debezium, the JSON decoder still produces a single Jsonb datum contai
 ### Testing Strategy
 
 **Testdrive (integration):**
-- `test/testdrive/kafka-debezium-json-sources.td` — primary test file covering generic Debezium JSON: insert, update, delete, payload-wrapped, flat, compound key, error cases
-- `test/testdrive/kafka-debezium-json-ticdc-sources.td` — TiCDC dialect mode tests
+- `test/testdrive/kafka-debezium-json-sources.td` — primary test file covering generic Debezium JSON: insert, update, delete, payload-wrapped, flat, INCLUDE OFFSET, INCLUDE DEBEZIUM METADATA (with alias and default name), error cases
+- `test/testdrive/kafka-debezium-json-ticdc-sources.td` — TiCDC dialect mode tests with INCLUDE DEBEZIUM METADATA to verify `commit_ts` access
 
 **Regression:**
 - Run existing `test/testdrive/kafka-upsert-debezium-sources.td` and related Avro Debezium tests to ensure no breakage from the `SourceEnvelope::Debezium` AST change
@@ -419,14 +444,15 @@ For JSON + Debezium, the JSON decoder still produces a single Jsonb datum contai
 
 ### Notes
 
-- All identified risks are captured as design decisions DD-9 through DD-17.
+- All identified risks are captured as design decisions DD-9 through DD-18.
 - TiCDC MODE is parsed and stored but V1 behavior is identical to generic mode (DD-15).
 - Multi-partition ordering is a known constraint documented in DD-16.
+- CDC metadata (e.g., `commit_ts`, `ts_ms`) is accessible via opt-in `INCLUDE DEBEZIUM METADATA` (DD-18).
 
 **Future considerations (out of scope):**
 - Schema-aware column projection (`CREATE SOURCE ... (id int, name text) FORMAT JSON ENVELOPE DEBEZIUM`)
 - Keyless upsert where key is derived from the Debezium payload
-- `commit_ts`-based ordering for TiCDC (the field is already preserved in the `envelope` column; future work is using it for message ordering)
+- `commit_ts`-based ordering for TiCDC (the field is already preserved via `INCLUDE DEBEZIUM METADATA`; future work is using it for message ordering)
 - Additional MODE values: Maxwell, Canal, etc.
 - Truncate operation support (DD-13)
 
