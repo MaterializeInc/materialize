@@ -163,7 +163,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def workflow_throughput(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Measure max throughput at increasing concurrency levels."""
     c.up("materialized")
-    c.wait_for_materialized()
+
     setup_standing_query(c)
 
     concurrency_levels = [1, 4, 16, 64]
@@ -193,7 +193,7 @@ def workflow_target_qps(c: Composition, parser: WorkflowArgumentParser) -> None:
     can sustain the target throughput without queuing.
     """
     c.up("materialized")
-    c.wait_for_materialized()
+
     setup_standing_query(c)
 
     # Target QPS levels with latency budgets (ms).
