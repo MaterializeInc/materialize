@@ -57,6 +57,7 @@ pub mod dataflows;
 pub mod index;
 pub mod materialized_view;
 pub mod peek;
+pub mod standing_query;
 pub mod subscribe;
 pub mod view;
 
