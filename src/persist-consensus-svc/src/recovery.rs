@@ -23,18 +23,12 @@ use crate::s3_wal::{WalWriter, deserialize_snapshot};
 ///
 /// Returns `(shards, next_batch_number)` — the actor should start writing
 /// at `next_batch_number`.
-pub async fn recover<W: WalWriter>(
-    wal_writer: &W,
-) -> (BTreeMap<String, ShardState>, u64) {
+pub async fn recover<W: WalWriter>(wal_writer: &W) -> (BTreeMap<String, ShardState>, u64) {
     // 1. Try loading snapshot.
     let (mut shards, last_batch) = match wal_writer.read_snapshot().await {
         Ok(Some(snapshot)) => {
             let (shards, through_batch) = deserialize_snapshot(&snapshot);
-            info!(
-                through_batch,
-                shards = shards.len(),
-                "loaded snapshot"
-            );
+            info!(through_batch, shards = shards.len(), "loaded snapshot");
             (shards, through_batch)
         }
         Ok(None) => {
@@ -60,7 +54,11 @@ pub async fn recover<W: WalWriter>(
     loop {
         match wal_writer.read_batch(next).await {
             Ok(Some(batch)) => {
-                info!(batch_number = batch.batch_number, ops = batch.ops.len(), "replaying WAL batch");
+                info!(
+                    batch_number = batch.batch_number,
+                    ops = batch.ops.len(),
+                    "replaying WAL batch"
+                );
                 for wal_op in &batch.ops {
                     match &wal_op.op {
                         Some(proto_wal_op::Op::Write(w)) => {

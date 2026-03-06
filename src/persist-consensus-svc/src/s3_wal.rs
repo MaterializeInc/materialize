@@ -86,14 +86,9 @@ pub struct S3WalWriter {
 
 impl S3WalWriter {
     /// Creates a new S3WalWriter.
-    pub async fn new(
-        bucket: &str,
-        prefix: &str,
-        endpoint: Option<&str>,
-        region: &str,
-    ) -> Self {
-        let mut config_loader = mz_aws_util::defaults()
-            .region(aws_sdk_s3::config::Region::new(region.to_owned()));
+    pub async fn new(bucket: &str, prefix: &str, endpoint: Option<&str>, region: &str) -> Self {
+        let mut config_loader =
+            mz_aws_util::defaults().region(aws_sdk_s3::config::Region::new(region.to_owned()));
         if let Some(endpoint) = endpoint {
             config_loader = config_loader.endpoint_url(endpoint);
         }
@@ -170,7 +165,14 @@ impl WalWriter for S3WalWriter {
 
     async fn read_snapshot(&self) -> Result<Option<ProtoSnapshot>, anyhow::Error> {
         let key = self.snapshot_key();
-        match self.client.get_object().bucket(&self.bucket).key(&key).send().await {
+        match self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(&key)
+            .send()
+            .await
+        {
             Ok(output) => {
                 let body = output.body.collect().await?.into_bytes();
                 let snapshot = ProtoSnapshot::decode(body)?;
@@ -207,7 +209,11 @@ impl WalWriter for S3WalWriter {
                 if service_err.is_no_such_key() {
                     Ok(None)
                 } else {
-                    Err(anyhow::anyhow!("S3 GET wal/{}: {}", batch_number, service_err))
+                    Err(anyhow::anyhow!(
+                        "S3 GET wal/{}: {}",
+                        batch_number,
+                        service_err
+                    ))
                 }
             }
         }
@@ -240,9 +246,7 @@ pub fn serialize_snapshot(
 }
 
 /// Deserializes a `ProtoSnapshot` into in-memory shard state.
-pub fn deserialize_snapshot(
-    snapshot: &ProtoSnapshot,
-) -> (BTreeMap<String, ShardState>, u64) {
+pub fn deserialize_snapshot(snapshot: &ProtoSnapshot) -> (BTreeMap<String, ShardState>, u64) {
     let shards = snapshot
         .shards
         .iter()

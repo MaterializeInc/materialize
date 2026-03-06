@@ -86,10 +86,15 @@ struct Simulator {
     wal: Arc<SimWalWriter>,
     /// Reference model: committed entries per shard after flush.
     model: BTreeMap<String, Vec<(u64, Vec<u8>)>>,
-    /// Pending CAS ops in current batch (shard, seqno, data, committed).
+    /// Pending CAS ops in current batch (shard, seqno, data, accepted).
+    /// `accepted` means the CAS won conflict detection — it will become a
+    /// WAL op on the next flush, but isn't durable yet.
     pending_cas: Vec<(String, u64, Vec<u8>, bool)>,
     /// Pending truncates in current batch (shard, seqno).
     pending_truncates: Vec<(String, u64)>,
+    /// True when the current batch has pending WAL ops (accepted CAS or
+    /// truncates). Mirrors whether the actor's `pending_wal_ops` is non-empty.
+    has_pending_wal_ops: bool,
     /// Tracks the head seqno the model expects per shard (committed + pending).
     model_heads: BTreeMap<String, u64>,
     /// Tracks the actor's next batch number (mirrors `Actor::batch_number`).
@@ -118,6 +123,7 @@ impl Simulator {
             model: BTreeMap::new(),
             pending_cas: Vec::new(),
             pending_truncates: Vec::new(),
+            has_pending_wal_ops: false,
             model_heads: BTreeMap::new(),
             batch_number: 0,
             foreign_batch: None,
@@ -136,22 +142,20 @@ impl Simulator {
             } => {
                 // Determine if this CAS should win per the model.
                 let current_head = self.model_heads.get(&shard).copied();
-                let committed = current_head == expected;
-                if committed {
+                let accepted = current_head == expected;
+                if accepted {
                     self.model_heads.insert(shard.clone(), seqno);
+                    self.has_pending_wal_ops = true;
                 }
                 self.pending_cas
-                    .push((shard.clone(), seqno, data.clone(), committed));
+                    .push((shard.clone(), seqno, data.clone(), accepted));
 
                 let (reply_tx, reply_rx) = oneshot::channel();
                 self.tx
                     .send(ActorCommand::CompareAndSet {
                         key: shard,
                         expected,
-                        new: ProtoVersionedData {
-                            seqno,
-                            data,
-                        },
+                        new: ProtoVersionedData { seqno, data },
                         reply: reply_tx,
                     })
                     .await
@@ -188,11 +192,7 @@ impl Simulator {
                     self.seed, shard,
                 );
             }
-            SimOp::Scan {
-                shard,
-                from,
-                limit,
-            } => {
+            SimOp::Scan { shard, from, limit } => {
                 let (reply_tx, reply_rx) = oneshot::channel();
                 self.tx
                     .send(ActorCommand::Scan {
@@ -227,6 +227,7 @@ impl Simulator {
             }
             SimOp::Truncate { shard, seqno } => {
                 self.pending_truncates.push((shard.clone(), seqno));
+                self.has_pending_wal_ops = true;
 
                 let (reply_tx, reply_rx) = oneshot::channel();
                 self.tx
@@ -287,12 +288,7 @@ impl Simulator {
             .unwrap();
         reply_rx.await.unwrap();
 
-        // Mirror the actor's had_work check: true when pending_wal_ops was
-        // non-empty, which corresponds to having committed CAS or truncate ops.
-        let had_work = self.pending_cas.iter().any(|(_, _, _, c)| *c)
-            || !self.pending_truncates.is_empty();
-
-        if had_work {
+        if self.has_pending_wal_ops {
             if let Some(foreign_batch) = self.foreign_batch.take() {
                 // A foreign write pre-empted this batch number. The actor hit
                 // AlreadyExists and applied its own pending ops to in-memory
@@ -315,9 +311,9 @@ impl Simulator {
                     }
                 }
             } else {
-                // Normal flush — apply pending CAS (committed only) and truncates.
-                for (shard, seqno, data, committed) in self.pending_cas.iter() {
-                    if *committed {
+                // Normal flush — apply accepted CAS ops and truncates to model.
+                for (shard, seqno, data, accepted) in self.pending_cas.iter() {
+                    if *accepted {
                         self.model
                             .entry(shard.clone())
                             .or_default()
@@ -336,6 +332,7 @@ impl Simulator {
         // Always clear pending state.
         self.pending_cas.clear();
         self.pending_truncates.clear();
+        self.has_pending_wal_ops = false;
 
         // Sync model_heads to match the committed model state.
         self.model_heads.clear();
@@ -355,6 +352,7 @@ impl Simulator {
         // 2. Discard pending model state.
         self.pending_cas.clear();
         self.pending_truncates.clear();
+        self.has_pending_wal_ops = false;
         self.foreign_batch = None;
 
         // 3. Spin up a new actor (empty) and recover via command.
@@ -403,8 +401,7 @@ impl Simulator {
             .unwrap();
         let recovered_keys: std::collections::BTreeSet<String> =
             reply_rx.await.unwrap().unwrap().into_iter().collect();
-        let model_keys: std::collections::BTreeSet<String> =
-            self.model.keys().cloned().collect();
+        let model_keys: std::collections::BTreeSet<String> = self.model.keys().cloned().collect();
         assert_eq!(
             recovered_keys, model_keys,
             "seed={}: Recovery key set mismatch",
@@ -556,11 +553,7 @@ impl OpGenerator {
         let shard = self.random_shard();
         let from = self.rng.r#gen_range(0..=5);
         let limit = self.rng.r#gen_range(1..=100);
-        SimOp::Scan {
-            shard,
-            from,
-            limit,
-        }
+        SimOp::Scan { shard, from, limit }
     }
 
     fn gen_truncate(&mut self) -> SimOp {
@@ -718,8 +711,11 @@ async fn sim_wal_failures() {
             // Only inject TransientError for this scenario.
             match &op {
                 SimOp::InjectFault(SimWriteFault::AmbiguousError) => {
-                    sim.apply(SimOp::InjectFault(SimWriteFault::TransientError), &mut op_gen)
-                        .await;
+                    sim.apply(
+                        SimOp::InjectFault(SimWriteFault::TransientError),
+                        &mut op_gen,
+                    )
+                    .await;
                 }
                 _ => sim.apply(op, &mut op_gen).await,
             }

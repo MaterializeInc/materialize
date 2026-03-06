@@ -65,7 +65,13 @@ fn spawn_recording_actor_with_snapshot_interval(
     let (tx, rx) = mpsc::channel(256);
     let interval = time::interval(Duration::from_secs(86400));
     let writer = Arc::new(RecordingWalWriter::new());
-    let actor = Actor::new(rx, writer.clone(), interval, snapshot_interval, test_metrics());
+    let actor = Actor::new(
+        rx,
+        writer.clone(),
+        interval,
+        snapshot_interval,
+        test_metrics(),
+    );
     let handle = tokio::spawn(actor.run());
     (TestActor { tx, handle }, writer)
 }
@@ -111,7 +117,9 @@ async fn send_cas_no_flush(
     expected: Option<u64>,
     seqno: u64,
     data: &[u8],
-) -> oneshot::Receiver<Result<mz_persist::generated::consensus_service::ProtoCompareAndSetResponse, String>> {
+) -> oneshot::Receiver<
+    Result<mz_persist::generated::consensus_service::ProtoCompareAndSetResponse, String>,
+> {
     let (reply_tx, reply_rx) = oneshot::channel();
     tx.send(ActorCommand::CompareAndSet {
         key: key.to_string(),
@@ -161,10 +169,7 @@ async fn send_flush(tx: &mpsc::Sender<ActorCommand>) {
 }
 
 /// Helper to send a head request.
-async fn send_head(
-    tx: &mpsc::Sender<ActorCommand>,
-    key: &str,
-) -> Option<(u64, Vec<u8>)> {
+async fn send_head(tx: &mpsc::Sender<ActorCommand>, key: &str) -> Option<(u64, Vec<u8>)> {
     let (reply_tx, reply_rx) = oneshot::channel();
     tx.send(ActorCommand::Head {
         key: key.to_string(),
@@ -258,14 +263,20 @@ async fn send_list_keys(tx: &mpsc::Sender<ActorCommand>) -> Vec<String> {
 #[tokio::test]
 async fn cas_on_empty_shard() {
     let a = spawn_test_actor();
-    assert!(cas_and_flush(&a.tx, "shard-1", None, 1, b"hello").await.unwrap());
+    assert!(
+        cas_and_flush(&a.tx, "shard-1", None, 1, b"hello")
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]
 async fn cas_wrong_expected() {
     let a = spawn_test_actor();
     assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
-    let committed = cas_and_flush(&a.tx, "s", Some(999), 1000, b"v2").await.unwrap();
+    let committed = cas_and_flush(&a.tx, "s", Some(999), 1000, b"v2")
+        .await
+        .unwrap();
     assert!(!committed);
 }
 
@@ -506,7 +517,11 @@ async fn snapshot_written_every_n_batches() {
     assert!(cas_and_flush(&a.tx, "s", Some(2), 3, b"v3").await.unwrap());
 
     let snapshots = writer.snapshots.lock().unwrap();
-    assert_eq!(snapshots.len(), 1, "expected exactly one snapshot after 3 batches");
+    assert_eq!(
+        snapshots.len(),
+        1,
+        "expected exactly one snapshot after 3 batches"
+    );
 }
 
 #[tokio::test]
@@ -628,12 +643,21 @@ async fn recover_from_snapshot_with_snapshot_and_wal() {
     // Pre-seed a snapshot (through batch 1).
     wal.set_snapshot(ProtoSnapshot {
         through_batch: 1,
-        shards: [("s".to_string(), ProtoShardState {
-            entries: vec![
-                ProtoVersionedData { seqno: 1, data: b"v1".to_vec() },
-                ProtoVersionedData { seqno: 2, data: b"v2".to_vec() },
-            ],
-        })]
+        shards: [(
+            "s".to_string(),
+            ProtoShardState {
+                entries: vec![
+                    ProtoVersionedData {
+                        seqno: 1,
+                        data: b"v1".to_vec(),
+                    },
+                    ProtoVersionedData {
+                        seqno: 2,
+                        data: b"v2".to_vec(),
+                    },
+                ],
+            },
+        )]
         .into(),
     });
 

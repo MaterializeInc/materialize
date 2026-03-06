@@ -113,7 +113,13 @@ async fn run(args: Args) {
 
     let (tx, rx) = tokio::sync::mpsc::channel::<ActorCommand>(4096);
 
-    let actor = Actor::new(rx, wal_writer, flush_interval, args.snapshot_interval, metrics);
+    let actor = Actor::new(
+        rx,
+        wal_writer,
+        flush_interval,
+        args.snapshot_interval,
+        metrics,
+    );
     tokio::task::spawn_local(actor.run());
 
     // Recover state from S3 via the actor's command channel.
