@@ -397,4 +397,3 @@ Metrics for data output to external systems.
 | `mz_table_updates_total` | Counter | `table`, `cluster` | Total UPDATE operations. |
 | `mz_table_deletes_total` | Counter | `table`, `cluster` | Total DELETE operations. |
 | `mz_table_write_duration_seconds` | Histogram | `table`, `cluster` | Write operation latency. |
-
