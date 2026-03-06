@@ -9,7 +9,7 @@
 
 //! Startup recovery: loads snapshot then replays WAL entries.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use bytes::Bytes;
 use tracing::info;
@@ -25,7 +25,7 @@ use crate::s3_wal::{WalWriter, deserialize_snapshot};
 /// at `next_batch_number`.
 pub async fn recover<W: WalWriter>(
     wal_writer: &W,
-) -> (HashMap<String, ShardState>, u64) {
+) -> (BTreeMap<String, ShardState>, u64) {
     // 1. Try loading snapshot.
     let (mut shards, last_batch) = match wal_writer.read_snapshot().await {
         Ok(Some(snapshot)) => {
@@ -39,13 +39,13 @@ pub async fn recover<W: WalWriter>(
         }
         Ok(None) => {
             info!("no snapshot found, starting fresh");
-            (HashMap::new(), 0)
+            (BTreeMap::new(), 0)
         }
         Err(e) => {
             // If we can't read the snapshot, start from scratch and try WAL
             // from the beginning.
             tracing::warn!("failed to read snapshot: {}, starting from batch 0", e);
-            (HashMap::new(), 0)
+            (BTreeMap::new(), 0)
         }
     };
 

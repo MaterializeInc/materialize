@@ -10,7 +10,7 @@
 //! The single-threaded actor that owns all shard state and implements group
 //! commit.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use bytes::Bytes;
 use tokio::sync::{mpsc, oneshot};
@@ -94,7 +94,7 @@ enum PendingReply {
 
 /// The core actor that processes commands and flushes batches.
 pub struct Actor<W: WalWriter> {
-    shards: HashMap<String, ShardState>,
+    shards: BTreeMap<String, ShardState>,
     rx: mpsc::Receiver<ActorCommand>,
     wal_writer: W,
     batch_number: u64,
@@ -102,7 +102,7 @@ pub struct Actor<W: WalWriter> {
     pending_wal_ops: Vec<PendingWalOp>,
     /// Tracks the latest accepted seqno per shard within the current batch,
     /// just enough for CAS conflict detection. Cleared after flush.
-    pending_heads: HashMap<String, u64>,
+    pending_heads: BTreeMap<String, u64>,
     flush_interval: Interval,
     /// Write a snapshot every this many WAL batches.
     snapshot_interval: u64,
@@ -119,7 +119,7 @@ pub struct Actor<W: WalWriter> {
 impl<W: WalWriter> Actor<W> {
     /// Creates a new actor with recovered state.
     pub fn new(
-        shards: HashMap<String, ShardState>,
+        shards: BTreeMap<String, ShardState>,
         rx: mpsc::Receiver<ActorCommand>,
         wal_writer: W,
         next_batch_number: u64,
@@ -148,7 +148,7 @@ impl<W: WalWriter> Actor<W> {
             batch_number: next_batch_number,
             pending_replies: Vec::new(),
             pending_wal_ops: Vec::new(),
-            pending_heads: HashMap::new(),
+            pending_heads: BTreeMap::new(),
             flush_interval,
             snapshot_interval,
             batches_since_snapshot: 0,
@@ -378,7 +378,7 @@ impl<W: WalWriter> Actor<W> {
     /// flush (where `&mut self.rx` and `&self.wal_writer` are held by the
     /// select loop, preventing a `&self` call).
     fn serve_read(
-        shards: &HashMap<String, ShardState>,
+        shards: &BTreeMap<String, ShardState>,
         metrics: &ConsensusMetrics,
         cmd: ActorCommand,
     ) -> Result<(), ActorCommand> {
@@ -683,7 +683,16 @@ impl<W: WalWriter> Actor<W> {
         // point pending_heads is clear and self.shards reflects the just-
         // committed batch, so buffered CAS ops evaluate against correct state.
         for cmd in buffered_cmds {
-            self.handle_command(cmd);
+            match cmd {
+                ActorCommand::Flush { reply } => {
+                    // A flush was requested while we were already flushing.
+                    // The current flush just completed, so reply immediately.
+                    // Any writes that arrived after this Flush command will be
+                    // flushed on the next cycle.
+                    let _ = reply.send(());
+                }
+                cmd => self.handle_command(cmd),
+            }
         }
 
         // Write snapshot every N batches. This happens after replies are
@@ -714,3 +723,5 @@ impl<W: WalWriter> Actor<W> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod sim_tests;

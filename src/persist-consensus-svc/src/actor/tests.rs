@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,7 +44,7 @@ impl Drop for TestActor {
 fn spawn_test_actor() -> TestActor {
     let (tx, rx) = mpsc::channel(256);
     let interval = time::interval(Duration::from_secs(86400));
-    let actor = Actor::new(HashMap::new(), rx, NoopWalWriter, 0, interval, 100, test_metrics());
+    let actor = Actor::new(BTreeMap::new(), rx, NoopWalWriter, 0, interval, 100, test_metrics());
     let handle = tokio::spawn(actor.run());
     TestActor { tx, handle }
 }
@@ -54,7 +54,7 @@ fn spawn_recording_actor() -> (TestActor, Arc<RecordingWalWriter>) {
     let (tx, rx) = mpsc::channel(256);
     let interval = time::interval(Duration::from_secs(86400));
     let writer = Arc::new(RecordingWalWriter::new());
-    let actor = Actor::new(HashMap::new(), rx, writer.clone(), 0, interval, 100, test_metrics());
+    let actor = Actor::new(BTreeMap::new(), rx, writer.clone(), 0, interval, 100, test_metrics());
     let handle = tokio::spawn(actor.run());
     (TestActor { tx, handle }, writer)
 }
@@ -66,7 +66,7 @@ fn spawn_recording_actor_with_snapshot_interval(
     let (tx, rx) = mpsc::channel(256);
     let interval = time::interval(Duration::from_secs(86400));
     let writer = Arc::new(RecordingWalWriter::new());
-    let actor = Actor::new(HashMap::new(), rx, writer.clone(), 0, interval, snapshot_interval, test_metrics());
+    let actor = Actor::new(BTreeMap::new(), rx, writer.clone(), 0, interval, snapshot_interval, test_metrics());
     let handle = tokio::spawn(actor.run());
     (TestActor { tx, handle }, writer)
 }
