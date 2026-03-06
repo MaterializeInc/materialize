@@ -15,6 +15,18 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.14.1
+*Released to Materialize Cloud: 2026-03-05* <br>
+*Released to Materialize Self-Managed: 2026-03-06* <br>
+
+This patch release enables the `COPY FROM` remote (S3) feature, allowing users
+to bulk load data from Amazon S3 into Materialize.
+
+### Improvements
+
+- Enabled the `COPY FROM` remote feature flag, allowing users to use
+  `COPY FROM` to bulk load data from Amazon S3 into Materialize tables.
+
 ## v26.13.0
 *Released to Materialize Cloud: 2026-02-26* <br>
 *Released to Materialize Self-Managed: 2026-02-27* <br>
