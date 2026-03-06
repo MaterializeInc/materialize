@@ -127,24 +127,15 @@ instrumentation logging).
 
 ## Immediate Next Steps
 
-1. **Baseline measurement.** Start environmentd with many tables (1k, 5k, 10k, 20k),
-   set `storage_usage_collection_interval` to 10s, capture
-   `mz_slow_message_handling{message_kind="storage_usage_update"}` histograms
-   across several collection cycles. Establish how coordinator stall scales
-   with shard count.
-
-2. **Instrument `storage_usage_update`.** Add timing logs or histogram sub-metrics
-   to isolate which of the 5 costs dominates: oracle calls, transact_op loop,
-   persist write, persist read, or group commit.
-
-3. **Implement the fix.** Bypass `catalog_transact_inner`: pack builtin table rows
-   directly and append via `builtin_table_update().execute()`. Drop or replace
-   the durable id allocator with a cheap local counter.
-
-4. **Clean up.** Remove `Op::WeirdStorageUsageUpdates`, the durable
-   `STORAGE_USAGE_ID_ALLOC_KEY` allocator, and simplify `VersionedStorageUsage`.
-
-5. **Re-measure.** Confirm coordinator stall is reduced to just group-commit time.
+1. ~~**Baseline measurement.**~~ Done. ~499ms/cycle at 10k shards.
+2. ~~**Instrument.**~~ Done. 91% in transact_inner op loop.
+3. ~~**Implement the fix.**~~ Done. 25x speedup (499ms → 20ms).
+4. ~~**Re-measure.**~~ Done. Confirmed.
+5. **Clean up dead code:**
+   - Remove `Op::WeirdStorageUsageUpdates` variant from `transact.rs`
+   - Remove durable `STORAGE_USAGE_ID_ALLOC_KEY` allocator
+   - Simplify or remove `VersionedStorageUsage` / unused `id` field
+   - Remove diagnostic `info!` log from `storage_usage_update`
 
 ## Work-in-progress log (update after each milestone)
 
