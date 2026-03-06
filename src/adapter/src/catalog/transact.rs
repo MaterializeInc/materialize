@@ -12,7 +12,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
@@ -23,7 +23,7 @@ use mz_adapter_types::dyncfgs::{
 };
 use mz_audit_log::{
     CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, IdNameV1,
-    ObjectType, SchedulingDecisionsWithReasonsV2, VersionedEvent, VersionedStorageUsage,
+    ObjectType, SchedulingDecisionsWithReasonsV2, VersionedEvent,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
@@ -38,7 +38,6 @@ use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLoca
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
-use mz_ore::now::EpochMillis;
 use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap, merge_mz_acl_items};
 use mz_repr::network_policy_id::NetworkPolicyId;
@@ -231,17 +230,6 @@ pub enum Op {
         name: String,
     },
     ResetAllSystemConfiguration,
-    /// Performs updates to the storage usage table, which probably should be a builtin source.
-    ///
-    /// TODO(jkosh44) In a multi-writer or high availability catalog world, this
-    /// might not work. If a process crashes after collecting storage usage events
-    /// but before updating the builtin table, then another listening catalog
-    /// will never know to update the builtin table.
-    WeirdStorageUsageUpdates {
-        object_id: Option<String>,
-        size_bytes: u64,
-        collection_timestamp: EpochMillis,
-    },
 }
 
 /// Almost the same as `ObjectId`, but the `ClusterReplica` case has an extra
@@ -447,15 +435,12 @@ impl Catalog {
         let mut builtin_table_updates = vec![];
         let mut catalog_updates = vec![];
         let mut audit_events = vec![];
-        let transact_start = Instant::now();
         let mut storage = self.storage().await;
         let mut tx = storage
             .transaction()
             .await
             .unwrap_or_terminate("starting catalog transaction");
-        let open_tx_elapsed = transact_start.elapsed();
 
-        let inner_start = Instant::now();
         let new_state = Self::transact_inner(
             TransactInnerMode::Commit,
             storage_collections,
@@ -470,29 +455,18 @@ impl Catalog {
             &self.state,
         )
         .await?;
-        let inner_elapsed = inner_start.elapsed();
 
         // The user closure was successful, apply the updates. Terminate the
         // process if this fails, because we have to restart envd due to
         // indeterminate catalog state, which we only reconcile during catalog
         // init.
-        let commit_start = Instant::now();
         tx.commit(oracle_write_ts)
             .await
             .unwrap_or_terminate("catalog storage transaction commit must succeed");
-        let commit_elapsed = commit_start.elapsed();
 
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
         drop(storage);
-
-        info!(
-            "catalog::transact: ops={} open_tx={:.3}s inner={:.3}s commit={:.3}s",
-            builtin_table_updates.len() + catalog_updates.len(),
-            open_tx_elapsed.as_secs_f64(),
-            inner_elapsed.as_secs_f64(),
-            commit_elapsed.as_secs_f64(),
-        );
         if let Some(new_state) = new_state {
             self.transient_revision += 1;
             self.state = new_state;
@@ -697,7 +671,7 @@ impl Catalog {
         let mut updates = Vec::new();
 
         for op in ops {
-            let (weird_builtin_table_update, temporary_item_updates) = Self::transact_op(
+            let temporary_item_updates = Self::transact_op(
                 oracle_write_ts,
                 session,
                 op,
@@ -710,18 +684,6 @@ impl Catalog {
                 &mut storage_collections_to_register,
             )
             .await?;
-
-            // Certain builtin tables are not derived from the durable catalog state, so they need
-            // to be updated ad-hoc based on the current transaction. This is weird and will not
-            // work if we ever want multi-writer catalogs or high availability (HA) catalogs. If
-            // this instance crashes after committing the durable catalog but before applying the
-            // weird builtin table updates, then they'll be lost forever in a multi-writer or HA
-            // world. Currently, this works fine and there are no correctness issues because
-            // whenever a Coordinator crashes, a new Coordinator starts up, and it will set the
-            // state of all builtin tables to the correct values.
-            if let Some(builtin_table_update) = weird_builtin_table_update {
-                builtin_table_updates.push(builtin_table_update);
-            }
 
             // Temporary items are not stored in the durable catalog, so they need to be handled
             // separately for updating state and builtin tables.
@@ -824,8 +786,7 @@ impl Catalog {
         storage_collections_to_create: &mut BTreeSet<GlobalId>,
         storage_collections_to_drop: &mut BTreeSet<GlobalId>,
         storage_collections_to_register: &mut BTreeMap<GlobalId, ShardId>,
-    ) -> Result<(Option<BuiltinTableUpdate>, Vec<(TemporaryItem, StateDiff)>), AdapterError> {
-        let mut weird_builtin_table_update = None;
+    ) -> Result<Vec<(TemporaryItem, StateDiff)>, AdapterError> {
         let mut temporary_item_updates = Vec::new();
 
         match op {
@@ -2670,20 +2631,8 @@ impl Catalog {
                     EventDetails::ResetAllV1,
                 )?;
             }
-            Op::WeirdStorageUsageUpdates {
-                object_id,
-                size_bytes,
-                collection_timestamp,
-            } => {
-                let id = tx.allocate_storage_usage_ids()?;
-                let metric =
-                    VersionedStorageUsage::new(id, object_id, size_bytes, collection_timestamp);
-                let builtin_table_update = state.pack_storage_usage_update(metric, Diff::ONE);
-                let builtin_table_update = state.resolve_builtin_table_update(builtin_table_update);
-                weird_builtin_table_update = Some(builtin_table_update);
-            }
         };
-        Ok((weird_builtin_table_update, temporary_item_updates))
+        Ok(temporary_item_updates)
     }
 
     fn log_update(state: &CatalogState, id: &CatalogItemId) {
