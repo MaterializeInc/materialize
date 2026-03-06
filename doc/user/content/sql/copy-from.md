@@ -33,6 +33,13 @@ To use `COPY FROM` with S3, you need to allow the following actions in your IAM 
 | Read        | [`s3:GetObject`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html)      | Grants permission to retrieve an object from a bucket.            |
 | List        | [`s3:ListBucket`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html) | Grants permission to list some or all of the objects in a bucket. |
 
+{{< note >}}
+For S3-compatible object storage services (e.g., Google Cloud Storage, Cloudflare R2, MinIO),
+you need to enable equivalent permissions on the service you are using. The specific
+configuration steps will vary by provider, but the access credentials must allow the same
+read and list operations on the target bucket.
+{{< /note >}}
+
 ### Text formatting
 
 As described in the **Text Format** section of [PostgreSQL's documentation][pg-copy-from].
@@ -127,7 +134,7 @@ COPY t FROM STDIN (FORMAT CSV);
 COPY t FROM STDIN (DELIMITER '|');
 ```
 
-### From s3
+### From AWS S3
 
 #### Using AWS connection
 
@@ -152,6 +159,18 @@ COPY INTO parquet_table FROM 's3://example_bucket' (FORMAT PARQUET, AWS CONNECTI
 ```
 
 {{< /comment >}}
+
+#### Using S3-compatible object storage
+
+You can use `COPY FROM` with any S3-compatible object storage service, such as
+Google Cloud Storage, Cloudflare R2, or MinIO. First,
+[create an AWS connection for S3-compatible storage](/sql/create-connection/#s3-compatible-object-storage),
+then use it in the `COPY` command. Make sure your credentials have the necessary
+permissions as described in [S3 Bucket IAM Policies](#s3-bucket-iam-policies).
+
+```mzsql
+COPY INTO csv_table FROM 's3://my_bucket/my_data.csv' (FORMAT CSV, AWS CONNECTION = gcs_connection);
+```
 
 #### Using presigned URL
 
