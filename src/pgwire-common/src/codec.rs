@@ -63,8 +63,9 @@ impl<B: BufMut> Pgbuf for B {
     }
 
     fn put_length_i16(&mut self, len: usize) -> Result<(), io::Error> {
-        let len = i16::try_from(len)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "length does not fit in an i16"))?;
+        let len = i16::try_from(len).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "length does not fit in an i16")
+        })?;
         self.put_i16(len);
         Ok(())
     }
@@ -157,7 +158,7 @@ impl FrontendStartupMessage {
         // Overwrite length placeholder with true length.
         let len = i32::try_from(len).map_err(|_| {
             io::Error::new(
-                io::ErrorKind::Other,
+                io::ErrorKind::InvalidData,
                 "length of encoded message does not fit into an i32",
             )
         })?;
@@ -194,7 +195,7 @@ impl FrontendMessage {
         // Overwrite length placeholder with true length.
         let len = i32::try_from(len).map_err(|_| {
             io::Error::new(
-                io::ErrorKind::Other,
+                io::ErrorKind::InvalidData,
                 "length of encoded message does not fit into an i32",
             )
         })?;

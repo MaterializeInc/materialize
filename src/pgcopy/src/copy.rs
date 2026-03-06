@@ -33,7 +33,7 @@ fn encode_copy_row_binary(
     // 16-bit int of number of tuples.
     let count = i16::try_from(typ.column_types.len()).map_err(|_| {
         io::Error::new(
-            io::ErrorKind::Other,
+            io::ErrorKind::InvalidData,
             "column count does not fit into an i16",
         )
     })?;
@@ -54,7 +54,7 @@ fn encode_copy_row_binary(
                     i32::try_from(buf.len())
                         .map_err(|_| {
                             io::Error::new(
-                                io::ErrorKind::Other,
+                                io::ErrorKind::InvalidData,
                                 "field length does not fit into an i32",
                             )
                         })?

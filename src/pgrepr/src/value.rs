@@ -449,7 +449,7 @@ impl Value {
                     buf.put_i32(pg_len("array dimension length", dim.length)?);
                     buf.put_i32(dim.lower_bound.try_into().map_err(|_| {
                         io::Error::new(
-                            io::ErrorKind::Other,
+                            io::ErrorKind::InvalidData,
                             "array dimension lower bound does not fit into an i32",
                         )
                     })?);
@@ -912,7 +912,7 @@ fn encode_element(buf: &mut BytesMut, elem: Option<&Value>, ty: &Type) -> Result
 fn pg_len(what: &str, len: usize) -> Result<i32, io::Error> {
     len.try_into().map_err(|_| {
         io::Error::new(
-            io::ErrorKind::Other,
+            io::ErrorKind::InvalidData,
             format!("{} does not fit into an i32", what),
         )
     })

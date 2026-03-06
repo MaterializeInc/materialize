@@ -379,7 +379,7 @@ impl Codec {
                         let len = dst.len() - base - 4;
                         let len = i32::try_from(len).map_err(|_| {
                             io::Error::new(
-                                io::ErrorKind::Other,
+                                io::ErrorKind::InvalidData,
                                 "length of encoded data row field does not fit into an i32",
                             )
                         })?;
@@ -453,7 +453,7 @@ impl Codec {
         // Overwrite length placeholder with true length.
         let len = i32::try_from(len).map_err(|_| {
             io::Error::new(
-                io::ErrorKind::Other,
+                io::ErrorKind::InvalidData,
                 "length of encoded message does not fit into an i32",
             )
         })?;
