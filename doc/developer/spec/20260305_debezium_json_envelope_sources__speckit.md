@@ -188,7 +188,11 @@ ingested while invalid ones produce appropriate error behavior.
   when using `ENVELOPE DEBEZIUM` with JSON, consistent with the
   existing Avro Debezium requirement for key format.
 - **FR-006**: System MUST ignore extra envelope-level fields (e.g.,
-  `source`, `ts_ms`, `transaction`) that are not part of the row data.
+  `source`, `ts_ms`, `transaction`) that are not part of the row data
+  by default. System MUST support an opt-in `INCLUDE DEBEZIUM METADATA
+  [AS <alias>]` clause that exposes all envelope-level fields (except
+  `before` and `after`) as a single `jsonb` column. The default column
+  name MUST be `debezium_metadata` when no alias is provided.
 - **FR-007**: System MUST support both Debezium JSON message forms:
   the wrapped form (`{"schema": ..., "payload": {...}}`) and the
   unwrapped form (envelope fields at top level). The system MUST
@@ -225,7 +229,10 @@ ingested while invalid ones produce appropriate error behavior.
 
 - TiCDC Debezium JSON format follows the standard Debezium envelope
   structure with minor extensions (`commit_ts`, `cluster_id` in source
-  metadata). These extensions are safely ignored.
+  metadata). These extensions are ignored by default but accessible
+  via `INCLUDE DEBEZIUM METADATA` for use cases like snapshot alignment
+  (e.g., using `commit_ts` to correlate CDC messages with Dumpling
+  snapshots).
 - Users will declare the table schema explicitly in Materialize (column
   names and types), as there is no schema registry for JSON. The JSON
   payload is decoded according to this declared schema.
@@ -607,7 +614,7 @@ VALUE FORMAT JSON
 ENVELOPE DEBEZIUM;
 ```
 
-### With INCLUDE metadata
+### With INCLUDE Kafka metadata
 
 ```sql
 CREATE TABLE orders (
@@ -620,6 +627,38 @@ VALUE FORMAT JSON
 INCLUDE PARTITION, OFFSET
 ENVELOPE DEBEZIUM;
 ```
+
+### With INCLUDE DEBEZIUM METADATA
+
+Exposes all Debezium envelope fields (except `before`/`after`) as a
+single `jsonb` column. Useful for accessing CDC metadata like TiCDC's
+`commit_ts` for snapshot alignment.
+
+```sql
+CREATE TABLE orders (
+    id int8 NOT NULL,
+    product text
+)
+FROM SOURCE kafka_src (REFERENCE "dbz.inventory.orders")
+KEY FORMAT JSON
+VALUE FORMAT JSON
+INCLUDE DEBEZIUM METADATA AS dbz_meta
+ENVELOPE DEBEZIUM;
+
+-- Query envelope metadata:
+SELECT id, dbz_meta->>'op' AS op,
+       dbz_meta->'source'->>'commit_ts' AS commit_ts
+FROM orders;
+```
+
+| Clause | Column Name | Column Type | Contents |
+|--------|-------------|-------------|----------|
+| `INCLUDE DEBEZIUM METADATA` | `debezium_metadata` | `jsonb` | All envelope fields except `before`/`after` |
+| `INCLUDE DEBEZIUM METADATA AS <alias>` | `<alias>` | `jsonb` | Same |
+
+The metadata jsonb object typically contains: `op`, `ts_ms`, `source`
+(with connector-specific fields like `commit_ts`, `db`, `table`), and
+`transaction`.
 
 ### Column Mismatch Configuration
 
