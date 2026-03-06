@@ -31,7 +31,7 @@ use crate::typedefs::{ErrBatcher, ErrBuilder, MzData, MzTimestamp};
 
 /// Shared function to compute an arrangement of values matching `logic`.
 fn threshold_arrangement<G, T1, Bu2, T2, L>(
-    arrangement: &Arranged<G, T1>,
+    arrangement: Arranged<G, T1>,
     name: &str,
     logic: L,
 ) -> Arranged<G, TraceAgent<T2>>
@@ -59,15 +59,13 @@ where
     L: Fn(&Diff) -> bool + 'static,
     Arranged<G, TraceAgent<T2>>: ArrangementSize,
 {
-    arrangement
-        .clone()
-        .mz_reduce_abelian::<_, Bu2, T2>(name, move |_key, s, t| {
-            for (record, count) in s.iter() {
-                if logic(count) {
-                    t.push((T1::owned_val(*record), *count));
-                }
+    arrangement.mz_reduce_abelian::<_, Bu2, T2>(name, move |_key, s, t| {
+        for (record, count) in s.iter() {
+            if logic(count) {
+                t.push((T1::owned_val(*record), *count));
             }
-        })
+        }
+    })
 }
 
 /// Build a dataflow to threshold the input data.
@@ -89,7 +87,7 @@ where
     match arrangement {
         ArrangementFlavor::Local(oks, errs) => {
             let oks = threshold_arrangement::<_, _, RowRowBuilder<_, _>, _, _>(
-                &oks,
+                oks,
                 "Threshold local",
                 |count| count.is_positive(),
             );
@@ -97,7 +95,7 @@ where
         }
         ArrangementFlavor::Trace(_, oks, errs) => {
             let oks = threshold_arrangement::<_, _, RowRowBuilder<_, _>, _, _>(
-                &oks,
+                oks,
                 "Threshold trace",
                 |count| count.is_positive(),
             );

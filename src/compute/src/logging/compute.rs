@@ -372,7 +372,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                 let mut lir_mapping = lir_mapping_out.activate();
                 let mut dataflow_global_ids = dataflow_global_ids_out.activate();
 
-                input.for_each(|cap, data: &mut Column<(Duration, ComputeEvent)>| {
+                input.for_each(|cap, data| {
                     let mut output_sessions = DemuxOutput {
                         export: export.session_with_builder(&cap),
                         frontier: frontier.session_with_builder(&cap),
@@ -1436,7 +1436,7 @@ where
         self.inner
             .unary(Pipeline, "LogDataflowErrorsCollection", |_cap, _info| {
                 move |input, output| {
-                    input.for_each(|cap, data: &mut Vec<(D, G::Timestamp, Diff)>| {
+                    input.for_each(|cap, data| {
                         let diff = data.iter().map(|(_d, _t, r)| *r).sum::<Diff>();
                         logger.log(&ComputeEvent::ErrorCount(ErrorCount { export_id, diff }));
 
@@ -1456,7 +1456,7 @@ where
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
         self.unary(Pipeline, "LogDataflowErrorsStream", |_cap, _info| {
             move |input, output| {
-                input.for_each(|cap, data: &mut Vec<B>| {
+                input.for_each(|cap, data| {
                     let diff = data.iter().map(sum_batch_diffs).sum::<Diff>();
                     logger.log(&ComputeEvent::ErrorCount(ErrorCount { export_id, diff }));
 

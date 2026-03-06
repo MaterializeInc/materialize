@@ -199,7 +199,7 @@ use timely::progress::{Antichain, Timestamp};
 /// used with timely's capture facilities to connect a collection from a foreign scope to this
 /// operator.
 pub fn reclock<G, D, FromTime, IntoTime, R>(
-    remap_collection: &VecCollection<G, FromTime, Overflowing<i64>>,
+    remap_collection: VecCollection<G, FromTime, Overflowing<i64>>,
     as_of: Antichain<G::Timestamp>,
 ) -> (
     Box<dyn Push<Event<FromTime, Vec<(D, FromTime, R)>>>>,
@@ -223,7 +223,7 @@ where
     let (pusher, mut events) =
         scope.pipeline::<Event<FromTime, Vec<(D, FromTime, R)>>>(channel_id, info.address);
 
-    let mut remap_input = builder.new_input(remap_collection.inner.clone(), Pipeline);
+    let mut remap_input = builder.new_input(remap_collection.inner, Pipeline);
     let (output, reclocked) = builder.new_output();
     let mut output = OutputBuilder::from(output);
 
@@ -641,8 +641,8 @@ mod test {
                     scope.scoped::<IntoTime, _, _>("IntoScope", move |scope| {
                         let (binding_handle, binding_collection) = scope.new_collection();
                         let (data_pusher, reclocked_collection) =
-                            reclock(&binding_collection, as_of);
-                        let reclocked_capture = reclocked_collection.inner.clone().capture();
+                            reclock(binding_collection, as_of);
+                        let reclocked_capture = reclocked_collection.inner.capture();
                         (binding_handle, data_pusher, reclocked_capture)
                     });
 

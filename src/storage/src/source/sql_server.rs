@@ -15,7 +15,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
-use differential_dataflow::containers::TimelyStack;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
@@ -181,7 +180,7 @@ impl SourceRender for SqlServerSourceConnection {
         let partition_count = u64::cast_from(config.source_exports.len());
         let data_streams: Vec<_> = repl_updates
             .inner
-            .partition::<CapacityContainerBuilder<TimelyStack<_>>, _, _>(
+            .partition::<CapacityContainerBuilder<_>, _, _>(
                 partition_count,
                 move |((partition_idx, data), time, diff): &(
                     (u64, Result<SourceMessage, DataflowError>),

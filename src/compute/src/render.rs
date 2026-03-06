@@ -1403,10 +1403,10 @@ where
 
                 match arrangement {
                     Local(a, _) => {
-                        a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
+                        a.stream = self.log_operator_hydration_inner(a.stream.clone(), lir_id);
                     }
                     Trace(_, a, _) => {
-                        a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
+                        a.stream = self.log_operator_hydration_inner(a.stream.clone(), lir_id);
                     }
                 }
             }
@@ -1415,13 +1415,13 @@ where
                     .collection
                     .as_mut()
                     .expect("CollectionBundle invariant");
-                let stream = self.log_operator_hydration_inner(&oks.inner, lir_id);
+                let stream = self.log_operator_hydration_inner(oks.inner.clone(), lir_id);
                 *oks = stream.as_collection();
             }
         }
     }
 
-    fn log_operator_hydration_inner<D>(&self, stream: &Stream<G, D>, lir_id: LirId) -> Stream<G, D>
+    fn log_operator_hydration_inner<D>(&self, stream: Stream<G, D>, lir_id: LirId) -> Stream<G, D>
     where
         D: timely::Container + Clone + 'static,
     {
@@ -1446,13 +1446,29 @@ where
         }
 
         let name = format!("LogOperatorHydration ({lir_id})");
-        stream
-            .clone()
-            .unary_frontier::<CapacityContainerBuilder<D>, _, _, _>(
-                Pipeline,
-                &name,
-                |_cap, _info| {
-                    let mut hydrated = false;
+        stream.unary_frontier(Pipeline, &name, |_cap, _info| {
+            let mut hydrated = false;
+
+            for &export_id in &export_ids {
+                logger.log(&ComputeEvent::OperatorHydration(OperatorHydration {
+                    export_id,
+                    lir_id,
+                    hydrated,
+                }));
+            }
+
+            move |(input, frontier), output| {
+                // Pass through inputs.
+                input.for_each(|cap, data| {
+                    output.session(&cap).give_container(data);
+                });
+
+                if hydrated {
+                    return;
+                }
+
+                if PartialOrder::less_equal(&hydration_frontier.borrow(), &frontier.frontier()) {
+                    hydrated = true;
 
                     for &export_id in &export_ids {
                         logger.log(&ComputeEvent::OperatorHydration(OperatorHydration {
@@ -1461,34 +1477,9 @@ where
                             hydrated,
                         }));
                     }
-
-                    move |(input, frontier), output| {
-                        // Pass through inputs.
-                        input.for_each(|cap, data| {
-                            output.session(&cap).give_container(data);
-                        });
-
-                        if hydrated {
-                            return;
-                        }
-
-                        if PartialOrder::less_equal(
-                            &hydration_frontier.borrow(),
-                            &frontier.frontier(),
-                        ) {
-                            hydrated = true;
-
-                            for &export_id in &export_ids {
-                                logger.log(&ComputeEvent::OperatorHydration(OperatorHydration {
-                                    export_id,
-                                    lir_id,
-                                    hydrated,
-                                }));
-                            }
-                        }
-                    }
-                },
-            )
+                }
+            }
+        })
     }
 }
 
@@ -1759,7 +1750,7 @@ trait LimitProgress<T: Timestamp> {
     /// * `upper` is the upper bound of the stream's frontier until which the implementation can
     ///   retain a capability.
     fn limit_progress(
-        &self,
+        self,
         handle: MzProbeHandle<T>,
         slack_ms: u64,
         limit: Option<usize>,
@@ -1777,7 +1768,7 @@ where
     R: Clone + 'static,
 {
     fn limit_progress(
-        &self,
+        self,
         handle: MzProbeHandle<mz_repr::Timestamp>,
         slack_ms: u64,
         limit: Option<usize>,
@@ -1785,10 +1776,8 @@ where
         name: String,
     ) -> Self {
         let scope = self.scope();
-        let stream = self.clone().unary_frontier(
-            Pipeline,
-            &format!("LimitProgress({name})"),
-            |_cap, info| {
+        let stream =
+            self.unary_frontier(Pipeline, &format!("LimitProgress({name})"), |_cap, info| {
                 // Times that we've observed on our input.
                 let mut pending_times: BTreeSet<G::Timestamp> = BTreeSet::new();
                 // Capability for the lower bound of `pending_times`, if any.
@@ -1853,8 +1842,7 @@ where
                         );
                     }
                 }
-            },
-        );
+            });
         stream
     }
 }

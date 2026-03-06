@@ -16,7 +16,6 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use chrono::{DateTime, NaiveDateTime};
-use differential_dataflow::containers::TimelyStack;
 use differential_dataflow::{AsCollection, Hashable};
 use futures::StreamExt;
 use itertools::Itertools;
@@ -200,19 +199,13 @@ impl SourceRender for KafkaSourceConnection {
         );
 
         let partition_count = u64::cast_from(config.source_exports.len());
-        let data_streams: Vec<_> = data
-            .inner
-            .partition::<CapacityContainerBuilder<TimelyStack<_>>, _, _>(
-                partition_count,
-                |((output, data), time, diff): &(
-                    (usize, Result<SourceMessage, DataflowError>),
-                    KafkaTimestamp,
-                    Diff,
-                )| {
-                    let output = u64::cast_from(*output);
-                    (output, (data.clone(), time.clone(), diff.clone()))
-                },
-            );
+        let data_streams: Vec<_> = data.inner.partition::<CapacityContainerBuilder<_>, _, _>(
+            partition_count,
+            |((output, data), time, diff)| {
+                let output = u64::cast_from(*output);
+                (output, (data.clone(), time.clone(), diff.clone()))
+            },
+        );
         let mut data_collections = BTreeMap::new();
         for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
             data_collections.insert(*id, data_stream.as_collection());
@@ -249,7 +242,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
     let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
     let (health_output, health_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
-    let mut metadata_input = builder.new_disconnected_input(&metadata_stream.broadcast(), Pipeline);
+    let mut metadata_input = builder.new_disconnected_input(metadata_stream.broadcast(), Pipeline);
 
     let mut outputs = vec![];
 

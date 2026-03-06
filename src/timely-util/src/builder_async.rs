@@ -411,8 +411,7 @@ impl<const N: usize, T: Timestamp> InputConnection<T> for ConnectedToMany<N> {
     }
 
     fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
-        self.0
-            .map(|output| input_cap.delayed(input_cap.time(), output))
+        self.0.map(|output| input_cap.retain(output))
     }
 }
 
@@ -459,7 +458,7 @@ impl<G: Scope> OperatorBuilder<G> {
     /// Adds a new input that is connected to the specified output, returning the async input handle to use.
     pub fn new_input_for<D, P>(
         &mut self,
-        stream: &TimelyStream<G, D>,
+        stream: TimelyStream<G, D>,
         pact: P,
         output: &dyn OutputIndex,
     ) -> AsyncInputHandle<G::Timestamp, D, ConnectedToOne>
@@ -475,7 +474,7 @@ impl<G: Scope> OperatorBuilder<G> {
     /// Adds a new input that is connected to the specified outputs, returning the async input handle to use.
     pub fn new_input_for_many<const N: usize, D, P>(
         &mut self,
-        stream: &TimelyStream<G, D>,
+        stream: TimelyStream<G, D>,
         pact: P,
         outputs: [&dyn OutputIndex; N],
     ) -> AsyncInputHandle<G::Timestamp, D, ConnectedToMany<N>>
@@ -493,7 +492,7 @@ impl<G: Scope> OperatorBuilder<G> {
     /// Adds a new input that is not connected to any output, returning the async input handle to use.
     pub fn new_disconnected_input<D, P>(
         &mut self,
-        stream: &TimelyStream<G, D>,
+        stream: TimelyStream<G, D>,
         pact: P,
     ) -> AsyncInputHandle<G::Timestamp, D, Disconnected>
     where
@@ -506,7 +505,7 @@ impl<G: Scope> OperatorBuilder<G> {
     /// Adds a new input with connection information, returning the async input handle to use.
     pub fn new_input_connection<D, P, C>(
         &mut self,
-        stream: &TimelyStream<G, D>,
+        stream: TimelyStream<G, D>,
         pact: P,
         connection: C,
     ) -> AsyncInputHandle<G::Timestamp, D, C>
@@ -520,7 +519,7 @@ impl<G: Scope> OperatorBuilder<G> {
 
         let outputs = self.builder.shape().outputs();
         let handle = self.builder.new_input_connection(
-            stream.clone(),
+            stream,
             pact,
             connection.describe(outputs).into_iter().enumerate(),
         );
@@ -813,8 +812,7 @@ mod test {
 
             let mut op = OperatorBuilder::new("async_passthru".to_string(), input.scope());
             let (output, output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
-            let mut input_handle: AsyncInputHandle<_, Vec<i32>, _> =
-                op.new_input_for(&input, Pipeline, &output);
+            let mut input_handle = op.new_input_for(input, Pipeline, &output);
 
             op.build(move |_capabilities| async move {
                 tokio::task::yield_now().await;
@@ -858,7 +856,7 @@ mod test {
                 });
 
                 let mut consumer = OperatorBuilder::new("consumer".to_string(), scope.clone());
-                let mut input_handle = consumer.new_disconnected_input(&output_stream, Pipeline);
+                let mut input_handle = consumer.new_disconnected_input(output_stream, Pipeline);
                 let consumer_button = consumer.build(move |_| async move {
                     while let Some(event) = input_handle.next().await {
                         if let Event::Progress(frontier) = event {

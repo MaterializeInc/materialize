@@ -259,8 +259,8 @@ where
     );
     let (passthrough_output, passthrough_stream) =
         builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
-    let mut remap_input = builder.new_disconnected_input(&remap, Pipeline);
-    let mut passthrough_input = builder.new_disconnected_input(&passthrough, Pipeline);
+    let mut remap_input = builder.new_disconnected_input(remap, Pipeline);
+    let mut passthrough_input = builder.new_disconnected_input(passthrough, Pipeline);
 
     let shutdown_button = builder.build(move |capabilities| async move {
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
@@ -536,7 +536,7 @@ impl DataSubscribe {
                     Some(Antichain::from_elem(as_of)),
                     SnapshotMode::Include,
                     until.clone(),
-                    false.then_some(|_, _: &_, _| unreachable!()),
+                    false.then_some(|_, _, _| unreachable!()),
                     Arc::new(StringSchema),
                     Arc::new(UnitSchema),
                     FilterResult::keep_all,

@@ -66,81 +66,77 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: T
     let channel_tx = Rc::clone(&channel_rx);
     let activator_get = Rc::clone(&activator_set);
     let pact = Exchange::new(|(x, _, _): &(DecodeResult<FromTime>, _, _)| x.key.hashed());
-    input
-        .inner
-        .clone()
-        .sink(pact, "CDCv2Unpack", move |(input, _)| {
-            input.for_each(|_time, data| {
-                // The inputs are rows containing two columns that encode an enum, i.e only one of them
-                // is ever set while the other is unset. This is the convention we follow in our Avro
-                // decoder. When the first field of the record is set then we have a data message.
-                // Otherwise we have a progress message.
-                for (row, _time, _diff) in data.drain(..) {
-                    let mut record = match &row.value {
-                        Some(Ok(row)) => row.iter(),
-                        Some(Err(err)) => {
-                            error!("Ignoring errored record: {err}");
-                            continue;
-                        }
-                        None => continue,
-                    };
-                    let message = match (record.next().unwrap(), record.next().unwrap()) {
-                        (Datum::List(datum_updates), Datum::Null) => {
-                            let mut updates = vec![];
-                            for update in datum_updates.iter() {
-                                let mut update = update.unwrap_list().iter();
-                                let data = update.next().unwrap().unwrap_list();
-                                let time = update.next().unwrap().unwrap_int64();
-                                let diff = Diff::from(update.next().unwrap().unwrap_int64());
+    let input2 = input.inner.clone();
+    input2.sink(pact, "CDCv2Unpack", move |(input, _)| {
+        input.for_each(|_time, data| {
+            // The inputs are rows containing two columns that encode an enum, i.e only one of them
+            // is ever set while the other is unset. This is the convention we follow in our Avro
+            // decoder. When the first field of the record is set then we have a data message.
+            // Otherwise we have a progress message.
+            for (row, _time, _diff) in data.drain(..) {
+                let mut record = match &row.value {
+                    Some(Ok(row)) => row.iter(),
+                    Some(Err(err)) => {
+                        error!("Ignoring errored record: {err}");
+                        continue;
+                    }
+                    None => continue,
+                };
+                let message = match (record.next().unwrap(), record.next().unwrap()) {
+                    (Datum::List(datum_updates), Datum::Null) => {
+                        let mut updates = vec![];
+                        for update in datum_updates.iter() {
+                            let mut update = update.unwrap_list().iter();
+                            let data = update.next().unwrap().unwrap_list();
+                            let time = update.next().unwrap().unwrap_int64();
+                            let diff = Diff::from(update.next().unwrap().unwrap_int64());
 
-                                row_buf.packer().extend(data);
-                                let data = row_buf.clone();
-                                let time = u64::try_from(time).expect("non-negative");
-                                let time = mz_repr::Timestamp::from(time);
-                                updates.push((data, time, diff));
-                            }
-                            Message::Updates(updates)
+                            row_buf.packer().extend(data);
+                            let data = row_buf.clone();
+                            let time = u64::try_from(time).expect("non-negative");
+                            let time = mz_repr::Timestamp::from(time);
+                            updates.push((data, time, diff));
                         }
-                        (Datum::Null, Datum::List(progress)) => {
-                            let mut progress = progress.iter();
-                            let mut lower = vec![];
-                            for time in progress.next().unwrap().unwrap_list() {
-                                let time =
-                                    u64::try_from(time.unwrap_int64()).expect("non-negative");
-                                lower.push(mz_repr::Timestamp::from(time));
-                            }
-                            let mut upper = vec![];
-                            for time in progress.next().unwrap().unwrap_list() {
-                                let time =
-                                    u64::try_from(time.unwrap_int64()).expect("non-negative");
-                                upper.push(mz_repr::Timestamp::from(time));
-                            }
-                            let mut counts = vec![];
-                            for pair in progress.next().unwrap().unwrap_list() {
-                                let mut pair = pair.unwrap_list().iter();
-                                let time = pair.next().unwrap().unwrap_int64();
-                                let count = pair.next().unwrap().unwrap_int64();
+                        Message::Updates(updates)
+                    }
+                    (Datum::Null, Datum::List(progress)) => {
+                        let mut progress = progress.iter();
+                        let mut lower = vec![];
+                        for time in progress.next().unwrap().unwrap_list() {
+                            let time = u64::try_from(time.unwrap_int64()).expect("non-negative");
+                            lower.push(mz_repr::Timestamp::from(time));
+                        }
+                        let mut upper = vec![];
+                        for time in progress.next().unwrap().unwrap_list() {
+                            let time = u64::try_from(time.unwrap_int64()).expect("non-negative");
+                            upper.push(mz_repr::Timestamp::from(time));
+                        }
+                        let mut counts = vec![];
+                        for pair in progress.next().unwrap().unwrap_list() {
+                            let mut pair = pair.unwrap_list().iter();
+                            let time = pair.next().unwrap().unwrap_int64();
+                            let count = pair.next().unwrap().unwrap_int64();
 
-                                let time = u64::try_from(time).expect("non-negative");
-                                let count = usize::try_from(count).expect("non-negative");
-                                counts.push((mz_repr::Timestamp::from(time), count));
-                            }
-                            let progress = Progress {
-                                lower,
-                                upper,
-                                counts,
-                            };
-                            Message::Progress(progress)
+                            let time = u64::try_from(time).expect("non-negative");
+                            let count = usize::try_from(count).expect("non-negative");
+                            counts.push((mz_repr::Timestamp::from(time), count));
                         }
-                        _ => unreachable!("invalid input"),
-                    };
-                    channel_tx.borrow_mut().push_back(message);
-                }
-            });
-            if let Some(activator) = activator_get.borrow_mut().as_mut() {
-                activator.activate().unwrap()
+                        let progress = Progress {
+                            lower,
+                            upper,
+                            counts,
+                        };
+                        Message::Progress(progress)
+                    }
+                    _ => unreachable!("invalid input"),
+                };
+                channel_tx.borrow_mut().push_back(message);
             }
         });
+        if let Some(activator) = activator_get.borrow_mut().as_mut() {
+            activator.activate().unwrap()
+        }
+    });
 
     struct VdIterator<T>(Rc<RefCell<VecDeque<T>>>);
     impl<T> Iterator for VdIterator<T> {
@@ -462,7 +458,7 @@ async fn decode_delimited(
 /// (which is not always possible otherwise, since often gibberish strings can be interpreted as Avro,
 ///  so the only signal is how many bytes you managed to decode).
 pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
-    input: &VecCollection<G, SourceOutput<FromTime>, Diff>,
+    input: VecCollection<G, SourceOutput<FromTime>, Diff>,
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: String,
@@ -484,8 +480,8 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
 
     let mut builder = AsyncOperatorBuilder::new(op_name, input.scope());
 
-    let (output_handle, output) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
-    let mut input = builder.new_input_for(&input.inner, Exchange::new(dist), &output_handle);
+    let (output_handle, output) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let mut input = builder.new_input_for(input.inner, Exchange::new(dist), &output_handle);
 
     let (_, transient_errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {

@@ -222,7 +222,6 @@ where
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         self.0
-            .clone()
             .map(|d| (d, ()))
             .mz_arrange_core::<_, Ba, Bu, _>(pact, name)
     }

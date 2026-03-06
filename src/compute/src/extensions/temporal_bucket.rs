@@ -133,22 +133,14 @@ where
                 let peeled = chain.peel(upper.borrow());
                 if let Some(cap) = cap.as_ref() {
                     let mut session = output.session_with_builder(cap);
-                    for stack in peeled
-                        .into_iter()
-                        .flat_map(|x: MergeBatcherWrapper<D, G::Timestamp, mz_repr::Diff>| x.done())
-                    {
+                    for stack in peeled.into_iter().flat_map(|x| x.done()) {
                         // TODO: If we have a columnar merge batcher, cloning won't be necessary.
                         session.give_iterator(stack.iter().cloned());
                     }
                 } else {
                     // If we don't have a cap, we should not have any data to reveal.
                     assert_eq!(
-                        peeled
-                            .into_iter()
-                            .flat_map(
-                                |x: MergeBatcherWrapper<D, G::Timestamp, mz_repr::Diff>| x.done()
-                            )
-                            .next(),
+                        peeled.into_iter().flat_map(|x| x.done()).next(),
                         None,
                         "Unexpected data revealed without a cap."
                     );

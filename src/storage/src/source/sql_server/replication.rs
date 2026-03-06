@@ -74,7 +74,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
-        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+        builder.new_output::<CapacityContainerBuilder<_>>();
 
     let (button, transient_errors) = builder.build_fallible(move |caps| {
         let busy_signal = Arc::clone(&config.busy_signal);

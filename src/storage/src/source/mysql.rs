@@ -167,7 +167,7 @@ impl SourceRender for MySqlSourceConnection {
             config.clone(),
             self.clone(),
             source_outputs,
-            &rewinds,
+            rewinds,
             metrics,
         );
 
@@ -178,7 +178,7 @@ impl SourceRender for MySqlSourceConnection {
         let partition_count = u64::cast_from(config.source_exports.len());
         let data_streams: Vec<_> = updates
             .inner
-            .partition::<CapacityContainerBuilder<TimelyStack<_>>, _, _>(
+            .partition::<CapacityContainerBuilder<_>, _, _>(
                 partition_count,
                 |((output, data), time, diff): &(
                     (usize, Result<SourceMessage, DataflowError>),

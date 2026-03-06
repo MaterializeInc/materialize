@@ -299,7 +299,7 @@ where
         collection_id,
         &operator_name,
         &target,
-        &desired_collection,
+        desired_collection,
         Arc::clone(&persist_clients),
     );
 
@@ -308,8 +308,8 @@ where
         collection_id.clone(),
         &operator_name,
         &target,
-        &batch_descriptions,
-        &passthrough_desired_stream.as_collection(),
+        batch_descriptions.clone(),
+        passthrough_desired_stream.as_collection(),
         Arc::clone(&persist_clients),
         storage_state,
         Arc::clone(&busy_signal),
@@ -320,8 +320,8 @@ where
         collection_id.clone(),
         operator_name,
         &target,
-        &batch_descriptions,
-        &written_batches,
+        batch_descriptions,
+        written_batches,
         persist_clients,
         storage_state,
         metrics,
@@ -348,7 +348,7 @@ fn mint_batch_descriptions<G>(
     collection_id: GlobalId,
     operator_name: &str,
     target: &CollectionMetadata,
-    desired_collection: &VecCollection<G, Result<Row, DataflowError>, Diff>,
+    desired_collection: VecCollection<G, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
 ) -> (
     Stream<G, Vec<(Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>>,
@@ -385,7 +385,7 @@ where
     // The description and the data-passthrough outputs are both driven by this input, so
     // they use a standard input connection.
     let mut desired_input =
-        mint_op.new_input_for_many(&desired_collection.inner, Pipeline, [&output, &data_output]);
+        mint_op.new_input_for_many(desired_collection.inner, Pipeline, [&output, &data_output]);
 
     let shutdown_button = mint_op.build(move |capabilities| async move {
         // Non-active workers should just pass the data through.
@@ -531,11 +531,11 @@ fn write_batches<G>(
     collection_id: GlobalId,
     operator_name: &str,
     target: &CollectionMetadata,
-    batch_descriptions: &Stream<
+    batch_descriptions: Stream<
         G,
         Vec<(Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
     >,
-    desired_collection: &VecCollection<G, Result<Row, DataflowError>, Diff>,
+    desired_collection: VecCollection<G, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &StorageState,
     busy_signal: Arc<Semaphore>,
@@ -564,8 +564,8 @@ where
     let (output, output_stream) = write_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let mut descriptions_input =
-        write_op.new_input_for(&batch_descriptions.clone().broadcast(), Pipeline, &output);
-    let mut desired_input = write_op.new_disconnected_input(&desired_collection.inner, Pipeline);
+        write_op.new_input_for(batch_descriptions.broadcast(), Pipeline, &output);
+    let mut desired_input = write_op.new_disconnected_input(desired_collection.inner, Pipeline);
 
     // This operator accepts the current and desired update streams for a `persist` shard.
     // It attempts to write out updates, starting from the current's upper frontier, that
@@ -874,11 +874,11 @@ fn append_batches<G>(
     collection_id: GlobalId,
     operator_name: String,
     target: &CollectionMetadata,
-    batch_descriptions: &Stream<
+    batch_descriptions: Stream<
         G,
         Vec<(Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
     >,
-    batches: &Stream<G, Vec<HollowBatchAndMetadata<mz_repr::Timestamp>>>,
+    batches: Stream<G, Vec<HollowBatchAndMetadata<mz_repr::Timestamp>>>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &StorageState,
     metrics: SourcePersistSinkMetrics,

@@ -319,7 +319,7 @@ where
     };
 
     let desc_transformer = match flow_control {
-        Some(flow_control) => Some(move |mut scope: _, descs: &Stream<_, _>, chosen_worker| {
+        Some(flow_control) => Some(move |mut scope: _, descs: Stream<_, _>, chosen_worker| {
             let (stream, token) = backpressure(
                 &mut scope,
                 &format!("backpressure({source_id})"),
@@ -734,7 +734,7 @@ pub struct FlowControl<G: Scope> {
 pub fn backpressure<T, G, O>(
     scope: &mut G,
     name: &str,
-    data: &Stream<G, Vec<O>>,
+    data: Stream<G, Vec<O>>,
     flow_control: FlowControl<G>,
     chosen_worker: usize,
     // A probe used to inspect this operator during unit-testing
@@ -767,7 +767,7 @@ where
     let (data_output, data_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let mut data_input = builder.new_disconnected_input(data, Pipeline);
-    let mut flow_control_input = builder.new_disconnected_input(&summaried_flow, Pipeline);
+    let mut flow_control_input = builder.new_disconnected_input(summaried_flow, Pipeline);
 
     // Helper method used to synthesize current and next frontier for ordered times.
     fn synthesize_frontiers<T: PartialOrder + Clone>(
@@ -1303,7 +1303,7 @@ mod tests {
                         let (backpressured, token) = backpressure(
                             scope,
                             "test",
-                            &input,
+                            input,
                             flow_control,
                             0,
                             Some(backpressure_status_tx),
@@ -1313,7 +1313,7 @@ mod tests {
                         let tx = if !non_granular_consumer {
                             Some(consumer_operator(
                                 scope.clone(),
-                                &backpressured,
+                                backpressured.clone(),
                                 granular_feedback_handle.unwrap(),
                             ))
                         } else {
@@ -1335,7 +1335,7 @@ mod tests {
                     let consumer_tx = if non_granular_consumer {
                         consumer_operator(
                             scope.clone(),
-                            &backpressured,
+                            backpressured,
                             non_granular_feedback_handle.unwrap(),
                         )
                     } else {
@@ -1443,7 +1443,7 @@ mod tests {
     /// being processed. Also connects the `feedback` handle to its output.
     fn consumer_operator<G: Scope, O: Backpressureable + std::fmt::Debug>(
         scope: G,
-        input: &Stream<G, Vec<O>>,
+        input: Stream<G, Vec<O>>,
         feedback: timely::dataflow::operators::feedback::Handle<G, Vec<std::convert::Infallible>>,
     ) -> UnboundedSender<()> {
         let (tx, mut rx) = unbounded_channel::<()>();

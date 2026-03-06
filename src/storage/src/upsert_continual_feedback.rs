@@ -100,7 +100,7 @@ use crate::upsert::types::{StateValue, UpsertState, UpsertStateBackend};
 /// case, our input might not be consolidated and `consolidate_chunk` is able to
 /// handle that.
 pub fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
-    input: &VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+    input: VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
     persist_input: VecCollection<G, Result<Row, DataflowError>, Diff>,
@@ -142,7 +142,7 @@ where
         };
         Some((UpsertKey::from_value(value_ref, &key_indices), value))
     });
-    let (output_handle, output) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (output_handle, output) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     // An output that just reports progress of the snapshot consolidation process upstream to the
     // persist source to ensure that backpressure is applied
@@ -151,13 +151,13 @@ where
 
     let (mut health_output, health_stream) = builder.new_output();
     let mut input = builder.new_input_for(
-        &input.inner,
+        input.inner,
         Exchange::new(move |((key, _, _), _, _)| UpsertKey::hashed(key)),
         &output_handle,
     );
 
     let mut persist_input = builder.new_disconnected_input(
-        &persist_input.inner,
+        persist_input.inner,
         Exchange::new(|((key, _), _, _)| UpsertKey::hashed(key)),
     );
 
@@ -982,7 +982,7 @@ mod test {
                         };
 
                         let (output, _, _, button) = upsert_inner(
-                            &input.as_collection(),
+                            input.as_collection(),
                             vec![0],
                             Antichain::from_elem(Timestamp::minimum()),
                             persist_input.as_collection(),
@@ -1177,7 +1177,7 @@ mod test {
                         };
 
                         let (output, _, _, button) = upsert_inner(
-                            &input.as_collection(),
+                            input.as_collection(),
                             vec![0],
                             Antichain::from_elem(Timestamp::minimum()),
                             persist_input.as_collection(),

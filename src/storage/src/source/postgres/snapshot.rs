@@ -360,21 +360,21 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let (feedback_handle, feedback_data) = scope.feedback(Default::default());
 
     let (raw_handle, raw_data) = builder.new_output();
-    let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<_>>();
     // This output is used to signal to the replication operator that the replication slot has been
     // created. With the current state of execution serialization there isn't a lot of benefit
     // of splitting the snapshot and replication phases into two operators.
     // TODO(petrosagg): merge the two operators in one (while still maintaining separation as
     // functions/modules)
-    let (_, slot_ready) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
-    let (snapshot_handle, snapshot) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (_, slot_ready) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (snapshot_handle, snapshot) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (definite_error_handle, definite_errors) =
-        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+        builder.new_output::<CapacityContainerBuilder<_>>();
 
     // This operator needs to broadcast data to itself in order to synchronize the transaction
     // snapshot. However, none of the feedback capabilities result in output messages and for the
     // feedback edge specifically having a default conncetion would result in a loop.
-    let mut snapshot_input = builder.new_disconnected_input(&feedback_data, Pipeline);
+    let mut snapshot_input = builder.new_disconnected_input(feedback_data, Pipeline);
 
     // The export id must be sent to all workers, so we broadcast the feedback connection
     snapshot.broadcast().connect_loop(feedback_handle);

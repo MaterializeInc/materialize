@@ -169,7 +169,7 @@ where
     T: Refines<G::Timestamp>,
     DT: FnOnce(
         Child<'g, G, T>,
-        &StreamVec<Child<'g, G, T>, (usize, ExchangeableBatchPart<G::Timestamp>)>,
+        StreamVec<Child<'g, G, T>, (usize, ExchangeableBatchPart<G::Timestamp>)>,
         usize,
     ) -> (
         StreamVec<Child<'g, G, T>, (usize, ExchangeableBatchPart<G::Timestamp>)>,
@@ -228,7 +228,7 @@ where
     let descs = descs.enter(scope);
     let descs = match desc_transformer {
         Some(desc_transformer) => {
-            let (descs, extra_tokens) = desc_transformer(scope.clone(), &descs, chosen_worker);
+            let (descs, extra_tokens) = desc_transformer(scope.clone(), descs, chosen_worker);
             tokens.extend(extra_tokens);
             descs
         }
@@ -236,7 +236,7 @@ where
     };
 
     let (parts, completed_fetches_stream, fetch_token) = shard_source_fetch(
-        &descs,
+        descs,
         name,
         client(),
         shard_id,
@@ -338,7 +338,7 @@ where
         format!("shard_source_descs_return({})", name),
         scope.clone(),
     );
-    let mut completed_fetches = builder.new_disconnected_input(&completed_fetches_stream, Pipeline);
+    let mut completed_fetches = builder.new_disconnected_input(completed_fetches_stream, Pipeline);
     // This operator doesn't need to use a token because it naturally exits when its input
     // frontier reaches the empty antichain.
     builder.build(move |_caps| async move {
@@ -584,7 +584,7 @@ where
 }
 
 pub(crate) fn shard_source_fetch<K, V, T, D, G>(
-    descs: &StreamVec<G, (usize, ExchangeableBatchPart<T>)>,
+    descs: StreamVec<G, (usize, ExchangeableBatchPart<T>)>,
     name: &str,
     client: impl Future<Output = PersistClient> + Send + 'static,
     shard_id: ShardId,
@@ -747,7 +747,7 @@ mod tests {
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
                 let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
-                    let transformer = move |_, descs: &StreamVec<_, _>, _| (descs.clone(), vec![]);
+                    let transformer = move |_, descs: StreamVec<_, _>, _| (descs.clone(), vec![]);
                     let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
                         scope,
                         "test_source",
@@ -817,7 +817,7 @@ mod tests {
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
                 let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
-                    let transformer = move |_, descs: &StreamVec<_, _>, _| (descs.clone(), vec![]);
+                    let transformer = move |_, descs: StreamVec<_, _>, _| (descs.clone(), vec![]);
                     let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
                         scope,
                         "test_source",

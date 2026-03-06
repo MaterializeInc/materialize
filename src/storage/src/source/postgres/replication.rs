@@ -147,8 +147,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     config: RawSourceCreationConfig,
     connection: PostgresSourceConnection,
     table_info: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
-    rewind_stream: &Stream<G, Vec<RewindRequest>>,
-    slot_ready_stream: &Stream<G, Vec<Infallible>>,
+    rewind_stream: Stream<G, Vec<RewindRequest>>,
+    slot_ready_stream: Stream<G, Vec<Infallible>>,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     metrics: PgSourceMetrics,
 ) -> (
@@ -163,8 +163,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
     let (data_output, data_stream) = builder.new_output();
     let (definite_error_handle, definite_errors) =
-        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
-    let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+        builder.new_output::<CapacityContainerBuilder<_>>();
+    let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let mut rewind_input =
         builder.new_disconnected_input(rewind_stream, Exchange::new(move |_| slot_reader));

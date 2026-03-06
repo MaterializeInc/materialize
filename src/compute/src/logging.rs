@@ -225,7 +225,7 @@ struct LogCollection {
 /// data is not exchanged between workers, as the consolidation would not function as desired
 /// otherwise.
 pub(super) fn consolidate_and_pack<G, B, CB, L, F>(
-    input: &Stream<G, B::Input>,
+    input: Stream<G, B::Input>,
     log: L,
     mut logic: F,
 ) -> Stream<G, CB::Container>

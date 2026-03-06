@@ -185,7 +185,7 @@ pub fn rehydration_finished<G, T>(
     // A token that we can drop to signal we are finished rehydrating.
     token: impl std::any::Any + 'static,
     resume_upper: Antichain<T>,
-    input: &Stream<G, Vec<Infallible>>,
+    input: Stream<G, Vec<Infallible>>,
 ) where
     G: Scope<Timestamp = T>,
     T: Timestamp,
@@ -221,7 +221,7 @@ pub fn rehydration_finished<G, T>(
 /// - A collection of the computed upsert operator and,
 /// - A health update stream to propagate errors
 pub(crate) fn upsert<G: Scope, FromTime>(
-    input: &VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+    input: VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     upsert_envelope: UpsertEnvelope,
     resume_upper: Antichain<G::Timestamp>,
     previous: VecCollection<G, Result<Row, DataflowError>, Diff>,
@@ -333,7 +333,7 @@ where
     };
 
     upsert_operator(
-        &thin_input,
+        thin_input,
         upsert_envelope.key_indices,
         resume_upper,
         previous,
@@ -351,7 +351,7 @@ where
 // A shim so we can dispatch based on the dyncfg that tells us which upsert
 // operator to use.
 fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
-    input: &VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+    input: VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
     persist_input: VecCollection<G, Result<Row, DataflowError>, Diff>,
@@ -420,7 +420,7 @@ where
 /// highest from_time. Its purpose is to thin out data as much as possible before exchanging them
 /// across workers.
 fn upsert_thinning<G, K, V, FromTime>(
-    input: &VecCollection<G, (K, V, FromTime), Diff>,
+    input: VecCollection<G, (K, V, FromTime), Diff>,
 ) -> VecCollection<G, (K, V, FromTime), Diff>
 where
     G: Scope,
@@ -431,7 +431,6 @@ where
 {
     input
         .inner
-        .clone()
         .unary(Pipeline, "UpsertThinning", |_, _| {
             // A capability suitable to emit all updates in `updates`, if any.
             let mut capability: Option<InputCapability<G::Timestamp>> = None;
@@ -670,7 +669,7 @@ pub(crate) struct UpsertConfig {
 }
 
 fn upsert_classic<G: Scope, FromTime, F, Fut, US>(
-    input: &VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+    input: VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
     previous: VecCollection<G, Result<Row, DataflowError>, Diff>,
@@ -721,13 +720,13 @@ where
 
     let (mut health_output, health_stream) = builder.new_output();
     let mut input = builder.new_input_for(
-        &input.inner,
+        input.inner,
         Exchange::new(move |((key, _, _), _, _)| UpsertKey::hashed(key)),
         &output_handle,
     );
 
     let mut previous = builder.new_input_for(
-        &previous.inner,
+        previous.inner,
         Exchange::new(|((key, _), _, _)| UpsertKey::hashed(key)),
         &output_handle,
     );

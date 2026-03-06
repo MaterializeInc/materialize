@@ -257,7 +257,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 
             let mut tokens = vec![];
 
-            let (feedback_handle, feedback) = mz_scope.feedback::<Vec<()>>(Default::default());
+            let (feedback_handle, feedback) = mz_scope.feedback(Default::default());
 
             let connection = description.desc.connection.clone();
             tracing::info!(
@@ -308,7 +308,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     &debug_name,
                     c,
                     description.clone(),
-                    &feedback,
+                    feedback,
                     storage_state,
                     base_source_config,
                 ),
@@ -317,7 +317,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     &debug_name,
                     c,
                     description.clone(),
-                    &feedback,
+                    feedback,
                     storage_state,
                     base_source_config,
                 ),
@@ -326,7 +326,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     &debug_name,
                     c,
                     description.clone(),
-                    &feedback,
+                    feedback,
                     storage_state,
                     base_source_config,
                 ),
@@ -335,7 +335,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     &debug_name,
                     c,
                     description.clone(),
-                    &feedback,
+                    feedback,
                     storage_state,
                     base_source_config,
                 ),
@@ -344,7 +344,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     &debug_name,
                     c,
                     description.clone(),
-                    &feedback,
+                    feedback,
                     storage_state,
                     base_source_config,
                 ),
@@ -413,7 +413,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     .collect(),
                 primary_source_id,
                 "source",
-                &health_stream,
+                health_stream,
                 crate::healthcheck::DefaultWriter {
                     command_tx: storage_state.internal_cmd_tx.clone(),
                     updates: Rc::clone(&storage_state.shared_status_updates),
@@ -460,7 +460,7 @@ pub fn build_export_dataflow<A: Allocate>(
             [id].into_iter().collect(),
             id,
             "sink",
-            &health_stream,
+            health_stream,
             crate::healthcheck::DefaultWriter {
                 command_tx: storage_state.internal_cmd_tx.clone(),
                 updates: Rc::clone(&storage_state.shared_status_updates),

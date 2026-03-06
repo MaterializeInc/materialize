@@ -518,9 +518,9 @@ fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
     // also remove the need for this to be an async timely operator.
     let active_worker = name.hashed();
     let to_append_input =
-        op.new_input_for_many(&to_append.inner, Exchange::new(move |_| active_worker), []);
+        op.new_input_for_many(to_append.inner, Exchange::new(move |_| active_worker), []);
     let append_times_input = op.new_input_for_many(
-        &append_times.inner,
+        append_times.inner,
         Exchange::new(move |_| active_worker),
         [],
     );
@@ -773,7 +773,7 @@ trait StepForward<G: Scope, D, R> {
     /// The caller is responsible for ensuring that all data and capabilities given
     /// to this operator can be stepped forward without panicking, otherwise the
     /// operator will panic at runtime.
-    fn step_forward(&self, name: &str) -> VecCollection<G, D, R>;
+    fn step_forward(self, name: &str) -> VecCollection<G, D, R>;
 }
 
 impl<G, D, R> StepForward<G, D, R> for VecCollection<G, D, R>
@@ -782,7 +782,7 @@ where
     D: Clone + 'static,
     R: Semigroup + 'static,
 {
-    fn step_forward(&self, name: &str) -> VecCollection<G, D, R> {
+    fn step_forward(self, name: &str) -> VecCollection<G, D, R> {
         let name = format!("ct_step_forward({})", name);
         let mut builder = OperatorBuilder::new(name, self.scope());
         let (output, output_stream) = builder.new_output();
@@ -793,7 +793,7 @@ where
         // frontier, so make this promise to timely.
         let step_forward_summary = Timestamp::from(1);
         let mut input = builder.new_input_connection(
-            self.inner.clone(),
+            self.inner,
             Pipeline,
             [(0, Antichain::from_elem(step_forward_summary))],
         );
@@ -801,7 +801,7 @@ where
         builder.build(move |_caps| {
             move |_frontiers| {
                 let mut output = output.activate();
-                input.for_each(|cap, data: &mut Vec<(D, Timestamp, R)>| {
+                input.for_each(|cap, data| {
                     for (_, ts, _) in data.iter_mut() {
                         *ts = ts.step_forward();
                     }
@@ -850,18 +850,16 @@ where
             move |_frontiers| {
                 let mut passthrough = passthrough.activate();
                 let mut times = times.activate();
-                input.for_each_time(
-                    |time, data: std::slice::IterMut<'_, Vec<(D, Timestamp, R)>>| {
-                        let mut times_session = times.session_with_builder(&time);
-                        let mut passthrough_session = passthrough.session(&time);
-                        for data in data {
-                            let times_iter =
-                                data.iter().map(|(_data, ts, diff)| ((), *ts, diff.clone()));
-                            times_session.give_iterator(times_iter);
-                            passthrough_session.give_container(data);
-                        }
-                    },
-                );
+                input.for_each_time(|time, data| {
+                    let mut times_session = times.session_with_builder(&time);
+                    let mut passthrough_session = passthrough.session(&time);
+                    for data in data {
+                        let times_iter =
+                            data.iter().map(|(_data, ts, diff)| ((), *ts, diff.clone()));
+                        times_session.give_iterator(times_iter);
+                        passthrough_session.give_container(data);
+                    }
+                });
             }
         });
         (

@@ -67,7 +67,7 @@ where
         // We exchange the data according to batch, but we don't want to send the batch ID to the
         // sink. The sink can re-compute the batch ID from the data.
         let input = consolidate_pact::<KeyBatcher<_, _, _>, _, _>(
-            &sinked_collection.map(move |row| (row, ())).inner,
+            sinked_collection.map(move |row| (row, ())).inner,
             Exchange::new(move |((row, ()), _, _): &((Row, _), _, _)| row.hashed() % batch_count),
             "Consolidated COPY TO S3 input",
         )
@@ -75,7 +75,7 @@ where
 
         // We need to consolidate the error collection to ensure we don't act on retracted errors.
         let error = consolidate_pact::<KeyBatcher<_, _, _>, _, _>(
-            &err_collection.map(move |err| (err, ())).inner,
+            err_collection.map(move |err| (err, ())).inner,
             Exchange::new(move |((err, _), _, _): &((DataflowError, _), _, _)| {
                 err.hashed() % batch_count
             }),

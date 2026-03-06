@@ -104,7 +104,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
     source_outputs: Vec<SourceOutputInfo>,
-    rewind_stream: &Stream<G, Vec<RewindRequest>>,
+    rewind_stream: Stream<G, Vec<RewindRequest>>,
     metrics: MySqlSourceMetrics,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,

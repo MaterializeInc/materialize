@@ -85,7 +85,6 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::AsCollection;
-use differential_dataflow::containers::TimelyStack;
 use itertools::Itertools as _;
 use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::cast::CastFrom;
@@ -190,8 +189,8 @@ impl SourceRender for PostgresSourceConnection {
             config.clone(),
             self,
             table_info,
-            &rewinds,
-            &slot_ready,
+            rewinds,
+            slot_ready,
             resume_uppers,
             metrics,
         );
@@ -200,7 +199,7 @@ impl SourceRender for PostgresSourceConnection {
         let partition_count = u64::cast_from(config.source_exports.len());
         let data_streams: Vec<_> = updates
             .inner
-            .partition::<CapacityContainerBuilder<TimelyStack<_>>, _, _>(
+            .partition::<CapacityContainerBuilder<_>, _, _>(
                 partition_count,
                 |((output, data), time, diff): &(
                     (usize, Result<SourceMessage, DataflowError>),

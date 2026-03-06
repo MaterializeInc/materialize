@@ -12,7 +12,6 @@ use std::convert::Infallible;
 use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
-use differential_dataflow::containers::TimelyStack;
 use futures::stream::StreamExt;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
@@ -59,7 +58,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
     let export_ids: Vec<_> = config.source_exports.keys().copied().collect();
     let partition_count = u64::cast_from(export_ids.len());
-    let data_streams: Vec<_> = stream.partition::<CapacityContainerBuilder<TimelyStack<_>>, _, _>(
+    let data_streams: Vec<_> = stream.partition::<CapacityContainerBuilder<_>, _, _>(
         partition_count,
         |((output, data), time, diff): &(
             (usize, Result<SourceMessage, DataflowError>),
@@ -75,8 +74,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
         data_collections.insert(*id, data_stream.as_collection());
     }
 
-    let (_progress_output, progress_stream) =
-        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let busy_signal = Arc::clone(&config.busy_signal);
 

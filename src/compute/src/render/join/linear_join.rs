@@ -95,8 +95,8 @@ impl LinearJoinSpec {
     /// Render a join operator according to this specification.
     fn render<G, Tr1, Tr2, L, I>(
         &self,
-        arranged1: &Arranged<G, Tr1>,
-        arranged2: &Arranged<G, Tr2>,
+        arranged1: Arranged<G, Tr1>,
+        arranged2: Arranged<G, Tr2>,
         result: L,
     ) -> VecCollection<G, I::Item, Diff>
     where
@@ -116,7 +116,7 @@ impl LinearJoinSpec {
             self.yielding.after_work,
             self.yielding.after_time,
         ) {
-            (DifferentialDataflow, _, _) => arranged1.clone().join_core(arranged2.clone(), result),
+            (DifferentialDataflow, _, _) => arranged1.join_core(arranged2, result),
             (Materialize, Some(work_limit), Some(time_limit)) => {
                 let yield_fn =
                     move |start: Instant, work| work >= work_limit || start.elapsed() >= time_limit;
@@ -497,7 +497,7 @@ where
         if closure.could_error() {
             let (oks, err) = self
                 .linear_join_spec
-                .render(&prev_keyed, &next_input, move |key, old, new| {
+                .render(prev_keyed, next_input, move |key, old, new| {
                     let mut row_builder = SharedRow::get();
                     let temp_storage = RowArena::new();
 
@@ -523,22 +523,22 @@ where
 
             (oks.as_collection(), Some(err.as_collection()))
         } else {
-            let oks =
-                self.linear_join_spec
-                    .render(&prev_keyed, &next_input, move |key, old, new| {
-                        let mut row_builder = SharedRow::get();
-                        let temp_storage = RowArena::new();
+            let oks = self
+                .linear_join_spec
+                .render(prev_keyed, next_input, move |key, old, new| {
+                    let mut row_builder = SharedRow::get();
+                    let temp_storage = RowArena::new();
 
-                        let mut datums_local = datums.borrow();
-                        datums_local.extend(key.to_datum_iter());
-                        datums_local.extend(old.to_datum_iter());
-                        datums_local.extend(new.to_datum_iter());
+                    let mut datums_local = datums.borrow();
+                    datums_local.extend(key.to_datum_iter());
+                    datums_local.extend(old.to_datum_iter());
+                    datums_local.extend(new.to_datum_iter());
 
-                        closure
-                            .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                            .expect("Closure claimed to never error")
-                            .cloned()
-                    });
+                    closure
+                        .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                        .expect("Closure claimed to never error")
+                        .cloned()
+                });
 
             (oks, None)
         }

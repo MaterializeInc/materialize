@@ -183,7 +183,7 @@ where
     let (work_stream, split_token) = render_split_work(
         scope.clone(),
         collection_id,
-        &objects_stream,
+        objects_stream,
         source.clone(),
         format.clone(),
     );
@@ -193,13 +193,13 @@ where
         collection_id,
         source.clone(),
         format.clone(),
-        &work_stream,
+        work_stream,
     );
     // Parse chunks of records into Rows.
     let (rows_stream, decode_token) = render_decode_chunk(
         scope.clone(),
         format.clone(),
-        &records_stream,
+        records_stream,
         shape.source_mfp,
     );
     // Stage the Rows in Persist.
@@ -208,11 +208,11 @@ where
         collection_id,
         &collection_meta,
         persist_clients,
-        &rows_stream,
+        rows_stream,
     );
 
     // Collect all results together and notify the upstream of whether or not we succeeded.
-    render_completion_operator(scope, &batch_stream, worker_callback);
+    render_completion_operator(scope, batch_stream, worker_callback);
 
     let tokens = vec![
         discover_token,
@@ -248,7 +248,7 @@ where
 
     let mut builder = AsyncOperatorBuilder::new("CopyFrom-discover".to_string(), scope.clone());
 
-    let (start_handle, start_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (start_handle, start_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let shutdown = builder.build(move |caps| async move {
         let [start_cap] = caps.try_into().unwrap();
@@ -293,7 +293,7 @@ where
 pub fn render_split_work<G, S, F>(
     scope: G,
     collection_id: GlobalId,
-    objects: &TimelyStream<G, Vec<Result<(S::Object, S::Checksum), StorageErrorX>>>,
+    objects: TimelyStream<G, Vec<Result<(S::Object, S::Checksum), StorageErrorX>>>,
     source: S,
     format: F,
 ) -> (
@@ -308,7 +308,7 @@ where
     let worker_id = scope.index();
     let mut builder = AsyncOperatorBuilder::new("CopyFrom-split_work".to_string(), scope.clone());
 
-    let (request_handle, request_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (request_handle, request_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let mut objects_handle = builder.new_input_for(objects, Distribute, &request_handle);
 
     let shutdown = builder.build(move |caps| async move {
@@ -367,7 +367,7 @@ pub fn render_fetch_work<G, S, F>(
     collection_id: GlobalId,
     source: S,
     format: F,
-    work_requests: &TimelyStream<G, Vec<Result<F::WorkRequest<S>, StorageErrorX>>>,
+    work_requests: TimelyStream<G, Vec<Result<F::WorkRequest<S>, StorageErrorX>>>,
 ) -> (
     TimelyStream<G, Vec<Result<F::RecordChunk, StorageErrorX>>>,
     PressOnDropButton,
@@ -380,7 +380,7 @@ where
     let worker_id = scope.index();
     let mut builder = AsyncOperatorBuilder::new("CopyFrom-fetch_work".to_string(), scope.clone());
 
-    let (record_handle, record_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (record_handle, record_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let mut work_requests_handle = builder.new_input_for(work_requests, Distribute, &record_handle);
 
     let shutdown = builder.build(move |caps| async move {
@@ -433,7 +433,7 @@ where
 pub fn render_decode_chunk<G, F>(
     scope: G,
     format: F,
-    record_chunks: &TimelyStream<G, Vec<Result<F::RecordChunk, StorageErrorX>>>,
+    record_chunks: TimelyStream<G, Vec<Result<F::RecordChunk, StorageErrorX>>>,
     mfp: SafeMfpPlan,
 ) -> (
     TimelyStream<G, Vec<Result<Row, StorageErrorX>>>,
@@ -445,7 +445,7 @@ where
 {
     let mut builder = AsyncOperatorBuilder::new("CopyFrom-decode_chunk".to_string(), scope.clone());
 
-    let (row_handle, row_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (row_handle, row_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let mut record_chunk_handle = builder.new_input_for(record_chunks, Distribute, &row_handle);
 
     let shutdown = builder.build(move |caps| async move {
@@ -512,7 +512,7 @@ pub fn render_stage_batches_operator<G>(
     collection_id: GlobalId,
     collection_meta: &CollectionMetadata,
     persist_clients: Arc<PersistClientCache>,
-    rows_stream: &TimelyStream<G, Vec<Result<Row, StorageErrorX>>>,
+    rows_stream: TimelyStream<G, Vec<Result<Row, StorageErrorX>>>,
 ) -> (
     TimelyStream<G, Vec<Result<ProtoBatch, StorageErrorX>>>,
     PressOnDropButton,
@@ -528,7 +528,7 @@ where
         AsyncOperatorBuilder::new("CopyFrom-stage_batches".to_string(), scope.clone());
 
     let (proto_batch_handle, proto_batch_stream) =
-        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+        builder.new_output::<CapacityContainerBuilder<_>>();
     let mut rows_handle = builder.new_input_for(rows_stream, Pipeline, &proto_batch_handle);
 
     let shutdown = builder.build(move |caps| async move {
@@ -625,7 +625,7 @@ where
 /// report the results upstream.
 pub fn render_completion_operator<G, F>(
     scope: G,
-    results_stream: &TimelyStream<G, Vec<Result<ProtoBatch, StorageErrorX>>>,
+    results_stream: TimelyStream<G, Vec<Result<ProtoBatch, StorageErrorX>>>,
     worker_callback: F,
 ) where
     G: Scope,

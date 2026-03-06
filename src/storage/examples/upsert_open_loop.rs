@@ -575,7 +575,7 @@ async fn run_benchmark(
 
                 let upsert_stream = upsert(
                     scope,
-                    &source_stream,
+                    source_stream,
                     source_id,
                     &dir_path,
                     args.clone(),
@@ -837,7 +837,7 @@ where
 /// A representative upsert operator.
 fn upsert<G>(
     scope: &G,
-    source_stream: &Stream<G, Vec<(Vec<u8>, Vec<u8>)>>,
+    source_stream: Stream<G, Vec<(Vec<u8>, Vec<u8>)>>,
     source_id: usize,
     instance_dir: &PathBuf,
     args: Args,
@@ -910,7 +910,7 @@ where
 
 fn upsert_core_pre_reduce<G, M: Map + 'static>(
     scope: &G,
-    source_stream: &Stream<G, Vec<(Vec<u8>, Vec<u8>)>>,
+    source_stream: Stream<G, Vec<(Vec<u8>, Vec<u8>)>>,
     source_id: usize,
     mut current_values: M,
 ) -> Stream<G, Vec<(Vec<u8>, Vec<u8>, i32)>>
@@ -1009,7 +1009,7 @@ where
 
 fn upsert_core<G, M: Map + 'static>(
     scope: &G,
-    source_stream: &Stream<G, Vec<(Vec<u8>, Vec<u8>)>>,
+    source_stream: Stream<G, Vec<(Vec<u8>, Vec<u8>)>>,
     source_id: usize,
     mut current_values: M,
 ) -> Stream<G, Vec<(Vec<u8>, Vec<u8>, i32)>>

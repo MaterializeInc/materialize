@@ -97,7 +97,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
 
         let updates =
             consolidate_and_pack::<_, Col2ValBatcher<UpdatesKey, _, _, _>, ColumnBuilder<_>, _, _>(
-                &logs,
+                logs,
                 TimelyLog::Reachability,
                 move |data, packer, session| {
                     for ((datum, ()), time, diff) in data.iter() {

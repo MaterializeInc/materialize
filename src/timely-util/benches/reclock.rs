@@ -59,13 +59,13 @@ where
             let (bindings, data_pusher, reclocked) =
                 scope.scoped::<IntoTime, _, _>("IntoScope", move |scope| {
                     let (binding_handle, binding_collection) = scope.new_collection();
-                    let (data_pusher, reclocked_collection) = reclock(&binding_collection, as_of);
-                    let reclocked_capture = reclocked_collection.inner.clone().capture();
+                    let (data_pusher, reclocked_collection) = reclock(binding_collection, as_of);
+                    let reclocked_capture = reclocked_collection.inner.capture();
                     (binding_handle, data_pusher, reclocked_capture)
                 });
 
             let (data, data_cap) = scope.scoped::<FromTime, _, _>("FromScope", move |scope| {
-                let ((handle, cap), data) = scope.new_unordered_input::<(D, FromTime, Diff)>();
+                let ((handle, cap), data) = scope.new_unordered_input();
                 data.capture_into(PusherCapture(data_pusher));
                 (handle, cap)
             });

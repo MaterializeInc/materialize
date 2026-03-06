@@ -329,12 +329,12 @@ where
 
         match &self {
             ArrangementFlavor::Local(oks, errs) => {
-                let oks = CollectionBundle::<S, T>::flat_map_core(oks, key, logic, refuel);
+                let oks = CollectionBundle::<S, T>::flat_map_core(oks.clone(), key, logic, refuel);
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
             ArrangementFlavor::Trace(_, oks, errs) => {
-                let oks = CollectionBundle::<S, T>::flat_map_core(oks, key, logic, refuel);
+                let oks = CollectionBundle::<S, T>::flat_map_core(oks.clone(), key, logic, refuel);
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
@@ -616,7 +616,7 @@ where
     /// The function presents the contents of the trace as `(key, value, time, delta)` tuples,
     /// where key and value are potentially specialized, but convertible into rows.
     fn flat_map_core<Tr, D, I, L>(
-        trace: &Arranged<S, Tr>,
+        trace: Arranged<S, Tr>,
         key: Option<&Tr::KeyOwn>,
         mut logic: L,
         refuel: usize,
@@ -635,6 +635,7 @@ where
         L: FnMut(Tr::Key<'_>, Tr::Val<'_>, S::Timestamp, mz_repr::Diff) -> I + 'static,
     {
         use differential_dataflow::consolidation::ConsolidatingContainerBuilder as CB;
+        let scope = trace.stream.scope();
 
         let mut key_con = Tr::KeyContainer::with_capacity(1);
         if let Some(key) = &key {
@@ -645,10 +646,9 @@ where
         use timely::dataflow::operators::Operator;
         trace
             .stream
-            .clone()
-            .unary::<CB<Vec<_>>, _, _, _>(Pipeline, &name, move |_, info| {
+            .unary::<CB<_>, _, _, _>(Pipeline, &name, move |_, info| {
                 // Acquire an activator to reschedule the operator when it has unfinished work.
-                let activator = trace.stream.scope().activator_for(info.address);
+                let activator = scope.activator_for(info.address);
                 // Maintain a list of work to do, cursor to navigate and process.
                 let mut todo = std::collections::VecDeque::new();
                 move |input, output| {
@@ -785,11 +785,10 @@ where
         use differential_dataflow::AsCollection;
         let (oks, errs) = stream
             .as_collection()
-            .map_fallible::<
-                CapacityContainerBuilder<Vec<_>>,
-                CapacityContainerBuilder<Vec<_>>,
-                _, _, _,
-            >("OkErr", |x| x);
+            .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>(
+                "OkErr",
+                |x| x,
+            );
 
         (oks, errors.concat(errs))
     }
@@ -900,7 +899,7 @@ where
                 let mut ok_output = ok_output.activate();
                 let mut err_output = err_output.activate();
                 let mut passthrough_output = passthrough_output.activate();
-                input.for_each(|time, data: &mut Vec<(Row, S::Timestamp, Diff)>| {
+                input.for_each(|time, data| {
                     let mut ok_session = ok_output.session_with_builder(&time);
                     let mut err_session = err_output.session(&time);
                     for (row, time, diff) in data.iter() {

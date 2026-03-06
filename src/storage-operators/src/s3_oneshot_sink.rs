@@ -150,13 +150,13 @@ where
     let mut builder =
         AsyncOperatorBuilder::new("CopyToS3-initialization".to_string(), scope.clone());
 
-    let (start_handle, start_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (start_handle, start_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     // Push all errors to the leader worker, so it early exits before doing any initialization work
     // This should be at-most 1 incoming error per-worker due to the filtering of this stream
     // in `CopyToS3OneshotSinkConnection::render_continuous_sink`.
     let mut error_handle = builder.new_input_for(
-        &err_stream,
+        err_stream,
         Exchange::new(move |_| u64::cast_from(leader_id)),
         &start_handle,
     );
@@ -227,7 +227,7 @@ where
 
     let mut builder = AsyncOperatorBuilder::new("CopyToS3-completion".to_string(), scope.clone());
 
-    let mut completion_input = builder.new_disconnected_input(&completion_stream, Pipeline);
+    let mut completion_input = builder.new_disconnected_input(completion_stream, Pipeline);
 
     let button = builder.build(move |_| async move {
         // fallible async block to use the `?` operator for convenience
@@ -310,10 +310,10 @@ where
     let worker_id = scope.index();
     let mut builder = AsyncOperatorBuilder::new("CopyToS3-uploader".to_string(), scope.clone());
 
-    let mut input_handle = builder.new_disconnected_input(&input_collection, Pipeline);
+    let mut input_handle = builder.new_disconnected_input(input_collection, Pipeline);
     let (completion_handle, completion_stream) =
-        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
-    let mut start_handle = builder.new_input_for(&start_stream, Pipeline, &completion_handle);
+        builder.new_output::<CapacityContainerBuilder<_>>();
+    let mut start_handle = builder.new_input_for(start_stream, Pipeline, &completion_handle);
 
     let button = builder.build(move |caps| async move {
         let [completion_cap] = caps.try_into().unwrap();

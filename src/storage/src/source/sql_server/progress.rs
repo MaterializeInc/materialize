@@ -66,7 +66,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     let op_name = format!("SqlServerProgress({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
-    let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let (button, transient_errors) = builder.build_fallible::<TransientError, _>(move |caps| {
         Box::pin(async move {

@@ -862,7 +862,7 @@ where
                 // stream or produce correct data in the output stream.
                 let validating = err_output.is_none();
 
-                let (oks, errs) = self.build_bucketed_stage(&aggr_funcs, &input, validating);
+                let (oks, errs) = self.build_bucketed_stage(&aggr_funcs, input, validating);
                 if let Some(errs) = errs {
                     err_output = Some(errs.leave_region());
                 }
@@ -1000,7 +1000,7 @@ where
     fn build_bucketed_stage<S>(
         &self,
         aggr_funcs: &Vec<AggregateFunc>,
-        input: &VecCollection<S, (Row, Row), Diff>,
+        input: VecCollection<S, (Row, Row), Diff>,
         validating: bool,
     ) -> (
         VecCollection<S, (Row, Row), Diff>,
@@ -1016,7 +1016,7 @@ where
                     RowValBuilder<_, _, _>,
                     RowValSpine<Result<Row, Row>, _, _>,
                 >(
-                    input,
+                    input.clone(),
                     aggr_funcs.clone(),
                 );
             let (oks, errs) = reduced
@@ -1060,7 +1060,7 @@ where
     /// with all diffs in the reduction's output negated.
     fn build_bucketed_negated_output<S, Bu, Tr>(
         &self,
-        input: &VecCollection<S, (Row, Row), Diff>,
+        input: VecCollection<S, (Row, Row), Diff>,
         aggrs: Vec<AggregateFunc>,
     ) -> (
         Arranged<S, TraceAgent<RowRowSpine<G::Timestamp, Diff>>>,
@@ -1086,7 +1086,6 @@ where
         // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
         // view mz_introspection.mz_expected_group_size_advice.
         let arranged_input = input
-            .clone()
             .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                 "Arranged MinsMaxesHierarchical input",
             );
@@ -1279,6 +1278,8 @@ where
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
+        let mut collection_scope = collection.scope();
+
         // we must have called this function with something to reduce
         if full_aggrs.len() == 0 || simple_aggrs.len() + distinct_aggrs.len() != full_aggrs.len() {
             self.error_logger().soft_panic_or_log(
@@ -1314,6 +1315,7 @@ where
         let mut to_aggregate = Vec::new();
         if simple_aggrs.len() > 0 {
             // First, collect all non-distinct aggregations in one pass.
+            let collection = collection.clone();
             let easy_cases = collection.explode_one({
                 let zero_diffs = zero_diffs.clone();
                 move |(key, row)| {
@@ -1340,7 +1342,6 @@ where
         }
 
         // Next, collect all aggregations that require distinctness.
-        let mut collection_scope = collection.scope();
         for (datum_index, aggr) in distinct_aggrs.into_iter() {
             let pairer = Pairer::new(key_arity);
             let collection = collection

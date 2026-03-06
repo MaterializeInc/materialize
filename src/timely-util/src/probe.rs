@@ -31,7 +31,7 @@ use crate::builder_async::OperatorBuilder as AsyncOperatorBuilder;
 /// Monitors progress at a `Stream`.
 pub trait ProbeNotify<G: Scope> {
     /// Inserts a collection of progress probe in a stream.
-    fn probe_notify_with(&self, handles: Vec<Handle<G::Timestamp>>) -> Self;
+    fn probe_notify_with(self, handles: Vec<Handle<G::Timestamp>>) -> Self;
 }
 
 impl<G, C> ProbeNotify<G> for Stream<G, C>
@@ -39,7 +39,7 @@ where
     G: Scope,
     C: Container + Clone + 'static,
 {
-    fn probe_notify_with(&self, mut handles: Vec<Handle<G::Timestamp>>) -> Self {
+    fn probe_notify_with(self, mut handles: Vec<Handle<G::Timestamp>>) -> Self {
         if handles.is_empty() {
             return self.clone();
         }
@@ -51,7 +51,7 @@ where
 
         // TODO: This operator observes but doesn't consume data.
         // Instead, it should only observe progress statements.
-        self.clone().inspect_container(move |update| {
+        self.inspect_container(move |update| {
             if let Err(frontier) = update {
                 for handle in &mut handles {
                     handle.update_frontier(frontier);

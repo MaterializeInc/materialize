@@ -372,11 +372,11 @@ where
             |_timer, count| count > 1_000_000,
             // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
             move |session: &mut Session<'_, '_, G::Timestamp, CB<Vec<_>>, _>,
-                  key: &Row,
-                  stream_row: &Row,
+                  key,
+                  stream_row,
                   lookup_row,
-                  initial: &G::Timestamp,
-                  diff1: &Diff,
+                  initial,
+                  diff1,
                   output| {
                 let mut row_builder = SharedRow::get();
                 let temp_storage = RowArena::new();
@@ -421,11 +421,11 @@ where
             |_timer, count| count > 1_000_000,
             // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
             move |session: &mut Session<'_, '_, G::Timestamp, CB<Vec<_>>, _>,
-                  key: &Row,
-                  stream_row: &Row,
+                  key,
+                  stream_row,
                   lookup_row,
-                  initial: &G::Timestamp,
-                  diff1: &Diff,
+                  initial,
+                  diff1,
                   output| {
                 if output.is_empty() {
                     return;

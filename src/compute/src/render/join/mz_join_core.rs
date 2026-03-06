@@ -55,8 +55,8 @@ use tracing::trace;
 /// which produces something implementing `IntoIterator`, where the output collection will have an entry for
 /// every value returned by the iterator.
 pub(super) fn mz_join_core<G, Tr1, Tr2, L, I, YFn, C>(
-    arranged1: &Arranged<G, Tr1>,
-    arranged2: &Arranged<G, Tr2>,
+    arranged1: Arranged<G, Tr1>,
+    arranged2: Arranged<G, Tr2>,
     result: L,
     yield_fn: YFn,
 ) -> Stream<G, C>
@@ -72,11 +72,12 @@ where
     YFn: Fn(Instant, usize) -> bool + 'static,
     C: Container + SizableContainer + PushInto<(I::Item, G::Timestamp, Diff)> + Data,
 {
+    let scope = arranged1.stream.scope();
     let mut trace1 = arranged1.trace.clone();
     let mut trace2 = arranged2.trace.clone();
 
-    arranged1.stream.clone().binary_frontier(
-        arranged2.stream.clone(),
+    arranged1.stream.binary_frontier(
+        arranged2.stream,
         Pipeline,
         Pipeline,
         "Join",
@@ -84,7 +85,7 @@ where
             let operator_id = info.global_id;
 
             // Acquire an activator to reschedule the operator when it has unfinished work.
-            let activator = arranged1.stream.scope().activator_for(info.address);
+            let activator = scope.activator_for(info.address);
 
             // Our initial invariants are that for each trace, physical compaction is less or equal the trace's upper bound.
             // These invariants ensure that we can reference observed batch frontiers from `_start_upper` onward, as long as
@@ -274,7 +275,7 @@ where
                 });
 
                 // Drain input 2, prepare work.
-                input2.for_each(|capability, data: &mut Vec<Tr2::Batch>| {
+                input2.for_each(|capability, data| {
                     let trace1 = trace1_option
                         .as_mut()
                         .expect("we only drop a trace in response to the other input emptying");

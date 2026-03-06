@@ -268,20 +268,20 @@ where
         persist_api.clone(),
         as_of.clone(),
         read_only_rx,
-        &desired,
+        desired,
     );
 
     let (batches, write_token) = write::render(
         sink_id,
         persist_api.clone(),
         as_of,
-        &desired,
-        &persist,
-        &descs,
+        desired,
+        persist,
+        descs.clone(),
         Rc::clone(&compute_state.worker_config),
     );
 
-    let append_token = append::render(sink_id, persist_api, &descs, &batches);
+    let append_token = append::render(sink_id, persist_api, descs, batches);
 
     // Report sink frontier updates to the `ComputeState`.
     let collection = compute_state.expect_collection_mut(sink_id);
@@ -477,7 +477,7 @@ mod mint {
         persist_api: PersistApi,
         as_of: Antichain<Timestamp>,
         mut read_only_rx: watch::Receiver<bool>,
-        desired: &DesiredStreams<S>,
+        desired: DesiredStreams<S>,
     ) -> (
         DesiredStreams<S>,
         DescsStream<S>,
@@ -500,16 +500,16 @@ mod mint {
         let name = operator_name(sink_id, "mint");
         let mut op = OperatorBuilder::new(name, scope);
 
-        let (ok_output, ok_stream) = op.new_output::<CapacityContainerBuilder<Vec<_>>>();
-        let (err_output, err_stream) = op.new_output::<CapacityContainerBuilder<Vec<_>>>();
+        let (ok_output, ok_stream) = op.new_output::<CapacityContainerBuilder<_>>();
+        let (err_output, err_stream) = op.new_output::<CapacityContainerBuilder<_>>();
         let desired_outputs = OkErr::new(ok_output, err_output);
         let desired_output_streams = OkErr::new(ok_stream, err_stream);
 
-        let (desc_output, desc_output_stream) = op.new_output::<CapacityContainerBuilder<Vec<_>>>();
+        let (desc_output, desc_output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
 
         let mut desired_inputs = OkErr {
-            ok: op.new_input_for(&desired.ok, Pipeline, &desired_outputs.ok),
-            err: op.new_input_for(&desired.err, Pipeline, &desired_outputs.err),
+            ok: op.new_input_for(desired.ok, Pipeline, &desired_outputs.ok),
+            err: op.new_input_for(desired.err, Pipeline, &desired_outputs.err),
         };
 
         let button = op.build(move |capabilities| async move {
@@ -756,9 +756,9 @@ mod write {
         sink_id: GlobalId,
         persist_api: PersistApi,
         as_of: Antichain<Timestamp>,
-        desired: &DesiredStreams<S>,
-        persist: &PersistStreams<S>,
-        descs: &DescsStream<S>,
+        desired: DesiredStreams<S>,
+        persist: PersistStreams<S>,
+        descs: DescsStream<S>,
         worker_config: Rc<ConfigSet>,
     ) -> (BatchesStream<S>, PressOnDropButton)
     where
@@ -785,7 +785,7 @@ mod write {
         }
 
         let (batches_output, batches_output_stream) =
-            op.new_output::<CapacityContainerBuilder<Vec<_>>>();
+            op.new_output::<CapacityContainerBuilder<_>>();
 
         // It is important that we exchange the `desired` and `persist` data the same way, so
         // updates that cancel each other out end up on the same worker.
@@ -793,15 +793,14 @@ mod write {
         let exchange_err = |(d, _, _): &(DataflowError, Timestamp, Diff)| d.hashed();
 
         let mut desired_inputs = OkErr::new(
-            op.new_disconnected_input(&desired.ok, Exchange::new(exchange_ok)),
-            op.new_disconnected_input(&desired.err, Exchange::new(exchange_err)),
+            op.new_disconnected_input(desired.ok, Exchange::new(exchange_ok)),
+            op.new_disconnected_input(desired.err, Exchange::new(exchange_err)),
         );
         let mut persist_inputs = OkErr::new(
-            op.new_disconnected_input(&persist.ok, Exchange::new(exchange_ok)),
-            op.new_disconnected_input(&persist.err, Exchange::new(exchange_err)),
+            op.new_disconnected_input(persist.ok, Exchange::new(exchange_ok)),
+            op.new_disconnected_input(persist.err, Exchange::new(exchange_err)),
         );
-        let mut descs_input =
-            op.new_input_for(&descs.clone().broadcast(), Pipeline, &batches_output);
+        let mut descs_input = op.new_input_for(descs.broadcast(), Pipeline, &batches_output);
 
         let button = op.build(move |capabilities| async move {
             // We will use the data capabilities from the `descs` input to produce output, so no
@@ -1120,8 +1119,8 @@ mod append {
     pub fn render<S>(
         sink_id: GlobalId,
         persist_api: PersistApi,
-        descs: &DescsStream<S>,
-        batches: &BatchesStream<S>,
+        descs: DescsStream<S>,
+        batches: BatchesStream<S>,
     ) -> PressOnDropButton
     where
         S: Scope<Timestamp = Timestamp>,
@@ -1135,7 +1134,7 @@ mod append {
         // Broadcast batch descriptions to all workers, regardless of whether or not they are
         // responsible for the append, to give them a chance to clean up any outdated state they
         // might still hold.
-        let mut descs_input = op.new_disconnected_input(&descs.clone().broadcast(), Pipeline);
+        let mut descs_input = op.new_disconnected_input(descs.broadcast(), Pipeline);
         let mut batches_input = op.new_disconnected_input(
             batches,
             Exchange::new(move |(desc, _): &(BatchDescription, _)| {

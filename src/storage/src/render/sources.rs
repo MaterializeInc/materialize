@@ -62,7 +62,7 @@ pub fn render_source<'g, G, C>(
     dataflow_debug_name: &String,
     connection: C,
     description: IngestionDescription<CollectionMetadata>,
-    resume_stream: &Stream<Child<'g, G, mz_repr::Timestamp>, Vec<()>>,
+    resume_stream: Stream<Child<'g, G, mz_repr::Timestamp>, Vec<()>>,
     storage_state: &crate::storage_state::StorageState,
     base_source_config: RawSourceCreationConfig,
 ) -> (
@@ -208,7 +208,7 @@ where
         ),
         Some(encoding) => {
             let (decoded_stream, decode_health) = render_decode_delimited(
-                &ok_source,
+                ok_source,
                 encoding.key,
                 encoding.value,
                 dataflow_debug_name.clone(),
@@ -333,7 +333,7 @@ where
                     };
                     let (upsert, health_update, snapshot_progress, upsert_token) =
                         crate::upsert::upsert(
-                            &upsert_input.enter(scope),
+                            upsert_input.enter(scope),
                             upsert_envelope.clone(),
                             refine_antichain(&resume_upper),
                             previous,
@@ -362,7 +362,7 @@ where
                             base_source_config,
                             rehydrated_token,
                             refine_antichain(&resume_upper),
-                            &snapshot_progress,
+                            snapshot_progress.clone(),
                         );
                     } else {
                         drop(rehydrated_token)

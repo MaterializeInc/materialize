@@ -55,7 +55,7 @@ where
     /// computations and the second output stream represents failed
     /// computations.
     fn unary_fallible<DCB, ECB, B, P>(
-        &self,
+        self,
         pact: P,
         name: &str,
         constructor: B,
@@ -80,7 +80,7 @@ where
     /// successful applications of `logic`, while the second returned stream
     /// will contain the failed applications.
     fn flat_map_fallible<DCB, ECB, D2, E, I, L>(
-        &self,
+        self,
         name: &str,
         logic: L,
     ) -> (Stream<G, DCB::Container>, Stream<G, ECB::Container>)
@@ -91,11 +91,11 @@ where
         L: for<'a> FnMut(C1::Item<'a>) -> I + 'static;
 
     /// Block progress of the frontier at `expiration` time
-    fn expire_stream_at(&self, name: &str, expiration: G::Timestamp) -> Stream<G, C1>;
+    fn expire_stream_at(self, name: &str, expiration: G::Timestamp) -> Stream<G, C1>;
 }
 
 /// Extension methods for differential [`Collection`]s.
-pub trait CollectionExt<G, D1, R>
+pub trait CollectionExt<G, D1, R>: Sized
 where
     G: Scope,
     R: Semigroup,
@@ -112,7 +112,7 @@ where
     /// * `DCB`: The container builder for the `Ok` output.
     /// * `ECB`: The container builder for the `Err` output.
     fn map_fallible<DCB, ECB, D2, E, L>(
-        &self,
+        self,
         name: &str,
         mut logic: L,
     ) -> (VecCollection<G, D2, R>, VecCollection<G, E, R>)
@@ -133,7 +133,7 @@ where
     /// while the second returned collection will contain the failed
     /// applications.
     fn flat_map_fallible<DCB, ECB, D2, E, I, L>(
-        &self,
+        self,
         name: &str,
         logic: L,
     ) -> (Collection<G, DCB::Container>, Collection<G, ECB::Container>)
@@ -146,14 +146,13 @@ where
         L: FnMut(D1) -> I + 'static;
 
     /// Block progress of the frontier at `expiration` time.
-    fn expire_collection_at(&self, name: &str, expiration: G::Timestamp)
-    -> VecCollection<G, D1, R>;
+    fn expire_collection_at(self, name: &str, expiration: G::Timestamp) -> VecCollection<G, D1, R>;
 
     /// Replaces each record with another, with a new difference type.
     ///
     /// This method is most commonly used to take records containing aggregatable data (e.g. numbers to be summed)
     /// and move the data into the difference component. This will allow differential dataflow to update in-place.
-    fn explode_one<D2, R2, L>(&self, logic: L) -> VecCollection<G, D2, <R2 as Multiply<R>>::Output>
+    fn explode_one<D2, R2, L>(self, logic: L) -> VecCollection<G, D2, <R2 as Multiply<R>>::Output>
     where
         D2: differential_dataflow::Data,
         R2: Semigroup + Multiply<R>,
@@ -166,7 +165,7 @@ where
     ///
     /// The exceptions are transformed by `into_err`.
     fn ensure_monotonic<E, IE>(
-        &self,
+        self,
         into_err: IE,
     ) -> (VecCollection<G, D1, R>, VecCollection<G, E, R>)
     where
@@ -206,7 +205,7 @@ where
     G: Scope,
 {
     fn unary_fallible<DCB, ECB, B, P>(
-        &self,
+        self,
         pact: P,
         name: &str,
         constructor: B,
@@ -258,7 +257,7 @@ where
     // so the simple `|d1| logic(d1)` closure is load-bearing
     #[allow(clippy::redundant_closure)]
     fn flat_map_fallible<DCB, ECB, D2, E, I, L>(
-        &self,
+        self,
         name: &str,
         mut logic: L,
     ) -> (Stream<G, DCB::Container>, Stream<G, ECB::Container>)
@@ -287,40 +286,39 @@ where
         })
     }
 
-    fn expire_stream_at(&self, name: &str, expiration: G::Timestamp) -> Stream<G, C1> {
+    fn expire_stream_at(self, name: &str, expiration: G::Timestamp) -> Stream<G, C1> {
         let name = format!("expire_stream_at({name})");
-        self.clone()
-            .unary_frontier(Pipeline, &name.clone(), move |cap, _| {
-                // Retain a capability for the expiration time, which we'll only drop if the token
-                // is dropped. Else, block progress at the expiration time to prevent downstream
-                // operators from making any statement about expiration time or any following time.
-                let cap = Some(cap.delayed(&expiration));
-                let mut warned = false;
-                move |(input, frontier), output| {
-                    let _ = &cap;
-                    let frontier = frontier.frontier();
-                    if !frontier.less_than(&expiration) && !warned {
-                        // Here, we print a warning, not an error. The state is only a liveness
-                        // concern, but not relevant for correctness. Additionally, a race between
-                        // shutting down the dataflow and dropping the token can cause the dataflow
-                        // to shut down before we drop the token.  This can happen when dropping
-                        // the last remaining capability on a different worker.  We do not want to
-                        // log an error every time this happens.
+        self.unary_frontier(Pipeline, &name.clone(), move |cap, _| {
+            // Retain a capability for the expiration time, which we'll only drop if the token
+            // is dropped. Else, block progress at the expiration time to prevent downstream
+            // operators from making any statement about expiration time or any following time.
+            let cap = Some(cap.delayed(&expiration));
+            let mut warned = false;
+            move |(input, frontier), output| {
+                let _ = &cap;
+                let frontier = frontier.frontier();
+                if !frontier.less_than(&expiration) && !warned {
+                    // Here, we print a warning, not an error. The state is only a liveness
+                    // concern, but not relevant for correctness. Additionally, a race between
+                    // shutting down the dataflow and dropping the token can cause the dataflow
+                    // to shut down before we drop the token.  This can happen when dropping
+                    // the last remaining capability on a different worker.  We do not want to
+                    // log an error every time this happens.
 
-                        tracing::warn!(
-                            name = name,
-                            frontier = ?frontier,
-                            expiration = ?expiration,
-                            "frontier not less than expiration"
-                        );
-                        warned = true;
-                    }
-                    input.for_each(|time, data| {
-                        let mut session = output.session(&time);
-                        session.give_container(data);
-                    });
+                    tracing::warn!(
+                        name = name,
+                        frontier = ?frontier,
+                        expiration = ?expiration,
+                        "frontier not less than expiration"
+                    );
+                    warned = true;
                 }
-            })
+                input.for_each(|time, data| {
+                    let mut session = output.session(&time);
+                    session.give_container(data);
+                });
+            }
+        })
     }
 }
 
@@ -336,7 +334,7 @@ where
     }
 
     fn flat_map_fallible<DCB, ECB, D2, E, I, L>(
-        &self,
+        self,
         name: &str,
         mut logic: L,
     ) -> (Collection<G, DCB::Container>, Collection<G, ECB::Container>)
@@ -359,18 +357,14 @@ where
         (ok_stream.as_collection(), err_stream.as_collection())
     }
 
-    fn expire_collection_at(
-        &self,
-        name: &str,
-        expiration: G::Timestamp,
-    ) -> VecCollection<G, D1, R> {
+    fn expire_collection_at(self, name: &str, expiration: G::Timestamp) -> VecCollection<G, D1, R> {
         self.inner
             .expire_stream_at(name, expiration)
             .as_collection()
     }
 
     fn explode_one<D2, R2, L>(
-        &self,
+        self,
         mut logic: L,
     ) -> VecCollection<G, D2, <R2 as Multiply<R>>::Output>
     where
@@ -402,7 +396,7 @@ where
     }
 
     fn ensure_monotonic<E, IE>(
-        &self,
+        self,
         into_err: IE,
     ) -> (VecCollection<G, D1, R>, VecCollection<G, E, R>)
     where
@@ -472,7 +466,7 @@ where
                 data.hash(&mut h);
                 h.finish()
             });
-            consolidate_pact::<Ba, _, _>(&self.map(|k| (k, ())).inner, exchange, name)
+            consolidate_pact::<Ba, _, _>(self.map(|k| (k, ())).inner, exchange, name)
                 .unary(Pipeline, "unpack consolidated", |_, _| {
                     |input, output| {
                         input.for_each(|time, data| {
@@ -505,7 +499,7 @@ where
         let exchange =
             Exchange::new(move |update: &((D1, ()), G::Timestamp, R)| (update.0).0.hashed());
 
-        consolidate_pact::<Ba, _, _>(&self.map(|k| (k, ())).inner, exchange, name)
+        consolidate_pact::<Ba, _, _>(self.map(|k| (k, ())).inner, exchange, name)
             .unary(Pipeline, &format!("Unpack {name}"), |_, _| {
                 |input, output| {
                     input.for_each(|time, data| {
@@ -528,7 +522,7 @@ where
 ///
 /// The data are accumulated in place, each held back until their timestamp has completed.
 pub fn consolidate_pact<Ba, P, G>(
-    stream: &Stream<G, Ba::Input>,
+    stream: Stream<G, Ba::Input>,
     pact: P,
     name: &str,
 ) -> StreamVec<G, Vec<Ba::Output>>
@@ -543,7 +537,7 @@ where
         .scope()
         .logger_for("differential/arrange")
         .map(Into::into);
-    stream.clone().unary_frontier(pact, name, |_cap, info| {
+    stream.unary_frontier(pact, name, |_cap, info| {
         // Acquire a logger for arrange events.
 
         let mut batcher = Ba::new(logger, info.global_id);

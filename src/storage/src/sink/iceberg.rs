@@ -567,7 +567,7 @@ fn row_to_recordbatch(
 fn mint_batch_descriptions<G, D>(
     name: String,
     sink_id: GlobalId,
-    input: &VecCollection<G, D, Diff>,
+    input: VecCollection<G, D, Diff>,
     sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -596,7 +596,7 @@ where
     let (batch_desc_output, batch_desc_stream) =
         builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let mut input =
-        builder.new_input_for_many(&input.inner, Pipeline, [&output, &batch_desc_output]);
+        builder.new_input_for_many(input.inner, Pipeline, [&output, &batch_desc_output]);
 
     let as_of = sink.as_of.clone();
     let commit_interval = sink
@@ -990,8 +990,8 @@ struct BoundedDataFileSet {
 fn write_data_files<G>(
     name: String,
     input: VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
-    batch_desc_input: &Stream<G, Vec<(Antichain<Timestamp>, Antichain<Timestamp>)>>,
-    table_ready_stream: &Stream<G, Vec<Infallible>>,
+    batch_desc_input: Stream<G, Vec<(Antichain<Timestamp>, Antichain<Timestamp>)>>,
+    table_ready_stream: Stream<G, Vec<Infallible>>,
     as_of: Antichain<Timestamp>,
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -1010,12 +1010,12 @@ where
     let name_for_logging = name.clone();
     let mut builder = OperatorBuilder::new(name, scope.clone());
 
-    let (output, output_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (output, output_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let mut table_ready_input = builder.new_disconnected_input(table_ready_stream, Pipeline);
     let mut batch_desc_input =
-        builder.new_input_for(&batch_desc_input.clone().broadcast(), Pipeline, &output);
-    let mut input = builder.new_disconnected_input(&input.inner, Pipeline);
+        builder.new_input_for(batch_desc_input.broadcast(), Pipeline, &output);
+    let mut input = builder.new_disconnected_input(input.inner, Pipeline);
 
     let (button, errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {
@@ -1501,9 +1501,9 @@ fn commit_to_iceberg<G>(
     name: String,
     sink_id: GlobalId,
     sink_version: u64,
-    batch_input: &Stream<G, Vec<BoundedDataFile>>,
-    batch_desc_input: &Stream<G, Vec<(Antichain<Timestamp>, Antichain<Timestamp>)>>,
-    table_ready_stream: &Stream<G, Vec<Infallible>>,
+    batch_input: Stream<G, Vec<BoundedDataFile>>,
+    batch_desc_input: Stream<G, Vec<(Antichain<Timestamp>, Antichain<Timestamp>)>>,
+    table_ready_stream: Stream<G, Vec<Infallible>>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -1890,7 +1890,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
             mint_batch_descriptions(
                 format!("{sink_id}-iceberg-mint"),
                 sink_id,
-                &input,
+                input,
                 sink,
                 connection_for_minter,
                 storage_state.storage_configuration.clone(),
@@ -1901,8 +1901,8 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
         let (datafiles, write_status, write_button) = write_data_files(
             format!("{sink_id}-write-data-files"),
             minted_input,
-            &batch_descriptions,
-            &table_ready,
+            batch_descriptions.clone(),
+            table_ready.clone(),
             sink.as_of.clone(),
             connection_for_writer,
             storage_state.storage_configuration.clone(),
@@ -1916,9 +1916,9 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
             format!("{sink_id}-commit-to-iceberg"),
             sink_id,
             sink.version,
-            &datafiles,
-            &batch_descriptions,
-            &table_ready,
+            datafiles,
+            batch_descriptions,
+            table_ready,
             Rc::clone(&write_frontier),
             connection_for_committer,
             storage_state.storage_configuration.clone(),

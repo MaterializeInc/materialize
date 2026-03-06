@@ -47,7 +47,7 @@ where
         let mut capability = capabilities.into_iter().next(); // (We have 1 one input.)
         move |frontiers| {
             let mut output_handle_core = output_buf.activate();
-            input.for_each(|input_cap, data: &mut Vec<(D, Timestamp, Diff)>| {
+            input.for_each(|input_cap, data| {
                 // Note that we can't use `input_cap` to get an output session because we might have
                 // advanced our output frontier already beyond the frontier of this capability.
 

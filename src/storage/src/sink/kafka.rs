@@ -190,7 +190,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
 
         let (encoded, encode_status, encode_token) = encode_collection(
             format!("kafka-{sink_id}-{}-encode", self.format.get_format_name()),
-            &input,
+            input,
             sink.envelope,
             self.clone(),
             storage_state.storage_configuration.clone(),
@@ -205,7 +205,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
 
         let (sink_status, sink_token) = sink_collection(
             format!("kafka-{sink_id}-sink"),
-            &encoded,
+            encoded,
             sink_id,
             self.clone(),
             storage_state.storage_configuration.clone(),
@@ -628,7 +628,7 @@ struct KafkaHeader {
 /// Updates are sent in ascending timestamp order.
 fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     name: String,
-    input: &VecCollection<G, KafkaMessage, Diff>,
+    input: VecCollection<G, KafkaMessage, Diff>,
     sink_id: GlobalId,
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -649,7 +649,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     let buffer_min_capacity =
         KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS.handle(storage_configuration.config_set());
 
-    let mut input = builder.new_disconnected_input(&input.inner, Exchange::new(move |_| hashed_id));
+    let mut input = builder.new_disconnected_input(input.inner, Exchange::new(move |_| hashed_id));
 
     let as_of = sink.as_of.clone();
     let sink_version = sink.version;
@@ -1358,7 +1358,7 @@ async fn fetch_partition_count_loop<F>(
 /// Input [`Row`] updates must me compatible with the given implementor of [`Encode`].
 fn encode_collection<G: Scope>(
     name: String,
-    input: &VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
+    input: VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
     envelope: SinkEnvelope,
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -1370,7 +1370,7 @@ fn encode_collection<G: Scope>(
     let mut builder = AsyncOperatorBuilder::new(name, input.inner.scope());
 
     let (output, stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
-    let mut input = builder.new_input_for(&input.inner, Pipeline, &output);
+    let mut input = builder.new_input_for(input.inner, Pipeline, &output);
 
     let (button, errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {
