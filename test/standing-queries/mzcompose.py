@@ -28,19 +28,24 @@ SERVICES = [
     Materialized(propagate_crashes=True),
     MzComposeService(
         "dbbench",
-        {"mzbuild": "dbbench"},
+        {
+            "mzbuild": "dbbench",
+            "sysctls": {
+                "net.ipv4.ip_local_port_range": "1024 65535",
+                "net.ipv4.tcp_tw_reuse": "1",
+            },
+        },
     ),
 ]
 
 NUM_ROWS = 100_000
 
 
-def setup_standing_query(c: Composition) -> None:
-    """Create a table with test data and a standing query."""
+def setup(c: Composition) -> None:
+    """Create a table with test data, indexes, and standing queries."""
     c.sql(
         """
         ALTER SYSTEM SET max_result_size = '10GB';
-        ALTER SYSTEM SET default_timestamp_interval = '100ms';
         ALTER SYSTEM SET max_connections = 65536;
         """,
         port=6877,
@@ -49,19 +54,26 @@ def setup_standing_query(c: Composition) -> None:
     c.sql(
         f"""
         DROP STANDING QUERY IF EXISTS orders_by_customer;
+        DROP STANDING QUERY IF EXISTS order_by_id;
         DROP TABLE IF EXISTS orders CASCADE;
         CREATE TABLE orders (id INT, customer_id INT, amount INT);
         INSERT INTO orders
             SELECT g, g % 100, g * 10
             FROM generate_series(1, {NUM_ROWS}) AS g;
+        CREATE INDEX orders_by_customer_idx ON orders (customer_id);
+        CREATE INDEX orders_by_id_idx ON orders (id);
         CREATE STANDING QUERY orders_by_customer (cid INT)
             AS SELECT id, customer_id, amount
             FROM orders
             WHERE customer_id = cid;
+        CREATE STANDING QUERY order_by_id (oid INT)
+            AS SELECT id, customer_id, amount
+            FROM orders
+            WHERE id = oid;
         """,
         port=6875,
     )
-    # Wait for the standing query dataflow to hydrate.
+    # Wait for the standing query dataflows to hydrate.
     c.sql("SELECT 1", port=6875)
 
 
@@ -131,12 +143,12 @@ def run_dbbench(
     # Parse QPS
     qps_matches = re.findall(r"([0-9]+(?:\.[0-9]+)?)\s*QPS", combined)
     if qps_matches:
-        parsed["qps"] = float(qps_matches[-1])
+        parsed["qps"] = float(qps_matches[0])
 
     # Parse TPS
     tps_matches = re.findall(r"([0-9]+(?:\.[0-9]+)?)\s*TPS", combined)
     if tps_matches:
-        parsed["tps"] = float(tps_matches[-1])
+        parsed["tps"] = float(tps_matches[0])
 
     # Parse latency: "latency 796.907µs±63.671µs"
     lat_matches = re.findall(
@@ -144,8 +156,8 @@ def run_dbbench(
         combined,
     )
     if lat_matches:
-        parsed["latency_mean"] = lat_matches[-1][0]
-        parsed["latency_ci"] = lat_matches[-1][1]
+        parsed["latency_mean"] = lat_matches[0][0]
+        parsed["latency_ci"] = lat_matches[0][1]
 
     return parsed
 
@@ -176,21 +188,31 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def workflow_throughput(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Measure max throughput at increasing concurrency levels."""
     c.up("materialized")
-
-    setup_standing_query(c)
+    setup(c)
 
     concurrency_levels = [1, 4, 16, 64, 128, 256, 512, 1024]
 
     for conc in concurrency_levels:
         stats = run_dbbench(
             c,
-            name=f"throughput_c{conc}",
+            name=f"standing_query_c{conc}",
             query="EXECUTE STANDING QUERY orders_by_customer (42)",
             concurrency=conc,
         )
         qps = stats.get("qps", 0)
         latency = stats.get("latency_mean", "N/A")
-        print(f"  concurrency={conc}: {qps:.1f} QPS, latency={latency}")
+        print(f"  standing_query concurrency={conc}: {qps:.1f} QPS, latency={latency}")
+
+    for conc in concurrency_levels:
+        stats = run_dbbench(
+            c,
+            name=f"index_select_c{conc}",
+            query="SELECT id, customer_id, amount FROM orders WHERE customer_id = 42",
+            concurrency=conc,
+        )
+        qps = stats.get("qps", 0)
+        latency = stats.get("latency_mean", "N/A")
+        print(f"  index_select concurrency={conc}: {qps:.1f} QPS, latency={latency}")
 
     c.kill("materialized")
     c.rm("materialized")
@@ -202,45 +224,31 @@ def workflow_throughput_single_row(
 ) -> None:
     """Measure max throughput at increasing concurrency (1 row per execute)."""
     c.up("materialized")
-
-    c.sql(
-        """
-        ALTER SYSTEM SET max_result_size = '10GB';
-        ALTER SYSTEM SET default_timestamp_interval = '100ms';
-        ALTER SYSTEM SET max_connections = 65536;
-        """,
-        port=6877,
-        user="mz_system",
-    )
-    c.sql(
-        f"""
-        DROP STANDING QUERY IF EXISTS order_by_id;
-        DROP TABLE IF EXISTS orders CASCADE;
-        CREATE TABLE orders (id INT, customer_id INT, amount INT);
-        INSERT INTO orders
-            SELECT g, g % 100, g * 10
-            FROM generate_series(1, {NUM_ROWS}) AS g;
-        CREATE STANDING QUERY order_by_id (oid INT)
-            AS SELECT id, customer_id, amount
-            FROM orders
-            WHERE id = oid;
-        """,
-        port=6875,
-    )
-    c.sql("SELECT 1", port=6875)
+    setup(c)
 
     concurrency_levels = [1, 4, 16, 64, 128, 256, 512, 1024]
 
     for conc in concurrency_levels:
         stats = run_dbbench(
             c,
-            name=f"throughput_single_row_c{conc}",
+            name=f"standing_query_single_row_c{conc}",
             query="EXECUTE STANDING QUERY order_by_id (42)",
             concurrency=conc,
         )
         qps = stats.get("qps", 0)
         latency = stats.get("latency_mean", "N/A")
-        print(f"  concurrency={conc}: {qps:.1f} QPS, latency={latency}")
+        print(f"  standing_query concurrency={conc}: {qps:.1f} QPS, latency={latency}")
+
+    for conc in concurrency_levels:
+        stats = run_dbbench(
+            c,
+            name=f"index_select_single_row_c{conc}",
+            query="SELECT id, customer_id, amount FROM orders WHERE id = 42",
+            concurrency=conc,
+        )
+        qps = stats.get("qps", 0)
+        latency = stats.get("latency_mean", "N/A")
+        print(f"  index_select concurrency={conc}: {qps:.1f} QPS, latency={latency}")
 
     c.kill("materialized")
     c.rm("materialized")
@@ -255,8 +263,7 @@ def workflow_target_qps(c: Composition, parser: WorkflowArgumentParser) -> None:
     can sustain the target throughput without queuing.
     """
     c.up("materialized")
-
-    setup_standing_query(c)
+    setup(c)
 
     # Target QPS levels with latency budgets (ms).
     targets = [
@@ -304,32 +311,7 @@ def workflow_target_qps_single_row(
 ) -> None:
     """Like target-qps but each execute returns exactly 1 row (filter on unique id)."""
     c.up("materialized")
-
-    c.sql(
-        """
-        ALTER SYSTEM SET max_result_size = '10GB';
-        ALTER SYSTEM SET default_timestamp_interval = '100ms';
-        ALTER SYSTEM SET max_connections = 65536;
-        """,
-        port=6877,
-        user="mz_system",
-    )
-    c.sql(
-        f"""
-        DROP STANDING QUERY IF EXISTS order_by_id;
-        DROP TABLE IF EXISTS orders CASCADE;
-        CREATE TABLE orders (id INT, customer_id INT, amount INT);
-        INSERT INTO orders
-            SELECT g, g % 100, g * 10
-            FROM generate_series(1, {NUM_ROWS}) AS g;
-        CREATE STANDING QUERY order_by_id (oid INT)
-            AS SELECT id, customer_id, amount
-            FROM orders
-            WHERE id = oid;
-        """,
-        port=6875,
-    )
-    c.sql("SELECT 1", port=6875)
+    setup(c)
 
     # Target QPS levels with latency budgets (ms).
     targets = [
