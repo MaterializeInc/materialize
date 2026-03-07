@@ -1,5 +1,6 @@
 //! Apply secrets command - create missing secrets and update existing ones.
 
+use crate::cli::progress;
 use crate::cli::{CliError, TypeCheckMode, executor};
 use crate::client::{Client, Profile};
 use crate::config::ProjectSettings;
@@ -8,7 +9,6 @@ use crate::project::ast::Statement;
 use crate::project::planned;
 use crate::secret_resolver::SecretResolver;
 use mz_sql_parser::ast::{AlterSecretStatement, Raw};
-use owo_colors::OwoColorize;
 use std::path::Path;
 use std::time::Instant;
 
@@ -33,11 +33,11 @@ pub async fn run(
         .collect();
 
     if secrets.is_empty() {
-        println!("No secrets found in project — nothing to do.");
+        progress::info("No secrets found in project — nothing to do.");
         return Ok(());
     }
 
-    println!("Found {} secret(s) in project", secrets.len());
+    progress::info(&format!("Found {} secret(s) in project", secrets.len()));
 
     let client = Client::connect_with_profile(profile.clone())
         .await
@@ -51,7 +51,6 @@ pub async fn run(
         &executor,
         &planned_project,
         &secret_schemas,
-        false,
     )
     .await?;
 
@@ -88,16 +87,16 @@ pub async fn run(
                 executor.execute_sql(comment).await?;
             }
 
-            println!("  {} {}", "✓".green().bold(), obj.id,);
+            progress::success(&format!("{}", obj.id));
         }
     }
 
     let duration = start_time.elapsed();
-    println!(
-        "\nApplied {} secret(s) in {:.1}s",
+    progress::success(&format!(
+        "Applied {} secret(s) in {:.1}s",
         secrets.len(),
         duration.as_secs_f64()
-    );
+    ));
 
     Ok(())
 }

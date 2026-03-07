@@ -1,6 +1,7 @@
 //! Create tables command - create tables that don't exist in the database.
 
 use crate::cli::git;
+use crate::cli::progress;
 use crate::cli::{CliError, TypeCheckMode, executor};
 use crate::client::{Client, Profile};
 use crate::config::ProjectSettings;
@@ -53,11 +54,7 @@ pub async fn run(
         .map(ToString::to_string)
         .unwrap_or_else(executor::generate_random_env_name);
 
-    if dry_run {
-        println!("-- DRY RUN: The following SQL would be executed --\n");
-    } else {
-        println!("Creating tables in deployment: {}", deploy_id);
-    }
+    progress::info(&format!("Creating tables in deployment: {}", deploy_id));
 
     let planned_project = super::compile::run(directory, TypeCheckMode::Disabled).await?;
     let client = Client::connect_with_profile(profile.clone())
@@ -101,12 +98,15 @@ pub async fn run(
         .cloned()
         .collect();
     if all_object_ids.is_empty() {
-        println!("No tables found in project");
+        progress::info("No tables found in project");
         return Ok(());
     }
 
     let table_objects = planned_project.get_sorted_objects_filtered(&all_object_ids)?;
-    println!("Found {} table(s) in project", table_objects.len());
+    progress::info(&format!(
+        "Found {} table(s) in project",
+        table_objects.len()
+    ));
 
     let introspection = client.introspection();
     let (existing_tables, existing_sources, existing_secrets, existing_connections) = tokio::try_join!(
@@ -130,22 +130,23 @@ pub async fn run(
     print_existing_objects(&existing_objects);
 
     if tables_to_create.is_empty() {
-        println!(
-            "\nAll {} table(s) already exist. Nothing to create.",
+        progress::info(&format!(
+            "All {} table(s) already exist. Nothing to create.",
             table_object_ids.len()
-        );
+        ));
         return Ok(());
     }
 
-    println!("\nCreating {} new table(s)...", tables_to_create.len());
+    progress::info(&format!(
+        "Creating {} new table(s)...",
+        tables_to_create.len()
+    ));
 
     let executor = executor::DeploymentExecutor::with_dry_run(&client, dry_run);
     let table_schemas = collect_table_schemas(&tables_to_create);
-    prepare_schemas_and_mod_statements(&executor, &planned_project, &table_schemas, dry_run)
-        .await?;
+    prepare_schemas_and_mod_statements(&executor, &planned_project, &table_schemas).await?;
     let resolver = SecretResolver::new(&settings.secret_config);
-    let success_count =
-        execute_table_creates(&executor, &resolver, &tables_to_create, dry_run).await?;
+    let success_count = execute_table_creates(&executor, &resolver, &tables_to_create).await?;
     finalize_table_deployment(
         &client,
         directory,
@@ -209,14 +210,14 @@ fn print_existing_objects(existing_objects: &BTreeSet<project::object_id::Object
     if existing_objects.is_empty() {
         return;
     }
-    println!("\nObjects that already exist (skipping):");
+    progress::info("Objects that already exist (skipping):");
     let mut existing_list: Vec<_> = existing_objects.iter().collect();
     existing_list.sort_by_key(|obj| (&obj.database, &obj.schema, &obj.object));
     for table_id in existing_list {
-        println!(
+        progress::info(&format!(
             "  - {}.{}.{}",
             table_id.database, table_id.schema, table_id.object
-        );
+        ));
     }
 }
 
@@ -244,16 +245,11 @@ pub async fn prepare_schemas_and_mod_statements(
     executor: &executor::DeploymentExecutor<'_>,
     planned_project: &project::planned::Project,
     table_schemas: &BTreeMap<project::SchemaQualifier, crate::client::DeploymentKind>,
-    dry_run: bool,
 ) -> Result<(), CliError> {
     if table_schemas.is_empty() {
         return Ok(());
     }
-    if !dry_run {
-        println!("Preparing databases and schemas...");
-    } else {
-        println!("-- Create databases and schemas --");
-    }
+    progress::info("Preparing databases and schemas...");
 
     // Create databases first (schemas can't exist without their database)
     let databases: BTreeSet<&str> = table_schemas
@@ -323,12 +319,7 @@ async fn execute_table_creates(
     executor: &executor::DeploymentExecutor<'_>,
     resolver: &SecretResolver,
     tables_to_create: &[ObjectRef<'_>],
-    dry_run: bool,
 ) -> Result<usize, CliError> {
-    if dry_run {
-        println!("-- Create tables --");
-    }
-
     // Sort: secrets first, then sources, then tables
     let mut sorted: Vec<_> = tables_to_create.to_vec();
     sorted.sort_by_key(|(_, typed_obj)| object_type_order(&typed_obj.stmt));
@@ -350,12 +341,10 @@ async fn execute_table_creates(
             executor.execute_sql(comment).await?;
         }
 
-        if !dry_run {
-            println!(
-                "  ✓ {}.{}.{}",
-                object_id.database, object_id.schema, object_id.object
-            );
-        }
+        progress::success(&format!(
+            "{}.{}.{}",
+            object_id.database, object_id.schema, object_id.object
+        ));
         success_count += 1;
     }
     Ok(success_count)
@@ -376,37 +365,37 @@ async fn finalize_table_deployment(
     success_count: usize,
     dry_run: bool,
 ) -> Result<(), CliError> {
-    if dry_run {
-        println!("-- End of dry run ({} statement(s)) --", success_count);
-        return Ok(());
+    if !dry_run {
+        let mut snapshot_objects = BTreeMap::new();
+        for (object_id, typed_obj) in tables_to_create {
+            let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
+            snapshot_objects.insert(object_id.clone(), hash);
+        }
+
+        let new_snapshot = project::deployment_snapshot::DeploymentSnapshot {
+            objects: snapshot_objects,
+            schemas: table_schemas.clone(),
+        };
+        let metadata = executor::collect_deployment_metadata(client, directory).await;
+        project::deployment_snapshot::write_to_database(
+            client,
+            &new_snapshot,
+            deploy_id,
+            &metadata,
+            Some(Utc::now()),
+        )
+        .await?;
     }
 
-    let mut snapshot_objects = BTreeMap::new();
-    for (object_id, typed_obj) in tables_to_create {
-        let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
-        snapshot_objects.insert(object_id.clone(), hash);
-    }
-
-    let new_snapshot = project::deployment_snapshot::DeploymentSnapshot {
-        objects: snapshot_objects,
-        schemas: table_schemas.clone(),
-    };
-    let metadata = executor::collect_deployment_metadata(client, directory).await;
-    project::deployment_snapshot::write_to_database(
-        client,
-        &new_snapshot,
-        deploy_id,
-        &metadata,
-        Some(Utc::now()),
-    )
-    .await?;
-
-    println!("\n✓ Successfully created {} new table(s)", success_count);
+    progress::success(&format!(
+        "Successfully created {} new table(s)",
+        success_count
+    ));
     if !existing_objects.is_empty() {
-        println!(
-            "  Skipped {} object(s) that already existed",
+        progress::info(&format!(
+            "Skipped {} object(s) that already existed",
             existing_objects.len()
-        );
+        ));
     }
     Ok(())
 }

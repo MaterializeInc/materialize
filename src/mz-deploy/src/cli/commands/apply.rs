@@ -1,6 +1,7 @@
 //! Apply command - promote staging deployment to production via ALTER SWAP.
 
 use crate::cli::CliError;
+use crate::cli::progress;
 use crate::client::{ApplyState, Client, DeploymentKind, Profile};
 use crate::project::SchemaQualifier;
 use crate::project::object_id::ObjectId;
@@ -41,7 +42,7 @@ struct ApplyResources {
 /// Returns `CliError::DeploymentConflict` if conflicts detected (without --force)
 /// Returns `CliError::Connection` for database errors
 pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), CliError> {
-    println!("Deploying '{}' to production", deploy_id);
+    progress::info(&format!("Deploying '{}' to production", deploy_id));
 
     let client = Client::connect_with_profile(profile.clone())
         .await
@@ -67,8 +68,11 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
     run_post_swap_steps(&client, deploy_id, &resources).await?;
     cleanup_apply_state(&client, deploy_id).await?;
 
-    println!("Deployment completed successfully!");
-    println!("Staging deployment '{}' is now in production", deploy_id);
+    progress::success("Deployment completed successfully!");
+    progress::info(&format!(
+        "Staging deployment '{}' is now in production",
+        deploy_id
+    ));
 
     Ok(())
 }
@@ -172,7 +176,7 @@ async fn run_post_swap_steps(
         .map_err(|source| CliError::DeploymentStateWriteFailed { source })?;
 
     if !resources.staging_schemas.is_empty() || !resources.staging_clusters.is_empty() {
-        println!("\nDropping old production objects...");
+        progress::info("Dropping old production objects...");
         drop_old_resources(
             client,
             &resources.staging_schemas,
@@ -481,29 +485,29 @@ async fn execute_pending_sinks(client: &Client, deploy_id: &str) -> Result<(), C
 
     // Log skipped sinks
     if !existing_sinks.is_empty() {
-        println!("\nSinks that already exist (skipping):");
+        progress::info("Sinks that already exist (skipping):");
         let mut existing_list: Vec<_> = existing_sinks.iter().collect();
         existing_list.sort_by_key(|obj| (&obj.database, &obj.schema, &obj.object));
         for sink_id in existing_list {
-            println!(
+            progress::info(&format!(
                 "  - {}.{}.{}",
                 sink_id.database, sink_id.schema, sink_id.object
-            );
+            ));
         }
     }
 
     // If all sinks exist, exit early
     if sinks_to_create.is_empty() {
         if !existing_sinks.is_empty() {
-            println!(
-                "\nAll {} sink(s) already exist. Nothing to create.",
+            progress::info(&format!(
+                "All {} sink(s) already exist. Nothing to create.",
                 sink_ids.len()
-            );
+            ));
         }
         return Ok(());
     }
 
-    println!("\nCreating {} sink(s)...", sinks_to_create.len());
+    progress::info(&format!("Creating {} sink(s)...", sinks_to_create.len()));
 
     for stmt in sinks_to_create {
         verbose!(
@@ -532,7 +536,10 @@ async fn execute_pending_sinks(client: &Client, deploy_id: &str) -> Result<(), C
             .mark_statement_executed(deploy_id, stmt.sequence_num)
             .await?;
 
-        println!("  ✓ {}.{}.{}", stmt.database, stmt.schema, stmt.object);
+        progress::success(&format!(
+            "{}.{}.{}",
+            stmt.database, stmt.schema, stmt.object
+        ));
     }
 
     Ok(())
@@ -553,10 +560,10 @@ async fn apply_replacement_mvs(client: &Client, deploy_id: &str) -> Result<(), C
         return Ok(());
     }
 
-    println!(
-        "\nApplying {} replacement materialized view(s)...",
+    progress::info(&format!(
+        "Applying {} replacement materialized view(s)...",
         records.len()
-    );
+    ));
 
     for record in &records {
         let alter_sql = format!(
@@ -582,13 +589,10 @@ async fn apply_replacement_mvs(client: &Client, deploy_id: &str) -> Result<(), C
             });
         }
 
-        println!(
-            "  {} {}.{}.{}",
-            "✓".green(),
-            record.target_database,
-            record.target_schema,
-            record.target_name
-        );
+        progress::success(&format!(
+            "{}.{}.{}",
+            record.target_database, record.target_schema, record.target_name
+        ));
     }
 
     // Drop now-empty replacement staging schemas
@@ -650,10 +654,10 @@ async fn repoint_dependent_sinks(
         return Ok(());
     }
 
-    println!(
-        "\nRepointing {} sink(s) to new upstream objects...",
+    progress::info(&format!(
+        "Repointing {} sink(s) to new upstream objects...",
         dependent_sinks.len()
-    );
+    ));
 
     // Batch check which replacement objects exist
     let replacement_ids: BTreeSet<ObjectId> = dependent_sinks
@@ -724,16 +728,15 @@ async fn repoint_dependent_sinks(
             });
         }
 
-        println!(
-            "  {} {}.{}.{} -> {}.{}.{}",
-            "✓".green(),
+        progress::success(&format!(
+            "{}.{}.{} -> {}.{}.{}",
             sink.sink_database,
             sink.sink_schema,
             sink.sink_name,
             sink.dependency_database,
             new_schema,
             sink.dependency_name
-        );
+        ));
     }
 
     Ok(())

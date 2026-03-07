@@ -1,6 +1,7 @@
 //! Generate data contracts command - creates types.lock for external dependencies.
 
 use crate::cli::CliError;
+use crate::cli::progress;
 use crate::client::{Client, Profile};
 use crate::project;
 use std::path::Path;
@@ -29,7 +30,7 @@ use std::path::Path;
 /// Returns `CliError::Project` if project loading fails
 /// Returns `CliError::Connection` if database connection fails
 pub async fn run(profile: &Profile, directory: &Path) -> Result<(), CliError> {
-    println!("Generating data contracts for external dependencies...");
+    progress::info("Generating data contracts for external dependencies...");
 
     // Connect to the database
     let client = Client::connect_with_profile(profile.clone())
@@ -40,14 +41,14 @@ pub async fn run(profile: &Profile, directory: &Path) -> Result<(), CliError> {
     let planned_project = project::plan(directory)?;
 
     if planned_project.external_dependencies.is_empty() {
-        println!("No external dependencies found - types.lock not needed");
+        progress::info("No external dependencies found - types.lock not needed");
         return Ok(());
     }
 
-    println!(
+    progress::info(&format!(
         "Found {} external dependencies",
         planned_project.external_dependencies.len()
-    );
+    ));
 
     // Query external types and write types.lock
     let types = client
@@ -56,10 +57,10 @@ pub async fn run(profile: &Profile, directory: &Path) -> Result<(), CliError> {
         .await?;
     types.write_types_lock(directory)?;
 
-    println!(
+    progress::success(&format!(
         "Successfully generated types.lock with {} object schemas",
         types.objects.len()
-    );
+    ));
 
     Ok(())
 }

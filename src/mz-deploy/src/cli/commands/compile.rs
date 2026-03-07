@@ -32,7 +32,7 @@ pub async fn run(
 ) -> Result<project::planned::Project, CliError> {
     let start_time = Instant::now();
 
-    println!("Loading project from: {}", directory.display());
+    progress::info(&format!("Loading project from: {}", directory.display()));
 
     // Stage 1: Parse and validate SQL files
     progress::stage_start("Parsing SQL files");
@@ -141,8 +141,8 @@ async fn typecheck_with_docker(
 
     // Load types.lock if it exists
     let types = crate::types::load_types_lock(directory).unwrap_or_else(|_| {
-        println!("No types.lock found, assuming no external dependencies");
-        println!("See SET api = stable for more information");
+        progress::info("No types.lock found, assuming no external dependencies");
+        progress::info("See SET api = stable for more information");
         crate::types::Types {
             version: 1,
             objects: std::collections::BTreeMap::new(),

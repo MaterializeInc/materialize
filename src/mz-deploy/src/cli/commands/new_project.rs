@@ -158,5 +158,6 @@ fn install_agent_skills(project_dir: &Path) -> Result<(), CliError> {
         }
     }
 
+    progress::info("Installed Materialize agent skill");
     Ok(())
 }

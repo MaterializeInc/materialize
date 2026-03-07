@@ -1,6 +1,7 @@
 //! Abort command - cleanup a staged deployment.
 
 use crate::cli::CliError;
+use crate::cli::progress;
 use crate::client::{Client, Profile};
 use crate::verbose;
 
@@ -24,7 +25,7 @@ use crate::verbose;
 /// Returns `CliError::StagingAlreadyPromoted` if the deployment was already promoted
 /// Returns `CliError::Connection` for database errors
 pub async fn run(profile: &Profile, deploy_id: &str) -> Result<(), CliError> {
-    println!("Aborting staged deployment: {}", deploy_id);
+    progress::info(&format!("Aborting staged deployment: {}", deploy_id));
 
     let client = Client::connect_with_profile(profile.clone())
         .await
@@ -105,7 +106,7 @@ pub async fn run(profile: &Profile, deploy_id: &str) -> Result<(), CliError> {
 
     client.deployments().delete_deployment(deploy_id).await?;
 
-    println!("Successfully aborted deployment '{}'", deploy_id);
+    progress::success(&format!("Successfully aborted deployment '{}'", deploy_id));
 
     Ok(())
 }

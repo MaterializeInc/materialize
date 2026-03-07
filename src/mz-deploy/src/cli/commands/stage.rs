@@ -91,11 +91,7 @@ pub async fn run(
         .map(ToString::to_string)
         .unwrap_or_else(executor::generate_random_env_name);
 
-    if dry_run {
-        println!("-- DRY RUN: The following SQL would be executed --\n");
-    } else {
-        println!("Deploying to staging environment: {}", stage_name);
-    }
+    progress::info(&format!("Deploying to staging environment: {}", stage_name));
 
     let planned_project = super::compile::run(directory, TypeCheckMode::Disabled).await?;
     let staging_suffix = format!("_{}", stage_name);
@@ -139,18 +135,14 @@ pub async fn run(
     )
     .await?;
 
-    if dry_run {
-        println!("-- End of dry run ({} object(s)) --", success_count);
-    } else {
-        let total_duration = start_time.elapsed();
-        progress::summary(
-            &format!(
-                "Successfully deployed to {} objects to '{}' staging environment",
-                success_count, stage_name
-            ),
-            total_duration,
-        );
-    }
+    let total_duration = start_time.elapsed();
+    progress::summary(
+        &format!(
+            "Successfully deployed to {} objects to '{}' staging environment",
+            success_count, stage_name
+        ),
+        total_duration,
+    );
     Ok(())
 }
 
@@ -523,14 +515,13 @@ async fn create_resources_with_rollback<'a>(
     // Wrap resource creation in a closure that we can call and handle errors from
     let create_result = async {
         // Stage 4a: Create project databases if they don't exist
+        progress::info("Creating project databases if not exists");
         if !dry_run {
-            progress::info("Creating project databases if not exists");
             for db in &planned_project.databases {
                 client.provisioning().create_database(&db.name).await?;
                 verbose!("  Ensured database {} exists", db.name);
             }
         } else {
-            println!("-- Create project databases --");
             for db in &planned_project.databases {
                 let create_db_sql =
                     format!("CREATE DATABASE IF NOT EXISTS {}", quote_identifier(&db.name));
@@ -539,11 +530,7 @@ async fn create_resources_with_rollback<'a>(
         }
 
         // Stage 4b: Create staging schemas
-        if !dry_run {
-            progress::stage_start("Creating staging schemas");
-        } else {
-            println!("-- Create staging schemas --");
-        }
+        progress::stage_start("Creating staging schemas");
         let schema_start = Instant::now();
         for sq in schema_set {
             let staging_schema = format!("{}{}", sq.schema, staging_suffix);
@@ -554,13 +541,13 @@ async fn create_resources_with_rollback<'a>(
             executor.execute_sql(&create_schema_sql).await?;
             verbose!("  Created schema {}.{}", sq.database, staging_schema);
         }
-        if !dry_run {
-            let schema_duration = schema_start.elapsed();
-            progress::stage_success(
-                &format!("Created {} staging schema(s)", schema_set.len()),
-                schema_duration,
-            );
+        let schema_duration = schema_start.elapsed();
+        progress::stage_success(
+            &format!("Created {} staging schema(s)", schema_set.len()),
+            schema_duration,
+        );
 
+        if !dry_run {
             // Create production schemas if they don't exist (needed for swap)
             progress::info("Creating production schemas if not exists");
             for sq in schema_set {
@@ -570,11 +557,7 @@ async fn create_resources_with_rollback<'a>(
         }
 
         // Execute schema mod_statements for staging schemas
-        if !dry_run {
-            progress::stage_start("Applying schema setup statements");
-        } else {
-            println!("-- Apply schema setup statements --");
-        }
+        progress::stage_start("Applying schema setup statements");
         let mod_start = Instant::now();
         for mod_stmt in planned_project.iter_mod_statements() {
             match mod_stmt {
@@ -608,10 +591,10 @@ async fn create_resources_with_rollback<'a>(
                 }
             }
         }
-        if !dry_run {
-            let mod_duration = mod_start.elapsed();
-            progress::stage_success("Schema setup statements applied", mod_duration);
+        let mod_duration = mod_start.elapsed();
+        progress::stage_success("Schema setup statements applied", mod_duration);
 
+        if !dry_run {
             // Write cluster mappings to deploy.clusters table BEFORE creating clusters
             // This allows abort logic to clean up even if cluster creation fails
             let cluster_names: Vec<String> = cluster_set.iter().cloned().collect();
@@ -622,11 +605,7 @@ async fn create_resources_with_rollback<'a>(
         }
 
         // Stage 5: Create staging clusters (by cloning production cluster configs)
-        if !dry_run {
-            progress::stage_start("Creating staging clusters");
-        } else {
-            println!("-- Create staging clusters --");
-        }
+        progress::stage_start("Creating staging clusters");
         let cluster_start = Instant::now();
         let mut created_clusters = 0;
 
@@ -717,20 +696,14 @@ async fn create_resources_with_rollback<'a>(
             }
         }
 
-        if !dry_run {
-            let cluster_duration = cluster_start.elapsed();
-            progress::stage_success(
-                &format!("Created {} cluster(s)", created_clusters),
-                cluster_duration,
-            );
-        }
+        let cluster_duration = cluster_start.elapsed();
+        progress::stage_success(
+            &format!("Created {} cluster(s)", created_clusters),
+            cluster_duration,
+        );
 
         // Stage 6: Deploy objects using staging transformer
-        if !dry_run {
-            progress::stage_start("Deploying objects to staging");
-        } else {
-            println!("-- Deploy objects to staging --");
-        }
+        progress::stage_start("Deploying objects to staging");
         let deploy_start = Instant::now();
 
         // Collect ObjectIds from objects being deployed for the staging transformer
@@ -820,13 +793,11 @@ async fn create_resources_with_rollback<'a>(
             success_count += 1;
         }
 
-        if !dry_run {
-            let deploy_duration = deploy_start.elapsed();
-            progress::stage_success(
-                &format!("Deployed {} view(s)/materialized view(s)", success_count),
-                deploy_duration,
-            );
-        }
+        let deploy_duration = deploy_start.elapsed();
+        progress::stage_success(
+            &format!("Deployed {} view(s)/materialized view(s)", success_count),
+            deploy_duration,
+        );
 
         // Return success count
         Ok::<usize, CliError>(success_count)

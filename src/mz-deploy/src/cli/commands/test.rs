@@ -1,6 +1,7 @@
 //! Test command - run unit tests against the database.
 
 use crate::cli::CliError;
+use crate::cli::progress;
 use crate::client::Client;
 use crate::project::{self, typed};
 use crate::types::docker_runtime::DockerRuntime;
@@ -68,7 +69,7 @@ pub async fn run(directory: &Path, docker_image: &str) -> Result<(), CliError> {
     let empty_types = Types::default();
     let runtime = DockerRuntime::new().with_image(docker_image);
     if planned_project.tests.is_empty() {
-        println!("No tests found in {}", directory.display());
+        progress::info(&format!("No tests found in {}", directory.display()));
         return Ok(());
     }
 

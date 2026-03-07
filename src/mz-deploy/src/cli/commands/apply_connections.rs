@@ -1,5 +1,6 @@
 //! Apply connections command - create missing connections and reconcile drifted ones.
 
+use crate::cli::progress;
 use crate::cli::{CliError, TypeCheckMode, executor};
 use crate::client::{Client, Profile};
 use crate::config::ProjectSettings;
@@ -12,7 +13,6 @@ use mz_sql_parser::ast::{
     Statement as ParserStatement,
 };
 use mz_sql_parser::parser::parse_statements;
-use owo_colors::OwoColorize;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
@@ -39,11 +39,14 @@ pub async fn run(
         .collect();
 
     if connections.is_empty() {
-        println!("No connections found in project — nothing to do.");
+        progress::info("No connections found in project — nothing to do.");
         return Ok(());
     }
 
-    println!("Found {} connection(s) in project", connections.len());
+    progress::info(&format!(
+        "Found {} connection(s) in project",
+        connections.len()
+    ));
 
     let client = Client::connect_with_profile(profile.clone())
         .await
@@ -57,7 +60,6 @@ pub async fn run(
         &executor,
         &planned_project,
         &connection_schemas,
-        false,
     )
     .await?;
 
@@ -96,12 +98,7 @@ pub async fn run(
                 create_if_not_exists.if_not_exists = true;
                 executor.execute_sql(&create_if_not_exists).await?;
                 created += 1;
-                println!(
-                    "  {} {} {}",
-                    "+".green().bold(),
-                    obj.id,
-                    "(created)".dimmed()
-                );
+                progress::success(&format!("{} (created)", obj.id));
             }
             Some(sql) => {
                 // Parse the live CREATE CONNECTION SQL
@@ -111,7 +108,7 @@ pub async fn run(
 
                 if to_set.is_empty() && to_drop.is_empty() {
                     up_to_date += 1;
-                    println!("  {} {} {}", "=".dimmed(), obj.id, "(up to date)".dimmed());
+                    progress::info(&format!("{} (up to date)", obj.id));
                 } else {
                     let actions: Vec<AlterConnectionAction<Raw>> = to_set
                         .into_iter()
@@ -127,12 +124,7 @@ pub async fn run(
                     };
                     executor.execute_sql(&alter_stmt).await?;
                     altered += 1;
-                    println!(
-                        "  {} {} {}",
-                        "~".yellow().bold(),
-                        obj.id,
-                        "(altered)".dimmed()
-                    );
+                    progress::success(&format!("{} (altered)", obj.id));
                 }
             }
         }
@@ -149,14 +141,14 @@ pub async fn run(
     }
 
     let duration = start_time.elapsed();
-    println!(
-        "\nApplied {} connection(s) in {:.1}s ({} created, {} altered, {} up to date)",
+    progress::success(&format!(
+        "Applied {} connection(s) in {:.1}s ({} created, {} altered, {} up to date)",
         connections.len(),
         duration.as_secs_f64(),
         created,
         altered,
         up_to_date,
-    );
+    ));
 
     Ok(())
 }
