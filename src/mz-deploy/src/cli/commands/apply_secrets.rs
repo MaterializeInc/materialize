@@ -9,6 +9,7 @@ use crate::project::ast::Statement;
 use crate::project::planned;
 use crate::secret_resolver::SecretResolver;
 use mz_sql_parser::ast::{AlterSecretStatement, Raw};
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Instant;
 
@@ -47,12 +48,9 @@ pub async fn run(
 
     // Prepare schemas and mod statements for secret schemas
     let secret_schemas = collect_secret_schemas(&secrets);
-    super::create_tables::prepare_schemas_and_mod_statements(
-        &executor,
-        &planned_project,
-        &secret_schemas,
-    )
-    .await?;
+    executor
+        .prepare_databases_and_schemas(&planned_project, &secret_schemas, None)
+        .await?;
 
     let resolver = SecretResolver::new(&settings.secret_config);
 
@@ -61,15 +59,12 @@ pub async fn run(
         if let Statement::CreateSecret(ref create_stmt) = typed_obj.stmt {
             let name = &create_stmt.name;
 
-            // Resolve client-side secret providers (e.g. env_var)
             let resolved_stmt = resolver.resolve_secret_for_cli(create_stmt).await?;
 
-            // CREATE SECRET IF NOT EXISTS
             let mut create_if_not_exists = resolved_stmt.clone();
             create_if_not_exists.if_not_exists = true;
             executor.execute_sql(&create_if_not_exists).await?;
 
-            // ALTER SECRET to update the value
             let alter_stmt = AlterSecretStatement::<Raw> {
                 name: name.clone(),
                 if_exists: false,
@@ -77,12 +72,10 @@ pub async fn run(
             };
             executor.execute_sql(&alter_stmt).await?;
 
-            // Execute grants
             for grant in &typed_obj.grants {
                 executor.execute_sql(grant).await?;
             }
 
-            // Execute comments
             for comment in &typed_obj.comments {
                 executor.execute_sql(comment).await?;
             }
@@ -103,13 +96,13 @@ pub async fn run(
 
 fn collect_secret_schemas(
     secrets: &[&planned::DatabaseObject],
-) -> std::collections::BTreeMap<project::SchemaQualifier, crate::client::DeploymentKind> {
-    let mut schemas = std::collections::BTreeMap::new();
+) -> BTreeSet<project::SchemaQualifier> {
+    let mut schemas = BTreeSet::new();
     for obj in secrets {
-        schemas.insert(
-            project::SchemaQualifier::new(obj.id.database.clone(), obj.id.schema.clone()),
-            crate::client::DeploymentKind::Tables,
-        );
+        schemas.insert(project::SchemaQualifier::new(
+            obj.id.database.clone(),
+            obj.id.schema.clone(),
+        ));
     }
     schemas
 }

@@ -6,8 +6,10 @@
 
 use crate::cli::CliError;
 use crate::cli::git::get_git_commit;
-use crate::client::Client;
+use crate::client::{Client, quote_identifier};
 use crate::project::{self, typed};
+use crate::verbose;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 /// Collect deployment metadata (user and git commit).
@@ -111,6 +113,88 @@ impl<'a> DeploymentExecutor<'a> {
         // Execute comments
         for comment in &typed_obj.comments {
             self.execute_sql(comment).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Create databases and schemas for `schema_set`, then execute filtered mod_statements.
+    ///
+    /// When `staging_suffix` is `Some`, schema names are suffixed and mod_statement
+    /// references are transformed to target staging schemas.
+    pub async fn prepare_databases_and_schemas(
+        &self,
+        planned_project: &project::planned::Project,
+        schema_set: &BTreeSet<project::SchemaQualifier>,
+        staging_suffix: Option<&str>,
+    ) -> Result<(), CliError> {
+        if schema_set.is_empty() {
+            return Ok(());
+        }
+
+        // Step 1: Create databases
+        let databases: BTreeSet<&str> = schema_set.iter().map(|sq| sq.database.as_str()).collect();
+        for db in &databases {
+            let sql = format!("CREATE DATABASE IF NOT EXISTS {}", quote_identifier(db));
+            self.execute_sql(&sql).await?;
+        }
+
+        // Step 2: Create schemas (with optional staging suffix)
+        for sq in schema_set {
+            let schema_name = match staging_suffix {
+                Some(suffix) => format!("{}{}", sq.schema, suffix),
+                None => sq.schema.clone(),
+            };
+            verbose!(
+                "Creating schema {}.{} if not exists",
+                sq.database,
+                schema_name
+            );
+            let sql = format!(
+                "CREATE SCHEMA IF NOT EXISTS {}.{}",
+                quote_identifier(&sq.database),
+                quote_identifier(&schema_name)
+            );
+            self.execute_sql(&sql).await?;
+        }
+
+        // Step 3: Execute mod_statements filtered by schema_set membership
+        for mod_stmt in planned_project.iter_mod_statements() {
+            match mod_stmt {
+                project::ModStatement::Database {
+                    database,
+                    statement,
+                } => {
+                    let has_schema = schema_set.iter().any(|sq| sq.database == *database);
+                    if has_schema {
+                        verbose!("Applying database setup for: {}", database);
+                        self.execute_sql(statement).await?;
+                    }
+                }
+                project::ModStatement::Schema {
+                    database,
+                    schema,
+                    statement,
+                } => {
+                    if schema_set.contains(&project::SchemaQualifier::new(
+                        database.to_string(),
+                        schema.to_string(),
+                    )) {
+                        if let Some(suffix) = staging_suffix {
+                            let staging_schema = format!("{}{}", schema, suffix);
+                            let transformed_stmt = statement.to_string().replace(
+                                &format!("{}.{}", database, schema),
+                                &format!("{}.{}", database, staging_schema),
+                            );
+                            verbose!("Applying schema setup for: {}.{}", database, staging_schema);
+                            self.execute_sql(&transformed_stmt).await?;
+                        } else {
+                            verbose!("Applying schema setup for: {}.{}", database, schema);
+                            self.execute_sql(statement).await?;
+                        }
+                    }
+                }
+            }
         }
 
         Ok(())

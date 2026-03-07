@@ -13,7 +13,7 @@ use mz_sql_parser::ast::{
     Statement as ParserStatement,
 };
 use mz_sql_parser::parser::parse_statements;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Instant;
 
@@ -56,12 +56,9 @@ pub async fn run(
 
     // Prepare schemas
     let connection_schemas = collect_connection_schemas(&connections);
-    super::create_tables::prepare_schemas_and_mod_statements(
-        &executor,
-        &planned_project,
-        &connection_schemas,
-    )
-    .await?;
+    executor
+        .prepare_databases_and_schemas(&planned_project, &connection_schemas, None)
+        .await?;
 
     let resolver = SecretResolver::new(&settings.secret_config);
 
@@ -155,13 +152,13 @@ pub async fn run(
 
 fn collect_connection_schemas(
     connections: &[&planned::DatabaseObject],
-) -> BTreeMap<project::SchemaQualifier, crate::client::DeploymentKind> {
-    let mut schemas = BTreeMap::new();
+) -> BTreeSet<project::SchemaQualifier> {
+    let mut schemas = BTreeSet::new();
     for obj in connections {
-        schemas.insert(
-            project::SchemaQualifier::new(obj.id.database.clone(), obj.id.schema.clone()),
-            crate::client::DeploymentKind::Tables,
-        );
+        schemas.insert(project::SchemaQualifier::new(
+            obj.id.database.clone(),
+            obj.id.schema.clone(),
+        ));
     }
     schemas
 }

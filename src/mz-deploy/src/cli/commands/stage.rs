@@ -514,85 +514,45 @@ async fn create_resources_with_rollback<'a>(
 
     // Wrap resource creation in a closure that we can call and handle errors from
     let create_result = async {
-        // Stage 4a: Create project databases if they don't exist
+        // Stage 4a: Create project databases that aren't in schema_set
+        // (schema_set databases will be created by prepare_databases_and_schemas)
         progress::info("Creating project databases if not exists");
+        let schema_set_dbs: BTreeSet<&str> = schema_set.iter().map(|sq| sq.database.as_str()).collect();
         if !dry_run {
             for db in &planned_project.databases {
-                client.provisioning().create_database(&db.name).await?;
-                verbose!("  Ensured database {} exists", db.name);
+                if !schema_set_dbs.contains(db.name.as_str()) {
+                    client.provisioning().create_database(&db.name).await?;
+                    verbose!("  Ensured database {} exists", db.name);
+                }
             }
         } else {
             for db in &planned_project.databases {
-                let create_db_sql =
-                    format!("CREATE DATABASE IF NOT EXISTS {}", quote_identifier(&db.name));
-                executor.execute_sql(&create_db_sql).await?;
+                if !schema_set_dbs.contains(db.name.as_str()) {
+                    let create_db_sql =
+                        format!("CREATE DATABASE IF NOT EXISTS {}", quote_identifier(&db.name));
+                    executor.execute_sql(&create_db_sql).await?;
+                }
             }
         }
 
-        // Stage 4b: Create staging schemas
-        progress::stage_start("Creating staging schemas");
+        // Stage 4b: Create staging schemas + apply mod_statements
+        progress::stage_start("Creating staging schemas and applying setup statements");
         let schema_start = Instant::now();
-        for sq in schema_set {
-            let staging_schema = format!("{}{}", sq.schema, staging_suffix);
-            let create_schema_sql = format!(
-                "CREATE SCHEMA IF NOT EXISTS {}.{}",
-                sq.database, staging_schema
-            );
-            executor.execute_sql(&create_schema_sql).await?;
-            verbose!("  Created schema {}.{}", sq.database, staging_schema);
-        }
+        executor.prepare_databases_and_schemas(planned_project, schema_set, Some(staging_suffix)).await?;
         let schema_duration = schema_start.elapsed();
         progress::stage_success(
-            &format!("Created {} staging schema(s)", schema_set.len()),
+            &format!("Created {} staging schema(s) with setup statements", schema_set.len()),
             schema_duration,
         );
 
+        // Create production schemas for swap (non-dry-run only)
         if !dry_run {
-            // Create production schemas if they don't exist (needed for swap)
             progress::info("Creating production schemas if not exists");
             for sq in schema_set {
                 client.provisioning().create_schema(&sq.database, &sq.schema).await?;
                 verbose!("  Ensured schema {}.{} exists", sq.database, sq.schema);
             }
         }
-
-        // Execute schema mod_statements for staging schemas
-        progress::stage_start("Applying schema setup statements");
-        let mod_start = Instant::now();
-        for mod_stmt in planned_project.iter_mod_statements() {
-            match mod_stmt {
-                project::ModStatement::Database {
-                    database,
-                    statement,
-                } => {
-                    // Check if any schema in this database is in our schema_set
-                    let has_schema = schema_set.iter().any(|sq| sq.database == *database);
-                    if has_schema {
-                        verbose!("Applying database setup for: {}", database);
-                        executor.execute_sql(statement).await?;
-                    }
-                }
-                project::ModStatement::Schema {
-                    database,
-                    schema,
-                    statement,
-                } => {
-                    if schema_set.contains(&SchemaQualifier::new(database.to_string(), schema.to_string())) {
-                        // Transform schema name to staging version
-                        let staging_schema = format!("{}{}", schema, staging_suffix);
-                        let transformed_stmt = statement.to_string().replace(
-                            &format!("{}.{}", database, schema),
-                            &format!("{}.{}", database, staging_schema),
-                        );
-
-                        verbose!("Applying schema setup for: {}.{}", database, staging_schema);
-                        executor.execute_sql(&transformed_stmt).await?;
-                    }
-                }
-            }
-        }
-        let mod_duration = mod_start.elapsed();
-        progress::stage_success("Schema setup statements applied", mod_duration);
 
         if !dry_run {
             // Write cluster mappings to deploy.clusters table BEFORE creating clusters

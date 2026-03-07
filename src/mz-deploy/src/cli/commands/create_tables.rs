@@ -144,7 +144,11 @@ pub async fn run(
 
     let executor = executor::DeploymentExecutor::with_dry_run(&client, dry_run);
     let table_schemas = collect_table_schemas(&tables_to_create);
-    prepare_schemas_and_mod_statements(&executor, &planned_project, &table_schemas).await?;
+    let schema_keys: BTreeSet<_> = table_schemas.keys().cloned().collect();
+    progress::info("Preparing databases and schemas...");
+    executor
+        .prepare_databases_and_schemas(&planned_project, &schema_keys, None)
+        .await?;
     let resolver = SecretResolver::new(&settings.secret_config);
     let success_count = execute_table_creates(&executor, &resolver, &tables_to_create).await?;
     finalize_table_deployment(
@@ -235,71 +239,6 @@ fn collect_table_schemas(
         );
     }
     table_schemas
-}
-
-/// Prepares the target environment for table creation.
-///
-/// Ensures schemas exist and replays relevant database/schema module setup SQL
-/// only for the databases/schemas that contain pending table objects.
-pub async fn prepare_schemas_and_mod_statements(
-    executor: &executor::DeploymentExecutor<'_>,
-    planned_project: &project::planned::Project,
-    table_schemas: &BTreeMap<project::SchemaQualifier, crate::client::DeploymentKind>,
-) -> Result<(), CliError> {
-    if table_schemas.is_empty() {
-        return Ok(());
-    }
-    progress::info("Preparing databases and schemas...");
-
-    // Create databases first (schemas can't exist without their database)
-    let databases: BTreeSet<&str> = table_schemas
-        .keys()
-        .map(|sq| sq.database.as_str())
-        .collect();
-    for db in databases {
-        let create_db_sql = format!("CREATE DATABASE IF NOT EXISTS {}", db);
-        executor.execute_sql(&create_db_sql).await?;
-    }
-
-    for sq in table_schemas.keys() {
-        verbose!(
-            "Creating schema {}.{} if not exists",
-            sq.database,
-            sq.schema
-        );
-        let create_schema_sql =
-            format!("CREATE SCHEMA IF NOT EXISTS {}.{}", sq.database, sq.schema);
-        executor.execute_sql(&create_schema_sql).await?;
-    }
-
-    for mod_stmt in planned_project.iter_mod_statements() {
-        match mod_stmt {
-            project::ModStatement::Database {
-                database,
-                statement,
-            } => {
-                let has_tables = table_schemas.keys().any(|sq| sq.database == *database);
-                if has_tables {
-                    verbose!("Applying database setup for: {}", database);
-                    executor.execute_sql(statement).await?;
-                }
-            }
-            project::ModStatement::Schema {
-                database,
-                schema,
-                statement,
-            } => {
-                if table_schemas.contains_key(&project::SchemaQualifier::new(
-                    database.to_string(),
-                    schema.to_string(),
-                )) {
-                    verbose!("Applying schema setup for: {}.{}", database, schema);
-                    executor.execute_sql(statement).await?;
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Returns a sort key for object type ordering: secrets, connections, sources, then tables.
