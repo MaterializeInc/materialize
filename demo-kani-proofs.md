@@ -14,54 +14,60 @@ custom envelope logic — format construction, parsing, version dispatch, bounds
 needs verification. We use two complementary approaches:
 
 1. **Unit tests** (19 tests) — check specific inputs and known edge cases
-2. **Kani bounded model checking** (5 proofs) — exhaustively prove properties hold for *all* inputs within bounds
+2. **Property-based tests** (4 proptest properties) — fuzz the full encrypt→decrypt pipeline with random inputs
+3. **Kani bounded model checking** (9 proofs) — exhaustively prove properties hold for *all* inputs within bounds
 
 This document demonstrates both passing.
 
 ### Architecture of the proofs
 
 The parsing logic was factored into `validate_envelope_header` (pure arithmetic, returns
-`Option<(u8, usize)>`) which `parse_envelope` delegates to. The Kani proofs target the
-pure inner function, avoiding `anyhow` and allocation overhead that would make the SAT
-solver intractable. Since `parse_envelope` delegates all validation to
-`validate_envelope_header`, proving the inner function correct proves the parsing logic correct.
+`Option<(u8, usize)>`) which `parse_envelope` delegates to. Similarly, the header-writing
+logic was factored into `write_envelope_header`, and the decrypt length check into
+`validate_decrypt_input`. The Kani proofs target these pure inner functions, avoiding
+`anyhow` and allocation overhead that would make the SAT solver intractable.
 
 ## Part 1: Existing Unit Tests
 
-All 19 crypto unit tests verify specific behaviors: roundtrips (V1, V2, empty plaintext),
-tamper detection, wrong-key rejection, version validation, truncated-data rejection,
-two-party encryption, EncryptedBlob/EncryptedConsensus wrappers, and mixed V1/V2 scenarios.
+All 23 crypto tests verify specific behaviors: 19 unit tests (roundtrips, tamper detection,
+wrong-key rejection, version validation, truncated-data rejection, two-party encryption,
+EncryptedBlob/EncryptedConsensus wrappers, mixed V1/V2 scenarios) plus 4 proptest
+property-based tests that fuzz the full encrypt→decrypt pipeline.
 
 ```bash
 cargo test -p mz-persist -- crypto 2>&1
 ```
 
 ```output
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.50s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.08s
      Running unittests src/lib.rs (target/debug/deps/mz_persist-76484e00c0355782)
 
-running 19 tests
+running 23 tests
 test crypto::tests::truncated_data_rejected ... ok
-test crypto::tests::roundtrip ... ok
-test crypto::tests::roundtrip_empty_plaintext ... ok
-test crypto::tests::tamper_detection ... ok
-test crypto::tests::two_party_v1_backward_compat ... ok
 test crypto::tests::two_party_customer_key_revocation ... ok
-test crypto::tests::two_party_envelope_format ... ok
+test crypto::tests::tamper_detection ... ok
+test crypto::tests::roundtrip_empty_plaintext ... ok
+test crypto::tests::roundtrip ... ok
 test crypto::tests::envelope_format_parsing ... ok
-test crypto::tests::two_party_roundtrip ... ok
-test crypto::tests::version_byte_validation ... ok
-test crypto::tests::wrong_key_fails ... ok
-test crypto::tests::encrypted_consensus_data_is_actually_encrypted ... ok
-test crypto::tests::two_party_encrypted_blob_roundtrip ... ok
+test crypto::tests::two_party_envelope_format ... ok
 test crypto::tests::two_party_encrypted_consensus_roundtrip ... ok
-test crypto::tests::two_party_v2_requires_customer_key ... ok
+test crypto::tests::encrypted_consensus_data_is_actually_encrypted ... ok
 test crypto::tests::encrypted_consensus_roundtrip ... ok
-test crypto::tests::encrypted_blob_roundtrip ... ok
+test crypto::tests::two_party_roundtrip ... ok
+test crypto::tests::two_party_v1_backward_compat ... ok
+test crypto::tests::two_party_encrypted_blob_roundtrip ... ok
+test crypto::tests::version_byte_validation ... ok
+test crypto::tests::two_party_v2_requires_customer_key ... ok
+test crypto::tests::wrong_key_fails ... ok
 test crypto::tests::two_party_mixed_versions ... ok
+test crypto::tests::encrypted_blob_roundtrip ... ok
 test crypto::tests::encrypted_consensus_impl_test ... ok
+test crypto::tests::proptest_parse_envelope_never_panics ... ok
+test crypto::tests::proptest_decrypt_with_key_never_panics ... ok
+test crypto::tests::proptest_tampered_ciphertext_detected ... ok
+test crypto::tests::proptest_encrypt_decrypt_roundtrip ... ok
 
-test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.02s
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.12s
 
    Doc-tests mz_persist
 
@@ -71,7 +77,14 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 ```
 
-All 19 tests pass. These verify specific behaviors but only cover a handful of inputs each.
+All 23 tests pass. The 19 unit tests verify specific behaviors, while the 4 proptest
+properties fuzz the pipeline with random keys, plaintexts (0–1024 bytes), wrapped DEKs
+(0–256 bytes), and both V1/V2 versions:
+
+- **`proptest_encrypt_decrypt_roundtrip`** — random encrypt→parse→decrypt always recovers the original plaintext
+- **`proptest_parse_envelope_never_panics`** — random byte vectors never cause a panic in `parse_envelope`
+- **`proptest_decrypt_with_key_never_panics`** — random data never causes a panic in `decrypt_with_key`
+- **`proptest_tampered_ciphertext_detected`** — flipping any byte in nonce+ciphertext is always caught by AEAD
 
 ## Part 2: Normal Build Is Unaffected
 
@@ -218,6 +231,98 @@ Complete - 1 successfully verified harnesses, 0 failures, 1 total.
 
 **VERIFIED** — 0 of 56 checks failed.
 
+### Proof 6: `parse_envelope_error_path_no_panic`
+
+Proves that the error-path indexing in `parse_envelope`'s `None` branch — which re-checks
+`data[0]` for diagnostic error messages — never panics on any input. This closes the gap
+between the proven `validate_envelope_header` and the `anyhow`-wrapping `parse_envelope`.
+
+```bash
+cargo kani -p mz-persist --harness parse_envelope_error_path_no_panic 2>&1 | grep -E '(Checking harness|SUMMARY|failed|VERIFICATION|Verification Time|Complete)'
+```
+
+```output
+Checking harness crypto::kani_proofs::parse_envelope_error_path_no_panic...
+SUMMARY:
+ ** 0 of 55 failed
+VERIFICATION:- SUCCESSFUL
+Verification Time: 0.19498241s
+Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+```
+
+**VERIFIED** — 0 of 55 checks failed. The `parse_envelope` error path is panic-free for all inputs.
+
+### Proof 7: `write_header_matches_parse_header`
+
+Proves that the header layout produced by `write_envelope_header` (the function used by
+`encrypt_with_dek_versioned`) is correctly parsed back by `validate_envelope_header`.
+This closes the format-consistency gap between the encrypt and parse paths without
+needing to model AEAD.
+
+```bash
+cargo kani -p mz-persist --harness write_header_matches_parse_header 2>&1 | grep -E '(Checking harness|SUMMARY|failed|VERIFICATION|Verification Time|Complete)'
+```
+
+```output
+Checking harness crypto::kani_proofs::write_header_matches_parse_header...
+	 - Description: "assertion failed: result.is_some()"
+	 - Description: "assertion failed: parsed_ver == version"
+	 - Description: "assertion failed: parsed_wrapped_end == min_header + wrapped_len"
+	 - Description: "assertion failed: buf[min_header + j] == wrapped_dek[j]"
+SUMMARY:
+ ** 0 of 75 failed
+VERIFICATION:- SUCCESSFUL
+Verification Time: 0.31899443s
+Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+```
+
+**VERIFIED** — 0 of 75 checks failed. The write→parse roundtrip holds: headers written by
+`write_envelope_header` are always correctly recovered by `validate_envelope_header`.
+
+### Proof 8: `validate_decrypt_input_no_panic`
+
+Proves the decrypt length-check function (`validate_decrypt_input`, the pure-arithmetic
+core of `decrypt_with_key`) never panics on any input up to 36 bytes.
+
+```bash
+cargo kani -p mz-persist --harness validate_decrypt_input_no_panic 2>&1 | grep -E '(Checking harness|SUMMARY|failed|VERIFICATION|Verification Time|Complete)'
+```
+
+```output
+Checking harness crypto::kani_proofs::validate_decrypt_input_no_panic...
+SUMMARY:
+ ** 0 of 15 failed
+VERIFICATION:- SUCCESSFUL
+Verification Time: 0.112957165s
+Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+```
+
+**VERIFIED** — 0 of 15 checks failed.
+
+### Proof 9: `validate_decrypt_input_bounds_sound`
+
+If `validate_decrypt_input` returns `Some(split)`, then: (a) `split ≤ len` (safe for
+`split_at`), (b) `split == NONCE_LEN` (exactly 12 bytes for the nonce), and
+(c) the remaining ciphertext+tag region is at least `GCM_TAG_LEN` (16) bytes.
+
+```bash
+cargo kani -p mz-persist --harness validate_decrypt_input_bounds_sound 2>&1 | grep -E '(Checking harness|SUMMARY|failed|VERIFICATION|Verification Time|Complete)'
+```
+
+```output
+Checking harness crypto::kani_proofs::validate_decrypt_input_bounds_sound...
+	 - Description: "assertion failed: split <= len"
+	 - Description: "assertion failed: split == NONCE_LEN"
+	 - Description: "assertion failed: ct_len >= GCM_TAG_LEN"
+SUMMARY:
+ ** 0 of 20 failed
+VERIFICATION:- SUCCESSFUL
+Verification Time: 0.11346517s
+Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+```
+
+**VERIFIED** — 0 of 20 checks failed. The decrypt bounds check is provably sufficient.
+
 ## Summary
 
 | Proof | Property | Checks | Result | Time |
@@ -227,14 +332,21 @@ Complete - 1 successfully verified harnesses, 0 failures, 1 total.
 | 3. `validate_envelope_header_slice_bounds` | Ok ⟹ offsets are sound & partition input | 50 | PASS | 0.27s |
 | 4. `envelope_header_roundtrip` | construct → parse recovers original fields | 62 | PASS | 0.30s |
 | 5. `version_byte_written_correctly` | version byte roundtrips correctly | 56 | PASS | 0.14s |
+| 6. `parse_envelope_error_path_no_panic` | error-path indexing never panics | 55 | PASS | 0.19s |
+| 7. `write_header_matches_parse_header` | write_envelope_header → validate roundtrip | 75 | PASS | 0.32s |
+| 8. `validate_decrypt_input_no_panic` | decrypt length check never panics | 15 | PASS | 0.11s |
+| 9. `validate_decrypt_input_bounds_sound` | Ok ⟹ split valid, nonce + tag regions sound | 20 | PASS | 0.11s |
 
-**Total: 248 CBMC checks, 0 failures, 5/5 proofs verified.**
+**Total: 413 CBMC checks, 0 failures, 9/9 proofs verified.**
 
-Combined with the 19 unit tests (which exercise the full encrypt/decrypt path including
-`aws-lc-rs` AEAD), this provides high confidence that:
-- The envelope format is self-consistent (roundtrip)
-- Parsing never panics on malformed input
-- Only valid version bytes are accepted
-- Slice boundaries are always sound
-- The `anyhow` error paths in `parse_envelope` are unreachable whenever
-  `validate_envelope_header` returns `Some` (structural guarantee)
+Combined with the 19 unit tests and 4 proptest properties (which fuzz the full
+encrypt/decrypt path including `aws-lc-rs` AEAD with random inputs), this provides
+high confidence that:
+- The envelope format is self-consistent (roundtrip — proofs 4, 7, proptest)
+- Parsing never panics on any malformed input (proofs 1, 6, proptest)
+- Only valid version bytes are accepted (proof 2)
+- Slice boundaries are always sound for both parse and decrypt (proofs 3, 8, 9)
+- The header layout written by `encrypt` matches what `parse` expects (proof 7)
+- The decrypt bounds check is provably sufficient (proofs 8, 9)
+- Tampered ciphertext is always detected by AEAD (proptest)
+- The `anyhow` error paths in `parse_envelope` are panic-free (proof 6)
