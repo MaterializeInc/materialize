@@ -162,6 +162,13 @@ pub const ENABLE_S3_TABLES_REGION_CHECK: Config<bool> = Config::new(
     "Whether to enforce that S3 Tables connections are in the same region as the environment.",
 );
 
+pub const FRONTEND_READ_THEN_WRITE: Config<bool> = Config::new(
+    "enable_adapter_frontend_occ_read_then_write",
+    // WIP: true for testing in ci, Should be false before merging.
+    true,
+    "Use frontend sequencing for DELETE/UPDATE operations.",
+);
+
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -186,4 +193,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CONSTRAINT_BASED_TIMESTAMP_SELECTION)
         .add(&PERSIST_FAST_PATH_ORDER)
         .add(&ENABLE_S3_TABLES_REGION_CHECK)
+        .add(&FRONTEND_READ_THEN_WRITE)
 }

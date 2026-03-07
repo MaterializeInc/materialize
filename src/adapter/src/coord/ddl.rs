@@ -641,7 +641,11 @@ impl Coordinator {
         for sink_id in sink_ids {
             let sink = match self.remove_active_compute_sink(sink_id).await {
                 None => {
-                    tracing::error!(%sink_id, "drop_compute_sinks called on nonexistent sink");
+                    // This can happen due to a race condition: an internal
+                    // subscribe may be cleaned up via its own message while
+                    // session disconnect cleanup is in progress. This is
+                    // benign.
+                    tracing::debug!(%sink_id, "drop_compute_sinks: sink already removed");
                     continue;
                 }
                 Some(sink) => sink,

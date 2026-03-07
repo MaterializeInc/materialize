@@ -54,6 +54,7 @@ pub struct Metrics {
     pub apply_catalog_implications_seconds: Histogram,
     pub group_commit_confirm_leadership_seconds: Histogram,
     pub group_commit_table_advancement_seconds: Histogram,
+    pub occ_retry_count: Histogram,
 }
 
 impl Metrics {
@@ -246,6 +247,11 @@ impl Metrics {
                 name: "mz_group_commit_table_advancement_seconds",
                 help: "The time it takes to iterate over all catalog entries to find tables during group commit.",
                 buckets: histogram_seconds_buckets(0.001, 32.0),
+            )),
+            occ_retry_count: registry.register(metric!(
+                name: "mz_occ_read_then_write_retry_count",
+                help: "Number of OCC retries per read-then-write operation.",
+                buckets: vec![0., 1., 2., 3., 5., 10., 25., 50., 100., 500., 1000.],
             ))
         }
     }

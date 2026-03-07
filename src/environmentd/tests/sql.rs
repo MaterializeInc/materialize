@@ -1680,8 +1680,12 @@ fn test_subscribe_outlive_cluster() {
         .batch_execute("CREATE CLUSTER newcluster REPLICAS (r1 (size 'scale=1,workers=1'))")
         .unwrap();
     client2_cancel.cancel_query(postgres::NoTls).unwrap();
-    client2
-        .batch_execute("ROLLBACK; SET CLUSTER = default")
+    // The cancel is asynchronous and might race with subsequent commands.
+    // Retry ROLLBACK in a loop in case it gets canceled.
+    Retry::default()
+        .max_tries(5)
+        .clamp_backoff(Duration::from_millis(100))
+        .retry(|_| client2.batch_execute("ROLLBACK; SET CLUSTER = default"))
         .unwrap();
     assert_eq!(
         client2

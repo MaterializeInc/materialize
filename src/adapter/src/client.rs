@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use anyhow::bail;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
-use futures::{Stream, StreamExt};
+use futures::{FutureExt, Stream, StreamExt};
 use itertools::Itertools;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_auth::Authenticated;
@@ -58,13 +58,16 @@ use crate::command::{
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
+use crate::optimize::Optimize;
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
 };
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
-use crate::{AdapterNotice, AppendWebhookError, PeekClient, PeekResponseUnary, StartupResponse};
+use crate::{
+    AdapterNotice, AppendWebhookError, PeekClient, PeekResponseUnary, StartupResponse, optimize,
+};
 
 /// A handle to a running coordinator.
 ///
@@ -268,6 +271,9 @@ impl Client {
             persist_client,
             statement_logging_frontend,
             superuser_attribute,
+            occ_write_semaphore,
+            frontend_read_then_write_enabled,
+            read_only,
         } = response;
 
         let peek_client = PeekClient::new(
@@ -277,6 +283,9 @@ impl Client {
             optimizer_metrics,
             persist_client,
             statement_logging_frontend,
+            occ_write_semaphore,
+            frontend_read_then_write_enabled,
+            read_only,
         );
 
         let mut client = SessionClient {
@@ -568,6 +577,23 @@ pub struct SessionClient {
     pub enable_frontend_peek_sequencing: bool,
 }
 
+/// Keeps a connection cancel watch installed in the coordinator for the
+/// duration of a frontend read-then-write attempt.
+struct FrontendConnectionCancelWatchGuard {
+    conn_id: ConnectionId,
+    client: Option<Client>,
+}
+
+impl Drop for FrontendConnectionCancelWatchGuard {
+    fn drop(&mut self) {
+        if let Some(client) = self.client.take() {
+            client.send(Command::UnregisterConnectionCancelWatch {
+                conn_id: self.conn_id.clone(),
+            });
+        }
+    }
+}
+
 impl SessionClient {
     /// Parses a SQL expression, reporting failures as a telemetry event if
     /// possible.
@@ -717,6 +743,7 @@ impl SessionClient {
         outer_ctx_extra: Option<ExecuteContextGuard>,
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
+        let cancel_future = cancel_future.map(|_| ()).shared();
 
         // Attempt peek sequencing in the session task.
         // If unsupported, fall back to the Coordinator path.
@@ -731,11 +758,24 @@ impl SessionClient {
             // No additional work needed here.
             return Ok((resp, execute_started));
         } else {
-            debug!("frontend peek did not happen, falling back to `Command::Execute`");
+            debug!("frontend peek did not happen, trying frontend read-then-write");
+        }
+
+        // Attempt read-then-write sequencing in the session task.
+        if let Some(resp) = self
+            .try_frontend_read_then_write_with_cancel(
+                &portal_name,
+                &mut outer_ctx_extra,
+                cancel_future.clone(),
+            )
+            .await?
+        {
+            debug!("frontend read-then-write succeeded");
+            return Ok((resp, execute_started));
+        } else {
+            debug!("frontend read-then-write did not happen, falling back to `Command::Execute`");
             // If we bailed out, outer_ctx_extra is still present (if it was originally).
             // `Command::Execute` will handle it.
-            // (This is not true if we bailed out _after_ the frontend peek sequencing has already
-            // begun its own statement logging. That case would be a bug.)
         }
 
         let response = self
@@ -746,7 +786,9 @@ impl SessionClient {
                     tx,
                     outer_ctx_extra,
                 },
-                cancel_future,
+                cancel_future
+                    .clone()
+                    .map(|_| std::io::Error::new(std::io::ErrorKind::Other, "connection closed")),
             )
             .await?;
         Ok((response, execute_started))
@@ -1052,7 +1094,12 @@ impl SessionClient {
                 | Command::RegisterFrontendPeek { .. }
                 | Command::UnregisterFrontendPeek { .. }
                 | Command::ExplainTimestamp { .. }
-                | Command::FrontendStatementLogging(..) => {}
+                | Command::FrontendStatementLogging(..)
+                | Command::RegisterConnectionCancelWatch { .. }
+                | Command::UnregisterConnectionCancelWatch { .. }
+                | Command::CreateInternalSubscribe { .. }
+                | Command::AttemptTimestampedWrite { .. }
+                | Command::DropInternalSubscribe { .. } => {}
             };
             cmd
         });
@@ -1155,6 +1202,290 @@ impl SessionClient {
         } else {
             Ok(None)
         }
+    }
+
+    /// Runs frontend read-then-write while reacting to both local/session
+    /// cancellation and coordinator-issued connection cancellation.
+    async fn try_frontend_read_then_write_with_cancel(
+        &mut self,
+        portal_name: &str,
+        outer_ctx_extra: &mut Option<ExecuteContextGuard>,
+        cancel_future: impl Future<Output = ()> + Send,
+    ) -> Result<Option<ExecuteResponse>, AdapterError> {
+        let conn_id = self.session().conn_id().clone();
+
+        let inner_client = self.inner().clone();
+        let mut cancel_future = pin::pin!(cancel_future);
+
+        // Cancellation can arrive via two independent paths:
+        //
+        // 1) `cancel_future`: local/session-side cancellation (e.g. client
+        // connection closes). For this path we must still forward a privileged
+        // cancel to the coordinator so in-flight work owned there is canceled.
+        //
+        // 2) `connection_cancel`: coordinator-side cancellation (e.g.
+        // `pg_cancel_backend`) reflected through the connection cancel watch.
+        // This can trigger while frontend RTW is still planning or optimizing,
+        // before coordinator-owned subscribe/write steps are installed.
+        //
+        // We select on both so frontend RTW exits promptly regardless of where
+        // cancellation originated.
+
+        let mut connection_cancel_rx = self
+            .peek_client
+            .call_coordinator(|tx| Command::RegisterConnectionCancelWatch {
+                conn_id: conn_id.clone(),
+                tx,
+            })
+            .await;
+        let _connection_cancel_guard = FrontendConnectionCancelWatchGuard {
+            conn_id: conn_id.clone(),
+            client: Some(inner_client.clone()),
+        };
+        if *connection_cancel_rx.borrow() {
+            return Err(AdapterError::Canceled);
+        }
+        let connection_cancel = async move {
+            let _ = connection_cancel_rx.wait_for(|v| *v).await;
+        };
+        tokio::pin!(connection_cancel);
+
+        let mut frontend_read_then_write =
+            pin::pin!(self.try_frontend_read_then_write(portal_name, outer_ctx_extra));
+
+        let mut cancelled = false;
+
+        loop {
+            tokio::select! {
+                response = &mut frontend_read_then_write => return response,
+                _ = &mut cancel_future, if !cancelled => {
+                    cancelled = true;
+                    inner_client.send(Command::PrivilegedCancelRequest {
+                        conn_id: conn_id.clone(),
+                    });
+                }
+                _ = &mut connection_cancel => {
+                    return Err(AdapterError::Canceled);
+                }
+            }
+        }
+    }
+
+    /// Attempt to sequence a read-then-write (DELETE/UPDATE/INSERT INTO ..
+    /// SELECT .. FROM) from the session task.
+    ///
+    /// Returns `Ok(Some(response))` if we handled the operation, or `Ok(None)`
+    /// to fall back to the Coordinator's sequencing. If it returns an error, it
+    /// should be returned to the user.
+    pub(crate) async fn try_frontend_read_then_write(
+        &mut self,
+        portal_name: &str,
+        outer_ctx_extra: &mut Option<ExecuteContextGuard>,
+    ) -> Result<Option<ExecuteResponse>, AdapterError> {
+        use mz_expr::RowSetFinishing;
+        use mz_sql::plan::{MutationKind, Plan, ReadThenWritePlan};
+        use mz_sql_parser::ast::Statement;
+
+        // Check if frontend read-then-write is enabled (determined once at process startup
+        // to avoid a mixed-mode window where both the old lock-based path and the new OCC
+        // path are active concurrently).
+        if !self.peek_client.frontend_read_then_write_enabled {
+            return Ok(None);
+        }
+
+        let catalog = self.catalog_snapshot("try_frontend_read_then_write").await;
+
+        // Extract statement, params, and logging info from portal
+        let (stmt, params, logging, lifecycle_timestamps) = {
+            let session = self.session.as_ref().expect("SessionClient invariant");
+            let portal = match session.get_portal_unverified(portal_name) {
+                Some(portal) => portal,
+                None => return Ok(None), // Portal doesn't exist, fall back
+            };
+            (
+                portal.stmt.clone(),
+                portal.parameters.clone(),
+                Arc::clone(&portal.logging),
+                portal.lifecycle_timestamps.clone(),
+            )
+        };
+
+        // Check if it's a DELETE, UPDATE, or INSERT statement
+        let stmt = match stmt {
+            Some(stmt)
+                if matches!(
+                    &*stmt,
+                    Statement::Delete(_) | Statement::Update(_) | Statement::Insert(_)
+                ) =>
+            {
+                stmt
+            }
+            Some(_stmt) => {
+                return Ok(None);
+            }
+            None => {
+                return Ok(None);
+            }
+        };
+
+        // Needed later, for an error message.
+        let stmt_string = stmt.to_string();
+
+        // Plan the statement
+        let (plan, target_cluster, resolved_ids) = {
+            let session = self.session.as_mut().expect("SessionClient invariant");
+            let conn_catalog = catalog.for_session(session);
+            let (stmt, resolved_ids) = mz_sql::names::resolve(&conn_catalog, (*stmt).clone())?;
+            let pcx = session.pcx();
+            let plan = mz_sql::plan::plan(Some(pcx), &conn_catalog, stmt, &params, &resolved_ids)?;
+
+            let target_cluster = match session.transaction().cluster() {
+                Some(cluster_id) => crate::coord::TargetCluster::Transaction(cluster_id),
+                None => crate::coord::catalog_serving::auto_run_on_catalog_server(
+                    &conn_catalog,
+                    session,
+                    &plan,
+                ),
+            };
+
+            (plan, target_cluster, resolved_ids)
+        };
+
+        // Check RBAC permissions, mirroring the coordinator's check in sequencer.rs.
+        {
+            let session = self.session.as_ref().expect("SessionClient invariant");
+            let conn_catalog = catalog.for_session(session);
+            let target_cluster_id = catalog
+                .resolve_target_cluster(target_cluster.clone(), session)
+                .ok()
+                .map(|cluster| cluster.id);
+            if let Err(e) = mz_sql::rbac::check_plan(
+                &conn_catalog,
+                None::<fn(u32) -> Option<mz_repr::role_id::RoleId>>,
+                session,
+                &plan,
+                target_cluster_id,
+                &resolved_ids,
+            ) {
+                return Err(e.into());
+            }
+        }
+
+        // Handle ReadThenWrite plans or Insert plans.
+        let rtw_plan = match plan {
+            Plan::ReadThenWrite(rtw_plan) => rtw_plan,
+            Plan::Insert(insert_plan) => {
+                // For INSERT, we need to check if it's a constant insert
+                // without RETURNING. Constant inserts use a fast path in the
+                // coordinator, so we fall back.
+                //
+                // We need to lower HIR to MIR to check for constants because
+                // VALUES statements are planned as Wrap calls at the HIR level.
+                let optimized_mir = if insert_plan.values.as_const().is_some() {
+                    // Already constant at HIR level - just lower without optimization
+                    let expr = insert_plan
+                        .values
+                        .clone()
+                        .lower(catalog.system_config(), None)?;
+                    mz_expr::OptimizedMirRelationExpr(expr)
+                } else {
+                    // Need to optimize to check if it becomes constant
+                    let optimizer_config = optimize::OptimizerConfig::from(catalog.system_config());
+                    let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
+                    optimizer.optimize(insert_plan.values.clone())?
+                };
+
+                // Constant INSERT without RETURNING are blind-writes. Add to
+                // the transaction and let those code paths handle it.
+                let inner_mir = optimized_mir.into_inner();
+                if inner_mir.as_const().is_some() && insert_plan.returning.is_empty() {
+                    let session = self.session.as_mut().expect("SessionClient invariant");
+
+                    let statement_logging_id = self.peek_client.begin_statement_logging(
+                        session,
+                        &params,
+                        &logging,
+                        &catalog,
+                        lifecycle_timestamps,
+                        outer_ctx_extra,
+                    );
+
+                    let result =
+                        Coordinator::insert_constant(&catalog, session, insert_plan.id, inner_mir);
+
+                    if let Some(logging_id) = statement_logging_id {
+                        self.peek_client.end_statement_logging(logging_id, &result);
+                    }
+
+                    return Ok(Some(result?));
+                }
+
+                // Get table descriptor arity for the finishing projection
+                let desc_arity = match catalog.try_get_entry(&insert_plan.id) {
+                    Some(table) => {
+                        let desc = table
+                            .relation_desc_latest()
+                            .ok_or_else(|| AdapterError::Internal("table has no desc".into()))?;
+                        desc.arity()
+                    }
+                    None => {
+                        return Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                            kind: mz_catalog::memory::error::ErrorKind::Sql(
+                                mz_sql::catalog::CatalogError::UnknownItem(
+                                    insert_plan.id.to_string(),
+                                ),
+                            ),
+                        }));
+                    }
+                };
+
+                let finishing = RowSetFinishing {
+                    order_by: vec![],
+                    limit: None,
+                    offset: 0,
+                    project: (0..desc_arity).collect(),
+                };
+
+                // Convert InsertPlan to ReadThenWritePlan
+                ReadThenWritePlan {
+                    id: insert_plan.id,
+                    selection: insert_plan.values,
+                    finishing,
+                    assignments: BTreeMap::new(),
+                    kind: MutationKind::Insert,
+                    returning: insert_plan.returning,
+                }
+            }
+            _ => {
+                return Err(AdapterError::Internal(
+                    "unexpected plan type for mutation".into(),
+                ));
+            }
+        };
+
+        // The OCC path commits writes immediately and they cannot be rolled
+        // back, so reject explicit transaction blocks. (Constant INSERTs are
+        // handled above and don't go through OCC.)
+        {
+            let session = self.session.as_ref().expect("SessionClient invariant");
+            if !session.transaction().is_implicit() {
+                return Err(AdapterError::OperationProhibitsTransaction(stmt_string));
+            }
+        }
+
+        let session = self.session.as_mut().expect("SessionClient invariant");
+        self.peek_client
+            .frontend_read_then_write(
+                session,
+                rtw_plan,
+                target_cluster,
+                &params,
+                &logging,
+                lifecycle_timestamps,
+                outer_ctx_extra,
+            )
+            .await
+            .map(Some)
     }
 }
 

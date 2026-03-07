@@ -192,33 +192,14 @@ impl PeekClient {
 
         // Set up statement logging, and log the beginning of execution.
         // (But only if we're not executing in the context of another statement.)
-        let statement_logging_id = if outer_ctx_extra.is_none() {
-            // This is a new statement, so begin statement logging
-            let result = self.statement_logging_frontend.begin_statement_execution(
-                session,
-                &params,
-                &logging,
-                catalog.system_config(),
-                lifecycle_timestamps,
-            );
-
-            if let Some((logging_id, began_execution, mseh_update, prepared_statement)) = result {
-                self.log_began_execution(began_execution, mseh_update, prepared_statement);
-                Some(logging_id)
-            } else {
-                None
-            }
-        } else {
-            // We're executing in the context of another statement (e.g., FETCH),
-            // so extract the statement logging ID from the outer context if present.
-            // We take ownership and retire the outer context here. The end of execution will be
-            // logged in one of the following ways:
-            // - At the end of this function, if the execution is finished by then.
-            // - Later by the Coordinator, either due to RegisterFrontendPeek or ExecuteSlowPathPeek.
-            outer_ctx_extra
-                .take()
-                .and_then(|guard| guard.defuse().retire())
-        };
+        let statement_logging_id = self.begin_statement_logging(
+            session,
+            &params,
+            &logging,
+            &catalog,
+            lifecycle_timestamps,
+            outer_ctx_extra,
+        );
 
         let result = self
             .try_frontend_peek_inner(session, catalog, stmt, params, statement_logging_id)
