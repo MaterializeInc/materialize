@@ -190,10 +190,9 @@ use timely::container::CapacityContainerBuilder;
 use timely::container::DrainContainer;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::Map;
-use timely::dataflow::operators::{
-    Broadcast, CapabilitySet, Concat, ConnectLoop, Feedback, Operator,
-};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::vec::Broadcast;
+use timely::dataflow::operators::{CapabilitySet, Concat, ConnectLoop, Feedback, Operator};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Timestamp;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::{Oid, PgLsn};
@@ -350,9 +349,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     metrics: PgSnapshotMetrics,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    Stream<G, RewindRequest>,
-    Stream<G, Infallible>,
-    Stream<G, ReplicationError>,
+    StreamVec<G, RewindRequest>,
+    StreamVec<G, Infallible>,
+    StreamVec<G, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("TableReader({})", config.id);
@@ -375,7 +374,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     // This operator needs to broadcast data to itself in order to synchronize the transaction
     // snapshot. However, none of the feedback capabilities result in output messages and for the
     // feedback edge specifically having a default conncetion would result in a loop.
-    let mut snapshot_input = builder.new_disconnected_input(&feedback_data, Pipeline);
+    let mut snapshot_input = builder.new_disconnected_input(feedback_data, Pipeline);
 
     // The export id must be sent to all workers, so we broadcast the feedback connection
     snapshot.broadcast().connect_loop(feedback_handle);
@@ -795,7 +794,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         })
         .as_collection();
 
-    let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
+    let errors = definite_errors.concat(transient_errors.map(ReplicationError::from));
 
     (
         snapshot_updates,

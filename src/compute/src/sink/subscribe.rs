@@ -95,8 +95,8 @@ fn subscribe<G>(
 {
     let name = format!("subscribe-{}", sink_id);
     let mut op = OperatorBuilder::new(name, sinked_collection.scope());
-    let mut ok_input = op.new_input(&sinked_collection.inner, Pipeline);
-    let mut err_input = op.new_input(&err_collection.inner, Pipeline);
+    let mut ok_input = op.new_input(sinked_collection.inner, Pipeline);
+    let mut err_input = op.new_input(err_collection.inner, Pipeline);
 
     op.build(|_cap| {
         let mut rows_to_emit = Vec::new();

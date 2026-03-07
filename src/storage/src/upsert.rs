@@ -37,7 +37,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Capability, InputCapability, Operator};
-use timely::dataflow::{Scope, ScopeParent, Stream};
+use timely::dataflow::{Scope, ScopeParent, StreamVec};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
@@ -185,7 +185,7 @@ pub fn rehydration_finished<G, T>(
     // A token that we can drop to signal we are finished rehydrating.
     token: impl std::any::Any + 'static,
     resume_upper: Antichain<T>,
-    input: &Stream<G, Infallible>,
+    input: StreamVec<G, Infallible>,
 ) where
     G: Scope<Timestamp = T>,
     T: Timestamp,
@@ -221,7 +221,7 @@ pub fn rehydration_finished<G, T>(
 /// - A collection of the computed upsert operator and,
 /// - A health update stream to propagate errors
 pub(crate) fn upsert<G: Scope, FromTime>(
-    input: &VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+    input: VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     upsert_envelope: UpsertEnvelope,
     resume_upper: Antichain<G::Timestamp>,
     previous: VecCollection<G, Result<Row, DataflowError>, Diff>,
@@ -233,14 +233,14 @@ pub(crate) fn upsert<G: Scope, FromTime>(
     backpressure_metrics: Option<BackpressureMetrics>,
 ) -> (
     VecCollection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
-    Stream<G, Infallible>,
+    StreamVec<G, (Option<GlobalId>, HealthStatusUpdate)>,
+    StreamVec<G, Infallible>,
     PressOnDropButton,
 )
 where
     G::Timestamp: TotalOrder + Sync,
     G::Timestamp: Refines<mz_repr::Timestamp> + TotalOrder + Sync,
-    FromTime: Timestamp + Sync,
+    FromTime: Timestamp + Clone + Sync,
 {
     let upsert_metrics = source_config.metrics.get_upsert_metrics(
         source_config.id,
@@ -333,7 +333,7 @@ where
     };
 
     upsert_operator(
-        &thin_input,
+        thin_input,
         upsert_envelope.key_indices,
         resume_upper,
         previous,
@@ -351,7 +351,7 @@ where
 // A shim so we can dispatch based on the dyncfg that tells us which upsert
 // operator to use.
 fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
-    input: &VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+    input: VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
     persist_input: VecCollection<G, Result<Row, DataflowError>, Diff>,
@@ -365,8 +365,8 @@ fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
     snapshot_buffering_max: Option<usize>,
 ) -> (
     VecCollection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
-    Stream<G, Infallible>,
+    StreamVec<G, (Option<GlobalId>, HealthStatusUpdate)>,
+    StreamVec<G, Infallible>,
     PressOnDropButton,
 )
 where
@@ -375,7 +375,7 @@ where
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
     US: UpsertStateBackend<G::Timestamp, FromTime>,
-    FromTime: Debug + timely::ExchangeData + Ord + Sync,
+    FromTime: Debug + timely::ExchangeData + Clone + Ord + Sync,
 {
     // Hard-coded to true because classic UPSERT cannot be used safely with
     // concurrent ingestions, which we need for both 0dt upgrades and
@@ -420,13 +420,13 @@ where
 /// highest from_time. Its purpose is to thin out data as much as possible before exchanging them
 /// across workers.
 fn upsert_thinning<G, K, V, FromTime>(
-    input: &VecCollection<G, (K, V, FromTime), Diff>,
+    input: VecCollection<G, (K, V, FromTime), Diff>,
 ) -> VecCollection<G, (K, V, FromTime), Diff>
 where
     G: Scope,
     G::Timestamp: TotalOrder,
-    K: timely::Data + Eq + Ord,
-    V: timely::Data,
+    K: timely::ExchangeData + Clone + Eq + Ord,
+    V: timely::ExchangeData + Clone,
     FromTime: Timestamp,
 {
     input
@@ -527,7 +527,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     S: UpsertStateBackend<T, FromTime>,
     G: Scope,
     T: PartialOrder + Ord + Clone + Send + Sync + Serialize + Debug + 'static,
-    FromTime: timely::ExchangeData + Ord + Sync,
+    FromTime: timely::ExchangeData + Clone + Ord + Sync,
     E: UpsertErrorEmitter<G>,
 {
     stash.sort_unstable();
@@ -669,7 +669,7 @@ pub(crate) struct UpsertConfig {
 }
 
 fn upsert_classic<G: Scope, FromTime, F, Fut, US>(
-    input: &VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+    input: VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
     previous: VecCollection<G, Result<Row, DataflowError>, Diff>,
@@ -682,8 +682,8 @@ fn upsert_classic<G: Scope, FromTime, F, Fut, US>(
     snapshot_buffering_max: Option<usize>,
 ) -> (
     VecCollection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
-    Stream<G, Infallible>,
+    StreamVec<G, (Option<GlobalId>, HealthStatusUpdate)>,
+    StreamVec<G, Infallible>,
     PressOnDropButton,
 )
 where
@@ -691,7 +691,7 @@ where
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
     US: UpsertStateBackend<G::Timestamp, FromTime>,
-    FromTime: timely::ExchangeData + Ord + Sync,
+    FromTime: timely::ExchangeData + Clone + Ord + Sync,
 {
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
 
@@ -720,13 +720,13 @@ where
 
     let (mut health_output, health_stream) = builder.new_output();
     let mut input = builder.new_input_for(
-        &input.inner,
+        input.inner,
         Exchange::new(move |((key, _, _), _, _)| UpsertKey::hashed(key)),
         &output_handle,
     );
 
     let mut previous = builder.new_input_for(
-        &previous.inner,
+        previous.inner,
         Exchange::new(|((key, _), _, _)| UpsertKey::hashed(key)),
         &output_handle,
     );

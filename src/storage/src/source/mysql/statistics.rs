@@ -11,8 +11,8 @@
 
 use futures::StreamExt;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::Map;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::vec::Map;
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 
 use mz_mysql_util::query_sys_var;
@@ -35,8 +35,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     connection: MySqlSourceConnection,
     resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
 ) -> (
-    Stream<G, ReplicationError>,
-    Stream<G, Probe<GtidPartition>>,
+    StreamVec<G, ReplicationError>,
+    StreamVec<G, Probe<GtidPartition>>,
     PressOnDropButton,
 ) {
     let op_name = format!("MySqlStatistics({})", config.id);

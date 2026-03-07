@@ -120,8 +120,9 @@ use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::vec::Broadcast;
+use timely::dataflow::operators::{Capability, CapabilitySet, Inspect};
+use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::Semaphore;
 use tracing::trace;
@@ -282,8 +283,8 @@ pub(crate) fn render<G>(
     metrics: SourcePersistSinkMetrics,
     busy_signal: Arc<Semaphore>,
 ) -> (
-    Stream<G, ()>,
-    Stream<G, Rc<anyhow::Error>>,
+    StreamVec<G, ()>,
+    StreamVec<G, Rc<anyhow::Error>>,
     Vec<PressOnDropButton>,
 )
 where
@@ -298,7 +299,7 @@ where
         collection_id,
         &operator_name,
         &target,
-        &desired_collection,
+        desired_collection,
         Arc::clone(&persist_clients),
     );
 
@@ -307,8 +308,8 @@ where
         collection_id.clone(),
         &operator_name,
         &target,
-        &batch_descriptions,
-        &passthrough_desired_stream.as_collection(),
+        batch_descriptions.clone(),
+        passthrough_desired_stream.as_collection(),
         Arc::clone(&persist_clients),
         storage_state,
         Arc::clone(&busy_signal),
@@ -319,8 +320,8 @@ where
         collection_id.clone(),
         operator_name,
         &target,
-        &batch_descriptions,
-        &written_batches,
+        batch_descriptions,
+        written_batches,
         persist_clients,
         storage_state,
         metrics,
@@ -347,11 +348,11 @@ fn mint_batch_descriptions<G>(
     collection_id: GlobalId,
     operator_name: &str,
     target: &CollectionMetadata,
-    desired_collection: &VecCollection<G, Result<Row, DataflowError>, Diff>,
+    desired_collection: VecCollection<G, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
 ) -> (
-    Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
-    Stream<G, (Result<Row, DataflowError>, mz_repr::Timestamp, Diff)>,
+    StreamVec<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
+    StreamVec<G, (Result<Row, DataflowError>, mz_repr::Timestamp, Diff)>,
     PressOnDropButton,
 )
 where
@@ -377,13 +378,14 @@ where
         scope.clone(),
     );
 
-    let (output, output_stream) = mint_op.new_output::<CapacityContainerBuilder<_>>();
-    let (data_output, data_output_stream) = mint_op.new_output::<CapacityContainerBuilder<_>>();
+    let (output, output_stream) = mint_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (data_output, data_output_stream) =
+        mint_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     // The description and the data-passthrough outputs are both driven by this input, so
     // they use a standard input connection.
     let mut desired_input =
-        mint_op.new_input_for_many(&desired_collection.inner, Pipeline, [&output, &data_output]);
+        mint_op.new_input_for_many(desired_collection.inner, Pipeline, [&output, &data_output]);
 
     let shutdown_button = mint_op.build(move |capabilities| async move {
         // Non-active workers should just pass the data through.
@@ -529,13 +531,16 @@ fn write_batches<G>(
     collection_id: GlobalId,
     operator_name: &str,
     target: &CollectionMetadata,
-    batch_descriptions: &Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
-    desired_collection: &VecCollection<G, Result<Row, DataflowError>, Diff>,
+    batch_descriptions: Stream<
+        G,
+        Vec<(Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
+    >,
+    desired_collection: VecCollection<G, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &StorageState,
     busy_signal: Arc<Semaphore>,
 ) -> (
-    Stream<G, HollowBatchAndMetadata<mz_repr::Timestamp>>,
+    StreamVec<G, HollowBatchAndMetadata<mz_repr::Timestamp>>,
     PressOnDropButton,
 )
 where
@@ -556,11 +561,11 @@ where
     let mut write_op =
         AsyncOperatorBuilder::new(format!("{} write_batches", operator_name), scope.clone());
 
-    let (output, output_stream) = write_op.new_output::<CapacityContainerBuilder<_>>();
+    let (output, output_stream) = write_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let mut descriptions_input =
-        write_op.new_input_for(&batch_descriptions.broadcast(), Pipeline, &output);
-    let mut desired_input = write_op.new_disconnected_input(&desired_collection.inner, Pipeline);
+        write_op.new_input_for(batch_descriptions.broadcast(), Pipeline, &output);
+    let mut desired_input = write_op.new_disconnected_input(desired_collection.inner, Pipeline);
 
     // This operator accepts the current and desired update streams for a `persist` shard.
     // It attempts to write out updates, starting from the current's upper frontier, that
@@ -846,9 +851,11 @@ where
         }
     });
 
-    if collection_id.is_user() {
-        output_stream.inspect(|d| trace!("batch: {:?}", d));
-    }
+    let output_stream = if collection_id.is_user() {
+        output_stream.inspect(|d| trace!("batch: {:?}", d))
+    } else {
+        output_stream
+    };
 
     (output_stream, shutdown_button.press_on_drop())
 }
@@ -867,15 +874,18 @@ fn append_batches<G>(
     collection_id: GlobalId,
     operator_name: String,
     target: &CollectionMetadata,
-    batch_descriptions: &Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
-    batches: &Stream<G, HollowBatchAndMetadata<mz_repr::Timestamp>>,
+    batch_descriptions: Stream<
+        G,
+        Vec<(Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
+    >,
+    batches: StreamVec<G, HollowBatchAndMetadata<mz_repr::Timestamp>>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &StorageState,
     metrics: SourcePersistSinkMetrics,
     busy_signal: Arc<Semaphore>,
 ) -> (
-    Stream<G, ()>,
-    Stream<G, Rc<anyhow::Error>>,
+    StreamVec<G, ()>,
+    StreamVec<G, Rc<anyhow::Error>>,
     PressOnDropButton,
 )
 where
@@ -925,7 +935,7 @@ where
         .clone();
 
     // An output whose frontier tracks the last successful compare and append of this operator
-    let (_upper_output, upper_stream) = append_op.new_output::<CapacityContainerBuilder<_>>();
+    let (_upper_output, upper_stream) = append_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     // This operator accepts the batch descriptions and tokens that represent
     // written batches. Written batches get appended to persist when we learn

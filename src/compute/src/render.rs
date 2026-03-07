@@ -113,7 +113,7 @@ use std::task::Poll;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::operators::iterate::SemigroupVariable;
+use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::trace::{BatchReader, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use futures::FutureExt;
@@ -142,10 +142,11 @@ use timely::PartialOrder;
 use timely::communication::Allocate;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::to_stream::ToStream;
-use timely::dataflow::operators::{BranchWhen, Capability, Filter, Operator, Probe, probe};
+use timely::dataflow::operators::vec::ToStream;
+use timely::dataflow::operators::vec::{BranchWhen, Filter};
+use timely::dataflow::operators::{Capability, Operator, Probe, probe};
 use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, Stream, StreamCore};
+use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::order::{Product, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
@@ -592,7 +593,7 @@ where
             let as_of = self.as_of_frontier.clone();
             move |b| !<Antichain<G::Timestamp> as PartialOrder>::less_equal(b.upper(), &as_of)
         });
-        Arranged::<G, Tr>::flat_map_batches(&oks, move |a, b| [logic(a, b)]).enter(&self.scope)
+        Arranged::<G, Tr>::flat_map_batches(oks, move |a, b| [logic(a, b)]).enter(&self.scope)
     }
 
     pub(crate) fn import_index(
@@ -735,7 +736,7 @@ where
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
-                    errs.stream.log_dataflow_errors(logger, idx_id);
+                    errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
                 }
 
                 compute_state.traces.set(
@@ -831,7 +832,7 @@ where
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
-                    errs.stream.log_dataflow_errors(logger, idx_id);
+                    errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
                 }
 
                 compute_state.traces.set(
@@ -916,24 +917,22 @@ where
             let rec_ids: Vec<_> = recs.iter().map(|r| r.id).collect();
 
             // Define variables for rec bindings.
-            // It is important that we only use the `SemigroupVariable` until the object is bound.
+            // It is important that we only use the `Variable` until the object is bound.
             // At that point, all subsequent uses should have access to the object itself.
             let mut variables = BTreeMap::new();
             for id in rec_ids.iter() {
                 use differential_dataflow::dynamic::feedback_summary;
                 let inner = feedback_summary::<u64>(level + 1, 1);
-                let oks_v = SemigroupVariable::new(
+                let (oks_v, oks_collection) = Variable::new(
                     &mut self.scope,
                     Product::new(Default::default(), inner.clone()),
                 );
-                let err_v = SemigroupVariable::new(
-                    &mut self.scope,
-                    Product::new(Default::default(), inner),
-                );
+                let (err_v, err_collection) =
+                    Variable::new(&mut self.scope, Product::new(Default::default(), inner));
 
                 self.insert_id(
                     Id::Local(*id),
-                    CollectionBundle::from_collections(oks_v.clone(), err_v.clone()),
+                    CollectionBundle::from_collections(oks_collection, err_collection),
                 );
                 variables.insert(Id::Local(*id), (oks_v, err_v));
             }
@@ -950,7 +949,10 @@ where
                 let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
 
                 // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
-                let mut oks = oks.consolidate_named::<KeyBatcher<_, _, _>>("LetRecConsolidation");
+                let mut oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                    oks,
+                    "LetRecConsolidation",
+                );
 
                 if let Some(limit) = limit {
                     // We swallow the results of the `max_iter`th iteration, because
@@ -964,7 +966,7 @@ where
                         });
                     oks = VecCollection::new(in_limit);
                     if !limit.return_at_limit {
-                        err = err.concat(&VecCollection::new(over_limit).map(move |_data| {
+                        err = err.concat(VecCollection::new(over_limit).map(move |_data| {
                             DataflowError::EvalError(Box::new(EvalError::LetRecLimitExceeded(
                                 format!("{}", limit.max_iters.get()).into(),
                             )))
@@ -988,8 +990,8 @@ where
                     )
                     .as_collection(|k, _| k.clone());
 
-                oks_v.set(&oks);
-                err_v.set(&errs);
+                oks_v.set(oks);
+                err_v.set(errs);
             }
             // Now extract each of the rec bindings into the outer scope.
             for id in rec_ids.into_iter() {
@@ -1332,7 +1334,10 @@ where
                 }
                 let mut oks = differential_dataflow::collection::concatenate(&mut self.scope, oks);
                 if consolidate_output {
-                    oks = oks.consolidate_named::<KeyBatcher<_, _, _>>("UnionConsolidation")
+                    oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                        oks,
+                        "UnionConsolidation",
+                    )
                 }
                 let errs = differential_dataflow::collection::concatenate(&mut self.scope, errs);
                 CollectionBundle::from_collections(oks, errs)
@@ -1396,10 +1401,10 @@ where
 
                 match arrangement {
                     Local(a, _) => {
-                        a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
+                        a.stream = self.log_operator_hydration_inner(a.stream.clone(), lir_id);
                     }
                     Trace(_, a, _) => {
-                        a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
+                        a.stream = self.log_operator_hydration_inner(a.stream.clone(), lir_id);
                     }
                 }
             }
@@ -1408,15 +1413,15 @@ where
                     .collection
                     .as_mut()
                     .expect("CollectionBundle invariant");
-                let stream = self.log_operator_hydration_inner(&oks.inner, lir_id);
+                let stream = self.log_operator_hydration_inner(oks.inner.clone(), lir_id);
                 *oks = stream.as_collection();
             }
         }
     }
 
-    fn log_operator_hydration_inner<D>(&self, stream: &Stream<G, D>, lir_id: LirId) -> Stream<G, D>
+    fn log_operator_hydration_inner<D>(&self, stream: Stream<G, D>, lir_id: LirId) -> Stream<G, D>
     where
-        D: Clone + 'static,
+        D: timely::Container + Clone + 'static,
     {
         let Some(logger) = self.compute_logger.clone() else {
             return stream.clone(); // hydration logging disabled
@@ -1627,15 +1632,12 @@ where
 impl<S, D> WithStartSignal for Stream<S, D>
 where
     S: Scope,
-    D: timely::Data,
+    D: timely::Container + Clone + 'static,
 {
     fn with_start_signal(self, signal: StartSignal) -> Self {
+        let activations = self.scope().activations();
         self.unary(Pipeline, "StartSignal", |_cap, info| {
-            let token = Box::new(ActivateOnDrop::new(
-                (),
-                info.address,
-                self.scope().activations(),
-            ));
+            let token = Box::new(ActivateOnDrop::new((), info.address, activations));
             signal.drop_on_fire(token);
 
             let mut stash = Vec::new();
@@ -1688,7 +1690,7 @@ fn suppress_early_progress<G, D>(
 ) -> Stream<G, D>
 where
     G: Scope,
-    D: Data,
+    D: Data + timely::Container,
 {
     stream.unary_frontier(Pipeline, "SuppressEarlyProgress", |default_cap, _info| {
         let mut early_cap = Some(default_cap);
@@ -1716,7 +1718,7 @@ where
     })
 }
 
-/// Extension trait for [`StreamCore`] to selectively limit progress.
+/// Extension trait for [`Stream`] to selectively limit progress.
 trait LimitProgress<T: Timestamp> {
     /// Limit the progress of the stream until its frontier reaches the given `upper` bound. Expects
     /// the implementation to observe times in data, and release capabilities based on the probe's
@@ -1746,7 +1748,7 @@ trait LimitProgress<T: Timestamp> {
     /// * `upper` is the upper bound of the stream's frontier until which the implementation can
     ///   retain a capability.
     fn limit_progress(
-        &self,
+        self,
         handle: MzProbeHandle<T>,
         slack_ms: u64,
         limit: Option<usize>,
@@ -1757,20 +1759,21 @@ trait LimitProgress<T: Timestamp> {
 
 // TODO: We could make this generic over a `T` that can be converted to and from a u64 millisecond
 // number.
-impl<G, D, R> LimitProgress<mz_repr::Timestamp> for StreamCore<G, Vec<(D, mz_repr::Timestamp, R)>>
+impl<G, D, R> LimitProgress<mz_repr::Timestamp> for StreamVec<G, (D, mz_repr::Timestamp, R)>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
-    D: timely::Data,
-    R: timely::Data,
+    D: Clone + 'static,
+    R: Clone + 'static,
 {
     fn limit_progress(
-        &self,
+        self,
         handle: MzProbeHandle<mz_repr::Timestamp>,
         slack_ms: u64,
         limit: Option<usize>,
         upper: Antichain<mz_repr::Timestamp>,
         name: String,
     ) -> Self {
+        let scope = self.scope();
         let stream =
             self.unary_frontier(Pipeline, &format!("LimitProgress({name})"), |_cap, info| {
                 // Times that we've observed on our input.
@@ -1778,7 +1781,7 @@ where
                 // Capability for the lower bound of `pending_times`, if any.
                 let mut retained_cap: Option<Capability<G::Timestamp>> = None;
 
-                let activator = self.scope().activator_for(info.address);
+                let activator = scope.activator_for(info.address);
                 handle.activate(activator.clone());
 
                 move |(input, frontier), output| {
@@ -1797,7 +1800,7 @@ where
                         if retained_cap.as_ref().is_none_or(|c| {
                             !c.time().less_than(cap.time()) && !upper.less_than(cap.time())
                         }) {
-                            retained_cap = Some(cap.retain());
+                            retained_cap = Some(cap.retain(0));
                         }
                     });
 

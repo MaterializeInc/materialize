@@ -31,7 +31,7 @@ where
     G::Timestamp: Lattice,
 {
     /// Applies `reduce` to arranged data, and returns an arrangement of output data.
-    fn mz_reduce_abelian<L, Bu, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
+    fn mz_reduce_abelian<L, Bu, T2>(self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
     where
         T2: for<'a> Trace<
                 Key<'a> = T1::Key<'a>,
@@ -55,7 +55,7 @@ where
     T1: TraceReader<Time = G::Timestamp, KeyOwn: Ord> + Clone + 'static,
 {
     /// Applies `reduce` to arranged data, and returns an arrangement of output data.
-    fn mz_reduce_abelian<L, Bu, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
+    fn mz_reduce_abelian<L, Bu, T2>(self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
     where
         T2: for<'a> Trace<
                 Key<'a> = T1::Key<'a>,
@@ -95,7 +95,7 @@ where
     /// output views on the same input data. An example is producing an error-free reduction output
     /// along with a separate error output indicating when the error-free output is valid.
     fn reduce_pair<L1, Bu1, T1, L2, Bu2, T2>(
-        &self,
+        self,
         name1: &str,
         name2: &str,
         logic1: L1,
@@ -145,7 +145,7 @@ where
     Tr: TraceReader<Time = G::Timestamp, KeyOwn: Ord> + Clone + 'static,
 {
     fn reduce_pair<L1, Bu1, T1, L2, Bu2, T2>(
-        &self,
+        self,
         name1: &str,
         name2: &str,
         logic1: L1,
@@ -187,7 +187,7 @@ where
         Arranged<G, TraceAgent<T1>>: ArrangementSize,
         Arranged<G, TraceAgent<T2>>: ArrangementSize,
     {
-        let arranged1 = self.mz_reduce_abelian::<L1, Bu1, T1>(name1, logic1);
+        let arranged1 = self.clone().mz_reduce_abelian::<L1, Bu1, T1>(name1, logic1);
         let arranged2 = self.mz_reduce_abelian::<L2, Bu2, T2>(name2, logic2);
         (arranged1, arranged2)
     }

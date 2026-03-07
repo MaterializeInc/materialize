@@ -38,7 +38,7 @@ where
     let (output_buf, output_stream) = builder.new_output();
     let mut output_buf = OutputBuilder::<_, ConsolidatingContainerBuilder<_>>::from(output_buf);
 
-    let mut input = builder.new_input_connection(&coll.inner, Pipeline, []);
+    let mut input = builder.new_input_connection(coll.inner, Pipeline, []);
     builder.build(move |capabilities| {
         // This capability directly controls this operator's output frontier (because we have
         // disconnected the input above). We wrap it in an Option so we can drop it to advance to

@@ -34,8 +34,8 @@ use mz_timely_util::builder_async::{
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::Broadcast;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::vec::Broadcast;
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use tracing::debug;
 
@@ -59,8 +59,8 @@ mod pgcopy;
 /// The `input_collection` must be a stream of chains, partitioned and exchanged by the row's hash
 /// modulo the number of batches.
 pub fn copy_to<G, F>(
-    input_collection: Stream<G, Vec<TimelyStack<((Row, ()), G::Timestamp, Diff)>>>,
-    err_stream: Stream<G, (DataflowError, G::Timestamp, Diff)>,
+    input_collection: StreamVec<G, Vec<TimelyStack<((Row, ()), G::Timestamp, Diff)>>>,
+    err_stream: StreamVec<G, (DataflowError, G::Timestamp, Diff)>,
     up_to: Antichain<G::Timestamp>,
     connection_details: S3UploadInfo,
     connection_context: ConnectionContext,
@@ -137,8 +137,8 @@ fn render_initialization_operator<G>(
     scope: G,
     sink_id: GlobalId,
     up_to: Antichain<G::Timestamp>,
-    err_stream: Stream<G, (DataflowError, G::Timestamp, Diff)>,
-) -> (Stream<G, Result<(), String>>, PressOnDropButton)
+    err_stream: StreamVec<G, (DataflowError, G::Timestamp, Diff)>,
+) -> (StreamVec<G, Result<(), String>>, PressOnDropButton)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -156,7 +156,7 @@ where
     // This should be at-most 1 incoming error per-worker due to the filtering of this stream
     // in `CopyToS3OneshotSinkConnection::render_continuous_sink`.
     let mut error_handle = builder.new_input_for(
-        &err_stream,
+        err_stream,
         Exchange::new(move |_| u64::cast_from(leader_id)),
         &start_handle,
     );
@@ -213,7 +213,7 @@ fn render_completion_operator<G, F>(
     connection_id: CatalogItemId,
     sink_id: GlobalId,
     s3_key_manager: S3KeyManager,
-    completion_stream: Stream<G, Result<u64, String>>,
+    completion_stream: StreamVec<G, Result<u64, String>>,
     worker_callback: F,
 ) -> PressOnDropButton
 where
@@ -227,7 +227,7 @@ where
 
     let mut builder = AsyncOperatorBuilder::new("CopyToS3-completion".to_string(), scope.clone());
 
-    let mut completion_input = builder.new_disconnected_input(&completion_stream, Pipeline);
+    let mut completion_input = builder.new_disconnected_input(completion_stream, Pipeline);
 
     let button = builder.build(move |_| async move {
         // fallible async block to use the `?` operator for convenience
@@ -297,12 +297,12 @@ fn render_upload_operator<G, T>(
     connection_id: CatalogItemId,
     connection_details: S3UploadInfo,
     sink_id: GlobalId,
-    input_collection: Stream<G, Vec<TimelyStack<((Row, ()), G::Timestamp, Diff)>>>,
+    input_collection: StreamVec<G, Vec<TimelyStack<((Row, ()), G::Timestamp, Diff)>>>,
     up_to: Antichain<G::Timestamp>,
-    start_stream: Stream<G, Result<(), String>>,
+    start_stream: StreamVec<G, Result<(), String>>,
     params: CopyToParameters,
     output_batch_count: u64,
-) -> (Stream<G, Result<u64, String>>, PressOnDropButton)
+) -> (StreamVec<G, Result<u64, String>>, PressOnDropButton)
 where
     G: Scope<Timestamp = Timestamp>,
     T: CopyToS3Uploader,
@@ -310,10 +310,10 @@ where
     let worker_id = scope.index();
     let mut builder = AsyncOperatorBuilder::new("CopyToS3-uploader".to_string(), scope.clone());
 
-    let mut input_handle = builder.new_disconnected_input(&input_collection, Pipeline);
+    let mut input_handle = builder.new_disconnected_input(input_collection, Pipeline);
     let (completion_handle, completion_stream) =
         builder.new_output::<CapacityContainerBuilder<_>>();
-    let mut start_handle = builder.new_input_for(&start_stream, Pipeline, &completion_handle);
+    let mut start_handle = builder.new_input_for(start_stream, Pipeline, &completion_handle);
 
     let button = builder.build(move |caps| async move {
         let [completion_cap] = caps.try_into().unwrap();

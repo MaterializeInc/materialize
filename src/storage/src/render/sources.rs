@@ -34,8 +34,9 @@ use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::Stream;
-use timely::dataflow::operators::{ConnectLoop, Feedback, Leave, Map, OkErr};
+use timely::dataflow::StreamVec;
+use timely::dataflow::operators::vec::Map;
+use timely::dataflow::operators::{ConnectLoop, Feedback, Leave, OkErr};
 use timely::dataflow::scopes::{Child, Scope};
 use timely::progress::{Antichain, Timestamp};
 
@@ -61,7 +62,7 @@ pub fn render_source<'g, G, C>(
     dataflow_debug_name: &String,
     connection: C,
     description: IngestionDescription<CollectionMetadata>,
-    resume_stream: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
+    resume_stream: StreamVec<Child<'g, G, mz_repr::Timestamp>, ()>,
     storage_state: &crate::storage_state::StorageState,
     base_source_config: RawSourceCreationConfig,
 ) -> (
@@ -72,7 +73,7 @@ pub fn render_source<'g, G, C>(
             VecCollection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
         ),
     >,
-    Vec<Stream<G, HealthStatusMessage>>,
+    Vec<StreamVec<G, HealthStatusMessage>>,
     Vec<PressOnDropButton>,
 )
 where
@@ -172,7 +173,7 @@ fn render_source_stream<G, FromTime>(
 ) -> (
     VecCollection<G, Row, Diff>,
     Vec<PressOnDropButton>,
-    Vec<Stream<G, HealthStatusMessage>>,
+    Vec<StreamVec<G, HealthStatusMessage>>,
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
@@ -207,7 +208,7 @@ where
         ),
         Some(encoding) => {
             let (decoded_stream, decode_health) = render_decode_delimited(
-                &ok_source,
+                ok_source,
                 encoding.key,
                 encoding.value,
                 dataflow_debug_name.clone(),
@@ -332,7 +333,7 @@ where
                     };
                     let (upsert, health_update, snapshot_progress, upsert_token) =
                         crate::upsert::upsert(
-                            &upsert_input.enter(scope),
+                            upsert_input.enter(scope),
                             upsert_envelope.clone(),
                             refine_antichain(&resume_upper),
                             previous,
@@ -361,7 +362,7 @@ where
                             base_source_config,
                             rehydrated_token,
                             refine_antichain(&resume_upper),
-                            &snapshot_progress,
+                            snapshot_progress.clone(),
                         );
                     } else {
                         drop(rehydrated_token)

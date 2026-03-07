@@ -39,8 +39,8 @@ use mz_storage_types::sources::sql_server::{
 };
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::Map;
-use timely::dataflow::{Scope, Stream as TimelyStream};
+use timely::dataflow::operators::vec::Map;
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 
 use crate::source::sql_server::{ReplicationError, SourceOutputInfo, TransientError};
@@ -59,8 +59,8 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     committed_uppers: impl futures::Stream<Item = Antichain<Lsn>> + 'static,
     extras: SqlServerSourceExtras,
 ) -> (
-    TimelyStream<G, ReplicationError>,
-    TimelyStream<G, Probe<Lsn>>,
+    StreamVec<G, ReplicationError>,
+    StreamVec<G, Probe<Lsn>>,
     PressOnDropButton,
 ) {
     let op_name = format!("SqlServerProgress({})", config.id);

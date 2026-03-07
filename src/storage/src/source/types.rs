@@ -27,7 +27,7 @@ use mz_storage_types::sources::SourceTimestamp;
 use mz_timely_util::builder_async::PressOnDropButton;
 use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
-use timely::dataflow::{Scope, ScopeParent, Stream};
+use timely::dataflow::{Scope, ScopeParent, StreamVec};
 use timely::progress::Antichain;
 use tokio::sync::Semaphore;
 use tokio_util::sync::PollSemaphore;
@@ -92,8 +92,8 @@ pub trait SourceRender {
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, HealthStatusMessage>,
-        Stream<G, Probe<Self::Time>>,
+        StreamVec<G, HealthStatusMessage>,
+        StreamVec<G, Probe<Self::Time>>,
         Vec<PressOnDropButton>,
     );
 }

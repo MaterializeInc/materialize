@@ -27,7 +27,7 @@ use std::convert::Infallible;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Capability, CapabilitySet};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
@@ -100,7 +100,7 @@ use crate::upsert::types::{StateValue, UpsertState, UpsertStateBackend};
 /// case, our input might not be consolidated and `consolidate_chunk` is able to
 /// handle that.
 pub fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
-    input: &VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+    input: VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
     persist_input: VecCollection<G, Result<Row, DataflowError>, Diff>,
@@ -113,8 +113,8 @@ pub fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     snapshot_buffering_max: Option<usize>,
 ) -> (
     VecCollection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
-    Stream<G, Infallible>,
+    StreamVec<G, (Option<GlobalId>, HealthStatusUpdate)>,
+    StreamVec<G, Infallible>,
     PressOnDropButton,
 )
 where
@@ -122,7 +122,7 @@ where
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
     US: UpsertStateBackend<G::Timestamp, FromTime>,
-    FromTime: Debug + timely::ExchangeData + Ord + Sync,
+    FromTime: Debug + timely::ExchangeData + Clone + Ord + Sync,
 {
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
 
@@ -151,13 +151,13 @@ where
 
     let (mut health_output, health_stream) = builder.new_output();
     let mut input = builder.new_input_for(
-        &input.inner,
+        input.inner,
         Exchange::new(move |((key, _, _), _, _)| UpsertKey::hashed(key)),
         &output_handle,
     );
 
     let mut persist_input = builder.new_disconnected_input(
-        &persist_input.inner,
+        persist_input.inner,
         Exchange::new(|((key, _), _, _)| UpsertKey::hashed(key)),
     );
 
@@ -636,8 +636,8 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
 where
     S: UpsertStateBackend<T, FromTime>,
     G: Scope,
-    T: TotalOrder + timely::ExchangeData + Debug + Ord + Sync,
-    FromTime: timely::ExchangeData + Ord + Sync,
+    T: TotalOrder + timely::ExchangeData + Clone + Debug + Ord + Sync,
+    FromTime: timely::ExchangeData + Clone + Ord + Sync,
     E: UpsertErrorEmitter<G>,
 {
     let mut min_remaining_time = Antichain::new();
@@ -982,7 +982,7 @@ mod test {
                         };
 
                         let (output, _, _, button) = upsert_inner(
-                            &input.as_collection(),
+                            input.as_collection(),
                             vec![0],
                             Antichain::from_elem(Timestamp::minimum()),
                             persist_input.as_collection(),
@@ -1177,7 +1177,7 @@ mod test {
                         };
 
                         let (output, _, _, button) = upsert_inner(
-                            &input.as_collection(),
+                            input.as_collection(),
                             vec![0],
                             Antichain::from_elem(Timestamp::minimum()),
                             persist_input.as_collection(),
@@ -1191,12 +1191,8 @@ mod test {
                         );
                         std::mem::forget(button);
 
-                        (
-                            input_handle,
-                            persist_handle,
-                            output.inner.probe(),
-                            output.inner.capture(),
-                        )
+                        let (probe, stream) = output.inner.probe();
+                        (input_handle, persist_handle, probe, stream.capture())
                     })
                 });
 

@@ -19,7 +19,7 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::operators::iterate::SemigroupVariable;
+use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
 use differential_dataflow::trace::implementations::merge_batcher::container::MergerChunk;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
@@ -86,7 +86,7 @@ where
                     // thus needs to be checked.
                     let expr = expr.clone();
                     let mut datum_vec = mz_repr::DatumVec::new();
-                    let errors = ok_input.flat_map(move |row| {
+                    let errors = ok_input.clone().flat_map(move |row| {
                         let temp_storage = mz_repr::RowArena::new();
                         let datums = datum_vec.borrow_with(&row);
                         match expr.eval(&datums[..], &temp_storage) {
@@ -97,7 +97,7 @@ where
                             Err(e) => Some(e.into()),
                         }
                     });
-                    err_collection = err_collection.concat(&errors);
+                    err_collection = err_collection.concat(errors);
                 }
             }
 
@@ -113,7 +113,7 @@ where
                         order_key,
                         must_consolidate,
                     );
-                    err_collection = err_collection.concat(&errs);
+                    err_collection = err_collection.concat(errs);
                     oks
                 }
                 TopKPlan::MonotonicTopK(MonotonicTopKPlan {
@@ -134,6 +134,7 @@ where
 
                     // Map the group key along with the row and consolidate if required to do so.
                     let mut datum_vec = mz_repr::DatumVec::new();
+                    let mut ok_scope = ok_input.scope();
                     let collection = ok_input
                         .map(move |row| {
                             let group_row = {
@@ -157,7 +158,7 @@ where
                         let m = "tried to build monotonic top-k on non-monotonic input".into();
                         (DataflowError::from(EvalError::Internal(m)), Diff::ONE)
                     });
-                    err_collection = err_collection.concat(&errs);
+                    err_collection = err_collection.concat(errs);
 
                     // For monotonic inputs, we are able to thin the input relation in two stages:
                     // 1. First, we can do an intra-timestamp thinning which has the advantage of
@@ -186,13 +187,13 @@ where
                     // of `offset` and `limit`, discarding only the records not produced in the intermediate
                     // stage.
                     let delay = std::time::Duration::from_secs(10);
-                    let retractions = SemigroupVariable::new(
-                        &mut ok_input.scope(),
+                    let (retractions_var, retractions) = SemigroupVariable::new(
+                        &mut ok_scope,
                         <G::Timestamp as crate::render::RenderTimestamp>::system_delay(
                             delay.try_into().expect("must fit"),
                         ),
                     );
-                    let thinned = collection.concat(&retractions.negate());
+                    let thinned = collection.clone().concat(retractions.negate());
 
                     // As an additional optimization, we can skip creating the full topk hierachy
                     // here since we now have an upper bound on the number records due to the
@@ -202,10 +203,11 @@ where
                     let (result, errs) =
                         self.build_topk_stage(thinned, order_key, 1u64, 0, limit, arity, false);
                     // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
-                    let result = result.consolidate_named::<KeyBatcher<_, _, _>>(
+                    let result = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                        result,
                         "Monotonic TopK final consolidate",
                     );
-                    retractions.set(&collection.concat(&result.negate()));
+                    retractions_var.set(collection.concat(result.clone().negate()));
                     soft_assert_or_log!(
                         errs.is_none(),
                         "requested no validation, but received error collection"
@@ -233,7 +235,7 @@ where
                     let (oks, errs) = self.build_topk(
                         ok_input, group_key, order_key, offset, limit, arity, buckets,
                     );
-                    err_collection = err_collection.concat(&errs);
+                    err_collection = err_collection.concat(errs);
                     oks
                 }
             };
@@ -335,7 +337,8 @@ where
             collection, order_key, 1u64, offset, limit, arity, validating,
         );
         // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
-        let oks = oks.consolidate_named::<KeyBatcher<_, _, _>>("TopK final consolidate");
+        let oks =
+            CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(oks, "TopK final consolidate");
         collection = oks;
         if validating {
             err_collection = errs;
@@ -443,7 +446,7 @@ where
             (input, stage, None)
         };
         let input = input.as_collection(|k, v| (k.to_row(), v.to_row()));
-        (oks.concat(&input), errs)
+        (oks.concat(input), errs)
     }
 
     fn render_top1_monotonic<S>(
@@ -557,9 +560,11 @@ where
     // such that `input.concat(&negated_output)` yields the correct TopK
     // NOTE(vmarcos): The arranged input operator name below is used in the tuning advice
     // built-in view mz_introspection.mz_expected_group_size_advice.
-    let arranged = input.mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-        "Arranged TopK input",
-    );
+    let arranged = input
+        .clone()
+        .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+            "Arranged TopK input",
+        );
 
     // Eagerly evaluate literal limits.
     let limit = limit.map(|l| match l.as_literal() {
@@ -568,107 +573,109 @@ where
         _ => Err(l),
     });
 
-    let reduced = arranged.mz_reduce_abelian::<_, Bu, Tr>("Reduced TopK input", {
-        move |mut hash_key, source, target: &mut Vec<(Tr::ValOwn, Diff)>| {
-            // Unpack the limit, either into an integer literal or an expression to evaluate.
-            let limit = match &limit {
-                Some(Ok(lit)) => Some(*lit),
-                Some(Err(expr)) => {
-                    // Unpack `key` after skipping the hash and determine the limit.
-                    // If the limit errors, use a zero limit; errors are surfaced elsewhere.
-                    let temp_storage = mz_repr::RowArena::new();
-                    let _hash = hash_key.next();
-                    let mut key_datums = datum_vec.borrow();
-                    key_datums.extend(hash_key);
-                    let datum_limit = expr
-                        .eval(&key_datums, &temp_storage)
-                        .unwrap_or(Datum::Int64(0));
-                    Some(match datum_limit {
-                        Datum::Null => Diff::MAX,
-                        d => Diff::from(d.unwrap_int64()),
-                    })
-                }
-                None => None,
-            };
-
-            if let Some(err) = Tr::ValOwn::into_error() {
-                for (datums, diff) in source.iter() {
-                    if diff.is_positive() {
-                        continue;
+    let reduced = arranged
+        .clone()
+        .mz_reduce_abelian::<_, Bu, Tr>("Reduced TopK input", {
+            move |mut hash_key, source, target: &mut Vec<(Tr::ValOwn, Diff)>| {
+                // Unpack the limit, either into an integer literal or an expression to evaluate.
+                let limit = match &limit {
+                    Some(Ok(lit)) => Some(*lit),
+                    Some(Err(expr)) => {
+                        // Unpack `key` after skipping the hash and determine the limit.
+                        // If the limit errors, use a zero limit; errors are surfaced elsewhere.
+                        let temp_storage = mz_repr::RowArena::new();
+                        let _hash = hash_key.next();
+                        let mut key_datums = datum_vec.borrow();
+                        key_datums.extend(hash_key);
+                        let datum_limit = expr
+                            .eval(&key_datums, &temp_storage)
+                            .unwrap_or(Datum::Int64(0));
+                        Some(match datum_limit {
+                            Datum::Null => Diff::MAX,
+                            d => Diff::from(d.unwrap_int64()),
+                        })
                     }
-                    target.push((err((*datums).to_row()), Diff::ONE));
+                    None => None,
+                };
+
+                if let Some(err) = Tr::ValOwn::into_error() {
+                    for (datums, diff) in source.iter() {
+                        if diff.is_positive() {
+                            continue;
+                        }
+                        target.push((err((*datums).to_row()), Diff::ONE));
+                        return;
+                    }
+                }
+
+                // Determine if we must actually shrink the result set.
+                let must_shrink = offset > 0
+                    || limit
+                        .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() > l)
+                        .unwrap_or(false);
+                if !must_shrink {
                     return;
                 }
-            }
 
-            // Determine if we must actually shrink the result set.
-            let must_shrink = offset > 0
-                || limit
-                    .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() > l)
-                    .unwrap_or(false);
-            if !must_shrink {
-                return;
-            }
-
-            // First go ahead and emit all records. Note that we ensure target
-            // has the capacity to hold at least these records, and avoid any
-            // dependencies on the user-provided (potentially unbounded) limit.
-            target.reserve(source.len());
-            for (datums, diff) in source.iter() {
-                target.push((Tr::ValOwn::ok((*datums).to_row()), -diff));
-            }
-            // local copies that may count down to zero.
-            let mut offset = offset;
-            let mut limit = limit;
-
-            // The order in which we should produce rows.
-            let mut indexes = (0..source.len()).collect::<Vec<_>>();
-            // We decode the datums once, into a common buffer for efficiency.
-            // Each row should contain `arity` columns; we should check that.
-            let mut buffer = datum_vec.borrow();
-            for (index, (datums, _)) in source.iter().enumerate() {
-                buffer.extend(*datums);
-                assert_eq!(buffer.len(), arity * (index + 1));
-            }
-            let width = buffer.len() / source.len();
-
-            //todo: use arrangements or otherwise make the sort more performant?
-            indexes.sort_by(|left, right| {
-                let left = &buffer[left * width..][..width];
-                let right = &buffer[right * width..][..width];
-                // Note: source was originally ordered by the u8 array representation
-                // of rows, but left.cmp(right) uses Datum::cmp.
-                mz_expr::compare_columns(&order_key, left, right, || left.cmp(right))
-            });
-
-            // We now need to lay out the data in order of `buffer`, but respecting
-            // the `offset` and `limit` constraints.
-            for index in indexes.into_iter() {
-                let (datums, mut diff) = source[index];
-                if !diff.is_positive() {
-                    continue;
+                // First go ahead and emit all records. Note that we ensure target
+                // has the capacity to hold at least these records, and avoid any
+                // dependencies on the user-provided (potentially unbounded) limit.
+                target.reserve(source.len());
+                for (datums, diff) in source.iter() {
+                    target.push((Tr::ValOwn::ok((*datums).to_row()), -diff));
                 }
-                // If we are still skipping early records ...
-                if offset > 0 {
-                    let to_skip =
-                        std::cmp::min(offset, usize::try_from(diff.into_inner()).unwrap());
-                    offset -= to_skip;
-                    diff -= Diff::try_from(to_skip).unwrap();
+                // local copies that may count down to zero.
+                let mut offset = offset;
+                let mut limit = limit;
+
+                // The order in which we should produce rows.
+                let mut indexes = (0..source.len()).collect::<Vec<_>>();
+                // We decode the datums once, into a common buffer for efficiency.
+                // Each row should contain `arity` columns; we should check that.
+                let mut buffer = datum_vec.borrow();
+                for (index, (datums, _)) in source.iter().enumerate() {
+                    buffer.extend(*datums);
+                    assert_eq!(buffer.len(), arity * (index + 1));
                 }
-                // We should produce at most `limit` records.
-                if let Some(limit) = &mut limit {
-                    diff = std::cmp::min(diff, Diff::from(*limit));
-                    *limit -= diff;
-                }
-                // Output the indicated number of rows.
-                if diff.is_positive() {
-                    // Emit retractions for the elements actually part of
-                    // the set of TopK elements.
-                    target.push((Tr::ValOwn::ok(datums.to_row()), diff));
+                let width = buffer.len() / source.len();
+
+                //todo: use arrangements or otherwise make the sort more performant?
+                indexes.sort_by(|left, right| {
+                    let left = &buffer[left * width..][..width];
+                    let right = &buffer[right * width..][..width];
+                    // Note: source was originally ordered by the u8 array representation
+                    // of rows, but left.cmp(right) uses Datum::cmp.
+                    mz_expr::compare_columns(&order_key, left, right, || left.cmp(right))
+                });
+
+                // We now need to lay out the data in order of `buffer`, but respecting
+                // the `offset` and `limit` constraints.
+                for index in indexes.into_iter() {
+                    let (datums, mut diff) = source[index];
+                    if !diff.is_positive() {
+                        continue;
+                    }
+                    // If we are still skipping early records ...
+                    if offset > 0 {
+                        let to_skip =
+                            std::cmp::min(offset, usize::try_from(diff.into_inner()).unwrap());
+                        offset -= to_skip;
+                        diff -= Diff::try_from(to_skip).unwrap();
+                    }
+                    // We should produce at most `limit` records.
+                    if let Some(limit) = &mut limit {
+                        diff = std::cmp::min(diff, Diff::from(*limit));
+                        *limit -= diff;
+                    }
+                    // Output the indicated number of rows.
+                    if diff.is_positive() {
+                        // Emit retractions for the elements actually part of
+                        // the set of TopK elements.
+                        target.push((Tr::ValOwn::ok(datums.to_row()), diff));
+                    }
                 }
             }
-        }
-    });
+        });
     (arranged, reduced)
 }
 
@@ -730,7 +737,7 @@ where
                             .or_insert_with(move || topk_agg::TopKBatch::new(limit));
                         topk.update(monoid, diff.into_inner());
                     }
-                    notificator.notify_at(time.retain());
+                    notificator.notify_at(time.retain(0));
                 });
 
                 notificator.for_each(|time, _, _| {

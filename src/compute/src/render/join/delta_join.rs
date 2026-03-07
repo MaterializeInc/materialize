@@ -29,8 +29,9 @@ use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::OkErr;
 use timely::dataflow::operators::generic::Session;
-use timely::dataflow::operators::{Map, OkErr};
+use timely::dataflow::operators::vec::Map;
 use timely::progress::Antichain;
 use timely::progress::timestamp::Refines;
 
@@ -146,7 +147,7 @@ where
                     let as_of = self.as_of_frontier.clone();
                     let update_stream = match val {
                         Ok(local) => {
-                            let arranged = local.enter_region(region);
+                            let arranged = local.clone().enter_region(region);
                             let (update_stream, err_stream) =
                                 build_update_stream::<_, RowRowAgent<_, _>>(
                                     arranged,
@@ -158,7 +159,7 @@ where
                             update_stream
                         }
                         Err(trace) => {
-                            let arranged = trace.enter_region(region);
+                            let arranged = trace.clone().enter_region(region);
                             let (update_stream, err_stream) =
                                 build_update_stream::<_, RowRowEnter<_, _, _>>(
                                     arranged,
@@ -204,7 +205,7 @@ where
                                     if source_relation < lookup_relation {
                                         build_halfjoin::<_, RowRowAgent<_, _>, _>(
                                             update_stream,
-                                            local.enter_region(region),
+                                            local.clone().enter_region(region),
                                             stream_key,
                                             stream_thinning,
                                             |t1, t2| t1.le(t2),
@@ -213,7 +214,7 @@ where
                                     } else {
                                         build_halfjoin::<_, RowRowAgent<_, _>, _>(
                                             update_stream,
-                                            local.enter_region(region),
+                                            local.clone().enter_region(region),
                                             stream_key,
                                             stream_thinning,
                                             |t1, t2| t1.lt(t2),
@@ -225,7 +226,7 @@ where
                                     if source_relation < lookup_relation {
                                         build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
                                             update_stream,
-                                            trace.enter_region(region),
+                                            trace.clone().enter_region(region),
                                             stream_key,
                                             stream_thinning,
                                             |t1, t2| t1.le(t2),
@@ -234,7 +235,7 @@ where
                                     } else {
                                         build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
                                             update_stream,
-                                            trace.enter_region(region),
+                                            trace.clone().enter_region(region),
                                             stream_key,
                                             stream_thinning,
                                             |t1, t2| t1.lt(t2),
@@ -360,7 +361,7 @@ where
 
     if closure.could_error() {
         let (oks, errs2) = differential_dogs3::operators::half_join::half_join_internal_unsafe(
-            &updates,
+            updates,
             trace,
             |time, antichain| {
                 antichain.insert(time.step_back());
@@ -405,11 +406,11 @@ where
 
         (
             oks.as_collection().flat_map(|x| x),
-            errs.concat(&errs2.as_collection()),
+            errs.concat(errs2.as_collection()),
         )
     } else {
         let oks = differential_dogs3::operators::half_join::half_join_internal_unsafe(
-            &updates,
+            updates,
             trace,
             |time, antichain| {
                 antichain.insert(time.step_back());

@@ -57,7 +57,7 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::core::Map;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 use tracing::trace;
 use uuid::Uuid;
@@ -104,11 +104,11 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
     source_outputs: Vec<SourceOutputInfo>,
-    rewind_stream: &Stream<G, RewindRequest>,
+    rewind_stream: StreamVec<G, RewindRequest>,
     metrics: MySqlSourceMetrics,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    Stream<G, ReplicationError>,
+    StreamVec<G, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("MySqlReplicationReader({})", config.id);
@@ -118,7 +118,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let (mut data_output, data_stream) = builder.new_output::<AccountedStackBuilder<_>>();
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
-        builder.new_output::<CapacityContainerBuilder<_>>();
+        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let mut rewind_input = builder.new_input_for(
         rewind_stream,
         Exchange::new(move |_| repl_reader_id),
@@ -463,7 +463,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
     // TODO: Split row decoding into a separate operator that can be distributed across all workers
 
-    let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
+    let errors = definite_errors.concat(transient_errors.map(ReplicationError::from));
 
     (data_stream.as_collection(), errors, button.press_on_drop())
 }

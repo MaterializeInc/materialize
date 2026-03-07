@@ -68,8 +68,9 @@ use mz_timely_util::containers::stack::AccountedStackBuilder;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::core::Partition;
-use timely::dataflow::operators::{CapabilitySet, Concat, Map, ToStream};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::vec::{Map, ToStream};
+use timely::dataflow::operators::{CapabilitySet, Concat};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use uuid::Uuid;
 
@@ -109,8 +110,8 @@ impl SourceRender for MySqlSourceConnection {
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, HealthStatusMessage>,
-        Stream<G, Probe<GtidPartition>>,
+        StreamVec<G, HealthStatusMessage>,
+        StreamVec<G, Probe<GtidPartition>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting.
@@ -166,14 +167,14 @@ impl SourceRender for MySqlSourceConnection {
             config.clone(),
             self.clone(),
             source_outputs,
-            &rewinds,
+            rewinds,
             metrics,
         );
 
         let (stats_err, probe_stream, stats_token) =
             statistics::render(scope.clone(), config.clone(), self, resume_uppers);
 
-        let updates = snapshot_updates.concat(&repl_updates);
+        let updates = snapshot_updates.concat(repl_updates);
         let partition_count = u64::cast_from(config.source_exports.len());
         let data_streams: Vec<_> = updates
             .inner
@@ -206,8 +207,8 @@ impl SourceRender for MySqlSourceConnection {
             .to_stream(scope);
 
         let health_errs = snapshot_err
-            .concat(&repl_err)
-            .concat(&stats_err)
+            .concat(repl_err)
+            .concat(stats_err)
             .map(move |err| {
                 // This update will cause the dataflow to restart
                 let err_string = err.display_with_causes().to_string();
@@ -228,7 +229,7 @@ impl SourceRender for MySqlSourceConnection {
                     update,
                 }
             });
-        let health = health_init.concat(&health_errs);
+        let health = health_init.concat(health_errs);
 
         (
             data_collections,

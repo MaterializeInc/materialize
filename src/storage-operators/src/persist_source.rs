@@ -56,7 +56,7 @@ use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
 use timely::dataflow::operators::{Capability, Leave, OkErr};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
@@ -159,8 +159,8 @@ pub fn persist_source<G>(
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
 ) -> (
-    Stream<G, (Row, Timestamp, Diff)>,
-    Stream<G, (DataflowError, Timestamp, Diff)>,
+    StreamVec<G, (Row, Timestamp, Diff)>,
+    StreamVec<G, (DataflowError, Timestamp, Diff)>,
     Vec<PressOnDropButton>,
 )
 where
@@ -297,11 +297,11 @@ pub fn persist_source_core<'g, G>(
 ) -> (
     Stream<
         RefinedScope<'g, G>,
-        (
+        Vec<(
             Result<Row, DataflowError>,
             (mz_repr::Timestamp, Subtime),
             Diff,
-        ),
+        )>,
     >,
     Vec<PressOnDropButton>,
 )
@@ -319,7 +319,7 @@ where
     };
 
     let desc_transformer = match flow_control {
-        Some(flow_control) => Some(move |mut scope: _, descs: &Stream<_, _>, chosen_worker| {
+        Some(flow_control) => Some(move |mut scope: _, descs: Stream<_, _>, chosen_worker| {
             let (stream, token) = backpressure(
                 &mut scope,
                 &format!("backpressure({source_id})"),
@@ -383,7 +383,7 @@ where
         start_signal,
         error_handler,
     );
-    let rows = decode_and_mfp(cfg, &fetched, &name, until, map_filter_project);
+    let rows = decode_and_mfp(cfg, fetched, &name, until, map_filter_project);
     (rows, token)
 }
 
@@ -435,11 +435,11 @@ fn filter_result(
 
 pub fn decode_and_mfp<G>(
     cfg: PersistConfig,
-    fetched: &Stream<G, FetchedBlob<SourceData, (), Timestamp, StorageDiff>>,
+    fetched: StreamVec<G, FetchedBlob<SourceData, (), Timestamp, StorageDiff>>,
     name: &str,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
-) -> Stream<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>
+) -> StreamVec<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>
 where
     G: Scope<Timestamp = (mz_repr::Timestamp, Subtime)>,
 {
@@ -472,7 +472,7 @@ where
 
         move |_frontier| {
             fetched_input.for_each(|time, data| {
-                let capability = time.retain();
+                let capability = time.retain(0);
                 for fetched_blob in data.drain(..) {
                     pending_work.push_back(PendingWork {
                         panic_on_audit_failure: panic_on_audit_failure.get(),
@@ -708,7 +708,7 @@ pub struct FlowControl<G: Scope> {
     /// As implied by its type, this stream never emits data, only progress updates.
     ///
     /// TODO: Replace `Infallible` with `!` once the latter is stabilized.
-    pub progress_stream: Stream<G, Infallible>,
+    pub progress_stream: StreamVec<G, Infallible>,
     /// Maximum number of in-flight bytes.
     pub max_inflight_bytes: usize,
     /// The minimum range of timestamps (be they granular or not) that must be emitted,
@@ -734,12 +734,12 @@ pub struct FlowControl<G: Scope> {
 pub fn backpressure<T, G, O>(
     scope: &mut G,
     name: &str,
-    data: &Stream<G, O>,
+    data: StreamVec<G, O>,
     flow_control: FlowControl<G>,
     chosen_worker: usize,
     // A probe used to inspect this operator during unit-testing
     probe: Option<UnboundedSender<(Antichain<(T, Subtime)>, usize, usize)>>,
-) -> (Stream<G, O>, PressOnDropButton)
+) -> (StreamVec<G, O>, PressOnDropButton)
 where
     T: TimelyTimestamp + Lattice + Codec64 + TotalOrder,
     G: Scope<Timestamp = (T, Subtime)>,
@@ -764,10 +764,10 @@ where
         format!("persist_source_backpressure({})", name),
         scope.clone(),
     );
-    let (data_output, data_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (data_output, data_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let mut data_input = builder.new_disconnected_input(data, Pipeline);
-    let mut flow_control_input = builder.new_disconnected_input(&summaried_flow, Pipeline);
+    let mut flow_control_input = builder.new_disconnected_input(summaried_flow, Pipeline);
 
     // Helper method used to synthesize current and next frontier for ordered times.
     fn synthesize_frontiers<T: PartialOrder + Clone>(
@@ -1303,7 +1303,7 @@ mod tests {
                         let (backpressured, token) = backpressure(
                             scope,
                             "test",
-                            &input,
+                            input,
                             flow_control,
                             0,
                             Some(backpressure_status_tx),
@@ -1313,15 +1313,16 @@ mod tests {
                         let tx = if !non_granular_consumer {
                             Some(consumer_operator(
                                 scope.clone(),
-                                &backpressured,
+                                backpressured.clone(),
                                 granular_feedback_handle.unwrap(),
                             ))
                         } else {
                             None
                         };
 
+                        let (probe_handle, backpressured) = backpressured.probe();
                         (
-                            backpressured.probe(),
+                            probe_handle,
                             tx,
                             backpressure_status_rx,
                             token,
@@ -1334,7 +1335,7 @@ mod tests {
                     let consumer_tx = if non_granular_consumer {
                         consumer_operator(
                             scope.clone(),
-                            &backpressured,
+                            backpressured,
                             non_granular_feedback_handle.unwrap(),
                         )
                     } else {
@@ -1409,7 +1410,7 @@ mod tests {
     >(
         scope: G,
         mut input: I,
-    ) -> (Stream<G, Part>, oneshot::Sender<()>) {
+    ) -> (StreamVec<G, Part>, oneshot::Sender<()>) {
         let (finalizer_tx, finalizer_rx) = oneshot::channel();
         let mut iterator = AsyncOperatorBuilder::new("iterator".to_string(), scope);
         let (output_handle, output) = iterator.new_output::<CapacityContainerBuilder<Vec<Part>>>();
@@ -1442,7 +1443,7 @@ mod tests {
     /// being processed. Also connects the `feedback` handle to its output.
     fn consumer_operator<G: Scope, O: Backpressureable + std::fmt::Debug>(
         scope: G,
-        input: &Stream<G, O>,
+        input: StreamVec<G, O>,
         feedback: timely::dataflow::operators::feedback::Handle<G, Vec<std::convert::Infallible>>,
     ) -> UnboundedSender<()> {
         let (tx, mut rx) = unbounded_channel::<()>();

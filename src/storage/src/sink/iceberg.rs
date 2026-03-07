@@ -135,8 +135,9 @@ use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{Broadcast, CapabilitySet, Concatenate, Map, ToStream};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::vec::{Broadcast, Map, ToStream};
+use timely::dataflow::operators::{CapabilitySet, Concatenate};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp as _};
 use tracing::debug;
 
@@ -566,16 +567,16 @@ fn row_to_recordbatch(
 fn mint_batch_descriptions<G, D>(
     name: String,
     sink_id: GlobalId,
-    input: &VecCollection<G, D, Diff>,
+    input: VecCollection<G, D, Diff>,
     sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
     initial_schema: SchemaRef,
 ) -> (
     VecCollection<G, D, Diff>,
-    Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    Stream<G, Infallible>,
-    Stream<G, HealthStatusMessage>,
+    StreamVec<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
+    StreamVec<G, Infallible>,
+    StreamVec<G, HealthStatusMessage>,
     PressOnDropButton,
 )
 where
@@ -590,12 +591,12 @@ where
 
     let hashed_id = sink_id.hashed();
     let is_active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
-    let (_, table_ready_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (_, table_ready_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let (output, output_stream) = builder.new_output();
     let (batch_desc_output, batch_desc_stream) =
-        builder.new_output::<CapacityContainerBuilder<_>>();
+        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let mut input =
-        builder.new_input_for_many(&input.inner, Pipeline, [&output, &batch_desc_output]);
+        builder.new_input_for_many(input.inner, Pipeline, [&output, &batch_desc_output]);
 
     let as_of = sink.as_of.clone();
     let commit_interval = sink
@@ -603,7 +604,8 @@ where
         .expect("the planner should have enforced this")
         .clone();
 
-    let (button, errors): (_, Stream<G, Rc<anyhow::Error>>) = builder.build_fallible(move |caps| {
+    let (button, errors): (_, StreamVec<G, Rc<anyhow::Error>>) =
+        builder.build_fallible(move |caps| {
         Box::pin(async move {
             let [table_ready_capset, data_capset, capset]: &mut [_; 3] = caps.try_into().unwrap();
             *data_capset = CapabilitySet::new();
@@ -988,8 +990,8 @@ struct BoundedDataFileSet {
 fn write_data_files<G>(
     name: String,
     input: VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
-    batch_desc_input: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    table_ready_stream: &Stream<G, Infallible>,
+    batch_desc_input: StreamVec<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
+    table_ready_stream: StreamVec<G, Infallible>,
     as_of: Antichain<Timestamp>,
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -997,8 +999,8 @@ fn write_data_files<G>(
     metrics: Arc<IcebergSinkMetrics>,
     statistics: SinkStatistics,
 ) -> (
-    Stream<G, BoundedDataFile>,
-    Stream<G, HealthStatusMessage>,
+    StreamVec<G, BoundedDataFile>,
+    StreamVec<G, HealthStatusMessage>,
     PressOnDropButton,
 )
 where
@@ -1012,8 +1014,8 @@ where
 
     let mut table_ready_input = builder.new_disconnected_input(table_ready_stream, Pipeline);
     let mut batch_desc_input =
-        builder.new_input_for(&batch_desc_input.broadcast(), Pipeline, &output);
-    let mut input = builder.new_disconnected_input(&input.inner, Pipeline);
+        builder.new_input_for(batch_desc_input.broadcast(), Pipeline, &output);
+    let mut input = builder.new_disconnected_input(input.inner, Pipeline);
 
     let (button, errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {
@@ -1499,9 +1501,9 @@ fn commit_to_iceberg<G>(
     name: String,
     sink_id: GlobalId,
     sink_version: u64,
-    batch_input: &Stream<G, BoundedDataFile>,
-    batch_desc_input: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    table_ready_stream: &Stream<G, Infallible>,
+    batch_input: StreamVec<G, BoundedDataFile>,
+    batch_desc_input: StreamVec<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
+    table_ready_stream: StreamVec<G, Infallible>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -1510,7 +1512,7 @@ fn commit_to_iceberg<G>(
     > + 'static,
     metrics: Arc<IcebergSinkMetrics>,
     statistics: SinkStatistics,
-) -> (Stream<G, HealthStatusMessage>, PressOnDropButton)
+) -> (StreamVec<G, HealthStatusMessage>, PressOnDropButton)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -1829,7 +1831,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
         sink_id: GlobalId,
         input: VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
         _err_collection: VecCollection<G, DataflowError, Diff>,
-    ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>) {
+    ) -> (StreamVec<G, HealthStatusMessage>, Vec<PressOnDropButton>) {
         let mut scope = input.scope();
 
         let write_handle = {
@@ -1888,7 +1890,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
             mint_batch_descriptions(
                 format!("{sink_id}-iceberg-mint"),
                 sink_id,
-                &input,
+                input,
                 sink,
                 connection_for_minter,
                 storage_state.storage_configuration.clone(),
@@ -1899,8 +1901,8 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
         let (datafiles, write_status, write_button) = write_data_files(
             format!("{sink_id}-write-data-files"),
             minted_input,
-            &batch_descriptions,
-            &table_ready,
+            batch_descriptions.clone(),
+            table_ready.clone(),
             sink.as_of.clone(),
             connection_for_writer,
             storage_state.storage_configuration.clone(),
@@ -1914,9 +1916,9 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
             format!("{sink_id}-commit-to-iceberg"),
             sink_id,
             sink.version,
-            &datafiles,
-            &batch_descriptions,
-            &table_ready,
+            datafiles,
+            batch_descriptions,
+            table_ready,
             Rc::clone(&write_frontier),
             connection_for_committer,
             storage_state.storage_configuration.clone(),

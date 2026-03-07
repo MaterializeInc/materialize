@@ -34,14 +34,14 @@ use timely::dataflow::operators::generic::operator::{self, Operator};
 use timely::dataflow::operators::generic::{
     InputHandleCore, OperatorInfo, OutputBuilder, OutputBuilderSession,
 };
-use timely::dataflow::{Scope, Stream, StreamCore};
+use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::progress::{Antichain, Timestamp};
-use timely::{Container, ContainerBuilder, Data, PartialOrder};
+use timely::{Container, ContainerBuilder, PartialOrder};
 
-/// Extension methods for timely [`StreamCore`]s.
+/// Extension methods for timely [`Stream`]s.
 pub trait StreamExt<G, C1>
 where
-    C1: Container + DrainContainer,
+    C1: Container + DrainContainer + Clone + 'static,
     G: Scope,
 {
     /// Like `timely::dataflow::operators::generic::operator::Operator::unary`,
@@ -55,11 +55,11 @@ where
     /// computations and the second output stream represents failed
     /// computations.
     fn unary_fallible<DCB, ECB, B, P>(
-        &self,
+        self,
         pact: P,
         name: &str,
         constructor: B,
-    ) -> (StreamCore<G, DCB::Container>, StreamCore<G, ECB::Container>)
+    ) -> (Stream<G, DCB::Container>, Stream<G, ECB::Container>)
     where
         DCB: ContainerBuilder,
         ECB: ContainerBuilder,
@@ -75,15 +75,15 @@ where
         >,
         P: ParallelizationContract<G::Timestamp, C1>;
 
-    /// Like [`timely::dataflow::operators::map::Map::flat_map`], but `logic`
+    /// Like [`timely::dataflow::operators::vec::Map::flat_map`], but `logic`
     /// is allowed to fail. The first returned stream will contain the
     /// successful applications of `logic`, while the second returned stream
     /// will contain the failed applications.
     fn flat_map_fallible<DCB, ECB, D2, E, I, L>(
-        &self,
+        self,
         name: &str,
         logic: L,
-    ) -> (StreamCore<G, DCB::Container>, StreamCore<G, ECB::Container>)
+    ) -> (Stream<G, DCB::Container>, Stream<G, ECB::Container>)
     where
         DCB: ContainerBuilder + PushInto<D2>,
         ECB: ContainerBuilder + PushInto<E>,
@@ -91,11 +91,11 @@ where
         L: for<'a> FnMut(C1::Item<'a>) -> I + 'static;
 
     /// Block progress of the frontier at `expiration` time
-    fn expire_stream_at(&self, name: &str, expiration: G::Timestamp) -> StreamCore<G, C1>;
+    fn expire_stream_at(self, name: &str, expiration: G::Timestamp) -> Stream<G, C1>;
 }
 
 /// Extension methods for differential [`Collection`]s.
-pub trait CollectionExt<G, D1, R>
+pub trait CollectionExt<G, D1, R>: Sized
 where
     G: Scope,
     R: Semigroup,
@@ -112,7 +112,7 @@ where
     /// * `DCB`: The container builder for the `Ok` output.
     /// * `ECB`: The container builder for the `Err` output.
     fn map_fallible<DCB, ECB, D2, E, L>(
-        &self,
+        self,
         name: &str,
         mut logic: L,
     ) -> (VecCollection<G, D2, R>, VecCollection<G, E, R>)
@@ -121,8 +121,8 @@ where
             + PushInto<(D2, G::Timestamp, R)>,
         ECB: ContainerBuilder<Container = Vec<(E, G::Timestamp, R)>>
             + PushInto<(E, G::Timestamp, R)>,
-        D2: Data,
-        E: Data,
+        D2: Clone + 'static,
+        E: Clone + 'static,
         L: FnMut(D1) -> Result<D2, E> + 'static,
     {
         self.flat_map_fallible::<DCB, ECB, _, _, _, _>(name, move |record| Some(logic(record)))
@@ -133,31 +133,30 @@ where
     /// while the second returned collection will contain the failed
     /// applications.
     fn flat_map_fallible<DCB, ECB, D2, E, I, L>(
-        &self,
+        self,
         name: &str,
         logic: L,
     ) -> (Collection<G, DCB::Container>, Collection<G, ECB::Container>)
     where
         DCB: ContainerBuilder + PushInto<(D2, G::Timestamp, R)>,
         ECB: ContainerBuilder + PushInto<(E, G::Timestamp, R)>,
-        D2: Data,
-        E: Data,
+        D2: Clone + 'static,
+        E: Clone + 'static,
         I: IntoIterator<Item = Result<D2, E>>,
         L: FnMut(D1) -> I + 'static;
 
     /// Block progress of the frontier at `expiration` time.
-    fn expire_collection_at(&self, name: &str, expiration: G::Timestamp)
-    -> VecCollection<G, D1, R>;
+    fn expire_collection_at(self, name: &str, expiration: G::Timestamp) -> VecCollection<G, D1, R>;
 
     /// Replaces each record with another, with a new difference type.
     ///
     /// This method is most commonly used to take records containing aggregatable data (e.g. numbers to be summed)
     /// and move the data into the difference component. This will allow differential dataflow to update in-place.
-    fn explode_one<D2, R2, L>(&self, logic: L) -> VecCollection<G, D2, <R2 as Multiply<R>>::Output>
+    fn explode_one<D2, R2, L>(self, logic: L) -> VecCollection<G, D2, <R2 as Multiply<R>>::Output>
     where
         D2: differential_dataflow::Data,
         R2: Semigroup + Multiply<R>,
-        <R2 as Multiply<R>>::Output: Data + Semigroup,
+        <R2 as Multiply<R>>::Output: Clone + 'static + Semigroup,
         L: FnMut(D1) -> (D2, R2) + 'static,
         G::Timestamp: Lattice;
 
@@ -166,11 +165,11 @@ where
     ///
     /// The exceptions are transformed by `into_err`.
     fn ensure_monotonic<E, IE>(
-        &self,
+        self,
         into_err: IE,
     ) -> (VecCollection<G, D1, R>, VecCollection<G, E, R>)
     where
-        E: Data,
+        E: Clone + 'static,
         IE: Fn(D1, R) -> (E, R) + 'static,
         R: num_traits::sign::Signed;
 
@@ -200,17 +199,17 @@ where
             > + 'static;
 }
 
-impl<G, C1> StreamExt<G, C1> for StreamCore<G, C1>
+impl<G, C1> StreamExt<G, C1> for Stream<G, C1>
 where
-    C1: Container + DrainContainer,
+    C1: Container + DrainContainer + Clone + 'static,
     G: Scope,
 {
     fn unary_fallible<DCB, ECB, B, P>(
-        &self,
+        self,
         pact: P,
         name: &str,
         constructor: B,
-    ) -> (StreamCore<G, DCB::Container>, StreamCore<G, ECB::Container>)
+    ) -> (Stream<G, DCB::Container>, Stream<G, ECB::Container>)
     where
         DCB: ContainerBuilder,
         ECB: ContainerBuilder,
@@ -231,7 +230,7 @@ where
 
         let operator_info = builder.operator_info();
 
-        let mut input = builder.new_input(self, pact);
+        let mut input = builder.new_input(self.clone(), pact);
         let (ok_output, ok_stream) = builder.new_output();
         let mut ok_output = OutputBuilder::from(ok_output);
         let (err_output, err_stream) = builder.new_output();
@@ -258,10 +257,10 @@ where
     // so the simple `|d1| logic(d1)` closure is load-bearing
     #[allow(clippy::redundant_closure)]
     fn flat_map_fallible<DCB, ECB, D2, E, I, L>(
-        &self,
+        self,
         name: &str,
         mut logic: L,
-    ) -> (StreamCore<G, DCB::Container>, StreamCore<G, ECB::Container>)
+    ) -> (Stream<G, DCB::Container>, Stream<G, ECB::Container>)
     where
         DCB: ContainerBuilder + PushInto<D2>,
         ECB: ContainerBuilder + PushInto<E>,
@@ -287,7 +286,7 @@ where
         })
     }
 
-    fn expire_stream_at(&self, name: &str, expiration: G::Timestamp) -> StreamCore<G, C1> {
+    fn expire_stream_at(self, name: &str, expiration: G::Timestamp) -> Stream<G, C1> {
         let name = format!("expire_stream_at({name})");
         self.unary_frontier(Pipeline, &name.clone(), move |cap, _| {
             // Retain a capability for the expiration time, which we'll only drop if the token
@@ -326,8 +325,8 @@ where
 impl<G, D1, R> CollectionExt<G, D1, R> for VecCollection<G, D1, R>
 where
     G: Scope,
-    G::Timestamp: Data,
-    D1: Data,
+    G::Timestamp: Clone + 'static,
+    D1: Clone + 'static,
     R: Semigroup + 'static,
 {
     fn empty(scope: &G) -> VecCollection<G, D1, R> {
@@ -335,15 +334,15 @@ where
     }
 
     fn flat_map_fallible<DCB, ECB, D2, E, I, L>(
-        &self,
+        self,
         name: &str,
         mut logic: L,
     ) -> (Collection<G, DCB::Container>, Collection<G, ECB::Container>)
     where
         DCB: ContainerBuilder + PushInto<(D2, G::Timestamp, R)>,
         ECB: ContainerBuilder + PushInto<(E, G::Timestamp, R)>,
-        D2: Data,
-        E: Data,
+        D2: Clone + 'static,
+        E: Clone + 'static,
         I: IntoIterator<Item = Result<D2, E>>,
         L: FnMut(D1) -> I + 'static,
     {
@@ -358,28 +357,25 @@ where
         (ok_stream.as_collection(), err_stream.as_collection())
     }
 
-    fn expire_collection_at(
-        &self,
-        name: &str,
-        expiration: G::Timestamp,
-    ) -> VecCollection<G, D1, R> {
+    fn expire_collection_at(self, name: &str, expiration: G::Timestamp) -> VecCollection<G, D1, R> {
         self.inner
             .expire_stream_at(name, expiration)
             .as_collection()
     }
 
     fn explode_one<D2, R2, L>(
-        &self,
+        self,
         mut logic: L,
     ) -> VecCollection<G, D2, <R2 as Multiply<R>>::Output>
     where
         D2: differential_dataflow::Data,
         R2: Semigroup + Multiply<R>,
-        <R2 as Multiply<R>>::Output: Data + Semigroup,
+        <R2 as Multiply<R>>::Output: Clone + 'static + Semigroup,
         L: FnMut(D1) -> (D2, R2) + 'static,
         G::Timestamp: Lattice,
     {
         self.inner
+            .clone()
             .unary::<ConsolidatingContainerBuilder<_>, _, _, _>(
                 Pipeline,
                 "ExplodeOne",
@@ -400,11 +396,11 @@ where
     }
 
     fn ensure_monotonic<E, IE>(
-        &self,
+        self,
         into_err: IE,
     ) -> (VecCollection<G, D1, R>, VecCollection<G, E, R>)
     where
-        E: Data,
+        E: Clone + 'static,
         IE: Fn(D1, R) -> (E, R) + 'static,
         R: num_traits::sign::Signed,
     {
@@ -470,7 +466,7 @@ where
                 data.hash(&mut h);
                 h.finish()
             });
-            consolidate_pact::<Ba, _, _>(&self.map(|k| (k, ())).inner, exchange, name)
+            consolidate_pact::<Ba, _, _>(self.map(|k| (k, ())).inner, exchange, name)
                 .unary(Pipeline, "unpack consolidated", |_, _| {
                     |input, output| {
                         input.for_each(|time, data| {
@@ -503,7 +499,7 @@ where
         let exchange =
             Exchange::new(move |update: &((D1, ()), G::Timestamp, R)| (update.0).0.hashed());
 
-        consolidate_pact::<Ba, _, _>(&self.map(|k| (k, ())).inner, exchange, name)
+        consolidate_pact::<Ba, _, _>(self.map(|k| (k, ())).inner, exchange, name)
             .unary(Pipeline, &format!("Unpack {name}"), |_, _| {
                 |input, output| {
                     input.for_each(|time, data| {
@@ -526,10 +522,10 @@ where
 ///
 /// The data are accumulated in place, each held back until their timestamp has completed.
 pub fn consolidate_pact<Ba, P, G>(
-    stream: &StreamCore<G, Ba::Input>,
+    stream: Stream<G, Ba::Input>,
     pact: P,
     name: &str,
-) -> Stream<G, Vec<Ba::Output>>
+) -> StreamVec<G, Vec<Ba::Output>>
 where
     G: Scope,
     Ba: Batcher<Time = G::Timestamp> + 'static,
@@ -537,12 +533,12 @@ where
     Ba::Output: Clone,
     P: ParallelizationContract<G::Timestamp, Ba::Input>,
 {
+    let logger = stream
+        .scope()
+        .logger_for("differential/arrange")
+        .map(Into::into);
     stream.unary_frontier(pact, name, |_cap, info| {
         // Acquire a logger for arrange events.
-        let logger = stream
-            .scope()
-            .logger_for("differential/arrange")
-            .map(Into::into);
 
         let mut batcher = Ba::new(logger, info.global_id);
         // Capabilities for the lower envelope of updates in `batcher`.
@@ -551,7 +547,7 @@ where
 
         move |(input, frontier), output| {
             input.for_each(|cap, data| {
-                capabilities.insert(cap.retain());
+                capabilities.insert(cap.retain(0));
                 batcher.push_container(data);
             });
 
@@ -672,25 +668,24 @@ pub trait ConcatenateFlatten<G: Scope, C: Container + DrainContainer> {
     ///          .inspect(|x| println!("seen: {:?}", x));
     /// });
     /// ```
-    fn concatenate_flatten<I, CB>(&self, sources: I) -> StreamCore<G, CB::Container>
+    fn concatenate_flatten<I, CB>(&self, sources: I) -> Stream<G, CB::Container>
     where
-        I: IntoIterator<Item = StreamCore<G, C>>,
+        I: IntoIterator<Item = Stream<G, C>>,
         CB: ContainerBuilder + for<'a> PushInto<C::Item<'a>>;
 }
 
-impl<G, C> ConcatenateFlatten<G, C> for StreamCore<G, C>
+impl<G, C> ConcatenateFlatten<G, C> for Stream<G, C>
 where
     G: Scope,
-    C: Container + DrainContainer,
+    C: Container + DrainContainer + Clone + 'static,
 {
-    fn concatenate_flatten<I, CB>(&self, sources: I) -> StreamCore<G, CB::Container>
+    fn concatenate_flatten<I, CB>(&self, sources: I) -> Stream<G, CB::Container>
     where
-        I: IntoIterator<Item = StreamCore<G, C>>,
+        I: IntoIterator<Item = Stream<G, C>>,
         CB: ContainerBuilder + for<'a> PushInto<C::Item<'a>>,
     {
-        let clone = self.clone();
         self.scope()
-            .concatenate_flatten::<_, CB>(Some(clone).into_iter().chain(sources))
+            .concatenate_flatten::<_, CB>(Some(Clone::clone(self)).into_iter().chain(sources))
     }
 }
 
@@ -699,9 +694,9 @@ where
     G: Scope,
     C: Container + DrainContainer,
 {
-    fn concatenate_flatten<I, CB>(&self, sources: I) -> StreamCore<G, CB::Container>
+    fn concatenate_flatten<I, CB>(&self, sources: I) -> Stream<G, CB::Container>
     where
-        I: IntoIterator<Item = StreamCore<G, C>>,
+        I: IntoIterator<Item = Stream<G, C>>,
         CB: ContainerBuilder + for<'a> PushInto<C::Item<'a>>,
     {
         let mut builder = OperatorBuilder::new("ConcatenateFlatten".to_string(), self.clone());
@@ -710,7 +705,7 @@ where
         // create new input handles for each input stream.
         let mut handles = sources
             .into_iter()
-            .map(|s| builder.new_input(&s, Pipeline))
+            .map(|s| builder.new_input(s, Pipeline))
             .collect::<Vec<_>>();
 
         // create one output handle for the concatenated results.

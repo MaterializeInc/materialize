@@ -28,7 +28,7 @@ use timely::dataflow::operators::InputCapability;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator::empty;
 use timely::dataflow::operators::generic::{OutputBuilder, Session};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::compute::{ArrangementHeapSizeOperatorDrop, ComputeEvent};
@@ -78,7 +78,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         // logging streams.
         let mut demux =
             OperatorBuilder::new("Differential Logging Demux".to_string(), scope.clone());
-        let mut input = demux.new_input(&logs, Pipeline);
+        let mut input = demux.new_input(logs, Pipeline);
         let (batches_out, batches) = demux.new_output();
         let (records_out, records) = demux.new_output();
         let (sharing_out, sharing) = demux.new_output();
@@ -133,7 +133,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
 
         // We're lucky and the differential logs all have the same stream format, so just implement
         // the call once.
-        let stream_to_collection = |input: &Stream<_, ((usize, ()), Timestamp, Diff)>, log| {
+        let stream_to_collection = |input: StreamVec<_, ((usize, ()), Timestamp, Diff)>, log| {
             let worker_id = scope.index();
             consolidate_and_pack::<_, KeyBatcher<_, _, _>, ColumnBuilder<_>, _, _>(
                 input,
@@ -151,13 +151,13 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         };
 
         // Encode the contents of each logging stream into its expected `Row` format.
-        let arrangement_batches = stream_to_collection(&batches, ArrangementBatches);
-        let arrangement_records = stream_to_collection(&records, ArrangementRecords);
-        let sharing = stream_to_collection(&sharing, Sharing);
-        let batcher_records = stream_to_collection(&batcher_records, BatcherRecords);
-        let batcher_size = stream_to_collection(&batcher_size, BatcherSize);
-        let batcher_capacity = stream_to_collection(&batcher_capacity, BatcherCapacity);
-        let batcher_allocations = stream_to_collection(&batcher_allocations, BatcherAllocations);
+        let arrangement_batches = stream_to_collection(batches, ArrangementBatches);
+        let arrangement_records = stream_to_collection(records, ArrangementRecords);
+        let sharing = stream_to_collection(sharing, Sharing);
+        let batcher_records = stream_to_collection(batcher_records, BatcherRecords);
+        let batcher_size = stream_to_collection(batcher_size, BatcherSize);
+        let batcher_capacity = stream_to_collection(batcher_capacity, BatcherCapacity);
+        let batcher_allocations = stream_to_collection(batcher_allocations, BatcherAllocations);
 
         use DifferentialLog::*;
         let logs = [

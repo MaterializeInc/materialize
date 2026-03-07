@@ -37,7 +37,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
 use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
@@ -277,12 +277,12 @@ where
         };
         match &self {
             ArrangementFlavor::Local(oks, errs) => (
-                oks.as_collection(logic),
-                errs.as_collection(|k, &()| k.clone()),
+                oks.clone().as_collection(logic),
+                errs.clone().as_collection(|k, &()| k.clone()),
             ),
             ArrangementFlavor::Trace(_, oks, errs) => (
-                oks.as_collection(logic),
-                errs.as_collection(|k, &()| k.clone()),
+                oks.clone().as_collection(logic),
+                errs.clone().as_collection(|k, &()| k.clone()),
             ),
         }
     }
@@ -304,7 +304,7 @@ where
         key: Option<&Row>,
         max_demand: usize,
         mut logic: L,
-    ) -> (Stream<S, I::Item>, VecCollection<S, DataflowError, Diff>)
+    ) -> (StreamVec<S, I::Item>, VecCollection<S, DataflowError, Diff>)
     where
         I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
         D: Data,
@@ -326,13 +326,13 @@ where
 
         match &self {
             ArrangementFlavor::Local(oks, errs) => {
-                let oks = CollectionBundle::<S, T>::flat_map_core(oks, key, logic, refuel);
-                let errs = errs.as_collection(|k, &()| k.clone());
+                let oks = CollectionBundle::<S, T>::flat_map_core(oks.clone(), key, logic, refuel);
+                let errs = errs.clone().as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
             ArrangementFlavor::Trace(_, oks, errs) => {
-                let oks = CollectionBundle::<S, T>::flat_map_core(oks, key, logic, refuel);
-                let errs = errs.as_collection(|k, &()| k.clone());
+                let oks = CollectionBundle::<S, T>::flat_map_core(oks.clone(), key, logic, refuel);
+                let errs = errs.clone().as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
         }
@@ -357,12 +357,15 @@ where
         region: &Child<'a, S, S::Timestamp>,
     ) -> ArrangementFlavor<Child<'a, S, S::Timestamp>, T> {
         match self {
-            ArrangementFlavor::Local(oks, errs) => {
-                ArrangementFlavor::Local(oks.enter_region(region), errs.enter_region(region))
-            }
-            ArrangementFlavor::Trace(gid, oks, errs) => {
-                ArrangementFlavor::Trace(*gid, oks.enter_region(region), errs.enter_region(region))
-            }
+            ArrangementFlavor::Local(oks, errs) => ArrangementFlavor::Local(
+                oks.clone().enter_region(region),
+                errs.clone().enter_region(region),
+            ),
+            ArrangementFlavor::Trace(gid, oks, errs) => ArrangementFlavor::Trace(
+                *gid,
+                oks.clone().enter_region(region),
+                errs.clone().enter_region(region),
+            ),
         }
     }
 }
@@ -375,11 +378,13 @@ where
     pub fn leave_region(&self) -> ArrangementFlavor<S, T> {
         match self {
             ArrangementFlavor::Local(oks, errs) => {
-                ArrangementFlavor::Local(oks.leave_region(), errs.leave_region())
+                ArrangementFlavor::Local(oks.clone().leave_region(), errs.clone().leave_region())
             }
-            ArrangementFlavor::Trace(gid, oks, errs) => {
-                ArrangementFlavor::Trace(*gid, oks.leave_region(), errs.leave_region())
-            }
+            ArrangementFlavor::Trace(gid, oks, errs) => ArrangementFlavor::Trace(
+                *gid,
+                oks.clone().leave_region(),
+                errs.clone().leave_region(),
+            ),
         }
     }
 }
@@ -461,10 +466,12 @@ where
         region: &Child<'a, S, S::Timestamp>,
     ) -> CollectionBundle<Child<'a, S, S::Timestamp>, T> {
         CollectionBundle {
-            collection: self
-                .collection
-                .as_ref()
-                .map(|(oks, errs)| (oks.enter_region(region), errs.enter_region(region))),
+            collection: self.collection.as_ref().map(|(oks, errs)| {
+                (
+                    oks.clone().enter_region(region),
+                    errs.clone().enter_region(region),
+                )
+            }),
             arranged: self
                 .arranged
                 .iter()
@@ -485,7 +492,7 @@ where
             collection: self
                 .collection
                 .as_ref()
-                .map(|(oks, errs)| (oks.leave_region(), errs.leave_region())),
+                .map(|(oks, errs)| (oks.clone().leave_region(), errs.clone().leave_region())),
             arranged: self
                 .arranged
                 .iter()
@@ -568,7 +575,7 @@ where
         key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
         max_demand: usize,
         mut logic: L,
-    ) -> (Stream<S, I::Item>, VecCollection<S, DataflowError, Diff>)
+    ) -> (StreamVec<S, I::Item>, VecCollection<S, DataflowError, Diff>)
     where
         I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
         D: Data,
@@ -582,7 +589,7 @@ where
                 .expect("Should have ensured during planning that this arrangement exists.")
                 .flat_map(val.as_ref(), max_demand, logic)
         } else {
-            use timely::dataflow::operators::Map;
+            use timely::dataflow::operators::vec::Map;
             let (oks, errs) = self
                 .collection
                 .clone()
@@ -603,11 +610,11 @@ where
     /// The function presents the contents of the trace as `(key, value, time, delta)` tuples,
     /// where key and value are potentially specialized, but convertible into rows.
     fn flat_map_core<Tr, D, I, L>(
-        trace: &Arranged<S, Tr>,
+        trace: Arranged<S, Tr>,
         key: Option<&Tr::KeyOwn>,
         mut logic: L,
         refuel: usize,
-    ) -> Stream<S, I::Item>
+    ) -> StreamVec<S, I::Item>
     where
         Tr: for<'a> TraceReader<
                 Key<'a>: ToDatumIter,
@@ -622,6 +629,7 @@ where
         L: FnMut(Tr::Key<'_>, Tr::Val<'_>, S::Timestamp, mz_repr::Diff) -> I + 'static,
     {
         use differential_dataflow::consolidation::ConsolidatingContainerBuilder as CB;
+        let scope = trace.stream.scope();
 
         let mut key_con = Tr::KeyContainer::with_capacity(1);
         if let Some(key) = &key {
@@ -634,14 +642,14 @@ where
             .stream
             .unary::<CB<_>, _, _, _>(Pipeline, &name, move |_, info| {
                 // Acquire an activator to reschedule the operator when it has unfinished work.
-                let activator = trace.stream.scope().activator_for(info.address);
+                let activator = scope.activator_for(info.address);
                 // Maintain a list of work to do, cursor to navigate and process.
                 let mut todo = std::collections::VecDeque::new();
                 move |input, output| {
                     let key = key_con.get(0);
                     // First, dequeue all batches.
                     input.for_each(|time, data| {
-                        let capability = time.retain();
+                        let capability = time.retain(0);
                         for batch in data.iter() {
                             // enqueue a capability, cursor, and batch.
                             todo.push_back(PendingWork::new(
@@ -776,7 +784,7 @@ where
                 |x| x,
             );
 
-        (oks, errors.concat(&errs))
+        (oks, errors.concat(errs))
     }
     pub fn ensure_collections(
         mut self,
@@ -829,7 +837,7 @@ where
                     .expect("Collection constructed above");
                 let (oks, errs_keyed, passthrough) =
                     Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
-                let errs_concat: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
+                let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
                 self.collection = Some((passthrough, errs));
                 let errs =
                     errs_concat.mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
@@ -874,7 +882,7 @@ where
         let mut err_output = OutputBuilder::from(err_output);
         let (passthrough_output, passthrough_stream) = builder.new_output();
         let mut passthrough_output = OutputBuilder::from(passthrough_output);
-        let mut input = builder.new_input(&oks.inner, Pipeline);
+        let mut input = builder.new_input(oks.inner, Pipeline);
         builder.set_notify(false);
         builder.build(move |_capabilities| {
             let mut key_buf = Row::default();

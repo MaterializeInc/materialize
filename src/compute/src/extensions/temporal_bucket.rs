@@ -22,10 +22,10 @@ use mz_timely_util::temporal::{Bucket, BucketChain, BucketTimestamp};
 use timely::container::PushInto;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
-use timely::dataflow::{Scope, StreamCore};
+use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, PathSummary, Timestamp};
-use timely::{ContainerBuilder, Data, ExchangeData, PartialOrder};
+use timely::{ContainerBuilder, ExchangeData, PartialOrder};
 
 use crate::typedefs::MzData;
 
@@ -37,26 +37,26 @@ pub trait TemporalBucketing<G: Scope, O> {
     /// not in advance of the frontier. Data that is within `threshold` distance of the input
     /// frontier or the `as_of` is passed through without being stored in the chain.
     fn bucket<CB>(
-        &self,
+        self,
         as_of: Antichain<G::Timestamp>,
         threshold: <G::Timestamp as Timestamp>::Summary,
-    ) -> StreamCore<G, CB::Container>
+    ) -> Stream<G, CB::Container>
     where
         CB: ContainerBuilder + PushInto<O>;
 }
 
 /// Implementation for streams in scopes where timestamps define a total order.
 impl<G, D> TemporalBucketing<G, (D, G::Timestamp, mz_repr::Diff)>
-    for StreamCore<G, Vec<(D, G::Timestamp, mz_repr::Diff)>>
+    for StreamVec<G, (D, G::Timestamp, mz_repr::Diff)>
 where
     G: Scope<Timestamp: ExchangeData + MzData + BucketTimestamp + TotalOrder + Lattice>,
-    D: ExchangeData + MzData + Ord + std::fmt::Debug + Hashable,
+    D: ExchangeData + MzData + Ord + Clone + std::fmt::Debug + Hashable,
 {
     fn bucket<CB>(
-        &self,
+        self,
         as_of: Antichain<G::Timestamp>,
         threshold: <G::Timestamp as Timestamp>::Summary,
-    ) -> StreamCore<G, CB::Container>
+    ) -> Stream<G, CB::Container>
     where
         CB: ContainerBuilder + PushInto<(D, G::Timestamp, mz_repr::Diff)>,
     {
@@ -201,8 +201,8 @@ where
 
 impl<D, T, R> Bucket for MergeBatcherWrapper<D, T, R>
 where
-    D: MzData + Ord + Data,
-    T: MzData + Ord + PartialOrder + Data + BucketTimestamp,
+    D: MzData + Ord + Clone + 'static,
+    T: MzData + Ord + PartialOrder + Clone + 'static + BucketTimestamp,
     R: MzData + Semigroup + Default,
 {
     type Timestamp = T;

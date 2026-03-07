@@ -79,7 +79,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         // Build a demux operator that splits the replayed event stream up into the separate
         // logging streams.
         let mut demux = OperatorBuilder::new("Timely Logging Demux".to_string(), scope.clone());
-        let mut input = demux.new_input(&logs, Pipeline);
+        let mut input = demux.new_input(logs, Pipeline);
         let (operates_out, operates) = demux.new_output();
         let mut operates_out = OutputBuilder::from(operates_out);
         let (channels_out, channels) = demux.new_output();
@@ -159,7 +159,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         // updates that reach `Row` encoding.
 
         let operates = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
-            &operates,
+            operates,
             TimelyLog::Operates,
             move |data, packer, session| {
                 for ((id, name), time, diff) in data.iter() {
@@ -208,7 +208,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         type KB<K, T, D> = KeyBatcher<K, T, D>;
 
         let addresses = consolidate_and_pack::<_, KVB<_, _, _, _>, ColumnBuilder<_>, _, _>(
-            &addresses,
+            addresses,
             TimelyLog::Addresses,
             move |data, packer, session| {
                 for ((id, address), time, diff) in data.iter() {
@@ -227,7 +227,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         );
 
         let parks = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
-            &parks,
+            parks,
             TimelyLog::Parks,
             move |data, packer, session| {
                 for ((datum, ()), time, diff) in data.iter() {
@@ -245,7 +245,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         );
 
         let batches_sent = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
-            &batches_sent,
+            batches_sent,
             TimelyLog::BatchesSent,
             move |data, packer, session| {
                 for ((datum, ()), time, diff) in data.iter() {
@@ -260,7 +260,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         );
 
         let batches_received = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
-            &batches_received,
+            batches_received,
             TimelyLog::BatchesReceived,
             move |data, packer, session| {
                 for ((datum, ()), time, diff) in data.iter() {
@@ -275,7 +275,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         );
 
         let messages_sent = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
-            &messages_sent,
+            messages_sent,
             TimelyLog::MessagesSent,
             move |data, packer, session| {
                 for ((datum, ()), time, diff) in data.iter() {
@@ -290,7 +290,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         );
 
         let messages_received = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
-            &messages_received,
+            messages_received,
             TimelyLog::MessagesReceived,
             move |data, packer, session| {
                 for ((datum, ()), time, diff) in data.iter() {
@@ -305,7 +305,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         );
 
         let elapsed = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
-            &schedules_duration,
+            schedules_duration,
             TimelyLog::Elapsed,
             move |data, packer, session| {
                 for ((operator, ()), time, diff) in data.iter() {
@@ -319,7 +319,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         );
 
         let histogram = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
-            &schedules_histogram,
+            schedules_histogram,
             TimelyLog::Histogram,
             move |data, packer, session| {
                 for ((datum, ()), time, diff) in data.iter() {

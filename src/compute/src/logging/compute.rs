@@ -25,13 +25,12 @@ use mz_repr::{Datum, Diff, GlobalId, Row, RowRef, Timestamp};
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use mz_timely_util::replay::MzReplay;
-use timely::Data;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator::empty;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::scheduling::Scheduler;
 use tracing::error;
 use uuid::Uuid;
@@ -327,7 +326,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         // Build a demux operator that splits the replayed event stream up into the separate
         // logging streams.
         let mut demux = OperatorBuilder::new("Compute Logging Demux".to_string(), scope.clone());
-        let mut input = demux.new_input(&logs, Pipeline);
+        let mut input = demux.new_input(logs, Pipeline);
         let (export_out, export) = demux.new_output();
         let mut export_out = OutputBuilder::from(export_out);
         let (frontier_out, frontier) = demux.new_output();
@@ -1431,7 +1430,7 @@ pub(crate) trait LogDataflowErrors {
 impl<G, D> LogDataflowErrors for VecCollection<G, D, Diff>
 where
     G: Scope,
-    D: Data,
+    D: Clone + 'static,
 {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
         self.inner
@@ -1449,7 +1448,7 @@ where
     }
 }
 
-impl<G, B> LogDataflowErrors for Stream<G, B>
+impl<G, B> LogDataflowErrors for StreamVec<G, B>
 where
     G: Scope,
     for<'a> B: BatchReader<DiffGat<'a> = &'a Diff> + Clone + 'static,

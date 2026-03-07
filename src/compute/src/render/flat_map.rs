@@ -65,11 +65,7 @@ where
                 let mut budget = budget;
 
                 input.for_each(|cap, data| {
-                    queue.push_back((
-                        cap.delayed_for_output(cap.time(), 0),
-                        cap.retain_for_output(1),
-                        std::mem::take(data),
-                    ))
+                    queue.push_back((cap.retain(0), cap.retain(1), std::mem::take(data)))
                 });
 
                 while let Some((ok_cap, err_cap, data)) = queue.pop_front() {
@@ -131,7 +127,7 @@ where
         use differential_dataflow::AsCollection;
         let ok_collection = oks.as_collection();
         let new_err_collection = errs.as_collection();
-        let err_collection = err_collection.concat(&new_err_collection);
+        let err_collection = err_collection.concat(new_err_collection);
         CollectionBundle::from_collections(ok_collection, err_collection)
     }
 }

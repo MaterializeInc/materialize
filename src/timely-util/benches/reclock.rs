@@ -22,8 +22,9 @@ use mz_timely_util::reclock::reclock;
 use timely::communication::allocator::Thread;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::capture::Event;
-use timely::dataflow::operators::unordered_input::UnorderedHandle;
-use timely::dataflow::operators::{ActivateCapability, Capture, UnorderedInput};
+use timely::dataflow::operators::vec::UnorderedInput;
+use timely::dataflow::operators::vec::unordered_input::UnorderedHandle;
+use timely::dataflow::operators::{ActivateCapability, Capture};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 use timely::worker::Worker;
@@ -58,7 +59,7 @@ where
             let (bindings, data_pusher, reclocked) =
                 scope.scoped::<IntoTime, _, _>("IntoScope", move |scope| {
                     let (binding_handle, binding_collection) = scope.new_collection();
-                    let (data_pusher, reclocked_collection) = reclock(&binding_collection, as_of);
+                    let (data_pusher, reclocked_collection) = reclock(binding_collection, as_of);
                     let reclocked_capture = reclocked_collection.inner.capture();
                     (binding_handle, data_pusher, reclocked_capture)
                 });

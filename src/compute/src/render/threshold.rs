@@ -31,7 +31,7 @@ use crate::typedefs::{ErrBatcher, ErrBuilder, MzData, MzTimestamp};
 
 /// Shared function to compute an arrangement of values matching `logic`.
 fn threshold_arrangement<G, T1, Bu2, T2, L>(
-    arrangement: &Arranged<G, T1>,
+    arrangement: Arranged<G, T1>,
     name: &str,
     logic: L,
 ) -> Arranged<G, TraceAgent<T2>>
@@ -87,7 +87,7 @@ where
     match arrangement {
         ArrangementFlavor::Local(oks, errs) => {
             let oks = threshold_arrangement::<_, _, RowRowBuilder<_, _>, _, _>(
-                &oks,
+                oks,
                 "Threshold local",
                 |count| count.is_positive(),
             );
@@ -95,7 +95,7 @@ where
         }
         ArrangementFlavor::Trace(_, oks, errs) => {
             let oks = threshold_arrangement::<_, _, RowRowBuilder<_, _>, _, _>(
-                &oks,
+                oks,
                 "Threshold trace",
                 |count| count.is_positive(),
             );

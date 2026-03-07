@@ -132,7 +132,7 @@ where
                     Ok(row)
                 });
             ok_collection = oks;
-            err_collection = err_collection.concat(&null_errs);
+            err_collection = err_collection.concat(null_errs);
         }
 
         let region_name = match sink.connection {

@@ -39,7 +39,7 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
 use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp, timestamp::Refines};
@@ -156,7 +156,7 @@ pub fn shard_source<'g, K, V, T, D, DT, G, C>(
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
 ) -> (
-    Stream<Child<'g, G, T>, FetchedBlob<K, V, G::Timestamp, D>>,
+    StreamVec<Child<'g, G, T>, FetchedBlob<K, V, G::Timestamp, D>>,
     Vec<PressOnDropButton>,
 )
 where
@@ -169,10 +169,10 @@ where
     T: Refines<G::Timestamp>,
     DT: FnOnce(
         Child<'g, G, T>,
-        &Stream<Child<'g, G, T>, (usize, ExchangeableBatchPart<G::Timestamp>)>,
+        StreamVec<Child<'g, G, T>, (usize, ExchangeableBatchPart<G::Timestamp>)>,
         usize,
     ) -> (
-        Stream<Child<'g, G, T>, (usize, ExchangeableBatchPart<G::Timestamp>)>,
+        StreamVec<Child<'g, G, T>, (usize, ExchangeableBatchPart<G::Timestamp>)>,
         Vec<PressOnDropButton>,
     ),
     C: Future<Output = PersistClient> + Send + 'static,
@@ -228,7 +228,7 @@ where
     let descs = descs.enter(scope);
     let descs = match desc_transformer {
         Some(desc_transformer) => {
-            let (descs, extra_tokens) = desc_transformer(scope.clone(), &descs, chosen_worker);
+            let (descs, extra_tokens) = desc_transformer(scope.clone(), descs, chosen_worker);
             tokens.extend(extra_tokens);
             descs
         }
@@ -236,7 +236,7 @@ where
     };
 
     let (parts, completed_fetches_stream, fetch_token) = shard_source_fetch(
-        &descs,
+        descs,
         name,
         client(),
         shard_id,
@@ -300,7 +300,7 @@ pub(crate) fn shard_source_descs<K, V, D, G>(
     as_of: Option<Antichain<G::Timestamp>>,
     snapshot_mode: SnapshotMode,
     until: Antichain<G::Timestamp>,
-    completed_fetches_stream: Stream<G, Infallible>,
+    completed_fetches_stream: StreamVec<G, Infallible>,
     chosen_worker: usize,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
@@ -310,7 +310,7 @@ pub(crate) fn shard_source_descs<K, V, D, G>(
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
 ) -> (
-    Stream<G, (usize, ExchangeableBatchPart<G::Timestamp>)>,
+    StreamVec<G, (usize, ExchangeableBatchPart<G::Timestamp>)>,
     PressOnDropButton,
 )
 where
@@ -338,7 +338,7 @@ where
         format!("shard_source_descs_return({})", name),
         scope.clone(),
     );
-    let mut completed_fetches = builder.new_disconnected_input(&completed_fetches_stream, Pipeline);
+    let mut completed_fetches = builder.new_disconnected_input(completed_fetches_stream, Pipeline);
     // This operator doesn't need to use a token because it naturally exits when its input
     // frontier reaches the empty antichain.
     builder.build(move |_caps| async move {
@@ -584,7 +584,7 @@ where
 }
 
 pub(crate) fn shard_source_fetch<K, V, T, D, G>(
-    descs: &Stream<G, (usize, ExchangeableBatchPart<T>)>,
+    descs: StreamVec<G, (usize, ExchangeableBatchPart<T>)>,
     name: &str,
     client: impl Future<Output = PersistClient> + Send + 'static,
     shard_id: ShardId,
@@ -593,8 +593,8 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G>(
     is_transient: bool,
     error_handler: ErrorHandler,
 ) -> (
-    Stream<G, FetchedBlob<K, V, T, D>>,
-    Stream<G, Infallible>,
+    StreamVec<G, FetchedBlob<K, V, T, D>>,
+    StreamVec<G, Infallible>,
     PressOnDropButton,
 )
 where
@@ -696,6 +696,7 @@ mod tests {
     use timely::dataflow::Scope;
     use timely::dataflow::operators::Leave;
     use timely::dataflow::operators::Probe;
+    use timely::dataflow::operators::probe::Handle as ProbeHandle;
     use timely::progress::Antichain;
 
     use crate::operators::shard_source::shard_source;
@@ -746,7 +747,7 @@ mod tests {
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
                 let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
-                    let transformer = move |_, descs: &Stream<_, _>, _| (descs.clone(), vec![]);
+                    let transformer = move |_, descs: StreamVec<_, _>, _| (descs.clone(), vec![]);
                     let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
                         scope,
                         "test_source",
@@ -770,7 +771,8 @@ mod tests {
                     (stream.leave(), tokens)
                 });
 
-                let probe = stream.probe();
+                let probe = ProbeHandle::new();
+                let _stream = stream.probe_with(&probe);
 
                 (probe, token)
             });
@@ -815,7 +817,7 @@ mod tests {
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
                 let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
-                    let transformer = move |_, descs: &Stream<_, _>, _| (descs.clone(), vec![]);
+                    let transformer = move |_, descs: StreamVec<_, _>, _| (descs.clone(), vec![]);
                     let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
                         scope,
                         "test_source",
@@ -839,7 +841,8 @@ mod tests {
                     (stream.leave(), tokens)
                 });
 
-                let probe = stream.probe();
+                let probe = ProbeHandle::new();
+                let _stream = stream.probe_with(&probe);
 
                 (probe, token)
             });

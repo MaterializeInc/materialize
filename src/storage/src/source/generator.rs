@@ -33,7 +33,7 @@ use mz_timely_util::containers::stack::AccountedStackBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::Partition;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 use tokio::time::{Instant, interval_at};
 
@@ -143,8 +143,8 @@ impl GeneratorKind {
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, Infallible>,
-        Stream<G, HealthStatusMessage>,
+        StreamVec<G, Infallible>,
+        StreamVec<G, HealthStatusMessage>,
         Vec<PressOnDropButton>,
     ) {
         // figure out which output types from the generator belong to which output indexes
@@ -211,8 +211,8 @@ impl SourceRender for LoadGeneratorSourceConnection {
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, HealthStatusMessage>,
-        Stream<G, Probe<MzOffset>>,
+        StreamVec<G, HealthStatusMessage>,
+        StreamVec<G, Probe<MzOffset>>,
         Vec<PressOnDropButton>,
     ) {
         let generator_kind = GeneratorKind::new(
@@ -226,7 +226,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
 
         let probe_stream = synthesize_probes(
             config.id,
-            &progress,
+            progress,
             config.timestamp_interval,
             config.now_fn.clone(),
         );
@@ -246,8 +246,8 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
 ) -> (
     BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-    Stream<G, Infallible>,
-    Stream<G, HealthStatusMessage>,
+    StreamVec<G, Infallible>,
+    StreamVec<G, HealthStatusMessage>,
     Vec<PressOnDropButton>,
 ) {
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
@@ -468,10 +468,10 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
 /// system.
 fn synthesize_probes<G>(
     source_id: GlobalId,
-    progress: &Stream<G, Infallible>,
+    progress: StreamVec<G, Infallible>,
     interval: Duration,
     now_fn: NowFn,
-) -> Stream<G, Probe<G::Timestamp>>
+) -> StreamVec<G, Probe<G::Timestamp>>
 where
     G: Scope,
 {

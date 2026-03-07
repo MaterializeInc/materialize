@@ -199,7 +199,7 @@ use timely::progress::{Antichain, Timestamp};
 /// used with timely's capture facilities to connect a collection from a foreign scope to this
 /// operator.
 pub fn reclock<G, D, FromTime, IntoTime, R>(
-    remap_collection: &VecCollection<G, FromTime, Overflowing<i64>>,
+    remap_collection: VecCollection<G, FromTime, Overflowing<i64>>,
     as_of: Antichain<G::Timestamp>,
 ) -> (
     Box<dyn Push<Event<FromTime, Vec<(D, FromTime, R)>>>>,
@@ -223,7 +223,7 @@ where
     let (pusher, mut events) =
         scope.pipeline::<Event<FromTime, Vec<(D, FromTime, R)>>>(channel_id, info.address);
 
-    let mut remap_input = builder.new_input(&remap_collection.inner, Pipeline);
+    let mut remap_input = builder.new_input(remap_collection.inner, Pipeline);
     let (output, reclocked) = builder.new_output();
     let mut output = OutputBuilder::from(output);
 
@@ -588,8 +588,9 @@ mod test {
     use serde::{Deserialize, Serialize};
     use timely::communication::allocator::Thread;
     use timely::dataflow::operators::capture::{Event, Extract};
-    use timely::dataflow::operators::unordered_input::UnorderedHandle;
-    use timely::dataflow::operators::{ActivateCapability, Capture, UnorderedInput};
+    use timely::dataflow::operators::vec::UnorderedInput;
+    use timely::dataflow::operators::vec::unordered_input::UnorderedHandle;
+    use timely::dataflow::operators::{ActivateCapability, Capture};
     use timely::progress::PathSummary;
     use timely::progress::timestamp::Refines;
     use timely::worker::Worker;
@@ -640,13 +641,13 @@ mod test {
                     scope.scoped::<IntoTime, _, _>("IntoScope", move |scope| {
                         let (binding_handle, binding_collection) = scope.new_collection();
                         let (data_pusher, reclocked_collection) =
-                            reclock(&binding_collection, as_of);
+                            reclock(binding_collection, as_of);
                         let reclocked_capture = reclocked_collection.inner.capture();
                         (binding_handle, data_pusher, reclocked_capture)
                     });
 
                 let (data, data_cap) = scope.scoped::<FromTime, _, _>("FromScope", move |scope| {
-                    let ((handle, cap), data) = scope.new_unordered_input();
+                    let ((handle, cap), data) = scope.new_unordered_input::<(D, FromTime, Diff)>();
                     data.capture_into(PusherCapture(data_pusher));
                     (handle, cap)
                 });

@@ -20,7 +20,7 @@ use differential_dataflow::{Collection, Data, ExchangeData, Hashable, VecCollect
 use timely::Container;
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
-use timely::dataflow::{Scope, ScopeParent, StreamCore};
+use timely::dataflow::{Scope, ScopeParent, Stream};
 
 use crate::logging::compute::{
     ArrangementHeapAllocations, ArrangementHeapCapacity, ArrangementHeapSize,
@@ -40,7 +40,7 @@ where
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times marked completed in the output stream, and probing this stream
     /// is the correct way to determine that times in the shared trace are committed.
-    fn mz_arrange<Ba, Bu, Tr>(&self, name: &str) -> Arranged<Self::Scope, TraceAgent<Tr>>
+    fn mz_arrange<Ba, Bu, Tr>(self, name: &str) -> Arranged<Self::Scope, TraceAgent<Tr>>
     where
         Ba: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Bu: Builder<
@@ -70,7 +70,7 @@ where
     /// This trace is current for all times marked completed in the output stream, and probing this stream
     /// is the correct way to determine that times in the shared trace are committed.
     fn mz_arrange_core<P, Ba, Bu, Tr>(
-        &self,
+        self,
         pact: P,
         name: &str,
     ) -> Arranged<Self::Scope, TraceAgent<Tr>>
@@ -88,7 +88,7 @@ where
         Arranged<Self::Scope, TraceAgent<Tr>>: ArrangementSize;
 }
 
-impl<G, C> MzArrangeCore for StreamCore<G, C>
+impl<G, C> MzArrangeCore for Stream<G, C>
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -97,7 +97,7 @@ where
     type Scope = G;
     type Input = C;
 
-    fn mz_arrange_core<P, Ba, Bu, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange_core<P, Ba, Bu, Tr>(self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         P: ParallelizationContract<G::Timestamp, Self::Input>,
         Ba: Batcher<Input = Self::Input, Time = G::Timestamp> + 'static,
@@ -120,7 +120,7 @@ where
     V: ExchangeData,
     R: ExchangeData,
 {
-    fn mz_arrange<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange<Ba, Bu, Tr>(self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         Ba: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Bu: Builder<
@@ -147,7 +147,7 @@ where
     type Scope = G;
     type Input = C;
 
-    fn mz_arrange_core<P, Ba, Bu, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange_core<P, Ba, Bu, Tr>(self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         P: ParallelizationContract<G::Timestamp, Self::Input>,
         Ba: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
@@ -167,7 +167,7 @@ where
 /// A specialized collection where data only has a key, but no associated value.
 ///
 /// Created by calling `collection.into()`.
-pub struct KeyCollection<G: Scope, K, R = usize>(VecCollection<G, K, R>);
+pub struct KeyCollection<G: Scope, K: 'static, R: 'static = usize>(VecCollection<G, K, R>);
 
 impl<G: Scope, K, R: Semigroup> From<VecCollection<G, K, R>> for KeyCollection<G, K, R> {
     fn from(value: VecCollection<G, K, R>) -> Self {
@@ -182,7 +182,7 @@ where
     G::Timestamp: Lattice,
     R: ExchangeData,
 {
-    fn mz_arrange<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange<Ba, Bu, Tr>(self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         Ba: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Bu: Builder<
@@ -201,14 +201,14 @@ where
 impl<G, K, R> MzArrangeCore for KeyCollection<G, K, R>
 where
     G: Scope,
-    K: Data,
+    K: Clone + 'static,
     G::Timestamp: Lattice,
-    R: Data,
+    R: Clone + 'static,
 {
     type Scope = G;
     type Input = Vec<((K, ()), G::Timestamp, R)>;
 
-    fn mz_arrange_core<P, Ba, Bu, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange_core<P, Ba, Bu, Tr>(self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         P: ParallelizationContract<G::Timestamp, Self::Input>,
         Ba: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,

@@ -28,9 +28,10 @@ use mz_storage_types::sources::{
 };
 use mz_timely_util::builder_async::PressOnDropButton;
 use timely::container::CapacityContainerBuilder;
+use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::core::Partition;
-use timely::dataflow::operators::{Concat, Map, ToStream};
-use timely::dataflow::{Scope, Stream as TimelyStream};
+use timely::dataflow::operators::vec::{Map, ToStream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
@@ -112,8 +113,8 @@ impl SourceRender for SqlServerSourceConnection {
     ) -> (
         // Timely Collection for each Source Export defined in the provided `config`.
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        TimelyStream<G, HealthStatusMessage>,
-        TimelyStream<G, Probe<Self::Time>>,
+        StreamVec<G, HealthStatusMessage>,
+        StreamVec<G, Probe<Self::Time>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting.
@@ -204,7 +205,7 @@ impl SourceRender for SqlServerSourceConnection {
             .collect::<Vec<_>>()
             .to_stream(scope);
 
-        let health_errs = repl_errs.concat(&progress_errs).map(move |err| {
+        let health_errs = repl_errs.concat(progress_errs).map(move |err| {
             // This update will cause the dataflow to restart
             let err_string = err.display_with_causes().to_string();
             let update = HealthStatusUpdate::halting(err_string, None);
@@ -218,7 +219,7 @@ impl SourceRender for SqlServerSourceConnection {
                 update,
             }
         });
-        let health = health_init.concat(&health_errs);
+        let health = health_init.concat(health_errs);
 
         (
             data_collections,

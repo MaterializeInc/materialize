@@ -28,8 +28,8 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::Map;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::vec::Map;
+use timely::dataflow::{Scope, StreamVec};
 use tracing::{error, info};
 
 use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
@@ -346,7 +346,7 @@ pub(crate) fn health_operator<G, P>(
     // A description of the object type we are writing status updates about. Used in log lines.
     object_type: &'static str,
     // An indexed stream of health updates. Indexes are configured in `configs`.
-    health_stream: &Stream<G, HealthStatusMessage>,
+    health_stream: StreamVec<G, HealthStatusMessage>,
     // An impl of `HealthOperator` that configures the output behavior of this operator.
     health_operator_impl: P,
     // Whether or not we should actually write namespaced errors in the `details` column.
@@ -380,7 +380,7 @@ where
     let mut health_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
 
     let mut input = health_op.new_disconnected_input(
-        &health_stream,
+        health_stream,
         Exchange::new(move |_| u64::cast_from(chosen_worker_id)),
     );
 
@@ -1101,7 +1101,7 @@ mod tests {
                                 inputs.keys().copied().collect(),
                                 *inputs.first_key_value().unwrap().0,
                                 "source_test",
-                                &input,
+                                input,
                                 TestWriter {
                                     sender: out_tx,
                                     input_mapping: inputs,
@@ -1165,7 +1165,7 @@ mod tests {
     fn producer<G: Scope<Timestamp = ()>>(
         scope: G,
         mut input: UnboundedReceiver<TestUpdate>,
-    ) -> Stream<G, HealthStatusMessage> {
+    ) -> StreamVec<G, HealthStatusMessage> {
         let mut iterator = AsyncOperatorBuilder::new("iterator".to_string(), scope.clone());
         let (output_handle, output) = iterator.new_output::<CapacityContainerBuilder<Vec<_>>>();
 

@@ -157,7 +157,7 @@ where
                 .as_collection()
                 .flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>("OkErrDemux", Some);
 
-            err = err.concat(&err_input);
+            err = err.concat(err_input);
 
             // Render the reduce plan
             self.render_reduce_plan(reduce_plan, ok, err, key_arity, mfp_after)
@@ -398,9 +398,9 @@ where
                 "Arranged ReduceFuseBasic input",
             );
 
-        let output = arranged.mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-            "ReduceFuseBasic",
-            {
+        let output = arranged
+            .clone()
+            .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>("ReduceFuseBasic", {
                 move |key, input, output| {
                     let temp_storage = RowArena::new();
                     let datum_iter = key.to_datum_iter();
@@ -418,8 +418,7 @@ where
                         output.push((row, Diff::ONE));
                     }
                 }
-            },
-        );
+            });
         // If `mfp_after` can error, then we need to render a paired reduction
         // to scan for these potential errors. Note that we cannot directly use
         // `mz_timely_util::reduce::ReduceExt::reduce_pair` here because we only
@@ -447,7 +446,7 @@ where
                     },
                 )
                 .as_collection(|_, v| v.clone());
-            (output, validation_errs.concat(&mfp_errs))
+            (output, validation_errs.concat(mfp_errs))
         } else {
             (output, validation_errs)
         }
@@ -553,24 +552,26 @@ where
                 "Arranged {name}"
             ));
         let oks = if !fused_unnest_list {
-            arranged.mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name, {
-                move |key, source, target| {
-                    // We respect the multiplicity here (unlike in hierarchical aggregation)
-                    // because we don't know that the aggregation method is not sensitive
-                    // to the number of records.
-                    let iter = source.iter().flat_map(|(v, w)| {
-                        // Note that in the non-positive case, this is wrong, but harmless because
-                        // our other reduction will produce an error.
-                        let count = usize::try_from(w.into_inner()).unwrap_or(0);
-                        std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
-                    });
+            arranged
+                .clone()
+                .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name, {
+                    move |key, source, target| {
+                        // We respect the multiplicity here (unlike in hierarchical aggregation)
+                        // because we don't know that the aggregation method is not sensitive
+                        // to the number of records.
+                        let iter = source.iter().flat_map(|(v, w)| {
+                            // Note that in the non-positive case, this is wrong, but harmless because
+                            // our other reduction will produce an error.
+                            let count = usize::try_from(w.into_inner()).unwrap_or(0);
+                            std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
+                        });
 
-                    let temp_storage = RowArena::new();
-                    let datum_iter = key.to_datum_iter();
-                    let mut datums_local = datums1.borrow();
-                    datums_local.extend(datum_iter);
-                    let key_len = datums_local.len();
-                    datums_local.push(
+                        let temp_storage = RowArena::new();
+                        let datum_iter = key.to_datum_iter();
+                        let mut datums_local = datums1.borrow();
+                        datums_local.extend(datum_iter);
+                        let key_len = datums_local.len();
+                        datums_local.push(
                         // Note that this is not necessarily a window aggregation, in which case
                         // `eval_with_fast_window_agg` delegates to the normal `eval`.
                         func.eval_with_fast_window_agg::<_, window_agg_helpers::OneByOneAggrImpls>(
@@ -579,35 +580,6 @@ where
                         ),
                     );
 
-                    if let Some(row) =
-                        evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
-                    {
-                        target.push((row, Diff::ONE));
-                    }
-                }
-            })
-        } else {
-            arranged.mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name, {
-                move |key, source, target| {
-                    // This part is the same as in the `!fused_unnest_list` if branch above.
-                    let iter = source.iter().flat_map(|(v, w)| {
-                        let count = usize::try_from(w.into_inner()).unwrap_or(0);
-                        std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
-                    });
-
-                    // This is the part that is specific to the `fused_unnest_list` branch.
-                    let temp_storage = RowArena::new();
-                    let mut datums_local = datums_key_1.borrow();
-                    datums_local.extend(key.to_datum_iter());
-                    let key_len = datums_local.len();
-                    for datum in func
-                        .eval_with_unnest_list::<_, window_agg_helpers::OneByOneAggrImpls>(
-                            iter,
-                            &temp_storage,
-                        )
-                    {
-                        datums_local.truncate(key_len);
-                        datums_local.push(datum);
                         if let Some(row) = evaluate_mfp_after(
                             &mfp_after1,
                             &mut datums_local,
@@ -617,8 +589,42 @@ where
                             target.push((row, Diff::ONE));
                         }
                     }
-                }
-            })
+                })
+        } else {
+            arranged
+                .clone()
+                .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name, {
+                    move |key, source, target| {
+                        // This part is the same as in the `!fused_unnest_list` if branch above.
+                        let iter = source.iter().flat_map(|(v, w)| {
+                            let count = usize::try_from(w.into_inner()).unwrap_or(0);
+                            std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
+                        });
+
+                        // This is the part that is specific to the `fused_unnest_list` branch.
+                        let temp_storage = RowArena::new();
+                        let mut datums_local = datums_key_1.borrow();
+                        datums_local.extend(key.to_datum_iter());
+                        let key_len = datums_local.len();
+                        for datum in func
+                            .eval_with_unnest_list::<_, window_agg_helpers::OneByOneAggrImpls>(
+                                iter,
+                                &temp_storage,
+                            )
+                        {
+                            datums_local.truncate(key_len);
+                            datums_local.push(datum);
+                            if let Some(row) = evaluate_mfp_after(
+                                &mfp_after1,
+                                &mut datums_local,
+                                &temp_storage,
+                                key_len,
+                            ) {
+                                target.push((row, Diff::ONE));
+                            }
+                        }
+                    }
+                })
         };
 
         // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here, but
@@ -724,7 +730,7 @@ where
             };
 
             if let Some(e) = err_output {
-                err_output = Some(e.concat(&errs));
+                err_output = Some(e.concat(errs));
             } else {
                 err_output = Some(errs);
             }
@@ -856,7 +862,7 @@ where
                 // stream or produce correct data in the output stream.
                 let validating = err_output.is_none();
 
-                let (oks, errs) = self.build_bucketed_stage(&aggr_funcs, &input, validating);
+                let (oks, errs) = self.build_bucketed_stage(&aggr_funcs, input, validating);
                 if let Some(errs) = errs {
                     err_output = Some(errs.leave_region());
                 }
@@ -892,6 +898,7 @@ where
             let must_validate = err_output.is_none();
             if must_validate || mfp_after2.is_some() {
                 let errs = arranged
+                    .clone()
                     .mz_reduce_abelian::<_, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
                         "ReduceMinsMaxes Error Check",
                         move |key, source, target| {
@@ -940,8 +947,8 @@ where
                     )
                     .as_collection(|_, v| v.clone())
                     .leave_region();
-                if let Some(e) = &err_output {
-                    err_output = Some(e.concat(&errs));
+                if let Some(e) = err_output.take() {
+                    err_output = Some(e.concat(errs));
                 } else {
                     err_output = Some(errs);
                 }
@@ -993,7 +1000,7 @@ where
     fn build_bucketed_stage<S>(
         &self,
         aggr_funcs: &Vec<AggregateFunc>,
-        input: &VecCollection<S, (Row, Row), Diff>,
+        input: VecCollection<S, (Row, Row), Diff>,
         validating: bool,
     ) -> (
         VecCollection<S, (Row, Row), Diff>,
@@ -1009,7 +1016,7 @@ where
                     RowValBuilder<_, _, _>,
                     RowValSpine<Result<Row, Row>, _, _>,
                 >(
-                    input,
+                    input.clone(),
                     aggr_funcs.clone(),
                 );
             let (oks, errs) = reduced
@@ -1044,7 +1051,7 @@ where
         };
 
         let input = input.as_collection(|k, v| (k.to_row(), v.to_row()));
-        let oks = negated_output.concat(&input);
+        let oks = negated_output.concat(input);
         (oks, errs)
     }
 
@@ -1053,7 +1060,7 @@ where
     /// with all diffs in the reduction's output negated.
     fn build_bucketed_negated_output<S, Bu, Tr>(
         &self,
-        input: &VecCollection<S, (Row, Row), Diff>,
+        input: VecCollection<S, (Row, Row), Diff>,
         aggrs: Vec<AggregateFunc>,
     ) -> (
         Arranged<S, TraceAgent<RowRowSpine<G::Timestamp, Diff>>>,
@@ -1083,7 +1090,7 @@ where
                 "Arranged MinsMaxesHierarchical input",
             );
 
-        let reduced = arranged_input.mz_reduce_abelian::<_, Bu, Tr>(
+        let reduced = arranged_input.clone().mz_reduce_abelian::<_, Bu, Tr>(
             "Reduced Fallibly MinsMaxesHierarchical",
             move |key, source, target| {
                 if let Some(err) = Tr::ValOwn::into_error() {
@@ -1199,9 +1206,9 @@ where
             .mz_arrange::<RowBatcher<_, _>, RowBuilder<_, _>, RowSpine<_, Vec<ReductionMonoid>>>(
                 "ArrangeMonotonic [val: empty]",
             );
-        let output = arranged.mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-            "ReduceMonotonic",
-            {
+        let output = arranged
+            .clone()
+            .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>("ReduceMonotonic", {
                 move |key, input, output| {
                     let temp_storage = RowArena::new();
                     let datum_iter = key.to_datum_iter();
@@ -1219,8 +1226,7 @@ where
                         output.push((row, Diff::ONE));
                     }
                 }
-            },
-        );
+            });
 
         // If `mfp_after` can error, then we need to render a paired reduction
         // to scan for these potential errors. Note that we cannot directly use
@@ -1246,7 +1252,7 @@ where
                     },
                 )
                 .as_collection(|_k, v| v.clone());
-            (output, validation_errs.concat(&mfp_errs))
+            (output, validation_errs.concat(mfp_errs))
         } else {
             (output, validation_errs)
         }
@@ -1272,6 +1278,8 @@ where
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
+        let mut collection_scope = collection.scope();
+
         // we must have called this function with something to reduce
         if full_aggrs.len() == 0 || simple_aggrs.len() + distinct_aggrs.len() != full_aggrs.len() {
             self.error_logger().soft_panic_or_log(
@@ -1307,6 +1315,7 @@ where
         let mut to_aggregate = Vec::new();
         if simple_aggrs.len() > 0 {
             // First, collect all non-distinct aggregations in one pass.
+            let collection = collection.clone();
             let easy_cases = collection.explode_one({
                 let zero_diffs = zero_diffs.clone();
                 move |(key, row)| {
@@ -1336,6 +1345,7 @@ where
         for (datum_index, aggr) in distinct_aggrs.into_iter() {
             let pairer = Pairer::new(key_arity);
             let collection = collection
+                .clone()
                 .map(move |(key, row)| {
                     let value = row.iter().nth(datum_index).unwrap();
                     (pairer.merge(&key, std::iter::once(value)), ())
@@ -1365,7 +1375,7 @@ where
         let collection = if to_aggregate.len() == 1 {
             to_aggregate.remove(0)
         } else {
-            differential_dataflow::collection::concatenate(&mut collection.scope(), to_aggregate)
+            differential_dataflow::collection::concatenate(&mut collection_scope, to_aggregate)
         };
 
         // Allocations for the two closures.

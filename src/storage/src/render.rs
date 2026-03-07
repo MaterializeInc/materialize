@@ -178,7 +178,7 @@
 //!
 //! However, regardless of whether the output is the main source or a subsource it is treated
 //! identically by the pipeline. Each output is demultiplexed into its own timely stream using
-//! [`timely::dataflow::operators::partition::Partition`] and the rest of the ingestion pipeline is
+//! [`timely::dataflow::operators::core::partition::Partition`] and the rest of the ingestion pipeline is
 //! rendered independently.
 //!
 //! #### Resumption frontier
@@ -212,7 +212,8 @@ use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::scope_label::ScopeExt;
 use timely::communication::Allocate;
 use timely::dataflow::Scope;
-use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave, Map};
+use timely::dataflow::operators::vec::Map;
+use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave};
 use timely::dataflow::scopes::Child;
 use timely::progress::Antichain;
 use timely::worker::{AsWorker, Worker as TimelyWorker};
@@ -307,7 +308,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     &debug_name,
                     c,
                     description.clone(),
-                    &feedback,
+                    feedback,
                     storage_state,
                     base_source_config,
                 ),
@@ -316,7 +317,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     &debug_name,
                     c,
                     description.clone(),
-                    &feedback,
+                    feedback,
                     storage_state,
                     base_source_config,
                 ),
@@ -325,7 +326,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     &debug_name,
                     c,
                     description.clone(),
-                    &feedback,
+                    feedback,
                     storage_state,
                     base_source_config,
                 ),
@@ -334,7 +335,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     &debug_name,
                     c,
                     description.clone(),
-                    &feedback,
+                    feedback,
                     storage_state,
                     base_source_config,
                 ),
@@ -343,7 +344,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     &debug_name,
                     c,
                     description.clone(),
-                    &feedback,
+                    feedback,
                     storage_state,
                     base_source_config,
                 ),
@@ -355,7 +356,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             health_streams.extend(source_health);
             for (export_id, (ok, err)) in outputs {
                 let export = &description.source_exports[&export_id];
-                let source_data = ok.map(Ok).concat(&err.map(Err));
+                let source_data = ok.map(Ok).concat(err.map(Err));
 
                 let metrics = storage_state.metrics.get_source_persist_sink_metrics(
                     export_id,
@@ -412,7 +413,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     .collect(),
                 primary_source_id,
                 "source",
-                &health_stream,
+                health_stream,
                 crate::healthcheck::DefaultWriter {
                     command_tx: storage_state.internal_cmd_tx.clone(),
                     updates: Rc::clone(&storage_state.shared_status_updates),
@@ -459,7 +460,7 @@ pub fn build_export_dataflow<A: Allocate>(
             [id].into_iter().collect(),
             id,
             "sink",
-            &health_stream,
+            health_stream,
             crate::healthcheck::DefaultWriter {
                 command_tx: storage_state.internal_cmd_tx.clone(),
                 updates: Rc::clone(&storage_state.shared_status_updates),

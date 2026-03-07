@@ -174,14 +174,15 @@ use mz_timely_util::builder_async::{Button, Event, OperatorBuilder as AsyncOpera
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::probe;
 use mz_timely_util::probe::ProbeNotify;
+use timely::PartialOrder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Filter, FrontierNotificator, Map, Operator};
+use timely::dataflow::operators::vec::{Filter, Map};
+use timely::dataflow::operators::{FrontierNotificator, Operator};
 use timely::dataflow::{ProbeHandle, Scope};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp as _};
-use timely::{Data, PartialOrder};
 use tracing::debug;
 
 use crate::compute_state::ComputeState;
@@ -441,7 +442,7 @@ where
 
         let to_append = oks
             .map(|x| SourceData(Ok(x)))
-            .concat(&errs.map(|x| SourceData(Err(x))));
+            .concat(errs.map(|x| SourceData(Err(x))));
         let append_times = append_times.expect("should be provided by ContinualTaskCtx");
 
         let write_handle = {
@@ -517,9 +518,9 @@ fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
     // also remove the need for this to be an async timely operator.
     let active_worker = name.hashed();
     let to_append_input =
-        op.new_input_for_many(&to_append.inner, Exchange::new(move |_| active_worker), []);
+        op.new_input_for_many(to_append.inner, Exchange::new(move |_| active_worker), []);
     let append_times_input = op.new_input_for_many(
-        &append_times.inner,
+        append_times.inner,
         Exchange::new(move |_| active_worker),
         [],
     );
@@ -772,16 +773,16 @@ trait StepForward<G: Scope, D, R> {
     /// The caller is responsible for ensuring that all data and capabilities given
     /// to this operator can be stepped forward without panicking, otherwise the
     /// operator will panic at runtime.
-    fn step_forward(&self, name: &str) -> VecCollection<G, D, R>;
+    fn step_forward(self, name: &str) -> VecCollection<G, D, R>;
 }
 
 impl<G, D, R> StepForward<G, D, R> for VecCollection<G, D, R>
 where
     G: Scope<Timestamp = Timestamp>,
-    D: Data,
+    D: Clone + 'static,
     R: Semigroup + 'static,
 {
-    fn step_forward(&self, name: &str) -> VecCollection<G, D, R> {
+    fn step_forward(self, name: &str) -> VecCollection<G, D, R> {
         let name = format!("ct_step_forward({})", name);
         let mut builder = OperatorBuilder::new(name, self.scope());
         let (output, output_stream) = builder.new_output();
@@ -792,7 +793,7 @@ where
         // frontier, so make this promise to timely.
         let step_forward_summary = Timestamp::from(1);
         let mut input = builder.new_input_connection(
-            &self.inner,
+            self.inner,
             Pipeline,
             [(0, Antichain::from_elem(step_forward_summary))],
         );
@@ -804,7 +805,7 @@ where
                     for (_, ts, _) in data.iter_mut() {
                         *ts = ts.step_forward();
                     }
-                    let cap = cap.delayed(&cap.time().step_forward());
+                    let cap = cap.delayed(&cap.time().step_forward(), 0);
                     output.session(&cap).give_container(data);
                 });
             }
@@ -827,7 +828,7 @@ trait TimesExtract<G: Scope, D, R> {
     ///
     /// The output may be partially consolidated, but no consolidation
     /// guarantees are made.
-    fn times_extract(&self, name: &str) -> (VecCollection<G, D, R>, VecCollection<G, (), R>);
+    fn times_extract(self, name: &str) -> (VecCollection<G, D, R>, VecCollection<G, (), R>);
 }
 
 impl<G, D, R> TimesExtract<G, D, R> for VecCollection<G, D, R>
@@ -836,14 +837,14 @@ where
     D: Clone + 'static,
     R: Semigroup + 'static + std::fmt::Debug,
 {
-    fn times_extract(&self, name: &str) -> (VecCollection<G, D, R>, VecCollection<G, (), R>) {
+    fn times_extract(self, name: &str) -> (VecCollection<G, D, R>, VecCollection<G, (), R>) {
         let name = format!("ct_times_extract({})", name);
         let mut builder = OperatorBuilder::new(name, self.scope());
         let (passthrough, passthrough_stream) = builder.new_output();
         let mut passthrough = OutputBuilder::from(passthrough);
         let (times, times_stream) = builder.new_output();
         let mut times = OutputBuilder::<_, ConsolidatingContainerBuilder<_>>::from(times);
-        let mut input = builder.new_input(&self.inner, Pipeline);
+        let mut input = builder.new_input(self.inner, Pipeline);
         builder.set_notify(false);
         builder.build(|_caps| {
             move |_frontiers| {
@@ -871,7 +872,7 @@ where
 trait TimesReduce<G: Scope, R> {
     /// This is essentially a specialized impl of consolidate, with a HashMap
     /// instead of the Trace.
-    fn times_reduce(&self, name: &str) -> VecCollection<G, (), R>;
+    fn times_reduce(self, name: &str) -> VecCollection<G, (), R>;
 }
 
 impl<G, R> TimesReduce<G, R> for VecCollection<G, (), R>
@@ -879,7 +880,7 @@ where
     G: Scope<Timestamp = Timestamp>,
     R: Semigroup + 'static + std::fmt::Debug,
 {
-    fn times_reduce(&self, name: &str) -> VecCollection<G, (), R> {
+    fn times_reduce(self, name: &str) -> VecCollection<G, (), R> {
         let name = format!("ct_times_reduce({})", name);
         self.inner
             .unary_frontier(Pipeline, &name, |_caps, _info| {
@@ -888,7 +889,7 @@ where
                 move |(input, frontier), output| {
                     input.for_each(|cap, data| {
                         for ((), ts, diff) in data.drain(..) {
-                            notificator.notify_at(cap.delayed(&ts));
+                            notificator.notify_at(cap.delayed(&ts, 0));
                             if let Some(sum) = stash.get_mut(&ts) {
                                 sum.plus_equals(&diff);
                             } else {

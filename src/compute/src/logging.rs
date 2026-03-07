@@ -22,7 +22,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use ::timely::container::CapacityContainerBuilder;
-use ::timely::dataflow::StreamCore;
+use ::timely::dataflow::Stream;
 use ::timely::dataflow::channels::pact::Pipeline;
 use ::timely::dataflow::operators::capture::{Event, EventLink, EventPusher};
 use ::timely::dataflow::operators::generic::Session;
@@ -225,10 +225,10 @@ struct LogCollection {
 /// data is not exchanged between workers, as the consolidation would not function as desired
 /// otherwise.
 pub(super) fn consolidate_and_pack<G, B, CB, L, F>(
-    input: &StreamCore<G, B::Input>,
+    input: Stream<G, B::Input>,
     log: L,
     mut logic: F,
-) -> StreamCore<G, CB::Container>
+) -> Stream<G, CB::Container>
 where
     G: ::timely::dataflow::Scope<Timestamp = Timestamp>,
     B: Batcher<Time = G::Timestamp> + 'static,
