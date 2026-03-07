@@ -132,18 +132,16 @@ flowchart TD
     progress > T1, T2"]
 
     F["Handler task: demux + deliver
-    1. Buffer diffs by request_id
+    1. Buffer positive diffs by request_id
     2. frontier > T → deliver results
-    3. Retract param rows
-    4. Discard retraction diffs"]
+    3. Discard retraction diffs (auto at T+1)"]
 
     G["Coordinator: advance upper
-    min(input frontiers) - 1s → handler
-    Handler advances param shard upper"]
+    min(input frontiers) → batcher
+    Batcher advances param shard upper"]
 
     A --> B --> C --> D --> E --> F
-    F -- "retract" --> C
-    G -- "watch channel" --> F
+    G -- "watch channel" --> B
 ```
 
 #### Execution architecture
@@ -181,16 +179,20 @@ The 1s lag provides a serializable isolation window while allowing compaction to
 
 #### Batch lifecycle
 
-1. **Write**: The session client generates a `request_id` (UUID), registers a result oneshot channel, and writes `(request_id, param_1, ..., param_N)` to the param shard via `compare_and_append` at the shard's current upper T.
-2. **Notify**: The client sends a flush notification to the handler task mapping write_ts T → request_id.
-3. **Observe**: The SUBSCRIBE emits diffs at timestamp T containing the join results. Each result row includes the `request_id`.
+1. **Write**: The session client generates a `request_id` (UUID), registers a result oneshot channel, and sends the param row to the batcher task. The batcher writes self-retracting pairs via `compare_and_append`: `(row, T, +1)` and `(row, T+1, -1)` in a single batch, advancing the upper by 2. Each param row exists for exactly one timestamp.
+2. **Notify**: The batcher sends a flush notification to the handler task mapping write_ts T → request_ids for the batch.
+3. **Observe**: The SUBSCRIBE emits positive diffs at timestamp T (join results) and negative diffs at T+1 (automatic retractions).
 4. **Progress**: When the SUBSCRIBE frontier advances past T, the handler knows all results for this request are in. Empty result sets (request_ids with no diffs) are detected at this point.
-5. **Deliver**: The handler groups result rows by `request_id` and sends them via the oneshot channel.
-6. **Retract**: The handler issues a batched retraction (diff=-1) for the delivered param rows.
-7. **Ignore retractions**: The SUBSCRIBE emits negative diffs at T'. The handler discards them (only positive diffs are buffered).
+5. **Deliver**: The handler groups result rows by `request_id` and sends them via the oneshot channel. Only positive diffs are buffered; negative diffs (retractions at T+1) are discarded.
 
 Multiple requests can be in-flight concurrently.
 The handler demuxes by timestamp and request_id.
+
+#### Future: SUBSCRIBE to a standing query
+
+The self-retracting write pattern naturally extends to a streaming mode where clients subscribe to a standing query's results rather than executing one-shot queries. In this mode, the param row would be written *without* the automatic retraction at T+1 — only the `(row, T, +1)` is written. The param row persists in the arrangement, and the client receives ongoing updates (inserts and deletes on the result set) as the underlying data changes. When the client cancels the subscribe or disconnects, the retraction `(row, T', -1)` is emitted to clean up.
+
+This would give users a way to say "watch this parameterized query" and receive a stream of diffs, combining the convenience of standing query parameters with the streaming semantics of SUBSCRIBE.
 
 #### SUBSCRIBE lifecycle
 
@@ -242,15 +244,42 @@ This was rejected because it requires knowing parameter values in advance, doesn
 
 ## Evaluation
 
-Benchmark the standing query path against the equivalent SELECT path using the following methodology:
+### Benchmark setup
 
-* **Varying parallelism**: Test with 1, 10, 50, 100, 500 concurrent connections, each issuing standing query executions in a tight loop.
-* **Throughput**: Measure total executions/s at each concurrency level. Compare against the same query issued as individual SELECTs.
-* **Latency**: Measure end-to-end latency (client sends EXECUTE to client receives last result row). Report as a CCDF (complementary cumulative distribution function) to reveal tail latency behavior.
-* **Batch efficiency**: Vary the batch window (1ms, 5ms, 10ms) and measure the throughput/latency tradeoff.
-* **Query complexity**: Test with simple key lookups and with additional static filters to understand how query complexity affects the pipeline.
+* **Dataset**: 100k orders, `customer_id = g % 100` (~1000 rows per customer).
+* **Standing query**: `SELECT id, customer_id, amount FROM orders WHERE customer_id = cid` — returns ~1000 rows per execution.
+* **SELECT baseline**: Same query as `SELECT id, customer_id, amount FROM orders WHERE customer_id = 42` — uses fast-path index lookup (no dataflow rendered).
+* **Duration**: 15s per data point, single-threaded Python benchmark client with psycopg3.
+* **Environment**: Local `bin/environmentd --optimized`, single `quickstart` cluster.
 
-The parameter table size under load is O(outstanding requests), bounded by the batch window and processing latency.
+### Results
+
+| Connections | SQ QPS | SQ p50 (ms) | SQ p99 (ms) | SELECT QPS | SELECT p50 (ms) | SELECT p99 (ms) | Speedup |
+|-------------|--------|-------------|-------------|------------|-----------------|-----------------|---------|
+| 1           | 59     | 12          | 43          | 6          | 65              | 725             | 10x     |
+| 4           | 137    | 17          | 675         | 13         | 307             | 690             | 11x     |
+| 8           | 259    | 20          | 828         | 26         | 290             | 604             | 10x     |
+| 16          | 426    | 30          | 82          | 54         | 210             | 573             | 8x      |
+| 32          | 718    | 35          | 109         | 131        | 239             | 486             | 5x      |
+| 64          | 386    | 148         | 945         | 137        | 444             | 902             | 3x      |
+| 128         | 567    | 236         | 1104        | 149        | 776             | 2016            | 4x      |
+| 256         | 898    | 286         | 356         | 144        | 1259            | 10083           | 6x      |
+
+### Analysis
+
+**Throughput.** Standing queries achieve 5–10x higher throughput than index SELECTs across all concurrency levels. Peak throughput is ~900 QPS at 256 connections. SELECT throughput plateaus at ~150 QPS beyond 32 connections due to coordinator contention. Standing query throughput scales with concurrency because the batcher amortizes persist writes — larger batches at higher concurrency.
+
+**Latency.** At low concurrency (1–32 connections), standing query median latency is 12–35ms vs 65–239ms for SELECTs. At high concurrency (128–256), standing query latency increases to 236–286ms due to batch queuing, but SELECT latency degrades much worse (776–1259ms) since each query contends for the coordinator.
+
+**Throughput dip at 64 connections.** There's a noticeable dip in standing query QPS at 64 connections (386 QPS vs 718 at 32). This likely reflects a transition point where the batcher's adaptive collect window hasn't yet scaled up to match the increased concurrency. At 128+ connections, larger batch sizes compensate and throughput recovers.
+
+**Tail latency.** Standing query p99 is volatile at low concurrency (4–8 connections show ~700–800ms spikes) due to occasional persist write latency outliers. At 32+ connections, p99 stabilizes because batching amortizes these spikes across more requests. SELECT p99 degrades monotonically with concurrency.
+
+**Distance from targets.** The 100k QPS aspirational target remains far off. The bottleneck is persist write latency (~10–30ms per `compare_and_append`), which bounds batch throughput regardless of batch size. Achieving 100k QPS would require either sub-millisecond persist writes or a fundamentally different write path (e.g., in-memory parameter passing without persistence).
+
+### Known issue: subscribe accumulation
+
+Under sustained load, the subscribe's internal arrangements accumulate param rows and join results faster than compaction can clean them up. After extended runs (minutes), this triggers `max_result_size` errors. The self-retracting write pattern (each param row exists for exactly one timestamp) bounds the *logical* working set, but the *physical* arrangement retains data until the `since` frontier advances. This needs investigation into compaction pacing for the param shard.
 
 ## Implementation plan
 
@@ -504,7 +533,6 @@ Suggested implementation phases:
 ## Open questions
 
 * **Error propagation**: A single error taints the entire collection in Materialize's current model. Standing queries amplify this since many clients share one dataflow. Should we add error detection and dataflow restart as a mitigation?
-* **Retraction batching**: Every execution requires two persist writes (param insert and retraction). Can retractions be batched across multiple executions to reduce write frequency?
-* **Persist write latency floor**: The minimum persist write latency (~5-10ms) dominates the end-to-end budget. How much can this be improved?
-* **Isolation level**: Currently serializable (min input frontier - 1s). Strict serializable would use max input frontier. Should this be configurable?
-* **Request batching**: Currently each `execute()` call does its own `compare_and_append`. Batching multiple param writes into a single persist append could improve throughput at the cost of latency.
+* **Subscribe accumulation**: Under sustained load, the subscribe's arrangements grow because compaction doesn't keep pace with param writes. Self-retracting writes bound the logical working set (each param row exists for one timestamp), but the physical arrangement retains data until the `since` frontier advances. This causes `max_result_size` errors after extended runs.
+* **Persist write latency floor**: The minimum persist write latency (~10-30ms) dominates the end-to-end budget. Peak throughput of ~900 QPS at 256 connections is far from the 100k aspirational target. Achieving higher throughput would require sub-millisecond persist writes or a non-persistent parameter path.
+* **Isolation level**: Currently serializable (min input frontier). Strict serializable would use max input frontier. Should this be configurable?
