@@ -1763,6 +1763,17 @@ steps:
               composition: sqlancer
               args: [--runtime=1500, --oracle=HAVING]
 
+      - id: sqlancer-dqp
+        label: "SQLancer DQP"
+        depends_on: build-aarch64
+        timeout_in_minutes: 40
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: sqlancer
+              args: [--runtime=1500, --oracle=DQP]
+
       - id: sqlancerplusplus-where
         label: "SQLancer++ Where"
         depends_on: build-aarch64
