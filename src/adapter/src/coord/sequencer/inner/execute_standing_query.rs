@@ -8,9 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use mz_ore::instrument;
+use mz_repr::Row;
 use mz_sql::plan;
 
 use crate::ExecuteContext;
+use crate::command::ExecuteResponse;
 use crate::coord::Coordinator;
 use crate::error::AdapterError;
 
@@ -59,6 +61,47 @@ impl Coordinator {
         });
 
         Ok(())
+    }
+
+    /// EXPLAIN EXECUTE STANDING QUERY
+    ///
+    /// Produces a simple textual explanation showing which standing query is
+    /// being executed and what parameter values are being passed.
+    pub(crate) fn explain_execute_standing_query(
+        &self,
+        plan::ExplainPlanPlan {
+            format: _,
+            explainee,
+            ..
+        }: plan::ExplainPlanPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let plan::Explainee::Statement(stmt) = explainee else {
+            unreachable!()
+        };
+        let plan::ExplaineeStatement::ExecuteStandingQuery { plan, .. } = stmt else {
+            unreachable!()
+        };
+
+        let plan::ExecuteStandingQueryPlan { id, params } = plan;
+
+        let entry = self.catalog().get_entry(&id);
+        let full_name = self
+            .catalog()
+            .resolve_full_name(entry.name(), entry.conn_id());
+
+        let mut output = format!("Execute Standing Query {}\n", full_name);
+        if params.is_empty() {
+            output.push_str("  Parameters: (none)\n");
+        } else {
+            output.push_str("  Parameters:\n");
+            for (i, (row, typ)) in params.iter().enumerate() {
+                let datum = row.unpack_first();
+                output.push_str(&format!("    ${}: {:?} = {}\n", i + 1, typ, datum));
+            }
+        }
+
+        let rows = vec![Row::pack_slice(&[mz_repr::Datum::String(&output)])];
+        Ok(Self::send_immediate_rows(rows))
     }
 
     /// Returns the [`StandingQueryExecuteClient`](crate::standing_query_client::StandingQueryExecuteClient) for a standing query, if active.

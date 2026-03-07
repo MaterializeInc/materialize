@@ -4896,6 +4896,8 @@ pub enum Explainee<T: AstInfo> {
     CreateView(Box<CreateViewStatement<T>>, bool),
     CreateMaterializedView(Box<CreateMaterializedViewStatement<T>>, bool),
     CreateIndex(Box<CreateIndexStatement<T>>, bool),
+    CreateStandingQuery(Box<CreateStandingQueryStatement<T>>, bool),
+    ExecuteStandingQuery(Box<ExecuteStandingQueryStatement<T>>, bool),
     Subscribe(Box<SubscribeStatement<T>>, bool),
 }
 
@@ -4912,6 +4914,8 @@ impl<T: AstInfo> Explainee<T> {
             | Self::CreateView(..)
             | Self::CreateMaterializedView(..)
             | Self::CreateIndex(..)
+            | Self::CreateStandingQuery(..)
+            | Self::ExecuteStandingQuery(..)
             | Self::Subscribe(..) => None,
         }
     }
@@ -4968,6 +4972,18 @@ impl<T: AstInfo> AstDisplay for Explainee<T> {
                 f.write_node(statement);
             }
             Self::CreateIndex(statement, broken) => {
+                if *broken {
+                    f.write_str("BROKEN ");
+                }
+                f.write_node(statement);
+            }
+            Self::CreateStandingQuery(statement, broken) => {
+                if *broken {
+                    f.write_str("BROKEN ");
+                }
+                f.write_node(statement);
+            }
+            Self::ExecuteStandingQuery(statement, broken) => {
                 if *broken {
                     f.write_str("BROKEN ");
                 }

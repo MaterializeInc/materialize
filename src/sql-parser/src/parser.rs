@@ -9039,6 +9039,22 @@ impl<'a> Parser<'a> {
                 };
 
                 Explainee::CreateIndex(Box::new(stmt), broken)
+            } else if self.peek_keywords(&[CREATE, STANDING, QUERY]) {
+                // Parse: `BROKEN? CREATE STANDING QUERY ...`
+                let _ = self.parse_keyword(CREATE); // consume CREATE token
+                let stmt = match self.parse_create_standing_query()? {
+                    Statement::CreateStandingQuery(stmt) => stmt,
+                    _ => panic!("Unexpected statement type return after parsing"),
+                };
+                Explainee::CreateStandingQuery(Box::new(stmt), broken)
+            } else if self.peek_keywords(&[EXECUTE, STANDING, QUERY]) {
+                // Parse: `BROKEN? EXECUTE STANDING QUERY ...`
+                let _ = self.parse_keyword(EXECUTE); // consume EXECUTE token
+                let stmt = match self.parse_execute_standing_query()? {
+                    Statement::ExecuteStandingQuery(stmt) => stmt,
+                    _ => panic!("Unexpected statement type return after parsing"),
+                };
+                Explainee::ExecuteStandingQuery(Box::new(stmt), broken)
             } else if self.peek_keyword(SUBSCRIBE) {
                 // Parse: `BROKEN? SUBSCRIBE ...`
                 let _ = self.parse_keyword(SUBSCRIBE); // consume SUBSCRIBE token

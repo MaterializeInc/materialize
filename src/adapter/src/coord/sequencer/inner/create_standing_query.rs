@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 
+use maplit::btreemap;
 use mz_catalog::memory::objects::{CatalogItem, StandingQuery};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
@@ -16,6 +17,7 @@ use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::instrument;
 use mz_ore::treat_as_equal::TreatAsEqual;
 use mz_repr::GlobalId;
+use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::{ColumnName, RelationDesc, SqlColumnType, SqlRelationType, SqlScalarType};
 use mz_sql::names::ResolvedIds;
@@ -25,10 +27,11 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::controller::CollectionDescription;
 use mz_transform::dataflow::DataflowMetainfo;
 use timely::progress::Timestamp as TimelyTimestamp;
-
 use crate::command::ExecuteResponse;
-use crate::coord::Coordinator;
+use crate::coord::sequencer::inner::return_if_err;
+use crate::coord::{Coordinator, ExplainContext, ExplainPlanContext};
 use crate::error::AdapterError;
+use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::{self, Optimize};
 use crate::util::ResultExt;
 use crate::{ExecuteContext, catalog};
@@ -497,5 +500,154 @@ impl Coordinator {
         let (physical_plan, metainfo) = global_lir_plan.unapply();
 
         Ok((optimized_plan, physical_plan, metainfo, optimizer_features))
+    }
+
+    /// EXPLAIN CREATE STANDING QUERY
+    ///
+    /// Shows the optimized plan for the standing query dataflow, including the
+    /// rewritten HIR that joins the user's query with the parameter collection.
+    pub(crate) async fn explain_create_standing_query(
+        &mut self,
+        ctx: ExecuteContext,
+        plan::ExplainPlanPlan {
+            stage,
+            format,
+            config,
+            explainee,
+        }: plan::ExplainPlanPlan,
+    ) {
+        let plan::Explainee::Statement(stmt) = explainee else {
+            unreachable!()
+        };
+        let plan::ExplaineeStatement::CreateStandingQuery { broken, plan } = stmt else {
+            unreachable!()
+        };
+
+        let plan::CreateStandingQueryPlan {
+            name,
+            standing_query:
+                plan::StandingQuery {
+                    expr: raw_expr,
+                    column_names,
+                    params,
+                    cluster_id,
+                    ..
+                },
+            ..
+        } = plan;
+
+        // Allocate transient IDs for the explain path.
+        let (_item_id, global_id) = self.allocate_transient_id();
+        let (_param_item_id, param_collection_id) = self.allocate_transient_id();
+
+        // Build the parameter collection desc and type.
+        let param_desc = Self::build_param_collection_desc(&params);
+        let param_typ = param_desc.typ().clone();
+
+        // Rewrite the user's query HIR to join with the parameter collection.
+        let (rewritten_expr, rewritten_column_names) = Self::rewrite_standing_query_hir(
+            &raw_expr,
+            &column_names,
+            param_collection_id,
+            &param_typ,
+            &params,
+        );
+
+        // Create an OptimizerTrace to collect plans emitted during optimization.
+        let optimizer_trace = OptimizerTrace::new(stage.paths());
+
+        let extra_source_imports = BTreeMap::from([(param_collection_id, param_typ)]);
+
+        // Run the optimizer pipeline within the trace dispatcher.
+        let result: Result<DataflowMetainfo, AdapterError> = {
+            let _dispatch_guard = optimizer_trace.as_guard();
+
+            let catalog = self.owned_catalog().as_optimizer_catalog();
+            let (_, view_id) = self.allocate_transient_id();
+            let compute_instance = self
+                .instance_snapshot(cluster_id)
+                .expect("compute instance does not exist");
+            let optimizer_config =
+                optimize::OptimizerConfig::from(self.catalog().system_config())
+                    .override_from(&self.catalog.get_cluster(cluster_id).config.features())
+                    .override_from(&ExplainContext::Plan(ExplainPlanContext {
+                        broken,
+                        config: config.clone(),
+                        format: format.clone(),
+                        stage: stage.clone(),
+                        replan: None,
+                        desc: None,
+                        optimizer_trace: OptimizerTrace::new(None),
+                    }));
+
+            let mut optimizer = optimize::standing_query::Optimizer::new(
+                catalog,
+                compute_instance,
+                global_id,
+                view_id,
+                rewritten_column_names.clone(),
+                format!("standing-query-{global_id}"),
+                optimizer_config,
+                self.optimizer_metrics(),
+                extra_source_imports,
+            );
+
+            match || -> Result<DataflowMetainfo, AdapterError> {
+                let local_mir_plan = optimizer.catch_unwind_optimize(rewritten_expr.clone())?;
+                let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
+                let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
+                let (_physical_plan, metainfo) = global_lir_plan.unapply();
+                Ok(metainfo)
+            }() {
+                Ok(metainfo) => Ok(metainfo),
+                Err(err) => {
+                    if broken {
+                        tracing::error!("error while handling EXPLAIN statement: {}", err);
+                        Ok(Default::default())
+                    } else {
+                        Err(err)
+                    }
+                }
+            }
+        };
+
+        let df_meta = return_if_err!(result, ctx);
+
+        // Build the humanizer with transient item names.
+        let session_catalog = self.catalog().for_session(ctx.session());
+        let expr_humanizer = {
+            let full_name = self.catalog().resolve_full_name(&name, None);
+            let transient_items = btreemap! {
+                global_id => TransientItem::new(
+                    Some(full_name.into_parts()),
+                    Some(rewritten_column_names.iter().map(|c| c.to_string()).collect()),
+                )
+            };
+            ExprHumanizerExt::new(transient_items, &session_catalog)
+        };
+
+        let target_cluster = self.catalog().get_cluster(cluster_id);
+
+        let features = OptimizerFeatures::from(self.catalog().system_config())
+            .override_from(&target_cluster.config.features())
+            .override_from(&config.features);
+
+        let result = optimizer_trace
+            .into_rows(
+                format,
+                &config,
+                &features,
+                &expr_humanizer,
+                None,
+                Some(target_cluster),
+                df_meta,
+                stage,
+                plan::ExplaineeStatementKind::CreateStandingQuery,
+                None,
+            )
+            .await;
+
+        let rows = return_if_err!(result, ctx);
+        ctx.retire(Ok(Self::send_immediate_rows(rows)));
     }
 }

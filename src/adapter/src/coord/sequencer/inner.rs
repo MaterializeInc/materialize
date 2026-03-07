@@ -2377,6 +2377,13 @@ impl Coordinator {
                 plan::ExplaineeStatement::CreateIndex { .. } => {
                     self.explain_create_index(ctx, plan).await;
                 }
+                plan::ExplaineeStatement::CreateStandingQuery { .. } => {
+                    self.explain_create_standing_query(ctx, plan).await;
+                }
+                plan::ExplaineeStatement::ExecuteStandingQuery { .. } => {
+                    let result = self.explain_execute_standing_query(plan);
+                    ctx.retire(result);
+                }
                 plan::ExplaineeStatement::Select { .. } => {
                     self.explain_peek(ctx, plan, target_cluster).await;
                 }

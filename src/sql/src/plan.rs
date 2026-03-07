@@ -1104,6 +1104,18 @@ pub enum ExplaineeStatement {
         broken: bool,
         plan: plan::CreateIndexPlan,
     },
+    /// The object to be explained is a CREATE STANDING QUERY.
+    CreateStandingQuery {
+        /// Broken flag (see [`ExplaineeStatement::broken()`]).
+        broken: bool,
+        plan: plan::CreateStandingQueryPlan,
+    },
+    /// The object to be explained is an EXECUTE STANDING QUERY.
+    ExecuteStandingQuery {
+        /// Broken flag (see [`ExplaineeStatement::broken()`]).
+        broken: bool,
+        plan: plan::ExecuteStandingQueryPlan,
+    },
     /// The object to be explained is a SUBSCRIBE statement.
     Subscribe {
         /// Broken flag (see [`ExplaineeStatement::broken()`]).
@@ -1119,6 +1131,9 @@ impl ExplaineeStatement {
             Self::CreateView { plan, .. } => plan.view.expr.depends_on(),
             Self::CreateMaterializedView { plan, .. } => plan.materialized_view.expr.depends_on(),
             Self::CreateIndex { plan, .. } => btreeset! {plan.index.on},
+            Self::CreateStandingQuery { plan, .. } => plan.standing_query.expr.depends_on(),
+            // EXECUTE STANDING QUERY references an existing catalog item, not expressions.
+            Self::ExecuteStandingQuery { .. } => BTreeSet::new(),
             Self::Subscribe { plan, .. } => plan.from.depends_on(),
         }
     }
@@ -1139,6 +1154,8 @@ impl ExplaineeStatement {
             Self::CreateView { broken, .. } => *broken,
             Self::CreateMaterializedView { broken, .. } => *broken,
             Self::CreateIndex { broken, .. } => *broken,
+            Self::CreateStandingQuery { broken, .. } => *broken,
+            Self::ExecuteStandingQuery { broken, .. } => *broken,
             Self::Subscribe { broken, .. } => *broken,
         }
     }
@@ -1152,6 +1169,11 @@ impl ExplaineeStatementKind {
             Self::CreateView => ![GlobalPlan, PhysicalPlan].contains(stage),
             Self::CreateMaterializedView => true,
             Self::CreateIndex => ![RawPlan, DecorrelatedPlan, LocalPlan].contains(stage),
+            // Standing queries support all stages like materialized views.
+            Self::CreateStandingQuery => true,
+            // EXECUTE STANDING QUERY produces a simple textual description
+            // regardless of the stage, so it supports all stages.
+            Self::ExecuteStandingQuery => true,
             // SUBSCRIBE doesn't support RAW, DECORRELATED, or LOCAL stages because
             // it takes MIR directly rather than going through HIR lowering.
             Self::Subscribe => ![RawPlan, DecorrelatedPlan, LocalPlan].contains(stage),
@@ -1166,6 +1188,8 @@ impl std::fmt::Display for ExplaineeStatementKind {
             Self::CreateView => write!(f, "CREATE VIEW"),
             Self::CreateMaterializedView => write!(f, "CREATE MATERIALIZED VIEW"),
             Self::CreateIndex => write!(f, "CREATE INDEX"),
+            Self::CreateStandingQuery => write!(f, "CREATE STANDING QUERY"),
+            Self::ExecuteStandingQuery => write!(f, "EXECUTE STANDING QUERY"),
             Self::Subscribe => write!(f, "SUBSCRIBE"),
         }
     }
