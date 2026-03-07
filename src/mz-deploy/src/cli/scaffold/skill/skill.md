@@ -57,9 +57,14 @@ computation objects (views, materialized views). Keep them in separate schemas.
 `<schema_name>/` directory. It can contain:
 
 - `SET api = stable` — marks the schema as a **stable API** (replacement
-  schema). Only materialized views are allowed in stable API schemas. During
-  deployments, MVs in these schemas are swapped atomically, providing a stable
-  API surface for downstream consumers.
+  schema). Only materialized views are allowed in stable API schemas. By
+  default, changed objects are deployed via a schema swap, which replaces the
+  entire schema and breaks any downstream consumers outside the project.
+  Stable API schemas use the replacement protocol instead
+  (`ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT`), which atomically replaces
+  the MV's internal computation without dropping and recreating it. The MV's
+  identity and name stay the same, so downstream objects — both in-project and
+  external — are not disrupted or redeployed.
 - `COMMENT ON SCHEMA`
 - `GRANT ... ON SCHEMA`
 - `ALTER DEFAULT PRIVILEGES IN SCHEMA`

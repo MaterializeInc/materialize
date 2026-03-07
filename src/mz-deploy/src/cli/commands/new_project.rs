@@ -16,10 +16,12 @@ const README_MD: &str = include_str!("../scaffold/README.md");
 const SKILL_MD: &str = include_str!("../scaffold/skill/skill.md");
 const AGENT_MD: &str = include_str!("../scaffold/AGENT.md");
 const UNIT_TEST_REFERENCE_MD: &str = include_str!("../scaffold/skill/references/unit-tests.md");
+const STABLE_API_REFERENCE_MD: &str = include_str!("../scaffold/skill/references/stable-api.md");
 
 pub async fn run(name: &str, init_git: bool) -> Result<(), CliError> {
     let project_dir = Path::new(name);
 
+    progress::info(&format!("Creating project {name}..."));
     if project_dir.exists() {
         return Err(CliError::Message(format!(
             "destination `{}` already exists",
@@ -50,6 +52,11 @@ pub async fn run(name: &str, init_git: bool) -> Result<(), CliError> {
         ".agents/skills/mz-deploy/references/unit-tests.md",
         UNIT_TEST_REFERENCE_MD,
     )?;
+    add_file(
+        project_dir,
+        ".agents/skills/mz-deploy/references/stable-api.md",
+        STABLE_API_REFERENCE_MD,
+    )?;
 
     std::os::unix::fs::symlink(
         "../../.agents/skills/mz-deploy",
@@ -60,6 +67,7 @@ pub async fn run(name: &str, init_git: bool) -> Result<(), CliError> {
     install_agent_skills(project_dir)?;
 
     if init_git {
+        progress::info("Initializing git repository");
         let status = Command::new("git")
             .args(["init", name])
             .stdout(std::process::Stdio::null())
@@ -126,7 +134,9 @@ fn install_agent_skills(project_dir: &Path) -> Result<(), CliError> {
             "-a",
             "universal",
             "-a",
-            "claude",
+            "claude-code",
+            "--project",
+            "--yes",
         ])
         .current_dir(project_dir)
         .stdout(std::process::Stdio::null())
