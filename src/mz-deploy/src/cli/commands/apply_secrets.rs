@@ -23,6 +23,7 @@ pub async fn run(
     directory: &Path,
     profile: &Profile,
     settings: &ProjectSettings,
+    dry_run: bool,
 ) -> Result<(), CliError> {
     let start_time = Instant::now();
 
@@ -44,7 +45,7 @@ pub async fn run(
         .await
         .map_err(CliError::Connection)?;
 
-    let executor = executor::DeploymentExecutor::new(&client);
+    let executor = executor::DeploymentExecutor::with_dry_run(&client, dry_run);
 
     // Prepare schemas and mod statements for secret schemas
     let secret_schemas = collect_secret_schemas(&secrets);

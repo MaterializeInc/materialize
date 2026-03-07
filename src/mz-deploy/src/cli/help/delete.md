@@ -63,4 +63,4 @@ Connections, secrets, and tables use fully-qualified `database.schema.object` na
 - `mz-deploy apply roles` — Create or update roles.
 - `mz-deploy apply connections` — Create or update connections.
 - `mz-deploy apply secrets` — Create or update secrets.
-- `mz-deploy create-tables` — Create tables.
+- `mz-deploy apply tables` — Create tables.

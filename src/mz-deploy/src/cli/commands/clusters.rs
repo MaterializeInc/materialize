@@ -13,7 +13,7 @@ use std::time::Instant;
 /// Loads cluster definitions from `<directory>/clusters/` and converges
 /// the live Materialize state to match: creating missing clusters and
 /// altering ones whose configuration has drifted.
-pub async fn run(directory: &Path, profile: &Profile) -> Result<(), CliError> {
+pub async fn run(directory: &Path, profile: &Profile, dry_run: bool) -> Result<(), CliError> {
     let start_time = Instant::now();
 
     // Load cluster definitions
@@ -33,6 +33,22 @@ pub async fn run(directory: &Path, profile: &Profile) -> Result<(), CliError> {
         &format!("Found {} cluster definition(s)", definitions.len()),
         load_start.elapsed(),
     );
+
+    if dry_run {
+        for def in &definitions {
+            println!("-- Would apply cluster '{}'", def.name);
+            println!("{};", def.create_stmt);
+            for grant in &def.grants {
+                println!("{};", grant);
+            }
+            for comment in &def.comments {
+                println!("{};", comment);
+            }
+        }
+        let total_duration = start_time.elapsed();
+        progress::summary("Clusters dry run complete", total_duration);
+        return Ok(());
+    }
 
     // Connect to Materialize
     let client = Client::connect_with_profile(profile.clone())

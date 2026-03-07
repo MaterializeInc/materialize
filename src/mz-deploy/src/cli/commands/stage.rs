@@ -291,7 +291,7 @@ fn partition_objects<'a>(
 fn log_partition_summary(partitioned: &PartitionedObjects<'_>) {
     if partitioned.table_count > 0 {
         verbose!(
-            "Skipped {} table(s)/source(s) - use 'mz-deploy create-tables' for those",
+            "Skipped {} table(s)/source(s) - use 'mz-deploy apply' for those",
             partitioned.table_count
         );
     }

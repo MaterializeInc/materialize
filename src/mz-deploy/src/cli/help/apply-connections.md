@@ -60,5 +60,4 @@ which matches the project's normalized format.
 - `mz-deploy apply secrets` — Create/update secrets before connections.
 - `mz-deploy apply clusters` — Converge cluster definitions similarly.
 - `mz-deploy apply roles` — Converge role definitions similarly.
-- `mz-deploy create-tables` — Create tables, sources, connections, and
-  secrets that don't already exist (will not reconcile drift).
+- `mz-deploy apply` — Apply all infrastructure objects in dependency order.

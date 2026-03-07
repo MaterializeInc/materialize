@@ -13,7 +13,7 @@ production, similar to `git log`. Newest promotions appear first.
 2. Queries all promoted deployments, ordered by promotion time (newest
    first).
 3. For each deployment, displays:
-   - Deployment ID and kind (staging or create-tables)
+   - Deployment ID
    - Git commit (if available)
    - Promoted by and promotion timestamp
    - Schemas included in the deployment

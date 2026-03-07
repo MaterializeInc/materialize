@@ -58,7 +58,6 @@ Other expressions are passed through to Materialize unchanged.
 
 ## Related Commands
 
-- `mz-deploy create-tables` — Create tables, sources, and secrets that
-  don't already exist (will not update existing secret values).
+- `mz-deploy apply` — Apply all infrastructure objects in dependency order.
 - `mz-deploy apply clusters` — Converge cluster definitions similarly.
 - `mz-deploy apply roles` — Converge role definitions similarly.

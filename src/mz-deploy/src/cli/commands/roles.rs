@@ -17,7 +17,7 @@ use std::time::Instant;
 /// Loads role definitions from `<directory>/roles/` and converges
 /// the live Materialize state to match: creating missing roles and
 /// applying ALTER, GRANT, and COMMENT statements idempotently.
-pub async fn run(directory: &Path, profile: &Profile) -> Result<(), CliError> {
+pub async fn run(directory: &Path, profile: &Profile, dry_run: bool) -> Result<(), CliError> {
     let start_time = Instant::now();
 
     // Load role definitions
@@ -37,6 +37,25 @@ pub async fn run(directory: &Path, profile: &Profile) -> Result<(), CliError> {
         &format!("Found {} role definition(s)", definitions.len()),
         load_start.elapsed(),
     );
+
+    if dry_run {
+        for def in &definitions {
+            println!("-- Would apply role '{}'", def.name);
+            println!("{};", def.create_stmt);
+            for alter in &def.alter_stmts {
+                println!("{};", alter);
+            }
+            for grant in &def.grants {
+                println!("{};", grant);
+            }
+            for comment in &def.comments {
+                println!("{};", comment);
+            }
+        }
+        let total_duration = start_time.elapsed();
+        progress::summary("Roles dry run complete", total_duration);
+        return Ok(());
+    }
 
     // Connect to Materialize
     let client = Client::connect_with_profile(profile.clone())

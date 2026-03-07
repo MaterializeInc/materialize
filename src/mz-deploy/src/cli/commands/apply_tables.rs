@@ -1,4 +1,4 @@
-//! Create tables command - create tables that don't exist in the database.
+//! Apply tables command - create tables that don't exist in the database.
 
 use crate::cli::git;
 use crate::cli::progress;
@@ -166,6 +166,182 @@ pub async fn run(
     Ok(())
 }
 
+/// Apply only table objects (no deployment tracking).
+///
+/// Creates tables that don't exist in the database. Existing tables are skipped.
+pub async fn apply_tables(
+    directory: &Path,
+    profile: &Profile,
+    settings: &ProjectSettings,
+    dry_run: bool,
+) -> Result<(), CliError> {
+    apply_by_kind(
+        directory,
+        profile,
+        settings,
+        dry_run,
+        ObjectKindFilter::Tables,
+    )
+    .await
+}
+
+/// Apply only source objects (no deployment tracking).
+///
+/// Creates sources that don't exist in the database. Existing sources are skipped.
+pub async fn apply_sources(
+    directory: &Path,
+    profile: &Profile,
+    settings: &ProjectSettings,
+    dry_run: bool,
+) -> Result<(), CliError> {
+    apply_by_kind(
+        directory,
+        profile,
+        settings,
+        dry_run,
+        ObjectKindFilter::Sources,
+    )
+    .await
+}
+
+/// Which object kinds to create.
+enum ObjectKindFilter {
+    Tables,
+    Sources,
+}
+
+/// Shared implementation for `apply_tables` and `apply_sources`.
+async fn apply_by_kind(
+    directory: &Path,
+    profile: &Profile,
+    settings: &ProjectSettings,
+    dry_run: bool,
+    filter: ObjectKindFilter,
+) -> Result<(), CliError> {
+    let (label, matcher): (&str, Box<dyn Fn(&Statement) -> bool>) = match filter {
+        ObjectKindFilter::Tables => (
+            "table",
+            Box::new(|stmt| {
+                matches!(
+                    stmt,
+                    Statement::CreateTable(_) | Statement::CreateTableFromSource(_)
+                )
+            }),
+        ),
+        ObjectKindFilter::Sources => (
+            "source",
+            Box::new(|stmt| matches!(stmt, Statement::CreateSource(_))),
+        ),
+    };
+
+    let planned_project = super::compile::run(directory, TypeCheckMode::Disabled).await?;
+    let client = Client::connect_with_profile(profile.clone())
+        .await
+        .map_err(CliError::Connection)?;
+
+    // Collect object IDs matching the filter
+    let mut target_ids = BTreeSet::new();
+    let mut dep_ids = BTreeSet::new();
+    for obj in planned_project.iter_objects() {
+        if matcher(&obj.typed_object.stmt) {
+            target_ids.insert(obj.id.clone());
+        }
+        // Also collect dependency objects (secrets, connections, sources) needed by tables
+        if matches!(filter, ObjectKindFilter::Tables) {
+            match &obj.typed_object.stmt {
+                Statement::CreateSecret(_)
+                | Statement::CreateConnection(_)
+                | Statement::CreateSource(_) => {
+                    dep_ids.insert(obj.id.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if target_ids.is_empty() {
+        progress::info(&format!("No {}s found in project", label));
+        return Ok(());
+    }
+
+    // For tables, we need to include dependency objects in the create set
+    let all_ids: BTreeSet<_> = target_ids.iter().chain(dep_ids.iter()).cloned().collect();
+    let all_objects = planned_project.get_sorted_objects_filtered(&all_ids)?;
+
+    // Check which already exist
+    let existing = match filter {
+        ObjectKindFilter::Tables => {
+            client
+                .introspection()
+                .check_tables_exist(&target_ids)
+                .await?
+        }
+        ObjectKindFilter::Sources => {
+            client
+                .introspection()
+                .check_sources_exist(&target_ids)
+                .await?
+        }
+    };
+    // Also check dependency existence
+    let existing_deps = if matches!(filter, ObjectKindFilter::Tables) && !dep_ids.is_empty() {
+        let mut deps = BTreeSet::new();
+        let introspection = client.introspection();
+        let (existing_secrets, existing_connections, existing_sources) = tokio::try_join!(
+            introspection.check_secrets_exist(&dep_ids),
+            introspection.check_connections_exist(&dep_ids),
+            introspection.check_sources_exist(&dep_ids),
+        )?;
+        deps.extend(existing_secrets);
+        deps.extend(existing_connections);
+        deps.extend(existing_sources);
+        deps
+    } else {
+        BTreeSet::new()
+    };
+
+    let all_existing: BTreeSet<_> = existing
+        .iter()
+        .chain(existing_deps.iter())
+        .cloned()
+        .collect();
+
+    let to_create: Vec<_> = all_objects
+        .into_iter()
+        .filter(|(obj_id, _)| !all_existing.contains(obj_id))
+        .collect();
+
+    if to_create.is_empty() {
+        progress::info(&format!(
+            "All {} {}(s) already exist. Nothing to create.",
+            target_ids.len(),
+            label,
+        ));
+        return Ok(());
+    }
+
+    progress::info(&format!("Creating {} new {}(s)...", to_create.len(), label));
+
+    let executor = executor::DeploymentExecutor::with_dry_run(&client, dry_run);
+    let schemas: BTreeSet<_> = to_create
+        .iter()
+        .map(|(id, _)| project::SchemaQualifier::new(id.database.clone(), id.schema.clone()))
+        .collect();
+    executor
+        .prepare_databases_and_schemas(&planned_project, &schemas, None)
+        .await?;
+
+    let resolver = SecretResolver::new(&settings.secret_config);
+    let success_count = execute_table_creates(&executor, &resolver, &to_create).await?;
+
+    progress::success(&format!(
+        "Successfully created {} new {}(s)",
+        success_count, label
+    ));
+
+    Ok(())
+}
+
 /// Partitions planned objects into catalog categories used by existence checks.
 ///
 /// Tables, sources, secrets, and connections are checked in different system catalogs,
@@ -290,7 +466,7 @@ async fn execute_table_creates(
 }
 
 #[allow(clippy::too_many_arguments)]
-/// Finalizes create-tables with either dry-run output or persisted deployment state.
+/// Finalizes apply-tables with either dry-run output or persisted deployment state.
 ///
 /// In non-dry-run mode this writes a promoted deployment snapshot containing exactly
 /// the objects created in this invocation so later diffing and conflict checks stay accurate.

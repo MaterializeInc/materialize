@@ -12,7 +12,7 @@ use crate::project::SchemaQualifier;
 /// The type of deployment - either tables-only or full objects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeploymentKind {
-    /// Table creation deployment (create-tables command)
+    /// Table creation deployment (apply tables command)
     Tables,
     /// Full object deployment (stage, apply commands)
     Objects,

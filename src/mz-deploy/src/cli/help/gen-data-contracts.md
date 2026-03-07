@@ -18,7 +18,7 @@ during `compile` and `test`.
 
 If there are no external dependencies, the command succeeds with an empty
 lock file. The lock file is also automatically regenerated after
-`create-tables` runs.
+`apply tables` runs.
 
 ## Examples
 
@@ -36,5 +36,5 @@ lock file. The lock file is also automatically regenerated after
 
 - `mz-deploy compile` — Uses `types.lock` for type checking.
 - `mz-deploy test` — Uses `types.lock` for test validation.
-- `mz-deploy create-tables` — Automatically runs gen-data-contracts after
+- `mz-deploy apply tables` — Automatically runs gen-data-contracts after
   creating tables.

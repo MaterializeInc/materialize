@@ -18,9 +18,9 @@ const COMMANDS: &[(&str, &str)] = &[
     ("apply-roles", include_str!("help/apply-roles.md")),
     ("apply-secrets", include_str!("help/apply-secrets.md")),
     ("compile", include_str!("help/compile.md")),
-    ("create-tables", include_str!("help/create-tables.md")),
     ("debug", include_str!("help/debug.md")),
     ("delete", include_str!("help/delete.md")),
+    ("deploy", include_str!("help/deploy.md")),
     ("deployments", include_str!("help/deployments.md")),
     ("describe", include_str!("help/describe.md")),
     (
@@ -41,9 +41,12 @@ const ALIASES: &[(&str, &str)] = &[
     ("clusters", "apply-clusters"),
     ("connections", "apply-connections"),
     ("log", "history"),
+    ("promote", "deploy"),
     ("roles", "apply-roles"),
     ("secrets", "apply-secrets"),
     ("show", "describe"),
+    ("sources", "apply"),
+    ("tables", "apply"),
 ];
 
 /// Look up extended help by command name or alias.
@@ -125,6 +128,7 @@ mod tests {
         assert!(help_for("compile").is_some());
         assert!(help_for("stage").is_some());
         assert!(help_for("apply").is_some());
+        assert!(help_for("deploy").is_some());
     }
 
     #[test]
@@ -135,6 +139,7 @@ mod tests {
         assert_eq!(help_for("branches"), help_for("deployments"));
         assert_eq!(help_for("clusters"), help_for("apply-clusters"));
         assert_eq!(help_for("roles"), help_for("apply-roles"));
+        assert_eq!(help_for("promote"), help_for("deploy"));
     }
 
     #[test]

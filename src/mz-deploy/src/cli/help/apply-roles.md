@@ -43,4 +43,4 @@ same result.
 ## Related Commands
 
 - `mz-deploy apply clusters` — Converge cluster definitions similarly.
-- `mz-deploy apply <DEPLOY_ID>` — Promote a staging deployment.
+- `mz-deploy deploy <DEPLOY_ID>` — Promote a staging deployment.

@@ -12,10 +12,10 @@
 //! - **[`stage`]** — Deploy the project to a staging environment using
 //!   blue/green schemas.
 //! - **[`ready`]** — Check hydration status of a staged deployment.
-//! - **[`apply`]** — Cut over a staged deployment to become the live environment.
+//! - **[`deploy`]** — Promote a staged deployment to production.
+//! - **[`apply_all`]** — Orchestrate all infrastructure apply steps.
 //! - **[`abort`]** — Roll back a staged deployment.
-//! - **[`create_tables`]** — Create tables defined in the project on the target
-//!   region.
+//! - **[`apply_tables`]** — Helpers for creating tables and sources.
 //! - **[`gen_data_contracts`]** — Generate or refresh the `types.lock` file from
 //!   the live region.
 //! - **[`describe`]** — Print a summary of the compiled project.
@@ -43,14 +43,15 @@ pub type ObjectRef<'a> = (
 );
 
 pub mod abort;
-pub mod apply;
+pub mod apply_all;
 pub mod apply_connections;
 pub mod apply_secrets;
+pub mod apply_tables;
 pub mod clusters;
 pub mod compile;
-pub mod create_tables;
 pub mod debug;
 pub mod delete;
+pub mod deploy;
 pub mod deployments;
 pub mod describe;
 pub mod gen_data_contracts;

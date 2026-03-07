@@ -4,7 +4,7 @@ description: >
   Guide for working with mz-deploy projects that manage Materialize SQL objects
   via blue-green deployments. Use when editing .sql model files, project.toml,
   profiles.toml, clusters/, roles/, or running mz-deploy commands (compile,
-  stage, apply, create-tables, ready, test).
+  stage, apply, deploy, ready, test).
 ---
 
 # mz-deploy
@@ -109,20 +109,20 @@ Environment variable override: `MZ_PROFILE_<NAME>_PASSWORD` (e.g.,
 
 ## Deployment lifecycle
 
-To deploy changes: `compile` → `create-tables` → `stage` → `ready` → `apply`.
+To deploy changes: `compile` → `apply` → `stage` → `ready` → `deploy`.
 
 1. `mz-deploy compile` — Parse and validate all SQL files locally.
-2. `mz-deploy create-tables` — Create tables and sources (durable state,
-   managed separately from deployments).
+2. `mz-deploy apply` — Apply infrastructure objects (clusters, roles,
+   secrets, connections, sources, tables) in dependency order.
 3. `mz-deploy stage` — Deploy views, materialized views, indexes, and sinks
    into a new "shadow" deployment that runs alongside the current one.
 4. `mz-deploy ready` — Wait for all materialized views and indexes in the
    staged deployment to be fully hydrated.
-5. `mz-deploy apply` — Swap the staged deployment into the active slot.
+5. `mz-deploy deploy` — Swap the staged deployment into the active slot.
 
 Tables and sources are **durable state** — they persist across deployments and
-are only created/modified via `create-tables`. Everything else (views, MVs,
-indexes, sinks) is deployed atomically via `stage` + `apply`.
+are only created/modified via `apply`. Everything else (views, MVs,
+indexes, sinks) is deployed atomically via `stage` + `deploy`.
 
 ## Unit tests
 

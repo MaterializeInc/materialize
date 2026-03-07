@@ -22,7 +22,7 @@ step suitable for local development and CI pipelines.
 With `-v`, also prints the full dependency graph, deployment order, and
 generated SQL plan.
 
-A passing `compile` guarantees that `stage` and `create-tables` will not
+A passing `compile` guarantees that `stage` and `apply` will not
 fail at the SQL-parsing stage.
 
 ## Flags

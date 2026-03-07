@@ -54,11 +54,11 @@ Status indicators:
   or check if source data is delayed.
 - **Cluster failing** — A replica may be OOM-looping. Check replica status
   in the Materialize console and consider increasing cluster size.
-- **Already promoted** — The deployment has been applied. No need to
+- **Already promoted** — The deployment has already been promoted. No need to
   monitor.
 
 ## Related Commands
 
 - `mz-deploy stage` — Create the staging deployment to monitor.
-- `mz-deploy apply` — Promote once all clusters are ready.
+- `mz-deploy deploy` — Promote once all clusters are ready.
 - `mz-deploy deployments` — List deployments with cluster status summary.

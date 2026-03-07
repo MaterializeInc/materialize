@@ -61,27 +61,30 @@ enum Command {
         skip_typecheck: bool,
     },
 
-    /// Create tables that don't exist in the database
+    /// Apply infrastructure objects to Materialize (Terraform-like)
     ///
-    /// Queries the database first and only creates tables that don't already exist.
-    /// Tracks the deployment under a deploy ID (default: random 7-char hex).
-    /// Only tables that are actually created are recorded in deployment metadata.
+    /// Declarative, diff-based, idempotent management of infrastructure objects.
+    /// Without a subcommand, applies all types in dependency order:
+    /// clusters → roles → secrets → connections → sources → tables.
     ///
-    /// Example:
-    ///   mz-deploy create-tables                 # Use random deploy ID
-    ///   mz-deploy create-tables --name abc123   # Use custom deploy ID
-    #[command(after_help = "Run 'mz-deploy help create-tables' for a detailed usage guide.")]
-    CreateTables {
-        /// Deploy ID for this table deployment (default: random 7-char hex)
-        ///
-        /// The deploy ID will be used to track this table deployment separately.
-        /// Must contain only alphanumeric characters, hyphens, and underscores.
-        #[arg(long, value_name = "DEPLOY_ID")]
-        deploy_id: Option<String>,
-
-        /// Allow deployment with uncommitted git changes
+    /// Subcommands:
+    ///   clusters     Apply cluster definitions from clusters/ directory
+    ///   roles        Apply role definitions from roles/ directory
+    ///   secrets      Apply secret definitions from the project
+    ///   connections  Apply connection definitions from the project
+    ///   sources      Apply source definitions from the project
+    ///   tables       Apply table definitions from the project
+    ///
+    /// Examples:
+    ///   mz-deploy apply                           # Apply all infrastructure
+    ///   mz-deploy apply --skip-secrets            # Skip secrets
+    ///   mz-deploy apply --dry-run                 # Preview SQL
+    ///   mz-deploy apply clusters                  # Apply cluster definitions only
+    #[command(after_help = "Run 'mz-deploy help apply' for a detailed usage guide.")]
+    Apply {
+        /// Skip applying secrets (for users without secret access)
         #[arg(long)]
-        allow_dirty: bool,
+        skip_secrets: bool,
 
         /// Print SQL statements without executing them
         ///
@@ -90,37 +93,36 @@ enum Command {
         /// reviewing changes before deployment.
         #[arg(long)]
         dry_run: bool,
+
+        #[command(subcommand)]
+        subcommand: Option<ApplyCommand>,
     },
 
-    /// Apply changes to Materialize
+    /// Promote a staging deployment to production
     ///
-    /// When used with a DEPLOY_ID, promotes a staging deployment to production
-    /// via an atomic schema swap. Before promoting, verifies that all staging
-    /// clusters are fully hydrated and caught up (unless --skip-ready is specified).
-    ///
-    /// Subcommands:
-    ///   clusters  Apply cluster definitions from clusters/ directory
+    /// Atomically swaps a staging deployment into production using ALTER SWAP.
+    /// Before promoting, verifies that all staging clusters are fully hydrated
+    /// and caught up (unless --skip-ready is specified).
     ///
     /// Examples:
-    ///   mz-deploy apply abc123                    # Promote staging deployment
-    ///   mz-deploy apply abc123 --skip-ready       # Skip hydration check
-    ///   mz-deploy apply abc123 --allowed-lag 600  # Allow up to 10 min lag
-    ///   mz-deploy apply clusters                  # Apply cluster definitions
+    ///   mz-deploy deploy abc123                    # Promote staging deployment
+    ///   mz-deploy deploy abc123 --skip-ready       # Skip hydration check
+    ///   mz-deploy deploy abc123 --allowed-lag 600  # Allow up to 10 min lag
     #[command(
-        subcommand_negates_reqs = true,
-        after_help = "Run 'mz-deploy help apply' for a detailed usage guide."
+        visible_alias = "promote",
+        after_help = "Run 'mz-deploy help deploy' for a detailed usage guide."
     )]
-    Apply {
+    Deploy {
         /// Staging deployment ID to promote to production
         ///
         /// The deployment ID was assigned when running 'mz-deploy stage'. You can
         /// find active deployments with 'mz-deploy deployments'.
-        #[arg(value_name = "DEPLOY_ID", required = true)]
-        deploy_id: Option<String>,
+        #[arg(value_name = "DEPLOY_ID")]
+        deploy_id: String,
 
         /// Skip conflict detection when promoting
         ///
-        /// Normally, apply checks if production schemas were modified after the
+        /// Normally, deploy checks if production schemas were modified after the
         /// staging deployment was created. This flag bypasses that safety check,
         /// which may overwrite recent production changes.
         #[arg(long)]
@@ -128,7 +130,7 @@ enum Command {
 
         /// Skip the readiness check before promoting
         ///
-        /// By default, apply verifies all staging clusters are hydrated and caught
+        /// By default, deploy verifies all staging clusters are hydrated and caught
         /// up before promoting. Use this flag to skip that check and promote
         /// immediately, which may result in stale data being served briefly.
         #[arg(long)]
@@ -141,16 +143,13 @@ enum Command {
         /// how far behind real-time the materialized data is. Default: 300 (5 min).
         #[arg(long, value_name = "SECONDS", default_value = "300")]
         allowed_lag: i64,
-
-        #[command(subcommand)]
-        subcommand: Option<ApplyCommand>,
     },
 
     /// Create a staging deployment for testing changes
     ///
     /// Deploys schemas and objects to staging with suffixed names (e.g., 'public_abc123').
     /// This allows testing changes in isolation before promoting to production.
-    /// Staging deployments can be listed with 'deployments' and promoted with 'apply'.
+    /// Staging deployments can be listed with 'deployments' and promoted with 'deploy'.
     ///
     /// Example:
     ///   mz-deploy stage                    # Use random deploy ID
@@ -428,6 +427,24 @@ enum ApplyCommand {
     ///   mz-deploy apply connections
     #[command(after_help = "Run 'mz-deploy help apply-connections' for a detailed usage guide.")]
     Connections,
+    /// Apply source definitions from the project
+    ///
+    /// Creates sources that don't exist in the database. Existing sources
+    /// are skipped (idempotent).
+    ///
+    /// Example:
+    ///   mz-deploy apply sources
+    #[command(after_help = "Run 'mz-deploy help apply' for a detailed usage guide.")]
+    Sources,
+    /// Apply table definitions from the project
+    ///
+    /// Creates tables that don't exist in the database. Existing tables
+    /// are skipped (idempotent).
+    ///
+    /// Example:
+    ///   mz-deploy apply tables
+    #[command(after_help = "Run 'mz-deploy help apply' for a detailed usage guide.")]
+    Tables,
 }
 
 #[derive(Subcommand, Debug)]
@@ -517,60 +534,79 @@ async fn run(args: Args) -> Result<(), CliError> {
                 .await
                 .map(|_| ())
         }
-        Some(Command::CreateTables {
-            deploy_id,
-            allow_dirty,
-            dry_run,
-        }) => {
-            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
-
-            cli::commands::create_tables::run(
-                &profile,
-                &args.directory,
-                &settings,
-                deploy_id.as_deref(),
-                allow_dirty,
-                dry_run,
-            )
-            .await?;
-            if !dry_run {
-                cli::commands::gen_data_contracts::run(&profile, &args.directory).await
-            } else {
-                Ok(())
-            }
-        }
         Some(Command::Apply {
-            deploy_id,
-            force,
-            skip_ready,
-            allowed_lag,
+            skip_secrets,
+            dry_run,
             subcommand,
         }) => {
             let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
 
             match subcommand {
                 Some(ApplyCommand::Clusters) => {
-                    cli::commands::clusters::run(&args.directory, &profile).await
+                    cli::commands::clusters::run(&args.directory, &profile, dry_run).await
                 }
                 Some(ApplyCommand::Roles) => {
-                    cli::commands::roles::run(&args.directory, &profile).await
+                    cli::commands::roles::run(&args.directory, &profile, dry_run).await
                 }
                 Some(ApplyCommand::Secrets) => {
-                    cli::commands::apply_secrets::run(&args.directory, &profile, &settings).await
-                }
-                Some(ApplyCommand::Connections) => {
-                    cli::commands::apply_connections::run(&args.directory, &profile, &settings)
+                    cli::commands::apply_secrets::run(&args.directory, &profile, &settings, dry_run)
                         .await
                 }
-                None => {
-                    let deploy_id = deploy_id.expect("deploy_id is required without subcommand");
-                    if !skip_ready {
-                        cli::commands::ready::run(&profile, &deploy_id, true, None, allowed_lag)
-                            .await?;
+                Some(ApplyCommand::Connections) => {
+                    cli::commands::apply_connections::run(
+                        &args.directory,
+                        &profile,
+                        &settings,
+                        dry_run,
+                    )
+                    .await
+                }
+                Some(ApplyCommand::Sources) => {
+                    cli::commands::apply_tables::apply_sources(
+                        &args.directory,
+                        &profile,
+                        &settings,
+                        dry_run,
+                    )
+                    .await
+                }
+                Some(ApplyCommand::Tables) => {
+                    cli::commands::apply_tables::apply_tables(
+                        &args.directory,
+                        &profile,
+                        &settings,
+                        dry_run,
+                    )
+                    .await?;
+                    if !dry_run {
+                        cli::commands::gen_data_contracts::run(&profile, &args.directory).await?;
                     }
-                    cli::commands::apply::run(&profile, &deploy_id, force).await
+                    Ok(())
+                }
+                None => {
+                    cli::commands::apply_all::run(
+                        &args.directory,
+                        &profile,
+                        &settings,
+                        skip_secrets,
+                        dry_run,
+                    )
+                    .await
                 }
             }
+        }
+        Some(Command::Deploy {
+            deploy_id,
+            force,
+            skip_ready,
+            allowed_lag,
+        }) => {
+            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
+
+            if !skip_ready {
+                cli::commands::ready::run(&profile, &deploy_id, true, None, allowed_lag).await?;
+            }
+            cli::commands::deploy::run(&profile, &deploy_id, force).await
         }
         Some(Command::Stage {
             deploy_id,

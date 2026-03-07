@@ -1,81 +1,71 @@
-# apply — Promote a staging deployment to production
+# apply — Apply infrastructure objects to Materialize
 
-Atomically swaps a staging deployment into production using `ALTER ... SWAP`.
-Supports resumable execution — if interrupted, re-running the same command
-picks up where it left off.
+Declarative, diff-based, idempotent management of infrastructure objects.
+Without a subcommand, applies all types in dependency order:
+clusters → roles → secrets → connections → sources → tables.
 
 ## Usage
 
-    mz-deploy apply <DEPLOY_ID> [FLAGS]
-    mz-deploy apply clusters
-    mz-deploy apply roles
+    mz-deploy apply [FLAGS]
+    mz-deploy apply <TYPE>
 
 ## Behavior
 
-Promoting a staging deployment (`mz-deploy apply <DEPLOY_ID>`):
+When run without a subcommand (`mz-deploy apply`):
 
-1. Validates the deployment exists and has not already been promoted.
-2. Runs a readiness check (unless `--skip-ready`): all staging clusters
-   must be hydrated and within the `--allowed-lag` threshold.
-3. Detects conflicts — checks whether production schemas were touched by
-   another deployment after this staging deployment was created. Use
-   `--force` to skip this check.
-4. Executes an atomic swap inside a transaction:
-   - Swaps user schemas (production ↔ staging).
-   - Swaps clusters (production ↔ staging).
-   - Swaps apply-state tracking schemas atomically.
-5. Post-swap work:
-   - Creates deferred sinks (held back during `stage`).
-   - Applies replacement materialized views — for schemas marked
-     with `SET api = stable`, updates each changed MV in place via
-     `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` so downstream
-     consumers are never disrupted (see `mz-deploy help stage`).
-   - Repoints sinks that depended on old production objects.
-   - Records the promotion timestamp.
-   - Drops the old production resources (now in staging names).
-6. Cleans up apply-state tracking tables.
+1. Applies cluster definitions from `clusters/` — creates missing,
+   alters drifted configuration.
+2. Applies role definitions from `roles/` — creates missing, applies
+   ALTER, GRANT, COMMENT statements.
+3. Applies secrets — creates missing, updates values (skip with
+   `--skip-secrets`).
+4. Applies connections — creates missing, reconciles drifted options.
+5. Applies sources — creates missing sources (idempotent).
+6. Applies tables — creates missing tables (idempotent).
 
-The command is **resumable**: if it crashes after the swap but before
-cleanup, re-running `mz-deploy apply <DEPLOY_ID>` detects the post-swap
-state and skips directly to step 5.
+Each step is idempotent — running `apply` multiple times converges
+to the same state.
+
+When run with a subcommand (`mz-deploy apply clusters`), only that
+type is applied.
+
+## Subcommands
+
+- `clusters` — Apply cluster definitions from `clusters/` directory.
+- `roles` — Apply role definitions from `roles/` directory.
+- `secrets` — Create missing secrets and update existing values.
+- `connections` — Create missing connections, reconcile drift.
+- `sources` — Create sources that don't exist.
+- `tables` — Create tables that don't exist.
 
 ## Flags
 
-- `--force` — Skip conflict detection. May overwrite changes made to
-  production after the staging deployment was created.
-- `--skip-ready` — Skip the readiness/hydration check before promoting.
-- `--allowed-lag <SECONDS>` — Maximum wallclock lag (in seconds) for the
-  readiness check (default: 300 = 5 minutes).
+- `--skip-secrets` — Skip applying secrets (bare `apply` only). Useful
+  for users without access to secret values.
+- `--dry-run` — Print the SQL that would be executed without running it.
 
 ## Examples
 
-    mz-deploy apply abc123                    # Promote staging deployment
-    mz-deploy apply abc123 --skip-ready       # Skip hydration check
-    mz-deploy apply abc123 --force            # Ignore conflicts
-    mz-deploy apply abc123 --allowed-lag 600  # 10 min lag tolerance
-    mz-deploy apply clusters                  # Apply cluster definitions
-    mz-deploy apply roles                     # Apply role definitions
+    mz-deploy apply                     # All infrastructure
+    mz-deploy apply --skip-secrets      # Skip secrets
+    mz-deploy apply --dry-run           # Preview SQL
+    mz-deploy apply clusters            # Clusters only
+    mz-deploy apply secrets             # Secrets only
+    mz-deploy apply tables              # Tables only
 
 ## Error Recovery
 
-- **Staging environment not found** — Verify the deploy ID with
-  `mz-deploy deployments`.
-- **Already promoted** — The deployment was already applied. Check
-  `mz-deploy history` for confirmation.
-- **Deployment conflict** — Another deployment modified production schemas.
-  Review with `mz-deploy history`, then re-run with `--force` if the
-  conflict is acceptable.
-- **Clusters not ready** — Wait for hydration with `mz-deploy ready <ID>`
-  or pass `--skip-ready` to promote anyway.
-- **Interrupted after swap** — Re-run the same `apply` command. It will
-  detect the post-swap state and resume cleanup.
-- **Sink creation fails post-swap** — The swap already succeeded. Fix the
-  sink definition and re-run `apply` to retry deferred work.
+- **Connection fails** — Check your profile configuration with
+  `mz-deploy debug`.
+- **Secret resolution fails** — Ensure environment variables or AWS
+  credentials are available, or use `--skip-secrets`.
+- **Table/source creation fails** — Already-created objects remain.
+  Fix the failing SQL and re-run; existing objects will be skipped.
 
 ## Related Commands
 
-- `mz-deploy stage` — Create the staging deployment to promote.
-- `mz-deploy ready` — Monitor hydration before promoting.
-- `mz-deploy abort` — Clean up a staging deployment without promoting.
-- `mz-deploy apply clusters` — Converge cluster definitions separately.
-- `mz-deploy apply roles` — Converge role definitions separately.
+- `mz-deploy deploy` — Promote a staging deployment to production.
+- `mz-deploy stage` — Deploy views/MVs to staging.
+- `mz-deploy compile` — Validate SQL before applying.
+- `mz-deploy apply clusters` — Converge cluster definitions.
+- `mz-deploy apply roles` — Converge role definitions.

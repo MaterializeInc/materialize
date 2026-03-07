@@ -358,7 +358,7 @@ impl fmt::Display for DatabaseValidationError {
                 writeln!(f)?;
                 writeln!(
                     f,
-                    "{} Run 'mz-deploy create-tables' to create the required tables first",
+                    "{} Run 'mz-deploy apply' to create the required tables first",
                     "help:".bright_cyan().bold()
                 )?;
                 Ok(())
@@ -445,7 +445,7 @@ mod tests {
         assert!(error_string.contains("materialize.public.another_view"));
         assert!(error_string.contains("materialize.tables.products"));
         assert!(error_string.contains("help"));
-        assert!(error_string.contains("mz-deploy create-tables"));
+        assert!(error_string.contains("mz-deploy apply"));
     }
 
     #[test]

@@ -13,7 +13,7 @@ their content hashes.
 1. Connects to the database.
 2. Queries deployment metadata for the given ID.
 3. Displays:
-   - Deployment ID and kind (staging or create-tables)
+   - Deployment ID
    - Git commit (if available)
    - Deployed by and timestamp
    - Promotion status and timestamp (if promoted)

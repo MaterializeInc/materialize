@@ -3,8 +3,8 @@
 Deploys all views, materialized views, indexes, and related objects to
 staging schemas and clusters with a suffixed name (e.g., `public_abc123`).
 Tables and sources are not recreated — they must already exist (see
-`create-tables`). Staging deployments run in isolation alongside
-production and can be promoted with `apply` or cleaned up with `abort`.
+`apply`). Staging deployments run in isolation alongside
+production and can be promoted with `deploy` or cleaned up with `abort`.
 
 ## Usage
 
@@ -27,13 +27,13 @@ production and can be promoted with `apply` or cleaned up with `abort`.
 9. On failure, automatically rolls back staging schemas and clusters
    (unless `--no-rollback`).
 
-Sinks are deferred to the `apply` step because they should not start
+Sinks are deferred to the `deploy` step because they should not start
 producing until the deployment is promoted.
 
 ### Stable API Schemas (`SET api = stable`)
 
 By default, `stage` recreates every changed object in a staging schema
-and `apply` swaps the entire schema into production. This means any
+and `deploy` swaps the entire schema into production. This means any
 downstream consumers — views, materialized views, or sinks that other
 teams have built on top of objects in that schema — would break, because
 the swap replaces the schema and all its contents atomically.
@@ -59,7 +59,7 @@ Key points:
 - A changed replacement MV does **not** propagate dirtiness to its
   downstream dependents, so dependent objects are not redeployed.
 - Replacement MVs are recorded during `stage` and applied during
-  `apply` after the main schema swap completes.
+  `deploy` after the main schema swap completes.
 
 Example schema mod file (`models/materialize/ontology.sql`):
 
@@ -100,8 +100,8 @@ during a deployment.
 ## Related Commands
 
 - `mz-deploy compile` — Validate SQL before staging.
-- `mz-deploy create-tables` — Create tables before staging.
+- `mz-deploy apply` — Create tables, sources, and other infra before staging.
 - `mz-deploy ready` — Monitor staging cluster hydration.
-- `mz-deploy apply` — Promote staging to production.
+- `mz-deploy deploy` — Promote staging to production.
 - `mz-deploy abort` — Clean up a staging deployment.
 - `mz-deploy deployments` — List active staging deployments.

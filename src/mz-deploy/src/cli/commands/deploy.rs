@@ -1,4 +1,4 @@
-//! Apply command - promote staging deployment to production via ALTER SWAP.
+//! Deploy command - promote staging deployment to production via ALTER SWAP.
 
 use crate::cli::CliError;
 use crate::cli::progress;

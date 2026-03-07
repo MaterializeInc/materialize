@@ -41,4 +41,4 @@ same result. Grants and comments are safe to re-apply.
 ## Related Commands
 
 - `mz-deploy apply roles` — Converge role definitions similarly.
-- `mz-deploy apply <DEPLOY_ID>` — Promote a staging deployment.
+- `mz-deploy deploy <DEPLOY_ID>` — Promote a staging deployment.
