@@ -290,6 +290,21 @@ pub enum ValidationErrorKind {
     RoleGrantTargetMismatch { target: String, role_name: String },
     /// COMMENT in role file targets a different role
     RoleCommentTargetMismatch { target: String, role_name: String },
+    /// Invalid statement type in network policy definition file
+    InvalidNetworkPolicyStatement {
+        statement_type: String,
+        policy_name: String,
+    },
+    /// Network policy name in CREATE NETWORK POLICY doesn't match filename
+    NetworkPolicyNameMismatch { declared: String, expected: String },
+    /// Network policy file missing required CREATE NETWORK POLICY statement
+    NetworkPolicyMissingCreateStatement { policy_name: String },
+    /// Network policy file contains multiple CREATE NETWORK POLICY statements
+    NetworkPolicyMultipleCreateStatements { policy_name: String },
+    /// GRANT in network policy file targets a different policy
+    NetworkPolicyGrantTargetMismatch { target: String, policy_name: String },
+    /// COMMENT in network policy file targets a different policy
+    NetworkPolicyCommentTargetMismatch { target: String, policy_name: String },
 }
 
 impl ValidationErrorKind {
@@ -638,6 +653,51 @@ impl ValidationErrorKind {
                     role_name, target
                 )
             }
+            Self::InvalidNetworkPolicyStatement {
+                statement_type,
+                policy_name,
+            } => {
+                format!(
+                    "invalid statement type in network policy file '{}': {}. Only CREATE NETWORK POLICY, GRANT ON NETWORK POLICY, and COMMENT ON NETWORK POLICY are allowed",
+                    policy_name, statement_type
+                )
+            }
+            Self::NetworkPolicyNameMismatch { declared, expected } => {
+                format!(
+                    "network policy name mismatch: declared '{}', expected '{}'",
+                    declared, expected
+                )
+            }
+            Self::NetworkPolicyMissingCreateStatement { policy_name } => {
+                format!(
+                    "no CREATE NETWORK POLICY statement found in network policy file '{}'",
+                    policy_name
+                )
+            }
+            Self::NetworkPolicyMultipleCreateStatements { policy_name } => {
+                format!(
+                    "multiple CREATE NETWORK POLICY statements found in network policy file '{}'",
+                    policy_name
+                )
+            }
+            Self::NetworkPolicyGrantTargetMismatch {
+                target,
+                policy_name,
+            } => {
+                format!(
+                    "GRANT in network policy file '{}' targets wrong policy: '{}'",
+                    policy_name, target
+                )
+            }
+            Self::NetworkPolicyCommentTargetMismatch {
+                target,
+                policy_name,
+            } => {
+                format!(
+                    "COMMENT in network policy file '{}' targets wrong policy: '{}'",
+                    policy_name, target
+                )
+            }
         }
     }
 
@@ -793,6 +853,24 @@ impl ValidationErrorKind {
             }
             Self::RoleCommentTargetMismatch { .. } => {
                 Some("COMMENT statements in a role file must target the role defined in that file".to_string())
+            }
+            Self::InvalidNetworkPolicyStatement { .. } => {
+                Some("network policy files can only contain CREATE NETWORK POLICY, GRANT ON NETWORK POLICY, and COMMENT ON NETWORK POLICY statements".to_string())
+            }
+            Self::NetworkPolicyNameMismatch { .. } => {
+                Some("the network policy name in your CREATE NETWORK POLICY statement must match the .sql file name".to_string())
+            }
+            Self::NetworkPolicyMissingCreateStatement { .. } => {
+                Some("each network policy file must contain exactly one CREATE NETWORK POLICY statement".to_string())
+            }
+            Self::NetworkPolicyMultipleCreateStatements { .. } => {
+                Some("each network policy file must contain exactly one CREATE NETWORK POLICY statement".to_string())
+            }
+            Self::NetworkPolicyGrantTargetMismatch { .. } => {
+                Some("GRANT statements in a network policy file must target the policy defined in that file".to_string())
+            }
+            Self::NetworkPolicyCommentTargetMismatch { .. } => {
+                Some("COMMENT statements in a network policy file must target the policy defined in that file".to_string())
             }
         }
     }

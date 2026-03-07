@@ -11,6 +11,7 @@ removed after a successful drop.
 
     mz-deploy delete cluster <NAME>
     mz-deploy delete connection <NAME>
+    mz-deploy delete network-policy <NAME>
     mz-deploy delete role <NAME>
     mz-deploy delete secret <NAME>
     mz-deploy delete table <NAME>
@@ -21,9 +22,10 @@ removed after a successful drop.
 
 ## Name Format
 
-Clusters and roles use simple names:
+Clusters, network policies, and roles use simple names:
 
     mz-deploy delete cluster analytics
+    mz-deploy delete network-policy my_policy
     mz-deploy delete role analyst
 
 Connections, secrets, and tables use fully-qualified `database.schema.object` names:
@@ -45,6 +47,7 @@ Connections, secrets, and tables use fully-qualified `database.schema.object` na
 
     mz-deploy delete cluster analytics              # Prompts before dropping
     mz-deploy delete cluster analytics --yes        # Skips prompt
+    mz-deploy delete network-policy my_policy       # Drop a network policy
     mz-deploy delete table mydb.public.users        # Drop a table
     mz-deploy delete connection mydb.public.pg_conn --yes
 
@@ -61,6 +64,7 @@ Connections, secrets, and tables use fully-qualified `database.schema.object` na
 
 - `mz-deploy apply clusters` — Create or update clusters.
 - `mz-deploy apply roles` — Create or update roles.
+- `mz-deploy apply network-policies` — Create or update network policies.
 - `mz-deploy apply connections` — Create or update connections.
 - `mz-deploy apply secrets` — Create or update secrets.
 - `mz-deploy apply tables` — Create tables.

@@ -32,11 +32,13 @@ pub async fn run(name: &str, init_git: bool) -> Result<(), CliError> {
     create_dir(project_dir, "models/materialize/public")?;
     create_dir(project_dir, "clusters")?;
     create_dir(project_dir, "roles")?;
+    create_dir(project_dir, "network_policies")?;
     create_dir(project_dir, ".agents/skills/mz-deploy/references")?;
     create_dir(project_dir, ".claude/skills")?;
     add_file(project_dir, "models/materialize/public/.gitkeep", "")?;
     add_file(project_dir, "clusters/.gitkeep", "")?;
     add_file(project_dir, "roles/.gitkeep", "")?;
+    add_file(project_dir, "network_policies/.gitkeep", "")?;
     add_file(project_dir, ".gitignore", GITIGNORE)?;
     add_file(project_dir, "project.toml", PROJECT_TOML)?;
     add_file(

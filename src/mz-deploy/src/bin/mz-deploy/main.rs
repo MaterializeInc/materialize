@@ -65,12 +65,13 @@ enum Command {
     ///
     /// Declarative, diff-based, idempotent management of infrastructure objects.
     /// Without a subcommand, applies all types in dependency order:
-    /// clusters → roles → secrets → connections → sources → tables.
+    /// clusters → roles → network-policies → secrets → connections → sources → tables.
     ///
     /// Subcommands:
-    ///   clusters     Apply cluster definitions from clusters/ directory
-    ///   roles        Apply role definitions from roles/ directory
-    ///   secrets      Apply secret definitions from the project
+    ///   clusters          Apply cluster definitions from clusters/ directory
+    ///   roles             Apply role definitions from roles/ directory
+    ///   network-policies  Apply network policy definitions from network_policies/ directory
+    ///   secrets           Apply secret definitions from the project
     ///   connections  Apply connection definitions from the project
     ///   sources      Apply source definitions from the project
     ///   tables       Apply table definitions from the project
@@ -408,6 +409,18 @@ enum ApplyCommand {
     ///   mz-deploy apply roles
     #[command(after_help = "Run 'mz-deploy help apply-roles' for a detailed usage guide.")]
     Roles,
+    /// Apply network policy definitions from network_policies/ directory
+    ///
+    /// Converges the live Materialize state to match the network policy definitions.
+    /// Creates policies that don't exist and alters ones whose rules have changed.
+    /// Grants and comments are applied idempotently.
+    ///
+    /// Example:
+    ///   mz-deploy apply network-policies
+    #[command(
+        after_help = "Run 'mz-deploy help apply-network-policies' for a detailed usage guide."
+    )]
+    NetworkPolicies,
     /// Apply secret definitions from the project
     ///
     /// Creates missing secrets and updates existing ones to match the project
@@ -458,6 +471,12 @@ enum DeleteCommand {
     /// Delete a connection
     Connection {
         /// Fully-qualified connection name (database.schema.name)
+        #[arg(value_name = "NAME")]
+        name: String,
+    },
+    /// Delete a network policy
+    NetworkPolicy {
+        /// Network policy name
         #[arg(value_name = "NAME")]
         name: String,
     },
@@ -547,6 +566,10 @@ async fn run(args: Args) -> Result<(), CliError> {
                 }
                 Some(ApplyCommand::Roles) => {
                     cli::commands::roles::run(&args.directory, &profile, dry_run).await
+                }
+                Some(ApplyCommand::NetworkPolicies) => {
+                    cli::commands::apply_network_policies::run(&args.directory, &profile, dry_run)
+                        .await
                 }
                 Some(ApplyCommand::Secrets) => {
                     cli::commands::apply_secrets::run(&args.directory, &profile, &settings, dry_run)
@@ -670,6 +693,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             let (kind, name) = match subcommand {
                 DeleteCommand::Cluster { name } => (delete::ObjectKind::Cluster, name),
                 DeleteCommand::Connection { name } => (delete::ObjectKind::Connection, name),
+                DeleteCommand::NetworkPolicy { name } => (delete::ObjectKind::NetworkPolicy, name),
                 DeleteCommand::Role { name } => (delete::ObjectKind::Role, name),
                 DeleteCommand::Secret { name } => (delete::ObjectKind::Secret, name),
                 DeleteCommand::Table { name } => (delete::ObjectKind::Table, name),

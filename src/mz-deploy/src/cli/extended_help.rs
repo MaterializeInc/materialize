@@ -15,6 +15,10 @@ const COMMANDS: &[(&str, &str)] = &[
         "apply-connections",
         include_str!("help/apply-connections.md"),
     ),
+    (
+        "apply-network-policies",
+        include_str!("help/apply-network-policies.md"),
+    ),
     ("apply-roles", include_str!("help/apply-roles.md")),
     ("apply-secrets", include_str!("help/apply-secrets.md")),
     ("compile", include_str!("help/compile.md")),
@@ -40,6 +44,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("branches", "deployments"),
     ("clusters", "apply-clusters"),
     ("connections", "apply-connections"),
+    ("network-policies", "apply-network-policies"),
     ("log", "history"),
     ("promote", "deploy"),
     ("roles", "apply-roles"),

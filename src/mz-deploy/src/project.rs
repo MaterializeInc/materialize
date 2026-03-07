@@ -51,6 +51,7 @@ pub mod changeset;
 pub mod clusters;
 pub mod deployment_snapshot;
 pub mod error;
+pub mod network_policies;
 pub mod normalize;
 pub mod object_id;
 mod parser;

@@ -240,6 +240,19 @@ pub async fn get_cluster_config(
     }
 }
 
+/// Check if a network policy exists.
+pub async fn network_policy_exists(client: &Client, name: &str) -> Result<bool, ConnectionError> {
+    let query = r#"
+        SELECT EXISTS(
+            SELECT 1 FROM mz_catalog.mz_network_policies WHERE name = $1
+        ) AS exists
+    "#;
+
+    let row = client.query_one(query, &[&name]).await?;
+
+    Ok(row.get("exists"))
+}
+
 /// Check if a role exists.
 pub async fn role_exists(client: &Client, name: &str) -> Result<bool, ConnectionError> {
     let query = r#"
@@ -993,6 +1006,11 @@ impl IntrospectionClient<'_> {
         schema: &str,
     ) -> Result<bool, ConnectionError> {
         schema_exists(self.client, database, schema).await
+    }
+
+    /// Check if a network policy exists.
+    pub async fn network_policy_exists(&self, name: &str) -> Result<bool, ConnectionError> {
+        network_policy_exists(self.client, name).await
     }
 
     /// Check if a role exists.

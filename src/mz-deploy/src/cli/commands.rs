@@ -24,6 +24,7 @@
 //! - **[`history`]** — Show deployment history.
 //! - **[`clusters`]** — List or inspect cluster definitions.
 //! - **[`roles`]** — List or inspect role definitions.
+//! - **[`apply_network_policies`]** — Apply network policy definitions.
 //! - **[`test`]** — Run SQL unit tests against cached type information.
 //!
 //! ## Shared Types
@@ -45,6 +46,7 @@ pub type ObjectRef<'a> = (
 pub mod abort;
 pub mod apply_all;
 pub mod apply_connections;
+pub mod apply_network_policies;
 pub mod apply_secrets;
 pub mod apply_tables;
 pub mod clusters;

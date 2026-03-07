@@ -86,6 +86,7 @@ pub fn statement_type_name(stmt: &Statement<Raw>) -> &'static str {
         Statement::CreateSchema(_) => "CREATE SCHEMA",
         Statement::CreateDatabase(_) => "CREATE DATABASE",
         Statement::CreateRole(_) => "CREATE ROLE",
+        Statement::CreateNetworkPolicy(_) => "CREATE NETWORK POLICY",
         Statement::AlterRole(_) => "ALTER ROLE",
         Statement::AlterCluster(_) => "ALTER CLUSTER",
         Statement::GrantRole(_) => "GRANT ROLE",

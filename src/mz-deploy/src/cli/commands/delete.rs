@@ -13,6 +13,7 @@ use std::time::Instant;
 pub enum ObjectKind {
     Cluster,
     Connection,
+    NetworkPolicy,
     Role,
     Secret,
     Table,
@@ -23,6 +24,7 @@ impl ObjectKind {
         match self {
             ObjectKind::Cluster => "cluster",
             ObjectKind::Connection => "connection",
+            ObjectKind::NetworkPolicy => "network policy",
             ObjectKind::Role => "role",
             ObjectKind::Secret => "secret",
             ObjectKind::Table => "table",
@@ -33,6 +35,7 @@ impl ObjectKind {
         match self {
             ObjectKind::Cluster => "CLUSTER",
             ObjectKind::Connection => "CONNECTION",
+            ObjectKind::NetworkPolicy => "NETWORK POLICY",
             ObjectKind::Role => "ROLE",
             ObjectKind::Secret => "SECRET",
             ObjectKind::Table => "TABLE",
@@ -52,6 +55,12 @@ impl DeleteTarget {
         let (file_path, drop_sql) = match kind {
             ObjectKind::Cluster => (
                 directory.join("clusters").join(format!("{}.sql", name)),
+                format!("DROP {} {}", keyword, quote_identifier(name)),
+            ),
+            ObjectKind::NetworkPolicy => (
+                directory
+                    .join("network_policies")
+                    .join(format!("{}.sql", name)),
                 format!("DROP {} {}", keyword, quote_identifier(name)),
             ),
             ObjectKind::Role => (

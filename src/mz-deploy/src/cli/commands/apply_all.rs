@@ -1,6 +1,6 @@
 //! Apply-all orchestrator — runs all infrastructure apply steps in dependency order.
 //!
-//! Dependency order: clusters → roles → secrets → connections → sources → tables.
+//! Dependency order: clusters → roles → network policies → secrets → connections → sources → tables.
 
 use crate::cli::CliError;
 use crate::cli::progress;
@@ -10,7 +10,7 @@ use std::path::Path;
 
 /// Run all infrastructure apply steps in dependency order.
 ///
-/// Applies: clusters → roles → secrets (unless skipped) → connections → sources → tables.
+/// Applies: clusters → roles → network policies → secrets (unless skipped) → connections → sources → tables.
 /// Each step prints a header and delegates to the existing module's `run()` function.
 pub async fn run(
     directory: &Path,
@@ -29,7 +29,11 @@ pub async fn run(
     progress::info("--- Applying roles ---");
     super::roles::run(directory, profile, dry_run).await?;
 
-    // 3. Secrets (unless skipped)
+    // 3. Network Policies
+    progress::info("--- Applying network policies ---");
+    super::apply_network_policies::run(directory, profile, dry_run).await?;
+
+    // 4. Secrets (unless skipped)
     if skip_secrets {
         progress::info("--- Skipping secrets (--skip-secrets) ---");
     } else {
@@ -37,15 +41,15 @@ pub async fn run(
         super::apply_secrets::run(directory, profile, settings, dry_run).await?;
     }
 
-    // 4. Connections
+    // 5. Connections
     progress::info("--- Applying connections ---");
     super::apply_connections::run(directory, profile, settings, dry_run).await?;
 
-    // 5. Sources
+    // 6. Sources
     progress::info("--- Applying sources ---");
     super::apply_tables::apply_sources(directory, profile, settings, dry_run).await?;
 
-    // 6. Tables
+    // 7. Tables
     progress::info("--- Applying tables ---");
     super::apply_tables::apply_tables(directory, profile, settings, dry_run).await?;
 
