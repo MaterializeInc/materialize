@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
 """
 Benchmark standing query execution with configurable concurrency.
 
@@ -22,6 +32,7 @@ import threading
 import time
 
 import psycopg
+from psycopg import sql
 
 NUM_ROWS = 100_000
 
@@ -39,26 +50,32 @@ def setup(port: int) -> None:
     )
     sys_conn.autocommit = True
     sys_cur = sys_conn.cursor()
-    sys_cur.execute("ALTER SYSTEM SET max_result_size = '10GB'")
-    sys_cur.execute("ALTER SYSTEM SET max_connections = 65536")
+    sys_cur.execute(sql.SQL("ALTER SYSTEM SET max_result_size = '10GB'"))
+    sys_cur.execute(sql.SQL("ALTER SYSTEM SET max_connections = 65536"))
     sys_conn.close()
 
-    cur.execute("DROP STANDING QUERY IF EXISTS orders_by_customer")
-    cur.execute("DROP STANDING QUERY IF EXISTS order_by_id")
-    cur.execute("DROP TABLE IF EXISTS orders CASCADE")
-    cur.execute("CREATE TABLE orders (id INT, customer_id INT, amount INT)")
+    cur.execute(sql.SQL("DROP STANDING QUERY IF EXISTS orders_by_customer"))
+    cur.execute(sql.SQL("DROP STANDING QUERY IF EXISTS order_by_id"))
+    cur.execute(sql.SQL("DROP TABLE IF EXISTS orders CASCADE"))
+    cur.execute(sql.SQL("CREATE TABLE orders (id INT, customer_id INT, amount INT)"))
     cur.execute(
-        f"INSERT INTO orders SELECT g, g % 100, g * 10 FROM generate_series(1, {NUM_ROWS}) AS g"
+        sql.SQL(
+            "INSERT INTO orders SELECT g, g % 100, g * 10 FROM generate_series(1, {}) AS g"
+        ).format(sql.Literal(NUM_ROWS))
     )
-    cur.execute("CREATE INDEX orders_by_customer_idx ON orders (customer_id)")
-    cur.execute("CREATE INDEX orders_by_id_idx ON orders (id)")
+    cur.execute(sql.SQL("CREATE INDEX orders_by_customer_idx ON orders (customer_id)"))
+    cur.execute(sql.SQL("CREATE INDEX orders_by_id_idx ON orders (id)"))
     cur.execute(
-        "CREATE STANDING QUERY orders_by_customer (cid INT) "
-        "AS SELECT id, customer_id, amount FROM orders WHERE customer_id = cid"
+        sql.SQL(
+            "CREATE STANDING QUERY orders_by_customer (cid INT) "
+            "AS SELECT id, customer_id, amount FROM orders WHERE customer_id = cid"
+        )
     )
     cur.execute(
-        "CREATE STANDING QUERY order_by_id (oid INT) "
-        "AS SELECT id, customer_id, amount FROM orders WHERE id = oid"
+        sql.SQL(
+            "CREATE STANDING QUERY order_by_id (oid INT) "
+            "AS SELECT id, customer_id, amount FROM orders WHERE id = oid"
+        )
     )
     conn.close()
     print("Setup complete.")
@@ -80,7 +97,7 @@ def worker(
     local_latencies: list[float] = []
     while not stop_event.is_set():
         start = time.monotonic()
-        cur.execute(query)
+        cur.execute(sql.SQL(query))  # type: ignore[arg-type]
         cur.fetchall()
         elapsed = time.monotonic() - start
         local_latencies.append(elapsed)

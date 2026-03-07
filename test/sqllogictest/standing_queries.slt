@@ -62,6 +62,92 @@ EXECUTE STANDING QUERY all_orders_for_customer (10)
 1  10  100
 2  10  200
 
+# --- EXPLAIN CREATE STANDING QUERY ---
+
+query T multiline
+EXPLAIN CREATE STANDING QUERY explain_test (cid INT) AS SELECT id, customer_id, amount FROM orders WHERE customer_id = cid
+----
+materialize.public.explain_test:
+  →Differential Join %0 » %1
+    Join stage 0 in %1 with lookup key #1
+    →Arrange (#1{customer_id})
+      →Read materialize.public.orders
+    →Arrange (#1)
+      →Read Explained Query
+
+Source materialize.public.orders
+  filter=((#1{customer_id}) IS NOT NULL)
+Source Explained Query
+  filter=((#1) IS NOT NULL)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR CREATE STANDING QUERY explain_test2 (cid INT) AS SELECT id, customer_id, amount FROM orders WHERE customer_id = cid
+----
+materialize.public.explain_test2:
+  Project (#3, #0..=#2)
+    Join on=(#1{customer_id} = #4) type=differential
+      ArrangeBy keys=[[#1{customer_id}]]
+        Filter (#1{customer_id}) IS NOT NULL
+          ReadStorage materialize.public.orders
+      ArrangeBy keys=[[#1]]
+        Filter (#1) IS NOT NULL
+          ReadStorage Explained Query
+
+Source materialize.public.orders
+  filter=((#1{customer_id}) IS NOT NULL)
+Source Explained Query
+  filter=((#1) IS NOT NULL)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR CREATE STANDING QUERY explain_test3 (cid INT) AS SELECT id, customer_id, amount FROM orders WHERE customer_id = cid
+----
+materialize.public.explain_test3:
+  Join::Linear
+    linear_stage[0]
+      closure
+        project=(#3, #1, #0, #2)
+      lookup={ relation=1, key=[#1] }
+      stream={ key=[#1{customer_id}], thinning=(#0, #2) }
+    source={ relation=0, key=[#1{customer_id}] }
+    ArrangeBy
+      raw=true
+      arrangements[0]={ key=[#1{customer_id}], permutation={#0: #1, #1: #0}, thinning=(#0, #2) }
+      Get::Collection materialize.public.orders
+        raw=true
+    ArrangeBy
+      raw=true
+      arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+      Get::Collection Explained Query
+        raw=true
+
+Source materialize.public.orders
+  filter=((#1{customer_id}) IS NOT NULL)
+Source Explained Query
+  filter=((#1) IS NOT NULL)
+
+Target cluster: quickstart
+
+EOF
+
+# --- EXPLAIN EXECUTE STANDING QUERY ---
+
+query T multiline
+EXPLAIN EXECUTE STANDING QUERY orders_by_customer (10)
+----
+Execute Standing Query materialize.public.orders_by_customer
+  Parameters:
+    $1: Int32 = 10
+
+EOF
+
 # --- DROP STANDING QUERY ---
 
 statement ok

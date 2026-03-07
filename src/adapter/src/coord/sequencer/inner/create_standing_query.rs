@@ -27,6 +27,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::controller::CollectionDescription;
 use mz_transform::dataflow::DataflowMetainfo;
 use timely::progress::Timestamp as TimelyTimestamp;
+
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{Coordinator, ExplainContext, ExplainPlanContext};
@@ -567,18 +568,17 @@ impl Coordinator {
             let compute_instance = self
                 .instance_snapshot(cluster_id)
                 .expect("compute instance does not exist");
-            let optimizer_config =
-                optimize::OptimizerConfig::from(self.catalog().system_config())
-                    .override_from(&self.catalog.get_cluster(cluster_id).config.features())
-                    .override_from(&ExplainContext::Plan(ExplainPlanContext {
-                        broken,
-                        config: config.clone(),
-                        format: format.clone(),
-                        stage: stage.clone(),
-                        replan: None,
-                        desc: None,
-                        optimizer_trace: OptimizerTrace::new(None),
-                    }));
+            let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
+                .override_from(&self.catalog.get_cluster(cluster_id).config.features())
+                .override_from(&ExplainContext::Plan(ExplainPlanContext {
+                    broken,
+                    config: config.clone(),
+                    format: format.clone(),
+                    stage: stage.clone(),
+                    replan: None,
+                    desc: None,
+                    optimizer_trace: OptimizerTrace::new(None),
+                }));
 
             let mut optimizer = optimize::standing_query::Optimizer::new(
                 catalog,
@@ -621,7 +621,11 @@ impl Coordinator {
                 global_id => TransientItem::new(
                     Some(full_name.into_parts()),
                     Some(rewritten_column_names.iter().map(|c| c.to_string()).collect()),
-                )
+                ),
+                param_collection_id => TransientItem::new(
+                    Some(vec![GlobalId::Explain.to_string()]),
+                    Some(param_desc.iter_names().map(|c| c.to_string()).collect()),
+                ),
             };
             ExprHumanizerExt::new(transient_items, &session_catalog)
         };
