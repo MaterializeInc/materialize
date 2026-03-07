@@ -192,11 +192,7 @@ impl Coordinator {
                         )
                         .await
                         .expect("valid persist usage");
-                    // Compute the as_of and input frontiers before creating
-                    // the batcher, so we can initialize the watch channel with
-                    // a meaningful upper target. Without this, the param shard
-                    // upper starts at 0 and the subscribe can't produce output
-                    // until AdvanceTimelines fires.
+                    // Compute the as_of from input frontiers.
                     use crate::optimize::dataflows::dataflow_import_id_bundle;
                     let mut id_bundle = dataflow_import_id_bundle(&physical_plan, cluster_id);
                     id_bundle.storage_ids.remove(&global_id);
@@ -205,33 +201,22 @@ impl Coordinator {
                     physical_plan.set_as_of(as_of.clone());
                     physical_plan.set_initial_as_of(as_of);
 
-                    // Collect non-param input IDs for upper tracking.
-                    let mut input_ids = id_bundle.storage_ids.clone();
-                    input_ids.remove(&param_collection_id);
+                    // The subscribe can't produce output until the param shard
+                    // upper advances past the as_of. Initialize the watch
+                    // channel with as_of + 1 so the batcher immediately
+                    // advances the param shard past the subscribe's snapshot
+                    // point.
+                    let initial_upper_target = physical_plan
+                        .as_of
+                        .as_ref()
+                        .and_then(|a| a.as_option().copied())
+                        .map(|ts| ts.step_forward())
+                        .unwrap_or_else(mz_repr::Timestamp::minimum);
 
-                    // Compute the initial upper target from non-param input
-                    // frontiers (same logic as advance_standing_query_uppers).
-                    let initial_upper_target = {
-                        let ids: Vec<_> = input_ids.iter().cloned().collect();
-                        if ids.is_empty() {
-                            mz_repr::Timestamp::minimum()
-                        } else {
-                            let frontiers = coord
-                                .controller
-                                .storage
-                                .collections_frontiers(ids)
-                                .expect("collections must exist");
-                            let mut min_upper = timely::progress::Antichain::new();
-                            for (_id, _since, upper) in frontiers {
-                                min_upper.extend(upper);
-                            }
-                            min_upper
-                                .as_option()
-                                .copied()
-                                .map(|ts| ts.saturating_sub(mz_repr::Timestamp::from(1000u64)))
-                                .unwrap_or_else(mz_repr::Timestamp::minimum)
-                        }
-                    };
+                    tracing::info!(
+                        "standing query {global_id}: initial_upper_target={initial_upper_target}, as_of={:?}",
+                        physical_plan.as_of.as_ref().map(|a| a.elements()),
+                    );
 
                     let (subscribe_tx, subscribe_rx) = tokio::sync::mpsc::unbounded_channel();
                     let (flush_tx, flush_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -255,12 +240,18 @@ impl Coordinator {
 
                     // Register the active standing query state.
                     use crate::coord::standing_query_state::ActiveStandingQuery;
+                    // Build the input bundle for ongoing upper tracking.
+                    // Remove the param collection — we don't want circular
+                    // dependency on ourselves.
+                    let mut input_bundle = id_bundle;
+                    input_bundle.storage_ids.remove(&param_collection_id);
+
                     coord.active_standing_queries.insert(
                         global_id,
                         ActiveStandingQuery {
                             item_id,
                             cluster_id,
-                            input_ids,
+                            input_ids: input_bundle,
                             client: sq_client,
                             subscribe_tx,
                             advance_upper_tx,

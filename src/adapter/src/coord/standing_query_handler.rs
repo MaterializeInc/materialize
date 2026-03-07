@@ -24,7 +24,7 @@
 use std::collections::BTreeMap;
 
 use mz_compute_client::protocol::response::SubscribeBatch;
-use mz_repr::{Datum, GlobalId, Row, Timestamp};
+use mz_repr::{Datum, GlobalId, Row, SharedRow, Timestamp};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -151,10 +151,9 @@ fn process_batch(
                 };
 
                 let result_row = {
-                    let remaining: Vec<Datum> = datums.collect();
-                    let mut row = Row::default();
-                    row.packer().extend(remaining.iter());
-                    row
+                    let mut row_buf = SharedRow::get();
+                    row_buf.packer().extend(datums);
+                    row_buf.clone()
                 };
 
                 debug!("standing query {sink_id}: buffering result for request {request_id}");

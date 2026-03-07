@@ -196,6 +196,11 @@ async fn batcher_task(
         .into_option()
         .unwrap_or_else(TimelyTimestamp::minimum);
 
+    debug!(
+        "standing query {sink_id}: batcher started, shared_upper={current_upper}, initial_target={}",
+        *advance_upper_rx.borrow()
+    );
+
     const MIN_COLLECT: Duration = Duration::from_millis(1);
     const MAX_COLLECT: Duration = Duration::from_millis(50);
     let mut last_append_duration = MIN_COLLECT;

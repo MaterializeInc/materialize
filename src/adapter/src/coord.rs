@@ -2305,13 +2305,21 @@ impl Coordinator {
                         );
                     }
 
-                    // Collect non-param input storage IDs before shipping consumes df_desc.
-                    let bootstrap_input_ids: std::collections::BTreeSet<GlobalId> = df_desc
-                        .source_imports
-                        .keys()
-                        .copied()
-                        .filter(|id| *id != sq.param_collection_id)
-                        .collect();
+                    // Build the input bundle for upper tracking.
+                    use crate::optimize::dataflows::dataflow_import_id_bundle;
+                    let mut input_bundle =
+                        dataflow_import_id_bundle(&df_desc, sq.cluster_id);
+                    // Remove the standing query sink and param collection.
+                    input_bundle.storage_ids.remove(&sq.global_id());
+                    input_bundle.storage_ids.remove(&sq.param_collection_id);
+
+                    // Compute initial upper target from the as_of.
+                    let initial_upper_target = df_desc
+                        .as_of
+                        .as_ref()
+                        .and_then(|a| a.as_option().copied())
+                        .map(|ts| mz_repr::TimestampManipulation::step_forward(&ts))
+                        .unwrap_or_else(Timestamp::minimum);
 
                     self.ship_dataflow(df_desc, sq.cluster_id, None).await;
                     self.allow_writes(sq.cluster_id, sq.global_id());
@@ -2339,28 +2347,6 @@ impl Coordinator {
                         )
                         .await
                         .expect("valid persist usage");
-                    // Compute initial upper target from non-param input frontiers.
-                    let initial_upper_target = {
-                        let ids: Vec<_> = bootstrap_input_ids.iter().cloned().collect();
-                        if ids.is_empty() {
-                            mz_repr::Timestamp::minimum()
-                        } else {
-                            let frontiers = self
-                                .controller
-                                .storage
-                                .collections_frontiers(ids)
-                                .expect("collections must exist");
-                            let mut min_upper = timely::progress::Antichain::new();
-                            for (_id, _since, upper) in frontiers {
-                                min_upper.extend(upper);
-                            }
-                            min_upper
-                                .as_option()
-                                .copied()
-                                .map(|ts| ts.saturating_sub(mz_repr::Timestamp::from(1000u64)))
-                                .unwrap_or_else(mz_repr::Timestamp::minimum)
-                        }
-                    };
                     let (subscribe_tx, subscribe_rx) = tokio::sync::mpsc::unbounded_channel();
                     let (flush_tx, flush_rx) = tokio::sync::mpsc::unbounded_channel();
                     let (advance_upper_tx, advance_upper_rx) =
@@ -2385,7 +2371,7 @@ impl Coordinator {
                         ActiveStandingQuery {
                             item_id: entry.id(),
                             cluster_id: sq.cluster_id,
-                            input_ids: bootstrap_input_ids,
+                            input_ids: input_bundle,
                             client: sq_client,
                             subscribe_tx,
                             advance_upper_tx,
