@@ -22,6 +22,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use mz_persist_client::write::WriteHandle;
 use mz_repr::{CatalogItemId, Diff, GlobalId, Row, Timestamp, TimestampManipulation};
@@ -195,7 +196,21 @@ async fn batcher_task(
         .into_option()
         .unwrap_or_else(TimelyTimestamp::minimum);
 
+    const MIN_COLLECT: Duration = Duration::from_millis(1);
+    const MAX_COLLECT: Duration = Duration::from_millis(50);
+    let mut last_append_duration = MIN_COLLECT;
+
     loop {
+        // Always apply the latest upper target before doing anything else.
+        // This is critical: the subscribe can't produce output until the
+        // param shard upper advances past its as_of. Using borrow_and_update
+        // (not has_changed) ensures we catch values sent before we started
+        // listening, not just new notifications.
+        {
+            let target = *advance_upper_rx.borrow_and_update();
+            advance_upper(sink_id, &mut write_handle, &mut current_upper, target).await;
+        }
+
         // Wait for at least one command or an upper-advance notification.
         tokio::select! {
             cmd = batcher_rx.recv() => {
@@ -203,19 +218,39 @@ async fn batcher_task(
                     break;
                 };
 
-                // Drain all available commands into a batch.
                 let mut writes: Vec<WriteRequest> = Vec::new();
                 let mut retractions: Vec<Row> = Vec::new();
 
                 apply_cmd(cmd, &mut writes, &mut retractions);
+
+                // Drain what's already buffered.
                 while let Ok(cmd) = batcher_rx.try_recv() {
                     apply_cmd(cmd, &mut writes, &mut retractions);
+                }
+
+                // Adaptively collect more: wait up to 2x the last append
+                // duration for additional requests. Under light load, this
+                // window is tiny (~1ms). Under heavy load, appends take
+                // longer so we collect bigger batches automatically.
+                let collect_budget = (2 * last_append_duration).clamp(MIN_COLLECT, MAX_COLLECT);
+                let collect_deadline = Instant::now() + collect_budget;
+                loop {
+                    let remaining = collect_deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        break;
+                    }
+                    match tokio::time::timeout(remaining, batcher_rx.recv()).await {
+                        Ok(Some(cmd)) => apply_cmd(cmd, &mut writes, &mut retractions),
+                        Ok(None) => break,
+                        Err(_) => break,
+                    }
                 }
 
                 if writes.is_empty() && retractions.is_empty() {
                     continue;
                 }
 
+                let append_start = Instant::now();
                 match batch_append(
                     sink_id,
                     &mut write_handle,
@@ -226,6 +261,7 @@ async fn batcher_task(
                 .await
                 {
                     Ok(write_ts) => {
+                        last_append_duration = append_start.elapsed();
                         if !writes.is_empty() {
                             let request_ids: Vec<Uuid> =
                                 writes.iter().map(|w| w.request_id).collect();
@@ -246,6 +282,7 @@ async fn batcher_task(
                         }
                     }
                     Err(e) => {
+                        last_append_duration = append_start.elapsed();
                         warn!("standing query {sink_id}: batch append failed: {e}");
                     }
                 }

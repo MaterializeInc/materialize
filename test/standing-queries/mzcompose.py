@@ -28,13 +28,7 @@ SERVICES = [
     Materialized(propagate_crashes=True),
     MzComposeService(
         "dbbench",
-        {
-            "mzbuild": "dbbench",
-            "sysctls": {
-                "net.ipv4.ip_local_port_range": "1024 65535",
-                "net.ipv4.tcp_tw_reuse": "1",
-            },
-        },
+        {"mzbuild": "dbbench"},
     ),
 ]
 

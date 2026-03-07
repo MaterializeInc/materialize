@@ -2339,10 +2339,32 @@ impl Coordinator {
                         )
                         .await
                         .expect("valid persist usage");
+                    // Compute initial upper target from non-param input frontiers.
+                    let initial_upper_target = {
+                        let ids: Vec<_> = bootstrap_input_ids.iter().cloned().collect();
+                        if ids.is_empty() {
+                            mz_repr::Timestamp::minimum()
+                        } else {
+                            let frontiers = self
+                                .controller
+                                .storage
+                                .collections_frontiers(ids)
+                                .expect("collections must exist");
+                            let mut min_upper = timely::progress::Antichain::new();
+                            for (_id, _since, upper) in frontiers {
+                                min_upper.extend(upper);
+                            }
+                            min_upper
+                                .as_option()
+                                .copied()
+                                .map(|ts| ts.saturating_sub(mz_repr::Timestamp::from(1000u64)))
+                                .unwrap_or_else(mz_repr::Timestamp::minimum)
+                        }
+                    };
                     let (subscribe_tx, subscribe_rx) = tokio::sync::mpsc::unbounded_channel();
                     let (flush_tx, flush_rx) = tokio::sync::mpsc::unbounded_channel();
                     let (advance_upper_tx, advance_upper_rx) =
-                        tokio::sync::watch::channel(mz_repr::Timestamp::minimum());
+                        tokio::sync::watch::channel(initial_upper_target);
                     let sq_client = crate::standing_query_client::StandingQueryExecuteClient::new(
                         entry.id(),
                         sq.global_id(),

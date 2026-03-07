@@ -24,6 +24,7 @@ use mz_sql::plan::{ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::controller::CollectionDescription;
 use mz_transform::dataflow::DataflowMetainfo;
+use timely::progress::Timestamp as TimelyTimestamp;
 
 use crate::command::ExecuteResponse;
 use crate::coord::Coordinator;
@@ -191,12 +192,51 @@ impl Coordinator {
                         )
                         .await
                         .expect("valid persist usage");
+                    // Compute the as_of and input frontiers before creating
+                    // the batcher, so we can initialize the watch channel with
+                    // a meaningful upper target. Without this, the param shard
+                    // upper starts at 0 and the subscribe can't produce output
+                    // until AdvanceTimelines fires.
+                    use crate::optimize::dataflows::dataflow_import_id_bundle;
+                    let mut id_bundle = dataflow_import_id_bundle(&physical_plan, cluster_id);
+                    id_bundle.storage_ids.remove(&global_id);
+                    let read_holds = coord.acquire_read_holds(&id_bundle);
+                    let as_of = read_holds.least_valid_read();
+                    physical_plan.set_as_of(as_of.clone());
+                    physical_plan.set_initial_as_of(as_of);
+
+                    // Collect non-param input IDs for upper tracking.
+                    let mut input_ids = id_bundle.storage_ids.clone();
+                    input_ids.remove(&param_collection_id);
+
+                    // Compute the initial upper target from non-param input
+                    // frontiers (same logic as advance_standing_query_uppers).
+                    let initial_upper_target = {
+                        let ids: Vec<_> = input_ids.iter().cloned().collect();
+                        if ids.is_empty() {
+                            mz_repr::Timestamp::minimum()
+                        } else {
+                            let frontiers = coord
+                                .controller
+                                .storage
+                                .collections_frontiers(ids)
+                                .expect("collections must exist");
+                            let mut min_upper = timely::progress::Antichain::new();
+                            for (_id, _since, upper) in frontiers {
+                                min_upper.extend(upper);
+                            }
+                            min_upper
+                                .as_option()
+                                .copied()
+                                .map(|ts| ts.saturating_sub(mz_repr::Timestamp::from(1000u64)))
+                                .unwrap_or_else(mz_repr::Timestamp::minimum)
+                        }
+                    };
+
                     let (subscribe_tx, subscribe_rx) = tokio::sync::mpsc::unbounded_channel();
                     let (flush_tx, flush_rx) = tokio::sync::mpsc::unbounded_channel();
-                    let (advance_upper_tx, advance_upper_rx) = tokio::sync::watch::channel({
-                        use timely::progress::Timestamp as _;
-                        mz_repr::Timestamp::minimum()
-                    });
+                    let (advance_upper_tx, advance_upper_rx) =
+                        tokio::sync::watch::channel(initial_upper_target);
                     let sq_client = crate::standing_query_client::StandingQueryExecuteClient::new(
                         item_id,
                         global_id,
@@ -210,19 +250,6 @@ impl Coordinator {
                         subscribe_rx,
                         flush_rx,
                     );
-
-                    // Now that the param collection exists, compute the as_of.
-                    use crate::optimize::dataflows::dataflow_import_id_bundle;
-                    let mut id_bundle = dataflow_import_id_bundle(&physical_plan, cluster_id);
-                    id_bundle.storage_ids.remove(&global_id);
-                    let read_holds = coord.acquire_read_holds(&id_bundle);
-                    let as_of = read_holds.least_valid_read();
-                    physical_plan.set_as_of(as_of.clone());
-                    physical_plan.set_initial_as_of(as_of);
-
-                    // Collect non-param input IDs for upper tracking.
-                    let mut input_ids = id_bundle.storage_ids.clone();
-                    input_ids.remove(&param_collection_id);
 
                     coord.ship_dataflow(physical_plan, cluster_id, None).await;
 
