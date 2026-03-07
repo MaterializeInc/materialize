@@ -40,7 +40,6 @@ pub struct StandingQueryFlush {
     pub sink_id: GlobalId,
     pub write_ts: Timestamp,
     pub request_ids: Vec<Uuid>,
-    pub param_rows: Vec<(Uuid, Row)>,
 }
 
 /// A request to write a param row, sent from `execute()` to the batcher task.
@@ -55,8 +54,6 @@ struct WriteRequest {
 enum BatcherCmd {
     /// Write param rows (from execute()).
     Write(WriteRequest),
-    /// Retract previously-delivered param rows (from handler).
-    Retract(Vec<Row>),
 }
 
 /// Client-side handle for a single standing query.
@@ -102,7 +99,9 @@ impl StandingQueryExecuteClient {
     /// Execute a standing query with the given parameters.
     ///
     /// Sends the param row to the batcher task for batched writing, then
-    /// waits for results from the subscribe handler.
+    /// waits for results from the subscribe handler. If this future is
+    /// cancelled (e.g. client disconnect), the param row is retracted
+    /// so it doesn't accumulate in the subscribe's working set.
     pub async fn execute(
         &self,
         params: &[(Row, mz_repr::SqlScalarType)],
@@ -144,6 +143,8 @@ impl StandingQueryExecuteClient {
         }
 
         // Wait for results from the subscribe handler.
+        // Param rows are self-retracting (written as +1 at ts, -1 at ts+1),
+        // so no explicit cleanup is needed on cancellation.
         result_rx
             .await
             .map_err(|_| StandingQueryExecuteError::ResultChannelClosed)
@@ -155,11 +156,6 @@ impl StandingQueryExecuteClient {
     pub fn take_result_sender(&self, request_id: &Uuid) -> Option<oneshot::Sender<Vec<Row>>> {
         let mut senders = self.result_senders.lock().expect("lock poisoned");
         senders.remove(request_id)
-    }
-
-    /// Queue retractions for param rows via the batcher task.
-    pub fn retract(&self, param_rows: Vec<Row>) {
-        let _ = self.batcher_tx.send(BatcherCmd::Retract(param_rows));
     }
 }
 
@@ -224,13 +220,12 @@ async fn batcher_task(
                 };
 
                 let mut writes: Vec<WriteRequest> = Vec::new();
-                let mut retractions: Vec<Row> = Vec::new();
 
-                apply_cmd(cmd, &mut writes, &mut retractions);
+                apply_cmd(cmd, &mut writes);
 
                 // Drain what's already buffered.
                 while let Ok(cmd) = batcher_rx.try_recv() {
-                    apply_cmd(cmd, &mut writes, &mut retractions);
+                    apply_cmd(cmd, &mut writes);
                 }
 
                 // Adaptively collect more: wait up to 2x the last append
@@ -245,13 +240,13 @@ async fn batcher_task(
                         break;
                     }
                     match tokio::time::timeout(remaining, batcher_rx.recv()).await {
-                        Ok(Some(cmd)) => apply_cmd(cmd, &mut writes, &mut retractions),
+                        Ok(Some(cmd)) => apply_cmd(cmd, &mut writes),
                         Ok(None) => break,
                         Err(_) => break,
                     }
                 }
 
-                if writes.is_empty() && retractions.is_empty() {
+                if writes.is_empty() {
                     continue;
                 }
 
@@ -261,30 +256,22 @@ async fn batcher_task(
                     &mut write_handle,
                     &mut current_upper,
                     &writes,
-                    &retractions,
                 )
                 .await
                 {
                     Ok(write_ts) => {
                         last_append_duration = append_start.elapsed();
-                        if !writes.is_empty() {
-                            let request_ids: Vec<Uuid> =
-                                writes.iter().map(|w| w.request_id).collect();
-                            let param_rows: Vec<(Uuid, Row)> = writes
-                                .into_iter()
-                                .map(|w| (w.request_id, w.param_row))
-                                .collect();
-                            debug!(
-                                "standing query {sink_id}: batched {} param writes at ts {write_ts}",
-                                request_ids.len()
-                            );
-                            let _ = flush_tx.send(StandingQueryFlush {
-                                sink_id,
-                                write_ts,
-                                request_ids,
-                                param_rows,
-                            });
-                        }
+                        let request_ids: Vec<Uuid> =
+                            writes.iter().map(|w| w.request_id).collect();
+                        debug!(
+                            "standing query {sink_id}: batched {} param writes at ts {write_ts}",
+                            request_ids.len()
+                        );
+                        let _ = flush_tx.send(StandingQueryFlush {
+                            sink_id,
+                            write_ts,
+                            request_ids,
+                        });
                     }
                     Err(e) => {
                         last_append_duration = append_start.elapsed();
@@ -303,41 +290,35 @@ async fn batcher_task(
     }
 }
 
-fn apply_cmd(cmd: BatcherCmd, writes: &mut Vec<WriteRequest>, retractions: &mut Vec<Row>) {
+fn apply_cmd(cmd: BatcherCmd, writes: &mut Vec<WriteRequest>) {
     match cmd {
         BatcherCmd::Write(req) => writes.push(req),
-        BatcherCmd::Retract(rows) => retractions.extend(rows),
     }
 }
 
-/// Append a batch of param writes and retractions in a single
-/// `compare_and_append`. Returns the timestamp at which the writes landed.
+/// Append a batch of self-retracting param writes in a single
+/// `compare_and_append`. Each param row is written as `+1` at `ts` and
+/// `-1` at `ts+1`, so it exists for exactly one timestamp. This means
+/// retractions happen automatically and no separate cleanup is needed
+/// on cancellation or disconnect. Returns the write timestamp.
 async fn batch_append(
     sink_id: GlobalId,
     write_handle: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
     current_upper: &mut Timestamp,
     writes: &[WriteRequest],
-    retractions: &[Row],
 ) -> Result<Timestamp, String> {
     let upper = *current_upper;
-    let new_upper = TimestampManipulation::step_forward(&upper);
+    let retract_ts = TimestampManipulation::step_forward(&upper);
+    let new_upper = TimestampManipulation::step_forward(&retract_ts);
 
     let mut updates: Vec<((SourceData, ()), Timestamp, i64)> =
-        Vec::with_capacity(writes.len() + retractions.len());
+        Vec::with_capacity(writes.len() * 2);
 
     for req in writes {
-        updates.push((
-            (SourceData(Ok(req.param_row.clone())), ()),
-            upper,
-            Diff::from(1i64).into_inner(),
-        ));
-    }
-    for row in retractions {
-        updates.push((
-            (SourceData(Ok(row.clone())), ()),
-            upper,
-            Diff::from(-1i64).into_inner(),
-        ));
+        let data = (SourceData(Ok(req.param_row.clone())), ());
+        // Insert at ts, retract at ts+1.
+        updates.push((data.clone(), upper, Diff::from(1i64).into_inner()));
+        updates.push((data, retract_ts, Diff::from(-1i64).into_inner()));
     }
 
     debug!(

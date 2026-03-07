@@ -15,9 +15,9 @@
 //! 3. Buffers result rows per request_id.
 //! 4. When the subscribe frontier advances past a write timestamp T,
 //!    delivers results via oneshot channels in the shared client.
-//! 5. Retracts delivered param rows.
-//! 6. Advances the param shard's upper to track the subscribe frontier,
-//!    keeping it in sync with the rest of the system.
+//!
+//! Param rows are self-retracting (written as +1 at ts, -1 at ts+1),
+//! so no explicit retraction is needed.
 //!
 //! This task runs entirely off the coordinator loop.
 
@@ -58,7 +58,6 @@ async fn standing_query_handler_task(
 
     let mut in_flight: BTreeMap<Timestamp, Vec<Uuid>> = BTreeMap::new();
     let mut result_buffer: BTreeMap<Uuid, Vec<Row>> = BTreeMap::new();
-    let mut param_rows: BTreeMap<Uuid, Row> = BTreeMap::new();
 
     loop {
         tokio::select! {
@@ -68,7 +67,7 @@ async fn standing_query_handler_task(
                     break;
                 };
                 // Before processing the batch, drain all available flush notifications.
-                drain_flushes(&mut flush_rx, &mut in_flight, &mut param_rows);
+                drain_flushes(&mut flush_rx, &mut in_flight);
 
                 process_batch(
                     sink_id,
@@ -76,7 +75,6 @@ async fn standing_query_handler_task(
                     batch,
                     &mut in_flight,
                     &mut result_buffer,
-                    &mut param_rows,
                 );
             }
             flush = flush_rx.recv() => {
@@ -84,7 +82,7 @@ async fn standing_query_handler_task(
                     // All clients dropped — but we keep running until subscribe_rx closes.
                     continue;
                 };
-                apply_flush(flush, &mut in_flight, &mut param_rows);
+                apply_flush(flush, &mut in_flight);
             }
         }
     }
@@ -95,25 +93,20 @@ async fn standing_query_handler_task(
 fn drain_flushes(
     flush_rx: &mut mpsc::UnboundedReceiver<StandingQueryFlush>,
     in_flight: &mut BTreeMap<Timestamp, Vec<Uuid>>,
-    param_rows: &mut BTreeMap<Uuid, Row>,
 ) {
     while let Ok(flush) = flush_rx.try_recv() {
-        apply_flush(flush, in_flight, param_rows);
+        apply_flush(flush, in_flight);
     }
 }
 
 fn apply_flush(
     flush: StandingQueryFlush,
     in_flight: &mut BTreeMap<Timestamp, Vec<Uuid>>,
-    param_rows: &mut BTreeMap<Uuid, Row>,
 ) {
     in_flight
         .entry(flush.write_ts)
         .or_default()
         .extend(flush.request_ids);
-    for (request_id, param_row) in flush.param_rows {
-        param_rows.insert(request_id, param_row);
-    }
 }
 
 fn process_batch(
@@ -122,7 +115,6 @@ fn process_batch(
     batch: SubscribeBatch,
     in_flight: &mut BTreeMap<Timestamp, Vec<Uuid>>,
     result_buffer: &mut BTreeMap<Uuid, Vec<Row>>,
-    param_rows: &mut BTreeMap<Uuid, Row>,
 ) {
     let SubscribeBatch {
         lower: _,
@@ -176,7 +168,6 @@ fn process_batch(
         .take_while(|ts| !upper.less_equal(ts))
         .collect();
 
-    let mut retraction_rows = Vec::new();
     for ts in completed_timestamps {
         if let Some(request_ids) = in_flight.remove(&ts) {
             for request_id in request_ids {
@@ -188,14 +179,7 @@ fn process_batch(
                     );
                     let _ = tx.send(results);
                 }
-                if let Some(param_row) = param_rows.remove(&request_id) {
-                    retraction_rows.push(param_row);
-                }
             }
         }
-    }
-
-    if !retraction_rows.is_empty() {
-        client.retract(retraction_rows);
     }
 }
