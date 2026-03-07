@@ -70,7 +70,7 @@ def run_dbbench(
     *,
     name: str,
     query: str,
-    duration: str = "30s",
+    duration: str = "120s",
     concurrency: int | None = None,
     rate: float | None = None,
     batch_size: int | None = None,
@@ -179,14 +179,63 @@ def workflow_throughput(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     setup_standing_query(c)
 
-    concurrency_levels = [1, 4, 16, 64]
+    concurrency_levels = [1, 4, 16, 64, 128, 256, 512, 1024]
 
     for conc in concurrency_levels:
         stats = run_dbbench(
             c,
             name=f"throughput_c{conc}",
             query="EXECUTE STANDING QUERY orders_by_customer (42)",
-            duration="15s",
+            concurrency=conc,
+        )
+        qps = stats.get("qps", 0)
+        latency = stats.get("latency_mean", "N/A")
+        print(f"  concurrency={conc}: {qps:.1f} QPS, latency={latency}")
+
+    c.kill("materialized")
+    c.rm("materialized")
+    c.rm_volumes("mzdata")
+
+
+def workflow_throughput_single_row(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Measure max throughput at increasing concurrency (1 row per execute)."""
+    c.up("materialized")
+
+    c.sql(
+        """
+        ALTER SYSTEM SET max_result_size = '10GB';
+        ALTER SYSTEM SET default_timestamp_interval = '100ms';
+        ALTER SYSTEM SET max_connections = 65536;
+        """,
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        f"""
+        DROP STANDING QUERY IF EXISTS order_by_id;
+        DROP TABLE IF EXISTS orders CASCADE;
+        CREATE TABLE orders (id INT, customer_id INT, amount INT);
+        INSERT INTO orders
+            SELECT g, g % 100, g * 10
+            FROM generate_series(1, {NUM_ROWS}) AS g;
+        CREATE STANDING QUERY order_by_id (oid INT)
+            AS SELECT id, customer_id, amount
+            FROM orders
+            WHERE id = oid;
+        """,
+        port=6875,
+    )
+    c.sql("SELECT 1", port=6875)
+
+    concurrency_levels = [1, 4, 16, 64, 128, 256, 512, 1024]
+
+    for conc in concurrency_levels:
+        stats = run_dbbench(
+            c,
+            name=f"throughput_single_row_c{conc}",
+            query="EXECUTE STANDING QUERY order_by_id (42)",
             concurrency=conc,
         )
         qps = stats.get("qps", 0)
@@ -226,7 +275,7 @@ def workflow_target_qps(c: Composition, parser: WorkflowArgumentParser) -> None:
             c,
             name=f"target_qps_{rate}",
             query="EXECUTE STANDING QUERY orders_by_customer (42)",
-            duration="20s",
+            duration="120s",
             rate=float(rate),
         )
 
@@ -299,7 +348,7 @@ def workflow_target_qps_single_row(
             c,
             name=f"target_qps_single_row_{rate}",
             query="EXECUTE STANDING QUERY order_by_id (42)",
-            duration="20s",
+            duration="120s",
             rate=float(rate),
         )
 

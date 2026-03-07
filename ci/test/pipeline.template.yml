@@ -532,7 +532,7 @@ steps:
   - id: standing-queries
     label: Standing queries
     depends_on: build-aarch64
-    timeout_in_minutes: 30
+    timeout_in_minutes: 180
     inputs: [test/standing-queries]
     plugins:
       - ./ci/plugins/mzcompose:

@@ -298,6 +298,11 @@ async fn batch_append(
         ));
     }
 
+    debug!(
+        "standing query {sink_id}: batch append {upper}..{new_upper}, {} updates",
+        updates.len()
+    );
+
     let res = write_handle
         .compare_and_append(
             updates,
@@ -337,6 +342,8 @@ async fn advance_upper(
     if upper >= target {
         return;
     }
+
+    debug!("standing query {sink_id}: advance upper {upper}..{target}");
 
     let res = write_handle
         .compare_and_append(
