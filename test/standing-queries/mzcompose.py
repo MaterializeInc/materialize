@@ -41,6 +41,7 @@ def setup_standing_query(c: Composition) -> None:
         """
         ALTER SYSTEM SET max_result_size = '10GB';
         ALTER SYSTEM SET default_timestamp_interval = '100ms';
+        ALTER SYSTEM SET max_connections = 65536;
         """,
         port=6877,
         user="mz_system",
@@ -164,9 +165,12 @@ def parse_duration_ms(s: str) -> float:
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run all standing query performance workflows."""
-    for workflow in ["throughput", "target-qps", "target-qps-single-row"]:
-        with c.test_case(workflow):
-            c.workflow(workflow)
+    for name in c.workflows:
+        if name == "default":
+            continue
+
+        with c.test_case(name):
+            c.workflow(name)
 
 
 def workflow_throughput(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -256,6 +260,7 @@ def workflow_target_qps_single_row(
         """
         ALTER SYSTEM SET max_result_size = '10GB';
         ALTER SYSTEM SET default_timestamp_interval = '100ms';
+        ALTER SYSTEM SET max_connections = 65536;
         """,
         port=6877,
         user="mz_system",

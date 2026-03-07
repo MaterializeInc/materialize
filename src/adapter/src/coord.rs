@@ -2348,6 +2348,7 @@ impl Coordinator {
                         sq.global_id(),
                         param_write_handle,
                         flush_tx,
+                        advance_upper_rx,
                     );
 
                     crate::coord::standing_query_handler::spawn_standing_query_handler(
@@ -2355,14 +2356,12 @@ impl Coordinator {
                         sq_client.clone(),
                         subscribe_rx,
                         flush_rx,
-                        advance_upper_rx,
                     );
                     use crate::coord::standing_query_state::ActiveStandingQuery;
                     self.active_standing_queries.insert(
                         sq.global_id(),
                         ActiveStandingQuery {
                             item_id: entry.id(),
-                            param_collection_id: sq.param_collection_id,
                             cluster_id: sq.cluster_id,
                             input_ids: bootstrap_input_ids,
                             client: sq_client,

@@ -32,8 +32,6 @@ use crate::standing_query_client::StandingQueryExecuteClient;
 pub(crate) struct ActiveStandingQuery {
     /// The CatalogItemId of this standing query.
     pub item_id: CatalogItemId,
-    /// The GlobalId of the parameter storage collection.
-    pub param_collection_id: GlobalId,
     /// The cluster on which the standing query's dataflow runs.
     #[allow(dead_code)]
     pub cluster_id: ClusterId,

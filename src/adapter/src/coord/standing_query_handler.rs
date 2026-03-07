@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 
 use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -41,11 +41,10 @@ pub(crate) fn spawn_standing_query_handler(
     client: StandingQueryExecuteClient,
     subscribe_rx: mpsc::UnboundedReceiver<SubscribeBatch>,
     flush_rx: mpsc::UnboundedReceiver<StandingQueryFlush>,
-    advance_upper_rx: watch::Receiver<Timestamp>,
 ) {
     mz_ore::task::spawn(
         || format!("standing-query-handler-{sink_id}"),
-        standing_query_handler_task(sink_id, client, subscribe_rx, flush_rx, advance_upper_rx),
+        standing_query_handler_task(sink_id, client, subscribe_rx, flush_rx),
     );
 }
 
@@ -54,7 +53,6 @@ async fn standing_query_handler_task(
     client: StandingQueryExecuteClient,
     mut subscribe_rx: mpsc::UnboundedReceiver<SubscribeBatch>,
     mut flush_rx: mpsc::UnboundedReceiver<StandingQueryFlush>,
-    mut advance_upper_rx: watch::Receiver<Timestamp>,
 ) {
     info!("standing query {sink_id}: handler task started");
 
@@ -87,14 +85,6 @@ async fn standing_query_handler_task(
                     continue;
                 };
                 apply_flush(flush, &mut in_flight, &mut param_rows);
-            }
-            result = advance_upper_rx.changed() => {
-                if result.is_err() {
-                    // Coordinator dropped the sender.
-                    break;
-                }
-                let target = *advance_upper_rx.borrow_and_update();
-                client.advance_upper(target).await;
             }
         }
     }

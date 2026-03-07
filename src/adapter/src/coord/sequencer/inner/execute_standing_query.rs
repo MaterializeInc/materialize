@@ -18,11 +18,11 @@ impl Coordinator {
     /// Sequence an EXECUTE STANDING QUERY plan.
     ///
     /// This is the coordinator fallback path. The primary execution path
-    /// bypasses the coordinator entirely via [`StandingQueryExecuteClient`].
+    /// bypasses the coordinator entirely via [`StandingQueryExecuteClient`](crate::standing_query_client::StandingQueryExecuteClient).
     /// This fallback handles the case where frontend execution is not available.
     #[instrument]
     pub(crate) async fn sequence_execute_standing_query(
-        &mut self,
+        &self,
         ctx: ExecuteContext,
         plan: plan::ExecuteStandingQueryPlan,
     ) -> Result<(), (AdapterError, ExecuteContext)> {
@@ -61,7 +61,7 @@ impl Coordinator {
         Ok(())
     }
 
-    /// Returns the [`StandingQueryExecuteClient`] for a standing query, if active.
+    /// Returns the [`StandingQueryExecuteClient`](crate::standing_query_client::StandingQueryExecuteClient) for a standing query, if active.
     ///
     /// Used by the session client to execute standing queries off the coordinator.
     pub(crate) fn standing_query_client(

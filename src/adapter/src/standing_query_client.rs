@@ -15,12 +15,10 @@
 //! subscribe). It allows EXECUTE STANDING QUERY to bypass the coordinator
 //! entirely for the write path.
 //!
-//! The param collection is NOT registered with the collection manager's
-//! append-only write task. Instead, we hold a [`WriteHandle`] directly and
-//! do our own `compare_and_append`. This gives us full control over the
-//! write timestamp: we write at the shard's current upper (which is already
-//! closed by the base table), so the subscribe can produce results immediately
-//! without waiting for the next group commit to advance the base table frontier.
+//! Param writes are **batched**: `execute()` sends requests to a background
+//! batcher task that drains all pending requests and writes them in a single
+//! `compare_and_append`. This amortizes the persist write cost across many
+//! concurrent executions.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -30,11 +28,11 @@ use mz_repr::{CatalogItemId, Diff, GlobalId, Row, Timestamp, TimestampManipulati
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-/// Notification sent from the client to the handler task when param rows
+/// Notification sent from the batcher to the handler task when param rows
 /// have been written, so the handler can track in-flight request IDs.
 #[derive(Debug)]
 pub struct StandingQueryFlush {
@@ -42,6 +40,22 @@ pub struct StandingQueryFlush {
     pub write_ts: Timestamp,
     pub request_ids: Vec<Uuid>,
     pub param_rows: Vec<(Uuid, Row)>,
+}
+
+/// A request to write a param row, sent from `execute()` to the batcher task.
+#[derive(Debug)]
+struct WriteRequest {
+    request_id: Uuid,
+    param_row: Row,
+}
+
+/// Commands sent to the batcher task.
+#[derive(Debug)]
+enum BatcherCmd {
+    /// Write param rows (from execute()).
+    Write(WriteRequest),
+    /// Retract previously-delivered param rows (from handler).
+    Retract(Vec<Row>),
 }
 
 /// Client-side handle for a single standing query.
@@ -53,20 +67,12 @@ pub struct StandingQueryFlush {
 pub struct StandingQueryExecuteClient {
     /// The CatalogItemId of this standing query.
     pub item_id: CatalogItemId,
-    /// Persist write handle for the param collection shard.
-    /// We are the sole writer, so we track the upper ourselves.
-    /// Uses tokio::sync::Mutex because we hold it across .await.
-    write_handle: Arc<tokio::sync::Mutex<WriteHandle<SourceData, (), Timestamp, StorageDiff>>>,
-    /// Our tracked upper for the param collection shard.
-    current_upper: Arc<tokio::sync::Mutex<Timestamp>>,
+    /// Channel to send commands to the batcher task.
+    batcher_tx: mpsc::UnboundedSender<BatcherCmd>,
     /// Shared map from request_id → result sender.
     /// The client registers a sender here before writing the param row.
     /// The handler task removes it and sends results.
     result_senders: Arc<Mutex<BTreeMap<Uuid, oneshot::Sender<Vec<Row>>>>>,
-    /// Channel to notify the handler task of write_ts → request_ids mappings.
-    flush_tx: mpsc::UnboundedSender<StandingQueryFlush>,
-    /// The GlobalId of the subscribe sink (used as the standing query key).
-    sink_id: GlobalId,
 }
 
 impl StandingQueryExecuteClient {
@@ -75,25 +81,27 @@ impl StandingQueryExecuteClient {
         sink_id: GlobalId,
         write_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         flush_tx: mpsc::UnboundedSender<StandingQueryFlush>,
+        advance_upper_rx: watch::Receiver<Timestamp>,
     ) -> Self {
-        let upper = write_handle
-            .shared_upper()
-            .into_option()
-            .unwrap_or(TimelyTimestamp::minimum());
+        let (batcher_tx, batcher_rx) = mpsc::unbounded_channel();
+        spawn_batcher_task(
+            sink_id,
+            write_handle,
+            batcher_rx,
+            flush_tx,
+            advance_upper_rx,
+        );
         Self {
             item_id,
-            write_handle: Arc::new(tokio::sync::Mutex::new(write_handle)),
-            current_upper: Arc::new(tokio::sync::Mutex::new(upper)),
+            batcher_tx,
             result_senders: Arc::new(Mutex::new(BTreeMap::new())),
-            flush_tx,
-            sink_id,
         }
     }
 
     /// Execute a standing query with the given parameters.
     ///
-    /// Writes the param row via direct `compare_and_append` (bypassing the
-    /// collection manager), then waits for results from the subscribe handler.
+    /// Sends the param row to the batcher task for batched writing, then
+    /// waits for results from the subscribe handler.
     pub async fn execute(
         &self,
         params: &[(Row, mz_repr::SqlScalarType)],
@@ -110,120 +118,34 @@ impl StandingQueryExecuteClient {
             }
         }
 
-        // Register a result channel before writing, so results can't arrive
-        // before we're listening.
+        // Register a result channel before sending to the batcher, so results
+        // can't arrive before we're listening.
         let (result_tx, result_rx) = oneshot::channel();
         {
             let mut senders = self.result_senders.lock().expect("lock poisoned");
             senders.insert(request_id, result_tx);
         }
 
-        // Write the param row via direct compare_and_append.
-        let write_ts = self
-            .append_param_row(&param_row, Diff::from(1i64))
-            .await
-            .map_err(|e| {
-                // Clean up the registered sender on write failure.
-                let mut senders = self.result_senders.lock().expect("lock poisoned");
-                senders.remove(&request_id);
-                StandingQueryExecuteError::WriteError(e)
-            })?;
-
-        debug!(
-            "standing query {}: wrote param for request {request_id} at ts {write_ts}",
-            self.sink_id
-        );
-
-        // Notify the handler task of the write_ts → request_id mapping.
-        let _ = self.flush_tx.send(StandingQueryFlush {
-            sink_id: self.sink_id,
-            write_ts,
-            request_ids: vec![request_id],
-            param_rows: vec![(request_id, param_row)],
-        });
+        // Send to the batcher task for batched writing.
+        if self
+            .batcher_tx
+            .send(BatcherCmd::Write(WriteRequest {
+                request_id,
+                param_row,
+            }))
+            .is_err()
+        {
+            let mut senders = self.result_senders.lock().expect("lock poisoned");
+            senders.remove(&request_id);
+            return Err(StandingQueryExecuteError::WriteError(
+                "batcher task closed".to_string(),
+            ));
+        }
 
         // Wait for results from the subscribe handler.
         result_rx
             .await
             .map_err(|_| StandingQueryExecuteError::ResultChannelClosed)
-    }
-
-    /// Append a single row to the param collection shard.
-    ///
-    /// We are the sole writer, so we use our tracked upper directly.
-    /// Returns the timestamp at which the row was written.
-    async fn append_param_row(&self, row: &Row, diff: Diff) -> Result<Timestamp, String> {
-        // Lock both together — we're the sole writer so no contention.
-        let mut wh = self.write_handle.lock().await;
-        let mut upper_guard = self.current_upper.lock().await;
-        let upper = *upper_guard;
-
-        let new_upper = TimestampManipulation::step_forward(&upper);
-        let updates = vec![(
-            (SourceData(Ok(row.clone())), ()),
-            upper.clone(),
-            diff.into_inner(),
-        )];
-
-        let res = wh
-            .compare_and_append(
-                updates,
-                Antichain::from_elem(upper),
-                Antichain::from_elem(new_upper),
-            )
-            .await
-            .expect("valid persist usage");
-
-        match res {
-            Ok(()) => {
-                *upper_guard = new_upper;
-                Ok(upper)
-            }
-            Err(mismatch) => {
-                // We're the sole writer, so this shouldn't happen.
-                // If it does, sync up and retry would be needed.
-                Err(format!(
-                    "unexpected upper mismatch: expected {:?}, actual {:?}",
-                    mismatch.expected, mismatch.current
-                ))
-            }
-        }
-    }
-
-    /// Advance the param shard's upper to at least `target`, without writing
-    /// any data. This keeps the param collection's upper in sync with the
-    /// subscribe frontier so that compaction can proceed.
-    ///
-    /// Only advances if the current upper is behind `target`.
-    pub async fn advance_upper(&self, target: Timestamp) {
-        let mut wh = self.write_handle.lock().await;
-        let mut upper_guard = self.current_upper.lock().await;
-        let upper = *upper_guard;
-
-        if upper >= target {
-            return;
-        }
-
-        let res = wh
-            .compare_and_append(
-                Vec::<((SourceData, ()), Timestamp, i64)>::new(),
-                Antichain::from_elem(upper),
-                Antichain::from_elem(target),
-            )
-            .await
-            .expect("valid persist usage");
-
-        match res {
-            Ok(()) => {
-                *upper_guard = target;
-            }
-            Err(mismatch) => {
-                // Someone else advanced it (shouldn't happen, we're the sole writer).
-                if let Some(actual) = mismatch.current.into_option() {
-                    *upper_guard = actual;
-                }
-            }
-        }
     }
 
     /// Deliver results for a request_id. Called by the handler task.
@@ -234,48 +156,210 @@ impl StandingQueryExecuteClient {
         senders.remove(request_id)
     }
 
-    /// Queue a retraction for param rows by writing diff=-1 via compare_and_append.
+    /// Queue retractions for param rows via the batcher task.
     pub fn retract(&self, param_rows: Vec<Row>) {
-        let write_handle = Arc::clone(&self.write_handle);
-        let current_upper = Arc::clone(&self.current_upper);
-        mz_ore::task::spawn(|| "standing-query-retract", async move {
-            let mut wh = write_handle.lock().await;
-            let mut upper_guard = current_upper.lock().await;
-            let upper = *upper_guard;
+        let _ = self.batcher_tx.send(BatcherCmd::Retract(param_rows));
+    }
+}
 
-            let new_upper = TimestampManipulation::step_forward(&upper);
-            let updates: Vec<_> = param_rows
-                .into_iter()
-                .map(|row| {
-                    (
-                        (SourceData(Ok(row)), ()),
-                        upper.clone(),
-                        Diff::from(-1i64).into_inner(),
-                    )
-                })
-                .collect();
+/// Spawn the batcher task that owns the persist `WriteHandle` and batches
+/// param writes and retractions into single `compare_and_append` calls.
+fn spawn_batcher_task(
+    sink_id: GlobalId,
+    write_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+    batcher_rx: mpsc::UnboundedReceiver<BatcherCmd>,
+    flush_tx: mpsc::UnboundedSender<StandingQueryFlush>,
+    advance_upper_rx: watch::Receiver<Timestamp>,
+) {
+    mz_ore::task::spawn(
+        || format!("standing-query-batcher-{sink_id}"),
+        batcher_task(
+            sink_id,
+            write_handle,
+            batcher_rx,
+            flush_tx,
+            advance_upper_rx,
+        ),
+    );
+}
 
-            let res = wh
-                .compare_and_append(
-                    updates,
-                    Antichain::from_elem(upper),
-                    Antichain::from_elem(new_upper),
+async fn batcher_task(
+    sink_id: GlobalId,
+    mut write_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+    mut batcher_rx: mpsc::UnboundedReceiver<BatcherCmd>,
+    flush_tx: mpsc::UnboundedSender<StandingQueryFlush>,
+    mut advance_upper_rx: watch::Receiver<Timestamp>,
+) {
+    let mut current_upper: Timestamp = write_handle
+        .shared_upper()
+        .into_option()
+        .unwrap_or_else(TimelyTimestamp::minimum);
+
+    loop {
+        // Wait for at least one command or an upper-advance notification.
+        tokio::select! {
+            cmd = batcher_rx.recv() => {
+                let Some(cmd) = cmd else {
+                    break;
+                };
+
+                // Drain all available commands into a batch.
+                let mut writes: Vec<WriteRequest> = Vec::new();
+                let mut retractions: Vec<Row> = Vec::new();
+
+                apply_cmd(cmd, &mut writes, &mut retractions);
+                while let Ok(cmd) = batcher_rx.try_recv() {
+                    apply_cmd(cmd, &mut writes, &mut retractions);
+                }
+
+                if writes.is_empty() && retractions.is_empty() {
+                    continue;
+                }
+
+                match batch_append(
+                    sink_id,
+                    &mut write_handle,
+                    &mut current_upper,
+                    &writes,
+                    &retractions,
                 )
                 .await
-                .expect("valid persist usage");
-
-            match res {
-                Ok(()) => {
-                    *upper_guard = new_upper;
-                }
-                Err(mismatch) => {
-                    warn!(
-                        "standing query retraction: unexpected upper mismatch: expected {:?}, actual {:?}",
-                        mismatch.expected, mismatch.current
-                    );
+                {
+                    Ok(write_ts) => {
+                        if !writes.is_empty() {
+                            let request_ids: Vec<Uuid> =
+                                writes.iter().map(|w| w.request_id).collect();
+                            let param_rows: Vec<(Uuid, Row)> = writes
+                                .into_iter()
+                                .map(|w| (w.request_id, w.param_row))
+                                .collect();
+                            debug!(
+                                "standing query {sink_id}: batched {} param writes at ts {write_ts}",
+                                request_ids.len()
+                            );
+                            let _ = flush_tx.send(StandingQueryFlush {
+                                sink_id,
+                                write_ts,
+                                request_ids,
+                                param_rows,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        warn!("standing query {sink_id}: batch append failed: {e}");
+                    }
                 }
             }
-        });
+            result = advance_upper_rx.changed() => {
+                if result.is_err() {
+                    break;
+                }
+                let target = *advance_upper_rx.borrow_and_update();
+                advance_upper(sink_id, &mut write_handle, &mut current_upper, target).await;
+            }
+        }
+    }
+}
+
+fn apply_cmd(cmd: BatcherCmd, writes: &mut Vec<WriteRequest>, retractions: &mut Vec<Row>) {
+    match cmd {
+        BatcherCmd::Write(req) => writes.push(req),
+        BatcherCmd::Retract(rows) => retractions.extend(rows),
+    }
+}
+
+/// Append a batch of param writes and retractions in a single
+/// `compare_and_append`. Returns the timestamp at which the writes landed.
+async fn batch_append(
+    sink_id: GlobalId,
+    write_handle: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+    current_upper: &mut Timestamp,
+    writes: &[WriteRequest],
+    retractions: &[Row],
+) -> Result<Timestamp, String> {
+    let upper = *current_upper;
+    let new_upper = TimestampManipulation::step_forward(&upper);
+
+    let mut updates: Vec<((SourceData, ()), Timestamp, i64)> =
+        Vec::with_capacity(writes.len() + retractions.len());
+
+    for req in writes {
+        updates.push((
+            (SourceData(Ok(req.param_row.clone())), ()),
+            upper,
+            Diff::from(1i64).into_inner(),
+        ));
+    }
+    for row in retractions {
+        updates.push((
+            (SourceData(Ok(row.clone())), ()),
+            upper,
+            Diff::from(-1i64).into_inner(),
+        ));
+    }
+
+    let res = write_handle
+        .compare_and_append(
+            updates,
+            Antichain::from_elem(upper),
+            Antichain::from_elem(new_upper),
+        )
+        .await
+        .expect("valid persist usage");
+
+    match res {
+        Ok(()) => {
+            *current_upper = new_upper;
+            Ok(upper)
+        }
+        Err(mismatch) => {
+            let err = format!(
+                "upper mismatch: expected {:?}, actual {:?}",
+                mismatch.expected, mismatch.current
+            );
+            warn!("standing query {sink_id}: {err}");
+            if let Some(actual) = mismatch.current.into_option() {
+                *current_upper = actual;
+            }
+            Err(err)
+        }
+    }
+}
+
+/// Advance the param shard's upper to at least `target`, without writing data.
+async fn advance_upper(
+    sink_id: GlobalId,
+    write_handle: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+    current_upper: &mut Timestamp,
+    target: Timestamp,
+) {
+    let upper = *current_upper;
+    if upper >= target {
+        return;
+    }
+
+    let res = write_handle
+        .compare_and_append(
+            Vec::<((SourceData, ()), Timestamp, i64)>::new(),
+            Antichain::from_elem(upper),
+            Antichain::from_elem(target),
+        )
+        .await
+        .expect("valid persist usage");
+
+    match res {
+        Ok(()) => {
+            *current_upper = target;
+        }
+        Err(mismatch) => {
+            warn!(
+                "standing query {sink_id}: upper advance mismatch: expected {:?}, actual {:?}",
+                mismatch.expected, mismatch.current
+            );
+            if let Some(actual) = mismatch.current.into_option() {
+                *current_upper = actual;
+            }
+        }
     }
 }
 

@@ -202,13 +202,13 @@ impl Coordinator {
                         global_id,
                         param_write_handle,
                         flush_tx,
+                        advance_upper_rx,
                     );
                     crate::coord::standing_query_handler::spawn_standing_query_handler(
                         global_id,
                         sq_client.clone(),
                         subscribe_rx,
                         flush_rx,
-                        advance_upper_rx,
                     );
 
                     // Now that the param collection exists, compute the as_of.
@@ -232,7 +232,6 @@ impl Coordinator {
                         global_id,
                         ActiveStandingQuery {
                             item_id,
-                            param_collection_id,
                             cluster_id,
                             input_ids,
                             client: sq_client,
