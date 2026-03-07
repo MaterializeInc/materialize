@@ -56,6 +56,22 @@ def setup(c: Composition) -> None:
             FROM generate_series(1, {NUM_ROWS}) AS g;
         CREATE INDEX orders_by_customer_idx ON orders (customer_id);
         CREATE INDEX orders_by_id_idx ON orders (id);
+        """,
+        port=6875,
+    )
+    recreate_standing_queries(c)
+
+
+def recreate_standing_queries(c: Composition) -> None:
+    """Drop and recreate standing queries to reset subscribe state.
+
+    Standing query subscribes accumulate arrangement state over time.
+    Recreating between test runs prevents max_result_size errors.
+    """
+    c.sql(
+        """
+        DROP STANDING QUERY IF EXISTS orders_by_customer;
+        DROP STANDING QUERY IF EXISTS order_by_id;
         CREATE STANDING QUERY orders_by_customer (cid INT)
             AS SELECT id, customer_id, amount
             FROM orders
@@ -187,6 +203,7 @@ def workflow_throughput(c: Composition, parser: WorkflowArgumentParser) -> None:
     concurrency_levels = [1, 4, 16, 64, 128, 256, 512, 1024]
 
     for conc in concurrency_levels:
+        recreate_standing_queries(c)
         stats = run_dbbench(
             c,
             name=f"standing_query_c{conc}",
@@ -223,6 +240,7 @@ def workflow_throughput_single_row(
     concurrency_levels = [1, 4, 16, 64, 128, 256, 512, 1024]
 
     for conc in concurrency_levels:
+        recreate_standing_queries(c)
         stats = run_dbbench(
             c,
             name=f"standing_query_single_row_c{conc}",
@@ -272,6 +290,7 @@ def workflow_target_qps(c: Composition, parser: WorkflowArgumentParser) -> None:
         rate = target["rate"]
         max_lat = target["max_latency_ms"]
 
+        recreate_standing_queries(c)
         stats = run_dbbench(
             c,
             name=f"target_qps_{rate}",
@@ -320,6 +339,7 @@ def workflow_target_qps_single_row(
         rate = target["rate"]
         max_lat = target["max_latency_ms"]
 
+        recreate_standing_queries(c)
         stats = run_dbbench(
             c,
             name=f"target_qps_single_row_{rate}",
