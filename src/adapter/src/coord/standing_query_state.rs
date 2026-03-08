@@ -14,10 +14,10 @@
 //! a lightweight handle for forwarding subscribe batches to the task.
 
 use mz_compute_client::protocol::response::SubscribeBatch;
-use tracing::debug;
 use mz_controller_types::ClusterId;
 use mz_repr::{CatalogItemId, Timestamp};
 use tokio::sync::{mpsc, watch};
+use tracing::debug;
 
 use crate::coord::Coordinator;
 use crate::coord::id_bundle::CollectionIdBundle;

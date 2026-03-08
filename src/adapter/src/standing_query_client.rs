@@ -203,6 +203,7 @@ async fn batcher_task(
     const MIN_COLLECT: Duration = Duration::from_millis(1);
     const MAX_COLLECT: Duration = Duration::from_millis(50);
     let mut last_append_duration = MIN_COLLECT;
+    let mut cmds: Vec<BatcherCmd> = Vec::new();
 
     loop {
         // Apply the latest upper target before doing anything else.
@@ -217,18 +218,9 @@ async fn batcher_task(
 
         // Wait for at least one command or an upper-advance notification.
         tokio::select! {
-            cmd = batcher_rx.recv() => {
-                let Some(cmd) = cmd else {
+            count = batcher_rx.recv_many(&mut cmds, usize::MAX) => {
+                if count == 0 {
                     break;
-                };
-
-                let mut writes: Vec<WriteRequest> = Vec::new();
-
-                apply_cmd(cmd, &mut writes);
-
-                // Drain what's already buffered.
-                while let Ok(cmd) = batcher_rx.try_recv() {
-                    apply_cmd(cmd, &mut writes);
                 }
 
                 // Adaptively collect more: wait up to 2x the last append
@@ -242,12 +234,18 @@ async fn batcher_task(
                     if remaining.is_zero() {
                         break;
                     }
-                    match tokio::time::timeout(remaining, batcher_rx.recv()).await {
-                        Ok(Some(cmd)) => apply_cmd(cmd, &mut writes),
-                        Ok(None) => break,
-                        Err(_) => break,
+                    match tokio::time::timeout(remaining, batcher_rx.recv_many(&mut cmds, usize::MAX)).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
                     }
                 }
+
+                let writes: Vec<WriteRequest> = cmds
+                    .drain(..)
+                    .map(|cmd| match cmd {
+                        BatcherCmd::Write(req) => req,
+                    })
+                    .collect();
 
                 if writes.is_empty() {
                     continue;
@@ -290,12 +288,6 @@ async fn batcher_task(
                 advance_upper(sink_id, &mut write_handle, &mut current_upper, target).await;
             }
         }
-    }
-}
-
-fn apply_cmd(cmd: BatcherCmd, writes: &mut Vec<WriteRequest>) {
-    match cmd {
-        BatcherCmd::Write(req) => writes.push(req),
     }
 }
 
