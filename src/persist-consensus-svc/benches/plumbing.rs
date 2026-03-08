@@ -73,7 +73,7 @@ pub fn bench_cas_flush(c: &mut Criterion, runtime: &Runtime) {
 /// materialization cost (data is cloned into the response).
 pub fn bench_scan(c: &mut Criterion, runtime: &Runtime) {
     let mut g = c.benchmark_group("plumbing/scan");
-    for num_entries in [10, 100, 1000] {
+    for num_entries in [10u64, 100, 1000] {
         g.bench_with_input(
             BenchmarkId::new("entries", num_entries),
             &num_entries,
@@ -82,8 +82,8 @@ pub fn bench_scan(c: &mut Criterion, runtime: &Runtime) {
                 // Pre-populate the shard with num_entries committed entries.
                 runtime.block_on(async {
                     for i in 1..=num_entries {
-                        let expected = if i == 1 { None } else { Some(i as u64 - 1) };
-                        cas_and_flush(&tx, "s", expected, i as u64, &[0u8; 64]).await;
+                        let expected = if i == 1 { None } else { Some(i - 1) };
+                        cas_and_flush(&tx, "s", expected, i, &[0u8; 64]).await;
                     }
                 });
                 b.iter(|| {
@@ -158,14 +158,14 @@ pub fn bench_read_under_write_pressure(c: &mut Criterion, runtime: &Runtime) {
                             write_idx += 1;
                             let expected = write_seqno[idx];
                             write_seqno[idx] += 1;
-                            let _ = send_cas(
+                            drop(send_cas(
                                 &tx,
                                 &format!("shard-{}", idx),
                                 Some(expected),
                                 expected + 1,
                                 &[0u8; 64],
                             )
-                            .await;
+                            .await);
                         }
                         // Now measure head read latency with pending state present.
                         send_head(&tx, "shard-0").await;

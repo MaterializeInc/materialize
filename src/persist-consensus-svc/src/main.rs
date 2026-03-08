@@ -16,7 +16,7 @@ use tonic::transport::Server;
 use tracing::info;
 
 use mz_persist::generated::consensus_service::consensus_service_server::ConsensusServiceServer;
-use mz_persist_consensus_svc::actor::{Actor, ActorCommand, ActorHandle};
+use mz_persist_consensus_svc::actor::{Actor, ActorConfig};
 use mz_persist_consensus_svc::metrics::ConsensusMetrics;
 use mz_persist_consensus_svc::service::ConsensusGrpcService;
 use mz_persist_consensus_svc::wal::s3::S3WalWriter;
@@ -91,25 +91,24 @@ async fn run(args: Args) {
     )
     .await;
 
-    let (tx, rx) = tokio::sync::mpsc::channel::<ActorCommand>(4096);
-    let handle = ActorHandle::new(tx);
-
-    let actor = Actor::new(
-        rx,
-        wal_writer,
-        args.flush_interval_ms,
-        args.snapshot_interval,
-        metrics,
-    );
+    let config = ActorConfig {
+        flush_interval_ms: args.flush_interval_ms,
+        snapshot_interval: args.snapshot_interval,
+        ..Default::default()
+    };
+    let (actor, handle) = Actor::new(config, wal_writer, metrics);
+    // spawn_local is required: the actor runs on a single-threaded runtime
+    // and its future is !Send.
+    #[allow(clippy::disallowed_methods)]
     tokio::task::spawn_local(actor.run());
 
     // Recover state from S3 via the actor's command channel.
     info!("recovering state from S3...");
     handle.recover().await.expect("recovery failed");
 
-    // Spawn HTTP metrics server (Send-compatible, uses regular tokio::spawn).
+    // Spawn HTTP metrics server.
     let metrics_addr = args.metrics_listen_addr;
-    tokio::spawn(async move {
+    mz_ore::task::spawn(|| "metrics-server", async move {
         let app = axum::Router::new().route(
             "/metrics",
             axum::routing::get(move || {

@@ -10,13 +10,14 @@
 //! The single-threaded actor that owns all shard state and implements group
 //! commit.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use bytes::Bytes;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Interval;
 use tracing::{debug, info, warn};
 
+use mz_ore::cast::{CastFrom, CastLossy};
 use prost::Message;
 
 use mz_persist::generated::consensus_service::{
@@ -39,6 +40,27 @@ pub struct ShardState {
 pub struct VersionedEntry {
     pub seqno: u64,
     pub data: Bytes,
+}
+
+/// Configuration for the consensus [`Actor`].
+#[derive(Debug, Clone)]
+pub struct ActorConfig {
+    /// Depth of the command channel (mpsc queue).
+    pub queue_depth: usize,
+    /// How often to flush pending ops to the WAL, in milliseconds.
+    pub flush_interval_ms: u64,
+    /// Write a snapshot every this many WAL batches.
+    pub snapshot_interval: u64,
+}
+
+impl Default for ActorConfig {
+    fn default() -> Self {
+        ActorConfig {
+            queue_depth: 4096,
+            flush_interval_ms: 5,
+            snapshot_interval: 100,
+        }
+    }
 }
 
 /// Error returned by [`ActorHandle`] methods.
@@ -274,24 +296,26 @@ pub struct Actor<W: WalWriter> {
 }
 
 impl<W: WalWriter> Actor<W> {
-    /// Creates a new actor with empty state. Call `RecoverFromSnapshot` after
-    /// spawning to load persisted state from the WAL.
+    /// Creates a new actor and returns a handle for sending commands.
+    ///
+    /// The actor is not yet running — call [`Actor::run`] (or use [`Actor::spawn`]
+    /// to spawn it on the current runtime).
     pub fn new(
-        rx: mpsc::Receiver<ActorCommand>,
+        config: ActorConfig,
         wal_writer: W,
-        flush_interval_ms: u64,
-        snapshot_interval: u64,
         metrics: ConsensusMetrics,
-    ) -> Self {
+    ) -> (Self, ActorHandle) {
         metrics.active_shards.set(0);
         metrics.total_entries.set(0);
         metrics.approx_bytes.set(0);
 
         let mut flush_interval =
-            tokio::time::interval(std::time::Duration::from_millis(flush_interval_ms));
+            tokio::time::interval(std::time::Duration::from_millis(config.flush_interval_ms));
         flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-        Actor {
+        let (tx, rx) = mpsc::channel(config.queue_depth);
+
+        let actor = Actor {
             shards: BTreeMap::new(),
             rx,
             wal_writer,
@@ -300,13 +324,16 @@ impl<W: WalWriter> Actor<W> {
             pending_wal_ops: Vec::new(),
             pending_heads: BTreeMap::new(),
             flush_interval,
-            snapshot_interval,
+            snapshot_interval: config.snapshot_interval,
             batches_since_snapshot: 0,
             metrics,
             running_entry_count: 0,
             running_byte_count: 0,
-        }
+        };
+        let handle = ActorHandle::new(tx);
+        (actor, handle)
     }
+
 
     /// Returns true if there are pending WAL ops or replies to resolve.
     fn has_pending_work(&self) -> bool {
@@ -431,7 +458,10 @@ impl<W: WalWriter> Actor<W> {
                 return;
             }
         }
-        if new.seqno > i64::MAX as u64 {
+        // i64::MAX is always representable as u64.
+        #[allow(clippy::as_conversions)]
+        const MAX_SEQNO: u64 = i64::MAX as u64;
+        if new.seqno > MAX_SEQNO {
             let _ = reply.send(Err(format!(
                 "sequence numbers must fit within [0, i64::MAX], received: {}",
                 new.seqno
@@ -495,14 +525,15 @@ impl<W: WalWriter> Actor<W> {
         let mut deleted: u64 = self
             .shards
             .get(&key)
-            .map(|s| s.entries.iter().filter(|e| e.seqno < seqno).count() as u64)
+            .map(|s| u64::cast_from(s.entries.iter().filter(|e| e.seqno < seqno).count()))
             .unwrap_or(0);
         // ...plus pending writes to this shard with seqno < truncate_seqno.
-        deleted += self
-            .pending_wal_ops
-            .iter()
-            .filter(|op| matches!(op, PendingWalOp::Write(w) if w.key == key && w.seqno < seqno))
-            .count() as u64;
+        deleted += u64::cast_from(
+            self.pending_wal_ops
+                .iter()
+                .filter(|op| matches!(op, PendingWalOp::Write(w) if w.key == key && w.seqno < seqno))
+                .count(),
+        );
 
         // Record truncate in WAL — committed state is NOT mutated until
         // the S3 PUT confirms.
@@ -603,7 +634,7 @@ impl<W: WalWriter> Actor<W> {
             match op {
                 PendingWalOp::Write(w) => {
                     self.running_entry_count += 1;
-                    self.running_byte_count += w.data.len() as i64;
+                    self.running_byte_count += i64::try_from(w.data.len()).expect("data length");
                     let entry = VersionedEntry {
                         seqno: w.seqno,
                         data: Bytes::from(w.data.clone()),
@@ -620,11 +651,11 @@ impl<W: WalWriter> Actor<W> {
                             .entries
                             .iter()
                             .filter(|e| e.seqno < t.seqno)
-                            .map(|e| e.data.len() as i64)
+                            .map(|e| i64::try_from(e.data.len()).expect("data length"))
                             .sum();
                         let before = shard.entries.len();
                         shard.entries.retain(|e| e.seqno >= t.seqno);
-                        self.running_entry_count -= (before - shard.entries.len()) as i64;
+                        self.running_entry_count -= i64::try_from(before - shard.entries.len()).expect("entry count");
                         self.running_byte_count -= deleted_bytes;
                     }
                 }
@@ -735,13 +766,13 @@ impl<W: WalWriter> Actor<W> {
         let mut running_entry_count: i64 = 0;
         let mut running_byte_count: i64 = 0;
         for state in shards.values() {
-            running_entry_count += state.entries.len() as i64;
+            running_entry_count += i64::try_from(state.entries.len()).expect("entry count");
             for entry in &state.entries {
-                running_byte_count += entry.data.len() as i64;
+                running_byte_count += i64::try_from(entry.data.len()).expect("data length");
             }
         }
 
-        self.metrics.active_shards.set(shards.len() as i64);
+        self.metrics.active_shards.set(i64::try_from(shards.len()).expect("shard count"));
         self.metrics.total_entries.set(running_entry_count);
         self.metrics.approx_bytes.set(running_byte_count);
 
@@ -802,7 +833,7 @@ impl<W: WalWriter> Actor<W> {
                 PendingWalOp::Write(w) => w.key.as_str(),
                 PendingWalOp::Truncate(t) => t.key.as_str(),
             })
-            .collect::<HashSet<_>>()
+            .collect::<std::collections::BTreeSet<_>>()
             .len();
 
         debug!(
@@ -917,16 +948,20 @@ impl<W: WalWriter> Actor<W> {
             .s3_wal_write_latency_seconds
             .observe(s3_start.elapsed().as_secs_f64());
         self.metrics.s3_wal_writes.inc();
-        self.metrics.s3_wal_write_bytes.inc_by(batch_bytes as u64);
+        self.metrics
+            .s3_wal_write_bytes
+            .inc_by(u64::cast_from(batch_bytes));
         self.batch_number += 1;
         self.batches_since_snapshot += 1;
 
         // Record flush metrics.
         self.metrics.flush_count.inc();
-        self.metrics.flush_ops_per_batch.observe(num_ops as f64);
+        self.metrics
+            .flush_ops_per_batch
+            .observe(f64::cast_lossy(num_ops));
         self.metrics
             .flush_shards_per_batch
-            .observe(distinct_shards as f64);
+            .observe(f64::cast_lossy(distinct_shards));
 
         // Resolve all pending replies (both winners and losers) BEFORE the
         // snapshot write so clients aren't blocked by the (potentially slow)
@@ -934,7 +969,9 @@ impl<W: WalWriter> Actor<W> {
         self.resolve_pending_replies();
 
         // Update gauges.
-        self.metrics.active_shards.set(self.shards.len() as i64);
+        self.metrics
+            .active_shards
+            .set(i64::try_from(self.shards.len()).expect("shard count"));
         self.metrics.total_entries.set(self.running_entry_count);
         self.metrics.approx_bytes.set(self.running_byte_count);
         self.metrics
@@ -980,6 +1017,20 @@ impl<W: WalWriter> Actor<W> {
                 }
             }
         }
+    }
+}
+
+impl<W: WalWriter + Send + Sync + 'static> Actor<W> {
+    /// Creates and spawns the actor on the current runtime, returning the handle
+    /// and join handle.
+    pub fn spawn(
+        config: ActorConfig,
+        wal_writer: W,
+        metrics: ConsensusMetrics,
+    ) -> (ActorHandle, mz_ore::task::JoinHandle<()>) {
+        let (actor, handle) = Self::new(config, wal_writer, metrics);
+        let task = mz_ore::task::spawn(|| "group-commit-actor", actor.run());
+        (handle, task)
     }
 }
 

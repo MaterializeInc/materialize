@@ -94,7 +94,7 @@ impl ConsensusService for ConsensusGrpcService {
         debug!("list_keys");
         let keys = self.handle.list_keys().await?;
         let (stream_tx, stream_rx) = tokio::sync::mpsc::channel(64);
-        tokio::spawn(async move {
+        mz_ore::task::spawn(|| "list-keys-stream", async move {
             for key in keys {
                 if stream_tx
                     .send(Ok(ProtoListKeysResponse { key }))

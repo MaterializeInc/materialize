@@ -27,6 +27,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
+use mz_ore::cast::{CastFrom, CastLossy};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::Deserialize;
@@ -40,7 +41,7 @@ use mz_persist::generated::consensus_service::{
     ProtoCompareAndSetRequest, ProtoHeadRequest, ProtoScanRequest, ProtoTruncateRequest,
     ProtoVersionedData,
 };
-use mz_persist_consensus_svc::actor::{Actor, ActorCommand, ActorHandle};
+use mz_persist_consensus_svc::actor::{Actor, ActorCommand, ActorConfig};
 use mz_persist_consensus_svc::metrics::ConsensusMetrics;
 use mz_persist_consensus_svc::service::ConsensusGrpcService;
 use mz_persist_consensus_svc::wal::{LatencyProfile, LatencyWalWriter};
@@ -497,7 +498,7 @@ fn compute_percentiles(samples: &mut Vec<Duration>) -> PercentileStats {
     samples.sort();
     let len = samples.len();
     PercentileStats {
-        count: len as u64,
+        count: u64::cast_from(len),
         p50: samples[len * 50 / 100],
         p90: samples[len * 90 / 100],
         p95: samples[len * 95 / 100],
@@ -664,7 +665,7 @@ fn format_count(n: u64) -> String {
 }
 
 fn format_bytes(b: i64) -> String {
-    let b = b as f64;
+    let b = f64::cast_lossy(b);
     if b >= 1_073_741_824.0 {
         format!("{:.1} GiB", b / 1_073_741_824.0)
     } else if b >= 1_048_576.0 {
@@ -706,20 +707,20 @@ fn print_report(
     let secs = elapsed.as_secs_f64().max(0.001);
     let flush_count = metrics.flush_count.get();
     let total_ops: u64 = ops.iter().map(|o| o.stats.count).sum();
-    let wal_bytes = metrics.s3_wal_write_bytes.get() as u64;
+    let wal_bytes = metrics.s3_wal_write_bytes.get();
 
     // --- Overview ---
     println!();
     println!("=== Consensus Service Spec Sheet ===");
     let target_writes_per_sec =
-        cfg.num_shards as f64 * cfg.writers_per_shard as f64 * cfg.write_rate_per_second;
+        f64::cast_lossy(cfg.num_shards) * f64::cast_lossy(cfg.writers_per_shard) * cfg.write_rate_per_second;
     println!(
         "Scenario: {} ({} shards, {} writers/shard, {} values, {} target writes/s)",
         cfg.name,
         format_count(cfg.num_shards),
         cfg.writers_per_shard,
-        format_bytes(cfg.value_size as i64),
-        format_count(target_writes_per_sec as u64),
+        format_bytes(i64::try_from(cfg.value_size).expect("value_size fits in i64")),
+        format_count(u64::cast_lossy(target_writes_per_sec)),
     );
     println!(
         "Transport: {}, WAL latency: {}",
@@ -770,20 +771,20 @@ fn print_report(
     }
 
     // --- Throughput ---
-    let ops_per_sec = total_ops as f64 / secs;
-    let flushes_per_sec = flush_count as f64 / secs;
+    let ops_per_sec = f64::cast_lossy(total_ops) / secs;
+    let flushes_per_sec = f64::cast_lossy(flush_count) / secs;
     let flush_interval_actual = if flushes_per_sec > 0.0 {
         1000.0 / flushes_per_sec
     } else {
         0.0
     };
     let ops_per_flush = if flush_count > 0 {
-        total_ops as f64 / flush_count as f64
+        f64::cast_lossy(total_ops) / f64::cast_lossy(flush_count)
     } else {
         0.0
     };
     let bytes_per_flush = if flush_count > 0 {
-        wal_bytes as f64 / flush_count as f64
+        f64::cast_lossy(wal_bytes) / f64::cast_lossy(flush_count)
     } else {
         0.0
     };
@@ -791,9 +792,9 @@ fn print_report(
     let cas_committed_per_sec = ops
         .iter()
         .find(|o| o.name == "CAS committed")
-        .map(|o| o.stats.count as f64 / secs)
+        .map(|o| f64::cast_lossy(o.stats.count) / secs)
         .unwrap_or(0.0);
-    let cas_rejected_per_sec = cas_rejected.count as f64 / secs;
+    let cas_rejected_per_sec = f64::cast_lossy(cas_rejected.count) / secs;
     let cas_total_per_sec = cas_committed_per_sec + cas_rejected_per_sec;
 
     // Total actual includes rejections (real load on actor).
@@ -805,18 +806,18 @@ fn print_report(
     println!(
         "    {:<18} {:>8}",
         "CAS",
-        format_count(cas_total_per_sec as u64)
+        format_count(u64::cast_lossy(cas_total_per_sec))
     );
     println!(
         "      {:<16} {:>8}",
         "committed",
-        format_count(cas_committed_per_sec as u64)
+        format_count(u64::cast_lossy(cas_committed_per_sec))
     );
     if cas_rejected.count > 0 {
         println!(
             "      {:<16} {:>8}",
             "rejected",
-            format_count(cas_rejected_per_sec as u64)
+            format_count(u64::cast_lossy(cas_rejected_per_sec))
         );
     }
     for op in ops {
@@ -826,19 +827,19 @@ fn print_report(
         if op.stats.count == 0 && op.target_per_sec < 0.5 {
             continue;
         }
-        let actual = (op.stats.count as f64 / secs) as u64;
+        let actual = u64::cast_lossy(f64::cast_lossy(op.stats.count) / secs);
         println!("    {:<18} {:>8}", op.name, format_count(actual));
     }
-    let total_est = ops.iter().map(|o| o.target_per_sec).sum::<f64>() as u64;
+    let total_est = u64::cast_lossy(ops.iter().map(|o| o.target_per_sec).sum::<f64>());
     println!(
         "    {:<18} {:>8}",
         "Total (actor)",
-        format_count(total_actual_per_sec as u64)
+        format_count(u64::cast_lossy(total_actual_per_sec))
     );
     println!(
         "    {:<18} {:>8}  (est. {})",
         "Total (client)",
-        format_count(ops_per_sec as u64),
+        format_count(u64::cast_lossy(ops_per_sec)),
         format_count(total_est)
     );
     println!();
@@ -850,7 +851,7 @@ fn print_report(
     println!(
         "  {:<18} {:>8}",
         "Bytes/flush",
-        format_bytes(bytes_per_flush as i64)
+        format_bytes(i64::cast_lossy(bytes_per_flush))
     );
 
     // --- Clients ---
@@ -881,11 +882,11 @@ fn print_report(
     println!("--- Actor State (includes warmup) ---");
     println!(
         "  Shards:       {:>10}",
-        format_count(metrics.active_shards.get() as u64)
+        format_count(u64::try_from(metrics.active_shards.get()).expect("non-negative gauge"))
     );
     println!(
         "  Entries:      {:>10}",
-        format_count(metrics.total_entries.get() as u64)
+        format_count(u64::try_from(metrics.total_entries.get()).expect("non-negative gauge"))
     );
     println!(
         "  Memory:       {:>10}",
@@ -910,7 +911,7 @@ fn print_json(
     let secs = elapsed.as_secs_f64().max(0.001);
     let total_ops: u64 = ops.iter().map(|o| o.stats.count).sum();
     let flush_count = metrics.flush_count.get();
-    let wal_bytes = metrics.s3_wal_write_bytes.get() as u64;
+    let wal_bytes = metrics.s3_wal_write_bytes.get();
 
     // Only include operations that actually occurred.
     let mut latency_map: serde_json::Map<String, serde_json::Value> = ops
@@ -946,16 +947,16 @@ fn print_json(
     let latencies: serde_json::Value = latency_map.into();
 
     let ops_per_flush = if flush_count > 0 {
-        round2(total_ops as f64 / flush_count as f64)
+        round2(f64::cast_lossy(total_ops) / f64::cast_lossy(flush_count))
     } else {
         0.0
     };
     let bytes_per_flush = if flush_count > 0 {
-        (wal_bytes as f64 / flush_count as f64).round() as u64
+        u64::cast_lossy((f64::cast_lossy(wal_bytes) / f64::cast_lossy(flush_count)).round())
     } else {
         0
     };
-    let flushes_per_sec = flush_count as f64 / secs;
+    let flushes_per_sec = f64::cast_lossy(flush_count) / secs;
     let flush_interval_ms = if flushes_per_sec > 0.0 {
         round2(1000.0 / flushes_per_sec)
     } else {
@@ -970,8 +971,8 @@ fn print_json(
             (
                 op.name.clone(),
                 serde_json::json!({
-                    "target": op.target_per_sec.round() as u64,
-                    "actual": (op.stats.count as f64 / secs).round() as u64,
+                    "target": u64::cast_lossy(op.target_per_sec.round()),
+                    "actual": u64::cast_lossy((f64::cast_lossy(op.stats.count) / secs).round()),
                 }),
             )
         })
@@ -1007,9 +1008,9 @@ fn print_json(
             "approx_bytes": metrics.approx_bytes.get(),
         },
         "throughput": {
-            "ops_per_sec": (total_ops as f64 / secs).round() as u64,
+            "ops_per_sec": u64::cast_lossy((f64::cast_lossy(total_ops) / secs).round()),
             "ops_per_sec_by_type": ops_breakdown,
-            "cas_rejections_per_sec": (cas_rejected.count as f64 / secs).round() as u64,
+            "cas_rejections_per_sec": u64::cast_lossy((f64::cast_lossy(cas_rejected.count) / secs).round()),
             "flushes_per_sec": round2(flushes_per_sec),
             "flush_interval_ms": flush_interval_ms,
             "ops_per_flush": ops_per_flush,
@@ -1032,14 +1033,14 @@ async fn main() {
     cfg.validate();
 
     let target_writes_per_sec =
-        cfg.num_shards as f64 * cfg.writers_per_shard as f64 * cfg.write_rate_per_second;
+        f64::cast_lossy(cfg.num_shards) * f64::cast_lossy(cfg.writers_per_shard) * cfg.write_rate_per_second;
     if !json {
         eprintln!(
             "specsheet: {} shards, {} writers/shard, {} values, {} target writes/s, {}s run + {}s warmup, transport: {}",
             cfg.num_shards,
             cfg.writers_per_shard,
-            format_bytes(cfg.value_size as i64),
-            format_count(target_writes_per_sec as u64),
+            format_bytes(i64::try_from(cfg.value_size).expect("value_size fits in i64")),
+            format_count(u64::cast_lossy(target_writes_per_sec)),
             cfg.duration,
             cfg.warmup,
             cfg.transport,
@@ -1051,35 +1052,34 @@ async fn main() {
     let metrics = ConsensusMetrics::register(&registry);
     let metrics_for_report = metrics.clone();
 
-    let (tx, rx) = mpsc::channel::<ActorCommand>(
-        ((cfg.num_shards * cfg.writers_per_shard) as usize + 1024).max(4096),
-    );
-
+    let config = ActorConfig {
+        queue_depth: (usize::cast_from(cfg.num_shards * cfg.writers_per_shard) + 1024).max(4096),
+        flush_interval_ms: cfg.flush_interval_ms,
+        snapshot_interval: u64::MAX,
+    };
     let latency_profile = cfg.latency_profile();
-    let flush_interval_ms = cfg.flush_interval_ms;
-
-    let actor_handle = tokio::spawn(async move {
-        let wal = LatencyWalWriter::new(latency_profile);
-        let actor = Actor::new(rx, wal, flush_interval_ms, u64::MAX, metrics);
-        actor.run().await;
-    });
+    let wal = LatencyWalWriter::new(latency_profile);
+    let (actor, handle) = Actor::new(config, wal, metrics);
+    let tx = handle.sender().clone();
+    let actor_handle = mz_ore::task::spawn(|| "specsheet-actor", actor.run());
 
     // --- Create transport ---
     let grpc_server_handle = if cfg.transport == TransportMode::Grpc {
         let grpc_service = ConsensusGrpcService {
-            handle: ActorHandle::new(tx.clone()),
+            handle: handle.clone(),
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("failed to bind loopback listener");
         let addr = listener.local_addr().unwrap();
-        let handle = tokio::spawn(async move {
+        let handle = mz_ore::task::spawn(|| "specsheet-grpc-server", async move {
             Server::builder()
                 .add_service(ConsensusServiceServer::new(grpc_service))
                 .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
                 .await
                 .unwrap();
-        });
+        })
+        .abort_on_drop();
         tokio::time::sleep(Duration::from_millis(50)).await;
         Some((addr, handle))
     } else {
@@ -1106,7 +1106,7 @@ async fn main() {
     // op_rate = write_rate_per_second / (cas_pct / 100) so that the CAS
     // portion of ops hits the target write rate.
     let op_rate = if cfg.cas_pct > 0 {
-        cfg.write_rate_per_second / (cfg.cas_pct as f64 / 100.0)
+        cfg.write_rate_per_second / (f64::cast_lossy(cfg.cas_pct) / 100.0)
     } else {
         cfg.write_rate_per_second
     };
@@ -1128,9 +1128,9 @@ async fn main() {
             head_pct: cfg.head_pct,
             scan_limit: cfg.scan_limit,
             truncate_to: cfg.truncate_to,
-            seed: seed as u64,
+            seed: u64::cast_from(seed),
         };
-        client_handles.push(tokio::spawn(async move {
+        client_handles.push(mz_ore::task::spawn(|| "specsheet-client", async move {
             client_task(t, client_cfg, stop, warmup_end).await
         }));
     }
@@ -1151,25 +1151,25 @@ async fn main() {
     let mut truncate_samples = Vec::new();
     let mut per_client_rates: Vec<f64> = Vec::new();
     for h in client_handles {
-        if let Ok(r) = h.await {
-            all_committed.extend(r.cas_committed.samples);
-            all_rejected.extend(r.cas_rejected.samples);
-            head_samples.extend(r.head.samples);
-            scan_samples.extend(r.scan.samples);
-            truncate_samples.extend(r.truncate.samples);
-            // Per-client ops/sec for distribution.
-            let client_secs = r.measured_duration.as_secs_f64();
-            if client_secs > 0.0 {
-                per_client_rates.push(r.measured_ops as f64 / client_secs);
-            }
+        let r = h.await;
+        all_committed.extend(r.cas_committed.samples);
+        all_rejected.extend(r.cas_rejected.samples);
+        head_samples.extend(r.head.samples);
+        scan_samples.extend(r.scan.samples);
+        truncate_samples.extend(r.truncate.samples);
+        // Per-client ops/sec for distribution.
+        let client_secs = r.measured_duration.as_secs_f64();
+        if client_secs > 0.0 {
+            per_client_rates.push(f64::cast_lossy(r.measured_ops) / client_secs);
         }
     }
 
     // Shut down the gRPC server (which holds a tx clone) so the actor can
     // drain and exit. Without this, the actor blocks forever waiting for
-    // the server's sender to drop.
+    // the server's sender to drop. Dropping the AbortOnDropHandle aborts
+    // the task.
     if let Some((_, handle)) = grpc_server_handle {
-        handle.abort();
+        drop(handle);
     }
 
     let _ = actor_handle.await;
@@ -1181,7 +1181,7 @@ async fn main() {
     per_client_rates.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let client_dist = if per_client_rates.is_empty() {
         ClientDistribution {
-            num_clients: num_clients,
+            num_clients,
             target_ops_per_sec: op_rate,
             min_ops_per_sec: 0.0,
             p50_ops_per_sec: 0.0,
@@ -1191,7 +1191,7 @@ async fn main() {
     } else {
         let len = per_client_rates.len();
         ClientDistribution {
-            num_clients: num_clients,
+            num_clients,
             target_ops_per_sec: op_rate,
             min_ops_per_sec: per_client_rates[0],
             p50_ops_per_sec: per_client_rates[len * 50 / 100],
@@ -1201,29 +1201,29 @@ async fn main() {
     };
 
     // Target ops/sec per operation type (aggregate across all clients).
-    let total_target_ops = num_clients as f64 * op_rate;
+    let total_target_ops = f64::cast_lossy(num_clients) * op_rate;
 
     let cas_rejected_stats = compute_percentiles(&mut all_rejected);
 
     let op_stats = vec![
         OpStats {
             name: "CAS committed".into(),
-            target_per_sec: total_target_ops * cfg.cas_pct as f64 / 100.0,
+            target_per_sec: total_target_ops * f64::cast_lossy(cfg.cas_pct) / 100.0,
             stats: compute_percentiles(&mut all_committed),
         },
         OpStats {
             name: "Head".into(),
-            target_per_sec: total_target_ops * cfg.head_pct as f64 / 100.0,
+            target_per_sec: total_target_ops * f64::cast_lossy(cfg.head_pct) / 100.0,
             stats: compute_percentiles(&mut head_samples),
         },
         OpStats {
             name: "Scan".into(),
-            target_per_sec: total_target_ops * cfg.scan_pct as f64 / 100.0,
+            target_per_sec: total_target_ops * f64::cast_lossy(cfg.scan_pct) / 100.0,
             stats: compute_percentiles(&mut scan_samples),
         },
         OpStats {
             name: "Truncate".into(),
-            target_per_sec: total_target_ops * cfg.truncate_pct as f64 / 100.0,
+            target_per_sec: total_target_ops * f64::cast_lossy(cfg.truncate_pct) / 100.0,
             stats: compute_percentiles(&mut truncate_samples),
         },
     ];

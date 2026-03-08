@@ -30,18 +30,24 @@ use std::sync::Arc;
 
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
-use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle;
+use tokio::sync::oneshot;
 
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::generated::consensus_service::{ProtoVersionedData, proto_wal_op};
 
-use crate::actor::{Actor, ActorCommand, ActorHandle};
+use crate::actor::{Actor, ActorCommand, ActorConfig, ActorHandle};
 use crate::metrics::ConsensusMetrics;
 use crate::wal::{SimWalWriter, SimWriteFault};
 
 fn test_metrics() -> ConsensusMetrics {
     ConsensusMetrics::register(&MetricsRegistry::new())
+}
+
+fn test_config() -> ActorConfig {
+    ActorConfig {
+        flush_interval_ms: 86_400_000,
+        ..Default::default()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -291,8 +297,12 @@ impl SimTrace {
 impl std::fmt::Display for SimTrace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "seed={} ({} events)", self.seed, self.events.len())?;
-        writeln!(f, "{:>5}  {}", "step", "event")?;
-        writeln!(f, "{:>5}  {}", "----", "-----")?;
+        let step = "step";
+        let event = "event";
+        writeln!(f, "{step:>5}  {event}")?;
+        let dash1 = "----";
+        let dash2 = "-----";
+        writeln!(f, "{dash1:>5}  {dash2}")?;
         for event in &self.events {
             let prefix = match event.actor {
                 Some(id) => format!("[A{}] ", id),
@@ -310,20 +320,18 @@ impl std::fmt::Display for SimTrace {
 
 struct Simulator {
     handle: ActorHandle,
-    task: JoinHandle<()>,
+    _task: mz_ore::task::AbortOnDropHandle<()>,
     wal: Arc<SimWalWriter>,
     trace: SimTrace,
 }
 
 impl Simulator {
     fn new(seed: u64) -> Self {
-        let (tx, rx) = mpsc::channel(4096);
         let wal = Arc::new(SimWalWriter::new());
-        let actor = Actor::new(rx, wal.clone(), 86_400_000, 100, test_metrics());
-        let task = tokio::spawn(actor.run());
+        let (handle, task) = Actor::spawn(test_config(), Arc::clone(&wal), test_metrics());
         Simulator {
-            handle: ActorHandle::new(tx),
-            task,
+            handle,
+            _task: task.abort_on_drop(),
             wal,
             trace: SimTrace::new(seed),
         }
@@ -434,14 +442,11 @@ impl Simulator {
     async fn crash_and_recover(&mut self, op_gen: &mut OpGenerator) {
         self.trace.record(SimEventKind::CrashTriggered);
 
-        // 1. Abort the current actor — pending unflushed ops are lost.
-        self.task.abort();
-
+        // 1. Drop the old task handle — AbortOnDropHandle aborts the actor.
         // 2. Spin up a new actor and recover.
-        let (tx, rx) = mpsc::channel(4096);
-        let actor = Actor::new(rx, self.wal.clone(), 86_400_000, 100, test_metrics());
-        self.handle = ActorHandle::new(tx);
-        self.task = tokio::spawn(actor.run());
+        let (handle, task) = Actor::spawn(test_config(), Arc::clone(&self.wal), test_metrics());
+        self.handle = handle;
+        self._task = task.abort_on_drop();
         self.handle.recover().await.unwrap();
 
         // 3. Verify every recovered shard head exists in the WAL.
@@ -467,9 +472,9 @@ impl Simulator {
     }
 
     /// Shut down the actor cleanly.
-    async fn shutdown(self) {
+    fn shutdown(self) {
         drop(self.handle);
-        self.task.await.unwrap();
+        drop(self._task);
     }
 }
 
@@ -656,7 +661,7 @@ async fn sim_single_actor() {
             sim.apply(op, &mut op_gen).await;
         }
         sim.trace.verify_linearizable();
-        sim.shutdown().await;
+        sim.shutdown();
     }
 }
 
@@ -679,12 +684,11 @@ async fn sim_multi_actor() {
 
         // Spin up N actors sharing the same WAL.
         let mut actor_handles: Vec<ActorHandle> = Vec::new();
-        let mut tasks: Vec<JoinHandle<()>> = Vec::new();
+        let mut tasks: Vec<mz_ore::task::AbortOnDropHandle<()>> = Vec::new();
         for _ in 0..NUM_ACTORS {
-            let (tx, rx) = mpsc::channel(4096);
-            let actor = Actor::new(rx, wal.clone(), 86_400_000, 100, test_metrics());
-            tasks.push(tokio::spawn(actor.run()));
-            actor_handles.push(ActorHandle::new(tx));
+            let (handle, task) = Actor::spawn(test_config(), Arc::clone(&wal), test_metrics());
+            tasks.push(task.abort_on_drop());
+            actor_handles.push(handle);
         }
 
         for _ in 0..200 {
@@ -782,13 +786,10 @@ async fn sim_multi_actor() {
             trace.next_step();
         }
 
-        // Shutdown all actors.
-        for h in actor_handles {
-            drop(h);
-        }
-        for task in tasks {
-            task.await.unwrap();
-        }
+        // Shutdown all actors — drop handles to close channels, then
+        // drop tasks (AbortOnDropHandle aborts them).
+        drop(actor_handles);
+        drop(tasks);
     }
 }
 
@@ -812,7 +813,7 @@ async fn sim_fuzz() {
             sim.apply(op, &mut op_gen).await;
         }
         sim.trace.verify_linearizable();
-        sim.shutdown().await;
+        sim.shutdown();
 
         if seed % 1000 == 0 {
             eprintln!("sim_fuzz: completed seed {}", seed);

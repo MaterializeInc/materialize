@@ -40,7 +40,7 @@ mz-ore = { path = "../ore", default-features = false, features = ["metrics"] }
 mz-persist = { path = "../persist" }
 prometheus = { version = "0.14.0", default-features = false }
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
-tokio = { version = "1.49.0", default-features = false, features = ["macros", "sync", "rt", "time", "net"] }
+tokio = { version = "1.49.0", default-features = false, features = ["macros", "sync", "rt", "time", "net", "tracing"] }
 tokio-stream = "0.1"
 tonic = "0.14.2"
 tracing = "0.1.44"

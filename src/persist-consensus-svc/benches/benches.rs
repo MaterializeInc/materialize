@@ -21,7 +21,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::generated::consensus_service::ProtoVersionedData;
-use mz_persist_consensus_svc::actor::{Actor, ActorCommand};
+use mz_persist_consensus_svc::actor::{Actor, ActorCommand, ActorConfig};
 use mz_persist_consensus_svc::metrics::ConsensusMetrics;
 use mz_persist_consensus_svc::wal::{LatencyProfile, LatencyWalWriter, NoopWalWriter};
 
@@ -36,12 +36,15 @@ fn test_metrics() -> ConsensusMetrics {
 /// never fires — benchmarks use explicit `Flush` commands).
 pub(crate) fn spawn_bench_actor(
     runtime: &tokio::runtime::Runtime,
-) -> (mpsc::Sender<ActorCommand>, tokio::task::JoinHandle<()>) {
+) -> (mpsc::Sender<ActorCommand>, mz_ore::task::JoinHandle<()>) {
     runtime.block_on(async {
-        let (tx, rx) = mpsc::channel(4096);
-        let actor = Actor::new(rx, NoopWalWriter, 86_400_000, u64::MAX, test_metrics());
-        let handle = tokio::spawn(actor.run());
-        (tx, handle)
+        let config = ActorConfig {
+            flush_interval_ms: 86_400_000,
+            snapshot_interval: u64::MAX,
+            ..Default::default()
+        };
+        let (handle, task) = Actor::spawn(config, NoopWalWriter, test_metrics());
+        (handle.sender().clone(), task)
     })
 }
 
@@ -52,13 +55,16 @@ pub(crate) fn spawn_latency_actor(
     runtime: &tokio::runtime::Runtime,
     profile: LatencyProfile,
     flush_interval_ms: u64,
-) -> (mpsc::Sender<ActorCommand>, tokio::task::JoinHandle<()>) {
+) -> (mpsc::Sender<ActorCommand>, mz_ore::task::JoinHandle<()>) {
     runtime.block_on(async {
-        let (tx, rx) = mpsc::channel(4096);
+        let config = ActorConfig {
+            flush_interval_ms,
+            snapshot_interval: u64::MAX,
+            ..Default::default()
+        };
         let wal = LatencyWalWriter::new(profile);
-        let actor = Actor::new(rx, wal, flush_interval_ms, u64::MAX, test_metrics());
-        let handle = tokio::spawn(actor.run());
-        (tx, handle)
+        let (handle, task) = Actor::spawn(config, wal, test_metrics());
+        (handle.sender().clone(), task)
     })
 }
 

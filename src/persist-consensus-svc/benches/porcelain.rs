@@ -25,7 +25,7 @@ use mz_persist::generated::consensus_service::consensus_service_server::Consensu
 use mz_persist::generated::consensus_service::{
     ProtoCompareAndSetRequest, ProtoHeadRequest, ProtoScanRequest, ProtoVersionedData,
 };
-use mz_persist_consensus_svc::actor::{Actor, ActorCommand};
+use mz_persist_consensus_svc::actor::{Actor, ActorCommand, ActorConfig};
 use mz_persist_consensus_svc::metrics::ConsensusMetrics;
 use mz_persist_consensus_svc::service::ConsensusGrpcService;
 use mz_persist_consensus_svc::wal::NoopWalWriter;
@@ -43,17 +43,20 @@ async fn start_server_and_client_with_interval(
     ConsensusServiceClient<tonic::transport::Channel>,
     mpsc::Sender<ActorCommand>,
 ) {
-    let (tx, rx) = mpsc::channel(4096);
+    let config = ActorConfig {
+        flush_interval_ms: flush_interval_ms.unwrap_or(86_400_000),
+        snapshot_interval: u64::MAX,
+        ..Default::default()
+    };
     let metrics = ConsensusMetrics::register(&MetricsRegistry::new());
-    let actor = Actor::new(rx, NoopWalWriter, flush_interval_ms.unwrap_or(86_400_000), u64::MAX, metrics);
-    tokio::spawn(actor.run());
+    let (handle, _task) = Actor::spawn(config, NoopWalWriter, metrics);
 
-    let service = ConsensusGrpcService { tx: tx.clone() };
+    let service = ConsensusGrpcService { handle: handle.clone() };
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
-    tokio::spawn(async move {
+    mz_ore::task::spawn(|| "bench-grpc-server", async move {
         Server::builder()
             .add_service(ConsensusServiceServer::new(service))
             .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
@@ -68,7 +71,7 @@ async fn start_server_and_client_with_interval(
         .await
         .unwrap();
 
-    (client, tx)
+    (client, handle.sender().clone())
 }
 
 /// gRPC head latency. Comparison with plumbing/head shows the gRPC tax on reads.

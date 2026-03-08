@@ -9,13 +9,12 @@
 
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle;
+use tokio::sync::oneshot;
 
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::generated::consensus_service::ProtoVersionedData;
 
-use crate::actor::{Actor, ActorCommand, ActorHandle};
+use crate::actor::{Actor, ActorCommand, ActorConfig, ActorHandle};
 use crate::metrics::ConsensusMetrics;
 use crate::wal::{NoopWalWriter, RecordingWalWriter, SimWalWriter};
 
@@ -23,78 +22,51 @@ fn test_metrics() -> ConsensusMetrics {
     ConsensusMetrics::register(&MetricsRegistry::new())
 }
 
+fn test_config() -> ActorConfig {
+    ActorConfig {
+        flush_interval_ms: 86_400_000,
+        ..Default::default()
+    }
+}
+
 /// Test wrapper that holds the actor's handle and join handle.
 /// The actor task is aborted on drop so tests don't need explicit cleanup.
 struct TestActor {
     handle: ActorHandle,
-    task: JoinHandle<()>,
-}
-
-impl Drop for TestActor {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
+    _task: mz_ore::task::AbortOnDropHandle<()>,
 }
 
 /// Helper: spawn an actor with a noop WAL writer. Uses a huge flush interval
 /// so the timer never fires — tests use explicit `Flush` commands instead.
 fn spawn_test_actor() -> TestActor {
-    let (tx, rx) = mpsc::channel(256);
-    let actor = Actor::new(rx, NoopWalWriter, 86_400_000, 100, test_metrics());
-    let task = tokio::spawn(actor.run());
-    TestActor {
-        handle: ActorHandle::new(tx),
-        task,
-    }
+    let (handle, task) = Actor::spawn(test_config(), NoopWalWriter, test_metrics());
+    TestActor { handle, _task: task.abort_on_drop() }
 }
 
 /// Helper: spawn an actor with a recording WAL writer.
 fn spawn_recording_actor() -> (TestActor, Arc<RecordingWalWriter>) {
-    let (tx, rx) = mpsc::channel(256);
     let writer = Arc::new(RecordingWalWriter::new());
-    let actor = Actor::new(rx, writer.clone(), 86_400_000, 100, test_metrics());
-    let task = tokio::spawn(actor.run());
-    (
-        TestActor {
-            handle: ActorHandle::new(tx),
-            task,
-        },
-        writer,
-    )
+    let (handle, task) = Actor::spawn(test_config(), Arc::clone(&writer), test_metrics());
+    (TestActor { handle, _task: task.abort_on_drop() }, writer)
 }
 
 /// Helper: spawn an actor with a recording WAL writer and a custom snapshot interval.
 fn spawn_recording_actor_with_snapshot_interval(
     snapshot_interval: u64,
 ) -> (TestActor, Arc<RecordingWalWriter>) {
-    let (tx, rx) = mpsc::channel(256);
     let writer = Arc::new(RecordingWalWriter::new());
-    let actor = Actor::new(
-        rx,
-        writer.clone(),
-        86_400_000,
+    let config = ActorConfig {
         snapshot_interval,
-        test_metrics(),
-    );
-    let task = tokio::spawn(actor.run());
-    (
-        TestActor {
-            handle: ActorHandle::new(tx),
-            task,
-        },
-        writer,
-    )
+        ..test_config()
+    };
+    let (handle, task) = Actor::spawn(config, Arc::clone(&writer), test_metrics());
+    (TestActor { handle, _task: task.abort_on_drop() }, writer)
 }
 
 /// Helper: spawn an actor with a SimWalWriter (supports reads for recovery).
 fn spawn_sim_actor(wal: Arc<SimWalWriter>) -> TestActor {
-    let (tx, rx) = mpsc::channel(256);
-    let actor = Actor::new(rx, wal, 86_400_000, 100, test_metrics());
-    let task = tokio::spawn(actor.run());
-    TestActor {
-        handle: ActorHandle::new(tx),
-        task,
-    }
+    let (handle, task) = Actor::spawn(test_config(), wal, test_metrics());
+    TestActor { handle, _task: task.abort_on_drop() }
 }
 
 /// Send a CAS, then flush, then return the result.
@@ -321,7 +293,7 @@ async fn cas_seqno_equal_to_expected() {
 async fn cas_seqno_exceeds_i64_max() {
     let a = spawn_test_actor();
     let err =
-        send_cas_expect_validation_error(&a.handle, "s", None, (i64::MAX as u64) + 1, b"v").await;
+        send_cas_expect_validation_error(&a.handle, "s", None, u64::try_from(i64::MAX).expect("fits") + 1, b"v").await;
     assert!(err.contains("i64::MAX"));
 }
 
@@ -681,7 +653,7 @@ async fn recover_from_snapshot_replays_wal() {
 
     // Build up state via a first actor, then shut it down.
     {
-        let a = spawn_sim_actor(wal.clone());
+        let a = spawn_sim_actor(Arc::clone(&wal));
         assert!(
             cas_and_flush(&a.handle, "s1", None, 1, b"v1")
                 .await
@@ -730,7 +702,7 @@ async fn recover_from_snapshot_replays_truncates() {
     let wal = Arc::new(SimWalWriter::new());
 
     {
-        let a = spawn_sim_actor(wal.clone());
+        let a = spawn_sim_actor(Arc::clone(&wal));
         assert!(
             cas_and_flush(&a.handle, "s", None, 1, b"v1")
                 .await
@@ -764,7 +736,7 @@ async fn recover_from_snapshot_clears_pending() {
 
     // Write some durable state.
     {
-        let a = spawn_sim_actor(wal.clone());
+        let a = spawn_sim_actor(Arc::clone(&wal));
         assert!(
             cas_and_flush(&a.handle, "s", None, 1, b"v1")
                 .await
