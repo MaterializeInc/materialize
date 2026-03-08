@@ -144,6 +144,10 @@ enum Command {
         /// how far behind real-time the materialized data is. Default: 300 (5 min).
         #[arg(long, value_name = "SECONDS", default_value = "300")]
         allowed_lag: i64,
+
+        /// Preview what would happen without executing any changes
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Create a staging deployment for testing changes
@@ -623,13 +627,14 @@ async fn run(args: Args) -> Result<(), CliError> {
             force,
             skip_ready,
             allowed_lag,
+            dry_run,
         }) => {
             let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
 
-            if !skip_ready {
+            if !skip_ready && !dry_run {
                 cli::commands::ready::run(&profile, &deploy_id, true, None, allowed_lag).await?;
             }
-            cli::commands::deploy::run(&profile, &deploy_id, force).await
+            cli::commands::deploy::run(&profile, &deploy_id, force, dry_run).await
         }
         Some(Command::Stage {
             deploy_id,

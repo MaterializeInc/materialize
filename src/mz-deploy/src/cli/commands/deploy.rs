@@ -42,8 +42,17 @@ struct ApplyResources {
 /// Returns `CliError::StagingAlreadyPromoted` if already promoted
 /// Returns `CliError::DeploymentConflict` if conflicts detected (without --force)
 /// Returns `CliError::Connection` for database errors
-pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), CliError> {
-    progress::info(&format!("Deploying '{}' to production", deploy_id));
+pub async fn run(
+    profile: &Profile,
+    deploy_id: &str,
+    force: bool,
+    dry_run: bool,
+) -> Result<(), CliError> {
+    if dry_run {
+        progress::info(&format!("Previewing deployment plan for '{}'", deploy_id));
+    } else {
+        progress::info(&format!("Deploying '{}' to production", deploy_id));
+    }
 
     let client = Client::connect_with_profile(profile.clone())
         .await
@@ -65,6 +74,12 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
     );
 
     let resources = prepare_apply_resources(&client, deploy_id, apply_state, force).await?;
+
+    if dry_run {
+        print_deployment_plan(&client, deploy_id, apply_state, &resources).await?;
+        return Ok(());
+    }
+
     execute_swap_phase(&client, deploy_id, apply_state, &resources).await?;
     run_post_swap_steps(&client, deploy_id, &resources).await?;
     cleanup_apply_state(&client, deploy_id).await?;
@@ -74,6 +89,206 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
         "Staging deployment '{}' is now in production",
         deploy_id
     ));
+
+    Ok(())
+}
+
+/// Print a human-readable deployment plan showing what would happen.
+///
+/// Queries the database for read-only state and prints a structured plan
+/// with sections for swaps, creates, repoints, and drops.
+async fn print_deployment_plan(
+    client: &Client,
+    deploy_id: &str,
+    apply_state: ApplyState,
+    resources: &ApplyResources,
+) -> Result<(), CliError> {
+    let staging_suffix = &resources.staging_suffix;
+    let mut has_work = false;
+
+    // Note resume state if applicable
+    match apply_state {
+        ApplyState::PreSwap => {
+            println!(
+                "\n  {} Resuming from pre-swap state (apply state schemas already created)",
+                "note:".yellow().bold()
+            );
+        }
+        ApplyState::PostSwap => {
+            println!(
+                "\n  {} Resuming from post-swap state (swap already completed, showing remaining work)",
+                "note:".yellow().bold()
+            );
+        }
+        ApplyState::NotStarted => {}
+    }
+
+    // Schema Swaps
+    println!("\n  {}", "Schema Swaps:".bold());
+    if resources.staging_schemas.is_empty() {
+        println!("    (none)");
+    } else {
+        has_work = true;
+        for sq in &resources.staging_schemas {
+            let prod_schema = sq.schema.trim_end_matches(staging_suffix);
+            println!(
+                "    {} {}.{} {} {}.{}",
+                "~".yellow(),
+                sq.database,
+                prod_schema,
+                "<->".dimmed(),
+                sq.database,
+                sq.schema
+            );
+        }
+    }
+
+    // Cluster Swaps
+    println!("\n  {}", "Cluster Swaps:".bold());
+    if resources.staging_clusters.is_empty() {
+        println!("    (none)");
+    } else {
+        has_work = true;
+        for cluster in &resources.staging_clusters {
+            let staging_cluster = format!("{}{}", cluster, staging_suffix);
+            println!(
+                "    {} {} {} {}",
+                "~".yellow(),
+                cluster,
+                "<->".dimmed(),
+                staging_cluster
+            );
+        }
+    }
+
+    // Sinks to Create
+    let pending = client
+        .deployments()
+        .get_pending_statements(deploy_id)
+        .await?;
+    println!("\n  {}", "Sinks to Create:".bold());
+    if pending.is_empty() {
+        println!("    (none)");
+    } else {
+        has_work = true;
+        for stmt in &pending {
+            println!(
+                "    {} {}.{}.{}",
+                "+".green(),
+                stmt.database,
+                stmt.schema,
+                stmt.object
+            );
+        }
+    }
+
+    // Replacement MVs
+    let replacement_mvs = client.deployments().get_replacement_mvs(deploy_id).await?;
+    println!("\n  {}", "Replacement Materialized Views:".bold());
+    if replacement_mvs.is_empty() {
+        println!("    (none)");
+    } else {
+        has_work = true;
+        for record in &replacement_mvs {
+            println!(
+                "    {} {}.{}.{} {} {}.{}.{}",
+                "~".yellow(),
+                record.target_database,
+                record.target_schema,
+                record.target_name,
+                "<-".dimmed(),
+                record.target_database,
+                record.replacement_schema,
+                record.target_name
+            );
+        }
+    }
+
+    // Sinks to Repoint — query production schemas (pre-swap equivalent)
+    println!("\n  {}", "Sinks to Repoint:".bold());
+    if resources.staging_schemas.is_empty() {
+        println!("    (none)");
+    } else {
+        // In dry-run the swap hasn't happened, so current production schemas
+        // (without suffix) hold the objects that sinks depend on. After swap,
+        // those schemas would get the staging suffix and be dropped, so we
+        // query the production schemas now to find sinks that would need repointing.
+        let prod_schemas: Vec<SchemaQualifier> = resources
+            .staging_schemas
+            .iter()
+            .map(|sq| {
+                let prod_schema = sq.schema.trim_end_matches(staging_suffix);
+                SchemaQualifier::new(sq.database.clone(), prod_schema.to_string())
+            })
+            .collect();
+
+        let dependent_sinks = client
+            .introspection()
+            .find_sinks_depending_on_schemas(&prod_schemas)
+            .await
+            .map_err(CliError::Connection)?;
+
+        if dependent_sinks.is_empty() {
+            println!("    (none)");
+        } else {
+            has_work = true;
+            for sink in &dependent_sinks {
+                println!(
+                    "    {} {}.{}.{} {} {}.{}.{}",
+                    "~".yellow(),
+                    sink.sink_database,
+                    sink.sink_schema,
+                    sink.sink_name,
+                    "->".dimmed(),
+                    sink.dependency_database,
+                    sink.dependency_schema,
+                    sink.dependency_name
+                );
+            }
+        }
+    }
+
+    // Old Resources to Drop
+    println!("\n  {}", "Old Resources to Drop:".bold());
+    let replacement_schemas: BTreeSet<SchemaQualifier> = replacement_mvs
+        .iter()
+        .map(|r| SchemaQualifier::new(r.target_database.clone(), r.replacement_schema.clone()))
+        .collect();
+    let has_drops = !resources.staging_schemas.is_empty()
+        || !resources.staging_clusters.is_empty()
+        || !replacement_schemas.is_empty();
+
+    if !has_drops {
+        println!("    (none)");
+    } else {
+        has_work = true;
+        // After swap, old production schemas get the staging suffix and are dropped
+        for sq in &resources.staging_schemas {
+            let prod_schema = sq.schema.trim_end_matches(staging_suffix);
+            let old_schema = format!("{}{}", prod_schema, staging_suffix);
+            println!("    {} {}.{}", "-".red(), sq.database, old_schema);
+        }
+        // Old production clusters get the staging suffix and are dropped
+        for cluster in &resources.staging_clusters {
+            let old_cluster = format!("{}{}", cluster, staging_suffix);
+            println!("    {} {}", "-".red(), old_cluster);
+        }
+        // Replacement staging schemas are dropped after APPLY REPLACEMENT
+        for sq in &replacement_schemas {
+            println!("    {} {}.{}", "-".red(), sq.database, sq.schema);
+        }
+    }
+
+    // Summary
+    println!();
+    if has_work {
+        progress::info(&format!(
+            "To execute this plan, run: mz-deploy deploy {}",
+            deploy_id
+        ));
+    } else {
+        progress::info("Nothing to do.");
+    }
 
     Ok(())
 }

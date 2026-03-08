@@ -42,6 +42,9 @@ state and skips directly to step 5.
 - `--skip-ready` — Skip the readiness/hydration check before promoting.
 - `--allowed-lag <SECONDS>` — Maximum wallclock lag (in seconds) for the
   readiness check (default: 300 = 5 minutes).
+- `--dry-run` — Preview the deployment plan without executing any changes.
+  Connects to the database to discover resources, then prints what would
+  be swapped, created, repointed, and dropped.
 
 ## Examples
 
@@ -49,6 +52,7 @@ state and skips directly to step 5.
     mz-deploy deploy abc123 --skip-ready       # Skip hydration check
     mz-deploy deploy abc123 --force            # Ignore conflicts
     mz-deploy deploy abc123 --allowed-lag 600  # 10 min lag tolerance
+    mz-deploy deploy abc123 --dry-run          # Preview deployment plan
 
 ## Error Recovery
 
