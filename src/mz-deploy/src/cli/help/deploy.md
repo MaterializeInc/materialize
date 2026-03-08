@@ -70,6 +70,18 @@ state and skips directly to step 5.
 - **Sink creation fails post-swap** — The swap already succeeded. Fix the
   sink definition and re-run `deploy` to retry deferred work.
 
+## Rollback
+
+There is no dedicated rollback command. To revert a promotion, reverse the
+changes in your project and promote the result:
+
+    git revert <commit>              # Create a new commit undoing the change
+    mz-deploy stage                  # Stage the reverted project
+    mz-deploy deploy <NEW_DEPLOY_ID> # Promote to production
+
+Because `deploy` uses atomic `ALTER ... SWAP`, the rollback promotion is
+itself atomic — production traffic switches back in a single transaction.
+
 ## Related Commands
 
 - `mz-deploy stage` — Create the staging deployment to promote.
