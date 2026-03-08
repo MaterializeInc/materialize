@@ -47,11 +47,11 @@ pub async fn run(
 
     // 6. Sources
     progress::info("--- Applying sources ---");
-    super::apply_tables::apply_sources(directory, profile, settings, dry_run).await?;
+    super::apply_tables::apply_sources(directory, profile, dry_run).await?;
 
     // 7. Tables
     progress::info("--- Applying tables ---");
-    super::apply_tables::apply_tables(directory, profile, settings, dry_run).await?;
+    super::apply_tables::apply_tables(directory, profile, dry_run).await?;
 
     // Regenerate data contracts after tables are applied
     if !dry_run {

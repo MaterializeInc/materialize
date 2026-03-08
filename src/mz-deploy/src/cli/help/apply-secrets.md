@@ -58,6 +58,5 @@ Other expressions are passed through to Materialize unchanged.
 
 ## Related Commands
 
-- `mz-deploy apply` — Apply all infrastructure objects in dependency order.
-- `mz-deploy apply clusters` — Converge cluster definitions similarly.
-- `mz-deploy apply roles` — Converge role definitions similarly.
+- `mz-deploy apply` — Apply all object types in dependency order.
+- `mz-deploy delete secret <NAME>` — Drop a secret and remove its project file.

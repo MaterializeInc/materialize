@@ -37,6 +37,5 @@ same result. Grants and comments are safe to re-apply.
 
 ## Related Commands
 
-- `mz-deploy apply clusters` — Converge cluster definitions similarly.
-- `mz-deploy apply roles` — Converge role definitions similarly.
-- `mz-deploy deploy <DEPLOY_ID>` — Promote a staging deployment.
+- `mz-deploy apply` — Apply all object types in dependency order.
+- `mz-deploy delete network-policy <NAME>` — Drop a network policy and remove its project file.

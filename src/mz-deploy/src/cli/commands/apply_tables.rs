@@ -5,9 +5,7 @@ use crate::cli::git;
 use crate::cli::progress;
 use crate::cli::{CliError, TypeCheckMode, executor};
 use crate::client::{Client, Profile};
-use crate::config::ProjectSettings;
 use crate::project::ast::Statement;
-use crate::secret_resolver::SecretResolver;
 use crate::{project, verbose};
 
 use chrono::Utc;
@@ -34,6 +32,9 @@ use super::ObjectRef;
 /// * `allow_dirty` - Allow deploying with uncommitted changes
 /// * `dry_run` - If true, print SQL instead of executing
 ///
+/// Note: `run()` is the deploy-tracked variant used by `mz-deploy deploy`.
+/// For the non-tracked `apply tables` subcommand, see `apply_tables()`.
+///
 /// # Returns
 /// Ok(()) if deployment succeeds
 ///
@@ -42,7 +43,6 @@ use super::ObjectRef;
 pub async fn run(
     profile: &Profile,
     directory: &Path,
-    settings: &ProjectSettings,
     deploy_id: Option<&str>,
     allow_dirty: bool,
     dry_run: bool,
@@ -150,8 +150,7 @@ pub async fn run(
     executor
         .prepare_databases_and_schemas(&planned_project, &schema_keys, None)
         .await?;
-    let resolver = SecretResolver::new(&settings.secret_config_for_profile(&profile.name));
-    let success_count = execute_table_creates(&executor, &resolver, &tables_to_create).await?;
+    let success_count = execute_table_creates(&executor, &tables_to_create).await?;
     finalize_table_deployment(
         &client,
         directory,
@@ -173,17 +172,9 @@ pub async fn run(
 pub async fn apply_tables(
     directory: &Path,
     profile: &Profile,
-    settings: &ProjectSettings,
     dry_run: bool,
 ) -> Result<(), CliError> {
-    apply_by_kind(
-        directory,
-        profile,
-        settings,
-        dry_run,
-        ObjectKindFilter::Tables,
-    )
-    .await
+    apply_by_kind(directory, profile, dry_run, ObjectKindFilter::Tables).await
 }
 
 /// Apply only source objects (no deployment tracking).
@@ -192,17 +183,9 @@ pub async fn apply_tables(
 pub async fn apply_sources(
     directory: &Path,
     profile: &Profile,
-    settings: &ProjectSettings,
     dry_run: bool,
 ) -> Result<(), CliError> {
-    apply_by_kind(
-        directory,
-        profile,
-        settings,
-        dry_run,
-        ObjectKindFilter::Sources,
-    )
-    .await
+    apply_by_kind(directory, profile, dry_run, ObjectKindFilter::Sources).await
 }
 
 /// Which object kinds to create.
@@ -215,7 +198,6 @@ enum ObjectKindFilter {
 async fn apply_by_kind(
     directory: &Path,
     profile: &Profile,
-    settings: &ProjectSettings,
     dry_run: bool,
     filter: ObjectKindFilter,
 ) -> Result<(), CliError> {
@@ -242,21 +224,9 @@ async fn apply_by_kind(
 
     // Collect object IDs matching the filter
     let mut target_ids = BTreeSet::new();
-    let mut dep_ids = BTreeSet::new();
     for obj in planned_project.iter_objects() {
         if matcher(&obj.typed_object.stmt) {
             target_ids.insert(obj.id.clone());
-        }
-        // Also collect dependency objects (secrets, connections, sources) needed by tables
-        if matches!(filter, ObjectKindFilter::Tables) {
-            match &obj.typed_object.stmt {
-                Statement::CreateSecret(_)
-                | Statement::CreateConnection(_)
-                | Statement::CreateSource(_) => {
-                    dep_ids.insert(obj.id.clone());
-                }
-                _ => {}
-            }
         }
     }
 
@@ -265,9 +235,7 @@ async fn apply_by_kind(
         return Ok(());
     }
 
-    // For tables, we need to include dependency objects in the create set
-    let all_ids: BTreeSet<_> = target_ids.iter().chain(dep_ids.iter()).cloned().collect();
-    let all_objects = planned_project.get_sorted_objects_filtered(&all_ids)?;
+    let target_objects = planned_project.get_sorted_objects_filtered(&target_ids)?;
 
     // Check which already exist
     let existing = match filter {
@@ -284,32 +252,10 @@ async fn apply_by_kind(
                 .await?
         }
     };
-    // Also check dependency existence
-    let existing_deps = if matches!(filter, ObjectKindFilter::Tables) && !dep_ids.is_empty() {
-        let mut deps = BTreeSet::new();
-        let introspection = client.introspection();
-        let (existing_secrets, existing_connections, existing_sources) = tokio::try_join!(
-            introspection.check_secrets_exist(&dep_ids),
-            introspection.check_connections_exist(&dep_ids),
-            introspection.check_sources_exist(&dep_ids),
-        )?;
-        deps.extend(existing_secrets);
-        deps.extend(existing_connections);
-        deps.extend(existing_sources);
-        deps
-    } else {
-        BTreeSet::new()
-    };
 
-    let all_existing: BTreeSet<_> = existing
-        .iter()
-        .chain(existing_deps.iter())
-        .cloned()
-        .collect();
-
-    let to_create: Vec<_> = all_objects
+    let to_create: Vec<_> = target_objects
         .into_iter()
-        .filter(|(obj_id, _)| !all_existing.contains(obj_id))
+        .filter(|(obj_id, _)| !existing.contains(obj_id))
         .collect();
 
     // Reconcile grants on existing target objects
@@ -357,8 +303,7 @@ async fn apply_by_kind(
         .prepare_databases_and_schemas(&planned_project, &schemas, None)
         .await?;
 
-    let resolver = SecretResolver::new(&settings.secret_config_for_profile(&profile.name));
-    let success_count = execute_table_creates(&executor, &resolver, &to_create).await?;
+    let success_count = execute_table_creates(&executor, &to_create).await?;
 
     progress::success(&format!(
         "Successfully created {} new {}(s)",
@@ -443,35 +388,23 @@ fn collect_table_schemas(
     table_schemas
 }
 
-/// Returns a sort key for object type ordering: secrets, connections, sources, then tables.
-fn object_type_order(stmt: &Statement) -> u8 {
-    match stmt {
-        Statement::CreateSecret(_) => 0,
-        Statement::CreateConnection(_) => 1,
-        Statement::CreateSource(_) => 2,
-        _ => 3,
-    }
-}
-
-/// Executes missing table/source/secret objects in type order (secrets, sources, tables).
+/// Executes missing table/source objects.
 ///
 /// Returns the count of successfully executed objects for summary and metadata reporting.
 async fn execute_table_creates(
     executor: &executor::DeploymentExecutor<'_>,
-    resolver: &SecretResolver,
     tables_to_create: &[ObjectRef<'_>],
 ) -> Result<usize, CliError> {
-    // Sort: secrets first, then sources, then tables
-    let mut sorted: Vec<_> = tables_to_create.to_vec();
-    sorted.sort_by_key(|(_, typed_obj)| object_type_order(&typed_obj.stmt));
-
     let mut success_count = 0;
-    for (idx, (object_id, typed_obj)) in sorted.iter().enumerate() {
-        verbose!("Creating {}/{}: {}", idx + 1, sorted.len(), object_id);
+    for (idx, (object_id, typed_obj)) in tables_to_create.iter().enumerate() {
+        verbose!(
+            "Creating {}/{}: {}",
+            idx + 1,
+            tables_to_create.len(),
+            object_id
+        );
 
-        // Resolve client-side secret providers, then execute
-        let resolved_stmt = resolver.resolve_statement_for_cli(&typed_obj.stmt).await?;
-        executor.execute_sql(&resolved_stmt).await?;
+        executor.execute_sql(&typed_obj.stmt).await?;
         for index in &typed_obj.indexes {
             executor.execute_sql(index).await?;
         }

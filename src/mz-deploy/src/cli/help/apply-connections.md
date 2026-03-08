@@ -57,7 +57,5 @@ which matches the project's normalized format.
 
 ## Related Commands
 
-- `mz-deploy apply secrets` — Create/update secrets before connections.
-- `mz-deploy apply clusters` — Converge cluster definitions similarly.
-- `mz-deploy apply roles` — Converge role definitions similarly.
-- `mz-deploy apply` — Apply all infrastructure objects in dependency order.
+- `mz-deploy apply` — Apply all object types in dependency order.
+- `mz-deploy delete connection <NAME>` — Drop a connection and remove its project file.

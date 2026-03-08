@@ -64,8 +64,6 @@ type is applied.
 
 ## Related Commands
 
-- `mz-deploy deploy` — Promote a staging deployment to production.
 - `mz-deploy stage` — Deploy views/MVs to staging.
-- `mz-deploy compile` — Validate SQL before applying.
-- `mz-deploy apply clusters` — Converge cluster definitions.
-- `mz-deploy apply roles` — Converge role definitions.
+- `mz-deploy apply <type>` — Apply a specific type.
+- `mz-deploy delete <type>` — Drop an object and remove its project file.

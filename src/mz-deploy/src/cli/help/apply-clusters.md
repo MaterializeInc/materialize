@@ -40,5 +40,5 @@ same result. Grants and comments are safe to re-apply.
 
 ## Related Commands
 
-- `mz-deploy apply roles` — Converge role definitions similarly.
-- `mz-deploy deploy <DEPLOY_ID>` — Promote a staging deployment.
+- `mz-deploy apply` — Apply all object types in dependency order.
+- `mz-deploy delete cluster <NAME>` — Drop a cluster and remove its project file.

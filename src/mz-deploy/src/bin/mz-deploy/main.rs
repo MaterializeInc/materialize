@@ -451,7 +451,7 @@ enum ApplyCommand {
     ///
     /// Example:
     ///   mz-deploy apply sources
-    #[command(after_help = "Run 'mz-deploy help apply' for a detailed usage guide.")]
+    #[command(after_help = "Run 'mz-deploy help apply-sources' for a detailed usage guide.")]
     Sources,
     /// Apply table definitions from the project
     ///
@@ -460,7 +460,7 @@ enum ApplyCommand {
     ///
     /// Example:
     ///   mz-deploy apply tables
-    #[command(after_help = "Run 'mz-deploy help apply' for a detailed usage guide.")]
+    #[command(after_help = "Run 'mz-deploy help apply-tables' for a detailed usage guide.")]
     Tables,
 }
 
@@ -592,7 +592,6 @@ async fn run(args: Args) -> Result<(), CliError> {
                     cli::commands::apply_tables::apply_sources(
                         &args.directory,
                         &profile,
-                        &settings,
                         dry_run,
                     )
                     .await
@@ -601,7 +600,6 @@ async fn run(args: Args) -> Result<(), CliError> {
                     cli::commands::apply_tables::apply_tables(
                         &args.directory,
                         &profile,
-                        &settings,
                         dry_run,
                     )
                     .await?;

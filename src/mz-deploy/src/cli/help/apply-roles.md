@@ -42,5 +42,5 @@ same result.
 
 ## Related Commands
 
-- `mz-deploy apply clusters` — Converge cluster definitions similarly.
-- `mz-deploy deploy <DEPLOY_ID>` — Promote a staging deployment.
+- `mz-deploy apply` — Apply all object types in dependency order.
+- `mz-deploy delete role <NAME>` — Drop a role and remove its project file.

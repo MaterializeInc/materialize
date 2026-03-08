@@ -21,6 +21,8 @@ const COMMANDS: &[(&str, &str)] = &[
     ),
     ("apply-roles", include_str!("help/apply-roles.md")),
     ("apply-secrets", include_str!("help/apply-secrets.md")),
+    ("apply-sources", include_str!("help/apply-sources.md")),
+    ("apply-tables", include_str!("help/apply-tables.md")),
     ("compile", include_str!("help/compile.md")),
     ("debug", include_str!("help/debug.md")),
     ("delete", include_str!("help/delete.md")),
@@ -50,8 +52,8 @@ const ALIASES: &[(&str, &str)] = &[
     ("roles", "apply-roles"),
     ("secrets", "apply-secrets"),
     ("show", "describe"),
-    ("sources", "apply"),
-    ("tables", "apply"),
+    ("sources", "apply-sources"),
+    ("tables", "apply-tables"),
 ];
 
 /// Look up extended help by command name or alias.
