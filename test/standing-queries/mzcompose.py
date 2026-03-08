@@ -41,6 +41,7 @@ def setup(c: Composition) -> None:
         """
         ALTER SYSTEM SET max_result_size = '10GB';
         ALTER SYSTEM SET max_connections = 65536;
+        ALTER SYSTEM SET enable_standing_queries = true;
         """,
         port=6877,
         user="mz_system",

@@ -170,6 +170,7 @@ use crate::plan::{
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
     ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
+    ENABLE_STANDING_QUERIES,
 };
 use crate::{names, parse};
 
@@ -3134,6 +3135,8 @@ pub fn plan_create_standing_query(
     scx: &StatementContext,
     mut stmt: CreateStandingQueryStatement<Aug>,
 ) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&ENABLE_STANDING_QUERIES)?;
+
     // Resolve cluster.
     let cluster_id = match &stmt.in_cluster {
         None => scx.catalog.resolve_cluster(None)?.id(),
@@ -3256,6 +3259,8 @@ pub fn plan_execute_standing_query(
     scx: &StatementContext,
     stmt: ExecuteStandingQueryStatement<Aug>,
 ) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&ENABLE_STANDING_QUERIES)?;
+
     let item = resolve_standing_query(scx, &stmt.name)?;
     let item_id = item.id();
     let declared_params = item.standing_query_params()?;

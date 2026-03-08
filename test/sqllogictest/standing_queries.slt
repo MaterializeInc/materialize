@@ -11,6 +11,13 @@ mode cockroach
 
 # Test standing queries end-to-end.
 
+# --- Enable feature flag ---
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_standing_queries = true;
+----
+COMPLETE 0
+
 # --- Setup ---
 
 statement ok
