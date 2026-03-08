@@ -237,6 +237,16 @@ This was rejected because each new SUBSCRIBE renders a fresh dataflow, which is 
 Session-scoped prepared statements could be extended with batching and caching.
 This was rejected because prepared statements are inherently session-scoped and single-use, making cross-client batching impossible.
 
+### SELECT-based execute syntax
+
+Instead of `EXECUTE STANDING QUERY name (params)`, we considered SELECT-based alternatives:
+
+* **Transparent rewriting**: `SELECT id, amount FROM orders WHERE customer_id = 42` — the planner detects a matching standing query and routes to it. Rejected for v1 because it creates false expectations: users would expect arbitrary WHERE, JOIN, GROUP BY to work, but standing query results come from a subscribe and can't be composed further. Also makes it invisible whether a query uses a standing query or a regular index lookup, complicating debugging.
+* **Function-call syntax**: `SELECT * FROM orders_by_customer(42)` — more explicit than transparent rewriting but still implies composability (e.g., wrapping in a subquery or adding WHERE clauses). Also overloads table-function syntax which has different semantics.
+* **Qualified syntax**: `SELECT * FROM STANDING QUERY orders_by_customer (42)` — clearer but still a SELECT, inviting users to compose it.
+
+The dedicated `EXECUTE STANDING QUERY` syntax signals that this is a different execution model: results are pre-computed via a long-lived dataflow, not an ad-hoc query. This avoids user confusion and keeps the implementation simple (no planner matching, no composability edge cases). Could revisit for v2 if we add transparent query routing.
+
 ### Materialized view per parameter combination
 
 Users could create a materialized view for each parameter combination they care about.
