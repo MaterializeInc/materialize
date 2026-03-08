@@ -264,26 +264,24 @@ This was rejected because it requires knowing parameter values in advance, doesn
 
 ### Results
 
-| Connections | SQ QPS | SQ p50 (ms) | SQ p99 (ms) | SELECT QPS | SELECT p50 (ms) | SELECT p99 (ms) | Speedup |
-|-------------|--------|-------------|-------------|------------|-----------------|-----------------|---------|
-| 1           | 59     | 12          | 43          | 6          | 65              | 725             | 10x     |
-| 4           | 137    | 17          | 675         | 13         | 307             | 690             | 11x     |
-| 8           | 259    | 20          | 828         | 26         | 290             | 604             | 10x     |
-| 16          | 426    | 30          | 82          | 54         | 210             | 573             | 8x      |
-| 32          | 718    | 35          | 109         | 131        | 239             | 486             | 5x      |
-| 64          | 386    | 148         | 945         | 137        | 444             | 902             | 3x      |
-| 128         | 567    | 236         | 1104        | 149        | 776             | 2016            | 4x      |
-| 256         | 898    | 286         | 356         | 144        | 1259            | 10083           | 6x      |
+| Connections | SQ QPS | SQ p50 (ms) | SQ p99 (ms) | SQ max (ms) | SELECT QPS | SELECT p50 (ms) | SELECT p99 (ms) | SELECT max (ms) | Speedup |
+|-------------|--------|-------------|-------------|-------------|------------|-----------------|-----------------|-----------------|---------|
+| 1           | 69     | 13          | 43          | 715         | 5          | 110             | 573             | 573              | 14x     |
+| 4           | 259    | 15          | 27          | 63          | 14         | 419             | 518             | 519              | 18x     |
+| 8           | 416    | 19          | 36          | 68          | 36         | 112             | 532             | 536              | 12x     |
+| 16          | 586    | 26          | 49          | 79          | 62         | 163             | 600             | 605              | 9x      |
+| 32          | 859    | 36          | 64          | 109         | 126        | 244             | 587             | 617              | 7x      |
+| 64          | 1217   | 48          | 111         | 177         | 135        | 454             | 805             | 1377             | 9x      |
+| 128         | 1313   | 96          | 167         | 190         | 138        | 851             | 2107            | 3089             | 10x     |
+| 256         | 1243   | 195         | 372         | 422         | 143        | 1519            | 4539            | 8063             | 9x      |
 
 ### Analysis
 
-**Throughput.** Standing queries achieve 5–10x higher throughput than index SELECTs across all concurrency levels. Peak throughput is ~900 QPS at 256 connections. SELECT throughput plateaus at ~150 QPS beyond 32 connections due to coordinator contention. Standing query throughput scales with concurrency because the batcher amortizes persist writes — larger batches at higher concurrency.
+**Throughput.** Standing queries achieve 7–18x higher throughput than index SELECTs across all concurrency levels. Peak throughput is ~1300 QPS at 128 connections. SELECT throughput plateaus at ~143 QPS beyond 32 connections due to coordinator contention. Standing query throughput scales smoothly with concurrency because the batcher amortizes persist writes — larger batches at higher concurrency.
 
-**Latency.** At low concurrency (1–32 connections), standing query median latency is 12–35ms vs 65–239ms for SELECTs. At high concurrency (128–256), standing query latency increases to 236–286ms due to batch queuing, but SELECT latency degrades much worse (776–1259ms) since each query contends for the coordinator.
+**Latency.** At low concurrency (1–32 connections), standing query median latency is 13–36ms vs 110–244ms for SELECTs. At high concurrency (128–256), standing query latency increases to 96–195ms due to batch queuing, but SELECT latency degrades much worse (851–1519ms) since each query contends for the coordinator.
 
-**Throughput dip at 64 connections.** There's a noticeable dip in standing query QPS at 64 connections (386 QPS vs 718 at 32). This likely reflects a transition point where the batcher's adaptive collect window hasn't yet scaled up to match the increased concurrency. At 128+ connections, larger batch sizes compensate and throughput recovers.
-
-**Tail latency.** Standing query p99 is volatile at low concurrency (4–8 connections show ~700–800ms spikes) due to occasional persist write latency outliers. At 32+ connections, p99 stabilizes because batching amortizes these spikes across more requests. SELECT p99 degrades monotonically with concurrency.
+**Tail latency.** Standing query p99 is stable across all concurrency levels (27–372ms), without the volatile spikes seen in earlier iterations. This is due to the 1-second frontier trail: param writes land at timestamps already committed by the table, so the subscribe resolves immediately without waiting for the next AdvanceTimelines tick. SELECT p99 degrades monotonically with concurrency (573ms → 4539ms).
 
 **Distance from targets.** The 100k QPS aspirational target remains far off. The bottleneck is persist write latency (~10–30ms per `compare_and_append`), which bounds batch throughput regardless of batch size. Achieving 100k QPS would require either sub-millisecond persist writes or a fundamentally different write path (e.g., in-memory parameter passing without persistence).
 

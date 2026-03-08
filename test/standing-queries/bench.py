@@ -52,6 +52,7 @@ def setup(port: int) -> None:
     sys_cur = sys_conn.cursor()
     sys_cur.execute(sql.SQL("ALTER SYSTEM SET max_result_size = '10GB'"))
     sys_cur.execute(sql.SQL("ALTER SYSTEM SET max_connections = 65536"))
+    sys_cur.execute(sql.SQL("ALTER SYSTEM SET enable_standing_queries = true"))
     sys_conn.close()
 
     cur.execute(sql.SQL("DROP STANDING QUERY IF EXISTS orders_by_customer"))

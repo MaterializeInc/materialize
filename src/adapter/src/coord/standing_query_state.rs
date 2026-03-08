@@ -14,6 +14,7 @@
 //! a lightweight handle for forwarding subscribe batches to the task.
 
 use mz_compute_client::protocol::response::SubscribeBatch;
+use tracing::debug;
 use mz_controller_types::ClusterId;
 use mz_repr::{CatalogItemId, Timestamp};
 use tokio::sync::{mpsc, watch};
@@ -66,11 +67,22 @@ impl Coordinator {
                     None => continue,
                 }
             };
-            // Send the target upper to the batcher. The batcher only applies
-            // this when idle (no pending writes). Param writes happen at
-            // current_upper which is naturally behind the table's frontier,
-            // so the subscribe can resolve without waiting for the next tick.
-            let _ = asq.advance_upper_tx.send(ts);
+            // Send a target that trails the input frontier by 1 second. The
+            // batcher advances the param shard to this target, then writes
+            // at that timestamp. By writing below the table's current upper,
+            // the subscribe can resolve immediately (it needs all inputs
+            // past the write timestamp, and the table is already 1s ahead).
+            //
+            // The 1s gap gives ~500 batches of headroom (2 timestamps per
+            // batch, ~1000 timestamps per second). Without this gap, the
+            // batcher would write at the table's exact upper, forcing the
+            // subscribe to wait for the next AdvanceTimelines tick (~1s).
+            let target = ts.saturating_sub(1000);
+            debug!(
+                "standing query {:?}: advance upper target={target} (input frontier={ts})",
+                asq.item_id
+            );
+            let _ = asq.advance_upper_tx.send(target);
         }
     }
 }
