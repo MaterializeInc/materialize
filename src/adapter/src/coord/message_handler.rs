@@ -103,7 +103,7 @@ impl Coordinator {
             }
             Message::AdvanceTimelines => {
                 self.advance_timelines().boxed_local().await;
-                self.advance_standing_query_uppers();
+                self.advance_standing_query_uppers().await;
             }
             Message::ClusterEvent(event) => self.message_cluster_event(event).boxed_local().await,
             Message::CancelPendingPeeks { conn_id } => {

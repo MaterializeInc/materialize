@@ -52,16 +52,22 @@ impl Coordinator {
     /// its non-param input collections (both storage and compute) and sends
     /// that as the target upper to the batcher task. This keeps the param
     /// shard in sync with the rest of the system.
-    pub(crate) fn advance_standing_query_uppers(&self) {
+    ///
+    /// For standing queries with no input dependencies (constant queries),
+    /// uses the coordinator's current write timestamp instead.
+    pub(crate) async fn advance_standing_query_uppers(&self) {
         for asq in self.active_standing_queries.values() {
-            if asq.input_ids.is_empty() {
-                continue;
-            }
-            let upper = self.least_valid_write(&asq.input_ids);
-            if let Some(ts) = upper.as_option() {
-                // Send is cheap — watch::Sender only stores the latest value.
-                let _ = asq.advance_upper_tx.send(*ts);
-            }
+            let ts = if asq.input_ids.is_empty() {
+                self.peek_local_write_ts().await
+            } else {
+                let upper = self.least_valid_write(&asq.input_ids);
+                match upper.as_option() {
+                    Some(ts) => *ts,
+                    None => continue,
+                }
+            };
+            // Send is cheap — watch::Sender only stores the latest value.
+            let _ = asq.advance_upper_tx.send(ts);
         }
     }
 }
