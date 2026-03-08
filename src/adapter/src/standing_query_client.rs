@@ -204,18 +204,20 @@ async fn batcher_task(
     const MAX_COLLECT: Duration = Duration::from_millis(50);
     let mut last_append_duration = MIN_COLLECT;
 
-    loop {
-        // Always apply the latest upper target before doing anything else.
-        // This is critical: the subscribe can't produce output until the
-        // param shard upper advances past its as_of. Using borrow_and_update
-        // (not has_changed) ensures we catch values sent before we started
-        // listening, not just new notifications.
-        {
-            let target = *advance_upper_rx.borrow_and_update();
-            advance_upper(sink_id, &mut write_handle, &mut current_upper, target).await;
-        }
+    // Initial advance: the subscribe can't produce output until all inputs
+    // (including the param shard) advance past its as_of. Apply whatever
+    // target was set before we started listening.
+    {
+        let target = *advance_upper_rx.borrow_and_update();
+        advance_upper(sink_id, &mut write_handle, &mut current_upper, target).await;
+    }
 
-        // Wait for at least one command or an upper-advance notification.
+    loop {
+        // Wait for a command or an upper-advance notification.
+        // We do NOT eagerly advance the upper here — param writes should
+        // happen at `current_upper` which is naturally below the table's
+        // write frontier. This way the subscribe can resolve immediately
+        // without waiting for the next AdvanceTimelines tick.
         tokio::select! {
             cmd = batcher_rx.recv() => {
                 let Some(cmd) = cmd else {

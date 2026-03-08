@@ -66,7 +66,10 @@ impl Coordinator {
                     None => continue,
                 }
             };
-            // Send is cheap — watch::Sender only stores the latest value.
+            // Send the target upper to the batcher. The batcher only applies
+            // this when idle (no pending writes). Param writes happen at
+            // current_upper which is naturally behind the table's frontier,
+            // so the subscribe can resolve without waiting for the next tick.
             let _ = asq.advance_upper_tx.send(ts);
         }
     }
