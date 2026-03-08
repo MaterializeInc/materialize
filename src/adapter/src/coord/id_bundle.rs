@@ -22,6 +22,8 @@ pub struct CollectionIdBundle {
     /// The identifiers for sources in the storage layer.
     pub storage_ids: BTreeSet<GlobalId>,
     /// The identifiers for indexes in the compute layer.
+    /// (If this ever changes to include things other than indexes, then please attend to the
+    /// `Display` of `constraints::Reason::ComputeInput`.)
     pub compute_ids: BTreeMap<ComputeInstanceId, BTreeSet<GlobalId>>,
 }
 

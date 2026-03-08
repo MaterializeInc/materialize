@@ -13,8 +13,6 @@ use std::time::Duration;
 
 use mz_dyncfg::{Config, ConfigSet};
 
-use crate::timestamp_selection::ConstraintBasedTimestampSelection;
-
 pub const ALLOW_USER_SESSIONS: Config<bool> = Config::new(
     "allow_user_sessions",
     true,
@@ -142,12 +140,6 @@ pub const OIDC_AUTHENTICATION_CLAIM: Config<&'static str> = Config::new(
     "OIDC authentication claim to use as username.",
 );
 
-pub const CONSTRAINT_BASED_TIMESTAMP_SELECTION: Config<&'static str> = Config::new(
-    "constraint_based_timestamp_selection",
-    ConstraintBasedTimestampSelection::const_default().as_str(),
-    "Whether to use the constraint-based timestamp selection, one of: enabled, disabled, verify",
-);
-
 pub const PERSIST_FAST_PATH_ORDER: Config<bool> = Config::new(
     "persist_fast_path_order",
     false,
@@ -183,7 +175,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&OIDC_ISSUER)
         .add(&OIDC_AUDIENCE)
         .add(&OIDC_AUTHENTICATION_CLAIM)
-        .add(&CONSTRAINT_BASED_TIMESTAMP_SELECTION)
         .add(&PERSIST_FAST_PATH_ORDER)
         .add(&ENABLE_S3_TABLES_REGION_CHECK)
 }

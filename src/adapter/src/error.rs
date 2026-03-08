@@ -255,7 +255,7 @@ pub enum AdapterError {
     UnreadableSinkCollection,
     /// User sessions have been blocked.
     UserSessionsDisallowed,
-    /// This use session has been deneid by a NetworkPolicy.
+    /// This use session has been denied by a NetworkPolicy.
     NetworkPolicyDenied(NetworkPolicyError),
     /// Something attempted a write (to catalog, storage, tables, etc.) while in
     /// read-only mode.
@@ -268,6 +268,10 @@ pub enum AdapterError {
     /// Attempt to apply a replacement to a sealed materialized view.
     ReplaceMaterializedViewSealed {
         name: String,
+    },
+    /// Could not find a valid timestamp satisfying all constraints.
+    ImpossibleTimestampConstraints {
+        constraints: String,
     },
 }
 
@@ -480,6 +484,9 @@ impl AdapterError {
                  so replacing its definition would have no effect."
                     .into(),
             ),
+            AdapterError::ImpossibleTimestampConstraints { constraints } => {
+                Some(format!("Constraints:\n{}", constraints))
+            }
             _ => None,
         }
     }
@@ -725,6 +732,8 @@ impl AdapterError {
             AdapterError::ReplaceMaterializedViewSealed { .. } => {
                 SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE
             }
+            // similar to AbsurdSubscribeBounds
+            AdapterError::ImpossibleTimestampConstraints { .. } => SqlState::DATA_EXCEPTION,
         }
     }
 
@@ -1119,6 +1128,9 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::ReplacementSchemaMismatch(_) => {
                 write!(f, "replacement schema differs from target schema")
+            }
+            AdapterError::ImpossibleTimestampConstraints { .. } => {
+                write!(f, "could not find a valid timestamp for the query")
             }
         }
     }
