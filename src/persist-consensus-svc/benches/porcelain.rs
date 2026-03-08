@@ -49,7 +49,7 @@ async fn start_server_and_client_with_interval(
         ..Default::default()
     };
     let metrics = ConsensusMetrics::register(&MetricsRegistry::new());
-    let (handle, _task) = Actor::spawn(config, NoopWalWriter, metrics);
+    let (handle, _task) = Actor::spawn_on_current(config, NoopWalWriter, metrics);
 
     let service = ConsensusGrpcService { handle: handle.clone() };
 

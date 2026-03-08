@@ -25,7 +25,7 @@ pub enum WalWriteError {
     /// The write failed and the object does NOT exist.
     Failed(anyhow::Error),
     /// The object already exists (conditional write conflict). This means a
-    /// previous write for this batch number already landed on S3.
+    /// previous write for this batch number already landed in object storage.
     AlreadyExists,
 }
 
@@ -270,7 +270,7 @@ pub enum SimWriteFault {
 
 /// In-memory WAL writer with fault injection for simulation testing.
 ///
-/// Models S3 conditional-write semantics: `write_batch` returns
+/// Models object store conditional-write semantics: `write_batch` returns
 /// `AlreadyExists` if the batch number already exists in the store.
 /// Faults are consumed FIFO from the `faults` queue.
 #[cfg(test)]
@@ -320,7 +320,7 @@ impl SimWalWriter {
 #[async_trait::async_trait]
 impl WalWriter for SimWalWriter {
     async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), WalWriteError> {
-        // Simulate S3 latency. With `start_paused = true`, this costs zero
+        // Simulate object store latency. With `start_paused = true`, this costs zero
         // wall-clock time but creates a yield point that exercises
         // `serve_reads_until` in the actor's flush path.
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;

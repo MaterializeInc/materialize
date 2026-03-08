@@ -50,7 +50,7 @@ struct Args {
     s3_region: String,
 
     /// Flush collection window in milliseconds. This is the time spent
-    /// accumulating CAS ops between S3 writes, not the total period.
+    /// accumulating CAS ops between object store writes, not the total period.
     #[arg(long, default_value = "5")]
     flush_interval_ms: u64,
 
@@ -69,14 +69,15 @@ fn main() {
         )
         .init();
 
-    // Single-threaded runtime: simplest possible concurrency model.
-    let rt = tokio::runtime::Builder::new_current_thread()
+    // Multi-threaded runtime for gRPC + metrics. The actor gets its own
+    // dedicated single-threaded runtime on a separate OS thread (via
+    // Actor::spawn), so gRPC handler tasks never compete with it for CPU.
+    let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("failed to build tokio runtime");
 
-    let local = tokio::task::LocalSet::new();
-    local.block_on(&rt, run(args));
+    rt.block_on(run(args));
 }
 
 async fn run(args: Args) {
@@ -96,14 +97,13 @@ async fn run(args: Args) {
         snapshot_interval: args.snapshot_interval,
         ..Default::default()
     };
-    let (actor, handle) = Actor::new(config, wal_writer, metrics);
-    // spawn_local is required: the actor runs on a single-threaded runtime
-    // and its future is !Send.
-    #[allow(clippy::disallowed_methods)]
-    tokio::task::spawn_local(actor.run());
+    // Actor::spawn starts the actor on a dedicated OS thread with its own
+    // single-threaded tokio runtime. The returned handle is Send and works
+    // from this runtime.
+    let (handle, _actor_thread) = Actor::spawn(config, wal_writer, metrics);
 
-    // Recover state from S3 via the actor's command channel.
-    info!("recovering state from S3...");
+    // Recover state from object storage via the actor's command channel.
+    info!("recovering state from object storage...");
     handle.recover().await.expect("recovery failed");
 
     // Spawn HTTP metrics server.

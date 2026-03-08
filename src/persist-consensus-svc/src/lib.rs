@@ -9,8 +9,8 @@
 
 //! A group commit consensus service for Materialize persist.
 //!
-//! Batches independent cross-shard CAS writes into a single durable S3 Express
-//! One Zone PUT per flush interval, making cost O(1/batch_window) instead of
+//! Batches independent cross-shard CAS writes into a single durable object
+//! store PUT per flush interval, making cost O(1/batch_window) instead of
 //! O(shards).
 
 pub mod actor;

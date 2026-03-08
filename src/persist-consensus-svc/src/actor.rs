@@ -49,6 +49,11 @@ pub struct ActorConfig {
     pub queue_depth: usize,
     /// How often to flush pending ops to the WAL, in milliseconds.
     pub flush_interval_ms: u64,
+    /// Maximum time any single op may sit in the pending buffer before a
+    /// flush is forced, in milliseconds. This bounds worst-case latency to
+    /// `max_pending_age_ms + object_store_write_latency` regardless of arrival rate.
+    /// When `None`, only the fixed `flush_interval_ms` timer drives flushes.
+    pub max_pending_age_ms: Option<u64>,
     /// Write a snapshot every this many WAL batches.
     pub snapshot_interval: u64,
 }
@@ -58,6 +63,7 @@ impl Default for ActorConfig {
         ActorConfig {
             queue_depth: 4096,
             flush_interval_ms: 5,
+            max_pending_age_ms: Some(10),
             snapshot_interval: 100,
         }
     }
@@ -283,6 +289,11 @@ pub struct Actor<W: WalWriter> {
     /// just enough for CAS conflict detection. Cleared after flush.
     pending_heads: BTreeMap<String, u64>,
     flush_interval: Interval,
+    /// Maximum time any single op may sit in the pending buffer before a
+    /// flush is forced. `None` disables age-based flushing.
+    max_pending_age: Option<std::time::Duration>,
+    /// When the first op entered the current (empty) pending buffer.
+    oldest_pending_time: Option<tokio::time::Instant>,
     /// Write a snapshot every this many WAL batches.
     snapshot_interval: u64,
     /// WAL batches written since the last snapshot.
@@ -315,6 +326,10 @@ impl<W: WalWriter> Actor<W> {
 
         let (tx, rx) = mpsc::channel(config.queue_depth);
 
+        let max_pending_age = config
+            .max_pending_age_ms
+            .map(std::time::Duration::from_millis);
+
         let actor = Actor {
             shards: BTreeMap::new(),
             rx,
@@ -324,6 +339,8 @@ impl<W: WalWriter> Actor<W> {
             pending_wal_ops: Vec::new(),
             pending_heads: BTreeMap::new(),
             flush_interval,
+            max_pending_age,
+            oldest_pending_time: None,
             snapshot_interval: config.snapshot_interval,
             batches_since_snapshot: 0,
             metrics,
@@ -340,18 +357,39 @@ impl<W: WalWriter> Actor<W> {
         !self.pending_wal_ops.is_empty() || !self.pending_replies.is_empty()
     }
 
+    /// Computes the deadline at which the oldest pending op exceeds
+    /// `max_pending_age`. Returns a future that completes at that instant,
+    /// or never completes if age-based flushing is disabled or there is no
+    /// pending work.
+    fn pending_age_deadline(&self) -> tokio::time::Sleep {
+        match (self.max_pending_age, self.oldest_pending_time) {
+            (Some(age), Some(t)) => tokio::time::sleep_until(t + age),
+            _ => tokio::time::sleep(std::time::Duration::MAX),
+        }
+    }
+
+    /// Records that the pending buffer just received its first op (if it
+    /// was previously empty).
+    fn mark_pending_nonempty(&mut self) {
+        if self.oldest_pending_time.is_none() {
+            self.oldest_pending_time = Some(tokio::time::Instant::now());
+        }
+    }
+
     /// Runs the actor loop until the channel is closed.
     pub async fn run(mut self) {
         let mut stats_interval = tokio::time::interval(std::time::Duration::from_secs(10));
         stats_interval.tick().await; // consume the immediate first tick
         self.flush_interval.tick().await; // consume the immediate first tick
         loop {
+            let age_deadline = self.pending_age_deadline();
             tokio::select! {
                 biased;
                 cmd = self.rx.recv() => {
                     match cmd {
                         Some(ActorCommand::Flush { reply }) => {
                             if self.has_pending_work() {
+                                self.metrics.flush_explicit_triggered.inc();
                                 self.flush().await;
                             }
                             let _ = reply.send(());
@@ -371,6 +409,13 @@ impl<W: WalWriter> Actor<W> {
                 }
                 _ = self.flush_interval.tick() => {
                     if self.has_pending_work() {
+                        self.metrics.flush_timer_triggered.inc();
+                        self.flush().await;
+                    }
+                }
+                _ = age_deadline => {
+                    if self.has_pending_work() {
+                        self.metrics.flush_age_triggered.inc();
                         self.flush().await;
                     }
                 }
@@ -482,7 +527,7 @@ impl<W: WalWriter> Actor<W> {
         if committed {
             self.metrics.cas_committed.inc();
             // Record in pending overlay — committed state is NOT mutated
-            // until the S3 PUT confirms.
+            // until the object store PUT confirms.
             self.pending_heads.insert(key.clone(), new.seqno);
             self.pending_wal_ops
                 .push(PendingWalOp::Write(ProtoWalWrite {
@@ -496,6 +541,7 @@ impl<W: WalWriter> Actor<W> {
 
         // Both winners and losers wait for flush so all callers experience
         // the same latency.
+        self.mark_pending_nonempty();
         self.pending_replies
             .push(PendingReply::Cas { committed, reply });
     }
@@ -536,9 +582,10 @@ impl<W: WalWriter> Actor<W> {
         );
 
         // Record truncate in WAL — committed state is NOT mutated until
-        // the S3 PUT confirms.
+        // the object store PUT confirms.
         self.pending_wal_ops
             .push(PendingWalOp::Truncate(ProtoWalTruncate { key, seqno }));
+        self.mark_pending_nonempty();
         self.pending_replies
             .push(PendingReply::Truncate { deleted, reply });
     }
@@ -627,8 +674,8 @@ impl<W: WalWriter> Actor<W> {
         }
     }
 
-    /// Applies pending WAL ops to committed state. Called after the S3 PUT
-    /// confirms so that `self.shards` only reflects durable data.
+    /// Applies pending WAL ops to committed state. Called after the object
+    /// store PUT confirms so that `self.shards` only reflects durable data.
     fn apply_pending_ops(&mut self, ops: &[PendingWalOp]) {
         for op in ops {
             match op {
@@ -787,6 +834,8 @@ impl<W: WalWriter> Actor<W> {
             pending_wal_ops: Vec::new(),
             pending_heads: BTreeMap::new(),
             flush_interval: self.flush_interval,
+            max_pending_age: self.max_pending_age,
+            oldest_pending_time: None,
             snapshot_interval: self.snapshot_interval,
             batches_since_snapshot: 0,
             metrics: self.metrics,
@@ -814,6 +863,7 @@ impl<W: WalWriter> Actor<W> {
     async fn flush(&mut self) {
         let flush_start = std::time::Instant::now();
         let pending_ops = std::mem::take(&mut self.pending_wal_ops);
+        self.oldest_pending_time = None;
 
         if pending_ops.is_empty() {
             // No WAL ops — just resolve pending loser replies.
@@ -865,12 +915,12 @@ impl<W: WalWriter> Actor<W> {
 
         // Write WAL entry (the commit point). This MUST succeed — we
         // retry indefinitely with exponential backoff because returning
-        // an error to clients on a transient S3 failure is unacceptable.
-        // Only Ok and AlreadyExists are definite results.
+        // an error to clients on a transient object store failure is
+        // unacceptable. Only Ok and AlreadyExists are definite results.
         //
-        // While the S3 PUT is in flight, we serve reads from committed
-        // state via a select loop. Write commands are buffered and
-        // processed after the batch commits. This is safe because no
+        // While the object store PUT is in flight, we serve reads from
+        // committed state via a select loop. Write commands are buffered
+        // and processed after the batch commits. This is safe because no
         // write in this batch has completed yet (no caller has received
         // `Committed`), so readers are not "after" any in-flight write
         // in real-time ordering.
@@ -884,10 +934,10 @@ impl<W: WalWriter> Actor<W> {
         // Match = our write landed. Mismatch = we've been fenced. The
         // exact fencing mechanism needs more design work. See the "Writer
         // Fencing" section in the design doc.
-        // Commands (writes, flushes) that arrive while the S3 PUT is in
-        // flight. Processed after the batch commits.
+        // Commands (writes, flushes) that arrive while the object store
+        // PUT is in flight. Processed after the batch commits.
         let mut buffered_cmds: Vec<ActorCommand> = Vec::new();
-        let s3_start = std::time::Instant::now();
+        let store_start = std::time::Instant::now();
         let mut attempt = 0u64;
         let mut backoff = std::time::Duration::from_millis(125);
         let max_backoff = std::time::Duration::from_secs(2);
@@ -911,7 +961,7 @@ impl<W: WalWriter> Actor<W> {
                             batch = self.batch_number,
                             attempt, "retry conflict: original write landed"
                         );
-                        self.metrics.s3_write_retry_already_exists.inc();
+                        self.metrics.object_store_write_retry_already_exists.inc();
                     } else {
                         warn!(
                             batch = self.batch_number,
@@ -925,7 +975,7 @@ impl<W: WalWriter> Actor<W> {
                         batch = self.batch_number,
                         attempt, "WAL write failed: {}, retrying in {:?}", e, backoff
                     );
-                    self.metrics.s3_write_retries.inc();
+                    self.metrics.object_store_write_retries.inc();
                     Self::serve_reads_until(
                         tokio::time::sleep(backoff),
                         &mut self.rx,
@@ -940,16 +990,16 @@ impl<W: WalWriter> Actor<W> {
             }
         }
 
-        // S3 write succeeded — apply pending ops to committed state.
+        // Object store write succeeded — apply pending ops to committed state.
         self.apply_pending_ops(&pending_ops);
         self.pending_heads.clear();
 
         self.metrics
-            .s3_wal_write_latency_seconds
-            .observe(s3_start.elapsed().as_secs_f64());
-        self.metrics.s3_wal_writes.inc();
+            .object_store_wal_write_latency_seconds
+            .observe(store_start.elapsed().as_secs_f64());
+        self.metrics.object_store_wal_writes.inc();
         self.metrics
-            .s3_wal_write_bytes
+            .object_store_wal_write_bytes
             .inc_by(u64::cast_from(batch_bytes));
         self.batch_number += 1;
         self.batches_since_snapshot += 1;
@@ -978,7 +1028,7 @@ impl<W: WalWriter> Actor<W> {
             .flush_latency_seconds
             .observe(flush_start.elapsed().as_secs_f64());
 
-        // Process write commands that arrived during the S3 write. At this
+        // Process write commands that arrived during the object store write. At this
         // point pending_heads is clear and self.shards reflects the just-
         // committed batch, so buffered CAS ops evaluate against correct state.
         for cmd in buffered_cmds {
@@ -1010,9 +1060,9 @@ impl<W: WalWriter> Actor<W> {
                 }
                 Ok(()) => {
                     self.metrics
-                        .s3_snapshot_write_latency_seconds
+                        .object_store_snapshot_write_latency_seconds
                         .observe(snap_start.elapsed().as_secs_f64());
-                    self.metrics.s3_snapshot_writes.inc();
+                    self.metrics.object_store_snapshot_writes.inc();
                     self.batches_since_snapshot = 0;
                 }
             }
@@ -1021,9 +1071,35 @@ impl<W: WalWriter> Actor<W> {
 }
 
 impl<W: WalWriter + Send + Sync + 'static> Actor<W> {
-    /// Creates and spawns the actor on the current runtime, returning the handle
-    /// and join handle.
+    /// Spawns the actor on a **dedicated single-threaded tokio runtime** running
+    /// on its own OS thread. This isolates the actor from gRPC handler scheduling
+    /// pressure — the actor's select loop is never starved by other tasks competing
+    /// for CPU time.
+    ///
+    /// Returns the [`ActorHandle`] (which is `Send` and can be used from any
+    /// runtime) and a [`std::thread::JoinHandle`] for the OS thread.
     pub fn spawn(
+        config: ActorConfig,
+        wal_writer: W,
+        metrics: ConsensusMetrics,
+    ) -> (ActorHandle, std::thread::JoinHandle<()>) {
+        let (actor, handle) = Self::new(config, wal_writer, metrics);
+        let thread = std::thread::Builder::new()
+            .name("group-commit-actor".to_string())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build actor runtime");
+                rt.block_on(actor.run());
+            })
+            .expect("failed to spawn actor thread");
+        (handle, thread)
+    }
+
+    /// Spawns the actor on the current tokio runtime. For tests and benchmarks
+    /// where runtime isolation is unnecessary.
+    pub fn spawn_on_current(
         config: ActorConfig,
         wal_writer: W,
         metrics: ConsensusMetrics,

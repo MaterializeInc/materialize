@@ -328,7 +328,7 @@ struct Simulator {
 impl Simulator {
     fn new(seed: u64) -> Self {
         let wal = Arc::new(SimWalWriter::new());
-        let (handle, task) = Actor::spawn(test_config(), Arc::clone(&wal), test_metrics());
+        let (handle, task) = Actor::spawn_on_current(test_config(), Arc::clone(&wal), test_metrics());
         Simulator {
             handle,
             _task: task.abort_on_drop(),
@@ -444,7 +444,7 @@ impl Simulator {
 
         // 1. Drop the old task handle — AbortOnDropHandle aborts the actor.
         // 2. Spin up a new actor and recover.
-        let (handle, task) = Actor::spawn(test_config(), Arc::clone(&self.wal), test_metrics());
+        let (handle, task) = Actor::spawn_on_current(test_config(), Arc::clone(&self.wal), test_metrics());
         self.handle = handle;
         self._task = task.abort_on_drop();
         self.handle.recover().await.unwrap();
@@ -686,7 +686,7 @@ async fn sim_multi_actor() {
         let mut actor_handles: Vec<ActorHandle> = Vec::new();
         let mut tasks: Vec<mz_ore::task::AbortOnDropHandle<()>> = Vec::new();
         for _ in 0..NUM_ACTORS {
-            let (handle, task) = Actor::spawn(test_config(), Arc::clone(&wal), test_metrics());
+            let (handle, task) = Actor::spawn_on_current(test_config(), Arc::clone(&wal), test_metrics());
             tasks.push(task.abort_on_drop());
             actor_handles.push(handle);
         }

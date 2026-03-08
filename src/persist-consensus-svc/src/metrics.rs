@@ -13,7 +13,7 @@ use mz_ore::metric;
 use mz_ore::metrics::{IntCounter, IntGauge, MetricsRegistry};
 use prometheus::Histogram;
 
-/// Metrics for the consensus service actor and S3 WAL.
+/// Metrics for the consensus service actor and object store WAL.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct ConsensusMetrics {
@@ -25,20 +25,23 @@ pub struct ConsensusMetrics {
     pub truncate_ops: IntCounter,
     pub list_keys_ops: IntCounter,
 
-    // --- S3 write counters ---
-    pub s3_wal_writes: IntCounter,
-    pub s3_wal_write_bytes: IntCounter,
-    pub s3_snapshot_writes: IntCounter,
-    pub s3_snapshot_write_bytes: IntCounter,
-    pub s3_write_retries: IntCounter,
-    pub s3_write_retry_already_exists: IntCounter,
+    // --- Object store write counters ---
+    pub object_store_wal_writes: IntCounter,
+    pub object_store_wal_write_bytes: IntCounter,
+    pub object_store_snapshot_writes: IntCounter,
+    pub object_store_snapshot_write_bytes: IntCounter,
+    pub object_store_write_retries: IntCounter,
+    pub object_store_write_retry_already_exists: IntCounter,
 
-    // --- S3 latency ---
-    pub s3_wal_write_latency_seconds: Histogram,
-    pub s3_snapshot_write_latency_seconds: Histogram,
+    // --- Object store latency ---
+    pub object_store_wal_write_latency_seconds: Histogram,
+    pub object_store_snapshot_write_latency_seconds: Histogram,
 
     // --- Flush metrics ---
     pub flush_count: IntCounter,
+    pub flush_timer_triggered: IntCounter,
+    pub flush_age_triggered: IntCounter,
+    pub flush_explicit_triggered: IntCounter,
     pub flush_latency_seconds: Histogram,
     pub flush_ops_per_batch: Histogram,
     pub flush_shards_per_batch: Histogram,
@@ -77,41 +80,41 @@ impl ConsensusMetrics {
                 name: "mz_consensus_svc_list_keys_ops_total",
                 help: "Total list_keys operations.",
             )),
-            s3_wal_writes: registry.register(metric!(
-                name: "mz_consensus_svc_s3_wal_writes_total",
-                help: "Total WAL batches written to S3.",
+            object_store_wal_writes: registry.register(metric!(
+                name: "mz_consensus_svc_object_store_wal_writes_total",
+                help: "Total WAL batches written to object storage.",
             )),
-            s3_wal_write_bytes: registry.register(metric!(
-                name: "mz_consensus_svc_s3_wal_write_bytes_total",
-                help: "Total bytes written to S3 for WAL batches.",
+            object_store_wal_write_bytes: registry.register(metric!(
+                name: "mz_consensus_svc_object_store_wal_write_bytes_total",
+                help: "Total bytes written to object storage for WAL batches.",
             )),
-            s3_snapshot_writes: registry.register(metric!(
-                name: "mz_consensus_svc_s3_snapshot_writes_total",
-                help: "Total snapshots written to S3.",
+            object_store_snapshot_writes: registry.register(metric!(
+                name: "mz_consensus_svc_object_store_snapshot_writes_total",
+                help: "Total snapshots written to object storage.",
             )),
-            s3_snapshot_write_bytes: registry.register(metric!(
-                name: "mz_consensus_svc_s3_snapshot_write_bytes_total",
-                help: "Total bytes written to S3 for snapshots.",
+            object_store_snapshot_write_bytes: registry.register(metric!(
+                name: "mz_consensus_svc_object_store_snapshot_write_bytes_total",
+                help: "Total bytes written to object storage for snapshots.",
             )),
-            s3_write_retries: registry.register(metric!(
-                name: "mz_consensus_svc_s3_write_retries_total",
-                help: "Total S3 write retries attempted.",
+            object_store_write_retries: registry.register(metric!(
+                name: "mz_consensus_svc_object_store_write_retries_total",
+                help: "Total object store write retries attempted.",
             )),
-            s3_write_retry_already_exists: registry.register(metric!(
-                name: "mz_consensus_svc_s3_write_retry_already_exists_total",
-                help: "S3 write retries where object already existed (original write landed).",
+            object_store_write_retry_already_exists: registry.register(metric!(
+                name: "mz_consensus_svc_object_store_write_retry_already_exists_total",
+                help: "Object store write retries where object already existed (original write landed).",
             )),
-            s3_wal_write_latency_seconds: registry.register(metric!(
-                name: "mz_consensus_svc_s3_wal_write_latency_seconds",
-                help: "Histogram of S3 WAL PUT latency in seconds.",
+            object_store_wal_write_latency_seconds: registry.register(metric!(
+                name: "mz_consensus_svc_object_store_wal_write_latency_seconds",
+                help: "Histogram of object store WAL PUT latency in seconds.",
                 buckets: vec![
                     0.001, 0.002, 0.004, 0.008, 0.016, 0.032, 0.064,
                     0.128, 0.256, 0.512, 1.0, 2.0, 5.0,
                 ],
             )),
-            s3_snapshot_write_latency_seconds: registry.register(metric!(
-                name: "mz_consensus_svc_s3_snapshot_write_latency_seconds",
-                help: "Histogram of S3 snapshot PUT latency in seconds.",
+            object_store_snapshot_write_latency_seconds: registry.register(metric!(
+                name: "mz_consensus_svc_object_store_snapshot_write_latency_seconds",
+                help: "Histogram of object store snapshot PUT latency in seconds.",
                 buckets: vec![
                     0.002, 0.004, 0.008, 0.016, 0.032, 0.064,
                     0.128, 0.256, 0.512, 1.0, 2.0, 5.0,
@@ -120,6 +123,18 @@ impl ConsensusMetrics {
             flush_count: registry.register(metric!(
                 name: "mz_consensus_svc_flush_count_total",
                 help: "Total flush operations.",
+            )),
+            flush_timer_triggered: registry.register(metric!(
+                name: "mz_consensus_svc_flush_timer_triggered_total",
+                help: "Flushes triggered by the periodic flush interval timer.",
+            )),
+            flush_age_triggered: registry.register(metric!(
+                name: "mz_consensus_svc_flush_age_triggered_total",
+                help: "Flushes triggered by max pending age deadline.",
+            )),
+            flush_explicit_triggered: registry.register(metric!(
+                name: "mz_consensus_svc_flush_explicit_triggered_total",
+                help: "Flushes triggered by an explicit Flush command.",
             )),
             flush_latency_seconds: registry.register(metric!(
                 name: "mz_consensus_svc_flush_latency_seconds",

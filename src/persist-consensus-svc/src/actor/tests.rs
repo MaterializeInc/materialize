@@ -39,14 +39,14 @@ struct TestActor {
 /// Helper: spawn an actor with a noop WAL writer. Uses a huge flush interval
 /// so the timer never fires — tests use explicit `Flush` commands instead.
 fn spawn_test_actor() -> TestActor {
-    let (handle, task) = Actor::spawn(test_config(), NoopWalWriter, test_metrics());
+    let (handle, task) = Actor::spawn_on_current(test_config(), NoopWalWriter, test_metrics());
     TestActor { handle, _task: task.abort_on_drop() }
 }
 
 /// Helper: spawn an actor with a recording WAL writer.
 fn spawn_recording_actor() -> (TestActor, Arc<RecordingWalWriter>) {
     let writer = Arc::new(RecordingWalWriter::new());
-    let (handle, task) = Actor::spawn(test_config(), Arc::clone(&writer), test_metrics());
+    let (handle, task) = Actor::spawn_on_current(test_config(), Arc::clone(&writer), test_metrics());
     (TestActor { handle, _task: task.abort_on_drop() }, writer)
 }
 
@@ -59,13 +59,13 @@ fn spawn_recording_actor_with_snapshot_interval(
         snapshot_interval,
         ..test_config()
     };
-    let (handle, task) = Actor::spawn(config, Arc::clone(&writer), test_metrics());
+    let (handle, task) = Actor::spawn_on_current(config, Arc::clone(&writer), test_metrics());
     (TestActor { handle, _task: task.abort_on_drop() }, writer)
 }
 
 /// Helper: spawn an actor with a SimWalWriter (supports reads for recovery).
 fn spawn_sim_actor(wal: Arc<SimWalWriter>) -> TestActor {
-    let (handle, task) = Actor::spawn(test_config(), wal, test_metrics());
+    let (handle, task) = Actor::spawn_on_current(test_config(), wal, test_metrics());
     TestActor { handle, _task: task.abort_on_drop() }
 }
 

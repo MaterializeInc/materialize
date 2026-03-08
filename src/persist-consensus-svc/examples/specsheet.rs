@@ -160,6 +160,12 @@ struct Cli {
 
     #[arg(long)]
     flush_interval_ms: Option<u64>,
+    #[arg(long)]
+    max_pending_age_ms: Option<u64>,
+    #[arg(long)]
+    queue_depth: Option<usize>,
+    #[arg(long)]
+    snapshot_interval: Option<u64>,
 
     /// WAL latency profile.
     #[arg(long, value_enum)]
@@ -198,6 +204,9 @@ struct WorkloadConfig {
     truncate_to: u64,
     write_rate_per_second: f64,
     flush_interval_ms: u64,
+    max_pending_age_ms: Option<u64>,
+    queue_depth: usize,
+    snapshot_interval: u64,
     wal_latency: WalLatency,
     transport: TransportMode,
     duration: u64,
@@ -224,6 +233,9 @@ impl Default for WorkloadConfig {
             truncate_to: 500,
             write_rate_per_second: 1.0,
             flush_interval_ms: 5,
+            max_pending_age_ms: Some(10),
+            queue_depth: 4096,
+            snapshot_interval: u64::MAX,
             wal_latency: WalLatency::Zero,
             transport: TransportMode::Direct,
             duration: 60,
@@ -270,11 +282,18 @@ impl WorkloadConfig {
             truncate_to,
             write_rate_per_second,
             flush_interval_ms,
+            queue_depth,
+            snapshot_interval,
             wal_latency,
             transport,
             duration,
             warmup,
         );
+        // max_pending_age_ms is Option<u64> in both CLI and config,
+        // so only override if CLI explicitly provided it.
+        if cli.max_pending_age_ms.is_some() {
+            cfg.max_pending_age_ms = cli.max_pending_age_ms;
+        }
         cfg.json = cli.json;
 
         cfg
@@ -707,7 +726,7 @@ fn print_report(
     let secs = elapsed.as_secs_f64().max(0.001);
     let flush_count = metrics.flush_count.get();
     let total_ops: u64 = ops.iter().map(|o| o.stats.count).sum();
-    let wal_bytes = metrics.s3_wal_write_bytes.get();
+    let wal_bytes = metrics.object_store_wal_write_bytes.get();
 
     // --- Overview ---
     println!();
@@ -911,7 +930,7 @@ fn print_json(
     let secs = elapsed.as_secs_f64().max(0.001);
     let total_ops: u64 = ops.iter().map(|o| o.stats.count).sum();
     let flush_count = metrics.flush_count.get();
-    let wal_bytes = metrics.s3_wal_write_bytes.get();
+    let wal_bytes = metrics.object_store_wal_write_bytes.get();
 
     // Only include operations that actually occurred.
     let mut latency_map: serde_json::Map<String, serde_json::Value> = ops
@@ -1053,9 +1072,12 @@ async fn main() {
     let metrics_for_report = metrics.clone();
 
     let config = ActorConfig {
-        queue_depth: (usize::cast_from(cfg.num_shards * cfg.writers_per_shard) + 1024).max(4096),
+        queue_depth: cfg.queue_depth.max(
+            usize::cast_from(cfg.num_shards * cfg.writers_per_shard) + 1024,
+        ),
         flush_interval_ms: cfg.flush_interval_ms,
-        snapshot_interval: u64::MAX,
+        max_pending_age_ms: cfg.max_pending_age_ms,
+        snapshot_interval: cfg.snapshot_interval,
     };
     let latency_profile = cfg.latency_profile();
     let wal = LatencyWalWriter::new(latency_profile);
@@ -1136,7 +1158,9 @@ async fn main() {
     }
 
     // Drop our sender clones so the actor shuts down when tasks finish.
+    // The original `handle` also holds a sender — drop it too.
     drop(tx);
+    drop(handle);
     drop(transport);
 
     // --- Wait for duration ---

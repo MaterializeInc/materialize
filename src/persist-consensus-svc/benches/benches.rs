@@ -15,6 +15,9 @@
 //! actually are end-to-end.
 //!
 //! [1]: https://git-scm.com/book/en/v2/Git-Internals-Plumbing-and-Porcelain
+//!
+//! TODO: Add snapshot serialization / deserialization and recovery (snapshot +
+//! WAL replay) benchmarks.
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use tokio::sync::{mpsc, oneshot};
@@ -43,7 +46,7 @@ pub(crate) fn spawn_bench_actor(
             snapshot_interval: u64::MAX,
             ..Default::default()
         };
-        let (handle, task) = Actor::spawn(config, NoopWalWriter, test_metrics());
+        let (handle, task) = Actor::spawn_on_current(config, NoopWalWriter, test_metrics());
         (handle.sender().clone(), task)
     })
 }
@@ -63,7 +66,7 @@ pub(crate) fn spawn_latency_actor(
             ..Default::default()
         };
         let wal = LatencyWalWriter::new(profile);
-        let (handle, task) = Actor::spawn(config, wal, test_metrics());
+        let (handle, task) = Actor::spawn_on_current(config, wal, test_metrics());
         (handle.sender().clone(), task)
     })
 }
