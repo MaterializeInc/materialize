@@ -201,7 +201,7 @@ def workflow_throughput(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("materialized")
     setup(c)
 
-    concurrency_levels = [1, 4, 16, 64, 128, 256, 512, 1024]
+    concurrency_levels = [1, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
 
     for conc in concurrency_levels:
         recreate_standing_queries(c)
@@ -238,7 +238,7 @@ def workflow_throughput_single_row(
     c.up("materialized")
     setup(c)
 
-    concurrency_levels = [1, 4, 16, 64, 128, 256, 512, 1024]
+    concurrency_levels = [1, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
 
     for conc in concurrency_levels:
         recreate_standing_queries(c)
