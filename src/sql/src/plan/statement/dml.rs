@@ -780,8 +780,7 @@ fn plan_explainee(
                 );
             }
 
-            let Plan::CreateStandingQuery(plan) =
-                ddl::plan_create_standing_query(scx, *stmt)?
+            let Plan::CreateStandingQuery(plan) = ddl::plan_create_standing_query(scx, *stmt)?
             else {
                 sql_bail!("expected CreateStandingQueryPlan plan");
             };
@@ -792,8 +791,7 @@ fn plan_explainee(
             })
         }
         Explainee::ExecuteStandingQuery(stmt, broken) => {
-            let Plan::ExecuteStandingQuery(plan) =
-                ddl::plan_execute_standing_query(scx, *stmt)?
+            let Plan::ExecuteStandingQuery(plan) = ddl::plan_execute_standing_query(scx, *stmt)?
             else {
                 sql_bail!("expected ExecuteStandingQueryPlan plan");
             };

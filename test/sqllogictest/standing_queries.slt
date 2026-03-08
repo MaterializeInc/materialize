@@ -69,11 +69,11 @@ EXPLAIN CREATE STANDING QUERY explain_test (cid INT) AS SELECT id, customer_id, 
 ----
 materialize.public.explain_test:
   →Differential Join %0 » %1
-    Join stage 0 in %1 with lookup key #1
-    →Arrange (#1{customer_id})
-      →Read materialize.public.orders
+    Join stage 0 in %1 with lookup key #1{customer_id}
     →Arrange (#1)
       →Read Explained Query
+    →Arrange (#1{customer_id})
+      →Read materialize.public.orders
 
 Source materialize.public.orders
   filter=((#1{customer_id}) IS NOT NULL)
@@ -88,14 +88,14 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN FOR CREATE STANDING QUERY explain_test2 (cid INT) AS SELECT id, customer_id, amount FROM orders WHERE customer_id = cid
 ----
 materialize.public.explain_test2:
-  Project (#3, #0..=#2)
-    Join on=(#1{customer_id} = #4) type=differential
-      ArrangeBy keys=[[#1{customer_id}]]
-        Filter (#1{customer_id}) IS NOT NULL
-          ReadStorage materialize.public.orders
+  Project (#0, #2, #1, #4)
+    Join on=(#1 = #3{customer_id}) type=differential
       ArrangeBy keys=[[#1]]
         Filter (#1) IS NOT NULL
           ReadStorage Explained Query
+      ArrangeBy keys=[[#1{customer_id}]]
+        Filter (#1{customer_id}) IS NOT NULL
+          ReadStorage materialize.public.orders
 
 Source materialize.public.orders
   filter=((#1{customer_id}) IS NOT NULL)
@@ -113,19 +113,19 @@ materialize.public.explain_test3:
   Join::Linear
     linear_stage[0]
       closure
-        project=(#3, #1, #0, #2)
-      lookup={ relation=1, key=[#1] }
-      stream={ key=[#1{customer_id}], thinning=(#0, #2) }
-    source={ relation=0, key=[#1{customer_id}] }
-    ArrangeBy
-      raw=true
-      arrangements[0]={ key=[#1{customer_id}], permutation={#0: #1, #1: #0}, thinning=(#0, #2) }
-      Get::Collection materialize.public.orders
-        raw=true
+        project=(#1, #2, #0, #3)
+      lookup={ relation=1, key=[#1{customer_id}] }
+      stream={ key=[#1], thinning=(#0) }
+    source={ relation=0, key=[#1] }
     ArrangeBy
       raw=true
       arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
       Get::Collection Explained Query
+        raw=true
+    ArrangeBy
+      raw=true
+      arrangements[0]={ key=[#1{customer_id}], permutation={#0: #1, #1: #0}, thinning=(#0, #2) }
+      Get::Collection materialize.public.orders
         raw=true
 
 Source materialize.public.orders

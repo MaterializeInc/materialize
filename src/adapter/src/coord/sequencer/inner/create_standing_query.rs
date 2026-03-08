@@ -270,30 +270,31 @@ impl Coordinator {
 
     /// Rewrite the user's query HIR to join with the parameter collection.
     ///
-    /// Transforms:
+    /// Takes the user's query as-is (supporting arbitrary complexity: joins,
+    /// subqueries, aggregations, etc.) and produces:
     /// ```text
-    ///   Project { outputs }
-    ///     Filter { predicates: [col_a = $1, col_b = $2, static_filter] }
-    ///       Get { orders }
-    /// ```
-    /// Into:
-    /// ```text
-    ///   Project { request_id, original_outputs }
-    ///     Filter { predicates: [col_a = params.param_1, col_b = params.param_2, static_filter] }
-    ///       Join { left: Get(orders), right: Get(params), on: TRUE, kind: Inner }
+    ///   Project { request_id, user_col_1, ..., user_col_N }
+    ///     Join {
+    ///       left: Get(params),        -- [request_id, param_1, ..., param_K]
+    ///       right: <user_query>,      -- with $N replaced by correlated refs to left
+    ///       on: TRUE,
+    ///       kind: Inner,
+    ///     }
     /// ```
     ///
-    /// The key transformation:
-    /// 1. Decompose the user's expression into its base relation and the
-    ///    operators above it (filters, maps, projects).
-    /// 2. Insert a cross join between the base relation and the param collection.
-    /// 3. Replace `Parameter(N)` with column references to `params.param_N`.
-    /// 4. Prepend `request_id` to the output projection.
+    /// The user's query contains `Parameter(N)` references (from `$N` in the
+    /// SQL). These are replaced with correlated column references (`level: depth + 1`)
+    /// that point to the corresponding columns in the params collection (the
+    /// left side of the join). The HIR lowering pass handles decorrelation of
+    /// the resulting correlated join automatically.
     ///
-    /// In the joined relation:
-    ///   columns `0..base_arity` are from the base relation (e.g. orders)
-    ///   column `base_arity + 0` is `request_id`
-    ///   column `base_arity + N` is `param_N` (corresponding to `$N`)
+    /// In the params collection:
+    ///   column 0 is `request_id`
+    ///   column N is `param_N` (corresponding to `$N`)
+    ///
+    /// In the join result:
+    ///   columns `0..param_arity` are from the params collection
+    ///   columns `param_arity..param_arity+user_arity` are from the user query
     pub(crate) fn rewrite_standing_query_hir(
         raw_expr: &HirRelationExpr,
         column_names: &[ColumnName],
@@ -301,68 +302,63 @@ impl Coordinator {
         param_typ: &SqlRelationType,
         _params: &[(String, SqlScalarType)],
     ) -> (HirRelationExpr, Vec<ColumnName>) {
-        // Decompose the user's expression. For a standing query, the planner
-        // produces:
-        //   Project { Filter { Get { target } } }
-        // or just:
-        //   Filter { Get { target } }
-        // We need to find the innermost Get (the base relation) so we can
-        // insert the cross join below the filters.
-        //
-        // Strategy: find the base Get, wrap it in a cross join with params,
-        // then re-apply the filters/projects on top with parameter references
-        // replaced by column refs into the joined relation.
+        let user_arity = raw_expr.arity();
+        let param_arity = param_typ.column_types.len(); // request_id + param_1..param_K
 
-        // For v1, the expression structure is restricted (single FROM, no joins).
-        // Extract the base Get and the filter predicates + project outputs.
-        let (base_get, predicates, project_outputs) = Self::decompose_simple_query(raw_expr);
-        let base_arity = match &base_get {
-            HirRelationExpr::Get { typ, .. } => typ.column_types.len(),
-            _ => panic!("expected Get as base relation"),
-        };
-
-        // Construct the param collection Get.
+        // Construct the param collection Get (left side of join).
         let param_get = HirRelationExpr::Get {
             id: mz_expr::Id::Global(param_collection_id),
             typ: param_typ.clone(),
         };
 
-        // Cross join: base_relation × params
+        // Clone the user's query and replace Parameter(N) with correlated
+        // column references to the params collection (left side of join).
+        // In the right side of a Join, `level: 1` refers to the left side's
+        // columns. Inside nested subqueries or join-right-sides within the
+        // user query, the depth increases, so we use `level: depth + 1`.
+        let mut user_expr = raw_expr.clone();
+        #[allow(deprecated)]
+        let _ = user_expr.visit_scalar_expressions_mut(
+            0,
+            &mut |scalar: &mut HirScalarExpr, depth: usize| {
+                #[allow(deprecated)]
+                let _ = scalar.visit_recursively_mut(
+                    depth,
+                    &mut |depth: usize, e: &mut HirScalarExpr| {
+                        if let HirScalarExpr::Parameter(n, _name) = e {
+                            // $N (1-based) maps to column N in the params collection.
+                            // From within the right side of our join, the params
+                            // (left side) are `depth + 1` scopes up.
+                            *e = HirScalarExpr::Column(
+                                ColumnRef {
+                                    level: depth + 1,
+                                    column: *n,
+                                },
+                                TreatAsEqual(None),
+                            );
+                        }
+                        Ok::<_, ()>(())
+                    },
+                );
+                Ok::<_, ()>(())
+            },
+        );
+
+        // Build a correlated inner join: params × user_query.
+        // The user_expr now contains correlated references to the left side.
         let joined = HirRelationExpr::Join {
-            left: Box::new(base_get),
-            right: Box::new(param_get),
+            left: Box::new(param_get),
+            right: Box::new(user_expr),
             on: HirScalarExpr::literal_true(),
             kind: JoinKind::Inner,
         };
 
-        // Replace $N in predicates with column references to params.
-        let mut rewritten_predicates = predicates;
-        for pred in rewritten_predicates.iter_mut() {
-            Self::replace_param_in_scalar(pred, base_arity);
-        }
-
-        // Apply filters on top of the join.
-        let filtered = if rewritten_predicates.is_empty() {
-            joined
-        } else {
-            HirRelationExpr::Filter {
-                input: Box::new(joined),
-                predicates: rewritten_predicates,
-            }
-        };
-
-        // Project: request_id first, then original output columns.
-        // The original project_outputs reference columns in the base relation
-        // (0..base_arity), which are still at the same positions in the joined
-        // relation. request_id is at position base_arity.
-        let request_id_col = base_arity;
-        let mut outputs = vec![request_id_col];
-        match project_outputs {
-            Some(original_outputs) => outputs.extend(original_outputs),
-            None => outputs.extend(0..base_arity),
-        }
+        // Project: request_id first (column 0), then the user's output columns
+        // (which start at param_arity in the joined relation).
+        let mut outputs = vec![0]; // request_id
+        outputs.extend(param_arity..param_arity + user_arity);
         let projected = HirRelationExpr::Project {
-            input: Box::new(filtered),
+            input: Box::new(joined),
             outputs,
         };
 
@@ -373,73 +369,15 @@ impl Coordinator {
         (projected, new_column_names)
     }
 
-    /// Decompose a simple standing query expression into its components.
-    ///
-    /// Returns (base_get, filter_predicates, optional_project_outputs).
-    /// Handles:
-    ///   Get
-    ///   Filter { Get }
-    ///   Project { Filter { Get } }
-    ///   Project { Get }
-    fn decompose_simple_query(
-        expr: &HirRelationExpr,
-    ) -> (HirRelationExpr, Vec<HirScalarExpr>, Option<Vec<usize>>) {
-        match expr {
-            HirRelationExpr::Project { input, outputs } => match input.as_ref() {
-                HirRelationExpr::Filter {
-                    input: inner,
-                    predicates,
-                } => match inner.as_ref() {
-                    get @ HirRelationExpr::Get { .. } => {
-                        (get.clone(), predicates.clone(), Some(outputs.clone()))
-                    }
-                    _ => panic!("standing query: expected Get inside Filter inside Project"),
-                },
-                get @ HirRelationExpr::Get { .. } => {
-                    (get.clone(), Vec::new(), Some(outputs.clone()))
-                }
-                _ => panic!("standing query: expected Filter or Get inside Project"),
-            },
-            HirRelationExpr::Filter {
-                input, predicates, ..
-            } => match input.as_ref() {
-                get @ HirRelationExpr::Get { .. } => (get.clone(), predicates.clone(), None),
-                _ => panic!("standing query: expected Get inside Filter"),
-            },
-            get @ HirRelationExpr::Get { .. } => (get.clone(), Vec::new(), None),
-            _ => panic!("standing query: expected Project, Filter, or Get at top level"),
-        }
-    }
-
-    /// Replace `Parameter(N)` in a scalar expression with a column reference
-    /// to the param collection.
-    fn replace_param_in_scalar(expr: &mut HirScalarExpr, base_arity: usize) {
-        #[allow(deprecated)]
-        let _ = expr.visit_recursively_mut(0, &mut |_depth: usize, e: &mut HirScalarExpr| {
-            if let HirScalarExpr::Parameter(n, _name) = e {
-                // $N (1-based) maps to param_N in the param collection,
-                // which is at column base_arity + N in the joined relation.
-                *e = HirScalarExpr::Column(
-                    ColumnRef {
-                        level: 0,
-                        column: base_arity + *n,
-                    },
-                    TreatAsEqual(None),
-                );
-            }
-            Ok::<_, ()>(())
-        });
-    }
-
     /// Build the RelationDesc for a standing query's parameter collection.
     ///
-    /// Schema: `(request_id UUID, param_1 T1, param_2 T2, ...)`
+    /// Schema: `(request_id UInt64, param_1 T1, param_2 T2, ...)`
     pub(crate) fn build_param_collection_desc(params: &[(String, SqlScalarType)]) -> RelationDesc {
         let mut desc = RelationDesc::builder();
         desc = desc.with_column(
             ColumnName::from("request_id"),
             SqlColumnType {
-                scalar_type: SqlScalarType::Uuid,
+                scalar_type: SqlScalarType::UInt64,
                 nullable: false,
             },
         );
@@ -508,7 +446,7 @@ impl Coordinator {
     /// Shows the optimized plan for the standing query dataflow, including the
     /// rewritten HIR that joins the user's query with the parameter collection.
     pub(crate) async fn explain_create_standing_query(
-        &mut self,
+        &self,
         ctx: ExecuteContext,
         plan::ExplainPlanPlan {
             stage,

@@ -2307,8 +2307,7 @@ impl Coordinator {
 
                     // Build the input bundle for upper tracking.
                     use crate::optimize::dataflows::dataflow_import_id_bundle;
-                    let mut input_bundle =
-                        dataflow_import_id_bundle(&df_desc, sq.cluster_id);
+                    let mut input_bundle = dataflow_import_id_bundle(&df_desc, sq.cluster_id);
                     // Remove the standing query sink and param collection.
                     input_bundle.storage_ids.remove(&sq.global_id());
                     input_bundle.storage_ids.remove(&sq.param_collection_id);

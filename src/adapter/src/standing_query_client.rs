@@ -21,6 +21,7 @@
 //! concurrent executions.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -31,7 +32,6 @@ use mz_storage_types::sources::SourceData;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{debug, warn};
-use uuid::Uuid;
 
 /// Notification sent from the batcher to the handler task when param rows
 /// have been written, so the handler can track in-flight request IDs.
@@ -39,13 +39,13 @@ use uuid::Uuid;
 pub struct StandingQueryFlush {
     pub sink_id: GlobalId,
     pub write_ts: Timestamp,
-    pub request_ids: Vec<Uuid>,
+    pub request_ids: Vec<u64>,
 }
 
 /// A request to write a param row, sent from `execute()` to the batcher task.
 #[derive(Debug)]
 struct WriteRequest {
-    request_id: Uuid,
+    request_id: u64,
     param_row: Row,
 }
 
@@ -70,7 +70,9 @@ pub struct StandingQueryExecuteClient {
     /// Shared map from request_id → result sender.
     /// The client registers a sender here before writing the param row.
     /// The handler task removes it and sends results.
-    result_senders: Arc<Mutex<BTreeMap<Uuid, oneshot::Sender<Vec<Row>>>>>,
+    result_senders: Arc<Mutex<BTreeMap<u64, oneshot::Sender<Vec<Row>>>>>,
+    /// Monotonically increasing counter for generating request IDs.
+    next_request_id: Arc<AtomicU64>,
 }
 
 impl StandingQueryExecuteClient {
@@ -93,6 +95,7 @@ impl StandingQueryExecuteClient {
             item_id,
             batcher_tx,
             result_senders: Arc::new(Mutex::new(BTreeMap::new())),
+            next_request_id: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -106,13 +109,13 @@ impl StandingQueryExecuteClient {
         &self,
         params: &[(Row, mz_repr::SqlScalarType)],
     ) -> Result<Vec<Row>, StandingQueryExecuteError> {
-        let request_id = Uuid::new_v4();
+        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
 
         // Build the parameter row: (request_id, param_1, param_2, ...).
         let mut param_row = Row::default();
         {
             let mut packer = param_row.packer();
-            packer.push(mz_repr::Datum::Uuid(request_id));
+            packer.push(mz_repr::Datum::UInt64(request_id));
             for (value, _typ) in params {
                 packer.push(value.unpack_first());
             }
@@ -153,7 +156,7 @@ impl StandingQueryExecuteClient {
     /// Deliver results for a request_id. Called by the handler task.
     ///
     /// Returns the oneshot sender if the request_id is found, None otherwise.
-    pub fn take_result_sender(&self, request_id: &Uuid) -> Option<oneshot::Sender<Vec<Row>>> {
+    pub fn take_result_sender(&self, request_id: &u64) -> Option<oneshot::Sender<Vec<Row>>> {
         let mut senders = self.result_senders.lock().expect("lock poisoned");
         senders.remove(request_id)
     }
@@ -261,7 +264,7 @@ async fn batcher_task(
                 {
                     Ok(write_ts) => {
                         last_append_duration = append_start.elapsed();
-                        let request_ids: Vec<Uuid> =
+                        let request_ids: Vec<u64> =
                             writes.iter().map(|w| w.request_id).collect();
                         debug!(
                             "standing query {sink_id}: batched {} param writes at ts {write_ts}",
@@ -311,8 +314,7 @@ async fn batch_append(
     let retract_ts = TimestampManipulation::step_forward(&upper);
     let new_upper = TimestampManipulation::step_forward(&retract_ts);
 
-    let mut updates: Vec<((SourceData, ()), Timestamp, i64)> =
-        Vec::with_capacity(writes.len() * 2);
+    let mut updates: Vec<((SourceData, ()), Timestamp, i64)> = Vec::with_capacity(writes.len() * 2);
 
     for req in writes {
         let data = (SourceData(Ok(req.param_row.clone())), ());

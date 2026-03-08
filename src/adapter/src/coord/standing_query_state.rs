@@ -19,8 +19,8 @@ use mz_repr::{CatalogItemId, Timestamp};
 use tokio::sync::{mpsc, watch};
 
 use crate::coord::Coordinator;
-use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::id_bundle::CollectionIdBundle;
+use crate::coord::timestamp_selection::TimestampProvider;
 use crate::standing_query_client::StandingQueryExecuteClient;
 
 /// Lightweight handle held by the coordinator for an active standing query.

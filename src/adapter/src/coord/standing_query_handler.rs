@@ -27,7 +27,6 @@ use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_repr::{Datum, GlobalId, Row, SharedRow, Timestamp};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
-use uuid::Uuid;
 
 use crate::standing_query_client::{StandingQueryExecuteClient, StandingQueryFlush};
 
@@ -56,8 +55,8 @@ async fn standing_query_handler_task(
 ) {
     info!("standing query {sink_id}: handler task started");
 
-    let mut in_flight: BTreeMap<Timestamp, Vec<Uuid>> = BTreeMap::new();
-    let mut result_buffer: BTreeMap<Uuid, Vec<Row>> = BTreeMap::new();
+    let mut in_flight: BTreeMap<Timestamp, Vec<u64>> = BTreeMap::new();
+    let mut result_buffer: BTreeMap<u64, Vec<Row>> = BTreeMap::new();
 
     loop {
         tokio::select! {
@@ -92,17 +91,14 @@ async fn standing_query_handler_task(
 
 fn drain_flushes(
     flush_rx: &mut mpsc::UnboundedReceiver<StandingQueryFlush>,
-    in_flight: &mut BTreeMap<Timestamp, Vec<Uuid>>,
+    in_flight: &mut BTreeMap<Timestamp, Vec<u64>>,
 ) {
     while let Ok(flush) = flush_rx.try_recv() {
         apply_flush(flush, in_flight);
     }
 }
 
-fn apply_flush(
-    flush: StandingQueryFlush,
-    in_flight: &mut BTreeMap<Timestamp, Vec<Uuid>>,
-) {
+fn apply_flush(flush: StandingQueryFlush, in_flight: &mut BTreeMap<Timestamp, Vec<u64>>) {
     in_flight
         .entry(flush.write_ts)
         .or_default()
@@ -113,8 +109,8 @@ fn process_batch(
     sink_id: GlobalId,
     client: &StandingQueryExecuteClient,
     batch: SubscribeBatch,
-    in_flight: &mut BTreeMap<Timestamp, Vec<Uuid>>,
-    result_buffer: &mut BTreeMap<Uuid, Vec<Row>>,
+    in_flight: &mut BTreeMap<Timestamp, Vec<u64>>,
+    result_buffer: &mut BTreeMap<u64, Vec<Row>>,
 ) {
     let SubscribeBatch {
         lower: _,
@@ -132,10 +128,10 @@ fn process_batch(
 
                 let mut datums = row.iter();
                 let request_id = match datums.next() {
-                    Some(Datum::Uuid(id)) => id,
+                    Some(Datum::UInt64(id)) => id,
                     other => {
                         warn!(
-                            "standing query {sink_id}: expected UUID request_id, got {:?}",
+                            "standing query {sink_id}: expected UInt64 request_id, got {:?}",
                             other
                         );
                         continue;
