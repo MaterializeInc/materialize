@@ -78,10 +78,7 @@ impl Coordinator {
             // batcher would write at the table's exact upper, forcing the
             // subscribe to wait for the next AdvanceTimelines tick (~1s).
             let target = ts.saturating_sub(1000);
-            debug!(
-                "standing query {:?}: advance upper target={target} (input frontier={ts})",
-                asq.item_id
-            );
+            debug!(item_id = ?asq.item_id, %target, input_frontier = %ts, "advance upper");
             let _ = asq.advance_upper_tx.send(target);
         }
     }

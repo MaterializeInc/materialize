@@ -196,8 +196,10 @@ async fn batcher_task(
         .unwrap_or_else(TimelyTimestamp::minimum);
 
     debug!(
-        "standing query {sink_id}: batcher started, shared_upper={current_upper}, initial_target={}",
-        *advance_upper_rx.borrow()
+        %sink_id,
+        %current_upper,
+        initial_target = %*advance_upper_rx.borrow(),
+        "batcher started",
     );
 
     const MIN_COLLECT: Duration = Duration::from_millis(1);
@@ -265,8 +267,10 @@ async fn batcher_task(
                         let request_ids: Vec<u64> =
                             writes.iter().map(|w| w.request_id).collect();
                         debug!(
-                            "standing query {sink_id}: batched {} param writes at ts {write_ts}",
-                            request_ids.len()
+                            %sink_id,
+                            %write_ts,
+                            count = request_ids.len(),
+                            "batched param writes",
                         );
                         let _ = flush_tx.send(StandingQueryFlush {
                             sink_id,
@@ -276,7 +280,7 @@ async fn batcher_task(
                     }
                     Err(e) => {
                         last_append_duration = append_start.elapsed();
-                        warn!("standing query {sink_id}: batch append failed: {e}");
+                        warn!(%sink_id, error = %e, "batch append failed");
                     }
                 }
             }
@@ -316,8 +320,11 @@ async fn batch_append(
     }
 
     debug!(
-        "standing query {sink_id}: batch append {upper}..{new_upper}, {} updates",
-        updates.len()
+        %sink_id,
+        %upper,
+        %new_upper,
+        updates = updates.len(),
+        "batch append",
     );
 
     let res = write_handle
@@ -339,7 +346,7 @@ async fn batch_append(
                 "upper mismatch: expected {:?}, actual {:?}",
                 mismatch.expected, mismatch.current
             );
-            warn!("standing query {sink_id}: {err}");
+            warn!(%sink_id, %err, "upper mismatch");
             if let Some(actual) = mismatch.current.into_option() {
                 *current_upper = actual;
             }
@@ -360,7 +367,7 @@ async fn advance_upper(
         return;
     }
 
-    debug!("standing query {sink_id}: advance upper {upper}..{target}");
+    debug!(%sink_id, %upper, %target, "advance upper");
 
     let res = write_handle
         .compare_and_append(
@@ -377,8 +384,10 @@ async fn advance_upper(
         }
         Err(mismatch) => {
             warn!(
-                "standing query {sink_id}: upper advance mismatch: expected {:?}, actual {:?}",
-                mismatch.expected, mismatch.current
+                %sink_id,
+                expected = ?mismatch.expected,
+                actual = ?mismatch.current,
+                "upper advance mismatch",
             );
             if let Some(actual) = mismatch.current.into_option() {
                 *current_upper = actual;

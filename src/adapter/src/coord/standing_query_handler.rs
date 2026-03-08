@@ -53,7 +53,7 @@ async fn standing_query_handler_task(
     mut subscribe_rx: mpsc::UnboundedReceiver<SubscribeBatch>,
     mut flush_rx: mpsc::UnboundedReceiver<StandingQueryFlush>,
 ) {
-    info!("standing query {sink_id}: handler task started");
+    info!(%sink_id, "handler task started");
 
     let mut in_flight: BTreeMap<Timestamp, Vec<u64>> = BTreeMap::new();
     let mut result_buffer: BTreeMap<u64, Vec<Row>> = BTreeMap::new();
@@ -86,7 +86,7 @@ async fn standing_query_handler_task(
         }
     }
 
-    info!("standing query {sink_id}: handler task shutting down");
+    info!(%sink_id, "handler task shutting down");
 }
 
 fn drain_flushes(
@@ -130,10 +130,7 @@ fn process_batch(
                 let request_id = match datums.next() {
                     Some(Datum::UInt64(id)) => id,
                     other => {
-                        warn!(
-                            "standing query {sink_id}: expected UInt64 request_id, got {:?}",
-                            other
-                        );
+                        warn!(%sink_id, got = ?other, "expected UInt64 request_id");
                         continue;
                     }
                 };
@@ -144,7 +141,7 @@ fn process_batch(
                     row_buf.clone()
                 };
 
-                debug!("standing query {sink_id}: buffering result for request {request_id}");
+                debug!(%sink_id, %request_id, "buffering result");
                 result_buffer
                     .entry(request_id)
                     .or_default()
@@ -152,7 +149,7 @@ fn process_batch(
             }
         }
         Err(err) => {
-            warn!("standing query {sink_id}: subscribe error: {err}");
+            warn!(%sink_id, %err, "subscribe error");
             return;
         }
     }
@@ -169,10 +166,7 @@ fn process_batch(
             for request_id in request_ids {
                 let results = result_buffer.remove(&request_id).unwrap_or_default();
                 if let Some(tx) = client.take_result_sender(&request_id) {
-                    debug!(
-                        "standing query {sink_id}: delivering {} rows for request {request_id}",
-                        results.len()
-                    );
+                    debug!(%sink_id, %request_id, rows = results.len(), "delivering results");
                     let _ = tx.send(results);
                 }
             }
