@@ -14,7 +14,7 @@ name = "upsert_open_loop"
 bench = false
 
 [dependencies]
-anyhow = "1.0.101"
+anyhow = "1.0.102"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
 aws-credential-types = { version = "1.2.7", features = ["hardcoded-credentials"] }
@@ -31,7 +31,7 @@ csv-core = { version = "0.1.13" }
 dec = "0.4.8"
 differential-dataflow = "0.20.0"
 fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.31"
+futures = "0.3.32"
 iceberg = "0.7.0"
 indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
 itertools = { version = "0.14.0" }
