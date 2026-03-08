@@ -1,8 +1,9 @@
 //! Network policies apply command - converge live network policy state to match definitions.
 
 use crate::cli::CliError;
+use crate::cli::commands::grants;
 use crate::cli::progress;
-use crate::client::{Client, ConnectionError, Profile};
+use crate::client::{Client, ConnectionError, Profile, quote_identifier};
 use crate::project::network_policies::{self, NetworkPolicyDefinition};
 use mz_sql_parser::ast::AlterNetworkPolicyStatement;
 use owo_colors::OwoColorize;
@@ -126,6 +127,21 @@ async fn apply_network_policy(
             )))
         })?;
     }
+
+    // Revoke stale grants
+    let current_grants = client
+        .introspection()
+        .get_network_policy_grants(policy_name)
+        .await
+        .map_err(CliError::Connection)?;
+    let desired = grants::desired_grants(&def.grants, &["USAGE"]);
+    let revocations = grants::stale_grant_revocations(
+        &current_grants,
+        &desired,
+        "NETWORK POLICY",
+        &quote_identifier(policy_name),
+    );
+    grants::execute_revocations(client, &revocations, "network policy", &policy_name).await?;
 
     // Execute COMMENT statements (idempotent)
     for comment in &def.comments {

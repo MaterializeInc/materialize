@@ -1,5 +1,6 @@
 //! Apply secrets command - create missing secrets and update existing ones.
 
+use crate::cli::commands::grants;
 use crate::cli::progress;
 use crate::cli::{CliError, TypeCheckMode, executor};
 use crate::client::{Client, Profile};
@@ -75,6 +76,25 @@ pub async fn run(
 
             for grant in &typed_obj.grants {
                 executor.execute_sql(grant).await?;
+            }
+
+            // Revoke stale grants
+            if !dry_run {
+                let fqn = grants::quoted_fqn(&obj.id.database, &obj.id.schema, &obj.id.object);
+                let current_grants = client
+                    .introspection()
+                    .get_database_object_grants(
+                        "mz_secrets",
+                        &obj.id.database,
+                        &obj.id.schema,
+                        &obj.id.object,
+                    )
+                    .await
+                    .map_err(CliError::Connection)?;
+                let desired = grants::desired_grants(&typed_obj.grants, &["USAGE"]);
+                let revocations =
+                    grants::stale_grant_revocations(&current_grants, &desired, "SECRET", &fqn);
+                grants::execute_revocations(&client, &revocations, "secret", &obj.id).await?;
             }
 
             for comment in &typed_obj.comments {

@@ -110,7 +110,7 @@ pub struct ClusterReplica {
 
 /// A privilege grant on a cluster.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClusterGrant {
+pub struct ObjectGrant {
     /// Role name that receives the grant
     pub grantee: String,
     /// Privilege type (e.g., "USAGE", "CREATE")
@@ -128,20 +128,20 @@ pub enum ClusterConfig {
         /// Cluster options (size, replication factor)
         options: ClusterOptions,
         /// Privilege grants on the cluster
-        grants: Vec<ClusterGrant>,
+        grants: Vec<ObjectGrant>,
     },
     /// Unmanaged cluster with explicit replicas
     Unmanaged {
         /// Replica configurations
         replicas: Vec<ClusterReplica>,
         /// Privilege grants on the cluster
-        grants: Vec<ClusterGrant>,
+        grants: Vec<ObjectGrant>,
     },
 }
 
 impl ClusterConfig {
     /// Get the grants for this cluster configuration.
-    pub fn grants(&self) -> &[ClusterGrant] {
+    pub fn grants(&self) -> &[ObjectGrant] {
         match self {
             ClusterConfig::Managed { grants, .. } => grants,
             ClusterConfig::Unmanaged { grants, .. } => grants,
@@ -521,17 +521,17 @@ mod tests {
 
     #[test]
     fn test_cluster_grant_equality() {
-        let g1 = ClusterGrant {
+        let g1 = ObjectGrant {
             grantee: "reader".to_string(),
             privilege_type: "USAGE".to_string(),
         };
 
-        let g2 = ClusterGrant {
+        let g2 = ObjectGrant {
             grantee: "reader".to_string(),
             privilege_type: "USAGE".to_string(),
         };
 
-        let g3 = ClusterGrant {
+        let g3 = ObjectGrant {
             grantee: "writer".to_string(),
             privilege_type: "CREATE".to_string(),
         };
@@ -547,7 +547,7 @@ mod tests {
                 size: "25cc".to_string(),
                 replication_factor: 2,
             },
-            grants: vec![ClusterGrant {
+            grants: vec![ObjectGrant {
                 grantee: "reader".to_string(),
                 privilege_type: "USAGE".to_string(),
             }],
@@ -590,7 +590,7 @@ mod tests {
         // Unmanaged clusters with 0 replicas are valid
         let config = ClusterConfig::Unmanaged {
             replicas: vec![],
-            grants: vec![ClusterGrant {
+            grants: vec![ObjectGrant {
                 grantee: "admin".to_string(),
                 privilege_type: "CREATE".to_string(),
             }],

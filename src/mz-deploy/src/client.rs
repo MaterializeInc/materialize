@@ -49,8 +49,8 @@ pub use deployment_ops::{
 };
 pub use errors::{ConnectionError, DatabaseValidationError, format_relative_path};
 pub use models::{
-    ApplyState, Cluster, ClusterConfig, ClusterGrant, ClusterOptions, ClusterReplica,
-    ConflictRecord, DeploymentDetails, DeploymentHistoryEntry, DeploymentKind, DeploymentMetadata,
-    DeploymentObjectRecord, PendingStatement, ReplacementMvRecord, SchemaDeploymentRecord,
-    StagingDeployment,
+    ApplyState, Cluster, ClusterConfig, ClusterOptions, ClusterReplica, ConflictRecord,
+    DeploymentDetails, DeploymentHistoryEntry, DeploymentKind, DeploymentMetadata,
+    DeploymentObjectRecord, ObjectGrant, PendingStatement, ReplacementMvRecord,
+    SchemaDeploymentRecord, StagingDeployment,
 };

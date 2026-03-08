@@ -1,5 +1,6 @@
 //! Apply connections command - create missing connections and reconcile drifted ones.
 
+use crate::cli::commands::grants;
 use crate::cli::progress;
 use crate::cli::{CliError, TypeCheckMode, executor};
 use crate::client::{Client, Profile};
@@ -130,6 +131,20 @@ pub async fn run(
         // Apply grants
         for grant in &typed_obj.grants {
             executor.execute_sql(grant).await?;
+        }
+
+        // Revoke stale grants
+        if !dry_run {
+            let fqn = grants::quoted_fqn(database, schema, name);
+            let current_grants = client
+                .introspection()
+                .get_database_object_grants("mz_connections", database, schema, name)
+                .await
+                .map_err(CliError::Connection)?;
+            let desired = grants::desired_grants(&typed_obj.grants, &["USAGE"]);
+            let revocations =
+                grants::stale_grant_revocations(&current_grants, &desired, "CONNECTION", &fqn);
+            grants::execute_revocations(&client, &revocations, "connection", &obj.id).await?;
         }
 
         // Apply comments

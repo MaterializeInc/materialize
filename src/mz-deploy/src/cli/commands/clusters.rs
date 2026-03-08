@@ -1,8 +1,9 @@
 //! Clusters apply command - converge live cluster state to match definitions.
 
 use crate::cli::CliError;
+use crate::cli::commands::grants;
 use crate::cli::progress;
-use crate::client::{Client, ClusterOptions, ConnectionError, Profile};
+use crate::client::{Client, ClusterOptions, ConnectionError, Profile, quote_identifier};
 use crate::project::clusters::{self, ClusterDefinition, extract_replication_factor, extract_size};
 use owo_colors::OwoColorize;
 use std::path::Path;
@@ -155,6 +156,21 @@ async fn apply_cluster(client: &Client, def: &ClusterDefinition) -> Result<(), C
             )))
         })?;
     }
+
+    // Revoke stale grants
+    let current_grants = client
+        .introspection()
+        .get_cluster_grants(cluster_name)
+        .await
+        .map_err(CliError::Connection)?;
+    let desired = grants::desired_grants(&def.grants, &["USAGE", "CREATE"]);
+    let revocations = grants::stale_grant_revocations(
+        &current_grants,
+        &desired,
+        "CLUSTER",
+        &quote_identifier(cluster_name),
+    );
+    grants::execute_revocations(client, &revocations, "cluster", &cluster_name).await?;
 
     // Execute COMMENT statements
     for comment in &def.comments {

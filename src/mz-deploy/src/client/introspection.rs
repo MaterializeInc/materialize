@@ -7,7 +7,7 @@
 
 use crate::client::connection::{Client, IntrospectionClient};
 use crate::client::errors::ConnectionError;
-use crate::client::models::{Cluster, ClusterConfig, ClusterGrant, ClusterOptions, ClusterReplica};
+use crate::client::models::{Cluster, ClusterConfig, ClusterOptions, ClusterReplica, ObjectGrant};
 use crate::client::quote_identifier;
 use crate::project::SchemaQualifier;
 use crate::project::object_id::ObjectId;
@@ -194,9 +194,9 @@ pub async fn get_cluster_config(
 
     let grant_rows = client.query(grants_query, &[&name]).await?;
 
-    let grants: Vec<ClusterGrant> = grant_rows
+    let grants: Vec<ObjectGrant> = grant_rows
         .iter()
-        .map(|row| ClusterGrant {
+        .map(|row| ObjectGrant {
             grantee: row.get("grantee"),
             privilege_type: row.get("privilege_type"),
         })
@@ -834,6 +834,100 @@ pub async fn drop_staging_clusters(
     Ok(())
 }
 
+/// Get privilege grants on a named infrastructure object (cluster, network policy).
+///
+/// `catalog_table` is the system catalog table (e.g., `"mz_clusters"`,
+/// `"mz_network_policies"`). Returns `(grantee, privilege_type)` pairs from
+/// `mz_aclexplode`, filtering out system roles.
+async fn get_named_object_grants(
+    client: &Client,
+    catalog_table: &str,
+    name: &str,
+) -> Result<Vec<ObjectGrant>, ConnectionError> {
+    let query = format!(
+        r#"
+        WITH privilege AS (
+            SELECT mz_internal.mz_aclexplode(privileges).*
+            FROM {}
+            WHERE name = $1
+        )
+        SELECT
+            grantee.name AS grantee,
+            p.privilege_type
+        FROM privilege AS p
+        JOIN mz_roles AS grantee ON p.grantee = grantee.id
+        WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+        "#,
+        catalog_table
+    );
+
+    let rows = client.query(&query, &[&name]).await?;
+
+    Ok(rows
+        .iter()
+        .map(|row| ObjectGrant {
+            grantee: row.get("grantee"),
+            privilege_type: row.get("privilege_type"),
+        })
+        .collect())
+}
+
+/// Get privilege grants on a cluster by name.
+pub async fn get_cluster_grants(
+    client: &Client,
+    name: &str,
+) -> Result<Vec<ObjectGrant>, ConnectionError> {
+    get_named_object_grants(client, "mz_clusters", name).await
+}
+
+/// Get privilege grants on a network policy by name.
+pub async fn get_network_policy_grants(
+    client: &Client,
+    name: &str,
+) -> Result<Vec<ObjectGrant>, ConnectionError> {
+    get_named_object_grants(client, "mz_network_policies", name).await
+}
+
+/// Get privilege grants on a database object (table, source, secret, connection).
+///
+/// `catalog_table` is the system catalog table name (e.g., `"mz_tables"`, `"mz_secrets"`).
+pub async fn get_database_object_grants(
+    client: &Client,
+    catalog_table: &str,
+    database: &str,
+    schema: &str,
+    name: &str,
+) -> Result<Vec<ObjectGrant>, ConnectionError> {
+    let query = format!(
+        r#"
+        WITH privilege AS (
+            SELECT mz_internal.mz_aclexplode(t.privileges).*
+            FROM {} t
+            JOIN mz_schemas s ON t.schema_id = s.id
+            JOIN mz_databases d ON s.database_id = d.id
+            WHERE d.name = $1 AND s.name = $2 AND t.name = $3
+        )
+        SELECT
+            grantee.name AS grantee,
+            p.privilege_type
+        FROM privilege AS p
+        JOIN mz_roles AS grantee ON p.grantee = grantee.id
+        WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+        "#,
+        catalog_table
+    );
+
+    let rows = client.query(&query, &[&database, &schema, &name]).await?;
+
+    Ok(rows
+        .iter()
+        .map(|row| ObjectGrant {
+            grantee: row.get("grantee"),
+            privilege_type: row.get("privilege_type"),
+        })
+        .collect())
+}
+
 /// Get the `CREATE CONNECTION` SQL for an existing connection.
 ///
 /// Uses `SHOW CREATE CONNECTION` which returns the canonical, non-redacted SQL
@@ -1049,6 +1143,33 @@ impl IntrospectionClient<'_> {
         name: &str,
     ) -> Result<Option<ClusterConfig>, ConnectionError> {
         get_cluster_config(self.client, name).await
+    }
+
+    /// Get privilege grants on a cluster by name.
+    pub async fn get_cluster_grants(
+        &self,
+        name: &str,
+    ) -> Result<Vec<ObjectGrant>, ConnectionError> {
+        get_cluster_grants(self.client, name).await
+    }
+
+    /// Get privilege grants on a network policy by name.
+    pub async fn get_network_policy_grants(
+        &self,
+        name: &str,
+    ) -> Result<Vec<ObjectGrant>, ConnectionError> {
+        get_network_policy_grants(self.client, name).await
+    }
+
+    /// Get privilege grants on a database object.
+    pub async fn get_database_object_grants(
+        &self,
+        catalog_table: &str,
+        database: &str,
+        schema: &str,
+        name: &str,
+    ) -> Result<Vec<ObjectGrant>, ConnectionError> {
+        get_database_object_grants(self.client, catalog_table, database, schema, name).await
     }
 
     /// Get the `CREATE CONNECTION` SQL for an existing connection.
