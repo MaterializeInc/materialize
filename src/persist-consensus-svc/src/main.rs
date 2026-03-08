@@ -7,27 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A group commit consensus service for Materialize persist.
-//!
-//! Batches independent cross-shard CAS writes into a single durable S3 Express
-//! One Zone PUT per flush interval, making cost O(1/batch_window) instead of
-//! O(shards).
-
-mod actor;
-mod metrics;
-mod wal;
+//! Binary entry point for the group commit consensus service.
 
 use std::net::SocketAddr;
 
 use clap::Parser;
 use tonic::transport::Server;
-use tracing::{debug, info};
-
-use crate::actor::{Actor, ActorCommand};
-use crate::metrics::ConsensusMetrics;
-use crate::wal::s3::S3WalWriter;
+use tracing::info;
 
 use mz_persist::generated::consensus_service::consensus_service_server::ConsensusServiceServer;
+use mz_persist_consensus_svc::actor::{Actor, ActorCommand, ActorHandle};
+use mz_persist_consensus_svc::metrics::ConsensusMetrics;
+use mz_persist_consensus_svc::service::ConsensusGrpcService;
+use mz_persist_consensus_svc::wal::s3::S3WalWriter;
 
 /// CLI arguments for the consensus service.
 #[derive(Parser, Debug)]
@@ -99,23 +91,13 @@ async fn run(args: Args) {
     )
     .await;
 
-    // Use MissedTickBehavior::Delay so the interval represents the collection
-    // window — the time spent accumulating CAS ops — not the total period.
-    // With Delay, the cycle is: collect for flush_interval → flush (S3 PUT) →
-    // collect for flush_interval → flush → ... This makes throughput
-    // predictable: 1 / (flush_interval + flush_time). The default Burst
-    // behavior would degenerate into continuous flushing with no collection
-    // window if flush_time approaches the interval.
-    let mut flush_interval =
-        tokio::time::interval(std::time::Duration::from_millis(args.flush_interval_ms));
-    flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
     let (tx, rx) = tokio::sync::mpsc::channel::<ActorCommand>(4096);
+    let handle = ActorHandle::new(tx);
 
     let actor = Actor::new(
         rx,
         wal_writer,
-        flush_interval,
+        args.flush_interval_ms,
         args.snapshot_interval,
         metrics,
     );
@@ -123,14 +105,7 @@ async fn run(args: Args) {
 
     // Recover state from S3 via the actor's command channel.
     info!("recovering state from S3...");
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    tx.send(ActorCommand::RecoverFromSnapshot { reply: reply_tx })
-        .await
-        .expect("actor channel closed during recovery");
-    reply_rx
-        .await
-        .expect("actor dropped recovery reply")
-        .expect("recovery failed");
+    handle.recover().await.expect("recovery failed");
 
     // Spawn HTTP metrics server (Send-compatible, uses regular tokio::spawn).
     let metrics_addr = args.metrics_listen_addr;
@@ -151,7 +126,7 @@ async fn run(args: Args) {
             .expect("metrics server failed");
     });
 
-    let grpc_service = ConsensusGrpcService { tx };
+    let grpc_service = ConsensusGrpcService { handle };
     info!(addr = %args.listen_addr, "starting gRPC server");
 
     Server::builder()
@@ -159,161 +134,4 @@ async fn run(args: Args) {
         .serve(args.listen_addr)
         .await
         .expect("gRPC server failed");
-}
-
-// --- gRPC server glue ---
-
-use tokio::sync::oneshot;
-
-use mz_persist::generated::consensus_service::consensus_service_server::ConsensusService;
-use mz_persist::generated::consensus_service::{
-    ProtoCompareAndSetRequest, ProtoCompareAndSetResponse, ProtoHeadRequest, ProtoHeadResponse,
-    ProtoListKeysRequest, ProtoListKeysResponse, ProtoScanRequest, ProtoScanResponse,
-    ProtoTruncateRequest, ProtoTruncateResponse,
-};
-
-/// The gRPC service implementation that dispatches to the actor.
-#[derive(Debug)]
-struct ConsensusGrpcService {
-    tx: tokio::sync::mpsc::Sender<ActorCommand>,
-}
-
-#[tonic::async_trait]
-impl ConsensusService for ConsensusGrpcService {
-    async fn head(
-        &self,
-        request: tonic::Request<ProtoHeadRequest>,
-    ) -> Result<tonic::Response<ProtoHeadResponse>, tonic::Status> {
-        let req = request.into_inner();
-        debug!(key = %req.key, "head");
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.tx
-            .send(ActorCommand::Head {
-                key: req.key,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|_| tonic::Status::unavailable("actor shut down"))?;
-        let result = reply_rx
-            .await
-            .map_err(|_| tonic::Status::internal("actor dropped reply"))?;
-        match result {
-            Ok(resp) => Ok(tonic::Response::new(resp)),
-            Err(e) => Err(tonic::Status::internal(format!("{}", e))),
-        }
-    }
-
-    async fn compare_and_set(
-        &self,
-        request: tonic::Request<ProtoCompareAndSetRequest>,
-    ) -> Result<tonic::Response<ProtoCompareAndSetResponse>, tonic::Status> {
-        let req = request.into_inner();
-        debug!(key = %req.key, expected = req.expected, new_seqno = req.new.as_ref().map(|v| v.seqno), "cas");
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.tx
-            .send(ActorCommand::CompareAndSet {
-                key: req.key,
-                expected: req.expected,
-                new: req
-                    .new
-                    .ok_or_else(|| tonic::Status::invalid_argument("missing `new` field"))?,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|_| tonic::Status::unavailable("actor shut down"))?;
-        let result = reply_rx
-            .await
-            .map_err(|_| tonic::Status::internal("actor dropped reply"))?;
-        match result {
-            Ok(resp) => Ok(tonic::Response::new(resp)),
-            Err(e) => Err(tonic::Status::internal(format!("{}", e))),
-        }
-    }
-
-    async fn scan(
-        &self,
-        request: tonic::Request<ProtoScanRequest>,
-    ) -> Result<tonic::Response<ProtoScanResponse>, tonic::Status> {
-        let req = request.into_inner();
-        debug!(key = %req.key, from = req.from, limit = req.limit, "scan");
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.tx
-            .send(ActorCommand::Scan {
-                key: req.key,
-                from: req.from,
-                limit: req.limit,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|_| tonic::Status::unavailable("actor shut down"))?;
-        let result = reply_rx
-            .await
-            .map_err(|_| tonic::Status::internal("actor dropped reply"))?;
-        match result {
-            Ok(resp) => Ok(tonic::Response::new(resp)),
-            Err(e) => Err(tonic::Status::internal(format!("{}", e))),
-        }
-    }
-
-    async fn truncate(
-        &self,
-        request: tonic::Request<ProtoTruncateRequest>,
-    ) -> Result<tonic::Response<ProtoTruncateResponse>, tonic::Status> {
-        let req = request.into_inner();
-        debug!(key = %req.key, seqno = req.seqno, "truncate");
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.tx
-            .send(ActorCommand::Truncate {
-                key: req.key,
-                seqno: req.seqno,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|_| tonic::Status::unavailable("actor shut down"))?;
-        let result = reply_rx
-            .await
-            .map_err(|_| tonic::Status::internal("actor dropped reply"))?;
-        match result {
-            Ok(resp) => Ok(tonic::Response::new(resp)),
-            Err(e) => Err(tonic::Status::internal(format!("{}", e))),
-        }
-    }
-
-    type ListKeysStream =
-        tokio_stream::wrappers::ReceiverStream<Result<ProtoListKeysResponse, tonic::Status>>;
-
-    async fn list_keys(
-        &self,
-        _request: tonic::Request<ProtoListKeysRequest>,
-    ) -> Result<tonic::Response<Self::ListKeysStream>, tonic::Status> {
-        debug!("list_keys");
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.tx
-            .send(ActorCommand::ListKeys { reply: reply_tx })
-            .await
-            .map_err(|_| tonic::Status::unavailable("actor shut down"))?;
-        let result = reply_rx
-            .await
-            .map_err(|_| tonic::Status::internal("actor dropped reply"))?;
-        match result {
-            Ok(keys) => {
-                let (stream_tx, stream_rx) = tokio::sync::mpsc::channel(64);
-                tokio::spawn(async move {
-                    for key in keys {
-                        if stream_tx
-                            .send(Ok(ProtoListKeysResponse { key }))
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                });
-                Ok(tonic::Response::new(
-                    tokio_stream::wrappers::ReceiverStream::new(stream_rx),
-                ))
-            }
-            Err(e) => Err(tonic::Status::internal(format!("{}", e))),
-        }
-    }
 }

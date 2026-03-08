@@ -121,11 +121,9 @@ pub fn deserialize_snapshot(snapshot: &ProtoSnapshot) -> (BTreeMap<String, Shard
     (shards, snapshot.through_batch)
 }
 
-/// A no-op WAL writer for testing.
-#[cfg(test)]
+/// A no-op WAL writer for testing and benchmarking.
 pub struct NoopWalWriter;
 
-#[cfg(test)]
 #[async_trait::async_trait]
 impl WalWriter for NoopWalWriter {
     async fn write_batch(&self, _batch: &ProtoWalBatch) -> Result<(), WalWriteError> {
@@ -141,10 +139,77 @@ impl WalWriter for NoopWalWriter {
     async fn read_snapshot(&self) -> Result<Option<ProtoSnapshot>, anyhow::Error> {
         Ok(None)
     }
-    async fn read_batch(
+    async fn read_batch(&self, _batch_number: u64) -> Result<Option<ProtoWalBatch>, anyhow::Error> {
+        Ok(None)
+    }
+}
+
+/// Latency profile for [`LatencyWalWriter`]. Defines how long `write_batch`
+/// sleeps before returning.
+#[derive(Debug, Clone)]
+pub enum LatencyProfile {
+    /// Return immediately (same as `NoopWalWriter`).
+    Zero,
+    /// Fixed latency for every write.
+    Fixed(std::time::Duration),
+    /// Sample from a distribution: p50 latency with occasional p99 spikes.
+    /// Roughly 95% of writes take `p50`, 5% take `p99`.
+    P50P99 {
+        p50: std::time::Duration,
+        p99: std::time::Duration,
+    },
+}
+
+/// A WAL writer that simulates storage latency for benchmarking. Writes are
+/// no-ops (data is discarded) but `write_batch` sleeps according to the
+/// configured [`LatencyProfile`]. This lets benchmarks measure end-to-end
+/// actor behavior under realistic flush times.
+pub struct LatencyWalWriter {
+    profile: LatencyProfile,
+    /// Simple counter-based "random" for p50/p99 selection to avoid pulling
+    /// in rand as a non-dev dependency.
+    counter: std::sync::atomic::AtomicU64,
+}
+
+impl LatencyWalWriter {
+    pub fn new(profile: LatencyProfile) -> Self {
+        LatencyWalWriter {
+            profile,
+            counter: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl WalWriter for LatencyWalWriter {
+    async fn write_batch(&self, _batch: &ProtoWalBatch) -> Result<(), WalWriteError> {
+        match &self.profile {
+            LatencyProfile::Zero => {}
+            LatencyProfile::Fixed(d) => {
+                tokio::time::sleep(*d).await;
+            }
+            LatencyProfile::P50P99 { p50, p99 } => {
+                let n = self
+                    .counter
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // ~5% of writes get p99 latency.
+                let d = if n % 20 == 0 { *p99 } else { *p50 };
+                tokio::time::sleep(d).await;
+            }
+        }
+        Ok(())
+    }
+    async fn write_snapshot(
         &self,
-        _batch_number: u64,
-    ) -> Result<Option<ProtoWalBatch>, anyhow::Error> {
+        _shards: &BTreeMap<String, ShardState>,
+        _through_batch: u64,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+    async fn read_snapshot(&self) -> Result<Option<ProtoSnapshot>, anyhow::Error> {
+        Ok(None)
+    }
+    async fn read_batch(&self, _batch_number: u64) -> Result<Option<ProtoWalBatch>, anyhow::Error> {
         Ok(None)
     }
 }
@@ -187,10 +252,7 @@ impl WalWriter for RecordingWalWriter {
     async fn read_snapshot(&self) -> Result<Option<ProtoSnapshot>, anyhow::Error> {
         Ok(None)
     }
-    async fn read_batch(
-        &self,
-        _batch_number: u64,
-    ) -> Result<Option<ProtoWalBatch>, anyhow::Error> {
+    async fn read_batch(&self, _batch_number: u64) -> Result<Option<ProtoWalBatch>, anyhow::Error> {
         Ok(None)
     }
 }
@@ -258,6 +320,11 @@ impl SimWalWriter {
 #[async_trait::async_trait]
 impl WalWriter for SimWalWriter {
     async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), WalWriteError> {
+        // Simulate S3 latency. With `start_paused = true`, this costs zero
+        // wall-clock time but creates a yield point that exercises
+        // `serve_reads_until` in the actor's flush path.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+
         // Check for injected faults first.
         let fault = self.faults.lock().unwrap().pop_front();
         match fault {

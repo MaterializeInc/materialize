@@ -1,0 +1,23 @@
+name: "small-smoke"
+description: "100 shards for quick testing"
+
+num_shards: 100
+writers_per_shard: 1
+value_size: 64
+max_entries: 1000
+
+cas_pct: 90
+scan_pct: 8
+head_pct: 1
+truncate_pct: 1
+
+scan_limit: 10
+truncate_to: 500
+
+write_rate_per_second: 10.0
+flush_interval_ms: 5
+
+wal_latency: "zero"
+
+duration: 5
+warmup: 2

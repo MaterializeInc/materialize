@@ -8,16 +8,14 @@
 // by the Apache License, Version 2.0.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
-use tokio::time;
 
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::generated::consensus_service::ProtoVersionedData;
 
-use crate::actor::{Actor, ActorCommand};
+use crate::actor::{Actor, ActorCommand, ActorHandle};
 use crate::metrics::ConsensusMetrics;
 use crate::wal::{NoopWalWriter, RecordingWalWriter, SimWalWriter};
 
@@ -25,16 +23,16 @@ fn test_metrics() -> ConsensusMetrics {
     ConsensusMetrics::register(&MetricsRegistry::new())
 }
 
-/// Test wrapper that holds the actor's sender and join handle.
+/// Test wrapper that holds the actor's handle and join handle.
 /// The actor task is aborted on drop so tests don't need explicit cleanup.
 struct TestActor {
-    tx: mpsc::Sender<ActorCommand>,
-    handle: JoinHandle<()>,
+    handle: ActorHandle,
+    task: JoinHandle<()>,
 }
 
 impl Drop for TestActor {
     fn drop(&mut self) {
-        self.handle.abort();
+        self.task.abort();
     }
 }
 
@@ -42,20 +40,27 @@ impl Drop for TestActor {
 /// so the timer never fires — tests use explicit `Flush` commands instead.
 fn spawn_test_actor() -> TestActor {
     let (tx, rx) = mpsc::channel(256);
-    let interval = time::interval(Duration::from_secs(86400));
-    let actor = Actor::new(rx, NoopWalWriter, interval, 100, test_metrics());
-    let handle = tokio::spawn(actor.run());
-    TestActor { tx, handle }
+    let actor = Actor::new(rx, NoopWalWriter, 86_400_000, 100, test_metrics());
+    let task = tokio::spawn(actor.run());
+    TestActor {
+        handle: ActorHandle::new(tx),
+        task,
+    }
 }
 
 /// Helper: spawn an actor with a recording WAL writer.
 fn spawn_recording_actor() -> (TestActor, Arc<RecordingWalWriter>) {
     let (tx, rx) = mpsc::channel(256);
-    let interval = time::interval(Duration::from_secs(86400));
     let writer = Arc::new(RecordingWalWriter::new());
-    let actor = Actor::new(rx, writer.clone(), interval, 100, test_metrics());
-    let handle = tokio::spawn(actor.run());
-    (TestActor { tx, handle }, writer)
+    let actor = Actor::new(rx, writer.clone(), 86_400_000, 100, test_metrics());
+    let task = tokio::spawn(actor.run());
+    (
+        TestActor {
+            handle: ActorHandle::new(tx),
+            task,
+        },
+        writer,
+    )
 }
 
 /// Helper: spawn an actor with a recording WAL writer and a custom snapshot interval.
@@ -63,56 +68,69 @@ fn spawn_recording_actor_with_snapshot_interval(
     snapshot_interval: u64,
 ) -> (TestActor, Arc<RecordingWalWriter>) {
     let (tx, rx) = mpsc::channel(256);
-    let interval = time::interval(Duration::from_secs(86400));
     let writer = Arc::new(RecordingWalWriter::new());
     let actor = Actor::new(
         rx,
         writer.clone(),
-        interval,
+        86_400_000,
         snapshot_interval,
         test_metrics(),
     );
-    let handle = tokio::spawn(actor.run());
-    (TestActor { tx, handle }, writer)
+    let task = tokio::spawn(actor.run());
+    (
+        TestActor {
+            handle: ActorHandle::new(tx),
+            task,
+        },
+        writer,
+    )
 }
 
 /// Helper: spawn an actor with a SimWalWriter (supports reads for recovery).
 fn spawn_sim_actor(wal: Arc<SimWalWriter>) -> TestActor {
     let (tx, rx) = mpsc::channel(256);
-    let interval = time::interval(Duration::from_secs(86400));
-    let actor = Actor::new(rx, wal, interval, 100, test_metrics());
-    let handle = tokio::spawn(actor.run());
-    TestActor { tx, handle }
+    let actor = Actor::new(rx, wal, 86_400_000, 100, test_metrics());
+    let task = tokio::spawn(actor.run());
+    TestActor {
+        handle: ActorHandle::new(tx),
+        task,
+    }
 }
 
 /// Send a CAS, then flush, then return the result.
+///
+/// Uses a raw oneshot because the CAS reply is deferred until flush — calling
+/// `handle.compare_and_set().await` would deadlock in tests where the flush
+/// timer is disabled.
 async fn cas_and_flush(
-    tx: &mpsc::Sender<ActorCommand>,
+    handle: &ActorHandle,
     key: &str,
     expected: Option<u64>,
     seqno: u64,
     data: &[u8],
 ) -> Result<bool, String> {
     let (reply_tx, reply_rx) = oneshot::channel();
-    tx.send(ActorCommand::CompareAndSet {
-        key: key.to_string(),
-        expected,
-        new: ProtoVersionedData {
-            seqno,
-            data: data.to_vec(),
-        },
-        reply: reply_tx,
-    })
-    .await
-    .unwrap();
-    send_flush(tx).await;
+    handle
+        .sender()
+        .send(ActorCommand::CompareAndSet {
+            key: key.to_string(),
+            expected,
+            new: ProtoVersionedData {
+                seqno,
+                data: data.to_vec(),
+            },
+            reply: reply_tx,
+        })
+        .await
+        .unwrap();
+    handle.flush().await.unwrap();
     let resp = reply_rx.await.unwrap()?;
     Ok(resp.committed)
 }
 
 /// Send a CAS without flushing (for testing group commit batching).
 async fn send_cas_no_flush(
-    tx: &mpsc::Sender<ActorCommand>,
+    handle: &ActorHandle,
     key: &str,
     expected: Option<u64>,
     seqno: u64,
@@ -121,139 +139,110 @@ async fn send_cas_no_flush(
     Result<mz_persist::generated::consensus_service::ProtoCompareAndSetResponse, String>,
 > {
     let (reply_tx, reply_rx) = oneshot::channel();
-    tx.send(ActorCommand::CompareAndSet {
-        key: key.to_string(),
-        expected,
-        new: ProtoVersionedData {
-            seqno,
-            data: data.to_vec(),
-        },
-        reply: reply_tx,
-    })
-    .await
-    .unwrap();
+    handle
+        .sender()
+        .send(ActorCommand::CompareAndSet {
+            key: key.to_string(),
+            expected,
+            new: ProtoVersionedData {
+                seqno,
+                data: data.to_vec(),
+            },
+            reply: reply_tx,
+        })
+        .await
+        .unwrap();
     reply_rx
 }
 
 /// Send a CAS that should be rejected with a validation error (reply is
 /// immediate, no flush needed).
 async fn send_cas_expect_validation_error(
-    tx: &mpsc::Sender<ActorCommand>,
+    handle: &ActorHandle,
     key: &str,
     expected: Option<u64>,
     seqno: u64,
     data: &[u8],
 ) -> String {
     let (reply_tx, reply_rx) = oneshot::channel();
-    tx.send(ActorCommand::CompareAndSet {
-        key: key.to_string(),
-        expected,
-        new: ProtoVersionedData {
-            seqno,
-            data: data.to_vec(),
-        },
-        reply: reply_tx,
-    })
-    .await
-    .unwrap();
+    handle
+        .sender()
+        .send(ActorCommand::CompareAndSet {
+            key: key.to_string(),
+            expected,
+            new: ProtoVersionedData {
+                seqno,
+                data: data.to_vec(),
+            },
+            reply: reply_tx,
+        })
+        .await
+        .unwrap();
     reply_rx.await.unwrap().unwrap_err()
 }
 
-/// Explicitly flush the actor and wait for completion.
-async fn send_flush(tx: &mpsc::Sender<ActorCommand>) {
-    let (reply_tx, reply_rx) = oneshot::channel();
-    tx.send(ActorCommand::Flush { reply: reply_tx })
-        .await
-        .unwrap();
-    reply_rx.await.unwrap();
-}
-
 /// Helper to send a head request.
-async fn send_head(tx: &mpsc::Sender<ActorCommand>, key: &str) -> Option<(u64, Vec<u8>)> {
-    let (reply_tx, reply_rx) = oneshot::channel();
-    tx.send(ActorCommand::Head {
-        key: key.to_string(),
-        reply: reply_tx,
-    })
-    .await
-    .unwrap();
-    let resp = reply_rx.await.unwrap().unwrap();
+async fn send_head(handle: &ActorHandle, key: &str) -> Option<(u64, Vec<u8>)> {
+    let resp = handle.head(key.to_string()).await.unwrap();
     resp.data.map(|d| (d.seqno, d.data))
 }
 
 /// Helper to send a scan request.
 async fn send_scan(
-    tx: &mpsc::Sender<ActorCommand>,
+    handle: &ActorHandle,
     key: &str,
     from: u64,
     limit: u64,
 ) -> Vec<(u64, Vec<u8>)> {
-    let (reply_tx, reply_rx) = oneshot::channel();
-    tx.send(ActorCommand::Scan {
-        key: key.to_string(),
-        from,
-        limit,
-        reply: reply_tx,
-    })
-    .await
-    .unwrap();
-    let resp = reply_rx.await.unwrap().unwrap();
+    let resp = handle.scan(key.to_string(), from, limit).await.unwrap();
     resp.data.into_iter().map(|d| (d.seqno, d.data)).collect()
 }
 
 /// Send a truncate and flush, then return the result.
 async fn truncate_and_flush(
-    tx: &mpsc::Sender<ActorCommand>,
+    handle: &ActorHandle,
     key: &str,
     seqno: u64,
 ) -> Result<Option<u64>, String> {
     let (reply_tx, reply_rx) = oneshot::channel();
-    tx.send(ActorCommand::Truncate {
-        key: key.to_string(),
-        seqno,
-        reply: reply_tx,
-    })
-    .await
-    .unwrap();
-    send_flush(tx).await;
+    handle
+        .sender()
+        .send(ActorCommand::Truncate {
+            key: key.to_string(),
+            seqno,
+            reply: reply_tx,
+        })
+        .await
+        .unwrap();
+    handle.flush().await.unwrap();
     let resp = reply_rx.await.unwrap()?;
     Ok(resp.deleted)
 }
 
 /// Send a RecoverFromSnapshot command and wait for completion.
-async fn send_recover(tx: &mpsc::Sender<ActorCommand>) {
-    let (reply_tx, reply_rx) = oneshot::channel();
-    tx.send(ActorCommand::RecoverFromSnapshot { reply: reply_tx })
-        .await
-        .unwrap();
-    reply_rx.await.unwrap().unwrap();
+async fn send_recover(handle: &ActorHandle) {
+    handle.recover().await.unwrap();
 }
 
 /// Send a truncate that should be rejected with a validation error (reply is
 /// immediate, no flush needed).
-async fn send_truncate_expect_error(
-    tx: &mpsc::Sender<ActorCommand>,
-    key: &str,
-    seqno: u64,
-) -> String {
+async fn send_truncate_expect_error(handle: &ActorHandle, key: &str, seqno: u64) -> String {
     let (reply_tx, reply_rx) = oneshot::channel();
-    tx.send(ActorCommand::Truncate {
-        key: key.to_string(),
-        seqno,
-        reply: reply_tx,
-    })
-    .await
-    .unwrap();
+    handle
+        .sender()
+        .send(ActorCommand::Truncate {
+            key: key.to_string(),
+            seqno,
+            reply: reply_tx,
+        })
+        .await
+        .unwrap();
     reply_rx.await.unwrap().unwrap_err()
 }
 
 /// Helper to send a list_keys request.
-async fn send_list_keys(tx: &mpsc::Sender<ActorCommand>) -> Vec<String> {
-    let (reply_tx, reply_rx) = oneshot::channel();
-    tx.send(ActorCommand::ListKeys { reply: reply_tx })
-        .await
-        .unwrap();
-    let mut keys = reply_rx.await.unwrap().unwrap();
+async fn send_list_keys(handle: &ActorHandle) -> Vec<String> {
+    let mut keys = handle.list_keys().await.unwrap();
     keys.sort();
     keys
 }
@@ -264,7 +253,7 @@ async fn send_list_keys(tx: &mpsc::Sender<ActorCommand>) -> Vec<String> {
 async fn cas_on_empty_shard() {
     let a = spawn_test_actor();
     assert!(
-        cas_and_flush(&a.tx, "shard-1", None, 1, b"hello")
+        cas_and_flush(&a.handle, "shard-1", None, 1, b"hello")
             .await
             .unwrap()
     );
@@ -273,8 +262,8 @@ async fn cas_on_empty_shard() {
 #[tokio::test]
 async fn cas_wrong_expected() {
     let a = spawn_test_actor();
-    assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
-    let committed = cas_and_flush(&a.tx, "s", Some(999), 1000, b"v2")
+    assert!(cas_and_flush(&a.handle, "s", None, 1, b"v1").await.unwrap());
+    let committed = cas_and_flush(&a.handle, "s", Some(999), 1000, b"v2")
         .await
         .unwrap();
     assert!(!committed);
@@ -283,17 +272,33 @@ async fn cas_wrong_expected() {
 #[tokio::test]
 async fn cas_correct_expected() {
     let a = spawn_test_actor();
-    assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
-    assert!(cas_and_flush(&a.tx, "s", Some(1), 2, b"v2").await.unwrap());
+    assert!(cas_and_flush(&a.handle, "s", None, 1, b"v1").await.unwrap());
+    assert!(
+        cas_and_flush(&a.handle, "s", Some(1), 2, b"v2")
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]
 async fn cas_sequential() {
     let a = spawn_test_actor();
-    assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
-    assert!(cas_and_flush(&a.tx, "s", Some(1), 2, b"v2").await.unwrap());
-    assert!(cas_and_flush(&a.tx, "s", Some(2), 3, b"v3").await.unwrap());
-    assert!(cas_and_flush(&a.tx, "s", Some(3), 4, b"v4").await.unwrap());
+    assert!(cas_and_flush(&a.handle, "s", None, 1, b"v1").await.unwrap());
+    assert!(
+        cas_and_flush(&a.handle, "s", Some(1), 2, b"v2")
+            .await
+            .unwrap()
+    );
+    assert!(
+        cas_and_flush(&a.handle, "s", Some(2), 3, b"v3")
+            .await
+            .unwrap()
+    );
+    assert!(
+        cas_and_flush(&a.handle, "s", Some(3), 4, b"v4")
+            .await
+            .unwrap()
+    );
 }
 
 // --- CAS validation ---
@@ -301,21 +306,22 @@ async fn cas_sequential() {
 #[tokio::test]
 async fn cas_seqno_not_greater_than_expected() {
     let a = spawn_test_actor();
-    let err = send_cas_expect_validation_error(&a.tx, "s", Some(5), 3, b"v").await;
+    let err = send_cas_expect_validation_error(&a.handle, "s", Some(5), 3, b"v").await;
     assert!(err.contains("strictly greater"));
 }
 
 #[tokio::test]
 async fn cas_seqno_equal_to_expected() {
     let a = spawn_test_actor();
-    let err = send_cas_expect_validation_error(&a.tx, "s", Some(5), 5, b"v").await;
+    let err = send_cas_expect_validation_error(&a.handle, "s", Some(5), 5, b"v").await;
     assert!(err.contains("strictly greater"));
 }
 
 #[tokio::test]
 async fn cas_seqno_exceeds_i64_max() {
     let a = spawn_test_actor();
-    let err = send_cas_expect_validation_error(&a.tx, "s", None, (i64::MAX as u64) + 1, b"v").await;
+    let err =
+        send_cas_expect_validation_error(&a.handle, "s", None, (i64::MAX as u64) + 1, b"v").await;
     assert!(err.contains("i64::MAX"));
 }
 
@@ -324,9 +330,9 @@ async fn cas_seqno_exceeds_i64_max() {
 #[tokio::test]
 async fn group_commit_different_shards() {
     let a = spawn_test_actor();
-    let rx1 = send_cas_no_flush(&a.tx, "s1", None, 1, b"a").await;
-    let rx2 = send_cas_no_flush(&a.tx, "s2", None, 1, b"b").await;
-    send_flush(&a.tx).await;
+    let rx1 = send_cas_no_flush(&a.handle, "s1", None, 1, b"a").await;
+    let rx2 = send_cas_no_flush(&a.handle, "s2", None, 1, b"b").await;
+    a.handle.flush().await.unwrap();
     assert!(rx1.await.unwrap().unwrap().committed);
     assert!(rx2.await.unwrap().unwrap().committed);
 }
@@ -334,9 +340,9 @@ async fn group_commit_different_shards() {
 #[tokio::test]
 async fn group_commit_same_shard_conflict() {
     let a = spawn_test_actor();
-    let rx1 = send_cas_no_flush(&a.tx, "s", None, 1, b"first").await;
-    let rx2 = send_cas_no_flush(&a.tx, "s", None, 1, b"second").await;
-    send_flush(&a.tx).await;
+    let rx1 = send_cas_no_flush(&a.handle, "s", None, 1, b"first").await;
+    let rx2 = send_cas_no_flush(&a.handle, "s", None, 1, b"second").await;
+    a.handle.flush().await.unwrap();
     assert!(rx1.await.unwrap().unwrap().committed);
     assert!(!rx2.await.unwrap().unwrap().committed);
 }
@@ -344,9 +350,9 @@ async fn group_commit_same_shard_conflict() {
 #[tokio::test]
 async fn cas_caller_blocks_until_flush() {
     let a = spawn_test_actor();
-    let mut rx = send_cas_no_flush(&a.tx, "s", None, 1, b"v1").await;
+    let mut rx = send_cas_no_flush(&a.handle, "s", None, 1, b"v1").await;
     assert!(rx.try_recv().is_err());
-    send_flush(&a.tx).await;
+    a.handle.flush().await.unwrap();
     assert!(rx.await.unwrap().unwrap().committed);
 }
 
@@ -355,32 +361,62 @@ async fn cas_caller_blocks_until_flush() {
 #[tokio::test]
 async fn head_empty_shard() {
     let a = spawn_test_actor();
-    assert_eq!(send_head(&a.tx, "nonexistent").await, None);
+    assert_eq!(send_head(&a.handle, "nonexistent").await, None);
 }
 
 #[tokio::test]
 async fn head_after_cas() {
     let a = spawn_test_actor();
-    assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
-    assert_eq!(send_head(&a.tx, "s").await, Some((1, b"v1".to_vec())));
+    assert!(
+        cas_and_flush(&a.handle, "s", None, 1, b"v1")
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        send_head(&a.handle, "s").await,
+        Some((1, b"v1".to_vec()))
+    );
 }
 
 #[tokio::test]
 async fn head_returns_latest() {
     let a = spawn_test_actor();
-    assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
-    assert!(cas_and_flush(&a.tx, "s", Some(1), 2, b"v2").await.unwrap());
-    assert_eq!(send_head(&a.tx, "s").await, Some((2, b"v2".to_vec())));
+    assert!(
+        cas_and_flush(&a.handle, "s", None, 1, b"v1")
+            .await
+            .unwrap()
+    );
+    assert!(
+        cas_and_flush(&a.handle, "s", Some(1), 2, b"v2")
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        send_head(&a.handle, "s").await,
+        Some((2, b"v2".to_vec()))
+    );
 }
 
 #[tokio::test]
 async fn scan_returns_entries_in_order() {
     let a = spawn_test_actor();
-    assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
-    assert!(cas_and_flush(&a.tx, "s", Some(1), 2, b"v2").await.unwrap());
-    assert!(cas_and_flush(&a.tx, "s", Some(2), 3, b"v3").await.unwrap());
+    assert!(
+        cas_and_flush(&a.handle, "s", None, 1, b"v1")
+            .await
+            .unwrap()
+    );
+    assert!(
+        cas_and_flush(&a.handle, "s", Some(1), 2, b"v2")
+            .await
+            .unwrap()
+    );
+    assert!(
+        cas_and_flush(&a.handle, "s", Some(2), 3, b"v3")
+            .await
+            .unwrap()
+    );
 
-    let entries = send_scan(&a.tx, "s", 1, u64::MAX).await;
+    let entries = send_scan(&a.handle, "s", 1, u64::MAX).await;
     assert_eq!(entries.len(), 3);
     assert_eq!(entries[0].0, 1);
     assert_eq!(entries[1].0, 2);
@@ -390,11 +426,23 @@ async fn scan_returns_entries_in_order() {
 #[tokio::test]
 async fn scan_respects_from_and_limit() {
     let a = spawn_test_actor();
-    assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
-    assert!(cas_and_flush(&a.tx, "s", Some(1), 2, b"v2").await.unwrap());
-    assert!(cas_and_flush(&a.tx, "s", Some(2), 3, b"v3").await.unwrap());
+    assert!(
+        cas_and_flush(&a.handle, "s", None, 1, b"v1")
+            .await
+            .unwrap()
+    );
+    assert!(
+        cas_and_flush(&a.handle, "s", Some(1), 2, b"v2")
+            .await
+            .unwrap()
+    );
+    assert!(
+        cas_and_flush(&a.handle, "s", Some(2), 3, b"v3")
+            .await
+            .unwrap()
+    );
 
-    let entries = send_scan(&a.tx, "s", 2, 1).await;
+    let entries = send_scan(&a.handle, "s", 2, 1).await;
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].0, 2);
 }
@@ -402,17 +450,29 @@ async fn scan_respects_from_and_limit() {
 #[tokio::test]
 async fn scan_empty_shard() {
     let a = spawn_test_actor();
-    let entries = send_scan(&a.tx, "nonexistent", 0, u64::MAX).await;
+    let entries = send_scan(&a.handle, "nonexistent", 0, u64::MAX).await;
     assert!(entries.is_empty());
 }
 
 #[tokio::test]
 async fn list_keys_returns_all_shards() {
     let a = spawn_test_actor();
-    assert!(cas_and_flush(&a.tx, "b", None, 1, b"v").await.unwrap());
-    assert!(cas_and_flush(&a.tx, "a", None, 1, b"v").await.unwrap());
-    assert!(cas_and_flush(&a.tx, "c", None, 1, b"v").await.unwrap());
-    assert_eq!(send_list_keys(&a.tx).await, vec!["a", "b", "c"]);
+    assert!(
+        cas_and_flush(&a.handle, "b", None, 1, b"v")
+            .await
+            .unwrap()
+    );
+    assert!(
+        cas_and_flush(&a.handle, "a", None, 1, b"v")
+            .await
+            .unwrap()
+    );
+    assert!(
+        cas_and_flush(&a.handle, "c", None, 1, b"v")
+            .await
+            .unwrap()
+    );
+    assert_eq!(send_list_keys(&a.handle).await, vec!["a", "b", "c"]);
 }
 
 // --- Truncate ---
@@ -420,14 +480,26 @@ async fn list_keys_returns_all_shards() {
 #[tokio::test]
 async fn truncate_removes_entries_below() {
     let a = spawn_test_actor();
-    assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
-    assert!(cas_and_flush(&a.tx, "s", Some(1), 2, b"v2").await.unwrap());
-    assert!(cas_and_flush(&a.tx, "s", Some(2), 3, b"v3").await.unwrap());
+    assert!(
+        cas_and_flush(&a.handle, "s", None, 1, b"v1")
+            .await
+            .unwrap()
+    );
+    assert!(
+        cas_and_flush(&a.handle, "s", Some(1), 2, b"v2")
+            .await
+            .unwrap()
+    );
+    assert!(
+        cas_and_flush(&a.handle, "s", Some(2), 3, b"v3")
+            .await
+            .unwrap()
+    );
 
-    let deleted = truncate_and_flush(&a.tx, "s", 2).await.unwrap();
+    let deleted = truncate_and_flush(&a.handle, "s", 2).await.unwrap();
     assert_eq!(deleted, Some(1));
 
-    let entries = send_scan(&a.tx, "s", 0, u64::MAX).await;
+    let entries = send_scan(&a.handle, "s", 0, u64::MAX).await;
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].0, 2);
     assert_eq!(entries[1].0, 3);
@@ -436,15 +508,19 @@ async fn truncate_removes_entries_below() {
 #[tokio::test]
 async fn truncate_above_head_errors() {
     let a = spawn_test_actor();
-    assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
-    let err = send_truncate_expect_error(&a.tx, "s", 999).await;
+    assert!(
+        cas_and_flush(&a.handle, "s", None, 1, b"v1")
+            .await
+            .unwrap()
+    );
+    let err = send_truncate_expect_error(&a.handle, "s", 999).await;
     assert!(err.contains("upper bound too high"));
 }
 
 #[tokio::test]
 async fn truncate_empty_shard_errors() {
     let a = spawn_test_actor();
-    let err = send_truncate_expect_error(&a.tx, "nonexistent", 1).await;
+    let err = send_truncate_expect_error(&a.handle, "nonexistent", 1).await;
     assert!(err.contains("upper bound too high"));
 }
 
@@ -454,9 +530,9 @@ async fn truncate_empty_shard_errors() {
 async fn flush_calls_wal_writer() {
     let (a, writer) = spawn_recording_actor();
 
-    let _rx1 = send_cas_no_flush(&a.tx, "s1", None, 1, b"a").await;
-    let _rx2 = send_cas_no_flush(&a.tx, "s2", None, 1, b"b").await;
-    send_flush(&a.tx).await;
+    let _rx1 = send_cas_no_flush(&a.handle, "s1", None, 1, b"a").await;
+    let _rx2 = send_cas_no_flush(&a.handle, "s2", None, 1, b"b").await;
+    a.handle.flush().await.unwrap();
 
     let batches = writer.batches.lock().unwrap();
     assert_eq!(batches.len(), 1);
@@ -467,8 +543,16 @@ async fn flush_calls_wal_writer() {
 async fn batch_number_increments() {
     let (a, writer) = spawn_recording_actor();
 
-    assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
-    assert!(cas_and_flush(&a.tx, "s", Some(1), 2, b"v2").await.unwrap());
+    assert!(
+        cas_and_flush(&a.handle, "s", None, 1, b"v1")
+            .await
+            .unwrap()
+    );
+    assert!(
+        cas_and_flush(&a.handle, "s", Some(1), 2, b"v2")
+            .await
+            .unwrap()
+    );
 
     let batches = writer.batches.lock().unwrap();
     assert_eq!(batches.len(), 2);
@@ -479,7 +563,7 @@ async fn batch_number_increments() {
 #[tokio::test]
 async fn empty_flush_is_noop() {
     let (a, writer) = spawn_recording_actor();
-    send_flush(&a.tx).await;
+    a.handle.flush().await.unwrap();
 
     let batches = writer.batches.lock().unwrap();
     assert!(batches.is_empty());
@@ -488,10 +572,18 @@ async fn empty_flush_is_noop() {
 #[tokio::test]
 async fn truncate_recorded_in_wal() {
     let (a, writer) = spawn_recording_actor();
-    assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
-    assert!(cas_and_flush(&a.tx, "s", Some(1), 2, b"v2").await.unwrap());
+    assert!(
+        cas_and_flush(&a.handle, "s", None, 1, b"v1")
+            .await
+            .unwrap()
+    );
+    assert!(
+        cas_and_flush(&a.handle, "s", Some(1), 2, b"v2")
+            .await
+            .unwrap()
+    );
 
-    let deleted = truncate_and_flush(&a.tx, "s", 2).await.unwrap();
+    let deleted = truncate_and_flush(&a.handle, "s", 2).await.unwrap();
     assert_eq!(deleted, Some(1));
 
     let batches = writer.batches.lock().unwrap();
@@ -512,9 +604,21 @@ async fn truncate_recorded_in_wal() {
 async fn snapshot_written_every_n_batches() {
     let (a, writer) = spawn_recording_actor_with_snapshot_interval(3);
 
-    assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
-    assert!(cas_and_flush(&a.tx, "s", Some(1), 2, b"v2").await.unwrap());
-    assert!(cas_and_flush(&a.tx, "s", Some(2), 3, b"v3").await.unwrap());
+    assert!(
+        cas_and_flush(&a.handle, "s", None, 1, b"v1")
+            .await
+            .unwrap()
+    );
+    assert!(
+        cas_and_flush(&a.handle, "s", Some(1), 2, b"v2")
+            .await
+            .unwrap()
+    );
+    assert!(
+        cas_and_flush(&a.handle, "s", Some(2), 3, b"v3")
+            .await
+            .unwrap()
+    );
 
     let snapshots = writer.snapshots.lock().unwrap();
     assert_eq!(
@@ -528,8 +632,16 @@ async fn snapshot_written_every_n_batches() {
 async fn no_snapshot_before_interval() {
     let (a, writer) = spawn_recording_actor_with_snapshot_interval(100);
 
-    assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
-    assert!(cas_and_flush(&a.tx, "s", Some(1), 2, b"v2").await.unwrap());
+    assert!(
+        cas_and_flush(&a.handle, "s", None, 1, b"v1")
+            .await
+            .unwrap()
+    );
+    assert!(
+        cas_and_flush(&a.handle, "s", Some(1), 2, b"v2")
+            .await
+            .unwrap()
+    );
 
     let snapshots = writer.snapshots.lock().unwrap();
     assert!(snapshots.is_empty(), "no snapshot expected before interval");
@@ -541,14 +653,14 @@ async fn reads_return_committed_state() {
 
     // CAS accepted but not yet flushed — head should return None because
     // committed state hasn't been updated.
-    let rx = send_cas_no_flush(&a.tx, "s", None, 1, b"v1").await;
-    let head = send_head(&a.tx, "s").await;
+    let rx = send_cas_no_flush(&a.handle, "s", None, 1, b"v1").await;
+    let head = send_head(&a.handle, "s").await;
     assert_eq!(head, None);
 
     // After flush, committed state includes the write.
-    send_flush(&a.tx).await;
+    a.handle.flush().await.unwrap();
     assert!(rx.await.unwrap().unwrap().committed);
-    let head = send_head(&a.tx, "s").await;
+    let head = send_head(&a.handle, "s").await;
     assert_eq!(head, Some((1, b"v1".to_vec())));
 }
 
@@ -558,9 +670,9 @@ async fn reads_return_committed_state() {
 async fn recover_from_snapshot_empty_wal() {
     let wal = Arc::new(SimWalWriter::new());
     let a = spawn_sim_actor(wal);
-    send_recover(&a.tx).await;
-    assert_eq!(send_head(&a.tx, "s").await, None);
-    assert!(send_list_keys(&a.tx).await.is_empty());
+    send_recover(&a.handle).await;
+    assert_eq!(send_head(&a.handle, "s").await, None);
+    assert!(send_list_keys(&a.handle).await.is_empty());
 }
 
 #[tokio::test]
@@ -570,22 +682,47 @@ async fn recover_from_snapshot_replays_wal() {
     // Build up state via a first actor, then shut it down.
     {
         let a = spawn_sim_actor(wal.clone());
-        assert!(cas_and_flush(&a.tx, "s1", None, 1, b"v1").await.unwrap());
-        assert!(cas_and_flush(&a.tx, "s1", Some(1), 2, b"v2").await.unwrap());
-        assert!(cas_and_flush(&a.tx, "s2", None, 1, b"a").await.unwrap());
+        assert!(
+            cas_and_flush(&a.handle, "s1", None, 1, b"v1")
+                .await
+                .unwrap()
+        );
+        assert!(
+            cas_and_flush(&a.handle, "s1", Some(1), 2, b"v2")
+                .await
+                .unwrap()
+        );
+        assert!(
+            cas_and_flush(&a.handle, "s2", None, 1, b"a")
+                .await
+                .unwrap()
+        );
         drop(a);
     }
 
     // New actor recovers from WAL.
     let a = spawn_sim_actor(wal);
-    send_recover(&a.tx).await;
-    assert_eq!(send_head(&a.tx, "s1").await, Some((2, b"v2".to_vec())));
-    assert_eq!(send_head(&a.tx, "s2").await, Some((1, b"a".to_vec())));
-    assert_eq!(send_list_keys(&a.tx).await, vec!["s1", "s2"]);
+    send_recover(&a.handle).await;
+    assert_eq!(
+        send_head(&a.handle, "s1").await,
+        Some((2, b"v2".to_vec()))
+    );
+    assert_eq!(
+        send_head(&a.handle, "s2").await,
+        Some((1, b"a".to_vec()))
+    );
+    assert_eq!(send_list_keys(&a.handle).await, vec!["s1", "s2"]);
 
     // Can continue operating after recovery.
-    assert!(cas_and_flush(&a.tx, "s1", Some(2), 3, b"v3").await.unwrap());
-    assert_eq!(send_head(&a.tx, "s1").await, Some((3, b"v3".to_vec())));
+    assert!(
+        cas_and_flush(&a.handle, "s1", Some(2), 3, b"v3")
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        send_head(&a.handle, "s1").await,
+        Some((3, b"v3".to_vec()))
+    );
 }
 
 #[tokio::test]
@@ -594,16 +731,28 @@ async fn recover_from_snapshot_replays_truncates() {
 
     {
         let a = spawn_sim_actor(wal.clone());
-        assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
-        assert!(cas_and_flush(&a.tx, "s", Some(1), 2, b"v2").await.unwrap());
-        assert!(cas_and_flush(&a.tx, "s", Some(2), 3, b"v3").await.unwrap());
-        truncate_and_flush(&a.tx, "s", 2).await.unwrap();
+        assert!(
+            cas_and_flush(&a.handle, "s", None, 1, b"v1")
+                .await
+                .unwrap()
+        );
+        assert!(
+            cas_and_flush(&a.handle, "s", Some(1), 2, b"v2")
+                .await
+                .unwrap()
+        );
+        assert!(
+            cas_and_flush(&a.handle, "s", Some(2), 3, b"v3")
+                .await
+                .unwrap()
+        );
+        truncate_and_flush(&a.handle, "s", 2).await.unwrap();
         drop(a);
     }
 
     let a = spawn_sim_actor(wal);
-    send_recover(&a.tx).await;
-    let entries = send_scan(&a.tx, "s", 0, u64::MAX).await;
+    send_recover(&a.handle).await;
+    let entries = send_scan(&a.handle, "s", 0, u64::MAX).await;
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].0, 2);
     assert_eq!(entries[1].0, 3);
@@ -616,19 +765,26 @@ async fn recover_from_snapshot_clears_pending() {
     // Write some durable state.
     {
         let a = spawn_sim_actor(wal.clone());
-        assert!(cas_and_flush(&a.tx, "s", None, 1, b"v1").await.unwrap());
+        assert!(
+            cas_and_flush(&a.handle, "s", None, 1, b"v1")
+                .await
+                .unwrap()
+        );
         drop(a);
     }
 
     let a = spawn_sim_actor(wal);
-    send_recover(&a.tx).await;
+    send_recover(&a.handle).await;
 
     // CAS accepted but NOT flushed — pending state.
-    let _rx = send_cas_no_flush(&a.tx, "s", Some(1), 2, b"v2").await;
+    let _rx = send_cas_no_flush(&a.handle, "s", Some(1), 2, b"v2").await;
 
     // RecoverFromSnapshot wipes pending state, replaces with WAL contents.
-    send_recover(&a.tx).await;
-    assert_eq!(send_head(&a.tx, "s").await, Some((1, b"v1".to_vec())));
+    send_recover(&a.handle).await;
+    assert_eq!(
+        send_head(&a.handle, "s").await,
+        Some((1, b"v1".to_vec()))
+    );
 }
 
 #[tokio::test]
@@ -677,10 +833,10 @@ async fn recover_from_snapshot_with_snapshot_and_wal() {
     );
 
     let a = spawn_sim_actor(wal);
-    send_recover(&a.tx).await;
+    send_recover(&a.handle).await;
 
     // Should have snapshot state (seqno 1, 2) plus WAL replay (seqno 3).
-    let entries = send_scan(&a.tx, "s", 0, u64::MAX).await;
+    let entries = send_scan(&a.handle, "s", 0, u64::MAX).await;
     assert_eq!(entries.len(), 3);
     assert_eq!(entries[0], (1, b"v1".to_vec()));
     assert_eq!(entries[1], (2, b"v2".to_vec()));
@@ -688,6 +844,13 @@ async fn recover_from_snapshot_with_snapshot_and_wal() {
 
     // batch_number should be 3 (next after the replayed batch 2).
     // Verify by doing a CAS+flush and checking the WAL.
-    assert!(cas_and_flush(&a.tx, "s", Some(3), 4, b"v4").await.unwrap());
-    assert_eq!(send_head(&a.tx, "s").await, Some((4, b"v4".to_vec())));
+    assert!(
+        cas_and_flush(&a.handle, "s", Some(3), 4, b"v4")
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        send_head(&a.handle, "s").await,
+        Some((4, b"v4".to_vec()))
+    );
 }

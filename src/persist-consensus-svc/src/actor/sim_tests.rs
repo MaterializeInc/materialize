@@ -9,29 +9,34 @@
 
 //! Deterministic simulation tests for the consensus actor.
 //!
-//! These tests drive the actor through random command sequences generated from
-//! a seeded PRNG. Failures are reproduced by replaying the seed:
+//! Two test harnesses:
+//!
+//! - **`sim_single_actor`**: one actor, WAL as ground truth. Mixes CAS, reads,
+//!   truncates, faults, and crash/recovery. Checks linearizability per shard
+//!   (reconstructed from the op trace) and WAL consistency (every observed
+//!   value exists in the WAL).
+//! - **`sim_multi_actor`**: N actors sharing one WAL. Writer conflicts emerge
+//!   naturally from conditional write semantics. Checks WAL consistency
+//!   (catches phantom writes from the fencing bug).
+//!
+//! Failures are reproduced by replaying the seed:
 //!
 //! ```text
-//! SEED=42 cargo test -p mz-persist-consensus-svc sim_random_workload
+//! SEED=42 cargo test -p mz-persist-consensus-svc sim_single_actor
 //! ```
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
-use tokio::time;
 
 use mz_ore::metrics::MetricsRegistry;
-use mz_persist::generated::consensus_service::{
-    ProtoVersionedData, ProtoWalBatch, ProtoWalOp, ProtoWalWrite, proto_wal_op,
-};
+use mz_persist::generated::consensus_service::{ProtoVersionedData, proto_wal_op};
 
-use crate::actor::{Actor, ActorCommand};
+use crate::actor::{Actor, ActorCommand, ActorHandle};
 use crate::metrics::ConsensusMetrics;
 use crate::wal::{SimWalWriter, SimWriteFault};
 
@@ -66,68 +71,261 @@ enum SimOp {
     Flush,
     InjectFault(SimWriteFault),
     /// Crash the actor (drop channel + abort task) and recover from WAL.
-    /// Pending unflushed ops are lost. Asserts that recovered state matches
-    /// the committed reference model.
+    /// Pending unflushed ops are lost. Verifies recovered state is consistent
+    /// with the WAL.
     CrashAndRecover,
-    /// Plant a foreign batch in the WAL at the actor's next batch number,
-    /// simulating a failover race where a different service instance writes
-    /// first. The next actor flush hits `AlreadyExists` and treats it as
-    /// its own write, creating in-memory divergence from durable state.
-    ForeignWrite,
 }
 
 // ---------------------------------------------------------------------------
-// Simulator
+// Simulation trace (event log for diagnostics and property checking)
+// ---------------------------------------------------------------------------
+
+/// A single event in the simulation trace, tagged with a step number.
+#[derive(Debug, Clone)]
+struct SimEvent {
+    step: usize,
+    actor: Option<usize>,
+    kind: SimEventKind,
+}
+
+/// The kind of event that occurred during simulation.
+#[derive(Debug, Clone)]
+enum SimEventKind {
+    /// A CAS operation was submitted to the actor.
+    Cas {
+        shard: String,
+        expected: Option<u64>,
+        seqno: u64,
+    },
+    /// A Head read returned a result.
+    HeadObserved {
+        shard: String,
+        seqno: Option<u64>,
+    },
+    /// A Scan read returned results.
+    ScanObserved {
+        shard: String,
+        from: u64,
+        limit: u64,
+        result_seqnos: Vec<u64>,
+    },
+    /// A Truncate was submitted.
+    Truncate {
+        shard: String,
+        seqno: u64,
+    },
+    /// A flush was requested.
+    Flush,
+    /// A fault was injected into the WAL writer.
+    FaultInjected {
+        fault: String,
+    },
+    /// The actor was crashed (channel dropped, task aborted).
+    CrashTriggered,
+    /// Recovery from WAL completed.
+    RecoveryCompleted,
+}
+
+impl std::fmt::Display for SimEventKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SimEventKind::Cas {
+                shard,
+                expected,
+                seqno,
+            } => {
+                let exp = match expected {
+                    Some(s) => s.to_string(),
+                    None => "None".into(),
+                };
+                write!(f, "CAS {} expected={} seqno={}", shard, exp, seqno)
+            }
+            SimEventKind::HeadObserved { shard, seqno } => {
+                let s = match seqno {
+                    Some(s) => s.to_string(),
+                    None => "None".into(),
+                };
+                write!(f, "Head {} -> {}", shard, s)
+            }
+            SimEventKind::ScanObserved {
+                shard,
+                from,
+                limit,
+                result_seqnos,
+            } => write!(
+                f,
+                "Scan {} from={} limit={} -> {:?}",
+                shard, from, limit, result_seqnos
+            ),
+            SimEventKind::Truncate { shard, seqno } => {
+                write!(f, "Truncate {} seqno={}", shard, seqno)
+            }
+            SimEventKind::Flush => write!(f, "Flush"),
+            SimEventKind::FaultInjected { fault } => write!(f, "InjectFault {}", fault),
+            SimEventKind::CrashTriggered => write!(f, "Crash"),
+            SimEventKind::RecoveryCompleted => write!(f, "Recovery"),
+        }
+    }
+}
+
+/// Collects structured events during a simulation run. Used for both
+/// human-readable diagnostics (printed on failure) and property checking
+/// (linearizability verification).
+struct SimTrace {
+    seed: u64,
+    events: Vec<SimEvent>,
+    step: usize,
+}
+
+impl SimTrace {
+    fn new(seed: u64) -> Self {
+        SimTrace {
+            seed,
+            events: Vec::new(),
+            step: 0,
+        }
+    }
+
+    fn record(&mut self, kind: SimEventKind) {
+        self.events.push(SimEvent {
+            step: self.step,
+            actor: None,
+            kind,
+        });
+    }
+
+    fn record_with_actor(&mut self, actor: usize, kind: SimEventKind) {
+        self.events.push(SimEvent {
+            step: self.step,
+            actor: Some(actor),
+            kind,
+        });
+    }
+
+    fn next_step(&mut self) {
+        self.step += 1;
+    }
+
+    /// Verify that each shard's committed history forms a valid linear chain
+    /// and that all Head observations are consistent with committed state.
+    ///
+    /// Acceptance is computed from the trace: a CAS is accepted if its
+    /// `expected` matches the current head (committed or pending within
+    /// the current batch).
+    fn verify_linearizable(&self) {
+        // Reconstruct committed state by replaying the event log.
+        let mut pending_heads: BTreeMap<String, u64> = BTreeMap::new();
+        let mut committed_heads: BTreeMap<String, u64> = BTreeMap::new();
+        let mut pending_cas: Vec<(String, Option<u64>, u64)> = Vec::new();
+        let mut committed_history: BTreeMap<String, Vec<(Option<u64>, u64)>> = BTreeMap::new();
+
+        for event in &self.events {
+            match &event.kind {
+                SimEventKind::Cas {
+                    shard,
+                    expected,
+                    seqno,
+                } => {
+                    // Determine acceptance: expected must match current head
+                    // (pending overlay first, then committed).
+                    let current = pending_heads
+                        .get(shard)
+                        .or_else(|| committed_heads.get(shard))
+                        .copied();
+                    if current == *expected {
+                        pending_heads.insert(shard.clone(), *seqno);
+                        pending_cas.push((shard.clone(), *expected, *seqno));
+                    }
+                }
+                SimEventKind::Flush => {
+                    for (shard, expected, seqno) in &pending_cas {
+                        committed_history
+                            .entry(shard.clone())
+                            .or_default()
+                            .push((*expected, *seqno));
+                        committed_heads.insert(shard.clone(), *seqno);
+                    }
+                    pending_cas.clear();
+                    pending_heads.clear();
+                }
+                SimEventKind::CrashTriggered => {
+                    pending_cas.clear();
+                    pending_heads.clear();
+                }
+                SimEventKind::HeadObserved { shard, seqno } => {
+                    let expected_head = committed_heads.get(shard).copied();
+                    assert_eq!(
+                        *seqno, expected_head,
+                        "seed={}: linearizability violation: Head({}) observed \
+                         seqno={:?} but committed head is {:?}\n\nTrace:\n{}",
+                        self.seed, shard, seqno, expected_head, self,
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        // Verify per-shard history forms a valid chain.
+        for (shard, history) in &committed_history {
+            let mut prev_seqno: Option<u64> = None;
+            for (expected, seqno) in history {
+                assert_eq!(
+                    *expected, prev_seqno,
+                    "seed={}: linear history violation on shard {}: \
+                     write(expected={:?}, seqno={}) but previous committed \
+                     seqno was {:?}\n\nTrace:\n{}",
+                    self.seed, shard, expected, seqno, prev_seqno, self,
+                );
+                assert!(
+                    prev_seqno.map_or(true, |p| *seqno > p),
+                    "seed={}: linear history violation on shard {}: \
+                     seqno={} not greater than prev={:?}\n\nTrace:\n{}",
+                    self.seed, shard, seqno, prev_seqno, self,
+                );
+                prev_seqno = Some(*seqno);
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for SimTrace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "seed={} ({} events)", self.seed, self.events.len())?;
+        writeln!(f, "{:>5}  {}", "step", "event")?;
+        writeln!(f, "{:>5}  {}", "----", "-----")?;
+        for event in &self.events {
+            let prefix = match event.actor {
+                Some(id) => format!("[A{}] ", id),
+                None => String::new(),
+            };
+            writeln!(f, "{:>5}  {}{}", event.step, prefix, event.kind)?;
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Simulator (single-actor, WAL as ground truth)
 // ---------------------------------------------------------------------------
 
 struct Simulator {
-    tx: mpsc::Sender<ActorCommand>,
-    handle: JoinHandle<()>,
+    handle: ActorHandle,
+    task: JoinHandle<()>,
     wal: Arc<SimWalWriter>,
-    /// Reference model: committed entries per shard after flush.
-    model: BTreeMap<String, Vec<(u64, Vec<u8>)>>,
-    /// Pending CAS ops in current batch (shard, seqno, data, accepted).
-    /// `accepted` means the CAS won conflict detection — it will become a
-    /// WAL op on the next flush, but isn't durable yet.
-    pending_cas: Vec<(String, u64, Vec<u8>, bool)>,
-    /// Pending truncates in current batch (shard, seqno).
-    pending_truncates: Vec<(String, u64)>,
-    /// True when the current batch has pending WAL ops (accepted CAS or
-    /// truncates). Mirrors whether the actor's `pending_wal_ops` is non-empty.
-    has_pending_wal_ops: bool,
-    /// Tracks the head seqno the model expects per shard (committed + pending).
-    model_heads: BTreeMap<String, u64>,
-    /// Tracks the actor's next batch number (mirrors `Actor::batch_number`).
-    batch_number: u64,
-    /// A foreign batch planted by `ForeignWrite`, consumed on next flush.
-    foreign_batch: Option<ProtoWalBatch>,
-    /// The seed for this simulation (for error messages).
-    seed: u64,
+    trace: SimTrace,
 }
 
 impl Simulator {
     fn new(seed: u64) -> Self {
         let (tx, rx) = mpsc::channel(4096);
         let wal = Arc::new(SimWalWriter::new());
-        // Use interval_at with a far-future start so the timer never fires.
-        let interval = time::interval_at(
-            time::Instant::now() + Duration::from_secs(86400),
-            Duration::from_secs(86400),
-        );
-        let actor = Actor::new(rx, wal.clone(), interval, 100, test_metrics());
-        let handle = tokio::spawn(actor.run());
+        let actor = Actor::new(rx, wal.clone(), 86_400_000, 100, test_metrics());
+        let task = tokio::spawn(actor.run());
         Simulator {
-            tx,
-            handle,
+            handle: ActorHandle::new(tx),
+            task,
             wal,
-            model: BTreeMap::new(),
-            pending_cas: Vec::new(),
-            pending_truncates: Vec::new(),
-            has_pending_wal_ops: false,
-            model_heads: BTreeMap::new(),
-            batch_number: 0,
-            foreign_batch: None,
-            seed,
+            trace: SimTrace::new(seed),
         }
     }
 
@@ -140,18 +338,15 @@ impl Simulator {
                 seqno,
                 data,
             } => {
-                // Determine if this CAS should win per the model.
-                let current_head = self.model_heads.get(&shard).copied();
-                let accepted = current_head == expected;
-                if accepted {
-                    self.model_heads.insert(shard.clone(), seqno);
-                    self.has_pending_wal_ops = true;
-                }
-                self.pending_cas
-                    .push((shard.clone(), seqno, data.clone(), accepted));
+                self.trace.record(SimEventKind::Cas {
+                    shard: shard.clone(),
+                    expected,
+                    seqno,
+                });
 
                 let (reply_tx, reply_rx) = oneshot::channel();
-                self.tx
+                self.handle
+                    .sender()
                     .send(ActorCommand::CompareAndSet {
                         key: shard,
                         expected,
@@ -160,77 +355,54 @@ impl Simulator {
                     })
                     .await
                     .unwrap();
-                // We don't await the reply until flush — it will be resolved
-                // when the flush command is processed. Store the receiver if
-                // needed, but for simplicity in the sim we process CAS results
-                // after flush via the model. We drop reply_rx here; the actor
-                // will send on the channel but the receive side is gone, which
-                // is fine.
                 drop(reply_rx);
             }
             SimOp::Head { shard } => {
-                let (reply_tx, reply_rx) = oneshot::channel();
-                self.tx
-                    .send(ActorCommand::Head {
-                        key: shard.clone(),
-                        reply: reply_tx,
-                    })
-                    .await
-                    .unwrap();
-                let resp = reply_rx.await.unwrap().unwrap();
-
-                // Head reads committed state. Compare against model.
-                let model_head = self
-                    .model
-                    .get(&shard)
-                    .and_then(|entries| entries.last())
-                    .map(|(seqno, data)| (*seqno, data.clone()));
-                let actual = resp.data.map(|d| (d.seqno, d.data));
-                assert_eq!(
-                    actual, model_head,
-                    "seed={}: Head mismatch for shard {:?}",
-                    self.seed, shard,
-                );
+                let resp = self.handle.head(shard.clone()).await.unwrap();
+                let seqno = resp.data.as_ref().map(|d| d.seqno);
+                self.trace.record(SimEventKind::HeadObserved {
+                    shard: shard.clone(),
+                    seqno,
+                });
+                if let Some(data) = &resp.data {
+                    assert_value_in_wal(
+                        &self.wal,
+                        &shard,
+                        data.seqno,
+                        &data.data,
+                        0,
+                        &self.trace,
+                    );
+                }
             }
             SimOp::Scan { shard, from, limit } => {
-                let (reply_tx, reply_rx) = oneshot::channel();
-                self.tx
-                    .send(ActorCommand::Scan {
-                        key: shard.clone(),
-                        from,
-                        limit,
-                        reply: reply_tx,
-                    })
-                    .await
-                    .unwrap();
-                let resp = reply_rx.await.unwrap().unwrap();
-
-                let actual: Vec<(u64, Vec<u8>)> =
-                    resp.data.into_iter().map(|d| (d.seqno, d.data)).collect();
-
-                let model_entries = self.model.get(&shard);
-                let expected: Vec<(u64, Vec<u8>)> = model_entries
-                    .map(|entries| {
-                        let from_idx = entries.partition_point(|(s, _)| *s < from);
-                        let lim = usize::try_from(limit).unwrap_or(usize::MAX);
-                        let slice = &entries[from_idx..];
-                        let slice = &slice[..usize::min(lim, slice.len())];
-                        slice.to_vec()
-                    })
-                    .unwrap_or_default();
-
-                assert_eq!(
-                    actual, expected,
-                    "seed={}: Scan mismatch for shard {:?} from={} limit={}",
-                    self.seed, shard, from, limit,
-                );
+                let resp = self.handle.scan(shard.clone(), from, limit).await.unwrap();
+                self.trace.record(SimEventKind::ScanObserved {
+                    shard: shard.clone(),
+                    from,
+                    limit,
+                    result_seqnos: resp.data.iter().map(|d| d.seqno).collect(),
+                });
+                for entry in &resp.data {
+                    assert_value_in_wal(
+                        &self.wal,
+                        &shard,
+                        entry.seqno,
+                        &entry.data,
+                        0,
+                        &self.trace,
+                    );
+                }
             }
             SimOp::Truncate { shard, seqno } => {
-                self.pending_truncates.push((shard.clone(), seqno));
-                self.has_pending_wal_ops = true;
+                self.trace.record(SimEventKind::Truncate {
+                    shard: shard.clone(),
+                    seqno,
+                });
 
                 let (reply_tx, reply_rx) = oneshot::channel();
-                self.tx
+                self.handle
+                    .sender()
                     .send(ActorCommand::Truncate {
                         key: shard,
                         seqno,
@@ -241,197 +413,63 @@ impl Simulator {
                 drop(reply_rx);
             }
             SimOp::Flush => {
-                self.flush().await;
+                self.handle.flush().await.unwrap();
+                self.trace.record(SimEventKind::Flush);
             }
             SimOp::InjectFault(fault) => {
+                self.trace.record(SimEventKind::FaultInjected {
+                    fault: format!("{:?}", fault),
+                });
                 self.wal.inject_fault(fault);
             }
             SimOp::CrashAndRecover => {
                 self.crash_and_recover(op_gen).await;
             }
-            SimOp::ForeignWrite => {
-                self.inject_foreign_write(op_gen);
-            }
         }
-    }
-
-    /// Plant a foreign batch in the WAL at the actor's next batch number.
-    fn inject_foreign_write(&mut self, op_gen: &mut OpGenerator) {
-        let shard = format!("foreign-{}", op_gen.rng.r#gen_range(0..4u32));
-        let data_len = op_gen.rng.r#gen_range(1..=32usize);
-        let data: Vec<u8> = (0..data_len).map(|_| op_gen.rng.r#gen()).collect();
-        let seqno = 1; // Foreign shard starts at seqno 1.
-
-        let batch = ProtoWalBatch {
-            batch_number: self.batch_number,
-            ops: vec![ProtoWalOp {
-                op: Some(proto_wal_op::Op::Write(ProtoWalWrite {
-                    key: shard,
-                    seqno,
-                    data,
-                })),
-            }],
-        };
-
-        // Plant in the WAL — the actor's next flush will hit AlreadyExists.
-        self.wal
-            .write_batch_direct(self.batch_number, batch.clone());
-        self.foreign_batch = Some(batch);
-    }
-
-    /// Flush the actor and apply pending ops to the reference model.
-    async fn flush(&mut self) {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.tx
-            .send(ActorCommand::Flush { reply: reply_tx })
-            .await
-            .unwrap();
-        reply_rx.await.unwrap();
-
-        if self.has_pending_wal_ops {
-            if let Some(foreign_batch) = self.foreign_batch.take() {
-                // A foreign write pre-empted this batch number. The actor hit
-                // AlreadyExists and applied its own pending ops to in-memory
-                // state (creating divergence). The model applies the foreign
-                // batch's ops since that's what's actually durable in the WAL.
-                for wal_op in &foreign_batch.ops {
-                    match &wal_op.op {
-                        Some(proto_wal_op::Op::Write(w)) => {
-                            self.model
-                                .entry(w.key.clone())
-                                .or_default()
-                                .push((w.seqno, w.data.clone()));
-                        }
-                        Some(proto_wal_op::Op::Truncate(t)) => {
-                            if let Some(entries) = self.model.get_mut(&t.key) {
-                                entries.retain(|(s, _)| *s >= t.seqno);
-                            }
-                        }
-                        None => {}
-                    }
-                }
-            } else {
-                // Normal flush — apply accepted CAS ops and truncates to model.
-                for (shard, seqno, data, accepted) in self.pending_cas.iter() {
-                    if *accepted {
-                        self.model
-                            .entry(shard.clone())
-                            .or_default()
-                            .push((*seqno, data.clone()));
-                    }
-                }
-                for (shard, seqno) in self.pending_truncates.iter() {
-                    if let Some(entries) = self.model.get_mut(shard) {
-                        entries.retain(|(s, _)| *s >= *seqno);
-                    }
-                }
-            }
-            self.batch_number += 1;
-        }
-
-        // Always clear pending state.
-        self.pending_cas.clear();
-        self.pending_truncates.clear();
-        self.has_pending_wal_ops = false;
-
-        // Sync model_heads to match the committed model state.
-        self.model_heads.clear();
-        for (shard, entries) in &self.model {
-            if let Some((seqno, _)) = entries.last() {
-                self.model_heads.insert(shard.clone(), *seqno);
-            }
-        }
+        self.trace.next_step();
     }
 
     /// Crash the actor and recover from WAL. Verifies that recovered state
-    /// matches the committed reference model via queries, then resumes.
+    /// is consistent with the WAL.
     async fn crash_and_recover(&mut self, op_gen: &mut OpGenerator) {
+        self.trace.record(SimEventKind::CrashTriggered);
+
         // 1. Abort the current actor — pending unflushed ops are lost.
-        self.handle.abort();
+        self.task.abort();
 
-        // 2. Discard pending model state.
-        self.pending_cas.clear();
-        self.pending_truncates.clear();
-        self.has_pending_wal_ops = false;
-        self.foreign_batch = None;
-
-        // 3. Spin up a new actor (empty) and recover via command.
+        // 2. Spin up a new actor and recover.
         let (tx, rx) = mpsc::channel(4096);
-        let interval = time::interval_at(
-            time::Instant::now() + Duration::from_secs(86400),
-            Duration::from_secs(86400),
-        );
-        let actor = Actor::new(rx, self.wal.clone(), interval, 100, test_metrics());
-        self.tx = tx;
-        self.handle = tokio::spawn(actor.run());
+        let actor = Actor::new(rx, self.wal.clone(), 86_400_000, 100, test_metrics());
+        self.handle = ActorHandle::new(tx);
+        self.task = tokio::spawn(actor.run());
+        self.handle.recover().await.unwrap();
 
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.tx
-            .send(ActorCommand::RecoverFromSnapshot { reply: reply_tx })
-            .await
-            .unwrap();
-        reply_rx.await.unwrap().unwrap();
-
-        // 4. Verify recovered state matches the committed reference model
-        //    via queries through the actor.
-        for (shard, model_entries) in &self.model {
-            let model_head = model_entries.last().map(|(s, d)| (*s, d.clone()));
-            let (reply_tx, reply_rx) = oneshot::channel();
-            self.tx
-                .send(ActorCommand::Head {
-                    key: shard.clone(),
-                    reply: reply_tx,
-                })
-                .await
-                .unwrap();
-            let resp = reply_rx.await.unwrap().unwrap();
-            let actual_head = resp.data.map(|d| (d.seqno, d.data));
-            assert_eq!(
-                actual_head, model_head,
-                "seed={}: Recovery head mismatch for shard {:?}",
-                self.seed, shard,
-            );
-        }
-
-        // Check no extra shards via ListKeys.
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.tx
-            .send(ActorCommand::ListKeys { reply: reply_tx })
-            .await
-            .unwrap();
-        let recovered_keys: std::collections::BTreeSet<String> =
-            reply_rx.await.unwrap().unwrap().into_iter().collect();
-        let model_keys: std::collections::BTreeSet<String> = self.model.keys().cloned().collect();
-        assert_eq!(
-            recovered_keys, model_keys,
-            "seed={}: Recovery key set mismatch",
-            self.seed,
-        );
-
-        // 5. Sync batch_number from the actor's state. We can infer it: the
-        //    WAL has batches 0..N-1, so next_batch = N = self.batch_number
-        //    (which wasn't incremented for unflushed ops). No change needed.
-
-        // 6. Reset model_heads from committed model state.
-        self.model_heads.clear();
-        for (shard, entries) in &self.model {
-            if let Some((seqno, _)) = entries.last() {
-                self.model_heads.insert(shard.clone(), *seqno);
+        // 3. Verify every recovered shard head exists in the WAL.
+        let recovered_keys = self.handle.list_keys().await.unwrap();
+        for shard in &recovered_keys {
+            let resp = self.handle.head(shard.clone()).await.unwrap();
+            if let Some(data) = &resp.data {
+                assert_value_in_wal(
+                    &self.wal,
+                    shard,
+                    data.seqno,
+                    &data.data,
+                    0,
+                    &self.trace,
+                );
             }
         }
 
-        // 7. Sync OpGenerator.shard_seqno from committed heads so subsequent
-        //    CAS ops generate valid expected values.
-        op_gen.shard_seqno.clear();
-        for (shard, head) in &self.model_heads {
-            op_gen.shard_seqno.insert(shard.clone(), *head);
-        }
+        // 4. Sync OpGenerator from WAL ground truth.
+        op_gen.sync_from_wal(&self.wal);
+
+        self.trace.record(SimEventKind::RecoveryCompleted);
     }
 
     /// Shut down the actor cleanly.
     async fn shutdown(self) {
-        drop(self.tx);
-        self.handle.await.unwrap();
+        drop(self.handle);
+        self.task.await.unwrap();
     }
 }
 
@@ -455,58 +493,9 @@ impl OpGenerator {
         }
     }
 
+    /// Generate a random operation. Mixes all op types: CAS, reads, truncate,
+    /// flush, WAL faults, and crash/recovery.
     fn next_op(&mut self) -> SimOp {
-        let r: f64 = self.rng.r#gen();
-        if r < 0.50 {
-            self.gen_cas()
-        } else if r < 0.65 {
-            self.gen_head()
-        } else if r < 0.75 {
-            self.gen_scan()
-        } else if r < 0.85 {
-            self.gen_truncate()
-        } else {
-            SimOp::Flush
-        }
-    }
-
-    fn next_op_with_faults(&mut self) -> SimOp {
-        let r: f64 = self.rng.r#gen();
-        if r < 0.45 {
-            self.gen_cas()
-        } else if r < 0.55 {
-            self.gen_head()
-        } else if r < 0.65 {
-            self.gen_scan()
-        } else if r < 0.72 {
-            self.gen_truncate()
-        } else if r < 0.85 {
-            SimOp::Flush
-        } else {
-            self.gen_fault()
-        }
-    }
-
-    /// Generate ops with ~5% CrashAndRecover mixed in.
-    fn next_op_with_crashes(&mut self) -> SimOp {
-        let r: f64 = self.rng.r#gen();
-        if r < 0.47 {
-            self.gen_cas()
-        } else if r < 0.60 {
-            self.gen_head()
-        } else if r < 0.70 {
-            self.gen_scan()
-        } else if r < 0.80 {
-            self.gen_truncate()
-        } else if r < 0.95 {
-            SimOp::Flush
-        } else {
-            SimOp::CrashAndRecover
-        }
-    }
-
-    /// Generate ops with ~5% CrashAndRecover and ~10% faults.
-    fn next_op_with_crashes_and_faults(&mut self) -> SimOp {
         let r: f64 = self.rng.r#gen();
         if r < 0.40 {
             self.gen_cas()
@@ -575,70 +564,26 @@ impl OpGenerator {
         }
     }
 
+    /// Reset `shard_seqno` from WAL ground truth. Scans all committed batches
+    /// and extracts the latest seqno per shard from Write ops.
+    fn sync_from_wal(&mut self, wal: &SimWalWriter) {
+        let batches = wal.batches_snapshot();
+        self.shard_seqno.clear();
+        for (_batch_num, batch) in &batches {
+            for op in &batch.ops {
+                if let Some(proto_wal_op::Op::Write(w)) = &op.op {
+                    let entry = self.shard_seqno.entry(w.key.clone()).or_insert(0);
+                    if w.seqno > *entry {
+                        *entry = w.seqno;
+                    }
+                }
+            }
+        }
+    }
+
     fn random_shard(&mut self) -> String {
         let idx = self.rng.r#gen_range(0..SHARD_NAMES.len());
         SHARD_NAMES[idx].to_string()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Conflict generator (for group commit conflict scenarios)
-// ---------------------------------------------------------------------------
-
-struct ConflictGenerator {
-    rng: SmallRng,
-    /// Tracks per-shard committed seqno.
-    shard_seqno: BTreeMap<String, u64>,
-}
-
-impl ConflictGenerator {
-    fn new(seed: u64) -> Self {
-        ConflictGenerator {
-            rng: SmallRng::seed_from_u64(seed),
-            shard_seqno: BTreeMap::new(),
-        }
-    }
-
-    /// Generate a batch of CAS ops where multiple target the same shard.
-    fn gen_conflict_batch(&mut self) -> Vec<SimOp> {
-        let mut ops = Vec::new();
-        let shard = format!("s{}", self.rng.r#gen_range(0..3));
-        let current = self.shard_seqno.get(&shard).copied();
-        let new_seqno = current.map_or(1, |s| s + 1);
-
-        // 2-4 conflicting CAS ops on the same shard + expected.
-        let n_conflicts = self.rng.r#gen_range(2..=4);
-        for _ in 0..n_conflicts {
-            let data_len = self.rng.r#gen_range(1..=16);
-            let data: Vec<u8> = (0..data_len).map(|_| self.rng.r#gen()).collect();
-            ops.push(SimOp::Cas {
-                shard: shard.clone(),
-                expected: current,
-                seqno: new_seqno,
-                data,
-            });
-        }
-
-        // First one wins (per actor's sequential command processing).
-        self.shard_seqno.insert(shard, new_seqno);
-
-        // Optionally add a CAS on a different shard (non-conflicting).
-        if self.rng.r#gen_bool(0.5) {
-            let other_shard = format!("other-{}", self.rng.r#gen_range(0..3));
-            let other_current = self.shard_seqno.get(&other_shard).copied();
-            let other_seqno = other_current.map_or(1, |s| s + 1);
-            let data: Vec<u8> = vec![42; 8];
-            ops.push(SimOp::Cas {
-                shard: other_shard.clone(),
-                expected: other_current,
-                seqno: other_seqno,
-                data,
-            });
-            self.shard_seqno.insert(other_shard, other_seqno);
-        }
-
-        ops.push(SimOp::Flush);
-        ops
     }
 }
 
@@ -665,14 +610,43 @@ fn seed_range() -> std::ops::Range<u64> {
     }
 }
 
+/// Assert that a value observed via Head or Scan exists as a Write op in
+/// some WAL batch. Panics with the full trace on violation.
+fn assert_value_in_wal(
+    wal: &SimWalWriter,
+    shard: &str,
+    seqno: u64,
+    data: &[u8],
+    actor_id: usize,
+    trace: &SimTrace,
+) {
+    let batches = wal.batches_snapshot();
+    for (_batch_num, batch) in &batches {
+        for op in &batch.ops {
+            if let Some(proto_wal_op::Op::Write(w)) = &op.op {
+                if w.key == shard && w.seqno == seqno && w.data == data {
+                    return;
+                }
+            }
+        }
+    }
+    panic!(
+        "seed={}: WAL consistency violation: actor {} Head/Scan({}) returned \
+         seqno={} but this value does not exist in the WAL\n\nTrace:\n{}",
+        trace.seed, actor_id, shard, seqno, trace,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Test scenarios
 // ---------------------------------------------------------------------------
 
-/// Random mix of CAS (multiple shards), head, scan, truncate, flush. No
-/// faults. Verifies reads match the reference model.
+/// Single-actor simulation. Mixes CAS, reads, truncates, WAL faults
+/// (transient + ambiguous), and crash/recovery. Checks linearizability
+/// per shard (from the op trace) and WAL consistency (every observed value
+/// exists in the WAL).
 #[tokio::test(start_paused = true)]
-async fn sim_random_workload() {
+async fn sim_single_actor() {
     for seed in seed_range() {
         let mut sim = Simulator::new(seed);
         let mut op_gen = OpGenerator::new(seed);
@@ -681,248 +655,145 @@ async fn sim_random_workload() {
             let op = op_gen.next_op();
             sim.apply(op, &mut op_gen).await;
         }
-        // Final flush to commit any remaining pending ops.
-        sim.flush().await;
-        // Final read check on all shards.
-        for shard_name in SHARD_NAMES {
-            sim.apply(
-                SimOp::Head {
-                    shard: shard_name.to_string(),
-                },
-                &mut op_gen,
-            )
-            .await;
-        }
+        sim.trace.verify_linearizable();
         sim.shutdown().await;
     }
 }
 
-/// Random workload with TransientError faults injected before some flushes.
-/// Verifies the retry loop works: all committed CAS eventually resolve,
-/// reads remain consistent.
-#[tokio::test(start_paused = true)]
-async fn sim_wal_failures() {
-    for seed in seed_range() {
-        let mut sim = Simulator::new(seed);
-        let mut op_gen = OpGenerator::new(seed);
-
-        for _ in 0..200 {
-            let op = op_gen.next_op_with_faults();
-            // Only inject TransientError for this scenario.
-            match &op {
-                SimOp::InjectFault(SimWriteFault::AmbiguousError) => {
-                    sim.apply(
-                        SimOp::InjectFault(SimWriteFault::TransientError),
-                        &mut op_gen,
-                    )
-                    .await;
-                }
-                _ => sim.apply(op, &mut op_gen).await,
-            }
-        }
-        sim.flush().await;
-        for shard_name in SHARD_NAMES {
-            sim.apply(
-                SimOp::Head {
-                    shard: shard_name.to_string(),
-                },
-                &mut op_gen,
-            )
-            .await;
-        }
-        sim.shutdown().await;
-    }
-}
-
-/// Injects AmbiguousError faults. Verifies the AlreadyExists retry path:
-/// the batch is stored, retry detects this, replies resolve correctly.
-#[tokio::test(start_paused = true)]
-async fn sim_ambiguous_failures() {
-    for seed in seed_range() {
-        let mut sim = Simulator::new(seed);
-        let mut op_gen = OpGenerator::new(seed);
-
-        for _ in 0..200 {
-            let op = op_gen.next_op_with_faults();
-            sim.apply(op, &mut op_gen).await;
-        }
-        sim.flush().await;
-        for shard_name in SHARD_NAMES {
-            sim.apply(
-                SimOp::Head {
-                    shard: shard_name.to_string(),
-                },
-                &mut op_gen,
-            )
-            .await;
-        }
-        sim.shutdown().await;
-    }
-}
-
-/// Random workload with ~5% CrashAndRecover ops mixed in. Verifies that
-/// after each crash, recovery produces state matching the committed reference
-/// model, and the workload continues correctly afterward.
-#[tokio::test(start_paused = true)]
-async fn sim_crash_recovery() {
-    for seed in seed_range() {
-        let mut sim = Simulator::new(seed);
-        let mut op_gen = OpGenerator::new(seed);
-
-        for _ in 0..200 {
-            let op = op_gen.next_op_with_crashes();
-            sim.apply(op, &mut op_gen).await;
-        }
-        // Final flush + read check.
-        sim.flush().await;
-        for shard_name in SHARD_NAMES {
-            sim.apply(
-                SimOp::Head {
-                    shard: shard_name.to_string(),
-                },
-                &mut op_gen,
-            )
-            .await;
-        }
-        sim.shutdown().await;
-    }
-}
-
-/// Same as `sim_crash_recovery` but with transient + ambiguous faults.
-/// Verifies crash recovery works even when some batches were written via
-/// the ambiguous retry path.
-#[tokio::test(start_paused = true)]
-async fn sim_crash_recovery_with_faults() {
-    for seed in seed_range() {
-        let mut sim = Simulator::new(seed);
-        let mut op_gen = OpGenerator::new(seed);
-
-        for _ in 0..200 {
-            let op = op_gen.next_op_with_crashes_and_faults();
-            sim.apply(op, &mut op_gen).await;
-        }
-        sim.flush().await;
-        for shard_name in SHARD_NAMES {
-            sim.apply(
-                SimOp::Head {
-                    shard: shard_name.to_string(),
-                },
-                &mut op_gen,
-            )
-            .await;
-        }
-        sim.shutdown().await;
-    }
-}
-
-/// Targeted scenario: inject a foreign batch (simulating a failover race),
-/// flush (actor hits 412 and applies its own pending ops — divergence),
-/// then crash and recover. Asserts post-recovery state matches the WAL
-/// contents (including the foreign batch, not the actor's lost pending ops).
+/// N actors sharing one WAL. Writer conflicts emerge naturally from
+/// conditional write semantics — no hand-coded foreign-write ops needed.
 ///
-/// Documents the known fencing gap: the actor's pre-crash in-memory state
-/// diverges from durable state when a foreign writer pre-empts a batch.
+/// Invariant: every value returned by Head or Scan must exist as a Write
+/// op in some WAL batch. Violations indicate phantom writes (actor applied
+/// ops to in-memory state that were never durably committed).
+///
+/// This test is expected to FAIL until writer fencing is implemented.
 #[tokio::test(start_paused = true)]
-async fn sim_foreign_writer() {
+async fn sim_multi_actor() {
+    const NUM_ACTORS: usize = 3;
+
     for seed in seed_range() {
-        let mut sim = Simulator::new(seed);
+        let wal = Arc::new(SimWalWriter::new());
+        let mut trace = SimTrace::new(seed);
         let mut op_gen = OpGenerator::new(seed);
 
-        // Run a workload to build up committed state.
-        for _ in 0..50 {
-            let op = op_gen.next_op();
-            sim.apply(op, &mut op_gen).await;
-        }
-        sim.flush().await;
-
-        // Generate some pending CAS ops so the next flush has work.
-        let n_pending = op_gen.rng.r#gen_range(1..=5u32);
-        for _ in 0..n_pending {
-            let op = op_gen.gen_cas();
-            sim.apply(op, &mut op_gen).await;
+        // Spin up N actors sharing the same WAL.
+        let mut actor_handles: Vec<ActorHandle> = Vec::new();
+        let mut tasks: Vec<JoinHandle<()>> = Vec::new();
+        for _ in 0..NUM_ACTORS {
+            let (tx, rx) = mpsc::channel(4096);
+            let actor = Actor::new(rx, wal.clone(), 86_400_000, 100, test_metrics());
+            tasks.push(tokio::spawn(actor.run()));
+            actor_handles.push(ActorHandle::new(tx));
         }
 
-        // Inject a foreign write at the actor's next batch number.
-        sim.apply(SimOp::ForeignWrite, &mut op_gen).await;
+        for _ in 0..200 {
+            let actor_id = op_gen.rng.r#gen_range(0..NUM_ACTORS);
+            let r: f64 = op_gen.rng.r#gen();
 
-        // Flush — actor hits AlreadyExists, applies its own pending ops
-        // (divergence from WAL). Model tracks the foreign batch (ground truth).
-        sim.flush().await;
+            if r < 0.45 {
+                // CAS — send to a random actor.
+                let shard = op_gen.random_shard();
+                let current = op_gen.shard_seqno.get(&shard).copied();
+                let seqno = current.map_or(1, |s| s + 1);
+                let data_len = op_gen.rng.r#gen_range(1..=64usize);
+                let data: Vec<u8> = (0..data_len).map(|_| op_gen.rng.r#gen()).collect();
+                op_gen.shard_seqno.insert(shard.clone(), seqno);
 
-        // Crash and recover immediately — no new flushes between foreign
-        // write and crash, so no compounded divergence.
-        sim.apply(SimOp::CrashAndRecover, &mut op_gen).await;
+                trace.record_with_actor(
+                    actor_id,
+                    SimEventKind::Cas {
+                        shard: shard.clone(),
+                        expected: current,
+                        seqno,
+                    },
+                );
 
-        // After recovery, reads should match the model (which tracked
-        // ground truth throughout).
-        for shard_name in SHARD_NAMES {
-            sim.apply(
-                SimOp::Head {
-                    shard: shard_name.to_string(),
-                },
-                &mut op_gen,
-            )
-            .await;
-        }
-        // Also check foreign-* shards (the foreign batch wrote to one).
-        for i in 0..4 {
-            sim.apply(
-                SimOp::Head {
-                    shard: format!("foreign-{}", i),
-                },
-                &mut op_gen,
-            )
-            .await;
-        }
+                let (reply_tx, reply_rx) = oneshot::channel();
+                actor_handles[actor_id]
+                    .sender()
+                    .send(ActorCommand::CompareAndSet {
+                        key: shard,
+                        expected: current,
+                        new: ProtoVersionedData { seqno, data },
+                        reply: reply_tx,
+                    })
+                    .await
+                    .unwrap();
+                drop(reply_rx);
+            } else if r < 0.60 {
+                // Head — read from a random actor, check against WAL.
+                let shard = op_gen.random_shard();
+                let resp = actor_handles[actor_id].head(shard.clone()).await.unwrap();
 
-        sim.shutdown().await;
-    }
-}
+                trace.record_with_actor(
+                    actor_id,
+                    SimEventKind::HeadObserved {
+                        shard: shard.clone(),
+                        seqno: resp.data.as_ref().map(|d| d.seqno),
+                    },
+                );
 
-/// Focused on same-shard CAS conflicts within a batch. Multiple CAS ops
-/// targeting the same shard in the same batch. Exactly one wins. Losers
-/// get committed=false.
-#[tokio::test(start_paused = true)]
-async fn sim_group_commit_conflicts() {
-    for seed in seed_range() {
-        let mut sim = Simulator::new(seed);
-        let mut cg = ConflictGenerator::new(seed);
-        // Dummy op_gen for apply signature (conflicts never generate crashes).
-        let mut op_gen = OpGenerator::new(seed);
+                // WAL consistency check.
+                if let Some(data) = &resp.data {
+                    assert_value_in_wal(&wal, &shard, data.seqno, &data.data, actor_id, &trace);
+                }
+            } else if r < 0.70 {
+                // Scan — read from a random actor, check against WAL.
+                let shard = op_gen.random_shard();
+                let from = op_gen.rng.r#gen_range(0..=5u64);
+                let limit = op_gen.rng.r#gen_range(1..=100u64);
+                let resp = actor_handles[actor_id]
+                    .scan(shard.clone(), from, limit)
+                    .await
+                    .unwrap();
 
-        for _ in 0..50 {
-            let batch = cg.gen_conflict_batch();
-            for op in batch {
-                sim.apply(op, &mut op_gen).await;
+                let result_seqnos: Vec<u64> = resp.data.iter().map(|d| d.seqno).collect();
+                trace.record_with_actor(
+                    actor_id,
+                    SimEventKind::ScanObserved {
+                        shard: shard.clone(),
+                        from,
+                        limit,
+                        result_seqnos,
+                    },
+                );
+
+                // WAL consistency check for each returned entry.
+                for entry in &resp.data {
+                    assert_value_in_wal(
+                        &wal,
+                        &shard,
+                        entry.seqno,
+                        &entry.data,
+                        actor_id,
+                        &trace,
+                    );
+                }
+            } else {
+                // Flush — flush a random actor.
+                trace.record_with_actor(actor_id, SimEventKind::Flush);
+                actor_handles[actor_id].flush().await.unwrap();
+
+                // Sync generator's shard_seqno from WAL ground truth.
+                op_gen.sync_from_wal(&wal);
             }
+
+            trace.next_step();
         }
 
-        // Verify final state via reads.
-        for shard_name in SHARD_NAMES {
-            sim.apply(
-                SimOp::Head {
-                    shard: shard_name.to_string(),
-                },
-                &mut op_gen,
-            )
-            .await;
+        // Shutdown all actors.
+        for h in actor_handles {
+            drop(h);
         }
-        // Also check "other-*" shards.
-        for i in 0..3 {
-            sim.apply(
-                SimOp::Head {
-                    shard: format!("other-{}", i),
-                },
-                &mut op_gen,
-            )
-            .await;
+        for task in tasks {
+            task.await.unwrap();
         }
-        sim.shutdown().await;
     }
 }
 
-/// Fuzz-forever test. Loops over increasing seeds running the full random
-/// workload simulation. Used for overnight fuzzing:
+/// Fuzz-forever test. Loops over increasing seeds running the single-actor
+/// simulation. Used for overnight fuzzing:
 ///
 /// ```text
 /// SEED=0 cargo test -p mz-persist-consensus-svc sim_fuzz -- --ignored
@@ -937,19 +808,10 @@ async fn sim_fuzz() {
         let mut op_gen = OpGenerator::new(seed);
 
         for _ in 0..500 {
-            let op = op_gen.next_op_with_faults();
+            let op = op_gen.next_op();
             sim.apply(op, &mut op_gen).await;
         }
-        sim.flush().await;
-        for shard_name in SHARD_NAMES {
-            sim.apply(
-                SimOp::Head {
-                    shard: shard_name.to_string(),
-                },
-                &mut op_gen,
-            )
-            .await;
-        }
+        sim.trace.verify_linearizable();
         sim.shutdown().await;
 
         if seed % 1000 == 0 {

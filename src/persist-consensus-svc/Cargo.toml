@@ -12,9 +12,20 @@ autobenches = false
 [lints]
 workspace = true
 
+[lib]
+bench = false
+
 [[bin]]
 name = "mz-persist-consensus-svc"
 bench = false
+
+# Single consolidated bench target (saves linking time).
+[[bench]]
+name = "benches"
+harness = false
+
+[[example]]
+name = "specsheet"
 
 [dependencies]
 anyhow = "1.0.101"
@@ -37,8 +48,13 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
+criterion = { version = "0.8.2", features = ["html_reports"] }
+mz-ore = { path = "../ore", features = ["metrics", "test"] }
 rand = "0.8"
-tokio = { version = "1.49.0", features = ["test-util"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.149"
+serde_yaml = "0.9.34"
+tokio = { version = "1.49.0", features = ["test-util", "rt-multi-thread"] }
 
 [features]
 default = ["workspace-hack"]

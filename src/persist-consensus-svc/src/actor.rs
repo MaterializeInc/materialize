@@ -41,6 +41,157 @@ pub struct VersionedEntry {
     pub data: Bytes,
 }
 
+/// Error returned by [`ActorHandle`] methods.
+#[derive(Debug)]
+pub enum ActorError {
+    /// The actor's command channel was closed (actor shut down).
+    Shutdown,
+    /// The actor dropped the reply sender without responding.
+    DroppedReply,
+    /// The actor returned an application-level error.
+    Command(String),
+}
+
+impl std::fmt::Display for ActorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ActorError::Shutdown => write!(f, "actor shut down"),
+            ActorError::DroppedReply => write!(f, "actor dropped reply"),
+            ActorError::Command(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+/// A typed handle to the actor's command channel.
+///
+/// Provides ergonomic send-and-await methods that hide the oneshot plumbing.
+/// For fire-and-forget patterns (e.g. sim tests), use [`Self::sender()`] to
+/// access the raw `mpsc::Sender`.
+#[derive(Debug, Clone)]
+pub struct ActorHandle {
+    tx: mpsc::Sender<ActorCommand>,
+}
+
+impl ActorHandle {
+    pub fn new(tx: mpsc::Sender<ActorCommand>) -> Self {
+        ActorHandle { tx }
+    }
+
+    /// Access the raw command sender (for fire-and-forget or split-send patterns).
+    pub fn sender(&self) -> &mpsc::Sender<ActorCommand> {
+        &self.tx
+    }
+
+    pub async fn head(&self, key: String) -> Result<ProtoHeadResponse, ActorError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(ActorCommand::Head { key, reply: reply_tx })
+            .await
+            .map_err(|_| ActorError::Shutdown)?;
+        reply_rx
+            .await
+            .map_err(|_| ActorError::DroppedReply)?
+            .map_err(ActorError::Command)
+    }
+
+    pub async fn compare_and_set(
+        &self,
+        key: String,
+        expected: Option<u64>,
+        new: ProtoVersionedData,
+    ) -> Result<ProtoCompareAndSetResponse, ActorError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(ActorCommand::CompareAndSet {
+                key,
+                expected,
+                new,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| ActorError::Shutdown)?;
+        reply_rx
+            .await
+            .map_err(|_| ActorError::DroppedReply)?
+            .map_err(ActorError::Command)
+    }
+
+    pub async fn scan(
+        &self,
+        key: String,
+        from: u64,
+        limit: u64,
+    ) -> Result<ProtoScanResponse, ActorError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(ActorCommand::Scan {
+                key,
+                from,
+                limit,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| ActorError::Shutdown)?;
+        reply_rx
+            .await
+            .map_err(|_| ActorError::DroppedReply)?
+            .map_err(ActorError::Command)
+    }
+
+    pub async fn truncate(
+        &self,
+        key: String,
+        seqno: u64,
+    ) -> Result<ProtoTruncateResponse, ActorError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(ActorCommand::Truncate {
+                key,
+                seqno,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| ActorError::Shutdown)?;
+        reply_rx
+            .await
+            .map_err(|_| ActorError::DroppedReply)?
+            .map_err(ActorError::Command)
+    }
+
+    pub async fn list_keys(&self) -> Result<Vec<String>, ActorError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(ActorCommand::ListKeys { reply: reply_tx })
+            .await
+            .map_err(|_| ActorError::Shutdown)?;
+        reply_rx
+            .await
+            .map_err(|_| ActorError::DroppedReply)?
+            .map_err(ActorError::Command)
+    }
+
+    pub async fn flush(&self) -> Result<(), ActorError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(ActorCommand::Flush { reply: reply_tx })
+            .await
+            .map_err(|_| ActorError::Shutdown)?;
+        reply_rx.await.map_err(|_| ActorError::DroppedReply)
+    }
+
+    pub async fn recover(&self) -> Result<(), ActorError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(ActorCommand::RecoverFromSnapshot { reply: reply_tx })
+            .await
+            .map_err(|_| ActorError::Shutdown)?;
+        reply_rx
+            .await
+            .map_err(|_| ActorError::DroppedReply)?
+            .map_err(ActorError::Command)
+    }
+}
+
 /// Commands dispatched from gRPC handlers to the actor.
 pub enum ActorCommand {
     Head {
@@ -128,13 +279,17 @@ impl<W: WalWriter> Actor<W> {
     pub fn new(
         rx: mpsc::Receiver<ActorCommand>,
         wal_writer: W,
-        flush_interval: Interval,
+        flush_interval_ms: u64,
         snapshot_interval: u64,
         metrics: ConsensusMetrics,
     ) -> Self {
         metrics.active_shards.set(0);
         metrics.total_entries.set(0);
         metrics.approx_bytes.set(0);
+
+        let mut flush_interval =
+            tokio::time::interval(std::time::Duration::from_millis(flush_interval_ms));
+        flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         Actor {
             shards: BTreeMap::new(),
@@ -162,6 +317,7 @@ impl<W: WalWriter> Actor<W> {
     pub async fn run(mut self) {
         let mut stats_interval = tokio::time::interval(std::time::Duration::from_secs(10));
         stats_interval.tick().await; // consume the immediate first tick
+        self.flush_interval.tick().await; // consume the immediate first tick
         loop {
             tokio::select! {
                 biased;
