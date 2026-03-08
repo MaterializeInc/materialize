@@ -7,14 +7,13 @@ use crate::client::{Client, Profile};
 use crate::config::ProjectSettings;
 use crate::project;
 use crate::project::ast::Statement;
-use crate::project::planned;
 use crate::secret_resolver::SecretResolver;
 use mz_sql_parser::ast::{
     AlterConnectionAction, AlterConnectionStatement, ConnectionOption, ConnectionOptionName, Raw,
     Statement as ParserStatement,
 };
 use mz_sql_parser::parser::parse_statements;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
 
@@ -57,7 +56,7 @@ pub async fn run(
     let executor = executor::DeploymentExecutor::with_dry_run(&client, dry_run);
 
     // Prepare schemas
-    let connection_schemas = collect_connection_schemas(&connections);
+    let connection_schemas = project::SchemaQualifier::collect_from(&connections);
     executor
         .prepare_databases_and_schemas(&planned_project, &connection_schemas, None)
         .await?;
@@ -128,23 +127,15 @@ pub async fn run(
             }
         }
 
-        // Apply grants
-        for grant in &typed_obj.grants {
-            executor.execute_sql(grant).await?;
-        }
-
-        // Revoke stale grants
         if !dry_run {
-            let fqn = grants::quoted_fqn(database, schema, name);
-            let current_grants = client
-                .introspection()
-                .get_database_object_grants("mz_connections", database, schema, name)
-                .await
-                .map_err(CliError::Connection)?;
-            let desired = grants::desired_grants(&typed_obj.grants, &["USAGE"]);
-            let revocations =
-                grants::stale_grant_revocations(&current_grants, &desired, "CONNECTION", &fqn);
-            grants::execute_revocations(&client, &revocations, "connection", &obj.id).await?;
+            grants::reconcile(
+                &client,
+                &executor,
+                &obj.id,
+                &typed_obj.grants,
+                &grants::GrantObjectKind::Connection,
+            )
+            .await?;
         }
 
         // Apply comments
@@ -164,19 +155,6 @@ pub async fn run(
     ));
 
     Ok(())
-}
-
-fn collect_connection_schemas(
-    connections: &[&planned::DatabaseObject],
-) -> BTreeSet<project::SchemaQualifier> {
-    let mut schemas = BTreeSet::new();
-    for obj in connections {
-        schemas.insert(project::SchemaQualifier::new(
-            obj.id.database.clone(),
-            obj.id.schema.clone(),
-        ));
-    }
-    schemas
 }
 
 /// Parse a `CREATE CONNECTION` SQL string back into its AST statement.

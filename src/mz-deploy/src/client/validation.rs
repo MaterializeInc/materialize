@@ -5,6 +5,7 @@
 
 use crate::client::connection::{Client, ValidationClient};
 use crate::client::errors::DatabaseValidationError;
+use crate::client::sql_placeholders;
 use crate::project::ast::Statement;
 use crate::project::object_id::ObjectId;
 use crate::project::planned;
@@ -43,11 +44,7 @@ pub(crate) async fn query_sources_by_cluster(
         return Ok(BTreeMap::new());
     }
 
-    // Build IN clause with placeholders
-    let placeholders: Vec<String> = (1..=cluster_names.len())
-        .map(|i| format!("${}", i))
-        .collect();
-    let in_clause = placeholders.join(", ");
+    let in_clause = sql_placeholders(cluster_names.len());
 
     let query = format!(
         r#"
@@ -101,12 +98,12 @@ async fn query_existing_names(
 
     let name_list: Vec<String> = names.iter().cloned().collect();
     for chunk in name_list.chunks(LOOKUP_BATCH_SIZE) {
-        let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("${}", i)).collect();
+        let placeholders = sql_placeholders(chunk.len());
         let query = format!(
             "SELECT {column} FROM {table} WHERE {column} IN ({placeholders})",
             column = column_name,
             table = table_name,
-            placeholders = placeholders.join(", ")
+            placeholders = placeholders
         );
 
         #[allow(clippy::as_conversions)]
@@ -149,7 +146,7 @@ async fn query_existing_schema_pairs(
     let fqns: Vec<String> = fqn_to_pair.keys().cloned().collect();
 
     for chunk in fqns.chunks(LOOKUP_BATCH_SIZE) {
-        let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("${}", i)).collect();
+        let placeholders = sql_placeholders(chunk.len());
         let query = format!(
             r#"
             SELECT d.name || '.' || s.name AS fqn
@@ -157,7 +154,7 @@ async fn query_existing_schema_pairs(
             JOIN mz_databases d ON s.database_id = d.id
             WHERE d.name || '.' || s.name IN ({})
             "#,
-            placeholders.join(", ")
+            placeholders
         );
 
         #[allow(clippy::as_conversions)]
@@ -197,7 +194,7 @@ async fn query_existing_object_ids(
     let table_name = lookup.table_name();
 
     for chunk in fqns.chunks(LOOKUP_BATCH_SIZE) {
-        let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("${}", i)).collect();
+        let placeholders = sql_placeholders(chunk.len());
         let query = format!(
             r#"
             SELECT d.name || '.' || s.name || '.' || t.name AS fqn
@@ -207,7 +204,7 @@ async fn query_existing_object_ids(
             WHERE d.name || '.' || s.name || '.' || t.name IN ({placeholders})
             "#,
             table_name = table_name,
-            placeholders = placeholders.join(", ")
+            placeholders = placeholders
         );
 
         #[allow(clippy::as_conversions)]
@@ -492,11 +489,7 @@ pub(crate) async fn validate_privileges_impl(
 
     // Check USAGE privileges on databases using the provided query
     let missing_usage = if !priv_required_databases.is_empty() {
-        // Build IN clause with placeholders
-        let placeholders: Vec<String> = (1..=priv_required_databases.len())
-            .map(|i| format!("${}", i))
-            .collect();
-        let in_clause = placeholders.join(", ");
+        let in_clause = sql_placeholders(priv_required_databases.len());
 
         let query = format!(
             r#"

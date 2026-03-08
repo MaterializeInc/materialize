@@ -856,31 +856,15 @@ pub async fn deployment_table_exists(client: &Client) -> Result<bool, Connection
 /// Default allowed lag threshold in seconds (5 minutes).
 pub const DEFAULT_ALLOWED_LAG_SECS: i64 = 300;
 
-/// Get detailed hydration and health status for clusters in a staging deployment.
+/// Build the shared hydration-status SQL query.
 ///
-/// This function checks:
-/// - Hydration progress for each cluster
-/// - Wallclock lag to determine if data is fresh
-/// - Replica health (detecting OOM-looping replicas)
-///
-/// # Arguments
-/// * `client` - Database client
-/// * `deploy_id` - Staging deployment ID
-/// * `allowed_lag_secs` - Maximum allowed lag in seconds before marking as "lagging"
-///
-/// # Returns
-/// A vector of `ClusterStatusContext` with full status details for each cluster.
-pub async fn get_deployment_hydration_status(
-    client: &Client,
-    deploy_id: &str,
-    allowed_lag_secs: i64,
-) -> Result<Vec<ClusterStatusContext>, ConnectionError> {
-    let pattern = format!("%_{}", deploy_id);
-
-    let query = format!(
+/// Both `get_deployment_hydration_status` (one-shot SELECT) and
+/// `subscribe_deployment_hydration` (SUBSCRIBE) use the same CTE logic.
+/// The query expects a single `$1` parameter for the cluster name LIKE pattern.
+fn hydration_status_query(allowed_lag_secs: i64) -> String {
+    format!(
         r#"
         WITH
-        -- Detect problematic replicas: 3+ OOM kills in 24h (subscribe-friendly)
         problematic_replicas AS (
             SELECT replica_id
             FROM mz_internal.mz_cluster_replica_status_history
@@ -889,8 +873,6 @@ pub async fn get_deployment_hydration_status(
             GROUP BY replica_id
             HAVING COUNT(*) >= 3
         ),
-
-        -- Cluster health: count total vs problematic replicas
         cluster_health AS (
             SELECT
                 c.name AS cluster_name,
@@ -903,8 +885,6 @@ pub async fn get_deployment_hydration_status(
             WHERE c.name LIKE $1
             GROUP BY c.name, c.id
         ),
-
-        -- Hydration counts per cluster (best replica)
         hydration_counts AS (
             SELECT
                 c.name AS cluster_name,
@@ -917,14 +897,11 @@ pub async fn get_deployment_hydration_status(
             WHERE c.name LIKE $1
             GROUP BY c.name, r.id
         ),
-
         hydration_best AS (
             SELECT cluster_name, MAX(hydrated) AS hydrated, MAX(total) AS total
             FROM hydration_counts
             GROUP BY cluster_name
         ),
-
-        -- Max lag per cluster using mz_wallclock_global_lag
         cluster_lag AS (
             SELECT
                 c.name AS cluster_name,
@@ -936,7 +913,6 @@ pub async fn get_deployment_hydration_status(
             WHERE c.name LIKE $1
             GROUP BY c.name
         )
-
         SELECT
             ch.cluster_name,
             ch.cluster_id,
@@ -962,8 +938,30 @@ pub async fn get_deployment_hydration_status(
         LEFT JOIN cluster_lag cl ON ch.cluster_name = cl.cluster_name
     "#,
         allowed_lag_secs = allowed_lag_secs
-    );
+    )
+}
 
+/// Get detailed hydration and health status for clusters in a staging deployment.
+///
+/// This function checks:
+/// - Hydration progress for each cluster
+/// - Wallclock lag to determine if data is fresh
+/// - Replica health (detecting OOM-looping replicas)
+///
+/// # Arguments
+/// * `client` - Database client
+/// * `deploy_id` - Staging deployment ID
+/// * `allowed_lag_secs` - Maximum allowed lag in seconds before marking as "lagging"
+///
+/// # Returns
+/// A vector of `ClusterStatusContext` with full status details for each cluster.
+pub async fn get_deployment_hydration_status(
+    client: &Client,
+    deploy_id: &str,
+    allowed_lag_secs: i64,
+) -> Result<Vec<ClusterStatusContext>, ConnectionError> {
+    let pattern = format!("%_{}", deploy_id);
+    let query = hydration_status_query(allowed_lag_secs);
     let rows = client.query(&query, &[&pattern]).await?;
 
     let mut results = Vec::new();
@@ -1508,85 +1506,9 @@ impl DeploymentsClientMut<'_> {
         try_stream! {
                 let txn = self.client.begin_transaction().await?;
                 let pattern = format!("%_{}", deploy_id);
-
+                let query = hydration_status_query(allowed_lag_secs);
                 let subscribe_sql = format!(
-                    r#"
-                DECLARE c CURSOR FOR SUBSCRIBE (
-                    WITH
-                    problematic_replicas AS (
-                        SELECT replica_id
-                        FROM mz_internal.mz_cluster_replica_status_history
-                        WHERE occurred_at + INTERVAL '24 hours' > mz_now()
-                          AND reason = 'oom-killed'
-                        GROUP BY replica_id
-                        HAVING COUNT(*) >= 3
-                    ),
-                    cluster_health AS (
-                        SELECT
-                            c.name AS cluster_name,
-                            c.id AS cluster_id,
-                            COUNT(r.id) AS total_replicas,
-                            COUNT(pr.replica_id) AS problematic_replicas
-                        FROM mz_clusters c
-                        LEFT JOIN mz_cluster_replicas r ON c.id = r.cluster_id
-                        LEFT JOIN problematic_replicas pr ON r.id = pr.replica_id
-                        WHERE c.name LIKE $1
-                        GROUP BY c.name, c.id
-                    ),
-                    hydration_counts AS (
-                        SELECT
-                            c.name AS cluster_name,
-                            r.id AS replica_id,
-                            COUNT(*) FILTER (WHERE mhs.hydrated) AS hydrated,
-                            COUNT(*) AS total
-                        FROM mz_clusters c
-                        JOIN mz_cluster_replicas r ON c.id = r.cluster_id
-                        LEFT JOIN mz_internal.mz_hydration_statuses mhs ON mhs.replica_id = r.id
-                        WHERE c.name LIKE $1
-                        GROUP BY c.name, r.id
-                    ),
-                    hydration_best AS (
-                        SELECT cluster_name, MAX(hydrated) AS hydrated, MAX(total) AS total
-                        FROM hydration_counts
-                        GROUP BY cluster_name
-                    ),
-                    cluster_lag AS (
-                        SELECT
-                            c.name AS cluster_name,
-                            MAX(EXTRACT(EPOCH FROM wgl.lag)) AS max_lag_secs
-                        FROM mz_clusters c
-                        JOIN mz_cluster_replicas r ON c.id = r.cluster_id
-                        JOIN mz_internal.mz_hydration_statuses mhs ON mhs.replica_id = r.id
-                        JOIN mz_internal.mz_wallclock_global_lag wgl ON wgl.object_id = mhs.object_id
-                        WHERE c.name LIKE $1
-                        GROUP BY c.name
-                    )
-                    SELECT
-                        ch.cluster_name,
-                        ch.cluster_id,
-                        CASE
-                            WHEN ch.total_replicas = 0 THEN 'failing'
-                            WHEN ch.total_replicas = ch.problematic_replicas THEN 'failing'
-                            WHEN COALESCE(hb.hydrated, 0) < COALESCE(hb.total, 0) THEN 'hydrating'
-                            WHEN COALESCE(cl.max_lag_secs, 0) > {allowed_lag_secs} THEN 'lagging'
-                            ELSE 'ready'
-                        END AS status,
-                        CASE
-                            WHEN ch.total_replicas = 0 THEN 'no_replicas'
-                            WHEN ch.total_replicas = ch.problematic_replicas THEN 'all_replicas_problematic'
-                            ELSE NULL
-                        END AS failure_reason,
-                        COALESCE(hb.hydrated, 0) AS hydrated_count,
-                        COALESCE(hb.total, 0) AS total_count,
-                        COALESCE(cl.max_lag_secs, 0)::bigint AS max_lag_secs,
-                        ch.total_replicas,
-                        ch.problematic_replicas
-                    FROM cluster_health ch
-                    LEFT JOIN hydration_best hb ON ch.cluster_name = hb.cluster_name
-                    LEFT JOIN cluster_lag cl ON ch.cluster_name = cl.cluster_name
-                )
-            "#,
-                    allowed_lag_secs = allowed_lag_secs
+                    "DECLARE c CURSOR FOR SUBSCRIBE ({query})"
                 );
 
                 txn.execute(&subscribe_sql, &[&pattern]).await?;

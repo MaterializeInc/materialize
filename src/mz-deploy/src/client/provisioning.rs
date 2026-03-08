@@ -82,24 +82,10 @@ impl ProvisioningClient<'_> {
         name: &str,
         config: &ClusterConfig,
     ) -> Result<(), ConnectionError> {
-        match config {
+        let grants = match config {
             ClusterConfig::Managed { options, grants } => {
                 self.create_cluster(name, options).await?;
-                for grant in grants {
-                    let sql = format!(
-                        "GRANT {} ON CLUSTER {} TO {}",
-                        grant.privilege_type,
-                        quote_identifier(name),
-                        quote_identifier(&grant.grantee)
-                    );
-                    self.client.execute(&sql, &[]).await.map_err(|e| {
-                        ConnectionError::Message(format!(
-                            "Failed to grant {} to {} on cluster '{}': {}",
-                            grant.privilege_type, grant.grantee, name, e
-                        ))
-                    })?;
-                }
-                Ok(())
+                grants
             }
             ClusterConfig::Unmanaged { replicas, grants } => {
                 let create_cluster_sql =
@@ -144,24 +130,26 @@ impl ProvisioningClient<'_> {
                         })?;
                 }
 
-                for grant in grants {
-                    let sql = format!(
-                        "GRANT {} ON CLUSTER {} TO {}",
-                        grant.privilege_type,
-                        quote_identifier(name),
-                        quote_identifier(&grant.grantee)
-                    );
-                    self.client.execute(&sql, &[]).await.map_err(|e| {
-                        ConnectionError::Message(format!(
-                            "Failed to grant {} to {} on cluster '{}': {}",
-                            grant.privilege_type, grant.grantee, name, e
-                        ))
-                    })?;
-                }
-
-                Ok(())
+                grants
             }
+        };
+
+        for grant in grants {
+            let sql = format!(
+                "GRANT {} ON CLUSTER {} TO {}",
+                grant.privilege_type,
+                quote_identifier(name),
+                quote_identifier(&grant.grantee)
+            );
+            self.client.execute(&sql, &[]).await.map_err(|e| {
+                ConnectionError::Message(format!(
+                    "Failed to grant {} to {} on cluster '{}': {}",
+                    grant.privilege_type, grant.grantee, name, e
+                ))
+            })?;
         }
+
+        Ok(())
     }
 
     /// Update options for an existing managed cluster.

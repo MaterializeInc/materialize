@@ -7,6 +7,81 @@ use owo_colors::OwoColorize;
 use std::collections::BTreeSet;
 use std::fmt;
 
+/// The kind of database object for grant reconciliation.
+///
+/// Groups the catalog table name, SQL keyword, privilege set, and display label
+/// that vary per object type so callers don't have to pass four loose strings.
+pub enum GrantObjectKind {
+    Table,
+    Source,
+    Secret,
+    Connection,
+}
+
+impl GrantObjectKind {
+    pub fn catalog_table(&self) -> &'static str {
+        match self {
+            Self::Table => "mz_tables",
+            Self::Source => "mz_sources",
+            Self::Secret => "mz_secrets",
+            Self::Connection => "mz_connections",
+        }
+    }
+
+    pub fn sql_keyword(&self) -> &'static str {
+        match self {
+            Self::Table => "TABLE",
+            Self::Source => "SOURCE",
+            Self::Secret => "SECRET",
+            Self::Connection => "CONNECTION",
+        }
+    }
+
+    pub fn all_privileges(&self) -> &'static [&'static str] {
+        match self {
+            Self::Table => &["SELECT", "INSERT", "UPDATE", "DELETE"],
+            Self::Source => &["SELECT"],
+            Self::Secret | Self::Connection => &["USAGE"],
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Table => "table",
+            Self::Source => "source",
+            Self::Secret => "secret",
+            Self::Connection => "connection",
+        }
+    }
+}
+
+/// Reconcile grants for a single object: apply desired grants, revoke stale ones.
+pub async fn reconcile(
+    client: &Client,
+    executor: &crate::cli::executor::DeploymentExecutor<'_>,
+    obj_id: &crate::project::object_id::ObjectId,
+    grants: &[GrantPrivilegesStatement<Raw>],
+    kind: &GrantObjectKind,
+) -> Result<(), CliError> {
+    for grant in grants {
+        executor.execute_sql(grant).await?;
+    }
+    let fqn = quoted_fqn(&obj_id.database, &obj_id.schema, &obj_id.object);
+    let current = client
+        .introspection()
+        .get_database_object_grants(
+            kind.catalog_table(),
+            &obj_id.database,
+            &obj_id.schema,
+            &obj_id.object,
+        )
+        .await
+        .map_err(CliError::Connection)?;
+    let desired = desired_grants(grants, kind.all_privileges());
+    let revocations = stale_grant_revocations(&current, &desired, kind.sql_keyword(), &fqn);
+    execute_revocations(client, &revocations, kind.label(), obj_id).await
+}
+
 /// Build a quoted fully-qualified name from components.
 pub fn quoted_fqn(database: &str, schema: &str, name: &str) -> String {
     format!(

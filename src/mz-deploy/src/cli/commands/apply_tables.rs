@@ -314,15 +314,10 @@ async fn apply_by_kind(
 
     // Reconcile grants on existing target objects
     if !dry_run {
-        let (catalog_table, obj_type_keyword, all_privs): (&str, &str, &[&str]) = match filter {
-            ObjectKindFilter::Tables => (
-                "mz_tables",
-                "TABLE",
-                &["SELECT", "INSERT", "UPDATE", "DELETE"],
-            ),
-            ObjectKindFilter::Sources => ("mz_sources", "SOURCE", &["SELECT"]),
+        let grant_kind = match filter {
+            ObjectKindFilter::Tables => grants::GrantObjectKind::Table,
+            ObjectKindFilter::Sources => grants::GrantObjectKind::Source,
         };
-        // Build a lookup map to avoid O(N*M) scans
         let obj_map: BTreeMap<_, _> = planned_project
             .iter_objects()
             .map(|obj| (obj.id.clone(), obj))
@@ -330,30 +325,14 @@ async fn apply_by_kind(
         let executor = executor::DeploymentExecutor::with_dry_run(&client, false);
         for obj_id in &existing {
             if let Some(obj) = obj_map.get(obj_id) {
-                let typed_obj = &obj.typed_object;
-                // Re-apply grants (idempotent)
-                for grant in &typed_obj.grants {
-                    executor.execute_sql(grant).await?;
-                }
-                let fqn = grants::quoted_fqn(&obj_id.database, &obj_id.schema, &obj_id.object);
-                let current_grants = client
-                    .introspection()
-                    .get_database_object_grants(
-                        catalog_table,
-                        &obj_id.database,
-                        &obj_id.schema,
-                        &obj_id.object,
-                    )
-                    .await
-                    .map_err(CliError::Connection)?;
-                let desired = grants::desired_grants(&typed_obj.grants, all_privs);
-                let revocations = grants::stale_grant_revocations(
-                    &current_grants,
-                    &desired,
-                    obj_type_keyword,
-                    &fqn,
-                );
-                grants::execute_revocations(&client, &revocations, label, &obj_id).await?;
+                grants::reconcile(
+                    &client,
+                    &executor,
+                    obj_id,
+                    &obj.typed_object.grants,
+                    &grant_kind,
+                )
+                .await?;
             }
         }
     }

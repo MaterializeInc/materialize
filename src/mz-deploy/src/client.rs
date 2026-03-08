@@ -43,6 +43,14 @@ pub use connection::Client;
 pub fn quote_identifier(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
+
+/// Build a comma-separated `$1, $2, …, $n` placeholder string for parameterized queries.
+pub fn sql_placeholders(n: usize) -> String {
+    (1..=n)
+        .map(|i| format!("${}", i))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 pub use deployment_ops::{
     ClusterDeploymentStatus, ClusterStatusContext, DEFAULT_ALLOWED_LAG_SECS, FailureReason,
     HydrationStatusUpdate,

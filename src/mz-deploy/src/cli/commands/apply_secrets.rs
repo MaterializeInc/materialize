@@ -7,10 +7,8 @@ use crate::client::{Client, Profile};
 use crate::config::ProjectSettings;
 use crate::project;
 use crate::project::ast::Statement;
-use crate::project::planned;
 use crate::secret_resolver::SecretResolver;
 use mz_sql_parser::ast::{AlterSecretStatement, Raw};
-use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Instant;
 
@@ -49,7 +47,7 @@ pub async fn run(
     let executor = executor::DeploymentExecutor::with_dry_run(&client, dry_run);
 
     // Prepare schemas and mod statements for secret schemas
-    let secret_schemas = collect_secret_schemas(&secrets);
+    let secret_schemas = project::SchemaQualifier::collect_from(&secrets);
     executor
         .prepare_databases_and_schemas(&planned_project, &secret_schemas, None)
         .await?;
@@ -74,27 +72,15 @@ pub async fn run(
             };
             executor.execute_sql(&alter_stmt).await?;
 
-            for grant in &typed_obj.grants {
-                executor.execute_sql(grant).await?;
-            }
-
-            // Revoke stale grants
             if !dry_run {
-                let fqn = grants::quoted_fqn(&obj.id.database, &obj.id.schema, &obj.id.object);
-                let current_grants = client
-                    .introspection()
-                    .get_database_object_grants(
-                        "mz_secrets",
-                        &obj.id.database,
-                        &obj.id.schema,
-                        &obj.id.object,
-                    )
-                    .await
-                    .map_err(CliError::Connection)?;
-                let desired = grants::desired_grants(&typed_obj.grants, &["USAGE"]);
-                let revocations =
-                    grants::stale_grant_revocations(&current_grants, &desired, "SECRET", &fqn);
-                grants::execute_revocations(&client, &revocations, "secret", &obj.id).await?;
+                grants::reconcile(
+                    &client,
+                    &executor,
+                    &obj.id,
+                    &typed_obj.grants,
+                    &grants::GrantObjectKind::Secret,
+                )
+                .await?;
             }
 
             for comment in &typed_obj.comments {
@@ -113,17 +99,4 @@ pub async fn run(
     ));
 
     Ok(())
-}
-
-fn collect_secret_schemas(
-    secrets: &[&planned::DatabaseObject],
-) -> BTreeSet<project::SchemaQualifier> {
-    let mut schemas = BTreeSet::new();
-    for obj in secrets {
-        schemas.insert(project::SchemaQualifier::new(
-            obj.id.database.clone(),
-            obj.id.schema.clone(),
-        ));
-    }
-    schemas
 }

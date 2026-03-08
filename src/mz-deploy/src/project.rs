@@ -44,6 +44,7 @@
 //!   pipeline.
 //! - **`error`** — Structured error types for every stage.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 pub mod ast;
@@ -73,6 +74,13 @@ pub struct SchemaQualifier {
 impl SchemaQualifier {
     pub fn new(database: String, schema: String) -> Self {
         Self { database, schema }
+    }
+
+    /// Collect the distinct `(database, schema)` pairs from a slice of objects.
+    pub fn collect_from(objs: &[&planned::DatabaseObject]) -> BTreeSet<Self> {
+        objs.iter()
+            .map(|obj| Self::new(obj.id.database.clone(), obj.id.schema.clone()))
+            .collect()
     }
 }
 

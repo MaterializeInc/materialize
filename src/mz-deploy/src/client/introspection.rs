@@ -9,6 +9,7 @@ use crate::client::connection::{Client, IntrospectionClient};
 use crate::client::errors::ConnectionError;
 use crate::client::models::{Cluster, ClusterConfig, ClusterOptions, ClusterReplica, ObjectGrant};
 use crate::client::quote_identifier;
+use crate::client::sql_placeholders;
 use crate::project::SchemaQualifier;
 use crate::project::object_id::ObjectId;
 use itertools::Itertools;
@@ -82,23 +83,11 @@ pub async fn get_cluster(client: &Client, name: &str) -> Result<Option<Cluster>,
     }
 
     let row = &rows[0];
-    let replication_factor: Option<i64> = row
-        .try_get("replication_factor")
-        .or_else(|_| {
-            row.try_get::<_, Option<i32>>("replication_factor")
-                .map(|v| v.map(i64::from))
-        })
-        .or_else(|_| {
-            row.try_get::<_, Option<i16>>("replication_factor")
-                .map(|v| v.map(i64::from))
-        })
-        .unwrap_or(None);
-
     Ok(Some(Cluster {
         id: row.get("id"),
         name: row.get("name"),
         size: row.get("size"),
-        replication_factor,
+        replication_factor: row.get("replication_factor"),
     }))
 }
 
@@ -164,19 +153,7 @@ pub async fn get_cluster_config(
     let first_row = &cluster_rows[0];
     let managed: bool = first_row.get("managed");
     let size: Option<String> = first_row.get("size");
-    let replication_factor: Option<i64> = first_row
-        .try_get("replication_factor")
-        .or_else(|_| {
-            first_row
-                .try_get::<_, Option<i32>>("replication_factor")
-                .map(|v| v.map(i64::from))
-        })
-        .or_else(|_| {
-            first_row
-                .try_get::<_, Option<i16>>("replication_factor")
-                .map(|v| v.map(i64::from))
-        })
-        .unwrap_or(None);
+    let replication_factor: Option<i64> = first_row.get("replication_factor");
 
     // Query 2: Get grants
     let grants_query = r#"
@@ -334,8 +311,7 @@ pub async fn check_schemas_exist(
         .map(|(fqn, pair)| (fqn.as_str(), pair))
         .collect();
 
-    let placeholders: Vec<String> = (1..=fqns.len()).map(|i| format!("${}", i)).collect();
-    let placeholders_str = placeholders.join(", ");
+    let placeholders_str = sql_placeholders(fqns.len());
 
     let query = format!(
         r#"
@@ -377,8 +353,7 @@ pub async fn check_clusters_exist(
         return Ok(BTreeSet::new());
     }
 
-    let placeholders: Vec<String> = (1..=clusters.len()).map(|i| format!("${}", i)).collect();
-    let placeholders_str = placeholders.join(", ");
+    let placeholders_str = sql_placeholders(clusters.len());
 
     let query = format!(
         r#"
@@ -411,8 +386,7 @@ pub async fn check_objects_exist(
         return Ok(Vec::new());
     }
 
-    let placeholders: Vec<String> = (1..=fqns.len()).map(|i| format!("${}", i)).collect();
-    let placeholders_str = placeholders.join(", ");
+    let placeholders_str = sql_placeholders(fqns.len());
 
     let query = format!(
         r#"
@@ -453,8 +427,7 @@ async fn check_catalog_objects_exist(
     let fqn_map: BTreeMap<String, &ObjectId> = objects.iter().map(|o| (o.to_string(), o)).collect();
     let fqns: Vec<&String> = fqn_map.keys().collect();
 
-    let placeholders: Vec<String> = (1..=fqns.len()).map(|i| format!("${}", i)).collect();
-    let placeholders_str = placeholders.join(", ");
+    let placeholders_str = sql_placeholders(fqns.len());
 
     let query = format!(
         r#"
@@ -753,8 +726,7 @@ pub async fn drop_objects(
         return Ok(dropped);
     }
 
-    let placeholders: Vec<String> = (1..=objects.len()).map(|i| format!("${}", i)).collect();
-    let placeholders_str = placeholders.join(", ");
+    let placeholders_str = sql_placeholders(objects.len());
 
     let query = format!(
         r#"
