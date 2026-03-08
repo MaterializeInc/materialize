@@ -61,7 +61,7 @@ pub async fn run(
         .prepare_databases_and_schemas(&planned_project, &connection_schemas, None)
         .await?;
 
-    let resolver = SecretResolver::new(&settings.secret_config);
+    let resolver = SecretResolver::new(&settings.secret_config_for_profile(&profile.name));
 
     let mut created = 0u32;
     let mut altered = 0u32;

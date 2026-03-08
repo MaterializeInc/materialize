@@ -150,7 +150,7 @@ pub async fn run(
     executor
         .prepare_databases_and_schemas(&planned_project, &schema_keys, None)
         .await?;
-    let resolver = SecretResolver::new(&settings.secret_config);
+    let resolver = SecretResolver::new(&settings.secret_config_for_profile(&profile.name));
     let success_count = execute_table_creates(&executor, &resolver, &tables_to_create).await?;
     finalize_table_deployment(
         &client,
@@ -357,7 +357,7 @@ async fn apply_by_kind(
         .prepare_databases_and_schemas(&planned_project, &schemas, None)
         .await?;
 
-    let resolver = SecretResolver::new(&settings.secret_config);
+    let resolver = SecretResolver::new(&settings.secret_config_for_profile(&profile.name));
     let success_count = execute_table_creates(&executor, &resolver, &to_create).await?;
 
     progress::success(&format!(

@@ -52,7 +52,7 @@ pub async fn run(
         .prepare_databases_and_schemas(&planned_project, &secret_schemas, None)
         .await?;
 
-    let resolver = SecretResolver::new(&settings.secret_config);
+    let resolver = SecretResolver::new(&settings.secret_config_for_profile(&profile.name));
 
     for obj in &secrets {
         let typed_obj = &obj.typed_object;

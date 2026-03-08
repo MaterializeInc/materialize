@@ -6,6 +6,8 @@ profile = "default"
 ## or pin a specific version like "v26.0.0".
 mz_version = "cloud"
 
+## Per-profile configuration:
+[profiles.default]
 ## AWS profile name for resolving aws_secret() references in secret files.
 ## When set, enables the aws_secret() provider so CREATE SECRET statements
 ## can pull values from AWS Secrets Manager at deploy time.

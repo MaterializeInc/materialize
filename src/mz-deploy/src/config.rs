@@ -31,8 +31,7 @@ pub struct ProjectSettings {
     #[serde(skip)]
     docker_image_override: Option<String>,
 
-    #[serde(flatten)]
-    pub secret_config: SecretResolverConfig,
+    pub profiles: Option<BTreeMap<String, SecretResolverConfig>>,
 }
 
 impl ProjectSettings {
@@ -59,6 +58,16 @@ impl ProjectSettings {
     pub fn with_docker_image_override(mut self, docker_image: Option<String>) -> Self {
         self.docker_image_override = docker_image;
         self
+    }
+
+    /// Returns the secret resolver config for the given profile name.
+    /// Falls back to `SecretResolverConfig::default()` if no entry exists.
+    pub fn secret_config_for_profile(&self, profile_name: &str) -> SecretResolverConfig {
+        self.profiles
+            .as_ref()
+            .and_then(|p| p.get(profile_name))
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub fn docker_image(&self) -> String {
