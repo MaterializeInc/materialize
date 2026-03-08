@@ -4861,3 +4861,42 @@ GRANT SELECT ON t TO mz_monitor
 ----
 db error: ERROR: role name "mz_monitor" is reserved
 DETAIL: The role prefixes "mz_" and "pg_" are reserved for system roles.
+
+statement ok
+CREATE TABLE t0(c0 INT4 LIST NOT NULL, c1 NAME NOT NULL);
+
+statement ok
+INSERT INTO t0 VALUES (LIST[1,2,3], 'foo');
+
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/10074.
+#
+# TODO: Bad error msg, because we handle ExprContext names badly when inner contexts are created by `with_name`. See
+# https://github.com/MaterializeInc/database-issues/issues/10074
+statement error db error: ERROR: static function definition \(or its outer context 'mz_internal\.mz_role_oid'\) does not allow subqueries
+UPDATE t0 SET c1=has_secret_privilege(t0.c1, '30 minutes') WHERE (t0.c1 BETWEEN t0.c1 AND t0.c1);
+
+query B
+SELECT has_secret_privilege(t0.c1, 'USAGE') FROM t0 LIMIT 1;
+----
+NULL
+
+# Go wild on nesting.
+query B
+SELECT
+    has_secret_privilege(
+        t0.c1,
+        CASE
+            WHEN
+                        (
+                            SELECT has_secret_privilege(t0.c1, 'USAGE') FROM t0
+                            LIMIT 1
+                        )
+                            IS NULL
+                    THEN 'USAGE'
+                ELSE has_secret_privilege(t0.c1, 'USAGE')::text
+        END
+    )
+FROM t0
+LIMIT 3;
+----
+NULL

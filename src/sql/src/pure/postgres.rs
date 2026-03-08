@@ -582,7 +582,13 @@ pub(crate) fn generate_column_casts(
             keys: vec![],
         },
         allow_aggregates: false,
-        allow_subqueries: false,
+        // Even though we set `allow_subqueries` to `true`, with don't actually support casts here
+        // that expand to subqueries (through `sql_impl_cast`). The reason we still specify true is
+        // that cast planning doesn't have a way to report fine-grained errors, but we want to
+        // specifically sniff out the situation when the cast failed because of a subquery. So, what
+        // we do is we allow the HIR planning to succeed despite the subquery, and then catch the
+        // failure of `lower_uncorrelated` later.
+        allow_subqueries: true,
         allow_parameters: false,
         allow_windows: false,
     };
@@ -671,6 +677,8 @@ pub(crate) fn generate_column_casts(
         let mir_cast = cast
             .lower_uncorrelated(scx.catalog.system_vars())
             .map_err(|_e| {
+                // We allowed subqueries in the cast's HIR planning above, but we don't actually
+                // support them here.
                 tracing::info!(
                     "cannot ingest {:?} data from PG source because cast is correlated",
                     scalar_type
