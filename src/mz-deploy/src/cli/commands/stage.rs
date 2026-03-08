@@ -96,17 +96,16 @@ pub async fn run(
     let planned_project = super::compile::run(directory, TypeCheckMode::Disabled).await?;
     let staging_suffix = format!("_{}", stage_name);
 
-    let mut client = Client::connect_with_profile(profile.clone())
+    let client = Client::connect_with_profile(profile.clone())
         .await
         .map_err(CliError::Connection)?;
 
-    let Some(analysis) =
-        analyze_project_changes(&mut client, &planned_project, &stage_name).await?
+    let Some(analysis) = analyze_project_changes(&client, &planned_project, &stage_name).await?
     else {
         return Ok(());
     };
 
-    validate_project_for_stage(&mut client, &planned_project, directory).await?;
+    validate_project_for_stage(&client, &planned_project, directory).await?;
 
     if !dry_run {
         record_stage_metadata(
@@ -151,7 +150,7 @@ pub async fn run(
 /// Handles incremental-vs-full mode, applies stage-specific object filtering,
 /// validates table dependencies, and returns resource sets required for execution.
 async fn analyze_project_changes<'a>(
-    client: &mut Client,
+    client: &Client,
     planned_project: &'a project::planned::Project,
     stage_name: &str,
 ) -> Result<Option<StageAnalysis<'a>>, CliError> {
@@ -346,7 +345,7 @@ fn collect_stage_resources(
 ///
 /// This is intentionally isolated so stage fails before any metadata/resource writes.
 async fn validate_project_for_stage(
-    client: &mut Client,
+    client: &Client,
     planned_project: &project::planned::Project,
     directory: &Path,
 ) -> Result<(), CliError> {

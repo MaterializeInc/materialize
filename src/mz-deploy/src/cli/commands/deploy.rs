@@ -6,6 +6,7 @@ use crate::client::{ApplyState, Client, DeploymentKind, Profile};
 use crate::project::SchemaQualifier;
 use crate::project::object_id::ObjectId;
 use crate::{project, verbose};
+use itertools::Itertools;
 use owo_colors::OwoColorize;
 use std::collections::BTreeSet;
 
@@ -324,7 +325,7 @@ async fn gather_resources_and_check_conflicts(
         .check_clusters_exist(&staging_cluster_names)
         .await?;
 
-    for (cluster_name, staging_cluster) in cluster_names.into_iter().zip(staging_cluster_names) {
+    for (cluster_name, staging_cluster) in cluster_names.into_iter().zip_eq(staging_cluster_names) {
         if existing_clusters.contains(&staging_cluster) {
             staging_clusters.insert(cluster_name);
         } else {

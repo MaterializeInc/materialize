@@ -11,6 +11,7 @@ use crate::client::models::{Cluster, ClusterConfig, ClusterOptions, ClusterRepli
 use crate::client::quote_identifier;
 use crate::project::SchemaQualifier;
 use crate::project::object_id::ObjectId;
+use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet};
 use tokio_postgres::types::ToSql;
 
@@ -329,7 +330,7 @@ pub async fn check_schemas_exist(
 
     let fqn_map: BTreeMap<&str, &(String, String)> = fqns
         .iter()
-        .zip(schemas.iter())
+        .zip_eq(schemas.iter())
         .map(|(fqn, pair)| (fqn.as_str(), pair))
         .collect();
 

@@ -535,7 +535,7 @@ async fn run(args: Args) -> Result<(), CliError> {
     }
 
     if let Some(Command::New { name, no_git }) = &args.command {
-        return cli::commands::new_project::run(name, !no_git).await;
+        return cli::commands::new_project::run(name, !no_git);
     }
 
     let settings = load_project_settings(&args.directory, args.docker_image)?;

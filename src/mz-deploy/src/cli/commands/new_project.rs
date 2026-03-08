@@ -18,7 +18,7 @@ const AGENT_MD: &str = include_str!("../scaffold/AGENT.md");
 const UNIT_TEST_REFERENCE_MD: &str = include_str!("../scaffold/skill/references/unit-tests.md");
 const STABLE_API_REFERENCE_MD: &str = include_str!("../scaffold/skill/references/stable-api.md");
 
-pub async fn run(name: &str, init_git: bool) -> Result<(), CliError> {
+pub fn run(name: &str, init_git: bool) -> Result<(), CliError> {
     let project_dir = Path::new(name);
 
     progress::info(&format!("Creating project {name}..."));

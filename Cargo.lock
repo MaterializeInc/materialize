@@ -6582,6 +6582,7 @@ dependencies = [
  "crossterm",
  "dirs 5.0.1",
  "futures",
+ "itertools 0.14.0",
  "mz-aws-util",
  "mz-build-info",
  "mz-ore",

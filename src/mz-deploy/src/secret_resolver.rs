@@ -77,7 +77,7 @@ impl SecretResolver {
         resolver.register(Box::new(EnvVarProvider));
 
         if let Some(ref profile) = config.aws_profile {
-            resolver.register(Box::new(AwsSecretProvider::new(&profile)));
+            resolver.register(Box::new(AwsSecretProvider::new(profile)));
         } else {
             resolver.register(Box::new(UnconfiguredAwsProvider));
         }

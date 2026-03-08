@@ -102,8 +102,7 @@ async fn apply_cluster(client: &Client, def: &ClusterDefinition) -> Result<(), C
 
             let needs_alter = {
                 let size_differs = desired_size.as_deref() != existing_cluster.size.as_deref();
-                let rf_differs =
-                    desired_rf.map(|rf| rf as i64) != existing_cluster.replication_factor;
+                let rf_differs = desired_rf.map(i64::from) != existing_cluster.replication_factor;
                 size_differs || rf_differs
             };
 
