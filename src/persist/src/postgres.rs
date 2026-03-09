@@ -380,9 +380,9 @@ impl Consensus for PostgresConsensus {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
+        let expected = new.seqno.previous();
         if let Some(expected) = expected {
             if new.seqno <= expected {
                 return Err(Error::from(
@@ -602,12 +602,12 @@ mod tests {
         let consensus = PostgresConsensus::open(config.clone()).await?;
         let key = Uuid::new_v4().to_string();
         let state = VersionedData {
-            seqno: SeqNo(5),
+            seqno: SeqNo(0),
             data: Bytes::from("abc"),
         };
 
         assert_eq!(
-            consensus.compare_and_set(&key, None, state.clone()).await,
+            consensus.compare_and_set(&key, state.clone()).await,
             Ok(CaSResult::Committed),
         );
 

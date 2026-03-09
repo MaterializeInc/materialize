@@ -256,11 +256,7 @@ impl StateVersions {
         let payload_len = new.data.len();
         let cas_res = retry_determinate(
             &self.metrics.retries.determinate.apply_unbatched_cmd_cas,
-            || async {
-                self.consensus
-                    .compare_and_set(&path, new.seqno.previous(), new.clone())
-                    .await
-            },
+            || async { self.consensus.compare_and_set(&path, new.clone()).await },
         )
         .instrument(debug_span!("apply_unbatched_cmd::cas", payload_len))
         .await

@@ -259,9 +259,9 @@ impl Consensus for MemConsensus {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
+        let expected = new.seqno.previous();
         // Yield to maximize our chances for getting interesting orderings.
         let () = yield_now().await;
         if let Some(expected) = expected {

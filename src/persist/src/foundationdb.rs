@@ -367,9 +367,9 @@ impl Consensus for FdbConsensus {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
+        let expected = new.seqno.previous();
         if let Some(expected) = expected {
             if new.seqno <= expected {
                 return Err(Error::from(
@@ -479,26 +479,22 @@ mod tests {
         let consensus = FdbConsensus::open(config.clone()).await?;
         let key = Uuid::new_v4().to_string();
         let mut state = VersionedData {
-            seqno: SeqNo(5),
+            seqno: SeqNo(0),
             data: Bytes::from("abc"),
         };
 
         assert_eq!(
-            consensus.compare_and_set(&key, None, state.clone()).await,
+            consensus.compare_and_set(&key, state.clone()).await,
             Ok(CaSResult::Committed),
         );
-        state.seqno = SeqNo(6);
+        state.seqno = SeqNo(1);
         assert_eq!(
-            consensus
-                .compare_and_set(&key, Some(SeqNo(5)), state.clone())
-                .await,
+            consensus.compare_and_set(&key, state.clone()).await,
             Ok(CaSResult::Committed),
         );
-        state.seqno = SeqNo(129 + 5);
+        state.seqno = SeqNo(2);
         assert_eq!(
-            consensus
-                .compare_and_set(&key, Some(SeqNo(6)), state.clone())
-                .await,
+            consensus.compare_and_set(&key, state.clone()).await,
             Ok(CaSResult::Committed),
         );
 
@@ -506,7 +502,7 @@ mod tests {
 
         println!("--- SCANNING ---");
 
-        for data in consensus.scan(&key, SeqNo(129), 10).await? {
+        for data in consensus.scan(&key, SeqNo(2), 10).await? {
             println!(
                 "scan data: seqno: {:?}, {} bytes",
                 data.seqno,
