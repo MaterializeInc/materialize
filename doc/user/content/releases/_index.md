@@ -62,6 +62,12 @@ For more information, refer to:
 - **Faster DDL at scale**: We've improved DDL (e.g., `CREATE VIEW`, `CREATE INDEX`, `DROP`) latency by 37-55% for environments with many objects by making the internal catalog state a persistent data structure with structural sharing.
 - **Faster Iceberg sink commits**: We've improved Iceberg sink commit performance by disabling the duplicate check for RowDelta actions, which was causing significant commit time overhead.
 - **Up to 28x faster `COPY FROM STDIN`**: We've improved `COPY FROM STDIN` performance by parallelizing ingestion and using constant memory.
+- Added a `TIMESTAMP INTERVAL` option to `CREATE SOURCE` and
+  `ALTER SOURCE` that allows users to customize the timestamping
+  interval for sources.
+- Reduced per-batch overhead in Iceberg sink data file writes.
+- Improved OIDC authentication error messages in Self-Managed
+  deployments to provide clearer guidance when authentication fails.
 
 ### Bug Fixes {#v26.14-bug-fixes}
 
@@ -80,6 +86,13 @@ For more information, refer to:
 - Fixed dataflows being incorrectly re-planned after an environmentd
   restart due to missing per-cluster optimizer feature overrides.
 - Fixed query formatting for SQL Server and MySQL sources.
+- Fixed S3 one-shot sources to correctly read all pages of results from
+  `ListObjectsV2`, previously only the first page (up to ~1000 objects)
+  was read.
+- Fixed a hang in one-shot source ingestion (e.g., `COPY FROM` an S3
+  source) when running on multi-worker clusters.
+- Fixed an issue where the internal HTTP proxy could become overwhelmed
+  and reject new connections under load.
 
 ## v26.13.0
 *Released to Materialize Cloud: 2026-02-26* <br>
