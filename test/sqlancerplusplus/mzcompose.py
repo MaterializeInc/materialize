@@ -8,8 +8,8 @@
 # by the Apache License, Version 2.0.
 
 """
-Run SQLancer against Materialize: Automated testing to find logic bugs in
-database systems: https://github.com/sqlancer/sqlancer
+Run SQLancer++ against Materialize: Automated testing to find logic bugs in
+database systems: https://github.com/def-/sqlancerplusplus
 """
 
 import argparse
@@ -20,19 +20,13 @@ from materialize.mzcompose.composition import (
 )
 from materialize.sqlancer import create_services, run_sqlancer
 
-SERVICES = create_services("sqlancer")
+SERVICES = create_services("sqlancerplusplus")
 
 
 def _build_run_args(args: argparse.Namespace, seed: int) -> list[str]:
     return [
         "--random-seed",
         f"{seed}",
-        "--host",
-        "materialized",
-        "--port",
-        "6875",
-        "--username",
-        "materialize",
         "--timeout-seconds",
         f"{args.runtime}",
         "--num-tries",
@@ -43,8 +37,11 @@ def _build_run_args(args: argparse.Namespace, seed: int) -> list[str]:
         f"{args.qpg}",
         "--random-string-generation",
         "ALPHANUMERIC",
+        "general",
+        "--database-engine",
         "materialize",
         "--oracle",
+        # WHERE, NOREC or QUERY_PARTITIONING
         args.oracle,
     ]
 
@@ -53,9 +50,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     run_sqlancer(
         c,
         parser,
-        service_name="sqlancer",
-        default_oracle="NOREC",
+        service_name="sqlancerplusplus",
+        default_oracle="WHERE",
         build_run_args=_build_run_args,
-        docker_logs_path="/workdir/sqlancer/logs/materialize",
-        log_prefix="SQLancer",
+        docker_logs_path="/workdir/sqlancerplusplus/logs/general",
+        log_prefix="SQLancer++",
     )

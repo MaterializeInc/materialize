@@ -84,6 +84,7 @@ ERROR_RE = re.compile(
     | fatal\ runtime\ error: # stack overflow
     | \[SQLsmith\] # Unknown errors are logged
     | \[SQLancer\] # Unknown errors are logged
+    | \[SQLancer\+\+\] # Unknown errors are logged
     | environmentd:\ fatal: # startup failure
     | clusterd:\ fatal: # startup failure
     | error:\ Found\ argument\ '.*'\ which\ wasn't\ expected,\ or\ isn't\ valid\ in\ this\ context
@@ -202,6 +203,9 @@ IGNORE_RE = re.compile(
     | sqlsmith-mz.* \| .* very\ slow\ coordinator\ message
     # Expected on AWS in RQG because of build
     | comm="check"\ exe="/usr/bin/qemu-
+    # Handled by panic already
+    | sqlancer.* \| .*internal\ error:\ entered\ unreachable\ code
+    | sqlancer.* \| .*\("internal\ error:\ invalid\ input\ type"\)
     )
     """,
     re.VERBOSE | re.MULTILINE,
