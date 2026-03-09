@@ -1166,7 +1166,7 @@ class ClusterdCpu(Modification):
     def validate(self, mods: dict[type[Modification], Any]) -> None:
         version = MzVersion.parse_mz(mods[EnvironmentdImageRef])
         environmentd_supports_cpu_request = version >= MzVersion.parse_mz(
-            "v26.14.0-dev.0"
+            "v26.15.0-dev.0"
         )
 
         environmentd = get_environmentd_data()
