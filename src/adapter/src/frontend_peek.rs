@@ -737,8 +737,9 @@ impl PeekClient {
                     .contains(&id);
                 soft_assert_or_log!(
                     s || c,
-                    "missing read hold for collection {} in `input_id_bundle",
-                    id
+                    "missing read hold for collection {} in `input_id_bundle`; (in_immediate_multi_stmt_txn: {})",
+                    id,
+                    in_immediate_multi_stmt_txn,
                 );
             }
 
@@ -747,8 +748,9 @@ impl PeekClient {
             for id in input_id_bundle.storage_ids.iter() {
                 soft_assert_or_log!(
                     read_holds.storage_holds.contains_key(id),
-                    "missing storage read hold for collection {} in `input_id_bundle",
-                    id
+                    "missing storage read hold for collection {} in `input_id_bundle`; (in_immediate_multi_stmt_txn: {})",
+                    id,
+                    in_immediate_multi_stmt_txn,
                 );
             }
             for id in input_id_bundle
@@ -761,8 +763,9 @@ impl PeekClient {
                         .compute_ids()
                         .map(|(_instance, coll)| coll)
                         .contains(id),
-                    "missing compute read hold for collection {} in `input_id_bundle",
+                    "missing compute read hold for collection {} in `input_id_bundle`; (in_immediate_multi_stmt_txn: {})",
                     id,
+                    in_immediate_multi_stmt_txn,
                 );
             }
         }
@@ -1070,6 +1073,7 @@ impl PeekClient {
             &optimization_result,
             &determination,
             target_cluster_id,
+            in_immediate_multi_stmt_txn,
         );
 
         // Handle the optimization result: either generate EXPLAIN output or continue with execution
@@ -1438,6 +1442,7 @@ impl PeekClient {
         execution: &Execution,
         determination: &TimestampDetermination<Timestamp>,
         target_cluster_id: ClusterId,
+        in_immediate_multi_stmt_txn: bool,
     ) {
         // Extract source_imports, index_imports, as_of, and execution_name based on Execution variant
         let (source_imports, index_imports, as_of, execution_name): (
@@ -1503,9 +1508,10 @@ impl PeekClient {
         for id in source_imports.iter() {
             soft_assert_or_log!(
                 read_holds.storage_holds.contains_key(id),
-                "[{}] missing read hold for the source import {}",
+                "[{}] missing read hold for the source import {}; (in_immediate_multi_stmt_txn: {})",
                 execution_name,
-                id
+                id,
+                in_immediate_multi_stmt_txn,
             );
         }
         for id in index_imports.iter() {
@@ -1514,9 +1520,10 @@ impl PeekClient {
                     .compute_ids()
                     .map(|(_instance, coll)| coll)
                     .contains(id),
-                "[{}] missing read hold for the index import {}",
+                "[{}] missing read hold for the index import {}; (in_immediate_multi_stmt_txn: {})",
                 execution_name,
                 id,
+                in_immediate_multi_stmt_txn,
             );
         }
 
@@ -1524,30 +1531,33 @@ impl PeekClient {
         for (id, h) in read_holds.storage_holds.iter() {
             soft_assert_or_log!(
                 h.since().less_equal(&as_of),
-                "[{}] storage read hold at {:?} for collection {} is not enough for as_of {:?}, determination: {:?}",
+                "[{}] storage read hold at {:?} for collection {} is not enough for as_of {:?}, determination: {:?}; (in_immediate_multi_stmt_txn: {})",
                 execution_name,
                 h.since(),
                 id,
                 as_of,
-                determination
+                determination,
+                in_immediate_multi_stmt_txn,
             );
         }
         for ((instance, id), h) in read_holds.compute_holds.iter() {
             soft_assert_eq_or_log!(
                 *instance,
                 target_cluster_id,
-                "[{}] the read hold on {} is on the wrong cluster",
+                "[{}] the read hold on {} is on the wrong cluster; (in_immediate_multi_stmt_txn: {})",
                 execution_name,
-                id
+                id,
+                in_immediate_multi_stmt_txn,
             );
             soft_assert_or_log!(
                 h.since().less_equal(&as_of),
-                "[{}] compute read hold at {:?} for collection {} is not enough for as_of {:?}, determination: {:?}",
+                "[{}] compute read hold at {:?} for collection {} is not enough for as_of {:?}, determination: {:?}; (in_immediate_multi_stmt_txn: {})",
                 execution_name,
                 h.since(),
                 id,
                 as_of,
-                determination
+                determination,
+                in_immediate_multi_stmt_txn,
             );
         }
     }
