@@ -499,16 +499,26 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             None => BTreeMap::new(),
         };
 
+        // Batch-fetch all active storage collection frontiers once, instead of
+        // making a per-collection cross-controller call in the loop below.
+        let storage_read_frontiers: BTreeMap<GlobalId, Antichain<T>> = self
+            .storage_collections
+            .active_collection_frontiers()
+            .into_iter()
+            .map(|f| (f.id, f.read_capabilities))
+            .collect();
+
         // First, iterate over all collections and collect histogram measurements.
         // We keep a record of unreadable collections, so we can emit undefined lags for those here
         // and below when we collect history measurements.
         let mut unreadable_collections = BTreeSet::new();
         for (id, collection) in &mut self.collections {
-            // We need to ask the storage controller for the read frontiers of storage collections.
-            let read_frontier = match self.storage_collections.collection_frontiers(*id) {
-                Ok(f) => f.read_capabilities,
-                Err(_) => collection.read_frontier(),
-            };
+            // Use the pre-fetched storage read frontier, falling back to the
+            // collection's own read frontier for compute-only collections.
+            let read_frontier = storage_read_frontiers
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| collection.read_frontier());
             let write_frontier = collection.write_frontier();
             let collection_unreadable = PartialOrder::less_equal(&write_frontier, &read_frontier);
             if collection_unreadable {
@@ -2057,18 +2067,29 @@ where
     }
 
     /// Return the write frontiers of the dependencies of the given collection.
+    ///
+    /// If `storage_frontier_cache` is provided, it is used for storage
+    /// dependency lookups instead of making per-dependency cross-controller
+    /// calls.
     fn dependency_write_frontiers<'b>(
         &'b self,
         collection: &'b CollectionState<T>,
+        storage_frontier_cache: Option<&'b BTreeMap<GlobalId, Antichain<T>>>,
     ) -> impl Iterator<Item = Antichain<T>> + 'b {
         let compute_frontiers = collection.compute_dependency_ids().filter_map(|dep_id| {
             let collection = self.collections.get(&dep_id);
             collection.map(|c| c.write_frontier())
         });
-        let storage_frontiers = collection.storage_dependency_ids().filter_map(|dep_id| {
-            let frontiers = self.storage_collections.collection_frontiers(dep_id).ok();
-            frontiers.map(|f| f.write_frontier)
-        });
+        let storage_frontiers = collection
+            .storage_dependency_ids()
+            .filter_map(move |dep_id| {
+                if let Some(cache) = storage_frontier_cache {
+                    cache.get(&dep_id).cloned()
+                } else {
+                    let frontiers = self.storage_collections.collection_frontiers(dep_id).ok();
+                    frontiers.map(|f| f.write_frontier)
+                }
+            });
 
         compute_frontiers.chain(storage_frontiers)
     }
@@ -2114,6 +2135,15 @@ where
     /// don't learn about frontier updates of storage collections synchronously. We could do
     /// synchronous updates for compute dependencies, but we refrain from doing for simplicity.
     fn downgrade_warmup_capabilities(&mut self) {
+        // Batch-fetch all active storage collection write frontiers once,
+        // instead of making per-dependency cross-controller calls.
+        let storage_write_frontiers: BTreeMap<GlobalId, Antichain<T>> = self
+            .storage_collections
+            .active_collection_frontiers()
+            .into_iter()
+            .map(|f| (f.id, f.write_frontier))
+            .collect();
+
         let mut new_capabilities = BTreeMap::new();
         for (id, collection) in &self.collections {
             // For write-only collections that have advanced to the empty frontier, we can drop the
@@ -2127,7 +2157,9 @@ where
             }
 
             let mut new_capability = Antichain::new();
-            for frontier in self.dependency_write_frontiers(collection) {
+            for frontier in
+                self.dependency_write_frontiers(collection, Some(&storage_write_frontiers))
+            {
                 for time in frontier {
                     new_capability.insert(time.step_back().unwrap_or(time));
                 }
