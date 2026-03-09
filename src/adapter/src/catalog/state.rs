@@ -12,8 +12,8 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
-use std::sync::Arc;
 use std::sync::LazyLock;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use ipnet::IpNet;
@@ -97,10 +97,45 @@ use tracing::{debug, warn};
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::AdapterError;
+use crate::TimelineContext;
 use crate::catalog::{Catalog, ConnCatalog};
 use crate::coord::{ConnMeta, infer_sql_type_for_catalog};
 use crate::optimize::{self, Optimize, OptimizerCatalog};
 use crate::session::Session;
+
+/// Thread-safe cache for timeline context lookups per catalog item.
+/// Uses a `Mutex` to allow lazy population from `&self` methods on `Catalog`.
+/// Cache is cleared on any catalog item insert or drop (DDL operations).
+#[derive(Debug, Default)]
+pub(super) struct TimelineContextCache {
+    inner: Mutex<BTreeMap<CatalogItemId, TimelineContext>>,
+}
+
+impl Clone for TimelineContextCache {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Mutex::new(self.inner.lock().expect("poisoned").clone()),
+        }
+    }
+}
+
+impl TimelineContextCache {
+    /// Look up a cached timeline context. Returns `None` on cache miss.
+    pub fn get(&self, id: &CatalogItemId) -> Option<TimelineContext> {
+        self.inner.lock().expect("poisoned").get(id).cloned()
+    }
+
+    /// Insert a computed timeline context into the cache.
+    pub fn insert(&self, id: CatalogItemId, ctx: TimelineContext) {
+        self.inner.lock().expect("poisoned").insert(id, ctx);
+    }
+
+    /// Clear the entire cache. Uses `get_mut` for efficiency when `&mut self`
+    /// is available (bypasses the mutex lock).
+    pub fn clear(&mut self) {
+        self.inner.get_mut().expect("poisoned").clear();
+    }
+}
 
 /// The in-memory representation of the Catalog. This struct is not directly used to persist
 /// metadata to persistent storage. For persistent metadata see
@@ -168,6 +203,10 @@ pub struct CatalogState {
     // Read-only not derived from the durable catalog.
     #[serde(skip)]
     pub(super) license_key: ValidatedLicenseKey,
+
+    // Derived cache: timeline context per catalog item. Cleared on DDL.
+    #[serde(skip)]
+    pub(super) timeline_context_cache: TimelineContextCache,
 }
 
 /// Keeps track of what expressions are cached or not during startup.
@@ -323,6 +362,7 @@ impl CatalogState {
             storage_metadata: Arc::new(StorageMetadata::default()),
             license_key: ValidatedLicenseKey::for_tests(),
             mock_authentication_nonce: Default::default(),
+            timeline_context_cache: Default::default(),
         }
     }
 

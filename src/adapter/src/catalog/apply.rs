@@ -1701,6 +1701,9 @@ impl CatalogState {
 
     /// Associates a name, `CatalogItemId`, and entry.
     fn insert_entry(&mut self, entry: CatalogEntry) {
+        // Invalidate timeline context cache — item dependencies may have changed.
+        self.timeline_context_cache.clear();
+
         if !entry.id.is_system() {
             if let Some(cluster_id) = entry.item.cluster_id() {
                 self.clusters_by_id
@@ -1797,6 +1800,9 @@ impl CatalogState {
 
     #[mz_ore::instrument(level = "trace")]
     fn drop_item(&mut self, id: CatalogItemId) -> CatalogEntry {
+        // Invalidate timeline context cache — dependents' contexts may change.
+        self.timeline_context_cache.clear();
+
         let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
         for u in metadata.references().items() {
             if let Some(dep_metadata) = self.entry_by_id.get_mut(u) {

@@ -23,16 +23,29 @@ use crate::{AdapterError, CollectionIdBundle, TimelineContext};
 
 impl Catalog {
     /// Return the [`TimelineContext`] belonging to a [`CatalogItemId`], if one exists.
+    ///
+    /// Results are cached per item and invalidated on DDL (item insert/drop).
     pub(crate) fn get_timeline_context(&self, id: CatalogItemId) -> TimelineContext {
-        let entry = self.get_entry(&id);
-        self.validate_timeline_context(entry.global_ids())
-            .expect("impossible for a single object to belong to incompatible timeline contexts")
+        // Fast path: check cache.
+        if let Some(ctx) = self.state.timeline_context_cache.get(&id) {
+            return ctx;
+        }
+
+        // Slow path: compute via BFS through transitive dependencies.
+        let ctx = self.compute_timeline_context(id);
+
+        // Populate cache for future lookups.
+        self.state.timeline_context_cache.insert(id, ctx.clone());
+        ctx
     }
 
     /// Return the [`TimelineContext`] belonging to a [`GlobalId`], if one exists.
     pub(crate) fn get_timeline_context_for_global_id(&self, id: GlobalId) -> TimelineContext {
-        self.validate_timeline_context(vec![id])
-            .expect("impossible for a single object to belong to incompatible timeline contexts")
+        match self.try_resolve_item_id(&id) {
+            Some(item_id) => self.get_timeline_context(item_id),
+            // Unresolvable IDs don't contribute a timeline context.
+            None => TimelineContext::TimestampIndependent,
+        }
     }
 
     /// Returns an iterator that partitions an id bundle by the [`TimelineContext`] that each id
@@ -113,6 +126,8 @@ impl Catalog {
     /// (joining data from timelines that have similar numbers with different
     /// meanings like two separate debezium topics) or will never complete (joining
     /// cdcv2 and realtime data).
+    ///
+    /// Uses per-item cached timeline contexts to avoid redundant BFS traversals.
     pub(crate) fn validate_timeline_context<I>(
         &self,
         ids: I,
@@ -120,50 +135,67 @@ impl Catalog {
     where
         I: IntoIterator<Item = GlobalId>,
     {
-        let items_ids = ids
-            .into_iter()
-            .filter_map(|gid| self.try_resolve_item_id(&gid));
-        let mut timeline_contexts: Vec<_> =
-            self.get_timeline_contexts(items_ids).into_iter().collect();
-        // If there's more than one timeline, we will not produce meaningful
-        // data to a user. Take, for example, some realtime source and a debezium
-        // consistency topic source. The realtime source uses something close to now
-        // for its timestamps. The debezium source starts at 1 and increments per
-        // transaction. We don't want to choose some timestamp that is valid for both
-        // of these because the debezium source will never get to the same value as the
-        // realtime source's "milliseconds since Unix epoch" value. And even if it did,
-        // it's not meaningful to join just because those two numbers happen to be the
-        // same now.
-        //
-        // Another example: assume two separate debezium consistency topics. Both
-        // start counting at 1 and thus have similarish numbers that probably overlap
-        // a lot. However it's still not meaningful to join those two at a specific
-        // transaction counter number because those counters are unrelated to the
-        // other.
-        let timelines: Vec<_> = timeline_contexts
-            .extract_if(.., |timeline_context| timeline_context.contains_timeline())
-            .collect();
+        let mut timeline_dep: Option<Timeline> = None;
+        let mut has_timestamp_dep = false;
+
+        for gid in ids {
+            if let Some(item_id) = self.try_resolve_item_id(&gid) {
+                match self.get_timeline_context(item_id) {
+                    TimelineContext::TimelineDependent(t) => match &timeline_dep {
+                        Some(existing) if existing != &t => {
+                            return Err(AdapterError::Unsupported(
+                                "multiple timelines within one dataflow",
+                            ));
+                        }
+                        None => timeline_dep = Some(t),
+                        _ => {} // same timeline
+                    },
+                    TimelineContext::TimestampDependent => has_timestamp_dep = true,
+                    TimelineContext::TimestampIndependent => {}
+                }
+            }
+        }
 
         // A single or group of objects may contain multiple compatible timeline
         // contexts. For example `SELECT *, 1, mz_now() FROM t` will contain all
         // types of contexts. We choose the strongest context level to return back.
-        if timelines.len() > 1 {
-            Err(AdapterError::Unsupported(
-                "multiple timelines within one dataflow",
-            ))
-        } else if timelines.len() == 1 {
-            Ok(timelines.into_element())
-        } else if timeline_contexts
-            .iter()
-            .contains(&TimelineContext::TimestampDependent)
-        {
+        if let Some(timeline) = timeline_dep {
+            Ok(TimelineContext::TimelineDependent(timeline))
+        } else if has_timestamp_dep {
             Ok(TimelineContext::TimestampDependent)
         } else {
             Ok(TimelineContext::TimestampIndependent)
         }
     }
 
+    /// Compute the timeline context for a single catalog item using BFS
+    /// through its transitive dependencies. This is the uncached computation.
+    fn compute_timeline_context(&self, id: CatalogItemId) -> TimelineContext {
+        let entry = self.get_entry(&id);
+        let items_ids = entry
+            .global_ids()
+            .filter_map(|gid| self.try_resolve_item_id(&gid));
+        let mut timeline_contexts: Vec<_> =
+            self.get_timeline_contexts(items_ids).into_iter().collect();
+        let timelines: Vec<_> = timeline_contexts
+            .extract_if(.., |timeline_context| timeline_context.contains_timeline())
+            .collect();
+        if timelines.len() > 1 {
+            panic!("impossible for a single object to belong to incompatible timeline contexts");
+        } else if timelines.len() == 1 {
+            timelines.into_element()
+        } else if timeline_contexts
+            .iter()
+            .contains(&TimelineContext::TimestampDependent)
+        {
+            TimelineContext::TimestampDependent
+        } else {
+            TimelineContext::TimestampIndependent
+        }
+    }
+
     /// Return the [`TimelineContext`]s belonging to a list of [`CatalogItemId`]s, if any exist.
+    /// This performs a BFS through the catalog dependency graph.
     fn get_timeline_contexts<I>(&self, ids: I) -> BTreeSet<TimelineContext>
     where
         I: IntoIterator<Item = CatalogItemId>,

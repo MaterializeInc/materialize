@@ -180,6 +180,7 @@ impl Catalog {
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             http_host_name: config.http_host_name,
             license_key: config.license_key,
+            timeline_context_cache: Default::default(),
         };
 
         let deploy_generation = storage.get_deployment_generation().await?;
