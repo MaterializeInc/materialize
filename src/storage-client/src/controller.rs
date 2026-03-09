@@ -35,7 +35,7 @@ use mz_controller_types::dyncfgs::WALLCLOCK_LAG_HISTOGRAM_PERIOD_INTERVAL;
 use mz_dyncfg::ConfigSet;
 use mz_ore::soft_panic_or_log;
 use mz_persist_client::batch::ProtoBatch;
-use mz_persist_types::{Codec64, Opaque, ShardId};
+use mz_persist_types::{Codec64, ShardId};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row};
@@ -765,14 +765,8 @@ impl<T> DataSource<T> {
 /// A wrapper struct that presents the adapter token to a format that is understandable by persist
 /// and also allows us to differentiate between a token being present versus being set for the
 /// first time.
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone, Debug, Default)]
 pub struct PersistEpoch(pub Option<NonZeroI64>);
-
-impl Opaque for PersistEpoch {
-    fn initial() -> Self {
-        PersistEpoch(None)
-    }
-}
 
 impl Codec64 for PersistEpoch {
     fn codec_name() -> String {

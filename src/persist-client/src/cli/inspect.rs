@@ -26,7 +26,7 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_ore::url::SensitiveUrl;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist_types::codec_impls::TodoSchema;
-use mz_persist_types::{Codec, Codec64, Opaque};
+use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
 use prost::Message;
 use serde_json::json;
@@ -768,7 +768,7 @@ impl Codec for V {
 
 pub(crate) static FAKE_OPAQUE_CODEC: Mutex<String> = Mutex::new(String::new());
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct O([u8; 8]);
 
 impl Codec64 for O {
@@ -782,11 +782,5 @@ impl Codec64 for O {
 
     fn decode(buf: [u8; 8]) -> Self {
         Self(buf)
-    }
-}
-
-impl Opaque for O {
-    fn initial() -> Self {
-        Self([0; 8])
     }
 }

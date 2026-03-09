@@ -27,7 +27,7 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::instrument;
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::schema::SchemaId;
-use mz_persist_types::{Codec, Codec64, Opaque};
+use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType};
 use semver::Version;
 use timely::order::TotalOrder;
@@ -37,7 +37,7 @@ use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BATCH_DELETE_ENABLED, Batch, BatchBuilder, ProtoBatch};
 use crate::cache::{PersistClientCache, StateCache};
 use crate::cfg::PersistConfig;
-use crate::critical::{CriticalReaderId, SinceHandle};
+use crate::critical::{CriticalReaderId, Opaque, SinceHandle};
 use crate::error::InvalidUsage;
 use crate::fetch::{BatchFetcher, BatchFetcherConfig};
 use crate::internal::compact::{CompactConfig, Compactor};
@@ -454,33 +454,27 @@ impl PersistClient {
     /// return a handle with its `since` frontier set to the initial value of
     /// `Antichain::from_elem(T::minimum())`.
     #[instrument(level = "debug", fields(shard = %shard_id))]
-    pub async fn open_critical_since<K, V, T, D, O>(
+    pub async fn open_critical_since<K, V, T, D>(
         &self,
         shard_id: ShardId,
         reader_id: CriticalReaderId,
+        default_opaque: Opaque,
         diagnostics: Diagnostics,
-    ) -> Result<SinceHandle<K, V, T, D, O>, InvalidUsage<T>>
+    ) -> Result<SinceHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
         D: Monoid + Codec64 + Send + Sync,
-        O: Opaque + Codec64,
     {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let (state, maintenance) = machine
-            .register_critical_reader::<O>(&reader_id, &diagnostics.handle_purpose)
+            .register_critical_reader(&reader_id, default_opaque, &diagnostics.handle_purpose)
             .await;
         maintenance.start_performing(&machine, &gc);
-        let handle = SinceHandle::new(
-            machine,
-            gc,
-            reader_id,
-            state.since,
-            Codec64::decode(state.opaque.0),
-        );
+        let handle = SinceHandle::new(machine, gc, reader_id, state.since, state.opaque);
 
         Ok(handle)
     }
@@ -939,6 +933,7 @@ mod tests {
     use crate::batch::BLOB_TARGET_SIZE;
     use crate::cache::PersistClientCache;
     use crate::cfg::BATCH_BUILDER_MAX_OUTSTANDING_PARTS;
+    use crate::critical::Opaque;
     use crate::error::{CodecConcreteType, CodecMismatch, UpperMismatch};
     use crate::internal::paths::BlobKey;
     use crate::read::ListenEvent;
@@ -2033,8 +2028,13 @@ mod tests {
         let () = read.downgrade_since(&Antichain::new()).await;
         let () = write.advance_upper(&Antichain::new()).await;
 
-        let mut since_handle: SinceHandle<(), (), u64, i64, u64> = persist_client
-            .open_critical_since(shard_id, CRITICAL_SINCE, Diagnostics::for_tests())
+        let mut since_handle: SinceHandle<(), (), u64, i64> = persist_client
+            .open_critical_since(
+                shard_id,
+                CRITICAL_SINCE,
+                Opaque::encode(&0u64),
+                Diagnostics::for_tests(),
+            )
             .await
             .expect("invalid persist usage");
 
@@ -2091,8 +2091,13 @@ mod tests {
         let () = read.downgrade_since(&Antichain::new()).await;
         let () = write.advance_upper(&Antichain::new()).await;
 
-        let mut since_handle: SinceHandle<(), (), u64, i64, u64> = persist_client
-            .open_critical_since(shard_id, CRITICAL_SINCE, Diagnostics::for_tests())
+        let mut since_handle: SinceHandle<(), (), u64, i64> = persist_client
+            .open_critical_since(
+                shard_id,
+                CRITICAL_SINCE,
+                Opaque::encode(&0u64),
+                Diagnostics::for_tests(),
+            )
             .await
             .expect("invalid persist usage");
 

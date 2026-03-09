@@ -41,7 +41,7 @@ use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::arrow::{ArrayBound, ProtoArrayData};
 use mz_persist_types::columnar::{ColumnEncoder, Schema};
 use mz_persist_types::schema::{SchemaId, backward_compatible};
-use mz_persist_types::{Codec, Codec64, Opaque};
+use mz_persist_types::{Codec, Codec64};
 use mz_proto::ProtoType;
 use mz_proto::RustType;
 use proptest_derive::Arbitrary;
@@ -54,7 +54,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::critical::CriticalReaderId;
+use crate::critical::{CriticalReaderId, Opaque};
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{
     LazyInlineBatchPart, LazyPartStats, LazyProto, MetadataMap, parse_id,
@@ -200,24 +200,12 @@ pub struct LeasedReaderState<T> {
     pub debug: HandleDebugState,
 }
 
-#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize)]
-#[serde(into = "u64")]
-pub struct OpaqueState(pub [u8; 8]);
-
-impl From<OpaqueState> for u64 {
-    fn from(value: OpaqueState) -> Self {
-        u64::from_le_bytes(value.0)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CriticalReaderState<T> {
     /// The since capability of this reader.
     pub since: Antichain<T>,
     /// An opaque token matched on by compare_and_downgrade_since.
-    pub opaque: OpaqueState,
-    /// The [Codec64] used to encode [Self::opaque].
-    pub opaque_codec: String,
+    pub opaque: Opaque,
     /// For debugging.
     pub debug: HandleDebugState,
 }
@@ -1506,10 +1494,11 @@ where
         Continue((reader_state, self.seqno_since(seqno)))
     }
 
-    pub fn register_critical_reader<O: Opaque + Codec64>(
+    pub fn register_critical_reader(
         &mut self,
         hostname: &str,
         reader_id: &CriticalReaderId,
+        opaque: Opaque,
         purpose: &str,
     ) -> ControlFlow<NoOpStateTransition<CriticalReaderState<T>>, CriticalReaderState<T>> {
         let state = CriticalReaderState {
@@ -1518,8 +1507,7 @@ where
                 purpose: purpose.to_owned(),
             },
             since: self.trace.since().clone(),
-            opaque: OpaqueState(Codec64::encode(&O::initial())),
-            opaque_codec: O::codec_name(),
+            opaque,
         };
 
         // We expire all readers if the upper and since both advance to the
@@ -1938,14 +1926,14 @@ where
         Continue(Since(reader_current_since))
     }
 
-    pub fn compare_and_downgrade_since<O: Opaque + Codec64>(
+    pub fn compare_and_downgrade_since(
         &mut self,
         reader_id: &CriticalReaderId,
-        expected_opaque: &O,
-        (new_opaque, new_since): (&O, &Antichain<T>),
+        expected_opaque: &Opaque,
+        (new_opaque, new_since): (&Opaque, &Antichain<T>),
     ) -> ControlFlow<
-        NoOpStateTransition<Result<Since<T>, (O, Since<T>)>>,
-        Result<Since<T>, (O, Since<T>)>,
+        NoOpStateTransition<Result<Since<T>, (Opaque, Since<T>)>>,
+        Result<Since<T>, (Opaque, Since<T>)>,
     > {
         // We expire all readers if the upper and since both advance to the
         // empty antichain. Gracefully handle this. At the same time,
@@ -1959,18 +1947,17 @@ where
         }
 
         let reader_state = self.critical_reader(reader_id);
-        assert_eq!(reader_state.opaque_codec, O::codec_name());
 
-        if &O::decode(reader_state.opaque.0) != expected_opaque {
+        if reader_state.opaque != *expected_opaque {
             // No-op, but still commit the state change so that this gets
             // linearized.
             return Continue(Err((
-                Codec64::decode(reader_state.opaque.0),
+                reader_state.opaque.clone(),
                 Since(reader_state.since.clone()),
             )));
         }
 
-        reader_state.opaque = OpaqueState(Codec64::encode(new_opaque));
+        reader_state.opaque = new_opaque.clone();
         if PartialOrder::less_equal(&reader_state.since, new_since) {
             reader_state.since.clone_from(new_since);
             self.update_since();
@@ -3037,14 +3024,12 @@ pub(crate) mod tests {
         Strategy::prop_map(
             (
                 any::<Option<T>>(),
-                any::<OpaqueState>(),
-                any::<String>(),
+                any::<Opaque>(),
                 any::<HandleDebugState>(),
             ),
-            |(since, opaque, opaque_codec, debug)| CriticalReaderState {
+            |(since, opaque, debug)| CriticalReaderState {
                 since: since.map_or_else(Antichain::new, Antichain::from_elem),
                 opaque,
-                opaque_codec,
                 debug,
             },
         )
@@ -3345,56 +3330,72 @@ pub(crate) mod tests {
         let reader = CriticalReaderId::new();
         let _ = state
             .collections
-            .register_critical_reader::<u64>("", &reader, "");
+            .register_critical_reader("", &reader, Opaque::encode(&0u64), "");
 
         // The shard global since == 0 initially.
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(0));
         // The initial opaque value should be set.
         assert_eq!(
-            u64::decode(state.collections.critical_reader(&reader).opaque.0),
-            u64::initial()
+            state
+                .collections
+                .critical_reader(&reader)
+                .opaque
+                .decode::<u64>(),
+            u64::MIN
         );
 
         // Greater
         assert_eq!(
-            state.collections.compare_and_downgrade_since::<u64>(
+            state.collections.compare_and_downgrade_since(
                 &reader,
-                &u64::initial(),
-                (&1, &Antichain::from_elem(2)),
+                &Opaque::encode(&0u64),
+                (&Opaque::encode(&1u64), &Antichain::from_elem(2)),
             ),
             Continue(Ok(Since(Antichain::from_elem(2))))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         assert_eq!(
-            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            state
+                .collections
+                .critical_reader(&reader)
+                .opaque
+                .decode::<u64>(),
             1
         );
         // Equal (no-op)
         assert_eq!(
-            state.collections.compare_and_downgrade_since::<u64>(
+            state.collections.compare_and_downgrade_since(
                 &reader,
-                &1,
-                (&2, &Antichain::from_elem(2)),
+                &Opaque::encode(&1u64),
+                (&Opaque::encode(&2u64), &Antichain::from_elem(2)),
             ),
             Continue(Ok(Since(Antichain::from_elem(2))))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         assert_eq!(
-            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            state
+                .collections
+                .critical_reader(&reader)
+                .opaque
+                .decode::<u64>(),
             2
         );
         // Less (no-op)
         assert_eq!(
-            state.collections.compare_and_downgrade_since::<u64>(
+            state.collections.compare_and_downgrade_since(
                 &reader,
-                &2,
-                (&3, &Antichain::from_elem(1)),
+                &Opaque::encode(&2u64),
+                (&Opaque::encode(&3u64), &Antichain::from_elem(1)),
             ),
             Continue(Ok(Since(Antichain::from_elem(2))))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         assert_eq!(
-            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            state
+                .collections
+                .critical_reader(&reader)
+                .opaque
+                .decode::<u64>(),
             3
         );
     }

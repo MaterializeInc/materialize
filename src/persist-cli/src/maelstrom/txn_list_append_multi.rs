@@ -28,6 +28,7 @@ use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHand
 use mz_persist_client::async_runtime::IsolatedRuntime;
 use mz_persist_client::cache::StateCache;
 use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::critical::Opaque;
 use mz_persist_client::metrics::Metrics as PersistMetrics;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::rpc::PubSubClientConnection;
@@ -75,6 +76,7 @@ impl Transactor {
             mz_txn_wal::all_dyncfgs(client.dyncfgs().clone()),
             Arc::new(TxnMetrics::new(&MetricsRegistry::new())),
             txns_id,
+            Opaque::encode(&0u64),
         )
         .await;
         oracle.apply_write(init_ts.into()).await;

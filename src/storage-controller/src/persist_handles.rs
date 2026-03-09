@@ -36,7 +36,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 use tracing::{Instrument, Span, debug, info_span};
 
-use crate::{PersistEpoch, StorageError};
+use crate::StorageError;
 
 mod read_only_table_worker;
 
@@ -171,9 +171,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
         }
     }
 
-    pub(crate) fn new_txns(
-        txns: TxnsHandle<SourceData, (), T, StorageDiff, PersistEpoch, TxnsCodecRow>,
-    ) -> Self {
+    pub(crate) fn new_txns(txns: TxnsHandle<SourceData, (), T, StorageDiff, TxnsCodecRow>) -> Self {
         let (tx, rx) =
             tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd<T>)>();
         mz_ore::task::spawn(|| "PersistTableWriteWorker", async move {
@@ -268,7 +266,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
 }
 
 struct TxnsTableWorker<T: Timestamp + Lattice + TotalOrder + Codec64> {
-    txns: TxnsHandle<SourceData, (), T, StorageDiff, PersistEpoch, TxnsCodecRow>,
+    txns: TxnsHandle<SourceData, (), T, StorageDiff, TxnsCodecRow>,
     write_handles: BTreeMap<GlobalId, ShardId>,
     tidy: Tidy,
 }

@@ -746,20 +746,18 @@ impl DataSubscribeTask {
 #[cfg(test)]
 mod tests {
     use itertools::{Either, Itertools};
-    use mz_persist_types::Opaque;
 
     use crate::tests::writer;
     use crate::txns::TxnsHandle;
 
     use super::*;
 
-    impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
+    impl<K, V, T, D, C> TxnsHandle<K, V, T, D, C>
     where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
         D: Debug + Monoid + Ord + Codec64 + Send + Sync,
-        O: Opaque + Debug + Codec64,
         C: TxnsCodec,
     {
         async fn subscribe_task(
