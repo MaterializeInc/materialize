@@ -640,23 +640,28 @@ impl Coordinator {
             && real_time_recency_ts.is_none()
         {
             // Note down the difference between StrictSerializable and Serializable into a metric.
+            // We reuse the already-computed read_holds and upper from the first call, avoiding
+            // a redundant re-acquisition of read holds and frontier queries.
             if let Some(strict) = det.timestamp_context.timestamp() {
-                let (serializable_det, _tmp_read_holds) = self.determine_timestamp_for(
-                    session,
-                    id_bundle,
-                    when,
-                    timeline_context,
-                    oracle_read_ts,
-                    real_time_recency_ts,
-                    &IsolationLevel::Serializable,
-                )?;
-
-                if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
+                let timeline = Self::get_timeline(timeline_context);
+                if let Ok(serializable_raw) =
+                    <Coordinator as TimestampProvider>::determine_timestamp_via_constraints(
+                        session,
+                        &read_holds,
+                        id_bundle,
+                        when,
+                        oracle_read_ts,
+                        real_time_recency_ts,
+                        &IsolationLevel::Serializable,
+                        &timeline,
+                        det.largest_not_in_advance_of_upper,
+                    )
+                {
                     self.metrics
                         .timestamp_difference_for_strict_serializable_ms
                         .with_label_values(&[compute_instance.to_string().as_str()])
                         .observe(f64::cast_lossy(u64::from(
-                            strict.saturating_sub(*serializable),
+                            strict.saturating_sub(serializable_raw.timestamp),
                         )));
                 }
             }
