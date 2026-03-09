@@ -15,6 +15,51 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.15.0
+*Released to Materialize Cloud: 2026-03-12* <br>
+*Released to Materialize Self-Managed: 2026-03-13* <br>
+
+This release adds OIDC password authentication and custom authentication
+claims for Self-Managed deployments, enables `COPY FROM` for remote (S3)
+sources, and fixes several bugs including a panic during concurrent
+`COPY FROM STDIN` and table drops, and a Kafka sink authorization failure
+when progress topics already exist.
+
+### Improvements {#v26.15-improvements}
+
+- **OIDC password authentication for HTTP/WebSocket**: Self-Managed
+  deployments using OIDC authentication can now also authenticate via
+  password on HTTP and WebSocket connections, providing a fallback
+  authentication method.
+- **OIDC custom authentication claim**: Self-Managed deployments can now
+  configure a custom authentication claim for OIDC tokens, allowing more
+  flexible identity provider integration.
+- **`COPY FROM` remote sources**: The `COPY FROM` command now supports
+  reading from remote sources such as S3, enabling bulk data ingestion
+  from cloud object storage.
+- Improved query optimization by enabling cast elimination by default,
+  which removes unnecessary type casts from query plans.
+- Renamed "Org ID" to "Environment ID" in the console UI to reduce
+  confusion for Self-Managed users whose organization ID and environment
+  ID differ.
+
+### Bug Fixes {#v26.15-bug-fixes}
+
+- Fixed a panic when running `COPY FROM STDIN` concurrently with a table
+  drop on the target table.
+- Fixed Kafka sinks failing with an authorization error when the progress
+  topic was pre-created by an administrator before sink creation.
+- Fixed the Role Filters dropdown in the console not rendering correctly
+  in dark mode.
+- Fixed an incorrect join condition in the console cluster list that
+  could cause incorrect cluster information to be displayed.
+- Fixed incorrect behavior when using unmaterializable functions like
+  `now()` in `AS OF` queries by properly disallowing them, as these
+  functions cannot be evaluated at a specific timestamp.
+- Fixed a potential out-of-memory condition when environments had a large
+  number of indexes, caused by internal command channels not being fully
+  drained between processing batches.
+
 ## v26.14.1
 *Released to Materialize Cloud: 2026-03-05* <br>
 *Released to Materialize Self-Managed: 2026-03-06* <br>
