@@ -6762,3 +6762,24 @@ def workflow_test_prometheus_metrics(c: Composition) -> None:
                 """
             )
         )
+
+        # Disable scraping by setting the interval to 0s.
+        c.sql(
+            """
+            ALTER SYSTEM SET compute_prometheus_scrape_interval = '0s';
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        c.testdrive(
+            dedent(
+                """
+                > SET cluster = cluster1
+
+                > SELECT count(*) = 0
+                  FROM mz_introspection.mz_compute_prometheus_metrics
+                true
+                """
+            )
+        )
