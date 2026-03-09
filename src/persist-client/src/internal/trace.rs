@@ -504,6 +504,40 @@ impl<T> Trace<T> {
         self.spine.spine_batches().count()
     }
 
+    /// Find the hollow batch whose time range contains `frontier`.
+    ///
+    /// Optimized over a flat scan of all hollow batch parts: first searches
+    /// at the spine-batch level (O(log N) spine batches), then only examines
+    /// parts within the matching spine batch. This avoids scanning hollow
+    /// batch parts in spine batches whose time ranges have already been
+    /// passed by the frontier.
+    pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Option<&HollowBatch<T>>
+    where
+        T: Timestamp + Lattice,
+    {
+        for sb in self.spine.spine_batches() {
+            // Skip spine batches entirely before the frontier.
+            if PartialOrder::less_equal(sb.desc.upper(), frontier) {
+                continue;
+            }
+            // Check if this spine batch's range contains the frontier.
+            if PartialOrder::less_equal(sb.desc.lower(), frontier) {
+                // Search within this spine batch's hollow batch parts.
+                for part in &sb.parts {
+                    if PartialOrder::less_equal(part.batch.desc.lower(), frontier)
+                        && PartialOrder::less_than(frontier, part.batch.desc.upper())
+                    {
+                        return Some(&part.batch);
+                    }
+                }
+            }
+            // Spine batches are in time order; if this one is past the
+            // frontier, no later one will contain it.
+            break;
+        }
+        None
+    }
+
     #[cfg(test)]
     pub fn num_hollow_batches(&self) -> usize {
         self.batches().count()

@@ -2615,15 +2615,9 @@ where
     }
 
     pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Result<HollowBatch<T>, SeqNo> {
-        // TODO: Avoid the O(n^2) here: `next_listen_batch` is called once per
-        // batch and this iterates through all batches to find the next one.
         self.collections
             .trace
-            .batches()
-            .find(|b| {
-                PartialOrder::less_equal(b.desc.lower(), frontier)
-                    && PartialOrder::less_than(frontier, b.desc.upper())
-            })
+            .next_listen_batch(frontier)
             .cloned()
             .ok_or(self.seqno)
     }
