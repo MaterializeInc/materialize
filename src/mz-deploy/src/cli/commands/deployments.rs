@@ -43,14 +43,11 @@ pub async fn run(
         env_names.sort();
         for env_name in env_names {
             let deployment = &deployments[env_name];
-            let clusters = match client
+            let clusters = client
                 .deployments()
                 .get_deployment_hydration_status_with_lag(env_name, allowed_lag_secs)
                 .await
-            {
-                Ok(statuses) => statuses,
-                Err(_) => Vec::new(),
-            };
+                .unwrap_or_default();
             result.push(serde_json::json!({
                 "deploy_id": env_name,
                 "deployed_at": deployment.deployed_at,

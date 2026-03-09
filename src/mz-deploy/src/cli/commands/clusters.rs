@@ -169,7 +169,7 @@ async fn apply_cluster(
         "CLUSTER",
         &quote_identifier(cluster_name),
     );
-    grants::execute_revocations(&executor, &revocations, "cluster", &cluster_name).await?;
+    grants::execute_revocations(executor, &revocations, "cluster", &cluster_name).await?;
 
     // Execute COMMENT statements
     for comment in &def.comments {

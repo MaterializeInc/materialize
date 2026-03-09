@@ -126,7 +126,7 @@ async fn apply_network_policy(
         "NETWORK POLICY",
         &quote_identifier(policy_name),
     );
-    grants::execute_revocations(&executor, &revocations, "network policy", &policy_name).await?;
+    grants::execute_revocations(executor, &revocations, "network policy", &policy_name).await?;
 
     // Execute COMMENT statements
     for comment in &def.comments {
