@@ -18,6 +18,7 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::soft_panic_or_log;
 use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
@@ -86,28 +87,29 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         move |_frontiers| {
             let Some(cap) = &mut cap else { return };
 
-            let elapsed = now.elapsed();
-            let elapsed_ms = elapsed.as_millis();
+            // Compute the timestamp for the next scrape and downgrade
+            // the capability to it. This avoids frontier churn from
+            // premature wakeups between scrapes.
+            let next_scrape_elapsed = next_scrape - now;
+            let next_ms = next_scrape_elapsed.as_millis();
             let time_ms: u128 =
-                ((elapsed_ms + start_offset.as_millis()) / interval_ms + 1) * interval_ms;
+                ((next_ms + start_offset.as_millis()) / interval_ms + 1) * interval_ms;
             let ts: Timestamp = time_ms.try_into().expect("must fit");
-
-            // Downgrade capability to the current timestamp.
             cap.downgrade(&ts);
+
             if Instant::now() < next_scrape {
                 return;
             }
             next_scrape = Instant::now() + interval;
 
-            if !ENABLE_COMPUTE_PROMETHEUS_METRICS.get(&worker_config) {
-                // Skip scraping, leave prev_snapshot intact so diffs are
-                // correct when re-enabled.
-                return;
-            }
-
-            // Gather current metrics and build new snapshot.
-            let metric_families = metrics_registry.gather();
-            let new_snapshot = flatten_metrics(metric_families);
+            // Gather current metrics and build new snapshot, or an empty
+            // snapshot when disabled (which retracts any existing data).
+            let new_snapshot = if ENABLE_COMPUTE_PROMETHEUS_METRICS.get(&worker_config) {
+                let metric_families = metrics_registry.gather();
+                flatten_metrics(metric_families)
+            } else {
+                BTreeMap::new()
+            };
 
             // Diff against previous snapshot and emit packed Row pairs.
             let mut output = output.activate();
@@ -298,16 +300,7 @@ fn flatten_metrics(
                     );
                 }
                 MetricType::UNTYPED => {
-                    #[allow(deprecated)]
-                    let value = metric.get_untyped().get_value();
-                    insert_row(
-                        &mut snapshot,
-                        base_name.to_string(),
-                        base_labels,
-                        value,
-                        type_str,
-                        help,
-                    );
+                    soft_panic_or_log!("unexpected untyped metric: {base_name}");
                 }
             }
         }
@@ -336,7 +329,7 @@ fn insert_row(
     metric_type: &'static str,
     help: &str,
 ) {
-    labels.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+    labels.sort();
 
     snapshot.insert((name, labels), (value, metric_type, help.to_string()));
 }
@@ -352,20 +345,20 @@ fn pack_row<'a>(
     process_id: usize,
 ) -> (&'a mz_repr::RowRef, &'a mz_repr::RowRef) {
     packer.pack_by_index(|row_packer, index| match index {
+        // process_id
+        0 => row_packer.push(Datum::UInt64(u64::cast_from(process_id))),
         // metric_name
-        0 => row_packer.push(Datum::String(metric_name)),
+        1 => row_packer.push(Datum::String(metric_name)),
         // metric_type
-        1 => row_packer.push(Datum::String(metric_type)),
+        2 => row_packer.push(Datum::String(metric_type)),
         // labels (Map)
-        2 => {
+        3 => {
             row_packer.push_dict(labels.iter().map(|(k, v)| (k.as_str(), Datum::String(v))));
         }
         // value
-        3 => row_packer.push(Datum::Float64(value.into())),
+        4 => row_packer.push(Datum::Float64(value.into())),
         // help
-        4 => row_packer.push(Datum::String(help)),
-        // process_id
-        5 => row_packer.push(Datum::UInt64(u64::cast_from(process_id))),
+        5 => row_packer.push(Datum::String(help)),
         _ => unreachable!("unexpected column index {index}"),
     })
 }

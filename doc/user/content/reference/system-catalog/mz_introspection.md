@@ -153,24 +153,22 @@ The `mz_compute_operator_durations_histogram` view describes a histogram of the 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_operator_durations_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_operator_durations_histogram_raw -->
 
-## `mz_compute_prometheus_metrics_per_worker`
+## `mz_compute_prometheus_metrics`
 
-The `mz_compute_prometheus_metrics_per_worker` source exposes Prometheus metrics collected from each compute replica's internal metrics registry.
+The `mz_compute_prometheus_metrics` source exposes Prometheus metrics collected from each compute replica's internal metrics registry.
 Metrics are scraped periodically and presented as rows.
 Histograms are flattened into separate bucket, sum, and count rows.
 Summaries are flattened into separate quantile, sum, and count rows.
 
-<!-- RELATION_SPEC mz_introspection.mz_compute_prometheus_metrics_per_worker NO_COMMENTS -->
+<!-- RELATION_SPEC mz_introspection.mz_compute_prometheus_metrics NO_COMMENTS -->
 | Field         | Type                   | Meaning                                                              |
 |---------------|------------------------|----------------------------------------------------------------------|
+| `process_id`  | [`uint8`]              | The ID of the process that collected the metric.                     |
 | `metric_name` | [`text`]               | The name of the Prometheus metric.                                   |
 | `metric_type` | [`text`]               | The type of the metric: `counter`, `gauge`, `histogram`, or `summary`. |
 | `labels`      | [`map`]                | The label key-value pairs associated with the metric.                |
 | `value`       | [`double precision`]   | The numeric value of the metric.                                     |
 | `help`        | [`text`]               | The help string describing the metric.                               |
-| `process_id`  | [`uint8`]              | The ID of the process that collected the metric.                     |
-
-Metrics with the legacy Prometheus type `untyped` may also appear but are unlikely in practice.
 
 ## `mz_dataflows`
 

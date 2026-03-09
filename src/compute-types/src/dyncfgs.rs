@@ -331,7 +331,7 @@ pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
 ///
 /// When disabled, the source stops scraping and retracts any existing data.
 pub const ENABLE_COMPUTE_PROMETHEUS_METRICS: Config<bool> = Config::new(
-    "enable_compute_prometheus_metrics",
+    "enable_compute_prometheus_metrics_introspection",
     true,
     "Whether the Prometheus metrics introspection source is enabled.",
 );

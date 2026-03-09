@@ -1175,4 +1175,4 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17065  mz_hydration_statuses_ind
 17066  mz_mcp_data_products
 17067  mz_catalog_raw
-17068  mz_compute_prometheus_metrics_per_worker
+17068  mz_compute_prometheus_metrics
