@@ -850,8 +850,8 @@ fn test_many_columns() {
     // The query must fail because the server can't encode a RowDescription
     // with more than i16::MAX columns. When encoding fails, `machine.run()`
     // returns an error, and the catch-all handler in `protocol.rs` sends a
-    // FATAL ErrorResponse with "does not fit in an i16" before closing the
-    // connection.
+    // FATAL ErrorResponse with "fields in row description, which exceeds ..."
+    // before closing the connection.
     //
     // However, the client non-deterministically sees either the FATAL
     // ErrorResponse or just "connection closed". This is because the
@@ -869,7 +869,8 @@ fn test_many_columns() {
         Err(err) => {
             let err_str = err.to_string_with_causes();
             assert!(
-                err_str.contains("does not fit in an i16") || err_str.contains("connection closed"),
+                err_str.contains("fields in row description, which exceeds")
+                    || err_str.contains("connection closed"),
                 "unexpected error: {err}"
             );
         }
