@@ -7041,7 +7041,6 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "jsonwebtoken",
- "mz-authenticator",
  "mz-ore",
  "openssl",
  "reqwest",

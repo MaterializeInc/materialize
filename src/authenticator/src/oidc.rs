@@ -34,6 +34,7 @@ pub enum OidcError {
     MissingIssuer,
     /// Failed to parse OIDC configuration URL.
     InvalidIssuerUrl(String),
+    AudienceParseError,
     /// Failed to fetch from the identity provider.
     FetchFromProviderFailed {
         url: String,
@@ -67,6 +68,9 @@ impl std::fmt::Display for OidcError {
         match self {
             OidcError::MissingIssuer => write!(f, "OIDC issuer is not configured"),
             OidcError::InvalidIssuerUrl(_) => write!(f, "invalid OIDC issuer URL"),
+            OidcError::AudienceParseError => {
+                write!(f, "failed to parse OIDC_AUDIENCE system variable")
+            }
             OidcError::FetchFromProviderFailed { .. } => {
                 write!(f, "failed to fetch OIDC provider configuration")
             }
@@ -103,8 +107,8 @@ impl OidcError {
                 Some(format!("JWT key ID \"{key_id}\" was not found."))
             }
             OidcError::InvalidAudience { expected_audiences } => Some(format!(
-                "Expected one of audiences {} in the JWT.",
-                serde_json::to_string(expected_audiences).unwrap_or_default(),
+                "Expected one of audiences {:?} in the JWT.",
+                expected_audiences,
             )),
             OidcError::InvalidIssuer { expected_issuer } => {
                 Some(format!("Expected issuer \"{expected_issuer}\" in the JWT.",))
@@ -389,23 +393,18 @@ impl GenericOidcAuthenticatorInner {
         let authentication_claim = OIDC_AUTHENTICATION_CLAIM.get(system_vars.dyncfgs());
 
         let expected_audiences: Vec<String> = {
-            let val = OIDC_AUDIENCE.get(system_vars.dyncfgs());
-            let arr = val
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            if arr.is_empty() {
+            let audiences: Vec<String> =
+                serde_json::from_value(OIDC_AUDIENCE.get(system_vars.dyncfgs()))
+                    .map_err(|_| OidcError::AudienceParseError)?;
+
+            if audiences.is_empty() {
                 warn!(
                     "Audience validation skipped. It is discouraged \
                     to skip audience validation since it allows anyone \
                     with a JWT issued by the same issuer to authenticate."
                 );
             }
-            arr
+            audiences
         };
 
         // Decode header to get key ID (kid) and the

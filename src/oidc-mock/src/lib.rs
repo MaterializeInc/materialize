@@ -23,7 +23,6 @@ use axum::routing::get;
 use axum::{Json, Router};
 use base64::Engine;
 use jsonwebtoken::{EncodingKey, Header, encode};
-use mz_authenticator::OidcClaims;
 use mz_ore::now::NowFn;
 use mz_ore::task::JoinHandle;
 use openssl::pkey::{PKey, Private};
@@ -57,6 +56,34 @@ struct OidcMockContext {
     jwk: Jwk,
 }
 
+/// Audience claim value: either a single string or a list of strings.
+///
+/// Serializes as a JSON string when `Single`, and as a JSON array when `Multiple`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AudClaim {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl Default for AudClaim {
+    fn default() -> Self {
+        AudClaim::Multiple(vec![])
+    }
+}
+
+/// Claims struct used for JWT encoding in the mock server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MockClaims {
+    iss: String,
+    exp: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    iat: Option<i64>,
+    aud: AudClaim,
+    #[serde(flatten)]
+    unknown_claims: BTreeMap<String, serde_json::Value>,
+}
+
 /// Options for generating JWT tokens.
 #[derive(Debug, Clone, Default)]
 pub struct GenerateJwtOptions<'a> {
@@ -66,8 +93,9 @@ pub struct GenerateJwtOptions<'a> {
     pub exp: Option<i64>,
     /// Custom issuer. If None, uses server's issuer.
     pub issuer: Option<&'a str>,
-    /// Audience claim. If None, uses empty vec.
-    pub aud: Option<Vec<String>>,
+    /// Audience claim. If None, uses empty array.
+    /// Use `AudClaim::Single` for a single string or `AudClaim::Multiple` for an array.
+    pub aud: Option<AudClaim>,
     /// Additional claims.
     pub unknown_claims: Option<BTreeMap<String, String>>,
 }
@@ -179,7 +207,7 @@ impl OidcMockServer {
             .map(|(k, v)| (k, serde_json::Value::String(v.to_string())))
             .collect();
 
-        let claims = OidcClaims {
+        let claims = MockClaims {
             iss: opts.issuer.unwrap_or(&self.issuer).to_string(),
             exp: opts.exp.unwrap_or(now_secs + self.expires_in_secs),
             iat: Some(now_secs),

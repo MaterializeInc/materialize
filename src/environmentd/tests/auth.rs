@@ -47,7 +47,7 @@ use mz_frontegg_auth::{
 use mz_frontegg_mock::{
     FronteggMockServer, models::ApiToken, models::TenantApiTokenConfig, models::UserConfig,
 };
-use mz_oidc_mock::{GenerateJwtOptions, OidcMockServer};
+use mz_oidc_mock::{AudClaim, GenerateJwtOptions, OidcMockServer};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
@@ -1546,7 +1546,7 @@ async fn test_auth_oidc_audience_validation() {
     let valid_all_aud_token = oidc_server.generate_jwt(
         oidc_user,
         GenerateJwtOptions {
-            aud: Some(expected_audiences.clone()),
+            aud: Some(AudClaim::Multiple(expected_audiences.clone())),
             ..Default::default()
         },
     );
@@ -1555,7 +1555,7 @@ async fn test_auth_oidc_audience_validation() {
     let valid_one_aud_token = oidc_server.generate_jwt(
         oidc_user,
         GenerateJwtOptions {
-            aud: Some(vec![expected_audiences[0].clone()]),
+            aud: Some(AudClaim::Single(expected_audiences[0].clone())),
             ..Default::default()
         },
     );
@@ -1563,7 +1563,7 @@ async fn test_auth_oidc_audience_validation() {
     let wrong_aud_token = oidc_server.generate_jwt(
         oidc_user,
         GenerateJwtOptions {
-            aud: Some(vec!["wrong-app".to_string()]),
+            aud: Some(AudClaim::Single("wrong-app".to_string())),
             ..Default::default()
         },
     );
@@ -1622,10 +1622,7 @@ async fn test_auth_oidc_audience_validation() {
                     assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
                     assert_contains!(
                         err.detail().unwrap(),
-                        format!(
-                            "Expected one of audiences {}",
-                            serde_json::to_string(&expected_audiences).unwrap_or_default()
-                        )
+                        format!("Expected one of audiences {:?}", &expected_audiences)
                     );
                 })),
             },
@@ -1682,7 +1679,7 @@ async fn test_auth_oidc_audience_optional() {
     let valid_aud_token = oidc_server.generate_jwt(
         oidc_user,
         GenerateJwtOptions {
-            aud: Some(vec!["my-app-client-id".to_string()]),
+            aud: Some(AudClaim::Multiple(vec!["my-app-client-id".to_string()])),
             ..Default::default()
         },
     );
@@ -1881,14 +1878,14 @@ async fn test_auth_oidc_issuer_and_audience_switch() {
     let token1 = oidc_server1.generate_jwt(
         oidc_user,
         GenerateJwtOptions {
-            aud: Some(vec![audience1.to_string()]),
+            aud: Some(AudClaim::Single(audience1.to_string())),
             ..Default::default()
         },
     );
     let token2 = oidc_server2.generate_jwt(
         oidc_user,
         GenerateJwtOptions {
-            aud: Some(vec![audience2.to_string()]),
+            aud: Some(AudClaim::Single(audience2.to_string())),
             ..Default::default()
         },
     );
