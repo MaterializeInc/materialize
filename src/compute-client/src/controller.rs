@@ -754,6 +754,11 @@ where
     }
 
     /// Creates the described dataflow and initializes state for its output.
+    ///
+    /// Only materialized views are allowed to have a `target_replica`.
+    ///
+    /// Panics if called with a dataflow description that has index exports
+    /// when `target_replica` is set.
     pub fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
@@ -769,6 +774,10 @@ where
             if !instance.replicas.contains(&replica_id) {
                 return Err(ReplicaMissing(replica_id));
             }
+            assert!(
+                dataflow.exported_index_ids().next().is_none(),
+                "Replica-targeted indexes are not supported"
+            );
         }
 
         // Validation: as_of
@@ -784,14 +793,6 @@ where
         let storage_ids = dataflow.imported_source_ids().collect();
         let mut import_read_holds = self.storage_collections.acquire_read_holds(storage_ids)?;
         for id in dataflow.imported_index_ids() {
-            if let Some(target_replica) = target_replica
-                && instance
-                    .collection(id)?
-                    .target_replica
-                    .is_some_and(|r| r != target_replica)
-            {
-                return Err(ReplicaNotHostingIndex(target_replica));
-            }
             let read_hold = instance.acquire_read_hold(id)?;
             import_read_holds.push(read_hold);
         }
@@ -821,7 +822,6 @@ where
                 compute_dependencies: dataflow.imported_index_ids().collect(),
                 shared: shared.clone(),
                 time_dependence: time_dependence.clone(),
-                target_replica,
             };
             instance.collections.insert(id, collection);
             shared_collection_state.insert(id, shared);
@@ -887,11 +887,6 @@ where
         if let Some(replica_id) = target_replica {
             if !instance.replicas.contains(&replica_id) {
                 return Err(ReplicaMissing(replica_id));
-            }
-            let collection = instance.collection(peek_target.id())?;
-            if !collection.write_only && collection.target_replica.is_some_and(|r| r != replica_id)
-            {
-                return Err(ReplicaNotHostingIndex(replica_id));
             }
         }
 
@@ -1193,8 +1188,6 @@ struct Collection<T> {
     /// The computed time dependence for this collection. None indicates no specific information,
     /// a value describes how the collection relates to wall-clock time.
     time_dependence: Option<TimeDependence>,
-    /// The single replica this collection is installed on, if any.
-    target_replica: Option<ReplicaId>,
 }
 
 impl<T: Timestamp> Collection<T> {
@@ -1205,7 +1198,6 @@ impl<T: Timestamp> Collection<T> {
             compute_dependencies: Default::default(),
             shared: SharedCollectionState::new(as_of),
             time_dependence: Some(TimeDependence::default()),
-            target_replica: None,
         }
     }
 

@@ -1026,7 +1026,28 @@ where
         // Record the command so that new replicas can be brought up to speed.
         self.history.push(cmd.clone());
 
-        let target_replica = match &cmd {
+        let target_replica = self.target_replica(&cmd);
+
+        if let Some(rid) = target_replica {
+            if let Some(replica) = self.replicas.get_mut(&rid) {
+                let _ = replica.client.send(cmd);
+            }
+        } else {
+            for replica in self.replicas.values_mut() {
+                let _ = replica.client.send(cmd.clone());
+            }
+        }
+    }
+
+    /// Determine the target replica for a compute command. Retrieves the
+    /// collection named by the command, and returns the target replica if
+    /// it is set, and None if not set, or the command doesn't name a collection.
+    ///
+    /// Panics if a create-dataflow command names collections that have different
+    /// target replicas. It is an error to construct such an object and would
+    /// indicate a bug in [`Self::create_dataflow`].
+    fn target_replica(&self, cmd: &ComputeCommand<T>) -> Option<ReplicaId> {
+        match &cmd {
             ComputeCommand::Schedule(id)
             | ComputeCommand::AllowWrites(id)
             | ComputeCommand::AllowCompaction { id, .. } => {
@@ -1044,22 +1065,13 @@ where
                 }
                 target_replica
             }
+            // Skip Peek as we don't allow replica-targeted indexes.
             ComputeCommand::Peek(_)
             | ComputeCommand::Hello { .. }
             | ComputeCommand::CreateInstance(_)
             | ComputeCommand::InitializationComplete
             | ComputeCommand::UpdateConfiguration(_)
             | ComputeCommand::CancelPeek { .. } => None,
-        };
-
-        if let Some(rid) = target_replica {
-            if let Some(replica) = self.replicas.get_mut(&rid) {
-                let _ = replica.client.send(cmd);
-            }
-        } else {
-            for replica in self.replicas.values_mut() {
-                let _ = replica.client.send(cmd.clone());
-            }
         }
     }
 
@@ -1096,45 +1108,12 @@ where
         self.history.update_source_uppers(&self.storage_collections);
 
         // Replay the commands at the client, creating new dataflow identifiers.
-        let mut skipped_ids = BTreeSet::new();
         for command in self.history.iter() {
             // Skip `CreateDataflow` commands targeted at different replicas.
-            match &command {
-                ComputeCommand::CreateDataflow(dataflow) => {
-                    let all_exports_skip = dataflow.export_ids().all(|eid| {
-                        self.collections
-                            .get(&eid)
-                            .and_then(|c| c.target_replica)
-                            .is_some_and(|rid| rid != id)
-                    });
-                    if all_exports_skip {
-                        skipped_ids.extend(dataflow.export_ids());
-                        continue;
-                    }
-                }
-                ComputeCommand::Schedule(id)
-                | ComputeCommand::AllowWrites(id)
-                | ComputeCommand::AllowCompaction { id, frontier: _ } => {
-                    if skipped_ids.contains(id) {
-                        continue;
-                    }
-                }
-                // Should have been validated before.
-                ComputeCommand::Peek(peek) => {
-                    if let Some(peek_state) = self.peeks.get(&peek.uuid) {
-                        if let Some(target_replica) = peek_state.target_replica
-                            && target_replica != id
-                        {
-                            continue;
-                        }
-                    }
-                }
-                // Do not contain collection IDs.
-                ComputeCommand::Hello { .. } => {}
-                ComputeCommand::CreateInstance(_) => {}
-                ComputeCommand::InitializationComplete => {}
-                ComputeCommand::UpdateConfiguration(_) => {}
-                ComputeCommand::CancelPeek { .. } => {}
+            if let Some(target_replica) = self.target_replica(command)
+                && target_replica != id
+            {
+                continue;
             }
 
             if client.send(command.clone()).is_err() {
@@ -1618,19 +1597,6 @@ where
         if let Some(target) = target_replica {
             if !self.replica_exists(target) {
                 return Err(ReplicaMissing(target));
-            }
-        }
-
-        // If the collection is targeted at a specific replica, the peek must
-        // go to that replica. Error if the user requested a different one.
-        let collection_target = self
-            .collections
-            .get(&target_id)
-            .and_then(|c| c.target_replica);
-        if let (Some(peek_replica), Some(collection_replica)) = (target_replica, collection_target)
-        {
-            if peek_replica != collection_replica {
-                return Err(ReplicaNotHosting(peek_replica));
             }
         }
 
