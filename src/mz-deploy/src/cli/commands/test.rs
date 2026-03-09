@@ -64,8 +64,8 @@ enum TestOutcome {
 /// Returns `CliError::Project` if project loading fails
 /// Returns `CliError::Connection` if database connection fails
 /// Returns error if tests fail (exits with code 1)
-pub async fn run(directory: &Path, docker_image: &str) -> Result<(), CliError> {
-    let planned_project = project::plan(directory)?;
+pub async fn run(directory: &Path, docker_image: &str, profile: &str) -> Result<(), CliError> {
+    let planned_project = project::plan(directory, profile)?;
     let empty_types = Types::default();
     let runtime = DockerRuntime::new().with_image(docker_image);
     if planned_project.tests.is_empty() {

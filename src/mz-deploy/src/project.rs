@@ -57,6 +57,7 @@ pub mod normalize;
 pub mod object_id;
 mod parser;
 pub mod planned;
+pub mod profile_files;
 pub mod raw;
 pub mod roles;
 pub mod typed;
@@ -85,8 +86,11 @@ impl SchemaQualifier {
 }
 
 /// Load, validate, and convert a project to a planned deployment representation.
-pub fn plan<P: AsRef<Path>>(root: P) -> Result<planned::Project, error::ProjectError> {
-    let raw_project = raw::load_project(root)?;
+pub fn plan<P: AsRef<Path>>(
+    root: P,
+    profile: &str,
+) -> Result<planned::Project, error::ProjectError> {
+    let raw_project = raw::load_project(root, profile)?;
     let typed_project = typed::Project::try_from(raw_project)?;
     let planned_project = planned::Project::from(typed_project);
     Ok(planned_project)

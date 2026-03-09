@@ -13,7 +13,9 @@ production and can be promoted with `deploy` or cleaned up with `abort`.
 ## Behavior
 
 1. Validates the git working tree is clean (unless `--allow-dirty`).
-2. Compiles and validates the project (same as `compile`).
+2. Compiles and validates the project (same as `compile`). The connection
+   profile's name is used for file resolution, so `--profile staging` will
+   load `__staging` file overrides. See `mz-deploy help profiles`.
 3. Diffs the plan against the current production snapshot to determine
    what changed. On the first deployment, everything is new.
 4. Validates privileges, cluster isolation, and sink connections.

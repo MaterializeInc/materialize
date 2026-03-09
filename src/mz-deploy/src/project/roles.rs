@@ -8,6 +8,7 @@ use crate::project::error::{
     LoadError, ProjectError, ValidationError, ValidationErrorKind, ValidationErrors,
 };
 use crate::project::parser::{parse_statements_with_context, statement_type_name};
+use crate::project::profile_files::collect_and_resolve_sql_files;
 use mz_sql_parser::ast::{
     AlterRoleStatement, CommentObjectType, CommentStatement, CreateRoleStatement,
     GrantRoleStatement, Raw, Statement,
@@ -33,7 +34,7 @@ pub struct RoleDefinition {
 /// Load all role definitions from `<root>/roles/`.
 ///
 /// Returns an empty vec if `roles/` doesn't exist (the directory is optional).
-pub fn load_roles(root: &Path) -> Result<Vec<RoleDefinition>, ProjectError> {
+pub fn load_roles(root: &Path, profile: &str) -> Result<Vec<RoleDefinition>, ProjectError> {
     let roles_dir = root.join("roles");
 
     if !roles_dir.exists() {
@@ -44,38 +45,12 @@ pub fn load_roles(root: &Path) -> Result<Vec<RoleDefinition>, ProjectError> {
         return Err(LoadError::RootNotDirectory { path: roles_dir }.into());
     }
 
-    let mut entries: Vec<_> = std::fs::read_dir(&roles_dir)
-        .map_err(|e| LoadError::DirectoryReadFailed {
-            path: roles_dir.clone(),
-            source: e,
-        })?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| LoadError::EntryReadFailed {
-            directory: roles_dir.clone(),
-            source: e,
-        })?;
-
-    // Sort for deterministic order
-    entries.sort_by_key(|e| e.file_name());
+    let resolved = collect_and_resolve_sql_files(&roles_dir, profile)?;
 
     let mut definitions = Vec::new();
     let mut errors = Vec::new();
 
-    for entry in entries {
-        let path = entry.path();
-
-        // Skip non-.sql files
-        if path.extension().and_then(|e| e.to_str()) != Some("sql") {
-            continue;
-        }
-
-        // Extract expected role name from filename
-        let expected_name = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .ok_or_else(|| LoadError::InvalidFileName { path: path.clone() })?
-            .to_string();
-
+    for (path, expected_name) in resolved {
         // Read file
         let sql = std::fs::read_to_string(&path).map_err(|e| LoadError::FileReadFailed {
             path: path.clone(),
@@ -253,7 +228,7 @@ mod tests {
     #[test]
     fn test_load_roles_no_directory() {
         let dir = create_test_dir();
-        let result = load_roles(dir.path()).unwrap();
+        let result = load_roles(dir.path(), "default").unwrap();
         assert!(
             result.is_empty(),
             "should return empty vec when roles/ doesn't exist"
@@ -275,7 +250,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_roles(dir.path()).unwrap();
+        let result = load_roles(dir.path(), "default").unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "analyst");
         assert_eq!(result[0].alter_stmts.len(), 1);
@@ -291,7 +266,7 @@ mod tests {
 
         fs::write(roles_dir.join("reader.sql"), "CREATE ROLE reader;").unwrap();
 
-        let result = load_roles(dir.path()).unwrap();
+        let result = load_roles(dir.path(), "default").unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "reader");
         assert!(result[0].alter_stmts.is_empty());
@@ -307,7 +282,7 @@ mod tests {
 
         fs::write(roles_dir.join("analyst.sql"), "CREATE ROLE wrong_name;").unwrap();
 
-        let result = load_roles(dir.path());
+        let result = load_roles(dir.path(), "default");
         assert!(
             result.is_err(),
             "should error when role name doesn't match filename"
@@ -322,7 +297,7 @@ mod tests {
 
         fs::write(roles_dir.join("analyst.sql"), "GRANT analyst TO joe;").unwrap();
 
-        let result = load_roles(dir.path());
+        let result = load_roles(dir.path(), "default");
         assert!(
             result.is_err(),
             "should error when no CREATE ROLE statement"
@@ -342,7 +317,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_roles(dir.path());
+        let result = load_roles(dir.path(), "default");
         assert!(
             result.is_err(),
             "should error on unsupported statement type"
@@ -362,7 +337,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_roles(dir.path());
+        let result = load_roles(dir.path(), "default");
         assert!(
             result.is_err(),
             "should error when ALTER targets wrong role"
@@ -382,7 +357,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_roles(dir.path());
+        let result = load_roles(dir.path(), "default");
         assert!(
             result.is_err(),
             "should error when grant targets wrong role"
@@ -402,7 +377,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_roles(dir.path());
+        let result = load_roles(dir.path(), "default");
         assert!(
             result.is_err(),
             "should error when comment targets wrong role"
@@ -419,7 +394,7 @@ mod tests {
 
         fs::write(roles_dir.join("writer.sql"), "CREATE ROLE writer;").unwrap();
 
-        let result = load_roles(dir.path()).unwrap();
+        let result = load_roles(dir.path(), "default").unwrap();
         assert_eq!(result.len(), 2);
         // Sorted by filename
         assert_eq!(result[0].name, "analyst");

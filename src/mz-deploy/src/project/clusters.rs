@@ -8,6 +8,7 @@ use crate::project::error::{
     LoadError, ProjectError, ValidationError, ValidationErrorKind, ValidationErrors,
 };
 use crate::project::parser::{parse_statements_with_context, statement_type_name};
+use crate::project::profile_files::collect_and_resolve_sql_files;
 use mz_sql_parser::ast::{
     ClusterOptionName, CommentObjectType, CommentStatement, CreateClusterStatement,
     GrantPrivilegesStatement, GrantTargetSpecification, GrantTargetSpecificationInner, ObjectType,
@@ -32,7 +33,7 @@ pub struct ClusterDefinition {
 /// Load all cluster definitions from `<root>/clusters/`.
 ///
 /// Returns an empty vec if `clusters/` doesn't exist (the directory is optional).
-pub fn load_clusters(root: &Path) -> Result<Vec<ClusterDefinition>, ProjectError> {
+pub fn load_clusters(root: &Path, profile: &str) -> Result<Vec<ClusterDefinition>, ProjectError> {
     let clusters_dir = root.join("clusters");
 
     if !clusters_dir.exists() {
@@ -43,38 +44,12 @@ pub fn load_clusters(root: &Path) -> Result<Vec<ClusterDefinition>, ProjectError
         return Err(LoadError::RootNotDirectory { path: clusters_dir }.into());
     }
 
-    let mut entries: Vec<_> = std::fs::read_dir(&clusters_dir)
-        .map_err(|e| LoadError::DirectoryReadFailed {
-            path: clusters_dir.clone(),
-            source: e,
-        })?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| LoadError::EntryReadFailed {
-            directory: clusters_dir.clone(),
-            source: e,
-        })?;
-
-    // Sort for deterministic order
-    entries.sort_by_key(|e| e.file_name());
+    let resolved = collect_and_resolve_sql_files(&clusters_dir, profile)?;
 
     let mut definitions = Vec::new();
     let mut errors = Vec::new();
 
-    for entry in entries {
-        let path = entry.path();
-
-        // Skip non-.sql files
-        if path.extension().and_then(|e| e.to_str()) != Some("sql") {
-            continue;
-        }
-
-        // Extract expected cluster name from filename
-        let expected_name = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .ok_or_else(|| LoadError::InvalidFileName { path: path.clone() })?
-            .to_string();
-
+    for (path, expected_name) in resolved {
         // Read file
         let sql = std::fs::read_to_string(&path).map_err(|e| LoadError::FileReadFailed {
             path: path.clone(),
@@ -275,7 +250,7 @@ mod tests {
     #[test]
     fn test_load_clusters_no_directory() {
         let dir = create_test_dir();
-        let result = load_clusters(dir.path()).unwrap();
+        let result = load_clusters(dir.path(), "default").unwrap();
         assert!(
             result.is_empty(),
             "should return empty vec when clusters/ doesn't exist"
@@ -296,7 +271,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path()).unwrap();
+        let result = load_clusters(dir.path(), "default").unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "analytics");
         assert_eq!(result[0].grants.len(), 1);
@@ -322,7 +297,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path()).unwrap();
+        let result = load_clusters(dir.path(), "default").unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "quickstart");
         assert!(result[0].grants.is_empty());
@@ -341,7 +316,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path());
+        let result = load_clusters(dir.path(), "default");
         assert!(
             result.is_err(),
             "should error when cluster name doesn't match filename"
@@ -360,7 +335,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path());
+        let result = load_clusters(dir.path(), "default");
         assert!(
             result.is_err(),
             "should error when no CREATE CLUSTER statement"
@@ -380,7 +355,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path());
+        let result = load_clusters(dir.path(), "default");
         assert!(
             result.is_err(),
             "should error on unsupported statement type"
@@ -400,7 +375,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path());
+        let result = load_clusters(dir.path(), "default");
         assert!(
             result.is_err(),
             "should error when grant targets wrong cluster"
@@ -420,7 +395,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path());
+        let result = load_clusters(dir.path(), "default");
         assert!(
             result.is_err(),
             "should error when comment targets wrong cluster"
@@ -445,7 +420,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path()).unwrap();
+        let result = load_clusters(dir.path(), "default").unwrap();
         assert_eq!(result.len(), 2);
         // Sorted by filename
         assert_eq!(result[0].name, "analytics");

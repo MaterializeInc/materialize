@@ -23,7 +23,7 @@ pub async fn run(directory: &Path, profile: &Profile, dry_run: bool) -> Result<(
     // Load role definitions
     progress::stage_start("Loading role definitions");
     let load_start = Instant::now();
-    let definitions = roles::load_roles(directory)?;
+    let definitions = roles::load_roles(directory, &profile.name)?;
 
     if definitions.is_empty() {
         println!(

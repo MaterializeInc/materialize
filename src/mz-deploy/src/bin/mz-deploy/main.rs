@@ -376,7 +376,10 @@ enum Command {
     /// Shows all profiles defined in profiles.toml and indicates which one
     /// is currently active. The active profile is determined by the --profile
     /// flag, or the default set in project.toml.
-    #[command(hide = true, after_help = "Run 'mz-deploy help profiles' for a detailed usage guide.")]
+    #[command(
+        hide = true,
+        after_help = "Run 'mz-deploy help profiles' for a detailed usage guide."
+    )]
     Profiles,
 
     /// Wait for staging deployment clusters to be hydrated and ready
@@ -626,6 +629,7 @@ async fn run(args: Args) -> Result<(), CliError> {
     }
 
     let settings = load_project_settings(&args.directory, args.docker_image)?;
+    let active_profile = args.profile.as_deref().unwrap_or(&settings.profile);
 
     match args.command {
         Some(Command::Compile { skip_typecheck }) => {
@@ -636,7 +640,7 @@ async fn run(args: Args) -> Result<(), CliError> {
                     image: settings.docker_image(),
                 }
             };
-            cli::commands::compile::run(&args.directory, typecheck)
+            cli::commands::compile::run(&args.directory, typecheck, active_profile)
                 .await
                 .map(|_| ())
         }
@@ -742,7 +746,8 @@ async fn run(args: Args) -> Result<(), CliError> {
             cli::commands::gen_data_contracts::run(&profile, &args.directory).await
         }
         Some(Command::Test) => {
-            cli::commands::test::run(&args.directory, &settings.docker_image()).await
+            cli::commands::test::run(&args.directory, &settings.docker_image(), active_profile)
+                .await
         }
         Some(Command::Abort { deploy_id }) => {
             let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;

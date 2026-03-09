@@ -13,18 +13,17 @@ use std::path::Path;
 pub fn run(directory: &Path, cli_profile: Option<&str>) -> Result<(), CliError> {
     let profiles_config = ProfilesConfig::load(Some(directory)).map_err(CliError::Config)?;
 
-    let default_profile = ProjectSettings::load(directory)
-        .ok()
-        .map(|s| s.profile);
+    let default_profile = ProjectSettings::load(directory).ok().map(|s| s.profile);
 
-    let active = cli_profile
-        .map(|s| s.to_string())
-        .or(default_profile);
+    let active = cli_profile.map(|s| s.to_string()).or(default_profile);
 
     let names = profiles_config.profile_names();
 
     if names.is_empty() {
-        println!("No profiles found in {}", profiles_config.source_path().display());
+        println!(
+            "No profiles found in {}",
+            profiles_config.source_path().display()
+        );
         return Ok(());
     }
 

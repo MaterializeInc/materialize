@@ -21,7 +21,7 @@ pub async fn run(directory: &Path, profile: &Profile, dry_run: bool) -> Result<(
     // Load network policy definitions
     progress::stage_start("Loading network policy definitions");
     let load_start = Instant::now();
-    let definitions = network_policies::load_network_policies(directory)?;
+    let definitions = network_policies::load_network_policies(directory, &profile.name)?;
 
     if definitions.is_empty() {
         println!(

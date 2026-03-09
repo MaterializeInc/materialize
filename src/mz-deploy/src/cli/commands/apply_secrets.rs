@@ -26,7 +26,8 @@ pub async fn run(
 ) -> Result<(), CliError> {
     let start_time = Instant::now();
 
-    let planned_project = super::compile::run(directory, TypeCheckMode::Disabled).await?;
+    let planned_project =
+        super::compile::run(directory, TypeCheckMode::Disabled, &profile.name).await?;
 
     let secrets: Vec<_> = planned_project
         .iter_objects()

@@ -434,7 +434,7 @@ pub struct Database {
 /// use mz_deploy::project::typed::Project;
 ///
 /// // Load raw project from file system
-/// let raw_project = raw::load_project("./my_project").unwrap();
+/// let raw_project = raw::load_project("./my_project", "default").unwrap();
 ///
 /// // Convert to validated typed project
 /// let typed_project = Project::try_from(raw_project).unwrap();

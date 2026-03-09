@@ -91,7 +91,7 @@ GROUP BY u.id, u.name;
         types.write_types_lock(project_path).unwrap();
 
         // Load the project
-        let mir_project = project::plan(project_path).unwrap();
+        let mir_project = project::plan(project_path, "default").unwrap();
 
         // Create Docker runtime and get client
         let runtime = DockerRuntime::new();

@@ -29,6 +29,7 @@ use crate::cli::TypeCheckMode;
 pub async fn run(
     directory: &Path,
     typecheck: TypeCheckMode,
+    profile: &str,
 ) -> Result<project::planned::Project, CliError> {
     let start_time = Instant::now();
 
@@ -37,7 +38,7 @@ pub async fn run(
     // Stage 1: Parse and validate SQL files
     progress::stage_start("Parsing SQL files");
     let parse_start = Instant::now();
-    let planned_project = project::plan(directory)?;
+    let planned_project = project::plan(directory, profile)?;
     let parse_duration = parse_start.elapsed();
 
     // Count objects and schemas

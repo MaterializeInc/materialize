@@ -93,7 +93,8 @@ pub async fn run(
 
     progress::info(&format!("Deploying to staging environment: {}", stage_name));
 
-    let planned_project = super::compile::run(directory, TypeCheckMode::Disabled).await?;
+    let planned_project =
+        super::compile::run(directory, TypeCheckMode::Disabled, &profile.name).await?;
     let staging_suffix = format!("_{}", stage_name);
 
     let client = Client::connect_with_profile(profile.clone())

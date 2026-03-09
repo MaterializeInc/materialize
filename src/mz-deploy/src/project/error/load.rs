@@ -80,4 +80,15 @@ pub enum LoadError {
         /// The path where extraction failed
         path: PathBuf,
     },
+
+    /// Two files resolve to the same object name for the active profile
+    #[error(
+        "duplicate object '{name}' for profile '{profile}': both {path1} and {path2} resolve to the same name"
+    )]
+    DuplicateProfileObject {
+        name: String,
+        profile: String,
+        path1: PathBuf,
+        path2: PathBuf,
+    },
 }

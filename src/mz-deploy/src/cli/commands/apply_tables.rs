@@ -57,7 +57,8 @@ pub async fn run(
 
     progress::info(&format!("Creating tables in deployment: {}", deploy_id));
 
-    let planned_project = super::compile::run(directory, TypeCheckMode::Disabled).await?;
+    let planned_project =
+        super::compile::run(directory, TypeCheckMode::Disabled, &profile.name).await?;
     let client = Client::connect_with_profile(profile.clone())
         .await
         .map_err(CliError::Connection)?;
@@ -217,7 +218,8 @@ async fn apply_by_kind(
         ),
     };
 
-    let planned_project = super::compile::run(directory, TypeCheckMode::Disabled).await?;
+    let planned_project =
+        super::compile::run(directory, TypeCheckMode::Disabled, &profile.name).await?;
     let client = Client::connect_with_profile(profile.clone())
         .await
         .map_err(CliError::Connection)?;

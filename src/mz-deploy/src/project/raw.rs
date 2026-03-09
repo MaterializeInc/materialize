@@ -54,6 +54,7 @@
 
 use super::error::{LoadError, ProjectError};
 use super::parser::parse_statements_with_context;
+use super::profile_files::collect_and_resolve_sql_files;
 use mz_sql_parser::ast::{Raw, Statement};
 use std::collections::BTreeMap;
 use std::fs;
@@ -210,7 +211,7 @@ pub struct Project {
 }
 
 /// Loads and parses a Materialize project from a directory structure.
-pub fn load_project<P: AsRef<Path>>(root: P) -> Result<Project, ProjectError> {
+pub fn load_project<P: AsRef<Path>>(root: P, profile: &str) -> Result<Project, ProjectError> {
     let root = root.as_ref();
 
     if !root.exists() {
@@ -308,34 +309,10 @@ pub fn load_project<P: AsRef<Path>>(root: P) -> Result<Project, ProjectError> {
                 None
             };
 
-            // Iterate over SQL files (third level)
-            for object_entry in
-                fs::read_dir(&schema_path).map_err(|source| LoadError::DirectoryReadFailed {
-                    path: schema_path.clone(),
-                    source,
-                })?
-            {
-                let object_entry = object_entry.map_err(|source| LoadError::EntryReadFailed {
-                    directory: schema_path.clone(),
-                    source,
-                })?;
-                let object_path = object_entry.path();
+            // Collect .sql files and resolve profile-specific overrides
+            let resolved = collect_and_resolve_sql_files(&schema_path, profile)?;
 
-                // Only process .sql files
-                if !object_path.is_file()
-                    || object_path.extension().and_then(|s| s.to_str()) != Some("sql")
-                {
-                    continue;
-                }
-
-                let object_name = object_path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .ok_or_else(|| LoadError::InvalidFileName {
-                        path: object_path.clone(),
-                    })?
-                    .to_string();
-
+            for (object_path, object_name) in resolved {
                 // Read and parse the SQL file
                 let sql_content = fs::read_to_string(&object_path).map_err(|source| {
                     LoadError::FileReadFailed {
@@ -407,7 +384,7 @@ mod tests {
         fs::write(&sql_file, "CREATE TABLE t (id INT);").unwrap();
 
         // Load the project
-        let project = load_project(root).unwrap();
+        let project = load_project(root, "default").unwrap();
 
         // Verify structure
         assert_eq!(project.databases.len(), 1);
@@ -440,7 +417,7 @@ mod tests {
             }
         }
 
-        let project = load_project(root).unwrap();
+        let project = load_project(root, "default").unwrap();
 
         assert_eq!(project.databases.len(), 2);
         for db_name in ["db1", "db2"] {
@@ -464,7 +441,7 @@ mod tests {
         fs::create_dir_all(&normal_path).unwrap();
         fs::write(normal_path.join("object.sql"), "CREATE TABLE t (id INT);").unwrap();
 
-        let project = load_project(root).unwrap();
+        let project = load_project(root, "default").unwrap();
 
         assert_eq!(project.databases.len(), 1);
         assert!(project.databases.contains_key("normal"));
@@ -492,7 +469,7 @@ mod tests {
         // Write a regular object
         fs::write(schema_path.join("object.sql"), "CREATE TABLE t (id INT);").unwrap();
 
-        let project = load_project(root).unwrap();
+        let project = load_project(root, "default").unwrap();
 
         let database = &project.databases["my_database"];
         assert!(database.mod_statements.is_some());
@@ -520,7 +497,7 @@ mod tests {
         // Write a regular object
         fs::write(schema_path.join("object.sql"), "CREATE TABLE t (id INT);").unwrap();
 
-        let project = load_project(root).unwrap();
+        let project = load_project(root, "default").unwrap();
 
         let schema = &project.databases["my_database"].schemas["my_schema"];
         assert!(schema.mod_statements.is_some());
@@ -546,7 +523,7 @@ mod tests {
         fs::write(schema_path.join("table1.sql"), "CREATE TABLE t1 (id INT);").unwrap();
         fs::write(schema_path.join("table2.sql"), "CREATE TABLE t2 (id INT);").unwrap();
 
-        let project = load_project(root).unwrap();
+        let project = load_project(root, "default").unwrap();
 
         let schema = &project.databases["my_database"].schemas["my_schema"];
 
@@ -576,7 +553,7 @@ mod tests {
         )
         .unwrap();
 
-        let project = load_project(root).unwrap();
+        let project = load_project(root, "default").unwrap();
 
         // Schema should still be loaded even with only schema-level .sql
         assert!(project.databases.contains_key("my_database"));
@@ -638,7 +615,7 @@ mod tests {
         .unwrap();
 
         // Load raw project
-        let raw_project = load_project(root).unwrap();
+        let raw_project = load_project(root, "default").unwrap();
         assert_eq!(raw_project.databases.len(), 1);
 
         // Convert to typed
