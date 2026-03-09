@@ -18,20 +18,33 @@ use thiserror::Error;
 pub const DEFAULT_DOCKER_IMAGE: &str = "materialize/materialized:latest";
 
 #[derive(Debug, Deserialize, Clone, Default)]
-pub struct SecretResolverConfig {
+pub struct SecurityConfig {
     /// AWS profile name for loading secrets from AWS Secrets Manager.
-    /// When set, enables the `aws_secret()` provider in secret resolution.
-    pub aws_profile: Option<String>,
+    aws_profile: Option<String>,
+}
+
+impl SecurityConfig {
+    pub fn aws_profile(&self) -> Option<&str> {
+        self.aws_profile.as_deref()
+    }
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct ProfileConfig {
+    /// Optional suffix to append to database names for this profile.
+    /// For example, `suffix = "_staging"` would rename `materialize` to `materialize_staging`.
+    /// The suffix includes the delimiter (user provides `"_staging"`, not `"staging"`).
+    pub suffix: Option<String>,
+    /// Security-related configuration (e.g., AWS profile for secret resolution).
+    #[serde(default)]
+    pub security: SecurityConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ProjectSettings {
     pub profile: String,
     pub mz_version: Option<String>,
-    #[serde(skip)]
-    docker_image_override: Option<String>,
-
-    pub profiles: Option<BTreeMap<String, SecretResolverConfig>>,
+    pub profiles: Option<BTreeMap<String, ProfileConfig>>,
 }
 
 impl ProjectSettings {
@@ -54,15 +67,9 @@ impl ProjectSettings {
         }
     }
 
-    /// Override the Docker image with a CLI-provided value.
-    pub fn with_docker_image_override(mut self, docker_image: Option<String>) -> Self {
-        self.docker_image_override = docker_image;
-        self
-    }
-
-    /// Returns the secret resolver config for the given profile name.
-    /// Falls back to `SecretResolverConfig::default()` if no entry exists.
-    pub fn secret_config_for_profile(&self, profile_name: &str) -> SecretResolverConfig {
+    /// Returns the profile config for the given profile name.
+    /// Falls back to `ProfileConfig::default()` if no entry exists.
+    pub fn config_for_profile(&self, profile_name: &str) -> ProfileConfig {
         self.profiles
             .as_ref()
             .and_then(|p| p.get(profile_name))
@@ -70,10 +77,15 @@ impl ProjectSettings {
             .unwrap_or_default()
     }
 
+    /// Returns the database suffix for the given profile name, if configured.
+    pub fn suffix_for_profile(&self, profile_name: &str) -> Option<&str> {
+        self.profiles
+            .as_ref()
+            .and_then(|p| p.get(profile_name))
+            .and_then(|c| c.suffix.as_deref())
+    }
+
     pub fn docker_image(&self) -> String {
-        if let Some(image) = &self.docker_image_override {
-            return image.clone();
-        }
         match self.mz_version.as_deref() {
             None | Some("cloud") => DEFAULT_DOCKER_IMAGE.to_string(),
             Some(tag) => format!("materialize/materialized:{}", tag),
@@ -259,5 +271,160 @@ impl ProfilesConfig {
         let name = cli_profile.unwrap_or(default_profile);
         let profile = config.get_profile(name)?;
         config.expand_env_vars(profile)
+    }
+}
+
+/// Resolved settings for an mz-deploy execution.
+///
+/// Constructed once in `main.rs` from CLI args + `project.toml` + `profiles.toml`,
+/// then passed to every command. Commands extract what they need (`directory`,
+/// `profile_name`, `suffix`, `docker_image`, `connection()`, `profile_config`).
+#[derive(Debug, Clone)]
+pub struct Settings {
+    /// Project root directory (from --directory, default ".").
+    pub directory: PathBuf,
+    /// Resolved profile name (CLI --profile overrides project.toml default).
+    pub profile_name: String,
+    /// Resolved Docker image for type checking and tests.
+    pub docker_image: String,
+    /// Per-profile config (security, suffix) — used for SecretResolver.
+    pub profile_config: ProfileConfig,
+    /// Database connection profile. None for commands that don't connect (compile, test).
+    connection: Option<Profile>,
+}
+
+impl Settings {
+    /// Load settings from CLI args, project.toml, and profiles.toml.
+    ///
+    /// `needs_connection` controls whether a connection profile is loaded from
+    /// `profiles.toml`. Commands like `compile` and `test` don't need one.
+    pub fn load(
+        directory: PathBuf,
+        cli_profile: Option<&str>,
+        docker_image_override: Option<&str>,
+        needs_connection: bool,
+    ) -> Result<Self, ConfigError> {
+        let project_settings = ProjectSettings::load(&directory)?;
+        let profile_name = cli_profile.unwrap_or(&project_settings.profile).to_string();
+
+        let profile_config = project_settings.config_for_profile(&profile_name);
+
+        let docker_image = match docker_image_override {
+            Some(image) => image.to_string(),
+            None => project_settings.docker_image(),
+        };
+
+        let connection = if needs_connection {
+            Some(ProfilesConfig::load_profile(
+                Some(&directory),
+                cli_profile,
+                &project_settings.profile,
+            )?)
+        } else {
+            None
+        };
+
+        Ok(Settings {
+            directory,
+            profile_name,
+            docker_image,
+            profile_config,
+            connection,
+        })
+    }
+
+    /// Database name suffix for this profile (e.g., `"_staging"`).
+    pub fn suffix(&self) -> Option<&str> {
+        self.profile_config.suffix.as_deref()
+    }
+
+    /// Returns the database connection profile.
+    ///
+    /// # Panics
+    /// Panics if `Settings` was loaded with `needs_connection: false`.
+    /// Calling this on a non-connected `Settings` is a programmer error.
+    pub fn connection(&self) -> &Profile {
+        self.connection
+            .as_ref()
+            .expect("Settings::connection() called but needs_connection was false")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_profile_config_deserializes_suffix() {
+        let toml = r#"
+            profile = "default"
+
+            [profiles.staging]
+            suffix = "_staging"
+        "#;
+        let settings: ProjectSettings = toml::from_str(toml).unwrap();
+        let config = settings.config_for_profile("staging");
+        assert_eq!(config.suffix.as_deref(), Some("_staging"));
+    }
+
+    #[test]
+    fn test_profile_config_suffix_optional() {
+        let toml = r#"
+            profile = "default"
+
+            [profiles.prod.security]
+            aws_profile = "prod-aws"
+        "#;
+        let settings: ProjectSettings = toml::from_str(toml).unwrap();
+        let config = settings.config_for_profile("prod");
+        assert!(config.suffix.is_none());
+        assert_eq!(config.security.aws_profile(), Some("prod-aws"));
+    }
+
+    #[test]
+    fn test_suffix_for_profile_returns_suffix() {
+        let toml = r#"
+            profile = "default"
+
+            [profiles.staging]
+            suffix = "_staging"
+        "#;
+        let settings: ProjectSettings = toml::from_str(toml).unwrap();
+        assert_eq!(settings.suffix_for_profile("staging"), Some("_staging"));
+    }
+
+    #[test]
+    fn test_suffix_for_profile_missing_profile() {
+        let toml = r#"
+            profile = "default"
+
+            [profiles.staging]
+            suffix = "_staging"
+        "#;
+        let settings: ProjectSettings = toml::from_str(toml).unwrap();
+        assert_eq!(settings.suffix_for_profile("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_suffix_for_profile_no_profiles_section() {
+        let toml = r#"
+            profile = "default"
+        "#;
+        let settings: ProjectSettings = toml::from_str(toml).unwrap();
+        assert_eq!(settings.suffix_for_profile("staging"), None);
+    }
+
+    #[test]
+    fn test_config_for_profile_without_security_section() {
+        let toml = r#"
+            profile = "default"
+
+            [profiles.prod]
+            suffix = "_prod"
+        "#;
+        let settings: ProjectSettings = toml::from_str(toml).unwrap();
+        let config = settings.config_for_profile("prod");
+        assert_eq!(config.suffix.as_deref(), Some("_prod"));
+        assert_eq!(config.security.aws_profile(), None);
     }
 }

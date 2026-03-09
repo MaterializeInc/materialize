@@ -3,8 +3,8 @@
 use crate::cli::CliError;
 use crate::client::{
     Client, ClusterDeploymentStatus, ClusterStatusContext, FailureReason, HydrationStatusUpdate,
-    Profile,
 };
+use crate::config::Settings;
 use crossterm::{
     cursor::{Hide, MoveToColumn, MoveUp, Show},
     execute,
@@ -41,12 +41,13 @@ use std::time::{Duration, Instant};
 /// Returns `CliError::StagingAlreadyPromoted` if already promoted
 /// Returns `CliError::ReadyTimeout` if timeout is reached
 pub async fn run(
-    profile: &Profile,
+    settings: &Settings,
     deploy_id: &str,
     snapshot: bool,
     timeout: Option<u64>,
     allowed_lag_secs: i64,
 ) -> Result<(), CliError> {
+    let profile = settings.connection();
     // Connect to database
     let mut client = Client::connect_with_profile(profile.clone())
         .await

@@ -3,10 +3,10 @@
 use crate::cli::CliError;
 use crate::cli::commands::grants;
 use crate::cli::progress;
-use crate::client::{Client, ClusterOptions, ConnectionError, Profile, quote_identifier};
+use crate::client::{Client, ClusterOptions, ConnectionError, quote_identifier};
+use crate::config::Settings;
 use crate::project::clusters::{self, ClusterDefinition, extract_replication_factor, extract_size};
 use owo_colors::OwoColorize;
-use std::path::Path;
 use std::time::Instant;
 
 /// Run the `clusters apply` command.
@@ -14,7 +14,9 @@ use std::time::Instant;
 /// Loads cluster definitions from `<directory>/clusters/` and converges
 /// the live Materialize state to match: creating missing clusters and
 /// altering ones whose configuration has drifted.
-pub async fn run(directory: &Path, profile: &Profile, dry_run: bool) -> Result<(), CliError> {
+pub async fn run(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
+    let profile = settings.connection();
+    let directory = &settings.directory;
     let start_time = Instant::now();
 
     // Load cluster definitions

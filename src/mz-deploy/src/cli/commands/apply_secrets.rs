@@ -2,14 +2,13 @@
 
 use crate::cli::commands::grants;
 use crate::cli::progress;
-use crate::cli::{CliError, TypeCheckMode, executor};
-use crate::client::{Client, Profile};
-use crate::config::ProjectSettings;
+use crate::cli::{CliError, executor};
+use crate::client::Client;
+use crate::config::Settings;
 use crate::project;
 use crate::project::ast::Statement;
 use crate::secret_resolver::SecretResolver;
 use mz_sql_parser::ast::{AlterSecretStatement, Raw};
-use std::path::Path;
 use std::time::Instant;
 
 /// Run the `apply secrets` command.
@@ -18,16 +17,11 @@ use std::time::Instant;
 /// 1. Executes `CREATE SECRET IF NOT EXISTS` (idempotent create)
 /// 2. Executes `ALTER SECRET` (always update the value to match the file)
 /// 3. Applies any associated grants and comments
-pub async fn run(
-    directory: &Path,
-    profile: &Profile,
-    settings: &ProjectSettings,
-    dry_run: bool,
-) -> Result<(), CliError> {
+pub async fn run(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
+    let profile = settings.connection();
     let start_time = Instant::now();
 
-    let planned_project =
-        super::compile::run(directory, TypeCheckMode::Disabled, &profile.name).await?;
+    let planned_project = super::compile::run(settings, true).await?;
 
     let secrets: Vec<_> = planned_project
         .iter_objects()
@@ -53,7 +47,7 @@ pub async fn run(
         .prepare_databases_and_schemas(&planned_project, &secret_schemas, None)
         .await?;
 
-    let resolver = SecretResolver::new(&settings.secret_config_for_profile(&profile.name));
+    let resolver = SecretResolver::new(&settings.profile_config.security);
 
     for obj in &secrets {
         let typed_obj = &obj.typed_object;

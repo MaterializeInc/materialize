@@ -7,7 +7,7 @@ profile = "default"
 mz_version = "cloud"
 
 ## Per-profile configuration:
-[profiles.default]
+# [profiles.default.security]
 ## AWS profile name for resolving aws_secret() references in secret files.
 ## When set, enables the aws_secret() provider so CREATE SECRET statements
 ## can pull values from AWS Secrets Manager at deploy time.

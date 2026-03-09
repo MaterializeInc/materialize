@@ -1,13 +1,13 @@
 //! Compile command - validate project and show deployment plan.
 
 use crate::cli::CliError;
+use crate::cli::TypeCheckMode;
 use crate::cli::progress;
+use crate::config::Settings;
 use crate::project::object_id::ObjectId;
 use crate::{project, verbose};
 use std::path::Path;
 use std::time::{Duration, Instant};
-
-use crate::cli::TypeCheckMode;
 
 /// Compile and validate the project, showing the deployment plan.
 ///
@@ -27,18 +27,26 @@ use crate::cli::TypeCheckMode;
 /// # Errors
 /// Returns `CliError::Project` if compilation or validation fails
 pub async fn run(
-    directory: &Path,
-    typecheck: TypeCheckMode,
-    profile: &str,
+    settings: &Settings,
+    skip_typecheck: bool,
 ) -> Result<project::planned::Project, CliError> {
     let start_time = Instant::now();
+    let directory = &settings.directory;
+
+    let typecheck = if skip_typecheck {
+        TypeCheckMode::Disabled
+    } else {
+        TypeCheckMode::Enabled {
+            image: settings.docker_image.clone(),
+        }
+    };
 
     progress::info(&format!("Loading project from: {}", directory.display()));
 
     // Stage 1: Parse and validate SQL files
     progress::stage_start("Parsing SQL files");
     let parse_start = Instant::now();
-    let planned_project = project::plan(directory, profile)?;
+    let planned_project = project::plan(directory, &settings.profile_name, settings.suffix())?;
     let parse_duration = parse_start.elapsed();
 
     // Count objects and schemas

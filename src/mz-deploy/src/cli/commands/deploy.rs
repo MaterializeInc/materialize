@@ -2,7 +2,8 @@
 
 use crate::cli::CliError;
 use crate::cli::progress;
-use crate::client::{ApplyState, Client, DeploymentKind, Profile};
+use crate::client::{ApplyState, Client, DeploymentKind};
+use crate::config::Settings;
 use crate::project::SchemaQualifier;
 use crate::project::object_id::ObjectId;
 use crate::{project, verbose};
@@ -43,11 +44,13 @@ struct ApplyResources {
 /// Returns `CliError::DeploymentConflict` if conflicts detected (without --force)
 /// Returns `CliError::Connection` for database errors
 pub async fn run(
-    profile: &Profile,
+    settings: &Settings,
     deploy_id: &str,
     force: bool,
     dry_run: bool,
 ) -> Result<(), CliError> {
+    let profile = settings.connection();
+
     if dry_run {
         progress::info(&format!("Previewing deployment plan for '{}'", deploy_id));
     } else {

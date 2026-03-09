@@ -2,6 +2,7 @@
 
 use crate::cli::CliError;
 use crate::client::{Client, Profile};
+use crate::config::Settings;
 use crate::types::docker_runtime::{DockerRuntime, DockerStatus};
 use crossterm::style::Stylize;
 use owo_colors::OwoColorize;
@@ -16,7 +17,8 @@ use owo_colors::OwoColorize;
 ///
 /// # Errors
 /// Returns `CliError::Connection` if connection fails
-pub async fn run(profile: &Profile) -> Result<(), CliError> {
+pub async fn run(settings: &Settings) -> Result<(), CliError> {
+    let profile = settings.connection();
     let profile_display = profile.name.as_str();
     println!("{}: {}", "Profile".green(), profile_display.cyan());
 

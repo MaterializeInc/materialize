@@ -1,7 +1,8 @@
 //! Describe command - show detailed information about a specific deployment.
 
 use crate::cli::CliError;
-use crate::client::{Client, DeploymentKind, Profile};
+use crate::client::{Client, DeploymentKind};
+use crate::config::Settings;
 use chrono::{DateTime, Local};
 use owo_colors::OwoColorize;
 
@@ -24,7 +25,8 @@ use owo_colors::OwoColorize;
 /// # Errors
 /// Returns `CliError::Connection` for database errors
 /// Returns `CliError::Message` if deployment is not found
-pub async fn run(profile: &Profile, deploy_id: &str) -> Result<(), CliError> {
+pub async fn run(settings: &Settings, deploy_id: &str) -> Result<(), CliError> {
+    let profile = settings.connection();
     let client = Client::connect_with_profile(profile.clone())
         .await
         .map_err(CliError::Connection)?;

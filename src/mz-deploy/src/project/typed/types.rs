@@ -10,7 +10,7 @@ use crate::project::SchemaQualifier;
 use crate::project::error::ValidationError;
 use crate::project::error::ValidationErrorKind;
 use mz_sql_parser::ast::*;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 /// Fully qualified name parsed from file path structure.
@@ -56,6 +56,63 @@ impl FullyQualifiedName {
     /// Get the UnresolvedItemName for updating statement names.
     pub fn to_item_name(&self) -> UnresolvedItemName {
         self.item_name.clone()
+    }
+
+    /// Create a FullyQualifiedName with explicit database and schema names.
+    ///
+    /// Unlike `TryFrom<(&Path, &str)>` which derives names from the file path,
+    /// this constructor accepts the names directly. This is needed when a suffix
+    /// has been applied to the database name, so the path-derived name no longer
+    /// matches the desired database name.
+    pub fn with_names(
+        path: &std::path::Path,
+        object_name: &str,
+        database: &str,
+        schema: &str,
+    ) -> Result<Self, ValidationError> {
+        let database_ident = Ident::new(database).map_err(|e| {
+            ValidationError::with_file(
+                ValidationErrorKind::InvalidIdentifier {
+                    name: database.to_string(),
+                    reason: e.to_string(),
+                },
+                path.to_path_buf(),
+            )
+        })?;
+
+        let schema_ident = Ident::new(schema).map_err(|e| {
+            ValidationError::with_file(
+                ValidationErrorKind::InvalidIdentifier {
+                    name: schema.to_string(),
+                    reason: e.to_string(),
+                },
+                path.to_path_buf(),
+            )
+        })?;
+
+        let object_ident = Ident::new(object_name).map_err(|e| {
+            ValidationError::with_file(
+                ValidationErrorKind::InvalidIdentifier {
+                    name: object_name.to_string(),
+                    reason: e.to_string(),
+                },
+                path.to_path_buf(),
+            )
+        })?;
+
+        let item_name = UnresolvedItemName(vec![database_ident, schema_ident, object_ident]);
+
+        let id = ObjectId::new(
+            database.to_string(),
+            schema.to_string(),
+            object_name.to_string(),
+        );
+
+        Ok(FullyQualifiedName {
+            id,
+            path: path.to_path_buf(),
+            item_name,
+        })
     }
 }
 
@@ -363,6 +420,28 @@ impl DatabaseObject {
             | Statement::CreateSource(_) => None,
         }
     }
+
+    /// Rewrite cross-database references using the given database name map.
+    ///
+    /// For any 3-part `UnresolvedItemName` where the database part matches an
+    /// original name in the map, replace it with the suffixed name. External
+    /// databases (not in the map) are untouched.
+    pub fn rewrite_database_references(&mut self, db_map: &BTreeMap<String, String>) {
+        let ident = self.stmt.ident();
+        let database = ident.database.as_deref().unwrap_or("unknown");
+        let schema = ident.schema.as_deref().unwrap_or("unknown");
+        let fqn = FullyQualifiedName::from(UnresolvedItemName(vec![
+            Ident::new(database).expect("valid ident"),
+            Ident::new(schema).expect("valid ident"),
+            Ident::new(&ident.object).expect("valid ident"),
+        ]));
+        let visitor = NormalizingVisitor::fully_qualifying_with_db_map(&fqn, Some(db_map));
+        self.stmt = self.stmt.clone().normalize_dependencies_with(&visitor);
+
+        visitor.normalize_index_references(&mut self.indexes);
+        visitor.normalize_grant_references(&mut self.grants);
+        visitor.normalize_comment_references(&mut self.comments);
+    }
 }
 
 /// A validated schema containing multiple database objects.
@@ -434,7 +513,7 @@ pub struct Database {
 /// use mz_deploy::project::typed::Project;
 ///
 /// // Load raw project from file system
-/// let raw_project = raw::load_project("./my_project", "default").unwrap();
+/// let raw_project = raw::load_project("./my_project", "default", None).unwrap();
 ///
 /// // Convert to validated typed project
 /// let typed_project = Project::try_from(raw_project).unwrap();
@@ -456,4 +535,21 @@ pub struct Project {
     /// `SET api = stable` statements.
     /// Each entry is a `(database, schema)` pair.
     pub replacement_schemas: BTreeSet<SchemaQualifier>,
+}
+
+impl Project {
+    /// Rewrite all cross-database references in the project using the given database name map.
+    ///
+    /// This walks all objects, mod_statements, etc. and replaces database names in
+    /// 3-part qualified references when the database is a project-owned database
+    /// that appears in the map.
+    pub fn rewrite_database_references(&mut self, db_map: &BTreeMap<String, String>) {
+        for db in &mut self.databases {
+            for schema in &mut db.schemas {
+                for obj in &mut schema.objects {
+                    obj.rewrite_database_references(db_map);
+                }
+            }
+        }
+    }
 }

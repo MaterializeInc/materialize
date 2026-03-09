@@ -3,11 +3,11 @@
 use crate::cli::CliError;
 use crate::cli::commands::grants;
 use crate::cli::progress;
-use crate::client::{Client, ConnectionError, Profile, quote_identifier};
+use crate::client::{Client, ConnectionError, quote_identifier};
+use crate::config::Settings;
 use crate::project::network_policies::{self, NetworkPolicyDefinition};
 use mz_sql_parser::ast::AlterNetworkPolicyStatement;
 use owo_colors::OwoColorize;
-use std::path::Path;
 use std::time::Instant;
 
 /// Run the `network-policies apply` command.
@@ -15,7 +15,9 @@ use std::time::Instant;
 /// Loads network policy definitions from `<directory>/network_policies/` and converges
 /// the live Materialize state to match: creating missing policies and
 /// altering ones whose rules have changed.
-pub async fn run(directory: &Path, profile: &Profile, dry_run: bool) -> Result<(), CliError> {
+pub async fn run(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
+    let profile = settings.connection();
+    let directory = &settings.directory;
     let start_time = Instant::now();
 
     // Load network policy definitions

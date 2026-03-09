@@ -512,7 +512,22 @@ impl<T: NameTransformer> NormalizingVisitor<T> {
 impl<'a> NormalizingVisitor<FullyQualifyingTransformer<'a>> {
     /// Create a visitor that fully qualifies names (`database.schema.object`).
     pub fn fully_qualifying(fqn: &'a FullyQualifiedName) -> Self {
-        Self::new(FullyQualifyingTransformer { fqn })
+        Self::new(FullyQualifyingTransformer {
+            fqn,
+            database_name_map: None,
+        })
+    }
+
+    /// Create a visitor that fully qualifies names and optionally rewrites
+    /// cross-database references using a database name map.
+    pub fn fully_qualifying_with_db_map(
+        fqn: &'a FullyQualifiedName,
+        database_name_map: Option<&'a std::collections::BTreeMap<String, String>>,
+    ) -> Self {
+        Self::new(FullyQualifyingTransformer {
+            fqn,
+            database_name_map,
+        })
     }
 }
 

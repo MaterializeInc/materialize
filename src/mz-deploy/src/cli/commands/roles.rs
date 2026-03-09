@@ -3,13 +3,13 @@
 use crate::cli::CliError;
 use crate::cli::progress;
 use crate::client::quote_identifier;
-use crate::client::{Client, ConnectionError, Profile};
+use crate::client::{Client, ConnectionError};
+use crate::config::Settings;
 use crate::project::roles::{self, RoleDefinition};
 use mz_sql_parser::ast::AlterRoleOption;
 use mz_sql_parser::ast::SetRoleVar;
 use owo_colors::OwoColorize;
 use std::collections::BTreeSet;
-use std::path::Path;
 use std::time::Instant;
 
 /// Run the `roles apply` command.
@@ -17,7 +17,9 @@ use std::time::Instant;
 /// Loads role definitions from `<directory>/roles/` and converges
 /// the live Materialize state to match: creating missing roles and
 /// applying ALTER, GRANT, and COMMENT statements idempotently.
-pub async fn run(directory: &Path, profile: &Profile, dry_run: bool) -> Result<(), CliError> {
+pub async fn run(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
+    let profile = settings.connection();
+    let directory = &settings.directory;
     let start_time = Instant::now();
 
     // Load role definitions

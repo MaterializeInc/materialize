@@ -2,7 +2,8 @@
 
 use crate::cli::CliError;
 use crate::cli::progress;
-use crate::client::{Client, ConnectionError, Profile, quote_identifier};
+use crate::client::{Client, ConnectionError, quote_identifier};
+use crate::config::Settings;
 use crate::project::object_id::ObjectId;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -97,12 +98,13 @@ impl DeleteTarget {
 /// Drops the named object from Materialize and removes the corresponding
 /// project file. Prompts for confirmation unless `yes` is true.
 pub async fn run(
-    directory: &Path,
-    profile: &Profile,
+    settings: &Settings,
     kind: ObjectKind,
     name: &str,
     yes: bool,
 ) -> Result<(), CliError> {
+    let profile = settings.connection();
+    let directory = &settings.directory;
     let start_time = Instant::now();
     let label = kind.label();
 

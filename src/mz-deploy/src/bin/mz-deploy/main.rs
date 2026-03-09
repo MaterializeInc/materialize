@@ -7,12 +7,11 @@ use clap::CommandFactory;
 use clap::{Parser, Subcommand};
 use mz_build_info::{BuildInfo, build_info};
 use mz_deploy::cli;
+use mz_deploy::cli::CliError;
 use mz_deploy::cli::commands::delete;
-use mz_deploy::cli::{CliError, TypeCheckMode};
-use mz_deploy::client::ConnectionError;
-use mz_deploy::config::{Profile, ProfilesConfig, ProjectSettings};
+use mz_deploy::config::Settings;
 use mz_deploy::log;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::LazyLock;
 
 const BUILD_INFO: BuildInfo = build_info!();
@@ -628,19 +627,21 @@ async fn run(args: Args) -> Result<(), CliError> {
         return cli::commands::profiles::run(&args.directory, args.profile.as_deref());
     }
 
-    let settings = load_project_settings(&args.directory, args.docker_image)?;
-    let active_profile = args.profile.as_deref().unwrap_or(&settings.profile);
+    let needs_connection = !matches!(
+        &args.command,
+        Some(Command::Compile { .. }) | Some(Command::Test)
+    );
+    let settings = Settings::load(
+        args.directory,
+        args.profile.as_deref(),
+        args.docker_image.as_deref(),
+        needs_connection,
+    )
+    .map_err(CliError::Config)?;
 
     match args.command {
         Some(Command::Compile { skip_typecheck }) => {
-            let typecheck = if skip_typecheck {
-                TypeCheckMode::Disabled
-            } else {
-                TypeCheckMode::Enabled {
-                    image: settings.docker_image(),
-                }
-            };
-            cli::commands::compile::run(&args.directory, typecheck, active_profile)
+            cli::commands::compile::run(&settings, skip_typecheck)
                 .await
                 .map(|_| ())
         }
@@ -648,57 +649,30 @@ async fn run(args: Args) -> Result<(), CliError> {
             skip_secrets,
             dry_run,
             subcommand,
-        }) => {
-            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
-
-            match subcommand {
-                Some(ApplyCommand::Clusters) => {
-                    cli::commands::clusters::run(&args.directory, &profile, dry_run).await
-                }
-                Some(ApplyCommand::Roles) => {
-                    cli::commands::roles::run(&args.directory, &profile, dry_run).await
-                }
-                Some(ApplyCommand::NetworkPolicies) => {
-                    cli::commands::apply_network_policies::run(&args.directory, &profile, dry_run)
-                        .await
-                }
-                Some(ApplyCommand::Secrets) => {
-                    cli::commands::apply_secrets::run(&args.directory, &profile, &settings, dry_run)
-                        .await
-                }
-                Some(ApplyCommand::Connections) => {
-                    cli::commands::apply_connections::run(
-                        &args.directory,
-                        &profile,
-                        &settings,
-                        dry_run,
-                    )
-                    .await
-                }
-                Some(ApplyCommand::Sources) => {
-                    cli::commands::apply_tables::apply_sources(&args.directory, &profile, dry_run)
-                        .await
-                }
-                Some(ApplyCommand::Tables) => {
-                    cli::commands::apply_tables::apply_tables(&args.directory, &profile, dry_run)
-                        .await?;
-                    if !dry_run {
-                        cli::commands::gen_data_contracts::run(&profile, &args.directory).await?;
-                    }
-                    Ok(())
-                }
-                None => {
-                    cli::commands::apply_all::run(
-                        &args.directory,
-                        &profile,
-                        &settings,
-                        skip_secrets,
-                        dry_run,
-                    )
-                    .await
-                }
+        }) => match subcommand {
+            Some(ApplyCommand::Clusters) => cli::commands::clusters::run(&settings, dry_run).await,
+            Some(ApplyCommand::Roles) => cli::commands::roles::run(&settings, dry_run).await,
+            Some(ApplyCommand::NetworkPolicies) => {
+                cli::commands::apply_network_policies::run(&settings, dry_run).await
             }
-        }
+            Some(ApplyCommand::Secrets) => {
+                cli::commands::apply_secrets::run(&settings, dry_run).await
+            }
+            Some(ApplyCommand::Connections) => {
+                cli::commands::apply_connections::run(&settings, dry_run).await
+            }
+            Some(ApplyCommand::Sources) => {
+                cli::commands::apply_tables::apply_sources(&settings, dry_run).await
+            }
+            Some(ApplyCommand::Tables) => {
+                cli::commands::apply_tables::apply_tables(&settings, dry_run).await?;
+                if !dry_run {
+                    cli::commands::gen_data_contracts::run(&settings).await?;
+                }
+                Ok(())
+            }
+            None => cli::commands::apply_all::run(&settings, skip_secrets, dry_run).await,
+        },
         Some(Command::Deploy {
             deploy_id,
             force,
@@ -706,12 +680,10 @@ async fn run(args: Args) -> Result<(), CliError> {
             allowed_lag,
             dry_run,
         }) => {
-            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
-
             if !skip_ready && !dry_run {
-                cli::commands::ready::run(&profile, &deploy_id, true, None, allowed_lag).await?;
+                cli::commands::ready::run(&settings, &deploy_id, true, None, allowed_lag).await?;
             }
-            cli::commands::deploy::run(&profile, &deploy_id, force, dry_run).await
+            cli::commands::deploy::run(&settings, &deploy_id, force, dry_run).await
         }
         Some(Command::Stage {
             deploy_id,
@@ -719,60 +691,35 @@ async fn run(args: Args) -> Result<(), CliError> {
             no_rollback,
             dry_run,
         }) => {
-            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
-
             cli::commands::stage::run(
-                &profile,
+                &settings,
                 deploy_id.as_deref(),
-                &args.directory,
                 allow_dirty,
                 no_rollback,
                 dry_run,
             )
             .await
         }
-        Some(Command::Debug) => {
-            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
-
-            cli::commands::debug::run(&profile).await
-        }
+        Some(Command::Debug) => cli::commands::debug::run(&settings).await,
         Some(Command::Describe { deploy_id }) => {
-            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
-
-            cli::commands::describe::run(&profile, &deploy_id).await
+            cli::commands::describe::run(&settings, &deploy_id).await
         }
-        Some(Command::GenDataContracts) => {
-            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
-            cli::commands::gen_data_contracts::run(&profile, &args.directory).await
-        }
-        Some(Command::Test) => {
-            cli::commands::test::run(&args.directory, &settings.docker_image(), active_profile)
-                .await
-        }
+        Some(Command::GenDataContracts) => cli::commands::gen_data_contracts::run(&settings).await,
+        Some(Command::Test) => cli::commands::test::run(&settings).await,
         Some(Command::Abort { deploy_id }) => {
-            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
-            cli::commands::abort::run(&profile, &deploy_id).await
+            cli::commands::abort::run(&settings, &deploy_id).await
         }
         Some(Command::Deployments { allowed_lag }) => {
-            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
-            cli::commands::deployments::run(&profile, allowed_lag).await
+            cli::commands::deployments::run(&settings, allowed_lag).await
         }
-        Some(Command::History { limit }) => {
-            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
-            cli::commands::history::run(&profile, limit).await
-        }
+        Some(Command::History { limit }) => cli::commands::history::run(&settings, limit).await,
         Some(Command::Ready {
             name,
             snapshot,
             timeout,
             allowed_lag,
-        }) => {
-            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
-
-            cli::commands::ready::run(&profile, &name, snapshot, timeout, allowed_lag).await
-        }
+        }) => cli::commands::ready::run(&settings, &name, snapshot, timeout, allowed_lag).await,
         Some(Command::Delete { yes, subcommand }) => {
-            let profile = load_profile(&args.directory, args.profile.as_deref(), &settings)?;
             let (kind, name) = match subcommand {
                 DeleteCommand::Cluster { name } => (delete::ObjectKind::Cluster, name),
                 DeleteCommand::Connection { name } => (delete::ObjectKind::Connection, name),
@@ -781,31 +728,13 @@ async fn run(args: Args) -> Result<(), CliError> {
                 DeleteCommand::Secret { name } => (delete::ObjectKind::Secret, name),
                 DeleteCommand::Table { name } => (delete::ObjectKind::Table, name),
             };
-            delete::run(&args.directory, &profile, kind, &name, yes).await
+            delete::run(&settings, kind, &name, yes).await
         }
         Some(Command::Help { .. }) => unreachable!("handled above"),
         Some(Command::New { .. }) => unreachable!("handled above"),
         Some(Command::Profiles) => unreachable!("handled above"),
         None => unreachable!("handled above"),
     }
-}
-
-fn load_project_settings(
-    directory: &Path,
-    docker_image: Option<String>,
-) -> Result<ProjectSettings, CliError> {
-    ProjectSettings::load(directory)
-        .map(|s| s.with_docker_image_override(docker_image))
-        .map_err(CliError::Config)
-}
-
-fn load_profile(
-    directory: &Path,
-    cli_profile: Option<&str>,
-    settings: &ProjectSettings,
-) -> Result<Profile, CliError> {
-    ProfilesConfig::load_profile(Some(directory), cli_profile, &settings.profile)
-        .map_err(|e| CliError::Connection(ConnectionError::Config(e)))
 }
 
 #[cfg(test)]

@@ -234,7 +234,7 @@ fn test_get_sorted_objects_filtered() {
     .unwrap();
 
     // Load and convert to planned
-    let raw_project = raw::load_project(src_dir, "default").unwrap();
+    let raw_project = raw::load_project(src_dir, "default", None).unwrap();
     let typed_project = typed::Project::try_from(raw_project).unwrap();
     let planned_project = Project::from(typed_project);
 
@@ -2059,7 +2059,7 @@ fn test_source_determines_storage_schema_type() {
     .unwrap();
 
     // Load raw → typed → planned
-    let raw_project = raw::load_project(src_dir, "default").unwrap();
+    let raw_project = raw::load_project(src_dir, "default", None).unwrap();
     let typed_project = typed::Project::try_from(raw_project).unwrap();
     let planned_project = Project::from(typed_project);
 
@@ -2097,7 +2097,7 @@ fn test_source_and_table_from_source_dependency_ordering() {
     .unwrap();
 
     // Load raw → typed → planned
-    let raw_project = raw::load_project(src_dir, "default").unwrap();
+    let raw_project = raw::load_project(src_dir, "default", None).unwrap();
     let typed_project = typed::Project::try_from(raw_project).unwrap();
     let planned_project = Project::from(typed_project);
 
@@ -2165,7 +2165,7 @@ fn test_secret_determines_storage_schema_type() {
     )
     .unwrap();
 
-    let raw_project = raw::load_project(src_dir, "default").unwrap();
+    let raw_project = raw::load_project(src_dir, "default", None).unwrap();
     let typed_project = typed::Project::try_from(raw_project).unwrap();
     let planned_project = Project::from(typed_project);
 
@@ -2200,7 +2200,7 @@ fn test_secret_in_project_compiles_end_to_end() {
     )
     .unwrap();
 
-    let raw_project = raw::load_project(src_dir, "default").unwrap();
+    let raw_project = raw::load_project(src_dir, "default", None).unwrap();
     let typed_project = typed::Project::try_from(raw_project).unwrap();
     let planned_project = Project::from(typed_project);
 
@@ -2342,7 +2342,7 @@ fn test_connection_determines_storage_schema_type() {
     )
     .unwrap();
 
-    let raw_project = raw::load_project(src_dir, "default").unwrap();
+    let raw_project = raw::load_project(src_dir, "default", None).unwrap();
     let typed_project = typed::Project::try_from(raw_project).unwrap();
     let planned_project = Project::from(typed_project);
 
@@ -2376,7 +2376,7 @@ fn test_connection_in_project_compiles_end_to_end() {
     )
     .unwrap();
 
-    let raw_project = raw::load_project(src_dir, "default").unwrap();
+    let raw_project = raw::load_project(src_dir, "default", None).unwrap();
     let typed_project = typed::Project::try_from(raw_project).unwrap();
     let planned_project = Project::from(typed_project);
 
@@ -2416,7 +2416,7 @@ fn test_connection_in_compute_schema_fails_validation() {
     )
     .unwrap();
 
-    let raw_project = raw::load_project(src_dir, "default").unwrap();
+    let raw_project = raw::load_project(src_dir, "default", None).unwrap();
     let result = typed::Project::try_from(raw_project);
     assert!(
         result.is_err(),

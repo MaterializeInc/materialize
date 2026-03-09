@@ -1,7 +1,8 @@
 //! History command - show deployment history in chronological order.
 
 use crate::cli::CliError;
-use crate::client::{Client, Profile};
+use crate::client::Client;
+use crate::config::Settings;
 use chrono::{DateTime, Local};
 use owo_colors::OwoColorize;
 use std::io::Write;
@@ -26,7 +27,8 @@ use std::process::{Command, Stdio};
 ///
 /// # Errors
 /// Returns `CliError::Connection` for database errors
-pub async fn run(profile: &Profile, limit: Option<usize>) -> Result<(), CliError> {
+pub async fn run(settings: &Settings, limit: Option<usize>) -> Result<(), CliError> {
+    let profile = settings.connection();
     // Connect to database
     let client = Client::connect_with_profile(profile.clone())
         .await

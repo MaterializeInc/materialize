@@ -2,7 +2,8 @@
 
 use crate::cli::CliError;
 use crate::cli::progress;
-use crate::client::{Client, Profile};
+use crate::client::Client;
+use crate::config::Settings;
 use crate::verbose;
 
 /// Abort a staged deployment by dropping schemas, clusters, and deployment records.
@@ -24,7 +25,8 @@ use crate::verbose;
 /// Returns `CliError::StagingEnvironmentNotFound` if the deployment doesn't exist
 /// Returns `CliError::StagingAlreadyPromoted` if the deployment was already promoted
 /// Returns `CliError::Connection` for database errors
-pub async fn run(profile: &Profile, deploy_id: &str) -> Result<(), CliError> {
+pub async fn run(settings: &Settings, deploy_id: &str) -> Result<(), CliError> {
+    let profile = settings.connection();
     progress::info(&format!("Aborting staged deployment: {}", deploy_id));
 
     let client = Client::connect_with_profile(profile.clone())

@@ -3,6 +3,7 @@
 use crate::cli::CliError;
 use crate::cli::progress;
 use crate::client::Client;
+use crate::config::Settings;
 use crate::project::{self, typed};
 use crate::types::docker_runtime::DockerRuntime;
 use crate::types::{self, TypeCheckError, Types};
@@ -64,10 +65,11 @@ enum TestOutcome {
 /// Returns `CliError::Project` if project loading fails
 /// Returns `CliError::Connection` if database connection fails
 /// Returns error if tests fail (exits with code 1)
-pub async fn run(directory: &Path, docker_image: &str, profile: &str) -> Result<(), CliError> {
-    let planned_project = project::plan(directory, profile)?;
+pub async fn run(settings: &Settings) -> Result<(), CliError> {
+    let directory = &settings.directory;
+    let planned_project = project::plan(directory, &settings.profile_name, settings.suffix())?;
     let empty_types = Types::default();
-    let runtime = DockerRuntime::new().with_image(docker_image);
+    let runtime = DockerRuntime::new().with_image(&settings.docker_image);
     if planned_project.tests.is_empty() {
         progress::info(&format!("No tests found in {}", directory.display()));
         return Ok(());

@@ -18,7 +18,7 @@ mod aws_secret;
 mod env_var;
 
 use crate::cli::CliError;
-use crate::config::SecretResolverConfig;
+use crate::config::SecurityConfig;
 use crate::project::ast::Statement;
 use async_trait::async_trait;
 use aws_secret::{AwsSecretProvider, UnconfiguredAwsProvider};
@@ -70,13 +70,13 @@ impl SecretResolver {
     /// Always registers `env_var`. If `aws_profile` is `Some`, registers the
     /// real AWS Secrets Manager provider (credentials are loaded lazily on
     /// first use); otherwise registers a placeholder that gives a clear error.
-    pub fn new(config: &SecretResolverConfig) -> Self {
+    pub fn new(config: &SecurityConfig) -> Self {
         let mut resolver = Self {
             providers: BTreeMap::new(),
         };
         resolver.register(Box::new(EnvVarProvider));
 
-        if let Some(ref profile) = config.aws_profile {
+        if let Some(profile) = config.aws_profile() {
             resolver.register(Box::new(AwsSecretProvider::new(profile)));
         } else {
             resolver.register(Box::new(UnconfiguredAwsProvider));

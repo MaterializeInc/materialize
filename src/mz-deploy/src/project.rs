@@ -89,9 +89,14 @@ impl SchemaQualifier {
 pub fn plan<P: AsRef<Path>>(
     root: P,
     profile: &str,
+    suffix: Option<&str>,
 ) -> Result<planned::Project, error::ProjectError> {
-    let raw_project = raw::load_project(root, profile)?;
-    let typed_project = typed::Project::try_from(raw_project)?;
+    let raw_project = raw::load_project(root, profile, suffix)?;
+    let db_name_map = raw_project.database_name_map.clone();
+    let mut typed_project = typed::Project::try_from(raw_project)?;
+    if !db_name_map.is_empty() {
+        typed_project.rewrite_database_references(&db_name_map);
+    }
     let planned_project = planned::Project::from(typed_project);
     Ok(planned_project)
 }

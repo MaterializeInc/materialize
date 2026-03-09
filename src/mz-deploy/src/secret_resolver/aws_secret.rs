@@ -98,7 +98,7 @@ impl SecretProvider for UnconfiguredAwsProvider {
     async fn resolve(&self, _args: &[String]) -> Result<String, SecretResolveError> {
         Err(SecretResolveError::ResolutionFailed {
             name: self.name().to_string(),
-            reason: "AWS Secrets Manager is not configured. Set 'aws_profile' in project.toml to enable aws_secret().".to_string(),
+            reason: "AWS Secrets Manager is not configured. Set 'aws_profile' under [profiles.<name>.security] in project.toml to enable aws_secret().".to_string(),
         })
     }
 }

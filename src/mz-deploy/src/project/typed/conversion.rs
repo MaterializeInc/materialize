@@ -223,7 +223,12 @@ impl TryFrom<super::super::raw::DatabaseObject> for DatabaseObject {
         let stmt = main_stmt.unwrap();
         let obj_type = object_type.unwrap();
 
-        let fqn = match FullyQualifiedName::try_from((value.path.as_path(), value.name.as_str())) {
+        let fqn = match FullyQualifiedName::with_names(
+            value.path.as_path(),
+            value.name.as_str(),
+            &value.database,
+            &value.schema,
+        ) {
             Ok(fqn) => fqn,
             Err(e) => {
                 errors.push(e);

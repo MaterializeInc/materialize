@@ -91,15 +91,16 @@ under `[profiles.<name>]`:
 ```toml
 profile = "default"
 
-[profiles.production]
+[profiles.production.security]
 aws_profile = "prod-account"
 
-[profiles.staging]
+[profiles.staging.security]
 aws_profile = "staging-account"
 ```
 
-The `aws_profile` field sets the AWS profile used when resolving secrets
-from AWS Secrets Manager via the `aws_secret()` provider.
+The `aws_profile` field under `[profiles.<name>.security]` sets the AWS
+profile used when resolving secrets from AWS Secrets Manager via the
+`aws_secret()` provider.
 
 ## Per-profile SQL file overrides
 

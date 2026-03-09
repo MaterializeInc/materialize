@@ -9,9 +9,22 @@ use tempfile::TempDir;
 
 fn create_raw_object(name: &str, path: PathBuf, sql: &str) -> raw::DatabaseObject {
     let statements = parse_statements(vec![sql]).unwrap();
+    let schema = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let database = path
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.file_name())
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
     raw::DatabaseObject {
         name: name.to_string(),
         path,
+        database,
+        schema,
         statements,
     }
 }
@@ -1444,12 +1457,16 @@ fn test_schema_with_tables_and_views_fails() {
     let raw_table = raw::DatabaseObject {
         name: "users".to_string(),
         path: PathBuf::from("materialize/mixed/users.sql"),
+        database: "materialize".to_string(),
+        schema: "mixed".to_string(),
         statements: table_stmts,
     };
 
     let raw_view = raw::DatabaseObject {
         name: "active_users".to_string(),
         path: PathBuf::from("materialize/mixed/active_users.sql"),
+        database: "materialize".to_string(),
+        schema: "mixed".to_string(),
         statements: view_stmts,
     };
 
@@ -1485,12 +1502,16 @@ fn test_schema_with_tables_and_materialized_views_fails() {
     let raw_table = raw::DatabaseObject {
         name: "orders".to_string(),
         path: PathBuf::from("materialize/mixed/orders.sql"),
+        database: "materialize".to_string(),
+        schema: "mixed".to_string(),
         statements: table_stmts,
     };
 
     let raw_mv = raw::DatabaseObject {
         name: "order_summary".to_string(),
         path: PathBuf::from("materialize/mixed/order_summary.sql"),
+        database: "materialize".to_string(),
+        schema: "mixed".to_string(),
         statements: mv_stmts,
     };
 
@@ -1518,12 +1539,16 @@ fn test_schema_with_sinks_and_views_fails() {
     let raw_sink = raw::DatabaseObject {
         name: "user_sink".to_string(),
         path: PathBuf::from("materialize/mixed/user_sink.sql"),
+        database: "materialize".to_string(),
+        schema: "mixed".to_string(),
         statements: sink_stmts,
     };
 
     let raw_view = raw::DatabaseObject {
         name: "user_view".to_string(),
         path: PathBuf::from("materialize/mixed/user_view.sql"),
+        database: "materialize".to_string(),
+        schema: "mixed".to_string(),
         statements: view_stmts,
     };
 
@@ -1552,12 +1577,16 @@ fn test_schema_with_sinks_and_materialized_views_fails() {
     let raw_sink = raw::DatabaseObject {
         name: "order_sink".to_string(),
         path: PathBuf::from("materialize/mixed/order_sink.sql"),
+        database: "materialize".to_string(),
+        schema: "mixed".to_string(),
         statements: sink_stmts,
     };
 
     let raw_mv = raw::DatabaseObject {
         name: "order_mv".to_string(),
         path: PathBuf::from("materialize/mixed/order_mv.sql"),
+        database: "materialize".to_string(),
+        schema: "mixed".to_string(),
         statements: mv_stmts,
     };
 
@@ -1587,18 +1616,24 @@ fn test_schema_with_tables_sinks_and_views_fails() {
     let raw_table = raw::DatabaseObject {
         name: "users".to_string(),
         path: PathBuf::from("materialize/mixed/users.sql"),
+        database: "materialize".to_string(),
+        schema: "mixed".to_string(),
         statements: table_stmts,
     };
 
     let raw_sink = raw::DatabaseObject {
         name: "user_sink".to_string(),
         path: PathBuf::from("materialize/mixed/user_sink.sql"),
+        database: "materialize".to_string(),
+        schema: "mixed".to_string(),
         statements: sink_stmts,
     };
 
     let raw_view = raw::DatabaseObject {
         name: "user_view".to_string(),
         path: PathBuf::from("materialize/mixed/user_view.sql"),
+        database: "materialize".to_string(),
+        schema: "mixed".to_string(),
         statements: view_stmts,
     };
 
@@ -1626,12 +1661,16 @@ fn test_schema_with_only_tables_succeeds() {
     let raw_table1 = raw::DatabaseObject {
         name: "users".to_string(),
         path: PathBuf::from("materialize/tables/users.sql"),
+        database: "materialize".to_string(),
+        schema: "tables".to_string(),
         statements: table1_stmts,
     };
 
     let raw_table2 = raw::DatabaseObject {
         name: "orders".to_string(),
         path: PathBuf::from("materialize/tables/orders.sql"),
+        database: "materialize".to_string(),
+        schema: "tables".to_string(),
         statements: table2_stmts,
     };
 
@@ -1659,12 +1698,16 @@ fn test_schema_with_tables_and_sinks_succeeds() {
     let raw_table = raw::DatabaseObject {
         name: "users".to_string(),
         path: PathBuf::from("materialize/storage/users.sql"),
+        database: "materialize".to_string(),
+        schema: "storage".to_string(),
         statements: table_stmts,
     };
 
     let raw_sink = raw::DatabaseObject {
         name: "user_sink".to_string(),
         path: PathBuf::from("materialize/storage/user_sink.sql"),
+        database: "materialize".to_string(),
+        schema: "storage".to_string(),
         statements: sink_stmts,
     };
 
@@ -1692,12 +1735,16 @@ fn test_schema_with_only_views_succeeds() {
     let raw_view1 = raw::DatabaseObject {
         name: "user_view".to_string(),
         path: PathBuf::from("materialize/views/user_view.sql"),
+        database: "materialize".to_string(),
+        schema: "views".to_string(),
         statements: view1_stmts,
     };
 
     let raw_view2 = raw::DatabaseObject {
         name: "order_view".to_string(),
         path: PathBuf::from("materialize/views/order_view.sql"),
+        database: "materialize".to_string(),
+        schema: "views".to_string(),
         statements: view2_stmts,
     };
 
@@ -1725,12 +1772,16 @@ fn test_schema_with_views_and_materialized_views_succeeds() {
     let raw_view = raw::DatabaseObject {
         name: "user_view".to_string(),
         path: PathBuf::from("materialize/computation/user_view.sql"),
+        database: "materialize".to_string(),
+        schema: "computation".to_string(),
         statements: view_stmts,
     };
 
     let raw_mv = raw::DatabaseObject {
         name: "user_summary".to_string(),
         path: PathBuf::from("materialize/computation/user_summary.sql"),
+        database: "materialize".to_string(),
+        schema: "computation".to_string(),
         statements: mv_stmts,
     };
 
@@ -1758,12 +1809,16 @@ fn test_schema_with_table_from_source_and_view_fails() {
     let raw_table = raw::DatabaseObject {
         name: "users".to_string(),
         path: PathBuf::from("materialize/mixed/users.sql"),
+        database: "materialize".to_string(),
+        schema: "mixed".to_string(),
         statements: table_stmts,
     };
 
     let raw_view = raw::DatabaseObject {
         name: "user_view".to_string(),
         path: PathBuf::from("materialize/mixed/user_view.sql"),
+        database: "materialize".to_string(),
+        schema: "mixed".to_string(),
         statements: view_stmts,
     };
 
@@ -1789,6 +1844,8 @@ fn test_sink_missing_cluster_fails() {
     let raw_sink = raw::DatabaseObject {
         name: "user_sink".to_string(),
         path: PathBuf::from("materialize/sinks/user_sink.sql"),
+        database: "materialize".to_string(),
+        schema: "sinks".to_string(),
         statements: sink_stmts,
     };
 
@@ -1830,6 +1887,8 @@ fn test_sink_with_cluster_succeeds() {
     let raw_sink = raw::DatabaseObject {
         name: "user_sink".to_string(),
         path: PathBuf::from("materialize/sinks/user_sink.sql"),
+        database: "materialize".to_string(),
+        schema: "sinks".to_string(),
         statements: sink_stmts,
     };
 
@@ -1854,6 +1913,8 @@ fn test_materialized_view_missing_cluster_fails() {
     let raw_mv = raw::DatabaseObject {
         name: "user_summary".to_string(),
         path: PathBuf::from("materialize/views/user_summary.sql"),
+        database: "materialize".to_string(),
+        schema: "views".to_string(),
         statements: mv_stmts,
     };
 
@@ -1899,6 +1960,8 @@ fn test_index_missing_cluster_fails() {
     let raw_table = raw::DatabaseObject {
         name: "users".to_string(),
         path: PathBuf::from("materialize/tables/users.sql"),
+        database: "materialize".to_string(),
+        schema: "tables".to_string(),
         statements: stmts,
     };
 
@@ -2165,6 +2228,8 @@ fn test_source_missing_cluster_fails() {
     let raw_source = raw::DatabaseObject {
         name: "kafka_source".to_string(),
         path: PathBuf::from("materialize/ingestion/kafka_source.sql"),
+        database: "materialize".to_string(),
+        schema: "ingestion".to_string(),
         statements: source_stmts,
     };
 
@@ -2210,6 +2275,8 @@ fn test_source_with_cluster_succeeds() {
     let raw_source = raw::DatabaseObject {
         name: "kafka_source".to_string(),
         path: PathBuf::from("materialize/ingestion/kafka_source.sql"),
+        database: "materialize".to_string(),
+        schema: "ingestion".to_string(),
         statements: source_stmts,
     };
 
@@ -2242,12 +2309,16 @@ fn test_schema_with_source_and_view_fails() {
     let raw_source = raw::DatabaseObject {
         name: "kafka_source".to_string(),
         path: PathBuf::from("materialize/mixed/kafka_source.sql"),
+        database: "materialize".to_string(),
+        schema: "mixed".to_string(),
         statements: source_stmts,
     };
 
     let raw_view = raw::DatabaseObject {
         name: "event_view".to_string(),
         path: PathBuf::from("materialize/mixed/event_view.sql"),
+        database: "materialize".to_string(),
+        schema: "mixed".to_string(),
         statements: view_stmts,
     };
 
@@ -2280,12 +2351,16 @@ fn test_schema_with_source_and_table_succeeds() {
     let raw_source = raw::DatabaseObject {
         name: "kafka_source".to_string(),
         path: PathBuf::from("materialize/ingestion/kafka_source.sql"),
+        database: "materialize".to_string(),
+        schema: "ingestion".to_string(),
         statements: source_stmts,
     };
 
     let raw_table = raw::DatabaseObject {
         name: "events".to_string(),
         path: PathBuf::from("materialize/ingestion/events.sql"),
+        database: "materialize".to_string(),
+        schema: "ingestion".to_string(),
         statements: table_stmts,
     };
 
@@ -2421,12 +2496,16 @@ fn test_schema_with_secrets_and_tables_succeeds() {
     let raw_secret = raw::DatabaseObject {
         name: "my_secret".to_string(),
         path: PathBuf::from("materialize/storage/my_secret.sql"),
+        database: "materialize".to_string(),
+        schema: "storage".to_string(),
         statements: secret_stmts,
     };
 
     let raw_table = raw::DatabaseObject {
         name: "users".to_string(),
         path: PathBuf::from("materialize/storage/users.sql"),
+        database: "materialize".to_string(),
+        schema: "storage".to_string(),
         statements: table_stmts,
     };
 
@@ -2454,12 +2533,16 @@ fn test_schema_with_secrets_and_views_fails() {
     let raw_secret = raw::DatabaseObject {
         name: "my_secret".to_string(),
         path: PathBuf::from("materialize/mixed/my_secret.sql"),
+        database: "materialize".to_string(),
+        schema: "mixed".to_string(),
         statements: secret_stmts,
     };
 
     let raw_view = raw::DatabaseObject {
         name: "user_view".to_string(),
         path: PathBuf::from("materialize/mixed/user_view.sql"),
+        database: "materialize".to_string(),
+        schema: "mixed".to_string(),
         statements: view_stmts,
     };
 

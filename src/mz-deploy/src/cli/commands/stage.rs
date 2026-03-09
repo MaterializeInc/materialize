@@ -1,11 +1,10 @@
 //! Stage command - deploy to staging environment with renamed schemas and clusters.
 
-use crate::cli::{CliError, TypeCheckMode, executor};
+use crate::cli::{CliError, executor};
 use crate::cli::{git, progress};
 use crate::client::quote_identifier;
-use crate::client::{
-    Client, ClusterConfig, DeploymentKind, PendingStatement, Profile, ReplacementMvRecord,
-};
+use crate::client::{Client, ClusterConfig, DeploymentKind, PendingStatement, ReplacementMvRecord};
+use crate::config::Settings;
 use crate::project::SchemaQualifier;
 use crate::project::ast::Statement;
 use crate::project::changeset::ChangeSet;
@@ -74,13 +73,14 @@ struct PartitionedObjects<'a> {
 /// Returns `CliError::Connection` for database errors
 /// Returns `CliError::Project` for project compilation errors
 pub async fn run(
-    profile: &Profile,
+    settings: &Settings,
     stage_name: Option<&str>,
-    directory: &Path,
     allow_dirty: bool,
     no_rollback: bool,
     dry_run: bool,
 ) -> Result<(), CliError> {
+    let profile = settings.connection();
+    let directory = &settings.directory;
     let start_time = Instant::now();
 
     if !allow_dirty && git::is_dirty(directory) {
@@ -93,8 +93,7 @@ pub async fn run(
 
     progress::info(&format!("Deploying to staging environment: {}", stage_name));
 
-    let planned_project =
-        super::compile::run(directory, TypeCheckMode::Disabled, &profile.name).await?;
+    let planned_project = super::compile::run(settings, true).await?;
     let staging_suffix = format!("_{}", stage_name);
 
     let client = Client::connect_with_profile(profile.clone())

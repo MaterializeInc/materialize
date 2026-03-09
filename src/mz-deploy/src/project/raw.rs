@@ -91,6 +91,10 @@ pub struct DatabaseObject {
     pub name: String,
     /// The full path to the file
     pub path: PathBuf,
+    /// The suffixed database name (same as directory name when no suffix is active)
+    pub database: String,
+    /// The schema name (directory name)
+    pub schema: String,
     /// The parsed SQL statements from the file
     ///
     /// All statements in the file are parsed in order. At this stage, no validation
@@ -203,15 +207,22 @@ pub struct Project {
     /// This is the absolute path to the directory that was passed to `load_project`.
     /// All other paths in the project are relative to or beneath this root.
     pub root: PathBuf,
-    /// All databases in this project, keyed by database name
+    /// All databases in this project, keyed by (possibly suffixed) database name
     ///
     /// Each database corresponds to one subdirectory in the project root.
     /// Hidden directories (starting with `.`) are excluded.
     pub databases: BTreeMap<String, Database>,
+    /// Mapping from original database directory names to suffixed names.
+    /// Empty when no suffix is active.
+    pub database_name_map: BTreeMap<String, String>,
 }
 
 /// Loads and parses a Materialize project from a directory structure.
-pub fn load_project<P: AsRef<Path>>(root: P, profile: &str) -> Result<Project, ProjectError> {
+pub fn load_project<P: AsRef<Path>>(
+    root: P,
+    profile: &str,
+    suffix: Option<&str>,
+) -> Result<Project, ProjectError> {
     let root = root.as_ref();
 
     if !root.exists() {
@@ -234,6 +245,7 @@ pub fn load_project<P: AsRef<Path>>(root: P, profile: &str) -> Result<Project, P
     }
 
     let mut databases = BTreeMap::new();
+    let mut database_name_map = BTreeMap::new();
 
     // Iterate over database directories (first level inside models/)
     for db_entry in fs::read_dir(&models_dir).map_err(|source| LoadError::DirectoryReadFailed {
@@ -251,17 +263,29 @@ pub fn load_project<P: AsRef<Path>>(root: P, profile: &str) -> Result<Project, P
             continue;
         }
 
-        let db_name = db_entry.file_name().to_string_lossy().to_string();
+        let original_db_name = db_entry.file_name().to_string_lossy().to_string();
+        let db_name = match suffix {
+            Some(s) => format!("{}{}", original_db_name, s),
+            None => original_db_name.clone(),
+        };
+
+        if suffix.is_some() {
+            database_name_map.insert(original_db_name.clone(), db_name.clone());
+        }
+
         let mut schemas = BTreeMap::new();
 
         // Check for database-level sibling .sql file (e.g., materialize.sql next to materialize/)
-        let db_mod_path = models_dir.join(format!("{}.sql", db_name));
+        let db_mod_path = models_dir.join(format!("{}.sql", original_db_name));
         let db_mod_statements = if db_mod_path.exists() {
-            let sql_content =
+            let mut sql_content =
                 fs::read_to_string(&db_mod_path).map_err(|source| LoadError::FileReadFailed {
                     path: db_mod_path.clone(),
                     source,
                 })?;
+            if suffix.is_some() {
+                sql_content = sql_content.replace(&original_db_name, &db_name);
+            }
             Some(parse_statements_with_context(
                 &sql_content,
                 db_mod_path.clone(),
@@ -295,12 +319,15 @@ pub fn load_project<P: AsRef<Path>>(root: P, profile: &str) -> Result<Project, P
             // Check for schema-level sibling .sql file (e.g., public.sql next to public/)
             let schema_mod_path = db_path.join(format!("{}.sql", schema_name));
             let schema_mod_statements = if schema_mod_path.exists() {
-                let sql_content = fs::read_to_string(&schema_mod_path).map_err(|source| {
+                let mut sql_content = fs::read_to_string(&schema_mod_path).map_err(|source| {
                     LoadError::FileReadFailed {
                         path: schema_mod_path.clone(),
                         source,
                     }
                 })?;
+                if suffix.is_some() {
+                    sql_content = sql_content.replace(&original_db_name, &db_name);
+                }
                 Some(parse_statements_with_context(
                     &sql_content,
                     schema_mod_path.clone(),
@@ -326,6 +353,8 @@ pub fn load_project<P: AsRef<Path>>(root: P, profile: &str) -> Result<Project, P
                 objects.push(DatabaseObject {
                     name: object_name,
                     path: object_path,
+                    database: db_name.clone(),
+                    schema: schema_name.clone(),
                     statements,
                 });
             }
@@ -359,6 +388,7 @@ pub fn load_project<P: AsRef<Path>>(root: P, profile: &str) -> Result<Project, P
     Ok(Project {
         root: root.to_path_buf(),
         databases,
+        database_name_map,
     })
 }
 
@@ -384,7 +414,7 @@ mod tests {
         fs::write(&sql_file, "CREATE TABLE t (id INT);").unwrap();
 
         // Load the project
-        let project = load_project(root, "default").unwrap();
+        let project = load_project(root, "default", None).unwrap();
 
         // Verify structure
         assert_eq!(project.databases.len(), 1);
@@ -417,7 +447,7 @@ mod tests {
             }
         }
 
-        let project = load_project(root, "default").unwrap();
+        let project = load_project(root, "default", None).unwrap();
 
         assert_eq!(project.databases.len(), 2);
         for db_name in ["db1", "db2"] {
@@ -441,7 +471,7 @@ mod tests {
         fs::create_dir_all(&normal_path).unwrap();
         fs::write(normal_path.join("object.sql"), "CREATE TABLE t (id INT);").unwrap();
 
-        let project = load_project(root, "default").unwrap();
+        let project = load_project(root, "default", None).unwrap();
 
         assert_eq!(project.databases.len(), 1);
         assert!(project.databases.contains_key("normal"));
@@ -469,7 +499,7 @@ mod tests {
         // Write a regular object
         fs::write(schema_path.join("object.sql"), "CREATE TABLE t (id INT);").unwrap();
 
-        let project = load_project(root, "default").unwrap();
+        let project = load_project(root, "default", None).unwrap();
 
         let database = &project.databases["my_database"];
         assert!(database.mod_statements.is_some());
@@ -497,7 +527,7 @@ mod tests {
         // Write a regular object
         fs::write(schema_path.join("object.sql"), "CREATE TABLE t (id INT);").unwrap();
 
-        let project = load_project(root, "default").unwrap();
+        let project = load_project(root, "default", None).unwrap();
 
         let schema = &project.databases["my_database"].schemas["my_schema"];
         assert!(schema.mod_statements.is_some());
@@ -523,7 +553,7 @@ mod tests {
         fs::write(schema_path.join("table1.sql"), "CREATE TABLE t1 (id INT);").unwrap();
         fs::write(schema_path.join("table2.sql"), "CREATE TABLE t2 (id INT);").unwrap();
 
-        let project = load_project(root, "default").unwrap();
+        let project = load_project(root, "default", None).unwrap();
 
         let schema = &project.databases["my_database"].schemas["my_schema"];
 
@@ -553,7 +583,7 @@ mod tests {
         )
         .unwrap();
 
-        let project = load_project(root, "default").unwrap();
+        let project = load_project(root, "default", None).unwrap();
 
         // Schema should still be loaded even with only schema-level .sql
         assert!(project.databases.contains_key("my_database"));
@@ -615,7 +645,7 @@ mod tests {
         .unwrap();
 
         // Load raw project
-        let raw_project = load_project(root, "default").unwrap();
+        let raw_project = load_project(root, "default", None).unwrap();
         assert_eq!(raw_project.databases.len(), 1);
 
         // Convert to typed
@@ -654,5 +684,255 @@ mod tests {
 
         assert_eq!(tables_schema.objects.len(), 1); // 1 table
         assert_eq!(views_schema.objects.len(), 4); // 3 MVs + 1 view
+    }
+
+    #[test]
+    fn test_load_project_with_suffix() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let schema_path = root.join("models").join("mydb").join("public");
+        fs::create_dir_all(&schema_path).unwrap();
+        fs::write(
+            schema_path.join("my_view.sql"),
+            "CREATE VIEW my_view AS SELECT 1;",
+        )
+        .unwrap();
+
+        let project = load_project(root, "default", Some("_stg")).unwrap();
+
+        assert_eq!(project.databases.len(), 1);
+        assert!(project.databases.contains_key("mydb_stg"));
+
+        let database = &project.databases["mydb_stg"];
+        assert_eq!(database.name, "mydb_stg");
+
+        let obj = &database.schemas["public"].objects[0];
+        assert_eq!(obj.database, "mydb_stg");
+        assert_eq!(obj.schema, "public");
+    }
+
+    #[test]
+    fn test_load_project_with_suffix_multiple_databases() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        for db in ["db1", "db2"] {
+            let schema_path = root.join("models").join(db).join("public");
+            fs::create_dir_all(&schema_path).unwrap();
+            fs::write(schema_path.join("t.sql"), "CREATE TABLE t (id INT);").unwrap();
+        }
+
+        let project = load_project(root, "default", Some("_stg")).unwrap();
+
+        assert_eq!(project.databases.len(), 2);
+        assert!(project.databases.contains_key("db1_stg"));
+        assert!(project.databases.contains_key("db2_stg"));
+        assert_eq!(project.database_name_map.len(), 2);
+        assert_eq!(project.database_name_map["db1"], "db1_stg");
+        assert_eq!(project.database_name_map["db2"], "db2_stg");
+    }
+
+    #[test]
+    fn test_load_project_no_suffix_unchanged() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let schema_path = root.join("models").join("mydb").join("public");
+        fs::create_dir_all(&schema_path).unwrap();
+        fs::write(schema_path.join("t.sql"), "CREATE TABLE t (id INT);").unwrap();
+
+        let project = load_project(root, "default", None).unwrap();
+
+        assert!(project.databases.contains_key("mydb"));
+        assert!(project.database_name_map.is_empty());
+
+        let obj = &project.databases["mydb"].schemas["public"].objects[0];
+        assert_eq!(obj.database, "mydb");
+        assert_eq!(obj.schema, "public");
+    }
+
+    #[test]
+    fn test_load_project_suffix_preserves_schema_names() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let schema_path = root.join("models").join("mydb").join("analytics");
+        fs::create_dir_all(&schema_path).unwrap();
+        fs::write(schema_path.join("t.sql"), "CREATE TABLE t (id INT);").unwrap();
+
+        let project = load_project(root, "default", Some("_stg")).unwrap();
+
+        let db = &project.databases["mydb_stg"];
+        assert!(db.schemas.contains_key("analytics"));
+        assert_eq!(db.schemas["analytics"].name, "analytics");
+    }
+
+    #[test]
+    fn test_load_project_suffix_database_mod_statements_rewritten() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let models_dir = root.join("models");
+        let db_path = models_dir.join("mydb");
+        let schema_path = db_path.join("public");
+        fs::create_dir_all(&schema_path).unwrap();
+        fs::write(schema_path.join("t.sql"), "CREATE TABLE t (id INT);").unwrap();
+
+        // Database-level mod file referencing original db name
+        fs::write(
+            models_dir.join("mydb.sql"),
+            "GRANT CREATE ON DATABASE mydb TO admin;",
+        )
+        .unwrap();
+
+        let project = load_project(root, "default", Some("_stg")).unwrap();
+
+        let db = &project.databases["mydb_stg"];
+        let mod_stmts = db.mod_statements.as_ref().unwrap();
+        // The SQL should reference mydb_stg, not mydb
+        let sql = format!("{}", mod_stmts[0]);
+        assert!(sql.contains("mydb_stg"), "Expected 'mydb_stg' in: {}", sql);
+    }
+
+    #[test]
+    fn test_database_name_map_only_populated_with_suffix() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let schema_path = root.join("models").join("mydb").join("public");
+        fs::create_dir_all(&schema_path).unwrap();
+        fs::write(schema_path.join("t.sql"), "CREATE TABLE t (id INT);").unwrap();
+
+        // Without suffix
+        let project = load_project(root, "default", None).unwrap();
+        assert!(project.database_name_map.is_empty());
+
+        // With suffix
+        let project = load_project(root, "default", Some("_stg")).unwrap();
+        assert_eq!(project.database_name_map.len(), 1);
+    }
+
+    #[test]
+    fn test_plan_single_db_with_suffix() {
+        use crate::project;
+
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let schema_path = root.join("models").join("testdb").join("public");
+        fs::create_dir_all(&schema_path).unwrap();
+        fs::write(
+            schema_path.join("my_view.sql"),
+            "CREATE VIEW my_view AS SELECT 1;",
+        )
+        .unwrap();
+
+        // Need a project.toml for the project to load
+        fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
+
+        let planned = project::plan(root, "default", Some("_staging")).unwrap();
+
+        assert_eq!(planned.databases.len(), 1);
+        assert_eq!(planned.databases[0].name, "testdb_staging");
+
+        let obj = &planned.databases[0].schemas[0].objects[0];
+        assert_eq!(obj.id.database, "testdb_staging");
+    }
+
+    #[test]
+    fn test_plan_cross_db_references_rewritten() {
+        use crate::project;
+
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        // db1 has a table
+        let db1_schema = root.join("models").join("db1").join("public");
+        fs::create_dir_all(&db1_schema).unwrap();
+        fs::write(db1_schema.join("tbl.sql"), "CREATE TABLE tbl (id INT);").unwrap();
+
+        // db2 has a view that references db1.public.tbl
+        let db2_schema = root.join("models").join("db2").join("public");
+        fs::create_dir_all(&db2_schema).unwrap();
+        fs::write(
+            db2_schema.join("v.sql"),
+            "CREATE VIEW v AS SELECT * FROM db1.public.tbl;",
+        )
+        .unwrap();
+
+        fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
+
+        let planned = project::plan(root, "default", Some("_stg")).unwrap();
+
+        // Find the view in db2_stg
+        let db2 = planned
+            .databases
+            .iter()
+            .find(|d| d.name == "db2_stg")
+            .expect("db2_stg should exist");
+        let view = &db2.schemas[0].objects[0];
+        let sql = format!("{}", view.typed_object.stmt);
+        assert!(
+            sql.contains("db1_stg"),
+            "Expected cross-db reference to be rewritten to db1_stg in: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn test_plan_external_db_references_preserved() {
+        use crate::project;
+
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let schema_path = root.join("models").join("mydb").join("public");
+        fs::create_dir_all(&schema_path).unwrap();
+        fs::write(
+            schema_path.join("v.sql"),
+            "CREATE VIEW v AS SELECT * FROM external.someschema.tbl;",
+        )
+        .unwrap();
+
+        fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
+
+        let planned = project::plan(root, "default", Some("_stg")).unwrap();
+
+        let view = &planned.databases[0].schemas[0].objects[0];
+        let sql = format!("{}", view.typed_object.stmt);
+        // external is not a project DB, so it should NOT be rewritten
+        assert!(
+            sql.contains("external"),
+            "Expected external reference to be preserved in: {}",
+            sql
+        );
+        assert!(
+            !sql.contains("external_stg"),
+            "External reference should NOT be suffixed in: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn test_plan_no_suffix_unchanged() {
+        use crate::project;
+
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let schema_path = root.join("models").join("mydb").join("public");
+        fs::create_dir_all(&schema_path).unwrap();
+        fs::write(schema_path.join("t.sql"), "CREATE TABLE t (id INT);").unwrap();
+
+        fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
+
+        let planned = project::plan(root, "default", None).unwrap();
+
+        assert_eq!(planned.databases[0].name, "mydb");
+        assert_eq!(
+            planned.databases[0].schemas[0].objects[0].id.database,
+            "mydb"
+        );
     }
 }

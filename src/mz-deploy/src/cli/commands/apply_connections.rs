@@ -2,9 +2,9 @@
 
 use crate::cli::commands::grants;
 use crate::cli::progress;
-use crate::cli::{CliError, TypeCheckMode, executor};
-use crate::client::{Client, Profile};
-use crate::config::ProjectSettings;
+use crate::cli::{CliError, executor};
+use crate::client::Client;
+use crate::config::Settings;
 use crate::project;
 use crate::project::ast::Statement;
 use crate::secret_resolver::SecretResolver;
@@ -14,7 +14,6 @@ use mz_sql_parser::ast::{
 };
 use mz_sql_parser::parser::parse_statements;
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::time::Instant;
 
 /// Run the `apply connections` command.
@@ -24,16 +23,11 @@ use std::time::Instant;
 /// 2. If missing, executes `CREATE CONNECTION IF NOT EXISTS`
 /// 3. If exists, diffs options and emits `ALTER CONNECTION ... SET/DROP`
 /// 4. Applies any associated grants and comments
-pub async fn run(
-    directory: &Path,
-    profile: &Profile,
-    settings: &ProjectSettings,
-    dry_run: bool,
-) -> Result<(), CliError> {
+pub async fn run(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
+    let profile = settings.connection();
     let start_time = Instant::now();
 
-    let planned_project =
-        super::compile::run(directory, TypeCheckMode::Disabled, &profile.name).await?;
+    let planned_project = super::compile::run(settings, true).await?;
 
     let connections: Vec<_> = planned_project
         .iter_objects()
@@ -62,7 +56,7 @@ pub async fn run(
         .prepare_databases_and_schemas(&planned_project, &connection_schemas, None)
         .await?;
 
-    let resolver = SecretResolver::new(&settings.secret_config_for_profile(&profile.name));
+    let resolver = SecretResolver::new(&settings.profile_config.security);
 
     let mut created = 0u32;
     let mut altered = 0u32;

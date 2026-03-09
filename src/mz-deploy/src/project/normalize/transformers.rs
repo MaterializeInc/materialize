@@ -7,6 +7,7 @@
 use super::super::typed::FullyQualifiedName;
 use crate::project::object_id::ObjectId;
 use mz_sql_parser::ast::*;
+use std::collections::BTreeMap;
 
 /// Trait for transforming object names in SQL AST nodes.
 ///
@@ -29,6 +30,9 @@ pub trait NameTransformer {
 /// use the 3-part qualified format.
 pub struct FullyQualifyingTransformer<'a> {
     pub(crate) fqn: &'a FullyQualifiedName,
+    /// Optional mapping from original database names to suffixed names.
+    /// When present, 3-part names with a database in this map get rewritten.
+    pub(crate) database_name_map: Option<&'a BTreeMap<String, String>>,
 }
 
 impl<'a> NameTransformer for FullyQualifyingTransformer<'a> {
@@ -50,8 +54,23 @@ impl<'a> NameTransformer for FullyQualifyingTransformer<'a> {
                 let database = Ident::new(self.fqn.database()).expect("valid database identifier");
                 UnresolvedItemName(vec![database, schema, object])
             }
+            3 => {
+                // Already fully qualified — optionally rewrite database name
+                if let Some(map) = &self.database_name_map {
+                    let db_str = name.0[0].to_string();
+                    if let Some(new_db) = map.get(&db_str) {
+                        let database = Ident::new(new_db).expect("valid identifier");
+                        return UnresolvedItemName(vec![
+                            database,
+                            name.0[1].clone(),
+                            name.0[2].clone(),
+                        ]);
+                    }
+                }
+                name.clone()
+            }
             _ => {
-                // Already fully qualified or invalid - return as-is
+                // Invalid - return as-is
                 name.clone()
             }
         }

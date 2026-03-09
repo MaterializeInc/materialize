@@ -2,9 +2,9 @@
 
 use crate::cli::CliError;
 use crate::cli::progress;
-use crate::client::{Client, Profile};
+use crate::client::Client;
+use crate::config::Settings;
 use crate::project;
-use std::path::Path;
 
 /// Generate data contracts (types.lock) for external dependencies.
 ///
@@ -29,7 +29,10 @@ use std::path::Path;
 /// # Errors
 /// Returns `CliError::Project` if project loading fails
 /// Returns `CliError::Connection` if database connection fails
-pub async fn run(profile: &Profile, directory: &Path) -> Result<(), CliError> {
+pub async fn run(settings: &Settings) -> Result<(), CliError> {
+    let profile = settings.connection();
+    let directory = &settings.directory;
+
     progress::info("Generating data contracts for external dependencies...");
 
     // Connect to the database
@@ -38,7 +41,7 @@ pub async fn run(profile: &Profile, directory: &Path) -> Result<(), CliError> {
         .map_err(CliError::Connection)?;
 
     // Load and plan the project
-    let planned_project = project::plan(directory, &profile.name)?;
+    let planned_project = project::plan(directory, &settings.profile_name, settings.suffix())?;
 
     if planned_project.external_dependencies.is_empty() {
         progress::info("No external dependencies found - types.lock not needed");

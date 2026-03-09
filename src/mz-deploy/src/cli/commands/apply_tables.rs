@@ -3,8 +3,9 @@
 use crate::cli::commands::grants;
 use crate::cli::git;
 use crate::cli::progress;
-use crate::cli::{CliError, TypeCheckMode, executor};
-use crate::client::{Client, Profile};
+use crate::cli::{CliError, executor};
+use crate::client::Client;
+use crate::config::Settings;
 use crate::project::ast::Statement;
 use crate::{project, verbose};
 
@@ -41,12 +42,14 @@ use super::ObjectRef;
 /// # Errors
 /// Returns various `CliError` variants for different failure modes
 pub async fn run(
-    profile: &Profile,
-    directory: &Path,
+    settings: &Settings,
     deploy_id: Option<&str>,
     allow_dirty: bool,
     dry_run: bool,
 ) -> Result<(), CliError> {
+    let profile = settings.connection();
+    let directory = &settings.directory;
+
     if !allow_dirty && git::is_dirty(directory) {
         return Err(CliError::GitDirty);
     }
@@ -57,8 +60,7 @@ pub async fn run(
 
     progress::info(&format!("Creating tables in deployment: {}", deploy_id));
 
-    let planned_project =
-        super::compile::run(directory, TypeCheckMode::Disabled, &profile.name).await?;
+    let planned_project = super::compile::run(settings, true).await?;
     let client = Client::connect_with_profile(profile.clone())
         .await
         .map_err(CliError::Connection)?;
@@ -170,23 +172,15 @@ pub async fn run(
 /// Apply only table objects (no deployment tracking).
 ///
 /// Creates tables that don't exist in the database. Existing tables are skipped.
-pub async fn apply_tables(
-    directory: &Path,
-    profile: &Profile,
-    dry_run: bool,
-) -> Result<(), CliError> {
-    apply_by_kind(directory, profile, dry_run, ObjectKindFilter::Tables).await
+pub async fn apply_tables(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
+    apply_by_kind(settings, dry_run, ObjectKindFilter::Tables).await
 }
 
 /// Apply only source objects (no deployment tracking).
 ///
 /// Creates sources that don't exist in the database. Existing sources are skipped.
-pub async fn apply_sources(
-    directory: &Path,
-    profile: &Profile,
-    dry_run: bool,
-) -> Result<(), CliError> {
-    apply_by_kind(directory, profile, dry_run, ObjectKindFilter::Sources).await
+pub async fn apply_sources(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
+    apply_by_kind(settings, dry_run, ObjectKindFilter::Sources).await
 }
 
 /// Which object kinds to create.
@@ -197,11 +191,11 @@ enum ObjectKindFilter {
 
 /// Shared implementation for `apply_tables` and `apply_sources`.
 async fn apply_by_kind(
-    directory: &Path,
-    profile: &Profile,
+    settings: &Settings,
     dry_run: bool,
     filter: ObjectKindFilter,
 ) -> Result<(), CliError> {
+    let profile = settings.connection();
     let (label, matcher): (&str, Box<dyn Fn(&Statement) -> bool>) = match filter {
         ObjectKindFilter::Tables => (
             "table",
@@ -218,8 +212,7 @@ async fn apply_by_kind(
         ),
     };
 
-    let planned_project =
-        super::compile::run(directory, TypeCheckMode::Disabled, &profile.name).await?;
+    let planned_project = super::compile::run(settings, true).await?;
     let client = Client::connect_with_profile(profile.clone())
         .await
         .map_err(CliError::Connection)?;
