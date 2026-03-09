@@ -1270,3 +1270,42 @@ impl fmt::Display for RegexpReplace {
         )
     }
 }
+
+#[sqlfunc(sqlname = "mz_redact_sql")]
+fn mz_redact_sql(sql: &str) -> Result<String, EvalError> {
+    use mz_sql_parser::ast::display::AstDisplay;
+    let stmts = mz_sql_parser::parser::parse_statements(sql)
+        .map_err(|e| EvalError::Internal(e.error.message.into()))?;
+    Ok(stmts
+        .iter()
+        .map(|s| s.ast.to_ast_string_redacted())
+        .collect::<Vec<_>>()
+        .join("; "))
+}
+
+/// Extracts the query definition from a CREATE VIEW or CREATE MATERIALIZED VIEW statement.
+/// Returns the query with a trailing semicolon, matching PostgreSQL's pg_matviews.definition.
+#[sqlfunc(sqlname = "mz_sql_extract_query")]
+fn mz_sql_extract_query(sql: &str) -> Result<Option<String>, EvalError> {
+    use mz_sql_parser::ast::Statement;
+    use mz_sql_parser::ast::display::AstDisplay;
+    let stmts = mz_sql_parser::parser::parse_statements(sql)
+        .map_err(|e| EvalError::Internal(e.error.message.into()))?;
+    let stmt = match stmts.into_iter().next() {
+        Some(s) => s.ast,
+        None => return Ok(None),
+    };
+    match &stmt {
+        Statement::CreateMaterializedView(s) => {
+            let mut q = s.query.to_ast_string_stable();
+            q.push(';');
+            Ok(Some(q))
+        }
+        Statement::CreateView(s) => {
+            let mut q = s.definition.query.to_ast_string_stable();
+            q.push(';');
+            Ok(Some(q))
+        }
+        _ => Ok(None),
+    }
+}

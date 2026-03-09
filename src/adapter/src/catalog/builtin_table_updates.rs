@@ -17,19 +17,19 @@ use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICAS,
-    MZ_CLUSTER_SCHEDULES, MZ_CLUSTER_WORKLOAD_CLASSES, MZ_CLUSTERS, MZ_COLUMNS, MZ_COMMENTS,
-    MZ_CONNECTIONS, MZ_CONTINUAL_TASKS, MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS,
-    MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_INDEXES,
+    MZ_CLUSTER_SCHEDULES, MZ_CLUSTER_WORKLOAD_CLASSES, MZ_COLUMNS, MZ_COMMENTS, MZ_CONNECTIONS,
+    MZ_CONTINUAL_TASKS, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS,
+    MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_INDEXES,
     MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES,
     MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
-    MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MATERIALIZED_VIEWS, MZ_MYSQL_SOURCE_TABLES,
-    MZ_NETWORK_POLICIES, MZ_NETWORK_POLICY_RULES, MZ_OBJECT_DEPENDENCIES, MZ_OBJECT_GLOBAL_IDS,
-    MZ_OPERATORS, MZ_PENDING_CLUSTER_REPLICAS, MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES,
-    MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS, MZ_ROLES,
-    MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SOURCES,
+    MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES, MZ_NETWORK_POLICIES,
+    MZ_NETWORK_POLICY_RULES, MZ_OBJECT_DEPENDENCIES, MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS,
+    MZ_PENDING_CLUSTER_REPLICAS, MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES,
+    MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS, MZ_ROLES, MZ_SCHEMAS,
+    MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SOURCES,
     MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
-    MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS,
-    MZ_WEBHOOKS_SOURCES,
+    MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_SYSTEM_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES,
+    MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
@@ -58,14 +58,9 @@ use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, Row, RowPacker, SqlScalarType, Timestamp};
 use mz_sql::ast::{ContinualTaskStmt, CreateIndexStatement, Statement, UnresolvedItemName};
-use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, DefaultPrivilegeObject,
-    TypeCategory,
-};
+use mz_sql::catalog::{CatalogSchema, CatalogType, DefaultPrivilegeObject, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
-use mz_sql::names::{
-    CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
-};
+use mz_sql::names::{CommentObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql::plan::{ClusterSchedule, ConnectionDetails, SshKey};
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::SessionVars;
@@ -142,27 +137,6 @@ impl CatalogState {
             Datum::String(&dependee.to_string()),
         ]);
         BuiltinTableUpdate::row(&*MZ_OBJECT_DEPENDENCIES, row, diff)
-    }
-
-    pub(super) fn pack_database_update(
-        &self,
-        database_id: &DatabaseId,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let database = self.get_database(database_id);
-        let row = self.pack_privilege_array_row(database.privileges());
-        let privileges = row.unpack_first();
-        BuiltinTableUpdate::row(
-            &*MZ_DATABASES,
-            Row::pack_slice(&[
-                Datum::String(&database.id.to_string()),
-                Datum::UInt32(database.oid),
-                Datum::String(database.name()),
-                Datum::String(&database.owner_id.to_string()),
-                privileges,
-            ]),
-            diff,
-        )
     }
 
     pub(super) fn pack_schema_update(
@@ -369,51 +343,10 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let id = self.clusters_by_name[name];
         let cluster = &self.clusters_by_id[&id];
-        let row = self.pack_privilege_array_row(cluster.privileges());
-        let privileges = row.unpack_first();
-        let (size, disk, replication_factor, azs, introspection_debugging, introspection_interval) =
-            match &cluster.config.variant {
-                ClusterVariant::Managed(config) => (
-                    Some(config.size.as_str()),
-                    Some(self.cluster_replica_size_has_disk(&config.size)),
-                    Some(config.replication_factor),
-                    if config.availability_zones.is_empty() {
-                        None
-                    } else {
-                        Some(config.availability_zones.clone())
-                    },
-                    Some(config.logging.log_logging),
-                    config.logging.interval.map(|d| {
-                        Interval::from_duration(&d)
-                            .expect("planning ensured this convertible back to interval")
-                    }),
-                ),
-                ClusterVariant::Unmanaged => (None, None, None, None, None, None),
-            };
 
-        let mut row = Row::default();
-        let mut packer = row.packer();
-        packer.extend([
-            Datum::String(&id.to_string()),
-            Datum::String(name),
-            Datum::String(&cluster.owner_id.to_string()),
-            privileges,
-            cluster.is_managed().into(),
-            size.into(),
-            replication_factor.into(),
-            disk.into(),
-        ]);
-        if let Some(azs) = azs {
-            packer.push_list(azs.iter().map(|az| Datum::String(az)));
-        } else {
-            packer.push(Datum::Null);
-        }
-        packer.push(Datum::from(introspection_debugging));
-        packer.push(Datum::from(introspection_interval));
-
+        // MZ_CLUSTERS is now a view over mz_catalog_raw; no builtin table update needed.
+        // But we still need to update MZ_CLUSTER_SCHEDULES and MZ_CLUSTER_WORKLOAD_CLASSES.
         let mut updates = Vec::new();
-
-        updates.push(BuiltinTableUpdate::row(&*MZ_CLUSTERS, row, diff));
 
         if let ClusterVariant::Managed(managed_config) = &cluster.config.variant {
             let row = match managed_config.schedule {
@@ -963,25 +896,14 @@ impl CatalogState {
         diff: Diff,
         table: &Table,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let redacted = table.create_sql.as_ref().map(|create_sql| {
-            mz_sql::parse::parse(create_sql)
-                .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", create_sql))
-                .into_element()
-                .ast
-                .to_ast_string_redacted()
-        });
-        let source_id = if let TableDataSource::DataSource {
-            desc: DataSourceDesc::IngestionExport { ingestion_id, .. },
-            ..
-        } = &table.data_source
-        {
-            Some(ingestion_id.to_string())
-        } else {
-            None
-        };
+        // User tables (with create_sql) are handled by the MZ_TABLES view over mz_catalog_raw.
+        // Only system/builtin tables (without create_sql) need to be packed into MZ_SYSTEM_TABLES.
+        if table.create_sql.is_some() {
+            return vec![];
+        }
 
         vec![BuiltinTableUpdate::row(
-            &*MZ_TABLES,
+            &*MZ_SYSTEM_TABLES,
             Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
@@ -989,21 +911,9 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(&owner_id.to_string()),
                 privileges,
-                if let Some(create_sql) = &table.create_sql {
-                    Datum::String(create_sql)
-                } else {
-                    Datum::Null
-                },
-                if let Some(redacted) = &redacted {
-                    Datum::String(redacted)
-                } else {
-                    Datum::Null
-                },
-                if let Some(source_id) = source_id.as_ref() {
-                    Datum::String(source_id)
-                } else {
-                    Datum::Null
-                },
+                Datum::Null, // create_sql
+                Datum::Null, // redacted_create_sql
+                Datum::Null, // source_id
             ]),
             diff,
         )]
@@ -1443,52 +1353,16 @@ impl CatalogState {
     fn pack_materialized_view_update(
         &self,
         id: CatalogItemId,
-        oid: u32,
-        schema_id: &SchemaSpecifier,
-        name: &str,
-        owner_id: &RoleId,
-        privileges: Datum,
+        _oid: u32,
+        _schema_id: &SchemaSpecifier,
+        _name: &str,
+        _owner_id: &RoleId,
+        _privileges: Datum,
         mview: &MaterializedView,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let create_stmt = mz_sql::parse::parse(&mview.create_sql)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "create_sql cannot be invalid: `{}` --- error: `{}`",
-                    mview.create_sql, e
-                )
-            })
-            .into_element()
-            .ast;
-        let query_string = match &create_stmt {
-            Statement::CreateMaterializedView(stmt) => {
-                let mut query_string = stmt.query.to_ast_string_stable();
-                // PostgreSQL appends a semicolon in `pg_matviews.definition`, we
-                // do the same for compatibility's sake.
-                query_string.push(';');
-                query_string
-            }
-            _ => unreachable!(),
-        };
-
+        // MZ_MATERIALIZED_VIEWS is now a view over mz_catalog_raw; no builtin table update needed.
         let mut updates = Vec::new();
-
-        updates.push(BuiltinTableUpdate::row(
-            &*MZ_MATERIALIZED_VIEWS,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::UInt32(oid),
-                Datum::String(&schema_id.to_string()),
-                Datum::String(name),
-                Datum::String(&mview.cluster_id.to_string()),
-                Datum::String(&query_string),
-                Datum::String(&owner_id.to_string()),
-                privileges,
-                Datum::String(&mview.create_sql),
-                Datum::String(&create_stmt.to_ast_string_redacted()),
-            ]),
-            diff,
-        ));
 
         if let Some(refresh_schedule) = &mview.refresh_schedule {
             // This can't be `ON COMMIT`, because that is represented by a `None` instead of an

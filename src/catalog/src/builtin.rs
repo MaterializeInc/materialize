@@ -62,6 +62,7 @@ use mz_storage_client::statistics::{MZ_SINK_STATISTICS_RAW_DESC, MZ_SOURCE_STATI
 use serde::Serialize;
 
 use crate::durable::objects::SystemObjectDescription;
+use crate::memory::objects::DataSourceDesc;
 
 pub const BUILTIN_PREFIXES: &[&str] = &["mz_", "pg_", "external_"];
 const BUILTIN_CLUSTER_REPLICA_NAME: &str = "r1";
@@ -172,14 +173,14 @@ pub struct BuiltinTable {
     pub access: Vec<MzAclItem>,
 }
 
-#[derive(Clone, Debug, Hash, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BuiltinSource {
     pub name: &'static str,
     pub schema: &'static str,
     pub oid: u32,
     pub desc: RelationDesc,
     pub column_comments: BTreeMap<&'static str, &'static str>,
-    pub data_source: IntrospectionType,
+    pub data_source: DataSourceDesc,
     /// Whether the source's retention policy is controlled by
     /// the system variable `METRICS_RETENTION`
     pub is_retained_metrics_object: bool,
@@ -1753,6 +1754,25 @@ const MONITOR_REDACTED_SELECT: MzAclItem = MzAclItem {
     acl_mode: AclMode::SELECT,
 };
 
+pub static MZ_CATALOG_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
+    name: "mz_catalog_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_CATALOG_RAW_OID,
+    data_source: DataSourceDesc::Catalog,
+    desc: crate::durable::persist_desc(),
+    column_comments: BTreeMap::new(),
+    is_retained_metrics_object: false,
+    // The raw catalog contains unredacted SQL statements, so we limit access to the system user.
+    access: vec![],
+});
+
+pub static MZ_CATALOG_RAW_DESCRIPTION: LazyLock<SystemObjectDescription> =
+    LazyLock::new(|| SystemObjectDescription {
+        schema_name: MZ_CATALOG_RAW.schema.to_string(),
+        object_type: CatalogItemType::Source,
+        object_name: MZ_CATALOG_RAW.name.to_string(),
+    });
+
 pub static MZ_DATAFLOW_OPERATORS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
     name: "mz_dataflow_operators_per_worker",
     schema: MZ_INTROSPECTION_SCHEMA,
@@ -2269,7 +2289,7 @@ pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| B
     name: "mz_compute_dependencies",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_COMPUTE_DEPENDENCIES_OID,
-    data_source: IntrospectionType::ComputeDependencies,
+    data_source: IntrospectionType::ComputeDependencies.into(),
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
         .with_column("dependency_id", SqlScalarType::String.nullable(false))
@@ -2288,10 +2308,11 @@ pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| B
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_DATABASES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
     name: "mz_databases",
     schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_DATABASES_OID,
+    oid: oid::VIEW_MZ_DATABASES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("oid", SqlScalarType::Oid.nullable(false))
@@ -2314,8 +2335,42 @@ pub static MZ_DATABASES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
         ),
         ("privileges", "The privileges belonging to the database."),
     ]),
-    is_retained_metrics_object: false,
+    sql: "SELECT
+    CASE
+        WHEN data->'key'->'id' ? 'User' THEN 'u' || (data->'key'->'id'->>'User')
+        WHEN data->'key'->'id' ? 'System' THEN 's' || (data->'key'->'id'->>'System')
+    END AS id,
+    (data->'value'->>'oid')::oid AS oid,
+    data->'value'->>'name' AS name,
+    CASE
+        WHEN jsonb_typeof(data->'value'->'owner_id') = 'string' THEN 'p'
+        WHEN data->'value'->'owner_id' ? 'User' THEN 'u' || (data->'value'->'owner_id'->>'User')
+        WHEN data->'value'->'owner_id' ? 'System' THEN 's' || (data->'value'->'owner_id'->>'System')
+        WHEN data->'value'->'owner_id' ? 'Predefined' THEN 'g' || (data->'value'->'owner_id'->>'Predefined')
+    END AS owner_id,
+    privs.privileges
+FROM mz_internal.mz_catalog_raw, LATERAL (
+    SELECT array_agg(
+        mz_internal.make_mz_aclitem(
+            CASE
+                WHEN jsonb_typeof(p->'grantee') = 'string' THEN 'p'
+                WHEN p->'grantee' ? 'User' THEN 'u' || (p->'grantee'->>'User')
+                WHEN p->'grantee' ? 'System' THEN 's' || (p->'grantee'->>'System')
+                WHEN p->'grantee' ? 'Predefined' THEN 'g' || (p->'grantee'->>'Predefined')
+            END,
+            CASE
+                WHEN p->'grantor' ? 'User' THEN 'u' || (p->'grantor'->>'User')
+                WHEN p->'grantor' ? 'System' THEN 's' || (p->'grantor'->>'System')
+                WHEN p->'grantor' ? 'Predefined' THEN 'g' || (p->'grantor'->>'Predefined')
+            END,
+            (p->'acl_mode'->>'bitflags')::int8
+        )
+    ) AS privileges
+    FROM jsonb_array_elements(data->'value'->'privileges') AS p
+) AS privs
+WHERE data->>'kind' = 'Database'",
     access: vec![PUBLIC_SELECT],
+}
 });
 pub static MZ_SCHEMAS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_schemas",
@@ -2464,10 +2519,11 @@ pub static MZ_INDEX_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
-pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_TABLES: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
     name: "mz_tables",
     schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_TABLES_OID,
+    oid: oid::VIEW_MZ_TABLES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("oid", SqlScalarType::Oid.nullable(false))
@@ -2507,6 +2563,83 @@ pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             "The ID of the source associated with the table, if any. Corresponds to `mz_sources.id`.",
         ),
     ]),
+    sql: "SELECT
+    CASE
+        WHEN data->'key'->'gid' ? 'User' THEN 'u' || (data->'key'->'gid'->>'User')
+        WHEN data->'key'->'gid' ? 'System' THEN 's' || (data->'key'->'gid'->>'System')
+    END AS id,
+    (data->'value'->>'oid')::oid AS oid,
+    CASE
+        WHEN data->'value'->'schema_id' ? 'User' THEN 'u' || (data->'value'->'schema_id'->>'User')
+        WHEN data->'value'->'schema_id' ? 'System' THEN 's' || (data->'value'->'schema_id'->>'System')
+    END AS schema_id,
+    data->'value'->>'name' AS name,
+    CASE
+        WHEN jsonb_typeof(data->'value'->'owner_id') = 'string' THEN 'p'
+        WHEN data->'value'->'owner_id' ? 'User' THEN 'u' || (data->'value'->'owner_id'->>'User')
+        WHEN data->'value'->'owner_id' ? 'System' THEN 's' || (data->'value'->'owner_id'->>'System')
+        WHEN data->'value'->'owner_id' ? 'Predefined' THEN 'g' || (data->'value'->'owner_id'->>'Predefined')
+    END AS owner_id,
+    privs.privileges,
+    data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
+    mz_internal.mz_redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql,
+    CASE
+        WHEN data->'value'->'definition'->'V1'->>'create_sql' LIKE '% FROM SOURCE %' THEN
+            (regexp_match(data->'value'->'definition'->'V1'->>'create_sql', 'FROM SOURCE \\[([^ ]*) AS '))[1]
+        ELSE NULL
+    END AS source_id
+FROM mz_internal.mz_catalog_raw, LATERAL (
+    SELECT array_agg(
+        mz_internal.make_mz_aclitem(
+            CASE
+                WHEN jsonb_typeof(p->'grantee') = 'string' THEN 'p'
+                WHEN p->'grantee' ? 'User' THEN 'u' || (p->'grantee'->>'User')
+                WHEN p->'grantee' ? 'System' THEN 's' || (p->'grantee'->>'System')
+                WHEN p->'grantee' ? 'Predefined' THEN 'g' || (p->'grantee'->>'Predefined')
+            END,
+            CASE
+                WHEN p->'grantor' ? 'User' THEN 'u' || (p->'grantor'->>'User')
+                WHEN p->'grantor' ? 'System' THEN 's' || (p->'grantor'->>'System')
+                WHEN p->'grantor' ? 'Predefined' THEN 'g' || (p->'grantor'->>'Predefined')
+            END,
+            (p->'acl_mode'->>'bitflags')::int8
+        )
+    ) AS privileges
+    FROM jsonb_array_elements(data->'value'->'privileges') AS p
+) AS privs
+WHERE data->>'kind' = 'Item'
+AND (
+    data->'value'->'definition'->'V1'->>'create_sql' LIKE 'CREATE TABLE %'
+    OR data->'value'->'definition'->'V1'->>'create_sql' LIKE 'CREATE TEMPORARY TABLE %'
+    OR data->'value'->'definition'->'V1'->>'create_sql' LIKE 'CREATE REPLACEMENT TABLE %'
+)
+UNION ALL
+SELECT id, oid, schema_id, name, owner_id, privileges, create_sql, redacted_create_sql, source_id
+FROM mz_internal.mz_system_tables",
+    access: vec![PUBLIC_SELECT],
+}
+});
+pub static MZ_SYSTEM_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_system_tables",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_SYSTEM_TABLES_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::String.nullable(false))
+        .with_column("oid", SqlScalarType::Oid.nullable(false))
+        .with_column("schema_id", SqlScalarType::String.nullable(false))
+        .with_column("name", SqlScalarType::String.nullable(false))
+        .with_column("owner_id", SqlScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+        )
+        .with_column("create_sql", SqlScalarType::String.nullable(true))
+        .with_column("redacted_create_sql", SqlScalarType::String.nullable(true))
+        .with_column("source_id", SqlScalarType::String.nullable(true))
+        .with_key(vec![0])
+        .with_key(vec![1])
+        .finish(),
+    column_comments: BTreeMap::new(),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
@@ -2772,10 +2905,11 @@ pub static MZ_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
-pub static MZ_MATERIALIZED_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_MATERIALIZED_VIEWS: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
     name: "mz_materialized_views",
     schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_MATERIALIZED_VIEWS_OID,
+    oid: oid::VIEW_MZ_MATERIALIZED_VIEWS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("oid", SqlScalarType::Oid.nullable(false))
@@ -2829,8 +2963,54 @@ pub static MZ_MATERIALIZED_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| Buil
             "The redacted `CREATE` SQL statement for the materialized view.",
         ),
     ]),
-    is_retained_metrics_object: false,
+    sql: "SELECT
+    CASE
+        WHEN data->'key'->'gid' ? 'User' THEN 'u' || (data->'key'->'gid'->>'User')
+        WHEN data->'key'->'gid' ? 'System' THEN 's' || (data->'key'->'gid'->>'System')
+    END AS id,
+    (data->'value'->>'oid')::oid AS oid,
+    CASE
+        WHEN data->'value'->'schema_id' ? 'User' THEN 'u' || (data->'value'->'schema_id'->>'User')
+        WHEN data->'value'->'schema_id' ? 'System' THEN 's' || (data->'value'->'schema_id'->>'System')
+    END AS schema_id,
+    data->'value'->>'name' AS name,
+    (regexp_match(data->'value'->'definition'->'V1'->>'create_sql', 'IN CLUSTER \\[([^\\]]*)\\]'))[1] AS cluster_id,
+    mz_internal.mz_sql_extract_query(data->'value'->'definition'->'V1'->>'create_sql') AS definition,
+    CASE
+        WHEN jsonb_typeof(data->'value'->'owner_id') = 'string' THEN 'p'
+        WHEN data->'value'->'owner_id' ? 'User' THEN 'u' || (data->'value'->'owner_id'->>'User')
+        WHEN data->'value'->'owner_id' ? 'System' THEN 's' || (data->'value'->'owner_id'->>'System')
+        WHEN data->'value'->'owner_id' ? 'Predefined' THEN 'g' || (data->'value'->'owner_id'->>'Predefined')
+    END AS owner_id,
+    privs.privileges,
+    data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
+    mz_internal.mz_redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql
+FROM mz_internal.mz_catalog_raw, LATERAL (
+    SELECT array_agg(
+        mz_internal.make_mz_aclitem(
+            CASE
+                WHEN jsonb_typeof(p->'grantee') = 'string' THEN 'p'
+                WHEN p->'grantee' ? 'User' THEN 'u' || (p->'grantee'->>'User')
+                WHEN p->'grantee' ? 'System' THEN 's' || (p->'grantee'->>'System')
+                WHEN p->'grantee' ? 'Predefined' THEN 'g' || (p->'grantee'->>'Predefined')
+            END,
+            CASE
+                WHEN p->'grantor' ? 'User' THEN 'u' || (p->'grantor'->>'User')
+                WHEN p->'grantor' ? 'System' THEN 's' || (p->'grantor'->>'System')
+                WHEN p->'grantor' ? 'Predefined' THEN 'g' || (p->'grantor'->>'Predefined')
+            END,
+            (p->'acl_mode'->>'bitflags')::int8
+        )
+    ) AS privileges
+    FROM jsonb_array_elements(data->'value'->'privileges') AS p
+) AS privs
+WHERE data->>'kind' = 'Item'
+AND (
+    data->'value'->'definition'->'V1'->>'create_sql' LIKE 'CREATE MATERIALIZED VIEW %'
+    OR data->'value'->'definition'->'V1'->>'create_sql' LIKE 'CREATE REPLACEMENT MATERIALIZED VIEW %'
+)",
     access: vec![PUBLIC_SELECT],
+}
 });
 pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: LazyLock<BuiltinTable> = LazyLock::new(|| {
     BuiltinTable {
@@ -3327,10 +3507,11 @@ pub static MZ_AGGREGATES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_CLUSTERS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_CLUSTERS: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
     name: "mz_clusters",
     schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_CLUSTERS_OID,
+    oid: oid::VIEW_MZ_CLUSTERS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("name", SqlScalarType::String.nullable(false))
@@ -3398,8 +3579,80 @@ pub static MZ_CLUSTERS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             "The interval at which to collect introspection data.",
         ),
     ]),
-    is_retained_metrics_object: false,
+    sql: "
+SELECT
+    c.id,
+    c.name,
+    c.owner_id,
+    c.privileges,
+    c.managed,
+    c.size,
+    c.replication_factor,
+    CASE WHEN c.managed THEN
+        (sizes.disk_bytes IS NULL OR sizes.disk_bytes > 0)
+    ELSE NULL END AS disk,
+    c.availability_zones,
+    c.introspection_debugging,
+    c.introspection_interval
+FROM (
+    SELECT
+        CASE
+            WHEN data->'key'->'id' ? 'User' THEN 'u' || (data->'key'->'id'->>'User')
+            WHEN data->'key'->'id' ? 'System' THEN 's' || (data->'key'->'id'->>'System')
+        END AS id,
+        data->'value'->>'name' AS name,
+        CASE
+            WHEN jsonb_typeof(data->'value'->'owner_id') = 'string' THEN 'p'
+            WHEN data->'value'->'owner_id' ? 'User' THEN 'u' || (data->'value'->'owner_id'->>'User')
+            WHEN data->'value'->'owner_id' ? 'System' THEN 's' || (data->'value'->'owner_id'->>'System')
+            WHEN data->'value'->'owner_id' ? 'Predefined' THEN 'g' || (data->'value'->'owner_id'->>'Predefined')
+        END AS owner_id,
+        privs.privileges,
+        data->'value'->'config'->'variant' ? 'Managed' AS managed,
+        data->'value'->'config'->'variant'->'Managed'->>'size' AS size,
+        (data->'value'->'config'->'variant'->'Managed'->>'replication_factor')::uint4 AS replication_factor,
+        azs.availability_zones,
+        (data->'value'->'config'->'variant'->'Managed'->'logging'->>'log_logging')::bool AS introspection_debugging,
+        CASE WHEN data->'value'->'config'->'variant'->'Managed'->'logging'->'interval' IS NOT NULL
+            THEN interval '1 second'
+                * (data->'value'->'config'->'variant'->'Managed'->'logging'->'interval'->>'secs')::int8
+                + interval '1 microsecond'
+                * ((data->'value'->'config'->'variant'->'Managed'->'logging'->'interval'->>'nanos')::int8 / 1000)
+            ELSE NULL
+        END AS introspection_interval
+    FROM mz_internal.mz_catalog_raw, LATERAL (
+        SELECT array_agg(
+            mz_internal.make_mz_aclitem(
+                CASE
+                    WHEN jsonb_typeof(p->'grantee') = 'string' THEN 'p'
+                    WHEN p->'grantee' ? 'User' THEN 'u' || (p->'grantee'->>'User')
+                    WHEN p->'grantee' ? 'System' THEN 's' || (p->'grantee'->>'System')
+                    WHEN p->'grantee' ? 'Predefined' THEN 'g' || (p->'grantee'->>'Predefined')
+                END,
+                CASE
+                    WHEN p->'grantor' ? 'User' THEN 'u' || (p->'grantor'->>'User')
+                    WHEN p->'grantor' ? 'System' THEN 's' || (p->'grantor'->>'System')
+                    WHEN p->'grantor' ? 'Predefined' THEN 'g' || (p->'grantor'->>'Predefined')
+                END,
+                (p->'acl_mode'->>'bitflags')::int8
+            )
+        ) AS privileges
+        FROM jsonb_array_elements(data->'value'->'privileges') AS p
+    ) AS privs, LATERAL (
+        SELECT CASE
+            WHEN jsonb_array_length(data->'value'->'config'->'variant'->'Managed'->'availability_zones') > 0
+            THEN list_agg(az)
+            ELSE NULL
+        END AS availability_zones
+        FROM jsonb_array_elements_text(
+            COALESCE(data->'value'->'config'->'variant'->'Managed'->'availability_zones', '[]'::jsonb)
+        ) AS az
+    ) AS azs
+    WHERE data->>'kind' = 'Cluster'
+) AS c
+LEFT JOIN mz_catalog.mz_cluster_replica_sizes AS sizes ON c.size = sizes.size",
     access: vec![PUBLIC_SELECT],
+}
 });
 
 pub static MZ_CLUSTER_WORKLOAD_CLASSES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -3560,7 +3813,7 @@ pub static MZ_CLUSTER_REPLICA_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock
         name: "mz_cluster_replica_status_history",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_CLUSTER_REPLICA_STATUS_HISTORY_OID,
-        data_source: IntrospectionType::ReplicaStatusHistory,
+        data_source: IntrospectionType::ReplicaStatusHistory.into(),
         desc: REPLICA_STATUS_HISTORY_DESC.clone(),
         column_comments: BTreeMap::from_iter([
             ("replica_id", "The ID of a cluster replica."),
@@ -3743,7 +3996,7 @@ pub static MZ_SOURCE_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| 
     name: "mz_source_status_history",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_SOURCE_STATUS_HISTORY_OID,
-    data_source: IntrospectionType::SourceStatusHistory,
+    data_source: IntrospectionType::SourceStatusHistory.into(),
     desc: MZ_SOURCE_STATUS_HISTORY_DESC.clone(),
     column_comments: BTreeMap::from_iter([
         (
@@ -3780,7 +4033,9 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY: LazyLock<BuiltinSource>
         name: "mz_aws_privatelink_connection_status_history",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_OID,
-        data_source: IntrospectionType::PrivatelinkConnectionStatusHistory,
+        data_source: DataSourceDesc::Introspection(
+            IntrospectionType::PrivatelinkConnectionStatusHistory,
+        ),
         desc: MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC.clone(),
         column_comments: BTreeMap::from_iter([
             ("occurred_at", "Wall-clock timestamp of the status change."),
@@ -3862,7 +4117,7 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY: LazyLock<BuiltinSource> =
         name: "mz_statement_execution_history",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_STATEMENT_EXECUTION_HISTORY_OID,
-        data_source: IntrospectionType::StatementExecutionHistory,
+        data_source: IntrospectionType::StatementExecutionHistory.into(),
         desc: MZ_STATEMENT_EXECUTION_HISTORY_DESC.clone(),
         column_comments: BTreeMap::new(),
         is_retained_metrics_object: false,
@@ -3912,7 +4167,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY: LazyLock<BuiltinSource> =
         name: "mz_prepared_statement_history",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_PREPARED_STATEMENT_HISTORY_OID,
-        data_source: IntrospectionType::PreparedStatementHistory,
+        data_source: IntrospectionType::PreparedStatementHistory.into(),
         desc: MZ_PREPARED_STATEMENT_HISTORY_DESC.clone(),
         column_comments: BTreeMap::new(),
         is_retained_metrics_object: false,
@@ -3929,7 +4184,7 @@ pub static MZ_SQL_TEXT: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_SQL_TEXT_OID,
     desc: MZ_SQL_TEXT_DESC.clone(),
-    data_source: IntrospectionType::SqlText,
+    data_source: IntrospectionType::SqlText.into(),
     column_comments: BTreeMap::new(),
     is_retained_metrics_object: false,
     access: vec![MONITOR_SELECT],
@@ -4004,7 +4259,7 @@ pub static MZ_SESSION_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| Builti
     name: "mz_session_history",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_SESSION_HISTORY_OID,
-    data_source: IntrospectionType::SessionHistory,
+    data_source: IntrospectionType::SessionHistory.into(),
     desc: MZ_SESSION_HISTORY_DESC.clone(),
     column_comments: BTreeMap::from_iter([
         (
@@ -4392,7 +4647,7 @@ pub static MZ_STATEMENT_LIFECYCLE_HISTORY: LazyLock<BuiltinSource> = LazyLock::n
                 SqlScalarType::TimestampTz { precision: None }.nullable(false),
             )
             .finish(),
-        data_source: IntrospectionType::StatementLifecycleHistory,
+        data_source: IntrospectionType::StatementLifecycleHistory.into(),
         column_comments: BTreeMap::from_iter([
             (
                 "statement_id",
@@ -4602,7 +4857,7 @@ pub static MZ_SINK_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| Bu
     name: "mz_sink_status_history",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_SINK_STATUS_HISTORY_OID,
-    data_source: IntrospectionType::SinkStatusHistory,
+    data_source: IntrospectionType::SinkStatusHistory.into(),
     desc: MZ_SINK_STATUS_HISTORY_DESC.clone(),
     column_comments: BTreeMap::from_iter([
         (
@@ -4890,7 +5145,7 @@ pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY: LazyLock<BuiltinSource> =
         name: "mz_cluster_replica_metrics_history",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_CLUSTER_REPLICA_METRICS_HISTORY_OID,
-        data_source: IntrospectionType::ReplicaMetricsHistory,
+        data_source: IntrospectionType::ReplicaMetricsHistory.into(),
         desc: REPLICA_METRICS_HISTORY_DESC.clone(),
         column_comments: BTreeMap::from_iter([
             ("replica_id", "The ID of a cluster replica."),
@@ -4983,7 +5238,7 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS: LazyLock<BuiltinSource> =
         name: "mz_cluster_replica_frontiers",
         schema: MZ_CATALOG_SCHEMA,
         oid: oid::SOURCE_MZ_CLUSTER_REPLICA_FRONTIERS_OID,
-        data_source: IntrospectionType::ReplicaFrontiers,
+        data_source: IntrospectionType::ReplicaFrontiers.into(),
         desc: RelationDesc::builder()
             .with_column("object_id", SqlScalarType::String.nullable(false))
             .with_column("replica_id", SqlScalarType::String.nullable(false))
@@ -5017,7 +5272,7 @@ pub static MZ_FRONTIERS: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSourc
     name: "mz_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_FRONTIERS_OID,
-    data_source: IntrospectionType::Frontiers,
+    data_source: IntrospectionType::Frontiers.into(),
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
         .with_column("read_frontier", SqlScalarType::MzTimestamp.nullable(true))
@@ -5063,7 +5318,7 @@ pub static MZ_WALLCLOCK_LAG_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| 
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_WALLCLOCK_LAG_HISTORY_OID,
     desc: WALLCLOCK_LAG_HISTORY_DESC.clone(),
-    data_source: IntrospectionType::WallclockLagHistory,
+    data_source: IntrospectionType::WallclockLagHistory.into(),
     column_comments: BTreeMap::from_iter([
         (
             "object_id",
@@ -5190,7 +5445,7 @@ pub static MZ_WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW: LazyLock<BuiltinSource> =
         oid: oid::SOURCE_MZ_WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_OID,
         desc: WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_DESC.clone(),
         column_comments: BTreeMap::new(),
-        data_source: IntrospectionType::WallclockLagHistogram,
+        data_source: IntrospectionType::WallclockLagHistogram.into(),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     });
@@ -5228,7 +5483,9 @@ pub static MZ_MATERIALIZED_VIEW_REFRESHES: LazyLock<BuiltinSource> = LazyLock::n
         name: "mz_materialized_view_refreshes",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_MATERIALIZED_VIEW_REFRESHES_OID,
-        data_source: IntrospectionType::ComputeMaterializedViewRefreshes,
+        data_source: DataSourceDesc::Introspection(
+            IntrospectionType::ComputeMaterializedViewRefreshes,
+        ),
         desc: RelationDesc::builder()
             .with_column(
                 "materialized_view_id",
@@ -5563,7 +5820,7 @@ pub static MZ_SOURCE_STATISTICS_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| 
     name: "mz_source_statistics_raw",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_SOURCE_STATISTICS_RAW_OID,
-    data_source: IntrospectionType::StorageSourceStatistics,
+    data_source: IntrospectionType::StorageSourceStatistics.into(),
     desc: MZ_SOURCE_STATISTICS_RAW_DESC.clone(),
     column_comments: BTreeMap::new(),
     is_retained_metrics_object: true,
@@ -5573,7 +5830,7 @@ pub static MZ_SINK_STATISTICS_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| Bu
     name: "mz_sink_statistics_raw",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_SINK_STATISTICS_RAW_OID,
-    data_source: IntrospectionType::StorageSinkStatistics,
+    data_source: IntrospectionType::StorageSinkStatistics.into(),
     desc: MZ_SINK_STATISTICS_RAW_DESC.clone(),
     column_comments: BTreeMap::new(),
     is_retained_metrics_object: true,
@@ -5584,7 +5841,7 @@ pub static MZ_STORAGE_SHARDS: LazyLock<BuiltinSource> = LazyLock::new(|| Builtin
     name: "mz_storage_shards",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_STORAGE_SHARDS_OID,
-    data_source: IntrospectionType::ShardMapping,
+    data_source: IntrospectionType::ShardMapping.into(),
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
         .with_column("shard_id", SqlScalarType::String.nullable(false))
@@ -8242,7 +8499,7 @@ pub static MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED: LazyLock<BuiltinSource> =
                 SqlScalarType::Numeric { max_scale: None }.nullable(false),
             )
             .finish(),
-        data_source: IntrospectionType::ComputeErrorCounts,
+        data_source: IntrospectionType::ComputeErrorCounts.into(),
         column_comments: BTreeMap::new(),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
@@ -8257,7 +8514,7 @@ pub static MZ_COMPUTE_HYDRATION_TIMES: LazyLock<BuiltinSource> = LazyLock::new(|
         .with_column("object_id", SqlScalarType::String.nullable(false))
         .with_column("time_ns", SqlScalarType::UInt64.nullable(true))
         .finish(),
-    data_source: IntrospectionType::ComputeHydrationTimes,
+    data_source: IntrospectionType::ComputeHydrationTimes.into(),
     column_comments: BTreeMap::new(),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
@@ -8356,7 +8613,7 @@ pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: LazyLock<BuiltinSource> = Laz
             .with_column("hydrated", SqlScalarType::Bool.nullable(false))
             .with_key(vec![0, 1, 2])
             .finish(),
-        data_source: IntrospectionType::ComputeOperatorHydrationStatus,
+        data_source: IntrospectionType::ComputeOperatorHydrationStatus.into(),
         column_comments: BTreeMap::from_iter([
             ("replica_id", "The ID of a cluster replica."),
             (
@@ -13905,6 +14162,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         }
     }
     builtins.append(&mut vec![
+        Builtin::Source(&MZ_CATALOG_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_SHARING_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_BATCHES_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_RECORDS_RAW),
@@ -13940,12 +14198,13 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_KAFKA_SOURCES),
         Builtin::Table(&MZ_OBJECT_DEPENDENCIES),
         Builtin::Table(&MZ_ICEBERG_SINKS),
-        Builtin::Table(&MZ_DATABASES),
+        Builtin::View(&MZ_DATABASES),
         Builtin::Table(&MZ_SCHEMAS),
         Builtin::Table(&MZ_COLUMNS),
         Builtin::Table(&MZ_INDEXES),
         Builtin::Table(&MZ_INDEX_COLUMNS),
-        Builtin::Table(&MZ_TABLES),
+        Builtin::Table(&MZ_SYSTEM_TABLES),
+        Builtin::View(&MZ_TABLES),
         Builtin::Table(&MZ_SOURCES),
         Builtin::Table(&MZ_SOURCE_REFERENCES),
         Builtin::Table(&MZ_POSTGRES_SOURCES),
@@ -13955,7 +14214,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_KAFKA_SOURCE_TABLES),
         Builtin::Table(&MZ_SINKS),
         Builtin::Table(&MZ_VIEWS),
-        Builtin::Table(&MZ_MATERIALIZED_VIEWS),
+        Builtin::View(&MZ_MATERIALIZED_VIEWS),
         Builtin::Table(&MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES),
         Builtin::Table(&MZ_TYPES),
         Builtin::Table(&MZ_TYPE_PG_METADATA),
@@ -13971,7 +14230,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_FUNCTIONS),
         Builtin::Table(&MZ_OPERATORS),
         Builtin::Table(&MZ_AGGREGATES),
-        Builtin::Table(&MZ_CLUSTERS),
         Builtin::Table(&MZ_CLUSTER_WORKLOAD_CLASSES),
         Builtin::Table(&MZ_CLUSTER_SCHEDULES),
         Builtin::Table(&MZ_SECRETS),
@@ -13981,6 +14239,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Source(&MZ_CLUSTER_REPLICA_METRICS_HISTORY),
         Builtin::View(&MZ_CLUSTER_REPLICA_METRICS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_SIZES),
+        Builtin::View(&MZ_CLUSTERS),
         Builtin::Source(&MZ_CLUSTER_REPLICA_STATUS_HISTORY),
         Builtin::View(&MZ_CLUSTER_REPLICA_STATUSES),
         Builtin::Table(&MZ_INTERNAL_CLUSTER_REPLICAS),

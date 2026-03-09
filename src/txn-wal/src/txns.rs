@@ -23,12 +23,12 @@ use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_persist_client::batch::Batch;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_TXN;
-use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::critical::{Opaque, SinceHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
-use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
+use mz_persist_types::{Codec, Codec64, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 use tracing::debug;
@@ -104,21 +104,20 @@ use crate::txn_write::Txn;
 /// (d1, <empty>, 2, 1)
 /// ```
 #[derive(Debug)]
-pub struct TxnsHandle<K: Codec, V: Codec, T, D, O = u64, C: TxnsCodec = TxnsCodecDefault> {
+pub struct TxnsHandle<K: Codec, V: Codec, T, D, C: TxnsCodec = TxnsCodecDefault> {
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) txns_cache: TxnsCache<T, C>,
     pub(crate) txns_write: WriteHandle<C::Key, C::Val, T, i64>,
-    pub(crate) txns_since: SinceHandle<C::Key, C::Val, T, i64, O>,
+    pub(crate) txns_since: SinceHandle<C::Key, C::Val, T, i64>,
     pub(crate) datas: DataHandles<K, V, T, D>,
 }
 
-impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
+impl<K, V, T, D, C> TxnsHandle<K, V, T, D, C>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Debug + Monoid + Ord + Codec64 + Send + Sync,
-    O: Opaque + Debug + Codec64,
     C: TxnsCodec,
 {
     /// Returns a [TxnsHandle] committing to the given txn shard.
@@ -136,6 +135,7 @@ where
         dyncfgs: ConfigSet,
         metrics: Arc<Metrics>,
         txns_id: ShardId,
+        opaque: Opaque,
     ) -> Self {
         let (txns_key_schema, txns_val_schema) = C::schemas();
         let (mut txns_write, txns_read) = client
@@ -157,6 +157,7 @@ where
                 // TODO: We likely need to use a different critical reader id
                 // for this if we want to be able to introspect it via SQL.
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
+                opaque,
                 Diagnostics {
                     shard_name: "txns".to_owned(),
                     handle_purpose: "commit txns".to_owned(),
@@ -702,7 +703,7 @@ where
             if min_unapplied_ts < &since_ts {
                 since_ts.clone_from(min_unapplied_ts);
             }
-            crate::cads::<T, O, C>(&mut self.txns_since, since_ts).await;
+            crate::cads::<T, C>(&mut self.txns_since, since_ts).await;
         })
         .await
     }
@@ -983,7 +984,7 @@ mod tests {
 
     use super::*;
 
-    impl TxnsHandle<String, (), u64, i64, u64, TxnsCodecDefault> {
+    impl TxnsHandle<String, (), u64, i64, TxnsCodecDefault> {
         pub(crate) async fn expect_open(client: PersistClient) -> Self {
             Self::expect_open_id(client, ShardId::new()).await
         }
@@ -996,6 +997,7 @@ mod tests {
                 dyncfgs,
                 Arc::new(Metrics::new(&MetricsRegistry::new())),
                 txns_id,
+                Opaque::encode(&0u64),
             )
             .await
         }

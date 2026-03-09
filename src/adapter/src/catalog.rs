@@ -1151,6 +1151,15 @@ impl Catalog {
         Ok(self.storage().await.confirm_leadership().await?)
     }
 
+    /// Advances the catalog shard's upper to `advance_to` without writing any data.
+    ///
+    /// This keeps the catalog shard's frontier in sync with the oracle timestamp
+    /// so that reads of `mz_catalog_raw` at the oracle's `read_ts` do not block.
+    #[mz_ore::instrument(level = "debug")]
+    pub async fn advance_upper(&self, advance_to: mz_repr::Timestamp) -> Result<(), AdapterError> {
+        Ok(self.storage().await.advance_upper(advance_to).await?)
+    }
+
     /// Return the ids of all log sources the given object depends on.
     pub fn introspection_dependencies(&self, id: CatalogItemId) -> Vec<CatalogItemId> {
         self.state.introspection_dependencies(id)

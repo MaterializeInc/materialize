@@ -2824,6 +2824,7 @@ impl Coordinator {
                 DataSourceDesc::Introspection(introspection) => {
                     DataSource::Introspection(introspection)
                 }
+                DataSourceDesc::Catalog => DataSource::Other,
             };
             CollectionDescription {
                 desc: desc.clone(),

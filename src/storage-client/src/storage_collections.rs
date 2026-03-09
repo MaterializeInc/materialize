@@ -29,7 +29,7 @@ use mz_ore::task::AbortOnDropHandle;
 use mz_ore::{assert_none, instrument, soft_assert_or_log};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
-use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::critical::{Opaque, SinceHandle};
 use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::schema::CaESchema;
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
@@ -480,13 +480,14 @@ where
 
         // We have to initialize, so that TxnsRead::start() below does not
         // block.
-        let _txns_handle: TxnsHandle<SourceData, (), T, StorageDiff, PersistEpoch, TxnsCodecRow> =
+        let _txns_handle: TxnsHandle<SourceData, (), T, StorageDiff, TxnsCodecRow> =
             TxnsHandle::open(
                 T::minimum(),
                 txns_client.clone(),
                 txns_client.dyncfgs().clone(),
                 Arc::clone(&txns_metrics),
                 txns_id,
+                Opaque::encode(&PersistEpoch::default()),
             )
             .await;
 
@@ -673,7 +674,7 @@ where
         shard: ShardId,
         since: Option<&Antichain<T>>,
         persist_client: &PersistClient,
-    ) -> SinceHandle<SourceData, (), T, StorageDiff, PersistEpoch> {
+    ) -> SinceHandle<SourceData, (), T, StorageDiff> {
         tracing::debug!(%id, ?since, "opening critical handle");
 
         assert!(
@@ -691,10 +692,11 @@ where
         let since_handle = {
             // This block's aim is to ensure the handle is in terms of our epoch
             // by the time we return it.
-            let mut handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
+            let mut handle = persist_client
                 .open_critical_since(
                     shard,
                     PersistClient::CONTROLLER_CRITICAL_SINCE,
+                    Opaque::encode(&PersistEpoch::default()),
                     diagnostics.clone(),
                 )
                 .await
@@ -712,7 +714,7 @@ where
             let our_epoch = self.envd_epoch;
 
             loop {
-                let current_epoch: PersistEpoch = handle.opaque().clone();
+                let current_epoch: PersistEpoch = handle.opaque().decode();
 
                 // Ensure the current epoch is <= our epoch.
                 let unchecked_success = current_epoch.0.map(|e| e <= our_epoch).unwrap_or(true);
@@ -722,8 +724,8 @@ where
                     // epoch.
                     let checked_success = handle
                         .compare_and_downgrade_since(
-                            &current_epoch,
-                            (&PersistEpoch::from(our_epoch), &since),
+                            &Opaque::encode(&current_epoch),
+                            (&Opaque::encode(&PersistEpoch::from(our_epoch)), &since),
                         )
                         .await
                         .is_ok();
@@ -2442,7 +2444,7 @@ enum SinceHandleWrapper<T>
 where
     T: TimelyTimestamp + Lattice + Codec64,
 {
-    Critical(SinceHandle<SourceData, (), T, StorageDiff, PersistEpoch>),
+    Critical(SinceHandle<SourceData, (), T, StorageDiff>),
     Leased(ReadHandle<SourceData, (), T, StorageDiff>),
 }
 
@@ -2459,7 +2461,7 @@ where
 
     pub fn opaque(&self) -> PersistEpoch {
         match self {
-            Self::Critical(handle) => handle.opaque().clone(),
+            Self::Critical(handle) => handle.opaque().decode(),
             Self::Leased(_handle) => {
                 // The opaque is expected to be used with
                 // `compare_and_downgrade_since`, and the leased handle doesn't
@@ -2473,12 +2475,17 @@ where
     pub async fn compare_and_downgrade_since(
         &mut self,
         expected: &PersistEpoch,
-        new: (&PersistEpoch, &Antichain<T>),
+        (opaque, since): (&PersistEpoch, &Antichain<T>),
     ) -> Result<Antichain<T>, PersistEpoch> {
         match self {
-            Self::Critical(handle) => handle.compare_and_downgrade_since(expected, new).await,
+            Self::Critical(handle) => handle
+                .compare_and_downgrade_since(
+                    &Opaque::encode(expected),
+                    (&Opaque::encode(opaque), since),
+                )
+                .await
+                .map_err(|e| e.decode()),
             Self::Leased(handle) => {
-                let (opaque, since) = new;
                 assert_none!(opaque.0);
 
                 handle.downgrade_since(since).await;
@@ -2491,16 +2498,17 @@ where
     pub async fn maybe_compare_and_downgrade_since(
         &mut self,
         expected: &PersistEpoch,
-        new: (&PersistEpoch, &Antichain<T>),
+        (opaque, since): (&PersistEpoch, &Antichain<T>),
     ) -> Option<Result<Antichain<T>, PersistEpoch>> {
         match self {
-            Self::Critical(handle) => {
-                handle
-                    .maybe_compare_and_downgrade_since(expected, new)
-                    .await
-            }
+            Self::Critical(handle) => handle
+                .maybe_compare_and_downgrade_since(
+                    &Opaque::encode(expected),
+                    (&Opaque::encode(opaque), since),
+                )
+                .await
+                .map(|r| r.map_err(|o| o.decode())),
             Self::Leased(handle) => {
-                let (opaque, since) = new;
                 assert_none!(opaque.0);
 
                 handle.maybe_downgrade_since(since).await;
@@ -3099,36 +3107,35 @@ async fn finalize_shards_task<T>(
                         write_handle.expire().await;
 
                         if force_downgrade_since {
-                            let mut since_handle: SinceHandle<
-                                SourceData,
-                                (),
-                                T,
-                                StorageDiff,
-                                PersistEpoch,
-                            > = persist_client
-                                .open_critical_since(
-                                    shard_id,
-                                    PersistClient::CONTROLLER_CRITICAL_SINCE,
-                                    Diagnostics::from_purpose("finalizing shards"),
-                                )
-                                .await
-                                .expect("invalid persist usage");
-                            let handle_epoch = since_handle.opaque().clone();
-                            let our_epoch = epoch.clone();
-                            let epoch = if our_epoch.0 > handle_epoch.0 {
+                            let our_opaque = Opaque::encode(&epoch);
+                            let mut since_handle: SinceHandle<SourceData, (), T, StorageDiff> =
+                                persist_client
+                                    .open_critical_since(
+                                        shard_id,
+                                        PersistClient::CONTROLLER_CRITICAL_SINCE,
+                                        our_opaque.clone(),
+                                        Diagnostics::from_purpose("finalizing shards"),
+                                    )
+                                    .await
+                                    .expect("invalid persist usage");
+                            let handle_opaque = since_handle.opaque().clone();
+                            let opaque = if our_opaque.codec_name() == handle_opaque.codec_name()
+                                && epoch.0 > handle_opaque.decode::<PersistEpoch>().0
+                            {
                                 // We're newer, but it's fine to use the
                                 // handle's old epoch to try and downgrade.
-                                handle_epoch
+                                handle_opaque
                             } else {
                                 // Good luck, buddy! The downgrade below will
                                 // not succeed. There's a process with a newer
                                 // epoch out there and someone at some juncture
                                 // will fence out this process.
-                                our_epoch
+                                // TODO: consider applying the downgrade no matter what!
+                                our_opaque
                             };
                             let new_since = Antichain::new();
                             let downgrade = since_handle
-                                .compare_and_downgrade_since(&epoch, (&epoch, &new_since))
+                                .compare_and_downgrade_since(&opaque, (&opaque, &new_since))
                                 .await;
                             if let Err(e) = downgrade {
                                 warn!("tried to finalize a shard with an advancing epoch: {e:?}");
@@ -3254,6 +3261,7 @@ mod tests {
             .open_critical_since(
                 shard_id,
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Opaque::encode(&PersistEpoch::default()),
                 Diagnostics::for_tests(),
             )
             .await

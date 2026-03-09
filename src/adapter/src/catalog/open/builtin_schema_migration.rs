@@ -36,8 +36,8 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_catalog::builtin::{
-    BUILTIN_LOOKUP, Builtin, Fingerprint, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
-    RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+    BUILTIN_LOOKUP, Builtin, Fingerprint, MZ_CATALOG_RAW, MZ_CATALOG_RAW_DESCRIPTION,
+    MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
 use mz_catalog::config::BuiltinItemMigrationConfig;
 use mz_catalog::durable::objects::SystemObjectUniqueIdentifier;
@@ -45,7 +45,7 @@ use mz_catalog::durable::{SystemObjectDescription, SystemObjectMapping, Transact
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_ore::soft_assert_or_log;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_CATALOG;
-use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::critical::{Opaque, SinceHandle};
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::schema::CaESchema;
 use mz_persist_client::write::WriteHandle;
@@ -426,6 +426,13 @@ impl Migration {
                 "mz_storage_usage_by_shard cannot be migrated or else the table will be truncated"
             );
 
+            // `mz_catalog_raw` cannot be migrated because it contains the durable catalog and it
+            // wouldn't be very durable if we allowed it to be truncated.
+            assert_ne!(
+                *MZ_CATALOG_RAW_DESCRIPTION, object,
+                "mz_catalog_raw cannot be migrated"
+            );
+
             let Some(object_info) = self.system_objects.get(&object) else {
                 panic!("migration step for non-existent builtin: {object:?}");
             };
@@ -477,7 +484,14 @@ impl Migration {
         let objects = self
             .system_objects
             .iter()
-            .filter(|(_, info)| matches!(info.builtin, Builtin::Table(..) | Builtin::Source(..)))
+            .filter(|(_, info)| {
+                use Builtin::*;
+                match info.builtin {
+                    Table(..) | ContinualTask(..) => true,
+                    Source(source) => **source != *MZ_CATALOG_RAW,
+                    Log(..) | View(..) | Type(..) | Func(..) | Index(..) | Connection(..) => false,
+                }
+            })
             .map(|(object, _)| object.clone())
             .collect();
 
@@ -807,7 +821,7 @@ impl Migration {
     async fn open_migration_shard_since(
         &self,
         diagnostics: Diagnostics,
-    ) -> SinceHandle<migration_shard::Key, ShardId, Timestamp, StorageDiff, i64> {
+    ) -> SinceHandle<migration_shard::Key, ShardId, Timestamp, StorageDiff> {
         self.config
             .persist_client
             .open_critical_since(
@@ -815,6 +829,7 @@ impl Migration {
                 // TODO: We may need to use a different critical reader
                 // id for this if we want to be able to introspect it via SQL.
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Opaque::encode(&i64::MIN),
                 diagnostics.clone(),
             )
             .await
@@ -953,7 +968,7 @@ impl Migration {
         .boxed();
 
         // Downgrade the since, to enable some compaction.
-        let o = *persist_since.opaque();
+        let o = persist_since.opaque().clone();
         let new_since = Antichain::from_elem(read_ts);
         let result = persist_since
             .maybe_compare_and_downgrade_since(&o, (&o, &new_since))

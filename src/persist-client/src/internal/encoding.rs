@@ -36,22 +36,21 @@ use serde::{Deserialize, Serialize, Serializer};
 use timely::progress::{Antichain, Timestamp};
 use uuid::Uuid;
 
-use crate::critical::CriticalReaderId;
+use crate::critical::{CriticalReaderId, Opaque};
 use crate::error::{CodecMismatch, CodecMismatchT};
 use crate::internal::metrics::Metrics;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
     ActiveGc, ActiveRollup, BatchPart, CriticalReaderState, EncodedSchemas, HandleDebugState,
     HollowBatch, HollowBatchPart, HollowRollup, HollowRun, HollowRunRef, IdempotencyToken,
-    LeasedReaderState, OpaqueState, ProtoActiveGc, ProtoActiveRollup, ProtoCompaction,
-    ProtoCriticalReaderState, ProtoEncodedSchemas, ProtoHandleDebugState, ProtoHollowBatch,
-    ProtoHollowBatchPart, ProtoHollowRollup, ProtoHollowRun, ProtoHollowRunRef, ProtoIdHollowBatch,
-    ProtoIdMerge, ProtoIdSpineBatch, ProtoInlineBatchPart, ProtoInlinedDiffs,
-    ProtoLeasedReaderState, ProtoMerge, ProtoRollup, ProtoRunMeta, ProtoRunOrder, ProtoSpineBatch,
-    ProtoSpineId, ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs,
-    ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoVersionedData, ProtoWriterState,
-    RunId, RunMeta, RunOrder, RunPart, State, StateCollections, TypedState, WriterState,
-    proto_hollow_batch_part,
+    LeasedReaderState, ProtoActiveGc, ProtoActiveRollup, ProtoCompaction, ProtoCriticalReaderState,
+    ProtoEncodedSchemas, ProtoHandleDebugState, ProtoHollowBatch, ProtoHollowBatchPart,
+    ProtoHollowRollup, ProtoHollowRun, ProtoHollowRunRef, ProtoIdHollowBatch, ProtoIdMerge,
+    ProtoIdSpineBatch, ProtoInlineBatchPart, ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoMerge,
+    ProtoRollup, ProtoRunMeta, ProtoRunOrder, ProtoSpineBatch, ProtoSpineId, ProtoStateDiff,
+    ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
+    ProtoU64Description, ProtoVersionedData, ProtoWriterState, RunId, RunMeta, RunOrder, RunPart,
+    State, StateCollections, TypedState, WriterState, proto_hollow_batch_part,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -1346,8 +1345,8 @@ impl<T: Timestamp + Codec64> RustType<ProtoCriticalReaderState> for CriticalRead
     fn into_proto(&self) -> ProtoCriticalReaderState {
         ProtoCriticalReaderState {
             since: Some(self.since.into_proto()),
-            opaque: i64::from_le_bytes(self.opaque.0),
-            opaque_codec: self.opaque_codec.clone(),
+            opaque: i64::from_le_bytes(self.opaque.1),
+            opaque_codec: self.opaque.0.clone(),
             debug: Some(self.debug.into_proto()),
         }
     }
@@ -1360,8 +1359,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoCriticalReaderState> for CriticalRead
             since: proto
                 .since
                 .into_rust_if_some("ProtoCriticalReaderState::since")?,
-            opaque: OpaqueState(i64::to_le_bytes(proto.opaque)),
-            opaque_codec: proto.opaque_codec,
+            opaque: Opaque(proto.opaque_codec, i64::to_le_bytes(proto.opaque)),
             debug,
         })
     }

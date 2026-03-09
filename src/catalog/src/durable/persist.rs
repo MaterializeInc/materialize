@@ -14,7 +14,7 @@ use std::cmp::max;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -30,14 +30,15 @@ use mz_ore::{
 };
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_CATALOG;
 use mz_persist_client::cli::admin::{CATALOG_FORCE_COMPACTION_FUEL, CATALOG_FORCE_COMPACTION_WAIT};
-use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::critical::{CriticalReaderId, Opaque, SinceHandle};
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::{RustType, TryFromProtoError};
-use mz_repr::{Diff, RelationDesc, SqlScalarType};
+use mz_repr::Diff;
+use mz_storage_client::controller::PersistEpoch;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
 use sha2::Digest;
@@ -62,7 +63,7 @@ use crate::durable::upgrade::upgrade;
 use crate::durable::{
     AuditLogIterator, BootstrapArgs, CATALOG_CONTENT_VERSION_KEY, CatalogError,
     DurableCatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState,
-    ReadOnlyDurableCatalogState, Transaction, initialize,
+    ReadOnlyDurableCatalogState, Transaction, initialize, persist_desc,
 };
 use crate::memory;
 
@@ -77,6 +78,14 @@ const MIN_EPOCH: Epoch = unsafe { Epoch::new_unchecked(1) };
 
 /// Human readable catalog shard name.
 const CATALOG_SHARD_NAME: &str = "catalog";
+
+/// [`CriticalReaderId`] for the catalog shard's own since hold, separate from
+/// [`PersistClient::CONTROLLER_CRITICAL_SINCE`].
+static CATALOG_CRITICAL_SINCE: LazyLock<CriticalReaderId> = LazyLock::new(|| {
+    "c55555555-6666-7777-8888-999999999999"
+        .parse()
+        .expect("valid CriticalReaderId")
+});
 
 /// Seed used to generate the persist shard ID for the catalog.
 const CATALOG_SEED: usize = 1;
@@ -333,7 +342,7 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     /// The [`Mode`] that this catalog was opened in.
     pub(crate) mode: Mode,
     /// Since handle to control compaction.
-    since_handle: SinceHandle<SourceData, (), Timestamp, StorageDiff, i64>,
+    since_handle: SinceHandle<SourceData, (), Timestamp, StorageDiff>,
     /// Write handle to persist.
     write_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
     /// Listener to catalog changes.
@@ -373,6 +382,31 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         }
     }
 
+    /// Advance the upper of the catalog shard to `new_upper`.
+    ///
+    /// If the catalog's upper is already >= `new_upper`, this is a no-op.
+    #[mz_ore::instrument(level = "debug")]
+    pub(crate) async fn advance_upper(&mut self, new_upper: Timestamp) -> Result<(), CatalogError> {
+        assert_eq!(self.mode, Mode::Writable);
+
+        if self.upper >= new_upper {
+            return Ok(());
+        }
+
+        self.compare_and_append_inner(
+            std::iter::empty::<((SourceData, ()), Timestamp, StorageDiff)>(),
+            new_upper,
+        )
+        .await
+        .map_err(|e| e.unwrap_fence_error())?;
+
+        // No sync needed since no data was written, but we must update our
+        // cached upper to reflect the advancement.
+        self.upper = new_upper;
+
+        Ok(())
+    }
+
     /// Appends `updates` iff the current global upper of the catalog is `self.upper`.
     ///
     /// Returns the next upper used to commit the transaction.
@@ -390,12 +424,9 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             self.upper
         );
 
-        // This awkward code allows us to perform an expensive soft assert that requires cloning
-        // `updates` twice, after `updates` has been consumed.
         let contains_fence = if mz_ore::assert::soft_assertions_enabled() {
             let updates: Vec<_> = updates.clone();
             let parsed_updates: Vec<_> = updates
-                .clone()
                 .into_iter()
                 .map(|(update, diff)| {
                     let update: StateUpdateKindJson = update.into();
@@ -413,10 +444,9 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             let contains_addition = parsed_updates.iter().any(|(update, diff)| {
                 matches!(update, StateUpdateKind::FenceToken(..)) && *diff == Diff::ONE
             });
-            let contains_fence = contains_retraction && contains_addition;
-            Some((contains_fence, updates))
+            contains_retraction && contains_addition
         } else {
-            None
+            false
         };
 
         let updates = updates.into_iter().map(|(kind, diff)| {
@@ -428,6 +458,37 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             )
         });
         let next_upper = commit_ts.step_forward();
+        self.compare_and_append_inner(updates, next_upper)
+            .await
+            .map_err(|e| {
+                // There was an upper mismatch which means something else must have written to the
+                // catalog. Syncing to the current upper should result in a fence error since
+                // writing to the catalog without fencing other catalogs should be impossible. The
+                // one exception is if we are trying to fence other catalogs with this write, in
+                // which case we won't see a fence error.
+                assert!(
+                    contains_fence,
+                    "encountered an upper mismatch on a non-fencing write"
+                );
+                e
+            })?;
+        self.sync(next_upper).await?;
+        Ok(next_upper)
+    }
+
+    /// Compare-and-append `updates` to the catalog shard, advancing the upper to `next_upper`.
+    ///
+    /// On success, downgrades the since handle but does NOT update `self.upper` or call `sync`.
+    /// Callers that wrote data must call `sync` to process listen events (which also updates
+    /// `self.upper`). Callers that wrote no data must update `self.upper` directly.
+    ///
+    /// On upper mismatch, syncs to the current upper (which may detect fencing) and returns an
+    /// error. Callers are responsible for asserting the appropriate fencing invariants.
+    async fn compare_and_append_inner(
+        &mut self,
+        updates: impl IntoIterator<Item = ((SourceData, ()), Timestamp, StorageDiff)>,
+        next_upper: Timestamp,
+    ) -> Result<(), CompareAndAppendError> {
         let res = self
             .write_handle
             .compare_and_append(
@@ -438,29 +499,19 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             .await
             .expect("invalid usage");
 
-        // There was an upper mismatch which means something else must have written to the catalog.
-        // Syncing to the current upper should result in a fence error since writing to the catalog
-        // without fencing other catalogs should be impossible. The one exception is if we are
-        // trying to fence other catalogs with this write, in which case we won't see a fence error.
         if let Err(e @ UpperMismatch { .. }) = res {
             self.sync_to_current_upper().await?;
-            if let Some((contains_fence, updates)) = contains_fence {
-                assert!(
-                    contains_fence,
-                    "updates were neither fenced nor fencing and encountered an upper mismatch: {updates:#?}"
-                )
-            }
             return Err(e.into());
         }
 
-        // Lag the shard's upper by 1 to keep it readable.
+        // Lag the shard's since by 1 to keep it readable.
         let downgrade_to = Antichain::from_elem(next_upper.saturating_sub(1));
 
         // The since handle gives us the ability to fence out other downgraders using an opaque token.
         // (See the method documentation for details.)
         // That's not needed here, so we use the since handle's opaque token to avoid any comparison
         // failures.
-        let opaque = *self.since_handle.opaque();
+        let opaque = self.since_handle.opaque().clone();
         let downgrade = self
             .since_handle
             .maybe_compare_and_downgrade_since(&opaque, (&opaque, &downgrade_to))
@@ -468,14 +519,14 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
         match downgrade {
             None => {}
-            Some(Err(e)) => soft_panic_or_log!("found opaque value {e}, but expected {opaque}"),
+            Some(Err(e)) => soft_panic_or_log!("found opaque value {e:?}, but expected {opaque:?}"),
             Some(Ok(updated)) => soft_assert_or_log!(
                 updated == downgrade_to,
                 "updated bound should match expected"
             ),
         }
-        self.sync(next_upper).await?;
-        Ok(next_upper)
+
+        Ok(())
     }
 
     /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
@@ -666,7 +717,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         self.persist_client
             .open_leased_reader(
                 self.shard_id,
-                Arc::new(desc()),
+                Arc::new(persist_desc()),
                 Arc::new(UnitSchema::default()),
                 Diagnostics {
                     shard_name: CATALOG_SHARD_NAME.to_string(),
@@ -934,9 +985,8 @@ impl UnopenedPersistCatalogState {
         let since_handle = persist_client
             .open_critical_since(
                 catalog_shard_id,
-                // TODO: We may need to use a different critical reader
-                // id for this if we want to be able to introspect it via SQL.
-                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                CATALOG_CRITICAL_SINCE.clone(),
+                Opaque::encode(&i64::MIN),
                 Diagnostics {
                     shard_name: CATALOG_SHARD_NAME.to_string(),
                     handle_purpose: "durable catalog state critical since".to_string(),
@@ -944,10 +994,11 @@ impl UnopenedPersistCatalogState {
             )
             .await
             .expect("invalid usage");
+
         let (mut write_handle, mut read_handle) = persist_client
             .open(
                 catalog_shard_id,
-                Arc::new(desc()),
+                Arc::new(persist_desc()),
                 Arc::new(UnitSchema::default()),
                 Diagnostics {
                     shard_name: CATALOG_SHARD_NAME.to_string(),
@@ -1125,6 +1176,41 @@ impl UnopenedPersistCatalogState {
             break;
         }
 
+        if matches!(self.mode, Mode::Writable) {
+            // One-time migration: The catalog previously used `CONTROLLER_CRITICAL_SINCE` for its
+            // since handle. Now it uses its own `CATALOG_CRITICAL_SINCE`, to free
+            // `CONTROLLER_CRITICAL_SINCE` up for the storage controller. The catalog and
+            // controller handles differ in the `Opaque` codec, so we need a migration.
+            //
+            // TODO: Remove this once we don't support upgrading from v26 anymore.
+            let mut controller_handle = self
+                .persist_client
+                .open_critical_since::<SourceData, (), Timestamp, StorageDiff>(
+                    self.shard_id,
+                    PersistClient::CONTROLLER_CRITICAL_SINCE,
+                    Opaque::encode(&i64::MIN),
+                    Diagnostics {
+                        shard_name: CATALOG_SHARD_NAME.to_string(),
+                        handle_purpose: "durable catalog state critical since (migration)"
+                            .to_string(),
+                    },
+                )
+                .await
+                .expect("invalid usage");
+
+            let since = controller_handle.since().clone();
+            let res = controller_handle
+                .compare_and_downgrade_since(
+                    &Opaque::encode(&i64::MIN),
+                    (&Opaque::encode(&PersistEpoch::default()), &since),
+                )
+                .await;
+            match res {
+                Ok(_) => info!("migrated Opaque of catalog since handle"),
+                Err(_) => { /* critical since was already migrated */ }
+            }
+        }
+
         let is_initialized = self.is_initialized_inner();
         if !matches!(self.mode, Mode::Writable) && !is_initialized {
             return Err(CatalogError::Durable(DurableCatalogError::NotWritable(
@@ -1239,7 +1325,7 @@ impl UnopenedPersistCatalogState {
                 .persist_client
                 .open_writer::<SourceData, (), Timestamp, i64>(
                     catalog.write_handle.shard_id(),
-                    Arc::new(desc()),
+                    Arc::new(persist_desc()),
                     Arc::new(UnitSchema::default()),
                     Diagnostics {
                         shard_name: CATALOG_SHARD_NAME.to_string(),
@@ -1747,6 +1833,19 @@ impl DurableCatalogState for PersistCatalogState {
         self.sync_to_current_upper().await?;
         Ok(())
     }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn advance_upper(&mut self, advance_to: Timestamp) -> Result<(), CatalogError> {
+        // Read-only and savepoint catalogs cannot advance the upper.
+        if self.is_read_only() || self.is_savepoint() {
+            return Ok(());
+        }
+        self.advance_upper(advance_to).await
+    }
+
+    fn shard_id(&self) -> ShardId {
+        self.shard_id
+    }
 }
 
 /// Deterministically generate a shard ID for the given `organization_id` and `seed`.
@@ -1755,14 +1854,6 @@ pub fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
     soft_assert_eq_or_log!(hash.len(), 32, "SHA256 returns 32 bytes (256 bits)");
     let uuid = Uuid::from_slice(&hash[0..16]).expect("from_slice accepts exactly 16 bytes");
     ShardId::from_str(&format!("s{uuid}")).expect("known to be valid")
-}
-
-/// Returns the schema of the `Row`s/`SourceData`s stored in the persist
-/// shard backing the catalog.
-fn desc() -> RelationDesc {
-    RelationDesc::builder()
-        .with_column("data", SqlScalarType::Jsonb.nullable(false))
-        .finish()
 }
 
 /// Generates a timestamp for reading from `read_handle` that is as fresh as possible, given

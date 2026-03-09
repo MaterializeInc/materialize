@@ -1052,6 +1052,33 @@ fn make_mz_acl_item(
     })
 }
 
+#[sqlfunc(sqlname = "make_mz_aclitem_from_flags")]
+fn make_mz_acl_item_from_flags(
+    greantee_str: &str,
+    grantor_str: &str,
+    bitflags_i64: i64,
+) -> Result<MzAclItem, EvalError> {
+    let grantee: RoleId = greantee_str
+        .parse()
+        .map_err(|e: anyhow::Error| EvalError::InvalidRoleId(e.to_string().into()))?;
+    let grantor: RoleId = grantor_str
+        .parse()
+        .map_err(|e: anyhow::Error| EvalError::InvalidRoleId(e.to_string().into()))?;
+    if grantor == RoleId::Public {
+        return Err(EvalError::InvalidRoleId(
+            "mz_aclitem grantor cannot be PUBLIC role".into(),
+        ));
+    }
+    let bitflags = u64::reinterpret_cast(bitflags_i64);
+    let acl_mode = AclMode::from_bits_truncate(bitflags);
+
+    Ok(MzAclItem {
+        grantee,
+        grantor,
+        acl_mode,
+    })
+}
+
 #[sqlfunc(sqlname = "makets")]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
@@ -1746,6 +1773,7 @@ derive_variadic! {
     RangeCreate(RangeCreate),
     MakeAclItem(MakeAclItem),
     MakeMzAclItem(MakeMzAclItem),
+    MakeMzAclItemFromFlags(MakeMzAclItemFromFlags),
     Translate(Translate),
     ArrayPosition(ArrayPosition),
     ArrayFill(ArrayFill),

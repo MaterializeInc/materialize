@@ -719,6 +719,7 @@ mz_aggregates
 mz_aws_connections
 mz_aws_privatelink_connection_status_history
 mz_aws_privatelink_connection_statuses
+mz_catalog_raw
 mz_cluster_deployment_lineage
 mz_cluster_replica_history
 mz_cluster_replica_metrics
@@ -830,6 +831,7 @@ mz_statement_lifecycle_history
 mz_storage_shards
 mz_storage_usage_by_shard
 mz_subscriptions
+mz_system_tables
 mz_type_pg_metadata
 mz_wallclock_global_lag
 mz_wallclock_global_lag_histogram

@@ -21,7 +21,8 @@ use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::PersistClient;
-use mz_repr::{CatalogItemId, Diff, GlobalId};
+use mz_persist_types::ShardId;
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, SqlScalarType};
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use uuid::Uuid;
 
@@ -316,6 +317,12 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// NB: We may remove this in later iterations of Pv2.
     async fn confirm_leadership(&mut self) -> Result<(), CatalogError>;
 
+    /// Advances the catalog shard's upper to `advance_to` without writing any data.
+    ///
+    /// This keeps the catalog shard's frontier in sync with the oracle timestamp
+    /// so that reads of `mz_catalog_raw` at the oracle's `read_ts` do not block.
+    async fn advance_upper(&mut self, advance_to: Timestamp) -> Result<(), CatalogError>;
+
     /// Allocates and returns `amount` IDs of `id_type`.
     ///
     /// See [`Self::commit_transaction`] for details on `commit_ts`.
@@ -382,6 +389,8 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
             .into_element();
         Ok(ClusterId::user(id).ok_or(SqlCatalogError::IdExhaustion)?)
     }
+
+    fn shard_id(&self) -> ShardId;
 }
 
 trait AuditLogIteratorTrait: Iterator<Item = (AuditLog, Timestamp)> + Send + Sync + Debug {}
@@ -440,6 +449,14 @@ impl Iterator for AuditLogIterator {
     fn next(&mut self) -> Option<Self::Item> {
         self.audit_logs.next()
     }
+}
+
+/// Returns the schema of the `Row`s/`SourceData`s stored in the persist
+/// shard backing the catalog.
+pub fn persist_desc() -> RelationDesc {
+    RelationDesc::builder()
+        .with_column("data", SqlScalarType::Jsonb.nullable(false))
+        .finish()
 }
 
 /// A builder to help create an [`OpenableDurableCatalogState`] for tests.

@@ -950,6 +950,9 @@ impl Coordinator {
             .await
             .unwrap_or_terminate("cannot fail to create collections");
 
+        // FIXME: Do we need to bump the catalog frontier here as well? If we don't, querying
+        // `mz_catalog_raw` after a `CREATE TABLE` hangs for up to a second (until the next tick of
+        // `group_commit`).
         self.apply_local_write(register_ts).await;
 
         Ok(())
@@ -1281,8 +1284,8 @@ impl Coordinator {
             }
             DataSourceDesc::Progress => DataSource::Progress,
             DataSourceDesc::Webhook { .. } => DataSource::Webhook,
-            DataSourceDesc::Introspection(_) => {
-                unreachable!("cannot create sources with introspection data sources")
+            DataSourceDesc::Introspection(_) | DataSourceDesc::Catalog => {
+                unreachable!("cannot create sources with internal data sources")
             }
         };
 
