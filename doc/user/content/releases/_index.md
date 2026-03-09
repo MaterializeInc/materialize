@@ -57,13 +57,13 @@ For more information, refer to:
 - [Syntax: `CREATE SOURCE`](/sql/create-source/sql-server-v2/)
 - [Syntax: `CREATE TABLE`](/sql/create-table/)
 
-### Improvements
+### Improvements {#v26.14-improvements}
 
 - **Faster DDL at scale**: We've improved DDL (e.g., `CREATE VIEW`, `CREATE INDEX`, `DROP`) latency by 37-55% for environments with many objects by making the internal catalog state a persistent data structure with structural sharing.
 - **Faster Iceberg sink commits**: We've improved Iceberg sink commit performance by disabling the duplicate check for RowDelta actions, which was causing significant commit time overhead.
 - **Up to 28x faster `COPY FROM STDIN`**: We've improved `COPY FROM STDIN` performance by parallelizing ingestion and using constant memory.
 
-### Bug Fixes
+### Bug Fixes {#v26.14-bug-fixes}
 
 - Fixed the jsonb contains operator (`?`) to correctly return NULL when
   the left operand is NULL, matching PostgreSQL behavior.
@@ -115,7 +115,7 @@ For more information, refer to:
 - [Blog: Making Iceberg work for Operational Data](https://materialize.com/blog/making-iceberg-work-for-operational-data/)
 - [Syntax: CREATE SINK... INTO ICEBERG ](/sql/create-sink/iceberg)
 
-### Improvements
+### Improvements {#v26.13-improvements}
 - **Improved `SUBSCRIBE` Performance**: We've optimized `SUBSCRIBE` to skip initial snapshots in more cases. This can speed up `SUBSCRIBE` start times.
 - **Improved compatibility with external tools**: We've added `strpos` as a
   synonym for the `position` function, improving compatibility with tools such
@@ -123,7 +123,7 @@ For more information, refer to:
 - **Improved database concurrency**: We've reduced contention when a single
   collection experiences a high volume of updates.
 
-### Bug Fixes
+### Bug Fixes {#v26.13-bug-fixes}
 - Fixed a panic when constructing multi-dimensional arrays with null values,
   now treating null elements as zero-dimensional arrays consistent with
   PostgreSQL behavior.
@@ -153,11 +153,11 @@ The new Roles and Users page on the Materialize Console allows organization admi
 
 You can navigate to the Roles and Users page directly from the Materialize console. If you're on Materialize Self-Managed, upgrade to v26.12 first. If you're on Materialize Cloud, you can go directly to https://console.materialize.com/roles to reach the page.
 
-### Improvements
+### Improvements {#v26.12-improvements}
 - **Updated default resource requirements** (<red>*Materialize Self-Managed only*</red>): We've updated the Materialize Self-Managed Helm charts to ensure correct operation on Kind clusters
 - **Improved console query history performance**: We've optimized RBAC queries to use OIDs instead of names, resulting in 2-3x faster page execution.
 
-### Bug Fixes
+### Bug Fixes {#v26.12-bug-fixes}
 - Fixed a panic when using unsupported types (e.g., float) with range
   expressions, now returning a proper error message instead of an internal error.
 - Fixed a panic when using empty `int2vector` values, which could cause internal
@@ -177,7 +177,7 @@ You can navigate to the Roles and Users page directly from the Materialize conso
 
 This release includes improvements to Avro Schema references, `EXPLAIN` commands, and bug fixes.
 
-### Improvements
+### Improvements {#v26.11-improvements}
 - **Avro Schema References**: Sources can now use avro schemas which reference
   other schemas when using Confluent Schema Registry.
 - **`EXPLAIN` improvements**: `EXPLAIN` now allows you to inspect the query plan
@@ -186,7 +186,7 @@ This release includes improvements to Avro Schema references, `EXPLAIN` commands
 - **More efficient dbt-adapter**: We've added indexes on `mz_hydration_statuses` and `mz_materialization_lag`.
   This should speed up "deployment ready" queries made by our dbt-adapter.
 
-### Bug Fixes
+### Bug Fixes {#v26.11-bug-fixes}
 - Fixed a bug where `IS DISTINCT FROM` could fail typechecking in certain cases
   involving different data types, causing query errors.
 - Improved the error message when `INSERT INTO ... SELECT` transitively
@@ -208,10 +208,10 @@ For more information, refer to:
 - [Syntax: CREATE REPLACEMENT MATERIALIZED VIEW](/sql/create-materialized-view)
 - [Syntax: ALTER MATERIALIZED VIEW](/sql/alter-materialized-view)
 
-### Improvements
+### Improvements {#v26.10-improvements}
 - **Improved hydration times for PostgreSQL sources**: PostgreSQL sources now perform parallel snapshots. This should improve initial hydration times, especially for large tables.
 
-### Bug Fixes
+### Bug Fixes {#v26.10-bug-fixes}
 - Fixed an issue where floating-point values like `-0.0` and `+0.0` could be
   treated as different values in equality comparisons but the same in ordering,
   causing incorrect results in operations like `DISTINCT`.
@@ -232,7 +232,7 @@ For more information, refer to:
 
 v26.9 includes significant performance improvements to QPS & query latency.
 
-### Improvements
+### Improvements {#v26.9-improvements}
 - **Up to 2.5x increased QPS**: <a name="v26.9-qps"></a>We've significantly optimized how `SELECT` statements are processed; they are now processed outside the main thread. In our tests, this change increased QPS by as much as 2.5x.
 ![Chart of QPS before/after](/images/releases/v2609_qps.png)
 - **Significant reduction in query latency**: <a
@@ -243,7 +243,7 @@ before/after](/images/releases/v2609_latency.png)
 - **Dynamically configure system parameters using a ConfigMap** (<red>*Materialize Self-Managed only*</red>): <a name="v26.9-sm-configmap"></a>You can now use a ConfigMap to dynamically update system parameters at runtime. In many cases, this means you don't need to restart Materialize for new system parameters to take effect. You can also specify system parameters which survive restarts and upgrades. Refer to our [documentation on configuring system parameters](/self-managed-deployments/configuration-system-parameters/#configure-system-parameters-via-configmap).
 - Added `ABORT` as a PostgreSQL-compatible alias for the `ROLLBACK` transaction command, to improve compatibility with GraphQL engines like Hasura
 
-### Bug Fixes
+### Bug Fixes {#v26.9-bug-fixes}
 - Fixed an issue causing new generations to be promoted prematurely when using the `WaitUntilReady` upgrade strategy (<red>*Materialize Self-Managed only*</red>)
 - Fixed a race condition in source reclock that could cause panics when the `as_of` timestamp was newer than the cached upper bound.
 - Improved error messages when the load balancer cannot connect to the upstream environment server
@@ -256,7 +256,7 @@ v26.8 includes a new notice in the Console to help catch common SQL mistakes,
 Protobuf compatibility improvements, and performance optimizations for view
 creation.
 
-### Improvements
+### Improvements {#v26.8-improvements}
 - Added a Console notice when users write `= NULL`, `!= NULL`, or `<>
   NULL` in SQL expressions instead of `IS NULL` or `IS NOT NULL`. Comparisons
   using `=`, `!=`, or `<>` with `NULL` always evaluate to `NULL`.
@@ -269,12 +269,12 @@ creation.
 
 v26.7 improves compatibility with go-jet and includes bug fixes.
 
-### Improvements
+### Improvements {#v26.7-improvements}
 
 - **Improved compatibility with go-jet**: We've added the `attndims` column to `pg_attribute`. We've also fixed `pg_type.typelem` to correctly report element types for named list types.
 - **Pretty print SQL in the console**: We've made it easier to read the definitions for views and materialized views in the console.
 
-### Bug Fixes
+### Bug Fixes {#v26.7-bug-fixes}
 - Fixed an issue where type error messages could inadvertently expose constant values from queries.
 - The console reconnects more gracefully if the connection to the backend is interrupted
 
@@ -284,7 +284,7 @@ v26.7 improves compatibility with go-jet and includes bug fixes.
 
 v26.6.0 includes bug fixes for Kafka sinks and Self-Managed deployments.
 
-### Bug Fixes
+### Bug Fixes {#v26.6-bug-fixes}
 - Fixed an issue where console and balancer deployments could fail to upgrade to the correct version during Self-Managed environment upgrades.
 - Fixed an issue where `ALTER SINK ... SET FROM` on Kafka sinks could incorrectly restart in snapshot mode even when the sink had already made progress, causing unnecessary resource consumption and potential out-of-memory errors.
 
@@ -294,7 +294,7 @@ v26.6.0 includes bug fixes for Kafka sinks and Self-Managed deployments.
 
 v26.5.1 enhances our SQL Server source, improves performance, and strengthens Materialize Self-Managed reliability.
 
-### Improvements
+### Improvements {#v26.5-improvements}
 - **VARCHAR(MAX) and NVARCHAR(MAX) support for SQL Server**: The Materialize SQL Server source now supports `varchar(max)` and `nvarchar(max)` data types.
 - **Faster authentication for connection poolers**: We've added an index to the `pg_authid` system catalog. This should significantly improve the performance of default authentication queries made by connection poolers like pgbouncer.
 - **Faster Kafka sink startup**: We've updated the default Kafka progress topic configuration to reduce the amount of progress data processed when creating new [Kafka sinks](/serve-results/sink/kafka/).
@@ -303,7 +303,7 @@ v26.5.1 enhances our SQL Server source, improves performance, and strengthens Ma
 - **Auto-repair accidental changes** (<red>*Materialize Self-Managed only*</red>): Improvements to the controller logic allow Materialize to auto-repair changes such as deleting a StatefulSet. This means that your production setups should be more robust in the face of accidental changes.
 - **Track deployment status after upgrades** (<red>*Materialize Self-Managed only*</red>): The Materialize custom resource now displays both active and desired `environmentd` versions. This makes it easier to track deployment status after upgrades.
 
-### Bug fixes
+### Bug fixes {#v26.5-bug-fixes}
 - Added additional checks to string functions (`replace`, `translate`, etc.) to help prevent out-of-memory errors from inflationary string operations.
 - Fixed an issue which could cause panics during connection drops; this means improved stability when clients disconnect.
 - Fixed an issue where disabling console or balancers would fail if they were already running.
@@ -316,14 +316,14 @@ v26.5.1 enhances our SQL Server source, improves performance, and strengthens Ma
 
 v26.4.0 introduces several performance improvements and bugfixes.
 
-### Improvements
+### Improvements {#v26.4-improvements}
 - **Over 2x higher connections per second (CPS)**: We've optimized how Materialize handles inbound connection requests. In our tests, we've observed 2x - 4x improvements to the rate at which new client connections can be established. This is especially beneficial when spinning up new environments, warming up connection pools, or scaling client instances.
 - **Up to 3x faster hydration times for large PostgreSQL tables**: We've reduced the overhead incurred by communication between multiple *workers* on a large cluster. We've observed up to 3x throughput improvement when ingesting 1 TB PostgreSQL tables on large clusters.
 - **More efficient source ingestion batching**: Sources now batch writes more effectively. This can result in improved freshness and lower resource utilization, especially when a source is doing a large number of writes.
 - **CloudSQL HA failover support** (<red>*Materialize Self-Managed only*</red>): Materialize Self-Managed now offers better support for handling failovers in CloudSQL HA sources, without downtime. [Contact our support team](/support/) to enable this in your environment.
 - **Manual Promotion** (<red>*Materialize Self-Managed only*</red>): [Rollout strategies](/self-managed-deployments/upgrading/#rollout-strategies) allow you control how Materialize transitions from the current generation to a new generation during an upgrade. We've added a new rollout strategy called `ManuallyPromote` which allows you to choose when to promote the new generation. This means that you can minimize the impact of potential downtime.
 
-### Bug Fixes
+### Bug Fixes {#v26.4-bug-fixes}
 - Fixed timestamp determination logic to handle empty read holds correctly.
 - Fixed lazy creation of temporary schemas to prevent schema-related errors.
 - Reduced SCRAM iterations in scalability framework and fixed fallback image configuration.
@@ -332,11 +332,11 @@ v26.4.0 introduces several performance improvements and bugfixes.
 
 *Released to Materialize Cloud & Materialize Self-Managed: 2025-12-12*<br>
 
-### Improvements
+### Improvements {#v26.3-improvements}
 - For Self-Managed: added version upgrade window validation, to prevent skipping required intermediate versions during upgrades.
 - Improved activity log throttling to apply across all statement executions, not just initial prepared statement execution, providing more consistent logging behavior.
 
-### Bug Fixes
+### Bug Fixes {#v26.3-bug-fixes}
 - Fixed validation for replica sizes to prevent configurations with zero scale or workers, which previously caused division-by-zero errors and panics.
 - Fixed frontend `SELECT` sequencing to gracefully handle collections that are dropped during real-time recent timestamp determination.
 
@@ -347,7 +347,7 @@ v26.4.0 introduces several performance improvements and bugfixes.
 
 This release focuses primarily on bug fixes.
 
-### Bug fixes
+### Bug fixes {#v26.2-bug-fixes}
 - **Catalog updates**: Fixed a bug where catalog item version updates were incorrectly ignored when the `create_sql` didn't change, which could cause version updates to not be applied properly.
 
 - **Console division by zero**: Fixed a division by zero error in the console, specifically when viewing `mz_console_cluster_utilization_overview`.
