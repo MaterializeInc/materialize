@@ -207,7 +207,13 @@ impl RbacRequirements {
         let role_membership =
             catalog.collect_role_membership(&session.role_metadata().current_role);
 
-        check_usage(catalog, session, resolved_ids, self.item_usage)?;
+        check_usage_inner(
+            catalog,
+            session,
+            resolved_ids,
+            self.item_usage,
+            role_membership.clone(),
+        )?;
 
         // Validate that the current session has the required role membership to execute the provided
         // plan.
@@ -304,6 +310,17 @@ pub fn check_usage(
     // Obtain all roles that the current session is a member of.
     let role_membership = catalog.collect_role_membership(&session.role_metadata().current_role);
 
+    check_usage_inner(catalog, session, resolved_ids, item_types, role_membership)
+}
+
+/// Inner implementation of usage checking that accepts a pre-computed `role_membership`.
+fn check_usage_inner(
+    catalog: &impl SessionCatalog,
+    session: &dyn SessionMetadata,
+    resolved_ids: &ResolvedIds,
+    item_types: &BTreeSet<CatalogItemType>,
+    role_membership: BTreeSet<RoleId>,
+) -> Result<(), UnauthorizedError> {
     // Certain statements depend on objects that haven't been created yet, like sub-sources, so we
     // need to filter those out.
     let existing_resolved_ids =
