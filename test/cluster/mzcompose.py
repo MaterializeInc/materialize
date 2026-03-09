@@ -6678,3 +6678,39 @@ def workflow_test_expression_cache_on_ddl(c: Composition) -> None:
             if re.search(r"global expression cache hit for User\(\d+\)", line)
         ]
         assert len(cache_hits) == 2, cache_hits
+
+
+def workflow_test_github_11219(c: Composition) -> None:
+    """Regression test for database-issues#11219."""
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_alter_table_add_column": "true",
+            },
+        ),
+    ):
+        c.up("materialized")
+
+        c.sql(
+            """
+            CREATE TABLE t1 (a int);
+            CREATE INDEX idx1 ON t1 (a);
+            CREATE MATERIALIZED VIEW mv1 AS SELECT a FROM t1;
+            ALTER TABLE t1 ADD COLUMN b int;
+
+            CREATE TABLE t2 (a int);
+            CREATE MATERIALIZED VIEW mv2 AS SELECT a FROM t2;
+            CREATE INDEX idx2 ON mv2 (a);
+            CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv2 AS SELECT a FROM t2;
+            ALTER MATERIALIZED VIEW mv2 APPLY REPLACEMENT rp;
+            """
+        )
+
+        # Restart environmentd.
+        # Before the fix, bootstrap would panic with "collection missing".
+        c.kill("materialized")
+        c.up("materialized")
+
+        c.sql_query("SELECT a FROM t1")
+        c.sql_query("SELECT a FROM mv2")
