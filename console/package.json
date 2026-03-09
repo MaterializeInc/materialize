@@ -167,7 +167,7 @@
     "kysely-codegen": "^0.17.0",
     "lint-staged": "^16.2.7",
     "miragejs": "^0.1.48",
-    "module-alias": "^2.2.3",
+    "module-alias": "^2.3.4",
     "msw": "^2.6.4",
     "openapi-typescript": "^7.4.2",
     "p-retry": "^4.6.1",
