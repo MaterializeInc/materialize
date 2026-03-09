@@ -60,6 +60,7 @@ pub mod gen_data_contracts;
 pub mod grants;
 pub mod history;
 pub mod new_project;
+pub mod profiles;
 pub mod ready;
 pub mod roles;
 pub mod stage;

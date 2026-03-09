@@ -35,6 +35,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ),
     ("history", include_str!("help/history.md")),
     ("new", include_str!("help/new.md")),
+    ("profiles", include_str!("help/profiles.md")),
     ("ready", include_str!("help/ready.md")),
     ("stage", include_str!("help/stage.md")),
     ("test", include_str!("help/test.md")),

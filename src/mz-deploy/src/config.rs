@@ -236,6 +236,10 @@ impl ProfilesConfig {
         Ok(profile)
     }
 
+    pub fn profile_names(&self) -> Vec<&str> {
+        self.profiles.keys().map(|s| s.as_str()).collect()
+    }
+
     pub fn source_path(&self) -> &PathBuf {
         &self.source_path
     }
