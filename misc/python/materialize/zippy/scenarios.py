@@ -74,7 +74,7 @@ from materialize.zippy.storaged_actions import (
     StoragedRestart,
     StoragedStart,
 )
-from materialize.zippy.copy_s3_actions import CopyToFromS3
+from materialize.zippy.copy_s3_actions import CopyFromS3, CopyToS3
 from materialize.zippy.table_actions import DML, CreateTableParameterized, ValidateTable
 from materialize.zippy.view_actions import CreateViewParameterized, ValidateView
 
@@ -500,7 +500,7 @@ class SqlServerCdcLarge(Scenario):
         }
 
 
-class CopyToFromS3Roundtrip(Scenario):
+class CopyToFromS3(Scenario):
     """A Zippy test performing roundtrip copy-to-S3 and copy-from-S3 operations over user tables."""
 
     def actions_with_weight(self) -> dict[ActionOrFactory, float]:
@@ -511,5 +511,6 @@ class CopyToFromS3Roundtrip(Scenario):
             CreateTableParameterized(): 10,
             DML: 30,
             ValidateTable: 10,
-            CopyToFromS3: 20,
+            CopyToS3: 20,
+            CopyFromS3: 20,
         }

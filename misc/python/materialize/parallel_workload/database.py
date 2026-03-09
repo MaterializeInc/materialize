@@ -794,6 +794,7 @@ class SqlServerSource(DBObject):
     def create(self, exe: Executor) -> None:
         self.executor.create(logging_exe=exe)
 
+
 class S3Object(DBObject):
     key: str
     bucket: str
@@ -812,10 +813,10 @@ class S3Object(DBObject):
 
     def name(self) -> str:
         return f"{self.bucket}/{self.key}"
-    
+
     def __str__(self) -> str:
         return self.name()
-    
+
     def create(self, exe: Executor) -> None:
         query = f"CREATE TABLE '{self.key}'("
         query += ",\n    ".join(column.create() for column in self.columns)
