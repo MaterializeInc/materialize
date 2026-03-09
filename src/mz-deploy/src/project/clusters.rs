@@ -14,6 +14,7 @@ use mz_sql_parser::ast::{
     GrantPrivilegesStatement, GrantTargetSpecification, GrantTargetSpecificationInner, Ident,
     ObjectType, Raw, RawClusterName, Statement, UnresolvedObjectName, WithOptionValue,
 };
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// A parsed cluster definition from a `.sql` file in the `clusters/` directory.
@@ -39,6 +40,7 @@ pub fn load_clusters(
     root: &Path,
     profile: &str,
     cluster_suffix: Option<&str>,
+    variables: &BTreeMap<String, String>,
 ) -> Result<Vec<ClusterDefinition>, ProjectError> {
     let clusters_dir = root.join("clusters");
 
@@ -63,7 +65,7 @@ pub fn load_clusters(
         })?;
 
         // Parse SQL statements
-        let statements = parse_statements_with_context(&sql, path.clone())?;
+        let statements = parse_statements_with_context(&sql, path.clone(), variables)?;
 
         // Classify statements
         match classify_cluster_statements(&expected_name, &path, statements) {
@@ -302,7 +304,7 @@ mod tests {
     #[test]
     fn test_load_clusters_no_directory() {
         let dir = create_test_dir();
-        let result = load_clusters(dir.path(), "default", None).unwrap();
+        let result = load_clusters(dir.path(), "default", None, &BTreeMap::new()).unwrap();
         assert!(
             result.is_empty(),
             "should return empty vec when clusters/ doesn't exist"
@@ -323,7 +325,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path(), "default", None).unwrap();
+        let result = load_clusters(dir.path(), "default", None, &BTreeMap::new()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "analytics");
         assert_eq!(result[0].grants.len(), 1);
@@ -349,7 +351,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path(), "default", None).unwrap();
+        let result = load_clusters(dir.path(), "default", None, &BTreeMap::new()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "quickstart");
         assert!(result[0].grants.is_empty());
@@ -368,7 +370,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path(), "default", None);
+        let result = load_clusters(dir.path(), "default", None, &BTreeMap::new());
         assert!(
             result.is_err(),
             "should error when cluster name doesn't match filename"
@@ -387,7 +389,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path(), "default", None);
+        let result = load_clusters(dir.path(), "default", None, &BTreeMap::new());
         assert!(
             result.is_err(),
             "should error when no CREATE CLUSTER statement"
@@ -407,7 +409,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path(), "default", None);
+        let result = load_clusters(dir.path(), "default", None, &BTreeMap::new());
         assert!(
             result.is_err(),
             "should error on unsupported statement type"
@@ -427,7 +429,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path(), "default", None);
+        let result = load_clusters(dir.path(), "default", None, &BTreeMap::new());
         assert!(
             result.is_err(),
             "should error when grant targets wrong cluster"
@@ -447,7 +449,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path(), "default", None);
+        let result = load_clusters(dir.path(), "default", None, &BTreeMap::new());
         assert!(
             result.is_err(),
             "should error when comment targets wrong cluster"
@@ -472,7 +474,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path(), "default", None).unwrap();
+        let result = load_clusters(dir.path(), "default", None, &BTreeMap::new()).unwrap();
         assert_eq!(result.len(), 2);
         // Sorted by filename
         assert_eq!(result[0].name, "analytics");

@@ -25,6 +25,14 @@ pub enum ParseError {
         /// Error message
         message: String,
     },
+
+    /// SQL file contains variable references with no definition
+    UnresolvedVariables {
+        /// The file containing unresolved variables
+        path: PathBuf,
+        /// Variable names that have no definition
+        unresolved: Vec<String>,
+    },
 }
 
 impl fmt::Display for ParseError {
@@ -64,6 +72,26 @@ impl fmt::Display for ParseError {
             ParseError::StatementsParseFailed { message } => {
                 write!(f, "{}: {}", "error".bright_red().bold(), message)
             }
+            ParseError::UnresolvedVariables { path, unresolved } => {
+                writeln!(
+                    f,
+                    "{}: unresolved variables in {}",
+                    "error".bright_red().bold(),
+                    path.display()
+                )?;
+                let formatted: Vec<String> = unresolved.iter().map(|v| format!(":{}", v)).collect();
+                writeln!(
+                    f,
+                    "  {}: {}",
+                    "undefined".bright_red(),
+                    formatted.join(", ")
+                )?;
+                write!(
+                    f,
+                    "  {}: define these in [profiles.<name>.variables] in project.toml",
+                    "hint".bright_blue()
+                )
+            }
         }
     }
 }
@@ -73,6 +101,7 @@ impl std::error::Error for ParseError {
         match self {
             ParseError::SqlParseFailed { source, .. } => Some(source),
             ParseError::StatementsParseFailed { .. } => None,
+            ParseError::UnresolvedVariables { .. } => None,
         }
     }
 }

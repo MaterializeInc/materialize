@@ -13,6 +13,7 @@ use mz_sql_parser::ast::{
     AlterRoleStatement, CommentObjectType, CommentStatement, CreateRoleStatement,
     GrantRoleStatement, Raw, Statement,
 };
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// A parsed role definition from a `.sql` file in the `roles/` directory.
@@ -34,7 +35,11 @@ pub struct RoleDefinition {
 /// Load all role definitions from `<root>/roles/`.
 ///
 /// Returns an empty vec if `roles/` doesn't exist (the directory is optional).
-pub fn load_roles(root: &Path, profile: &str) -> Result<Vec<RoleDefinition>, ProjectError> {
+pub fn load_roles(
+    root: &Path,
+    profile: &str,
+    variables: &BTreeMap<String, String>,
+) -> Result<Vec<RoleDefinition>, ProjectError> {
     let roles_dir = root.join("roles");
 
     if !roles_dir.exists() {
@@ -58,7 +63,7 @@ pub fn load_roles(root: &Path, profile: &str) -> Result<Vec<RoleDefinition>, Pro
         })?;
 
         // Parse SQL statements
-        let statements = parse_statements_with_context(&sql, path.clone())?;
+        let statements = parse_statements_with_context(&sql, path.clone(), variables)?;
 
         // Classify statements
         match classify_role_statements(&expected_name, &path, statements) {
@@ -228,7 +233,7 @@ mod tests {
     #[test]
     fn test_load_roles_no_directory() {
         let dir = create_test_dir();
-        let result = load_roles(dir.path(), "default").unwrap();
+        let result = load_roles(dir.path(), "default", &BTreeMap::new()).unwrap();
         assert!(
             result.is_empty(),
             "should return empty vec when roles/ doesn't exist"
@@ -250,7 +255,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_roles(dir.path(), "default").unwrap();
+        let result = load_roles(dir.path(), "default", &BTreeMap::new()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "analyst");
         assert_eq!(result[0].alter_stmts.len(), 1);
@@ -266,7 +271,7 @@ mod tests {
 
         fs::write(roles_dir.join("reader.sql"), "CREATE ROLE reader;").unwrap();
 
-        let result = load_roles(dir.path(), "default").unwrap();
+        let result = load_roles(dir.path(), "default", &BTreeMap::new()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "reader");
         assert!(result[0].alter_stmts.is_empty());
@@ -282,7 +287,7 @@ mod tests {
 
         fs::write(roles_dir.join("analyst.sql"), "CREATE ROLE wrong_name;").unwrap();
 
-        let result = load_roles(dir.path(), "default");
+        let result = load_roles(dir.path(), "default", &BTreeMap::new());
         assert!(
             result.is_err(),
             "should error when role name doesn't match filename"
@@ -297,7 +302,7 @@ mod tests {
 
         fs::write(roles_dir.join("analyst.sql"), "GRANT analyst TO joe;").unwrap();
 
-        let result = load_roles(dir.path(), "default");
+        let result = load_roles(dir.path(), "default", &BTreeMap::new());
         assert!(
             result.is_err(),
             "should error when no CREATE ROLE statement"
@@ -317,7 +322,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_roles(dir.path(), "default");
+        let result = load_roles(dir.path(), "default", &BTreeMap::new());
         assert!(
             result.is_err(),
             "should error on unsupported statement type"
@@ -337,7 +342,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_roles(dir.path(), "default");
+        let result = load_roles(dir.path(), "default", &BTreeMap::new());
         assert!(
             result.is_err(),
             "should error when ALTER targets wrong role"
@@ -357,7 +362,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_roles(dir.path(), "default");
+        let result = load_roles(dir.path(), "default", &BTreeMap::new());
         assert!(
             result.is_err(),
             "should error when grant targets wrong role"
@@ -377,7 +382,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_roles(dir.path(), "default");
+        let result = load_roles(dir.path(), "default", &BTreeMap::new());
         assert!(
             result.is_err(),
             "should error when comment targets wrong role"
@@ -394,7 +399,7 @@ mod tests {
 
         fs::write(roles_dir.join("writer.sql"), "CREATE ROLE writer;").unwrap();
 
-        let result = load_roles(dir.path(), "default").unwrap();
+        let result = load_roles(dir.path(), "default", &BTreeMap::new()).unwrap();
         assert_eq!(result.len(), 2);
         // Sorted by filename
         assert_eq!(result[0].name, "analyst");

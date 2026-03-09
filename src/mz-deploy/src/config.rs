@@ -42,6 +42,10 @@ pub struct ProfileConfig {
     /// Security-related configuration (e.g., AWS profile for secret resolution).
     #[serde(default)]
     pub security: SecurityConfig,
+    /// psql-style variables resolved in SQL files before parsing.
+    /// Defined per profile as `[profiles.<name>.variables]` in `project.toml`.
+    #[serde(default)]
+    pub variables: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -347,6 +351,11 @@ impl Settings {
         self.profile_config.cluster_suffix.as_deref()
     }
 
+    /// psql-style variables for this profile.
+    pub fn variables(&self) -> &BTreeMap<String, String> {
+        &self.profile_config.variables
+    }
+
     /// Returns the database connection profile.
     ///
     /// # Panics
@@ -476,5 +485,49 @@ mod tests {
         let config = settings.config_for_profile("prod");
         assert_eq!(config.suffix.as_deref(), Some("_prod"));
         assert_eq!(config.security.aws_profile(), None);
+    }
+
+    #[test]
+    fn test_profile_config_deserializes_variables() {
+        let toml = r#"
+            profile = "default"
+
+            [profiles.staging.variables]
+            cluster = "staging_cluster"
+            pg_host = "staging-replica.internal"
+        "#;
+        let settings: ProjectSettings = toml::from_str(toml).unwrap();
+        let config = settings.config_for_profile("staging");
+        assert_eq!(
+            config.variables.get("cluster").map(|s| s.as_str()),
+            Some("staging_cluster")
+        );
+        assert_eq!(
+            config.variables.get("pg_host").map(|s| s.as_str()),
+            Some("staging-replica.internal")
+        );
+    }
+
+    #[test]
+    fn test_profile_config_variables_default_empty() {
+        let toml = r#"
+            profile = "default"
+
+            [profiles.prod]
+            suffix = "_prod"
+        "#;
+        let settings: ProjectSettings = toml::from_str(toml).unwrap();
+        let config = settings.config_for_profile("prod");
+        assert!(config.variables.is_empty());
+    }
+
+    #[test]
+    fn test_profile_config_variables_missing_profile() {
+        let toml = r#"
+            profile = "default"
+        "#;
+        let settings: ProjectSettings = toml::from_str(toml).unwrap();
+        let config = settings.config_for_profile("nonexistent");
+        assert!(config.variables.is_empty());
     }
 }

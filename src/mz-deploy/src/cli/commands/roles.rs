@@ -25,7 +25,7 @@ pub async fn run(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
     // Load role definitions
     progress::stage_start("Loading role definitions");
     let load_start = Instant::now();
-    let definitions = roles::load_roles(directory, &profile.name)?;
+    let definitions = roles::load_roles(directory, &profile.name, settings.variables())?;
 
     if definitions.is_empty() {
         println!(

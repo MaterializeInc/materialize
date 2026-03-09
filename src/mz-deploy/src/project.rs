@@ -61,6 +61,7 @@ pub mod profile_files;
 pub mod raw;
 pub mod roles;
 pub mod typed;
+mod variables;
 
 // Re-export commonly used types
 pub use planned::ModStatement;
@@ -91,8 +92,9 @@ pub fn plan<P: AsRef<Path>>(
     profile: &str,
     suffix: Option<&str>,
     cluster_suffix: Option<&str>,
+    variables: &BTreeMap<String, String>,
 ) -> Result<planned::Project, error::ProjectError> {
-    let raw_project = raw::load_project(root, profile, suffix)?;
+    let raw_project = raw::load_project(root, profile, suffix, variables)?;
     let db_name_map = raw_project.database_name_map.clone();
     let mut typed_project = typed::Project::try_from(raw_project)?;
     if !db_name_map.is_empty() {

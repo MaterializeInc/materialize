@@ -91,7 +91,14 @@ GROUP BY u.id, u.name;
         types.write_types_lock(project_path).unwrap();
 
         // Load the project
-        let mir_project = project::plan(project_path, "default", None, None).unwrap();
+        let mir_project = project::plan(
+            project_path,
+            "default",
+            None,
+            None,
+            &std::collections::BTreeMap::new(),
+        )
+        .unwrap();
 
         // Create Docker runtime and get client
         let runtime = DockerRuntime::new();

@@ -6,6 +6,7 @@
 
 use super::error::ParseError;
 use mz_sql_parser::ast::{Raw, Statement};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// Parses one or more SQL statements from an iterable collection of strings.
@@ -40,12 +41,22 @@ where
 
 /// Parse SQL statements and add file context to any errors.
 ///
+/// Resolves psql-style variables (`:foo`, `:'foo'`, `:"foo"`) before parsing.
 /// This function directly parses SQL and creates SqlParseFailed errors with full context
 /// including file path and SQL content for better error reporting.
 pub fn parse_statements_with_context(
     sql: &str,
     path: PathBuf,
+    variables: &BTreeMap<String, String>,
 ) -> Result<Vec<Statement<Raw>>, ParseError> {
+    let resolved = super::variables::resolve_variables(sql, variables, &path).map_err(|e| {
+        ParseError::UnresolvedVariables {
+            path: e.path,
+            unresolved: e.unresolved,
+        }
+    })?;
+    let sql = resolved.as_ref();
+
     let mut statements = vec![];
 
     let parsed_results = mz_sql_parser::parser::parse_statements_with_limit(sql)

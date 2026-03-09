@@ -14,6 +14,7 @@ use mz_sql_parser::ast::{
     GrantTargetSpecification, GrantTargetSpecificationInner, ObjectType, Raw, RawNetworkPolicyName,
     Statement,
 };
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// A parsed network policy definition from a `.sql` file in the `network_policies/` directory.
@@ -36,6 +37,7 @@ pub struct NetworkPolicyDefinition {
 pub fn load_network_policies(
     root: &Path,
     profile: &str,
+    variables: &BTreeMap<String, String>,
 ) -> Result<Vec<NetworkPolicyDefinition>, ProjectError> {
     let policies_dir = root.join("network_policies");
 
@@ -60,7 +62,7 @@ pub fn load_network_policies(
         })?;
 
         // Parse SQL statements
-        let statements = parse_statements_with_context(&sql, path.clone())?;
+        let statements = parse_statements_with_context(&sql, path.clone(), variables)?;
 
         // Classify statements
         match classify_network_policy_statements(&expected_name, &path, statements) {
@@ -231,7 +233,7 @@ mod tests {
     #[test]
     fn test_load_network_policies_no_directory() {
         let dir = create_test_dir();
-        let result = load_network_policies(dir.path(), "default").unwrap();
+        let result = load_network_policies(dir.path(), "default", &BTreeMap::new()).unwrap();
         assert!(
             result.is_empty(),
             "should return empty vec when network_policies/ doesn't exist"
@@ -251,7 +253,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_network_policies(dir.path(), "default").unwrap();
+        let result = load_network_policies(dir.path(), "default", &BTreeMap::new()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "office_access");
         assert_eq!(result[0].comments.len(), 1);
@@ -269,7 +271,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_network_policies(dir.path(), "default").unwrap();
+        let result = load_network_policies(dir.path(), "default", &BTreeMap::new()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "office_access");
         assert!(result[0].grants.is_empty());
@@ -288,7 +290,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_network_policies(dir.path(), "default");
+        let result = load_network_policies(dir.path(), "default", &BTreeMap::new());
         assert!(
             result.is_err(),
             "should error when policy name doesn't match filename"
@@ -307,7 +309,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_network_policies(dir.path(), "default");
+        let result = load_network_policies(dir.path(), "default", &BTreeMap::new());
         assert!(
             result.is_err(),
             "should error when no CREATE NETWORK POLICY statement"
@@ -327,7 +329,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_network_policies(dir.path(), "default");
+        let result = load_network_policies(dir.path(), "default", &BTreeMap::new());
         assert!(
             result.is_err(),
             "should error on unsupported statement type"
@@ -347,7 +349,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_network_policies(dir.path(), "default");
+        let result = load_network_policies(dir.path(), "default", &BTreeMap::new());
         assert!(
             result.is_err(),
             "should error when comment targets wrong policy"
@@ -372,7 +374,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_network_policies(dir.path(), "default").unwrap();
+        let result = load_network_policies(dir.path(), "default", &BTreeMap::new()).unwrap();
         assert_eq!(result.len(), 2);
         // Sorted by filename
         assert_eq!(result[0].name, "office_access");

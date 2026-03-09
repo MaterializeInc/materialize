@@ -109,6 +109,37 @@ then the staging suffix stacks on top:
 - `cluster_suffix = "_staging"` + staging suffix `_a` →
   `foo` → `foo_staging` → `foo_staging_a`
 
+## Per-profile SQL variables
+
+Variables let you parameterize SQL files with values that differ per profile,
+using psql-compatible syntax. Define variables in `project.toml`:
+
+```toml
+[profiles.staging.variables]
+cluster = "staging_cluster"
+pg_host = "staging-replica.internal"
+```
+
+Then reference them in any SQL file:
+
+```sql
+-- :name substitutes the raw value
+CREATE MATERIALIZED VIEW mv IN CLUSTER :cluster AS SELECT 1;
+
+-- :'name' substitutes as a single-quoted string (with escaping)
+CREATE CONNECTION pg TO POSTGRES (HOST :'pg_host');
+
+-- :"name" substitutes as a double-quoted identifier (with escaping)
+SELECT * FROM :"my_table";
+```
+
+Variable resolution happens before SQL parsing, so the parser sees the
+final resolved SQL. Type casts (`::int`) are not confused with variables.
+Variables inside string literals and comments are not resolved.
+
+If a SQL file references a variable that is not defined for the active
+profile, compilation fails with an error listing all undefined variables.
+
 ## Per-profile secret configuration
 
 In `project.toml`, you can configure secret resolution settings per profile

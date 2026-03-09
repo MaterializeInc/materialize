@@ -23,7 +23,8 @@ pub async fn run(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
     // Load network policy definitions
     progress::stage_start("Loading network policy definitions");
     let load_start = Instant::now();
-    let definitions = network_policies::load_network_policies(directory, &profile.name)?;
+    let definitions =
+        network_policies::load_network_policies(directory, &profile.name, settings.variables())?;
 
     if definitions.is_empty() {
         println!(

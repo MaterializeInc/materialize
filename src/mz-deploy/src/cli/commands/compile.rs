@@ -51,6 +51,7 @@ pub async fn run(
         &settings.profile_name,
         settings.suffix(),
         settings.cluster_suffix(),
+        settings.variables(),
     )?;
     let parse_duration = parse_start.elapsed();
 

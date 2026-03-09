@@ -72,6 +72,7 @@ pub async fn run(settings: &Settings) -> Result<(), CliError> {
         &settings.profile_name,
         settings.suffix(),
         settings.cluster_suffix(),
+        settings.variables(),
     )?;
     let empty_types = Types::default();
     let runtime = DockerRuntime::new().with_image(&settings.docker_image);

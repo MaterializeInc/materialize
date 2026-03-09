@@ -222,6 +222,7 @@ pub fn load_project<P: AsRef<Path>>(
     root: P,
     profile: &str,
     suffix: Option<&str>,
+    variables: &BTreeMap<String, String>,
 ) -> Result<Project, ProjectError> {
     let root = root.as_ref();
 
@@ -289,6 +290,7 @@ pub fn load_project<P: AsRef<Path>>(
             Some(parse_statements_with_context(
                 &sql_content,
                 db_mod_path.clone(),
+                variables,
             )?)
         } else {
             None
@@ -331,6 +333,7 @@ pub fn load_project<P: AsRef<Path>>(
                 Some(parse_statements_with_context(
                     &sql_content,
                     schema_mod_path.clone(),
+                    variables,
                 )?)
             } else {
                 None
@@ -348,7 +351,8 @@ pub fn load_project<P: AsRef<Path>>(
                     }
                 })?;
 
-                let statements = parse_statements_with_context(&sql_content, object_path.clone())?;
+                let statements =
+                    parse_statements_with_context(&sql_content, object_path.clone(), variables)?;
 
                 objects.push(DatabaseObject {
                     name: object_name,
@@ -414,7 +418,7 @@ mod tests {
         fs::write(&sql_file, "CREATE TABLE t (id INT);").unwrap();
 
         // Load the project
-        let project = load_project(root, "default", None).unwrap();
+        let project = load_project(root, "default", None, &BTreeMap::new()).unwrap();
 
         // Verify structure
         assert_eq!(project.databases.len(), 1);
@@ -447,7 +451,7 @@ mod tests {
             }
         }
 
-        let project = load_project(root, "default", None).unwrap();
+        let project = load_project(root, "default", None, &BTreeMap::new()).unwrap();
 
         assert_eq!(project.databases.len(), 2);
         for db_name in ["db1", "db2"] {
@@ -471,7 +475,7 @@ mod tests {
         fs::create_dir_all(&normal_path).unwrap();
         fs::write(normal_path.join("object.sql"), "CREATE TABLE t (id INT);").unwrap();
 
-        let project = load_project(root, "default", None).unwrap();
+        let project = load_project(root, "default", None, &BTreeMap::new()).unwrap();
 
         assert_eq!(project.databases.len(), 1);
         assert!(project.databases.contains_key("normal"));
@@ -499,7 +503,7 @@ mod tests {
         // Write a regular object
         fs::write(schema_path.join("object.sql"), "CREATE TABLE t (id INT);").unwrap();
 
-        let project = load_project(root, "default", None).unwrap();
+        let project = load_project(root, "default", None, &BTreeMap::new()).unwrap();
 
         let database = &project.databases["my_database"];
         assert!(database.mod_statements.is_some());
@@ -527,7 +531,7 @@ mod tests {
         // Write a regular object
         fs::write(schema_path.join("object.sql"), "CREATE TABLE t (id INT);").unwrap();
 
-        let project = load_project(root, "default", None).unwrap();
+        let project = load_project(root, "default", None, &BTreeMap::new()).unwrap();
 
         let schema = &project.databases["my_database"].schemas["my_schema"];
         assert!(schema.mod_statements.is_some());
@@ -553,7 +557,7 @@ mod tests {
         fs::write(schema_path.join("table1.sql"), "CREATE TABLE t1 (id INT);").unwrap();
         fs::write(schema_path.join("table2.sql"), "CREATE TABLE t2 (id INT);").unwrap();
 
-        let project = load_project(root, "default", None).unwrap();
+        let project = load_project(root, "default", None, &BTreeMap::new()).unwrap();
 
         let schema = &project.databases["my_database"].schemas["my_schema"];
 
@@ -583,7 +587,7 @@ mod tests {
         )
         .unwrap();
 
-        let project = load_project(root, "default", None).unwrap();
+        let project = load_project(root, "default", None, &BTreeMap::new()).unwrap();
 
         // Schema should still be loaded even with only schema-level .sql
         assert!(project.databases.contains_key("my_database"));
@@ -645,7 +649,7 @@ mod tests {
         .unwrap();
 
         // Load raw project
-        let raw_project = load_project(root, "default", None).unwrap();
+        let raw_project = load_project(root, "default", None, &BTreeMap::new()).unwrap();
         assert_eq!(raw_project.databases.len(), 1);
 
         // Convert to typed
@@ -699,7 +703,7 @@ mod tests {
         )
         .unwrap();
 
-        let project = load_project(root, "default", Some("_stg")).unwrap();
+        let project = load_project(root, "default", Some("_stg"), &BTreeMap::new()).unwrap();
 
         assert_eq!(project.databases.len(), 1);
         assert!(project.databases.contains_key("mydb_stg"));
@@ -723,7 +727,7 @@ mod tests {
             fs::write(schema_path.join("t.sql"), "CREATE TABLE t (id INT);").unwrap();
         }
 
-        let project = load_project(root, "default", Some("_stg")).unwrap();
+        let project = load_project(root, "default", Some("_stg"), &BTreeMap::new()).unwrap();
 
         assert_eq!(project.databases.len(), 2);
         assert!(project.databases.contains_key("db1_stg"));
@@ -742,7 +746,7 @@ mod tests {
         fs::create_dir_all(&schema_path).unwrap();
         fs::write(schema_path.join("t.sql"), "CREATE TABLE t (id INT);").unwrap();
 
-        let project = load_project(root, "default", None).unwrap();
+        let project = load_project(root, "default", None, &BTreeMap::new()).unwrap();
 
         assert!(project.databases.contains_key("mydb"));
         assert!(project.database_name_map.is_empty());
@@ -761,7 +765,7 @@ mod tests {
         fs::create_dir_all(&schema_path).unwrap();
         fs::write(schema_path.join("t.sql"), "CREATE TABLE t (id INT);").unwrap();
 
-        let project = load_project(root, "default", Some("_stg")).unwrap();
+        let project = load_project(root, "default", Some("_stg"), &BTreeMap::new()).unwrap();
 
         let db = &project.databases["mydb_stg"];
         assert!(db.schemas.contains_key("analytics"));
@@ -786,7 +790,7 @@ mod tests {
         )
         .unwrap();
 
-        let project = load_project(root, "default", Some("_stg")).unwrap();
+        let project = load_project(root, "default", Some("_stg"), &BTreeMap::new()).unwrap();
 
         let db = &project.databases["mydb_stg"];
         let mod_stmts = db.mod_statements.as_ref().unwrap();
@@ -805,11 +809,11 @@ mod tests {
         fs::write(schema_path.join("t.sql"), "CREATE TABLE t (id INT);").unwrap();
 
         // Without suffix
-        let project = load_project(root, "default", None).unwrap();
+        let project = load_project(root, "default", None, &BTreeMap::new()).unwrap();
         assert!(project.database_name_map.is_empty());
 
         // With suffix
-        let project = load_project(root, "default", Some("_stg")).unwrap();
+        let project = load_project(root, "default", Some("_stg"), &BTreeMap::new()).unwrap();
         assert_eq!(project.database_name_map.len(), 1);
     }
 
@@ -831,7 +835,8 @@ mod tests {
         // Need a project.toml for the project to load
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let planned = project::plan(root, "default", Some("_staging"), None).unwrap();
+        let planned =
+            project::plan(root, "default", Some("_staging"), None, &BTreeMap::new()).unwrap();
 
         assert_eq!(planned.databases.len(), 1);
         assert_eq!(planned.databases[0].name, "testdb_staging");
@@ -863,7 +868,7 @@ mod tests {
 
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let planned = project::plan(root, "default", Some("_stg"), None).unwrap();
+        let planned = project::plan(root, "default", Some("_stg"), None, &BTreeMap::new()).unwrap();
 
         // Find the view in db2_stg
         let db2 = planned
@@ -897,7 +902,7 @@ mod tests {
 
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let planned = project::plan(root, "default", Some("_stg"), None).unwrap();
+        let planned = project::plan(root, "default", Some("_stg"), None, &BTreeMap::new()).unwrap();
 
         let view = &planned.databases[0].schemas[0].objects[0];
         let sql = format!("{}", view.typed_object.stmt);
@@ -927,7 +932,7 @@ mod tests {
 
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let planned = project::plan(root, "default", None, None).unwrap();
+        let planned = project::plan(root, "default", None, None, &BTreeMap::new()).unwrap();
 
         assert_eq!(planned.databases[0].name, "mydb");
         assert_eq!(

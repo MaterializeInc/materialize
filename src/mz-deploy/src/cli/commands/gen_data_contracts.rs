@@ -46,6 +46,7 @@ pub async fn run(settings: &Settings) -> Result<(), CliError> {
         &settings.profile_name,
         settings.suffix(),
         settings.cluster_suffix(),
+        settings.variables(),
     )?;
 
     if planned_project.external_dependencies.is_empty() {

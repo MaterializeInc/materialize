@@ -541,9 +541,10 @@ pub struct Database {
 /// ```no_run
 /// use mz_deploy::project::raw;
 /// use mz_deploy::project::typed::Project;
+/// use std::collections::BTreeMap;
 ///
 /// // Load raw project from file system
-/// let raw_project = raw::load_project("./my_project", "default", None).unwrap();
+/// let raw_project = raw::load_project("./my_project", "default", None, &BTreeMap::new()).unwrap();
 ///
 /// // Convert to validated typed project
 /// let typed_project = Project::try_from(raw_project).unwrap();
