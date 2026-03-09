@@ -513,6 +513,11 @@ pub mod v1alpha1 {
             // check when major.minor.patch are equal and either side
             // is a dev build. Environmentd will still enforce catalog
             // compatibility.
+            //
+            // We still block release-to-dev rollback: if the active
+            // version is a full release (no pre-release), it is
+            // definitively newer than any pre-release of the same
+            // version, so the bypass must not apply.
             let is_dev = |v: &Version| {
                 v.pre
                     .as_str()
@@ -523,6 +528,7 @@ pub mod v1alpha1 {
             if next_version.major == active_version.major
                 && next_version.minor == active_version.minor
                 && next_version.patch == active_version.patch
+                && !active_version.pre.is_empty()
                 && (is_dev(next_version) || is_dev(active_version))
             {
                 return true;
@@ -825,6 +831,11 @@ mod tests {
                 Version::parse("26.14.0-rc.4").unwrap(),
                 Version::new(26, 14, 0),
             ),
+            // Dev to release of the same version is a valid upgrade
+            (
+                Version::parse("26.14.0-dev.0").unwrap(),
+                Version::new(26, 14, 0),
+            ),
         ];
         for (active_version, next_version) in success_tests {
             assert!(
@@ -853,6 +864,11 @@ mod tests {
             (
                 Version::new(26, 14, 0),
                 Version::parse("26.14.0-rc.4").unwrap(),
+            ),
+            // Release to dev rollback is blocked
+            (
+                Version::new(26, 14, 0),
+                Version::parse("26.14.0-dev.0").unwrap(),
             ),
         ];
         for (active_version, next_version) in failure_tests {
