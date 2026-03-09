@@ -11,7 +11,9 @@ use crate::unit_test;
 use mz_sql_parser::ast::Ident;
 use owo_colors::OwoColorize;
 use std::collections::BTreeSet;
+use std::fs::File;
 use std::path::Path;
+use std::time::Instant;
 
 /// Final classification for a single test invocation.
 ///
@@ -21,6 +23,13 @@ enum TestOutcome {
     Passed,
     Failed,
     ValidationFailed,
+}
+
+/// Result of running a single test, combining the outcome with an optional error message
+/// for JUnit reporting.
+struct TestResult {
+    outcome: TestOutcome,
+    message: Option<String>,
 }
 
 /// Run unit tests against the database.
@@ -65,7 +74,7 @@ enum TestOutcome {
 /// Returns `CliError::Project` if project loading fails
 /// Returns `CliError::Connection` if database connection fails
 /// Returns error if tests fail (exits with code 1)
-pub async fn run(settings: &Settings) -> Result<(), CliError> {
+pub async fn run(settings: &Settings, junit_xml: Option<&Path>) -> Result<(), CliError> {
     let directory = &settings.directory;
     let planned_project = project::plan(
         directory,
@@ -91,9 +100,11 @@ pub async fn run(settings: &Settings) -> Result<(), CliError> {
         format!("Running tests from {}:", directory.display()).bold()
     );
 
+    let mut junit_suite = junit_xml.map(|_| junit_report::TestSuite::new("mz-deploy"));
     let (mut passed_tests, mut failed_tests, mut validation_failed) = (0, 0, 0);
     for (object_id, test) in &planned_project.tests {
-        match run_single_test(
+        let start_time = Instant::now();
+        let result = run_single_test(
             &planned_project,
             object_id,
             test,
@@ -101,12 +112,55 @@ pub async fn run(settings: &Settings) -> Result<(), CliError> {
             &runtime,
             &empty_types,
         )
-        .await?
-        {
+        .await?;
+
+        if let Some(junit_suite) = &mut junit_suite {
+            let elapsed =
+                time::Duration::try_from(start_time.elapsed()).unwrap_or(time::Duration::ZERO);
+            let mut test_case = match &result.outcome {
+                TestOutcome::Passed => junit_report::TestCase::success(&test.name, elapsed),
+                TestOutcome::Failed => junit_report::TestCase::failure(
+                    &test.name,
+                    elapsed,
+                    "failure",
+                    &result
+                        .message
+                        .as_deref()
+                        .unwrap_or("test failed")
+                        .replace('\n', "&#10;"),
+                ),
+                TestOutcome::ValidationFailed => junit_report::TestCase::failure(
+                    &test.name,
+                    elapsed,
+                    "validation",
+                    &result
+                        .message
+                        .as_deref()
+                        .unwrap_or("validation failed")
+                        .replace('\n', "&#10;"),
+                ),
+            };
+            test_case.set_classname("mz-deploy");
+            junit_suite.add_testcase(test_case);
+        }
+
+        match result.outcome {
             TestOutcome::Passed => passed_tests += 1,
             TestOutcome::Failed => failed_tests += 1,
             TestOutcome::ValidationFailed => validation_failed += 1,
         }
+    }
+
+    if let Some(junit_suite) = junit_suite {
+        let path = junit_xml.expect("junit_suite is Some only when junit_xml is Some");
+        let report = junit_report::ReportBuilder::new()
+            .add_testsuite(junit_suite)
+            .build();
+        let mut file = File::create(path)
+            .map_err(|e| CliError::Message(format!("failed to create JUnit XML file: {}", e)))?;
+        report
+            .write_xml(&mut file)
+            .map_err(|e| CliError::Message(format!("failed to write JUnit XML report: {}", e)))?;
     }
 
     let total_failed = failed_tests + validation_failed;
@@ -143,7 +197,7 @@ pub async fn run(settings: &Settings) -> Result<(), CliError> {
 
 /// Executes one test case through validation, setup SQL, assertion query, and cleanup.
 ///
-/// Returns a `TestOutcome` instead of mutating counters so top-level `run` remains
+/// Returns a `TestResult` instead of mutating counters so top-level `run` remains
 /// a simple coordinator over independent per-test executions.
 async fn run_single_test(
     planned_project: &project::planned::Project,
@@ -152,7 +206,7 @@ async fn run_single_test(
     combined_types: &Types,
     runtime: &DockerRuntime,
     empty_types: &Types,
-) -> Result<TestOutcome, CliError> {
+) -> Result<TestResult, CliError> {
     let dependencies = planned_project
         .dependency_graph
         .get(object_id)
@@ -167,24 +221,30 @@ async fn run_single_test(
             "VALIDATION FAILED".red().bold()
         );
         print_test_validation_error(&e);
-        return Ok(TestOutcome::ValidationFailed);
+        return Ok(TestResult {
+            outcome: TestOutcome::ValidationFailed,
+            message: Some(e.to_string()),
+        });
     }
 
     let client = runtime_client(runtime, empty_types).await?;
-    if !validate_test_at_time(&client, test).await? {
-        return Ok(TestOutcome::ValidationFailed);
+    if let Some(msg) = validate_test_at_time_message(&client, test).await? {
+        return Ok(TestResult {
+            outcome: TestOutcome::ValidationFailed,
+            message: Some(msg),
+        });
     }
 
     print!("{} {} ... ", "test".cyan(), test.name.cyan());
 
     let Some(target_obj) = planned_project.find_object(object_id) else {
         println!("{}", "FAILED".red().bold());
-        eprintln!(
-            "  {}: target object '{}' not found in project",
-            "error".red().bold(),
-            object_id
-        );
-        return Ok(TestOutcome::Failed);
+        let msg = format!("target object '{}' not found in project", object_id);
+        eprintln!("  {}: {}", "error".red().bold(), msg);
+        return Ok(TestResult {
+            outcome: TestOutcome::Failed,
+            message: Some(msg),
+        });
     };
 
     let typed_fqn = typed_fqn_from_object_id(object_id);
@@ -194,38 +254,47 @@ async fn run_single_test(
     for sql in &sql_statements[..sql_statements.len() - 1] {
         if let Err(e) = client.execute(sql, &[]).await {
             println!("{}", "FAILED".red().bold());
-            eprintln!("  {}: failed to execute SQL: {:?}", "error".red().bold(), e);
-            eprintln!("  statement: {}", sql);
-            return Ok(TestOutcome::Failed);
+            let msg = format!("failed to execute SQL: {:?}\n  statement: {}", e, sql);
+            eprintln!("  {}: {}", "error".red().bold(), msg);
+            return Ok(TestResult {
+                outcome: TestOutcome::Failed,
+                message: Some(msg),
+            });
         }
     }
 
     let test_query = &sql_statements[sql_statements.len() - 1];
-    let outcome = match client.query(test_query, &[]).await {
+    let result = match client.query(test_query, &[]).await {
         Ok(rows) if rows.is_empty() => {
             println!("{}", "ok".green().bold());
-            TestOutcome::Passed
+            TestResult {
+                outcome: TestOutcome::Passed,
+                message: None,
+            }
         }
         Ok(rows) => {
             println!("{}", "FAILED".red().bold());
             print_test_assertion_rows(&rows);
-            TestOutcome::Failed
+            TestResult {
+                outcome: TestOutcome::Failed,
+                message: Some("test assertion failed".to_string()),
+            }
         }
         Err(e) => {
             println!("{}", "FAILED".red().bold());
-            eprintln!(
-                "  {}: failed to execute test query: {}",
-                "error".red().bold(),
-                e
-            );
-            TestOutcome::Failed
+            let msg = format!("failed to execute test query: {}", e);
+            eprintln!("  {}: {}", "error".red().bold(), msg);
+            TestResult {
+                outcome: TestOutcome::Failed,
+                message: Some(msg),
+            }
         }
     };
 
     if let Err(e) = client.execute("DISCARD ALL", &[]).await {
         eprintln!("warning: failed to execute DISCARD ALL: {}", e);
     }
-    Ok(outcome)
+    Ok(result)
 }
 
 /// Renders validation failures with the same detail shape as legacy test output.
@@ -264,11 +333,11 @@ async fn runtime_client(runtime: &DockerRuntime, empty_types: &Types) -> Result<
 
 /// Pre-validates optional `AT TIME` test expressions against `mz_timestamp` casting.
 ///
-/// Returning `false` marks the test as validation failure without entering execution phases.
-async fn validate_test_at_time(
+/// Returns `Some(error_message)` on validation failure, `None` on success.
+async fn validate_test_at_time_message(
     client: &Client,
     test: &unit_test::UnitTest,
-) -> Result<bool, CliError> {
+) -> Result<Option<String>, CliError> {
     if let Some(at_time) = &test.at_time {
         let validation_query = format!("SELECT {}::mz_timestamp", at_time);
         if let Err(e) = client.query(&validation_query, &[]).await {
@@ -284,10 +353,10 @@ async fn validate_test_at_time(
                 db_error: e.to_string(),
             };
             eprintln!("{}", error);
-            return Ok(false);
+            return Ok(Some(error.to_string()));
         }
     }
-    Ok(true)
+    Ok(None)
 }
 
 /// Converts planned object identity into the AST form expected by unit test desugaring.

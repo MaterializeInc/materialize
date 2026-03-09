@@ -294,7 +294,11 @@ enum Command {
         hide = true,
         after_help = "Run 'mz-deploy help test' for a detailed usage guide."
     )]
-    Test,
+    Test {
+        /// Write test results to a JUnit XML file
+        #[arg(long, value_name = "FILE")]
+        junit_xml: Option<PathBuf>,
+    },
 
     /// Clean up a staging deployment by dropping all resources
     ///
@@ -656,7 +660,7 @@ async fn run(args: Args) -> Result<(), CliError> {
 
     let needs_connection = !matches!(
         &args.command,
-        Some(Command::Compile { .. }) | Some(Command::Test)
+        Some(Command::Compile { .. }) | Some(Command::Test { .. })
     );
     let settings = Settings::load(
         args.directory,
@@ -811,13 +815,13 @@ async fn run(args: Args) -> Result<(), CliError> {
             }
             cli::commands::gen_data_contracts::run(&settings).await
         }
-        Some(Command::Test) => {
+        Some(Command::Test { junit_xml }) => {
             if json {
                 return Err(CliError::Message(
                     "--output json is not supported for the 'test' command".to_string(),
                 ));
             }
-            cli::commands::test::run(&settings).await
+            cli::commands::test::run(&settings, junit_xml.as_deref()).await
         }
         Some(Command::Abort { deploy_id }) => {
             if json {
