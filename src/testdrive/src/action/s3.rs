@@ -10,7 +10,6 @@
 // The metadata for Arrow `Field` type requires `std::collections::HashMap`, which is disallowed.
 #[allow(clippy::disallowed_types)]
 use std::collections::HashMap;
-use std::fs;
 use std::pin::Pin;
 use std::str;
 use std::sync::Arc;
@@ -261,63 +260,6 @@ pub async fn run_upload(
             .await
             .context("s3 put")?;
     }
-
-    Ok(ControlFlow::Continue)
-}
-
-pub async fn run_upload_file(
-    mut cmd: BuiltinCommand,
-    state: &State,
-) -> Result<ControlFlow, anyhow::Error> {
-    let key = cmd.args.string("key")?;
-    let bucket = cmd.args.string("bucket")?;
-    let path = cmd.args.string("path")?;
-
-    let compression = build_compression(&mut cmd)?;
-    cmd.args.done()?;
-
-    let aws_client = mz_aws_util::s3::new_client(&state.aws_config);
-
-    println!(
-        "Running upload-file with path {path} from cwd: {:?} with ls:\n{}",
-        fs::canonicalize(std::env::current_dir()?)?,
-        std::fs::read_dir(std::env::current_dir()?)
-            .unwrap()
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.file_name().to_string_lossy().into_owned())
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
-    // Read the file from the filesystem.
-    println!("Reading file from {path}");
-    let body = tokio::fs::read(&path)
-        .await
-        .context(format!("reading file from {path}"))?;
-
-    let mut reader: Pin<Box<dyn AsyncRead + Send + Sync>> = match compression {
-        Compression::None => Box::pin(&body[..]),
-        Compression::Gzip => Box::pin(GzipEncoder::new(&body[..])),
-        Compression::Bzip2 => Box::pin(BzEncoder::new(&body[..])),
-        Compression::Xz => Box::pin(XzEncoder::new(&body[..])),
-        Compression::Zstd => Box::pin(ZstdEncoder::new(&body[..])),
-    };
-    let mut content = vec![];
-    reader
-        .read_to_end(&mut content)
-        .await
-        .context("compressing")?;
-
-    println!("Uploading file to S3 bucket {bucket}/{key}");
-
-    // Upload the file to S3.
-    aws_client
-        .put_object()
-        .bucket(&bucket)
-        .key(&key)
-        .body(content.into())
-        .send()
-        .await
-        .context("s3 put")?;
 
     Ok(ControlFlow::Continue)
 }
