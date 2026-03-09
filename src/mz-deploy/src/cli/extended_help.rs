@@ -27,29 +27,29 @@ const COMMANDS: &[(&str, &str)] = &[
     ("debug", include_str!("help/debug.md")),
     ("delete", include_str!("help/delete.md")),
     ("deploy", include_str!("help/deploy.md")),
-    ("deployments", include_str!("help/deployments.md")),
     ("describe", include_str!("help/describe.md")),
-    (
-        "gen-data-contracts",
-        include_str!("help/gen-data-contracts.md"),
-    ),
-    ("history", include_str!("help/history.md")),
+    ("list", include_str!("help/list.md")),
+    ("lock", include_str!("help/lock.md")),
+    ("log", include_str!("help/log.md")),
     ("new", include_str!("help/new.md")),
     ("profiles", include_str!("help/profiles.md")),
-    ("ready", include_str!("help/ready.md")),
+    ("wait", include_str!("help/wait.md")),
     ("stage", include_str!("help/stage.md")),
     ("test", include_str!("help/test.md")),
 ];
 
 /// Aliases that map alternative names to canonical command names.
 const ALIASES: &[(&str, &str)] = &[
+    ("branches", "list"),
     ("build", "compile"),
-    ("branches", "deployments"),
     ("clusters", "apply-clusters"),
     ("connections", "apply-connections"),
+    ("deployments", "list"),
+    ("gen-data-contracts", "lock"),
+    ("history", "log"),
     ("network-policies", "apply-network-policies"),
-    ("log", "history"),
     ("promote", "deploy"),
+    ("ready", "wait"),
     ("roles", "apply-roles"),
     ("secrets", "apply-secrets"),
     ("show", "describe"),
@@ -143,8 +143,11 @@ mod tests {
     fn help_for_alias() {
         assert_eq!(help_for("build"), help_for("compile"));
         assert_eq!(help_for("show"), help_for("describe"));
-        assert_eq!(help_for("log"), help_for("history"));
-        assert_eq!(help_for("branches"), help_for("deployments"));
+        assert_eq!(help_for("history"), help_for("log"));
+        assert_eq!(help_for("deployments"), help_for("list"));
+        assert_eq!(help_for("branches"), help_for("list"));
+        assert_eq!(help_for("gen-data-contracts"), help_for("lock"));
+        assert_eq!(help_for("ready"), help_for("wait"));
         assert_eq!(help_for("clusters"), help_for("apply-clusters"));
         assert_eq!(help_for("roles"), help_for("apply-roles"));
         assert_eq!(help_for("promote"), help_for("deploy"));

@@ -41,4 +41,4 @@ connectivity and configuration before running deployments.
 
 ## Related Commands
 
-- `mz-deploy deployments` — List active deployments (also tests connectivity).
+- `mz-deploy list` — List active deployments (also tests connectivity).

@@ -1,4 +1,4 @@
-# gen-data-contracts — Generate types.lock for external dependencies
+# lock — Generate types.lock for external dependencies
 
 Queries the database for schema information about external dependencies
 (tables and views referenced in your SQL but not managed by this project)
@@ -7,7 +7,7 @@ during `compile` and `test`.
 
 ## Usage
 
-    mz-deploy gen-data-contracts
+    mz-deploy lock
 
 ## Behavior
 
@@ -22,8 +22,8 @@ lock file. The lock file is also automatically regenerated after
 
 ## Examples
 
-    mz-deploy gen-data-contracts                   # Refresh types.lock
-    mz-deploy gen-data-contracts --profile prod    # From production
+    mz-deploy lock                   # Refresh types.lock
+    mz-deploy lock --profile prod    # From production
 
 ## Error Recovery
 
@@ -36,5 +36,4 @@ lock file. The lock file is also automatically regenerated after
 
 - `mz-deploy compile` — Uses `types.lock` for type checking.
 - `mz-deploy test` — Uses `types.lock` for test validation.
-- `mz-deploy apply tables` — Automatically runs gen-data-contracts after
-  creating tables.
+- `mz-deploy apply tables` — Automatically runs lock after creating tables.

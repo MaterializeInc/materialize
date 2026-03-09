@@ -32,20 +32,20 @@ Getting started:
 Develop:
   compile              Compile and validate SQL without connecting to database [aliases: build]
   test                 Run SQL unit tests defined in test files
-  gen-data-contracts   Generate types.lock file with external dependency schemas
 
 Infrastructure:
+  lock                 Generate types.lock file with external dependency schemas
   apply                Apply infrastructure objects to Materialize (Terraform-like)
   delete               Delete an object from Materialize and remove its project file
 
 Deploy:
   stage                Create a staging deployment for testing changes
-  ready                Wait for staging deployment clusters to be hydrated and ready
+  wait                 Wait for staging deployment clusters to be hydrated and ready [aliases: ready]
   deploy               Promote a staging deployment to production [aliases: promote]
   abort                Clean up a staging deployment by dropping all resources
   describe             Show detailed information about a specific deployment [aliases: show]
-  deployments          List all active staging deployments [aliases: branches]
-  history              Show history of promoted deployments [aliases: log]
+  list                 List all active staging deployments [aliases: deployments]
+  log                  Show history of promoted deployments [aliases: history]
 
 See 'mz-deploy help <command>' for detailed usage guides.";
 
@@ -161,7 +161,7 @@ enum Command {
         /// Staging deployment ID to promote to production
         ///
         /// The deployment ID was assigned when running 'mz-deploy stage'. You can
-        /// find active deployments with 'mz-deploy deployments'.
+        /// find active deployments with 'mz-deploy list'.
         #[arg(value_name = "DEPLOY_ID")]
         deploy_id: String,
 
@@ -198,7 +198,7 @@ enum Command {
     ///
     /// Deploys schemas and objects to staging with suffixed names (e.g., 'public_abc123').
     /// This allows testing changes in isolation before promoting to production.
-    /// Staging deployments can be listed with 'deployments' and promoted with 'deploy'.
+    /// Staging deployments can be listed with 'list' and promoted with 'deploy'.
     ///
     /// Example:
     ///   mz-deploy stage                    # Use random deploy ID
@@ -247,7 +247,7 @@ enum Command {
     ///
     /// Displays comprehensive information about a deployment including metadata
     /// (who deployed, when, git commit) and all objects with their hashes.
-    /// Use `mz-deploy history` to find deployment IDs.
+    /// Use `mz-deploy log` to find deployment IDs.
     ///
     /// Example:
     ///   mz-deploy describe abc123
@@ -269,10 +269,10 @@ enum Command {
     /// creates a types.lock file used for offline type checking.
     #[command(
         hide = true,
-        name = "gen-data-contracts",
-        after_help = "Run 'mz-deploy help gen-data-contracts' for a detailed usage guide."
+        name = "lock",
+        after_help = "Run 'mz-deploy help lock' for a detailed usage guide."
     )]
-    GenDataContracts,
+    Lock,
 
     /// Run SQL unit tests defined in test files
     ///
@@ -312,14 +312,16 @@ enum Command {
     /// - Schemas included in the deployment
     ///
     /// Example:
-    ///   mz-deploy deployments                  # List with default lag threshold
-    ///   mz-deploy deployments --allowed-lag 60 # Stricter lag threshold
+    ///   mz-deploy list                         # List with default lag threshold
+    ///   mz-deploy list --allowed-lag 60        # Stricter lag threshold
     #[command(
         hide = true,
-        visible_alias = "branches",
-        after_help = "Run 'mz-deploy help deployments' for a detailed usage guide."
+        name = "list",
+        visible_alias = "deployments",
+        alias = "branches",
+        after_help = "Run 'mz-deploy help list' for a detailed usage guide."
     )]
-    Deployments {
+    List {
         /// Maximum lag threshold in seconds for cluster status
         ///
         /// Clusters with wallclock lag exceeding this threshold are shown as
@@ -336,13 +338,14 @@ enum Command {
     /// who promoted it, when, and which schemas were included.
     ///
     /// Example:
-    ///   mz-deploy history --limit 10
+    ///   mz-deploy log --limit 10
     #[command(
         hide = true,
-        visible_alias = "log",
-        after_help = "Run 'mz-deploy help history' for a detailed usage guide."
+        name = "log",
+        visible_alias = "history",
+        after_help = "Run 'mz-deploy help log' for a detailed usage guide."
     )]
-    History {
+    Log {
         /// Maximum number of deployments to show (default: unlimited)
         #[arg(short, long, value_name = "N")]
         limit: Option<usize>,
@@ -396,15 +399,17 @@ enum Command {
     /// - failing: No replicas or all replicas OOM-looping
     ///
     /// Examples:
-    ///   mz-deploy ready abc123                    # Wait with live tracking
-    ///   mz-deploy ready abc123 --snapshot         # Check once and exit
-    ///   mz-deploy ready abc123 --timeout 300      # Wait up to 5 minutes
-    ///   mz-deploy ready abc123 --allowed-lag 60   # Require lag under 1 min
+    ///   mz-deploy wait abc123                     # Wait with live tracking
+    ///   mz-deploy wait abc123 --once              # Check once and exit
+    ///   mz-deploy wait abc123 --timeout 300       # Wait up to 5 minutes
+    ///   mz-deploy wait abc123 --allowed-lag 60    # Require lag under 1 min
     #[command(
         hide = true,
-        after_help = "Run 'mz-deploy help ready' for a detailed usage guide."
+        name = "wait",
+        visible_alias = "ready",
+        after_help = "Run 'mz-deploy help wait' for a detailed usage guide."
     )]
-    Ready {
+    Wait {
         /// Staging deployment ID to monitor
         #[arg(value_name = "DEPLOY_ID")]
         name: String,
@@ -414,7 +419,7 @@ enum Command {
         /// Takes a point-in-time snapshot of cluster status and exits immediately.
         /// Returns success (exit 0) only if all clusters are ready.
         #[arg(long)]
-        snapshot: bool,
+        once: bool,
 
         /// Maximum time to wait in seconds before timing out
         ///
@@ -704,21 +709,21 @@ async fn run(args: Args) -> Result<(), CliError> {
         Some(Command::Describe { deploy_id }) => {
             cli::commands::describe::run(&settings, &deploy_id).await
         }
-        Some(Command::GenDataContracts) => cli::commands::gen_data_contracts::run(&settings).await,
+        Some(Command::Lock) => cli::commands::gen_data_contracts::run(&settings).await,
         Some(Command::Test) => cli::commands::test::run(&settings).await,
         Some(Command::Abort { deploy_id }) => {
             cli::commands::abort::run(&settings, &deploy_id).await
         }
-        Some(Command::Deployments { allowed_lag }) => {
+        Some(Command::List { allowed_lag }) => {
             cli::commands::deployments::run(&settings, allowed_lag).await
         }
-        Some(Command::History { limit }) => cli::commands::history::run(&settings, limit).await,
-        Some(Command::Ready {
+        Some(Command::Log { limit }) => cli::commands::history::run(&settings, limit).await,
+        Some(Command::Wait {
             name,
-            snapshot,
+            once,
             timeout,
             allowed_lag,
-        }) => cli::commands::ready::run(&settings, &name, snapshot, timeout, allowed_lag).await,
+        }) => cli::commands::ready::run(&settings, &name, once, timeout, allowed_lag).await,
         Some(Command::Delete { yes, subcommand }) => {
             let (kind, name) = match subcommand {
                 DeleteCommand::Cluster { name } => (delete::ObjectKind::Cluster, name),

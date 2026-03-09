@@ -34,7 +34,7 @@ multiple times safely.
 ## Error Recovery
 
 - **Staging environment not found** — Verify the deploy ID with
-  `mz-deploy deployments`.
+  `mz-deploy list`.
 - **Already promoted** — Promoted deployments cannot be aborted. The
   resources have already been swapped into production.
 - **Partial cleanup** — If some drops fail, re-run `abort` to retry.
@@ -43,5 +43,5 @@ multiple times safely.
 ## Related Commands
 
 - `mz-deploy stage` — Create a staging deployment.
-- `mz-deploy deployments` — List active staging deployments.
+- `mz-deploy list` — List active staging deployments.
 - `mz-deploy deploy` — Promote instead of aborting.

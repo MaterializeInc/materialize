@@ -57,13 +57,13 @@ state and skips directly to step 5.
 ## Error Recovery
 
 - **Staging environment not found** — Verify the deploy ID with
-  `mz-deploy deployments`.
+  `mz-deploy list`.
 - **Already promoted** — The deployment was already deployed. Check
-  `mz-deploy history` for confirmation.
+  `mz-deploy log` for confirmation.
 - **Deployment conflict** — Another deployment modified production schemas.
-  Review with `mz-deploy history`, then re-run with `--force` if the
+  Review with `mz-deploy log`, then re-run with `--force` if the
   conflict is acceptable.
-- **Clusters not ready** — Wait for hydration with `mz-deploy ready <ID>`
+- **Clusters not ready** — Wait for hydration with `mz-deploy wait <ID>`
   or pass `--skip-ready` to promote anyway.
 - **Interrupted after swap** — Re-run the same `deploy` command. It will
   detect the post-swap state and resume cleanup.
@@ -85,6 +85,6 @@ itself atomic — production traffic switches back in a single transaction.
 ## Related Commands
 
 - `mz-deploy stage` — Create the staging deployment to promote.
-- `mz-deploy ready` — Monitor hydration before promoting.
+- `mz-deploy wait` — Monitor hydration before promoting.
 - `mz-deploy abort` — Clean up a staging deployment without promoting.
 - `mz-deploy apply` — Apply infrastructure objects (clusters, roles, etc.).

@@ -1,4 +1,4 @@
-# deployments — List active staging deployments
+# list — List active staging deployments
 
 Shows all staging deployments that have been created but not yet promoted,
 similar to `git branch`. Displays metadata and cluster hydration status
@@ -6,7 +6,7 @@ for each deployment.
 
 ## Usage
 
-    mz-deploy deployments [FLAGS]
+    mz-deploy list [FLAGS]
 
 ## Behavior
 
@@ -30,8 +30,8 @@ if they are "ready" or "lagging."
 
 ## Examples
 
-    mz-deploy deployments                    # Default lag threshold
-    mz-deploy deployments --allowed-lag 60   # Stricter 1-minute threshold
+    mz-deploy list                    # Default lag threshold
+    mz-deploy list --allowed-lag 60   # Stricter 1-minute threshold
 
 ## Error Recovery
 
@@ -42,7 +42,7 @@ if they are "ready" or "lagging."
 ## Related Commands
 
 - `mz-deploy stage` — Create a staging deployment.
-- `mz-deploy ready` — Monitor a specific deployment's hydration.
+- `mz-deploy wait` — Monitor a specific deployment's hydration.
 - `mz-deploy deploy` — Promote a staging deployment.
 - `mz-deploy abort` — Remove a staging deployment.
-- `mz-deploy history` — View promoted (past) deployments.
+- `mz-deploy log` — View promoted (past) deployments.

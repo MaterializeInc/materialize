@@ -47,7 +47,7 @@ fail at the SQL-parsing stage.
   locate the cycle.
 - **Type-check failure** — The reported error mirrors what Materialize would
   return. Fix the SQL, or if the error involves an external dependency, run
-  `mz-deploy gen-data-contracts` to refresh `types.lock`.
+  `mz-deploy lock` to refresh `types.lock`.
 - **Docker unavailable** — Type checking is skipped with a warning. Install
   Docker or pass `--skip-typecheck` to silence the warning.
 
@@ -55,4 +55,4 @@ fail at the SQL-parsing stage.
 
 - `mz-deploy stage` — Deploys the compiled plan to a staging environment.
 - `mz-deploy test` — Runs unit tests, which also compile the project first.
-- `mz-deploy gen-data-contracts` — Refresh `types.lock` for type checking.
+- `mz-deploy lock` — Refresh `types.lock` for type checking.

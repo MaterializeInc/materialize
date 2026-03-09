@@ -28,9 +28,9 @@ their content hashes.
 ## Error Recovery
 
 - **Deployment not found** — Verify the deploy ID with
-  `mz-deploy deployments` (staging) or `mz-deploy history` (promoted).
+  `mz-deploy list` (staging) or `mz-deploy log` (promoted).
 
 ## Related Commands
 
-- `mz-deploy deployments` — List active staging deployments.
-- `mz-deploy history` — List promoted deployments.
+- `mz-deploy list` — List active staging deployments.
+- `mz-deploy log` — List promoted deployments.

@@ -115,7 +115,7 @@ precision`, `numeric`/`decimal`, `json`/`jsonb`, etc.
   column schema.
 - **Mock schema mismatch** — Mock columns must exactly match the real
   object's schema. Check column names, types, and count. Run
-  `mz-deploy gen-data-contracts` to refresh `types.lock` if an external
+  `mz-deploy lock` to refresh `types.lock` if an external
   dependency changed.
 - **Expected schema mismatch** — The `EXPECTED` columns must match the
   target view's output columns. Update column names or types to match.
@@ -124,10 +124,10 @@ precision`, `numeric`/`decimal`, `json`/`jsonb`, etc.
 - **UNEXPECTED rows** — The view produced rows not in `EXPECTED`. Either
   add them to `EXPECTED` or fix the view logic.
 - **Types cache stale** — Delete `.mz-deploy/types.cache` and re-run, or
-  run `mz-deploy gen-data-contracts` to refresh `types.lock`.
+  run `mz-deploy lock` to refresh `types.lock`.
 
 ## Related Commands
 
 - `mz-deploy compile` — Validate SQL without running tests.
-- `mz-deploy gen-data-contracts` — Refresh `types.lock` for test
+- `mz-deploy lock` — Refresh `types.lock` for test
   validation.

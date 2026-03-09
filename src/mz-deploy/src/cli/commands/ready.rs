@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 /// # Arguments
 /// * `profile` - Database profile containing connection information
 /// * `deploy_id` - Staging deployment ID
-/// * `snapshot` - If true, check once and exit; if false, track continuously
+/// * `once` - If true, check once and exit; if false, track continuously
 /// * `timeout` - Optional timeout in seconds
 /// * `allowed_lag_secs` - Maximum allowed lag in seconds before marking as "lagging"
 ///
@@ -43,7 +43,7 @@ use std::time::{Duration, Instant};
 pub async fn run(
     settings: &Settings,
     deploy_id: &str,
-    snapshot: bool,
+    once: bool,
     timeout: Option<u64>,
     allowed_lag_secs: i64,
 ) -> Result<(), CliError> {
@@ -55,7 +55,7 @@ pub async fn run(
     // Validate staging deployment exists and is not promoted
     client.deployments().validate_staging(deploy_id).await?;
 
-    if snapshot {
+    if once {
         // Snapshot mode: query once and display status
         run_snapshot(deploy_id, &client, allowed_lag_secs).await
     } else {
@@ -394,7 +394,7 @@ fn render_dashboard(
     println!();
     println!(
         "{}",
-        format!("  mz-deploy ready · deployment: {}", deploy_id)
+        format!("  mz-deploy wait · deployment: {}", deploy_id)
             .cyan()
             .bold()
     );

@@ -103,7 +103,7 @@ during a deployment.
 
 - `mz-deploy compile` — Validate SQL before staging.
 - `mz-deploy apply` — Create tables, sources, and other infra before staging.
-- `mz-deploy ready` — Monitor staging cluster hydration.
+- `mz-deploy wait` — Monitor staging cluster hydration.
 - `mz-deploy deploy` — Promote staging to production.
 - `mz-deploy abort` — Clean up a staging deployment.
-- `mz-deploy deployments` — List active staging deployments.
+- `mz-deploy list` — List active staging deployments.
