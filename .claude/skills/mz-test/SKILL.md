@@ -16,7 +16,8 @@ description: >
 
 Run unit tests with `cargo test`.
 If available, use `cargo nextest` instead.
-Use `bin/cargo-test` to run the full unit/integration test suite.
+If these complain about `METADATA_BACKEND_URL`, then use `bin/cargo-test` instead.
+When using `-p`, our packages typically have an `mz-` suffix, e.g., `mz-adapter`.
 Rewrite datadriven test expectations with `REWRITE=1 cargo test ...`.
 Do not manually update `*.snap` files.
 Use `cargo test` followed by `cargo insta accept` to update snapshot files.
@@ -40,6 +41,7 @@ bin/sqllogictest --optimized -- PATH
 `PATH` is relative to the repo root, usually a file in `test/sqllogictest/`.
 Rewrite expected results with `bin/sqllogictest -- --rewrite-results PATH`.
 For large test files, `--optimized` significantly improves execution speed at the cost of longer compile time.
+You can use `-v` for printing each query before it is run, e.g. to figure out where we are crashing.
 
 ## Testdrive
 
@@ -56,10 +58,10 @@ bin/mzcompose --find testdrive run default -- FILENAME.td
 Run pgtest files with:
 
 ```
-cargo test -p environmentd pgtest
+bin/cargo-test -p mz-environmentd pgtest
 ```
 
-Run a specific pgtest file: `cargo test -p environmentd test_pgtest_FILE_NAME`.
+Run a specific pgtest file: `bin/cargo-test -p mz-environmentd test_pgtest_FILE_NAME`.
 
 ## mzcompose
 
@@ -135,6 +137,7 @@ Determine the right framework based on what you're testing:
 * **SQL correctness, types, functions** (no external systems, no concurrency): sqllogictest (`.slt` in `test/sqllogictest/`).
   Use `mode cockroach`, test NULLs and edge cases.
   Do NOT modify files in `test/sqllogictest/sqlite` or `test/sqllogictest/cockroach` (upstream).
+  When adding new tests to slt files, prefer adding them to an existing slt file rather than creating new slt files, if you are able to quickly find an existing slt file where the new tests fit naturally.
 * **Sources/sinks, Kafka, catalog, pgwire** (external systems): testdrive (`.td` in `test/testdrive/`).
   Frameworks like `pg-cdc`, `mysql-cdc`, `sql-server-cdc`, `kafka-*` have targeted setups but also run testdrive files.
 * **Raw pgwire messages** (COPY, extended protocol): pgtest (`.pt` in `test/pgtest/`).
