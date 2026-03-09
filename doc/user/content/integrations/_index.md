@@ -46,9 +46,10 @@ See also the following integration guides for BI tools:
 - [Connect to Materialize via HTTP](/integrations/http-api/)
 - [Connect to Materialize via WebSocket](/integrations/websocket-api/)
 
-## LLM
+## Coding agents
 
-- [LLM Integrations](/integrations/llm/)
+- [MCP Server](/integrations/llm/)
+- [Coding Agent Skills](/integrations/coding-agent-skills/)
 
 ## Foreign data wrapper
 

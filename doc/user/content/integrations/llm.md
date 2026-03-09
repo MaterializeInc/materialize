@@ -107,6 +107,7 @@ GRANT USAGE ON CLUSTER mcp_cluster TO mcp_server_role;
 
 ## Related Pages
 
+* [Coding Agent Skills](/integrations/coding-agent-skills/)
 * [CREATE VIEW](/sql/create-view)
 * [CREATE INDEX](/sql/create-index)
 * [COMMENT ON](/sql/comment-on)
