@@ -3048,7 +3048,8 @@ impl Coordinator {
         let mut non_indexes = Vec::new();
         for entry in self.catalog().entries().cloned() {
             if let Some(index) = entry.index() {
-                indexes_on.entry(index.on).or_default().push(entry);
+                let on = self.catalog().get_entry_by_global_id(&index.on);
+                indexes_on.entry(on.id()).or_default().push(entry);
             } else {
                 non_indexes.push(entry);
             }
@@ -3060,12 +3061,17 @@ impl Coordinator {
 
         let mut result = Vec::new();
         for entry in non_indexes {
-            let gid = entry.latest_global_id();
+            let id = entry.id();
             result.push(entry);
-            if let Some(mut indexes) = indexes_on.remove(&gid) {
+            if let Some(mut indexes) = indexes_on.remove(&id) {
                 result.append(&mut indexes);
             }
         }
+
+        soft_assert_or_log!(
+            indexes_on.is_empty(),
+            "indexes with missing dependencies: {indexes_on:?}",
+        );
 
         result
     }
