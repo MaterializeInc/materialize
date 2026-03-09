@@ -436,8 +436,9 @@ Explained Query:
               Map ("view") // { arity: 10 }
                 ReadIndex on=mz_views mz_views_ind=[*** full scan ***] // { arity: 9 }
             Project (#2{schema_id}, #3{name}, #10) // { arity: 3 }
-              Map ("materialized-view") // { arity: 11 }
-                ReadIndex on=mz_materialized_views mz_materialized_views_ind=[*** full scan ***] // { arity: 10 }
+              Filter (#2{schema_id}) IS NOT NULL // { arity: 11 }
+                Map ("materialized-view") // { arity: 11 }
+                  ReadIndex on=mz_materialized_views mz_materialized_views_ind=[*** full scan ***] // { arity: 10 }
 
 Used Indexes:
   - mz_catalog.mz_materialized_views_ind (*** full scan ***)

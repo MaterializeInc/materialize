@@ -1384,6 +1384,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_statement_execution_history_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_shards -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_usage_by_shard -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_system_tables -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_type_pg_metadata -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_object_oid_alias -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_objects_id_namespace_types -->

@@ -831,6 +831,7 @@ mz_statement_lifecycle_history
 mz_storage_shards
 mz_storage_usage_by_shard
 mz_subscriptions
+mz_system_tables
 mz_type_pg_metadata
 mz_wallclock_global_lag
 mz_wallclock_global_lag_histogram

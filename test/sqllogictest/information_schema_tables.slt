@@ -122,7 +122,7 @@ BASE TABLE
 materialize
 mz_catalog
 mz_clusters
-BASE TABLE
+VIEW
 materialize
 mz_catalog
 mz_columns
@@ -134,7 +134,7 @@ BASE TABLE
 materialize
 mz_catalog
 mz_databases
-BASE TABLE
+VIEW
 materialize
 mz_catalog
 mz_default_privileges
@@ -182,7 +182,7 @@ BASE TABLE
 materialize
 mz_catalog
 mz_materialized_views
-BASE TABLE
+VIEW
 materialize
 mz_catalog
 mz_objects
@@ -250,7 +250,7 @@ BASE TABLE
 materialize
 mz_catalog
 mz_tables
-BASE TABLE
+VIEW
 materialize
 mz_catalog
 mz_timezone_abbreviations
@@ -734,6 +734,10 @@ BASE TABLE
 materialize
 mz_internal
 mz_subscriptions
+BASE TABLE
+materialize
+mz_internal
+mz_system_tables
 BASE TABLE
 materialize
 mz_internal
