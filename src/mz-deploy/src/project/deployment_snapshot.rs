@@ -59,7 +59,7 @@ impl Hasher for Sha256Hasher {
 /// Maps object IDs to their content hashes, where the hash is computed from
 /// the normalized typed representation (not raw file contents).
 /// Also tracks which schemas were deployed as atomic units.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DeploymentSnapshot {
     /// Map of ObjectId to content hash
     pub objects: BTreeMap<ObjectId, String>,

@@ -43,11 +43,69 @@ struct ApplyResources {
 /// Returns `CliError::StagingAlreadyPromoted` if already promoted
 /// Returns `CliError::DeploymentConflict` if conflicts detected (without --force)
 /// Returns `CliError::Connection` for database errors
+/// JSON-serializable deployment plan for `--dry-run --output json`.
+#[derive(serde::Serialize)]
+struct DeploymentPlanJson {
+    deploy_id: String,
+    apply_state: String,
+    schema_swaps: Vec<SchemaSwapJson>,
+    cluster_swaps: Vec<ClusterSwapJson>,
+    sinks_to_create: Vec<SinkToCreateJson>,
+    replacement_mvs: Vec<ReplacementMvJson>,
+    sinks_to_repoint: Vec<SinkToRepointJson>,
+    resources_to_drop: Vec<ResourceToDropJson>,
+}
+
+#[derive(serde::Serialize)]
+struct SchemaSwapJson {
+    database: String,
+    production_schema: String,
+    staging_schema: String,
+}
+
+#[derive(serde::Serialize)]
+struct ClusterSwapJson {
+    production_cluster: String,
+    staging_cluster: String,
+}
+
+#[derive(serde::Serialize)]
+struct SinkToCreateJson {
+    database: String,
+    schema: String,
+    object: String,
+}
+
+#[derive(serde::Serialize)]
+struct ReplacementMvJson {
+    target_database: String,
+    target_schema: String,
+    target_name: String,
+    replacement_schema: String,
+}
+
+#[derive(serde::Serialize)]
+struct SinkToRepointJson {
+    sink_database: String,
+    sink_schema: String,
+    sink_name: String,
+    dependency_database: String,
+    dependency_schema: String,
+    dependency_name: String,
+}
+
+#[derive(serde::Serialize)]
+struct ResourceToDropJson {
+    kind: String,
+    name: String,
+}
+
 pub async fn run(
     settings: &Settings,
     deploy_id: &str,
     force: bool,
     dry_run: bool,
+    json_output: bool,
 ) -> Result<(), CliError> {
     let profile = settings.connection();
 
@@ -79,7 +137,11 @@ pub async fn run(
     let resources = prepare_apply_resources(&client, deploy_id, apply_state, force).await?;
 
     if dry_run {
-        print_deployment_plan(&client, deploy_id, apply_state, &resources).await?;
+        if json_output {
+            print_deployment_plan_json(&client, deploy_id, apply_state, &resources).await?;
+        } else {
+            print_deployment_plan(&client, deploy_id, apply_state, &resources).await?;
+        }
         return Ok(());
     }
 
@@ -293,6 +355,139 @@ async fn print_deployment_plan(
         progress::info("Nothing to do.");
     }
 
+    Ok(())
+}
+
+/// Print JSON deployment plan for `--dry-run --output json`.
+async fn print_deployment_plan_json(
+    client: &Client,
+    deploy_id: &str,
+    apply_state: ApplyState,
+    resources: &ApplyResources,
+) -> Result<(), CliError> {
+    let staging_suffix = &resources.staging_suffix;
+
+    let schema_swaps: Vec<SchemaSwapJson> = resources
+        .staging_schemas
+        .iter()
+        .map(|sq| {
+            let prod_schema = sq.schema.trim_end_matches(staging_suffix).to_string();
+            SchemaSwapJson {
+                database: sq.database.clone(),
+                production_schema: prod_schema,
+                staging_schema: sq.schema.clone(),
+            }
+        })
+        .collect();
+
+    let cluster_swaps: Vec<ClusterSwapJson> = resources
+        .staging_clusters
+        .iter()
+        .map(|cluster| ClusterSwapJson {
+            production_cluster: cluster.clone(),
+            staging_cluster: format!("{}{}", cluster, staging_suffix),
+        })
+        .collect();
+
+    let pending = client
+        .deployments()
+        .get_pending_statements(deploy_id)
+        .await?;
+    let sinks_to_create: Vec<SinkToCreateJson> = pending
+        .iter()
+        .map(|stmt| SinkToCreateJson {
+            database: stmt.database.clone(),
+            schema: stmt.schema.clone(),
+            object: stmt.object.clone(),
+        })
+        .collect();
+
+    let replacement_mvs = client.deployments().get_replacement_mvs(deploy_id).await?;
+    let replacement_mvs_json: Vec<ReplacementMvJson> = replacement_mvs
+        .iter()
+        .map(|record| ReplacementMvJson {
+            target_database: record.target_database.clone(),
+            target_schema: record.target_schema.clone(),
+            target_name: record.target_name.clone(),
+            replacement_schema: record.replacement_schema.clone(),
+        })
+        .collect();
+
+    let mut sinks_to_repoint = Vec::new();
+    if !resources.staging_schemas.is_empty() {
+        let prod_schemas: Vec<SchemaQualifier> = resources
+            .staging_schemas
+            .iter()
+            .map(|sq| {
+                let prod_schema = sq.schema.trim_end_matches(staging_suffix);
+                SchemaQualifier::new(sq.database.clone(), prod_schema.to_string())
+            })
+            .collect();
+
+        let dependent_sinks = client
+            .introspection()
+            .find_sinks_depending_on_schemas(&prod_schemas)
+            .await
+            .map_err(CliError::Connection)?;
+
+        sinks_to_repoint = dependent_sinks
+            .iter()
+            .map(|sink| SinkToRepointJson {
+                sink_database: sink.sink_database.clone(),
+                sink_schema: sink.sink_schema.clone(),
+                sink_name: sink.sink_name.clone(),
+                dependency_database: sink.dependency_database.clone(),
+                dependency_schema: sink.dependency_schema.clone(),
+                dependency_name: sink.dependency_name.clone(),
+            })
+            .collect();
+    }
+
+    let mut resources_to_drop = Vec::new();
+    for sq in &resources.staging_schemas {
+        let prod_schema = sq.schema.trim_end_matches(staging_suffix);
+        let old_schema = format!("{}{}", prod_schema, staging_suffix);
+        resources_to_drop.push(ResourceToDropJson {
+            kind: "schema".to_string(),
+            name: format!("{}.{}", sq.database, old_schema),
+        });
+    }
+    for cluster in &resources.staging_clusters {
+        let old_cluster = format!("{}{}", cluster, staging_suffix);
+        resources_to_drop.push(ResourceToDropJson {
+            kind: "cluster".to_string(),
+            name: old_cluster,
+        });
+    }
+    let replacement_schemas: BTreeSet<SchemaQualifier> = replacement_mvs
+        .iter()
+        .map(|r| SchemaQualifier::new(r.target_database.clone(), r.replacement_schema.clone()))
+        .collect();
+    for sq in &replacement_schemas {
+        resources_to_drop.push(ResourceToDropJson {
+            kind: "schema".to_string(),
+            name: format!("{}.{}", sq.database, sq.schema),
+        });
+    }
+
+    let apply_state_str = match apply_state {
+        ApplyState::NotStarted => "not_started",
+        ApplyState::PreSwap => "pre_swap",
+        ApplyState::PostSwap => "post_swap",
+    };
+
+    let plan = DeploymentPlanJson {
+        deploy_id: deploy_id.to_string(),
+        apply_state: apply_state_str.to_string(),
+        schema_swaps,
+        cluster_swaps,
+        sinks_to_create,
+        replacement_mvs: replacement_mvs_json,
+        sinks_to_repoint,
+        resources_to_drop,
+    };
+
+    println!("{}", serde_json::to_string_pretty(&plan).unwrap());
     Ok(())
 }
 

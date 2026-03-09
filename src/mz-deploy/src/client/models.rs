@@ -10,7 +10,8 @@ use std::str::FromStr;
 use crate::project::SchemaQualifier;
 
 /// The type of deployment - either tables-only or full objects.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DeploymentKind {
     /// Table creation deployment (apply tables command)
     Tables,
@@ -227,7 +228,7 @@ pub struct ConflictRecord {
 /// Details about a specific deployment.
 ///
 /// Returned by `get_deployment_details()` for the describe command.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DeploymentDetails {
     /// When this deployment was created
     pub deployed_at: DateTime<Utc>,
@@ -246,7 +247,7 @@ pub struct DeploymentDetails {
 /// Summary of a staging deployment.
 ///
 /// Used by `list_staging_deployments()` for the deployments command.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct StagingDeployment {
     /// When this deployment was created
     pub deployed_at: DateTime<Utc>,
@@ -263,7 +264,7 @@ pub struct StagingDeployment {
 /// A promoted deployment in history.
 ///
 /// Returned by `list_deployment_history()` for the history command.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DeploymentHistoryEntry {
     /// Deploy ID for this deployment
     pub deploy_id: String,
@@ -304,7 +305,7 @@ pub enum ApplyState {
 /// within the same database, and has the same object name as the target.
 ///
 /// Stored in `_mz_deploy.public.replacement_mvs` table.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ReplacementMvRecord {
     /// Deploy ID this replacement belongs to
     pub deploy_id: String,
@@ -323,7 +324,7 @@ pub struct ReplacementMvRecord {
 /// Used for deferred execution of statements like sinks that cannot
 /// be created in staging (they write to external systems immediately).
 /// Stored in `_mz_deploy.public.pending_statements` table.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct PendingStatement {
     /// Deploy ID this statement belongs to
     pub deploy_id: String,

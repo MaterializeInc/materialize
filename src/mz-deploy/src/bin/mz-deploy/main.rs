@@ -14,6 +14,14 @@ use mz_deploy::log;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
+/// Output format for command results.
+#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
+enum OutputFormat {
+    #[default]
+    Text,
+    Json,
+}
+
 const BUILD_INFO: BuildInfo = build_info!();
 static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 
@@ -78,6 +86,10 @@ struct Args {
     /// Materialize Docker image to use for type checking and tests
     #[arg(long, value_name = "IMAGE", global = true)]
     docker_image: Option<String>,
+
+    /// Output format (text or json)
+    #[arg(long, global = true, default_value = "text")]
+    output: OutputFormat,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -595,8 +607,18 @@ async fn main() {
     let args = Args::parse();
     log::set_verbose(args.verbose);
 
+    let json_output = matches!(args.output, OutputFormat::Json);
+
     if let Err(e) = run(args).await {
-        cli::display_error(&e);
+        if json_output {
+            let error_json = serde_json::json!({
+                "error": e.to_string(),
+            });
+            println!("{}", serde_json::to_string_pretty(&error_json).unwrap());
+            std::process::exit(1);
+        } else {
+            cli::display_error(&e);
+        }
     }
 }
 
@@ -644,8 +666,15 @@ async fn run(args: Args) -> Result<(), CliError> {
     )
     .map_err(CliError::Config)?;
 
+    let json = matches!(args.output, OutputFormat::Json);
+
     match args.command {
         Some(Command::Compile { skip_typecheck }) => {
+            if json {
+                return Err(CliError::Message(
+                    "--output json is not supported for the 'compile' command".to_string(),
+                ));
+            }
             cli::commands::compile::run(&settings, skip_typecheck)
                 .await
                 .map(|_| ())
@@ -654,30 +683,76 @@ async fn run(args: Args) -> Result<(), CliError> {
             skip_secrets,
             dry_run,
             subcommand,
-        }) => match subcommand {
-            Some(ApplyCommand::Clusters) => cli::commands::clusters::run(&settings, dry_run).await,
-            Some(ApplyCommand::Roles) => cli::commands::roles::run(&settings, dry_run).await,
-            Some(ApplyCommand::NetworkPolicies) => {
-                cli::commands::apply_network_policies::run(&settings, dry_run).await
+        }) => {
+            if json && !dry_run {
+                return Err(CliError::Message(
+                    "--output json requires --dry-run for the 'apply' command".to_string(),
+                ));
             }
-            Some(ApplyCommand::Secrets) => {
-                cli::commands::apply_secrets::run(&settings, dry_run).await
-            }
-            Some(ApplyCommand::Connections) => {
-                cli::commands::apply_connections::run(&settings, dry_run).await
-            }
-            Some(ApplyCommand::Sources) => {
-                cli::commands::apply_tables::apply_sources(&settings, dry_run).await
-            }
-            Some(ApplyCommand::Tables) => {
-                cli::commands::apply_tables::apply_tables(&settings, dry_run).await?;
-                if !dry_run {
-                    cli::commands::gen_data_contracts::run(&settings).await?;
+            let collector = if json {
+                Some(cli::executor::SqlCollector::new())
+            } else {
+                None
+            };
+            let result = match subcommand {
+                Some(ApplyCommand::Clusters) => {
+                    cli::commands::clusters::run(&settings, dry_run, collector.clone()).await
                 }
-                Ok(())
+                Some(ApplyCommand::Roles) => {
+                    cli::commands::roles::run(&settings, dry_run, collector.clone()).await
+                }
+                Some(ApplyCommand::NetworkPolicies) => {
+                    cli::commands::apply_network_policies::run(
+                        &settings,
+                        dry_run,
+                        collector.clone(),
+                    )
+                    .await
+                }
+                Some(ApplyCommand::Secrets) => {
+                    cli::commands::apply_secrets::run(&settings, dry_run, collector.clone()).await
+                }
+                Some(ApplyCommand::Connections) => {
+                    cli::commands::apply_connections::run(&settings, dry_run, collector.clone())
+                        .await
+                }
+                Some(ApplyCommand::Sources) => {
+                    cli::commands::apply_tables::apply_sources(
+                        &settings,
+                        dry_run,
+                        collector.clone(),
+                    )
+                    .await
+                }
+                Some(ApplyCommand::Tables) => {
+                    let r = cli::commands::apply_tables::apply_tables(
+                        &settings,
+                        dry_run,
+                        collector.clone(),
+                    )
+                    .await;
+                    if r.is_ok() && !dry_run {
+                        cli::commands::gen_data_contracts::run(&settings).await?;
+                    }
+                    r
+                }
+                None => {
+                    cli::commands::apply_all::run(
+                        &settings,
+                        skip_secrets,
+                        dry_run,
+                        collector.clone(),
+                    )
+                    .await
+                }
+            };
+            if let Some(c) = collector {
+                let statements = c.into_statements();
+                let json_output = serde_json::json!({ "statements": statements });
+                println!("{}", serde_json::to_string_pretty(&json_output).unwrap());
             }
-            None => cli::commands::apply_all::run(&settings, skip_secrets, dry_run).await,
-        },
+            result
+        }
         Some(Command::Deploy {
             deploy_id,
             force,
@@ -685,10 +760,16 @@ async fn run(args: Args) -> Result<(), CliError> {
             allowed_lag,
             dry_run,
         }) => {
-            if !skip_ready && !dry_run {
-                cli::commands::ready::run(&settings, &deploy_id, true, None, allowed_lag).await?;
+            if json && !dry_run {
+                return Err(CliError::Message(
+                    "--output json requires --dry-run for the 'deploy' command".to_string(),
+                ));
             }
-            cli::commands::deploy::run(&settings, &deploy_id, force, dry_run).await
+            if !skip_ready && !dry_run {
+                cli::commands::ready::run(&settings, &deploy_id, true, None, allowed_lag, false)
+                    .await?;
+            }
+            cli::commands::deploy::run(&settings, &deploy_id, force, dry_run, json).await
         }
         Some(Command::Stage {
             deploy_id,
@@ -696,35 +777,72 @@ async fn run(args: Args) -> Result<(), CliError> {
             no_rollback,
             dry_run,
         }) => {
+            if json && !dry_run {
+                return Err(CliError::Message(
+                    "--output json requires --dry-run for the 'stage' command".to_string(),
+                ));
+            }
             cli::commands::stage::run(
                 &settings,
                 deploy_id.as_deref(),
                 allow_dirty,
                 no_rollback,
                 dry_run,
+                json,
             )
             .await
         }
-        Some(Command::Debug) => cli::commands::debug::run(&settings).await,
-        Some(Command::Describe { deploy_id }) => {
-            cli::commands::describe::run(&settings, &deploy_id).await
+        Some(Command::Debug) => {
+            if json {
+                return Err(CliError::Message(
+                    "--output json is not supported for the 'debug' command".to_string(),
+                ));
+            }
+            cli::commands::debug::run(&settings).await
         }
-        Some(Command::Lock) => cli::commands::gen_data_contracts::run(&settings).await,
-        Some(Command::Test) => cli::commands::test::run(&settings).await,
+        Some(Command::Describe { deploy_id }) => {
+            cli::commands::describe::run(&settings, &deploy_id, json).await
+        }
+        Some(Command::Lock) => {
+            if json {
+                return Err(CliError::Message(
+                    "--output json is not supported for the 'lock' command".to_string(),
+                ));
+            }
+            cli::commands::gen_data_contracts::run(&settings).await
+        }
+        Some(Command::Test) => {
+            if json {
+                return Err(CliError::Message(
+                    "--output json is not supported for the 'test' command".to_string(),
+                ));
+            }
+            cli::commands::test::run(&settings).await
+        }
         Some(Command::Abort { deploy_id }) => {
+            if json {
+                return Err(CliError::Message(
+                    "--output json is not supported for the 'abort' command".to_string(),
+                ));
+            }
             cli::commands::abort::run(&settings, &deploy_id).await
         }
         Some(Command::List { allowed_lag }) => {
-            cli::commands::deployments::run(&settings, allowed_lag).await
+            cli::commands::deployments::run(&settings, allowed_lag, json).await
         }
-        Some(Command::Log { limit }) => cli::commands::history::run(&settings, limit).await,
+        Some(Command::Log { limit }) => cli::commands::history::run(&settings, limit, json).await,
         Some(Command::Wait {
             name,
             once,
             timeout,
             allowed_lag,
-        }) => cli::commands::ready::run(&settings, &name, once, timeout, allowed_lag).await,
+        }) => cli::commands::ready::run(&settings, &name, once, timeout, allowed_lag, json).await,
         Some(Command::Delete { yes, subcommand }) => {
+            if json {
+                return Err(CliError::Message(
+                    "--output json is not supported for the 'delete' command".to_string(),
+                ));
+            }
             let (kind, name) = match subcommand {
                 DeleteCommand::Cluster { name } => (delete::ObjectKind::Cluster, name),
                 DeleteCommand::Connection { name } => (delete::ObjectKind::Connection, name),

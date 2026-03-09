@@ -2,8 +2,9 @@
 
 use crate::cli::CliError;
 use crate::cli::commands::grants;
+use crate::cli::executor::{DeploymentExecutor, SqlCollector};
 use crate::cli::progress;
-use crate::client::{Client, ConnectionError, quote_identifier};
+use crate::client::{Client, quote_identifier};
 use crate::config::Settings;
 use crate::project::network_policies::{self, NetworkPolicyDefinition};
 use mz_sql_parser::ast::AlterNetworkPolicyStatement;
@@ -15,7 +16,11 @@ use std::time::Instant;
 /// Loads network policy definitions from `<directory>/network_policies/` and converges
 /// the live Materialize state to match: creating missing policies and
 /// altering ones whose rules have changed.
-pub async fn run(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
+pub async fn run(
+    settings: &Settings,
+    dry_run: bool,
+    collector: Option<SqlCollector>,
+) -> Result<(), CliError> {
     let profile = settings.connection();
     let directory = &settings.directory;
     let start_time = Instant::now();
@@ -39,42 +44,33 @@ pub async fn run(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
         load_start.elapsed(),
     );
 
-    if dry_run {
-        for def in &definitions {
-            println!("-- Would apply network policy '{}'", def.name);
-            println!("{};", def.create_stmt);
-            for grant in &def.grants {
-                println!("{};", grant);
-            }
-            for comment in &def.comments {
-                println!("{};", comment);
-            }
-        }
-        let total_duration = start_time.elapsed();
-        progress::summary("Network policies dry run complete", total_duration);
-        return Ok(());
-    }
-
     // Connect to Materialize
     let client = Client::connect_with_profile(profile.clone())
         .await
         .map_err(CliError::Connection)?;
 
+    let executor = DeploymentExecutor::with_collector(&client, dry_run, collector);
+
     // Apply each network policy definition
     for def in &definitions {
-        apply_network_policy(&client, def).await?;
+        apply_network_policy(&client, &executor, def).await?;
     }
 
     let total_duration = start_time.elapsed();
-    progress::summary("Network policies applied successfully", total_duration);
+    if dry_run {
+        progress::summary("Network policies dry run complete", total_duration);
+    } else {
+        progress::summary("Network policies applied successfully", total_duration);
+    }
 
     Ok(())
 }
 
 /// Apply a single network policy definition: create if missing, alter if exists,
-/// then execute grants and comments.
+/// then execute grants, revocations, and comments.
 async fn apply_network_policy(
     client: &Client,
+    executor: &DeploymentExecutor<'_>,
     def: &NetworkPolicyDefinition,
 ) -> Result<(), CliError> {
     let policy_name = &def.name;
@@ -88,47 +84,33 @@ async fn apply_network_policy(
 
     if exists {
         // ALTER NETWORK POLICY to converge rules
-        println!(
-            "  {} Altering network policy '{}'",
-            "~".yellow().bold(),
-            policy_name
-        );
+        if !executor.is_dry_run() {
+            println!(
+                "  {} Altering network policy '{}'",
+                "~".yellow().bold(),
+                policy_name
+            );
+        }
         let alter_stmt = AlterNetworkPolicyStatement {
             name: def.create_stmt.name.clone(),
             options: def.create_stmt.options.clone(),
         };
-        let sql = format!("{}", alter_stmt);
-        client.execute(&sql, &[]).await.map_err(|e| {
-            CliError::Connection(ConnectionError::Message(format!(
-                "Failed to alter network policy '{}': {}",
-                policy_name, e
-            )))
-        })?;
+        executor.execute_sql(&alter_stmt).await?;
     } else {
         // Create network policy from the parsed CREATE NETWORK POLICY statement
-        println!(
-            "  {} Creating network policy '{}'",
-            "+".green().bold(),
-            policy_name
-        );
-        let sql = format!("{}", def.create_stmt);
-        client.execute(&sql, &[]).await.map_err(|e| {
-            CliError::Connection(ConnectionError::Message(format!(
-                "Failed to create network policy '{}': {}",
-                policy_name, e
-            )))
-        })?;
+        if !executor.is_dry_run() {
+            println!(
+                "  {} Creating network policy '{}'",
+                "+".green().bold(),
+                policy_name
+            );
+        }
+        executor.execute_sql(&def.create_stmt).await?;
     }
 
-    // Execute GRANT statements (idempotent)
+    // Execute GRANT statements
     for grant in &def.grants {
-        let sql = format!("{}", grant);
-        client.execute(&sql, &[]).await.map_err(|e| {
-            CliError::Connection(ConnectionError::Message(format!(
-                "Failed to execute grant on network policy '{}': {}",
-                policy_name, e
-            )))
-        })?;
+        executor.execute_sql(grant).await?;
     }
 
     // Revoke stale grants
@@ -144,17 +126,11 @@ async fn apply_network_policy(
         "NETWORK POLICY",
         &quote_identifier(policy_name),
     );
-    grants::execute_revocations(client, &revocations, "network policy", &policy_name).await?;
+    grants::execute_revocations(&executor, &revocations, "network policy", &policy_name).await?;
 
-    // Execute COMMENT statements (idempotent)
+    // Execute COMMENT statements
     for comment in &def.comments {
-        let sql = format!("{}", comment);
-        client.execute(&sql, &[]).await.map_err(|e| {
-            CliError::Connection(ConnectionError::Message(format!(
-                "Failed to execute comment on network policy '{}': {}",
-                policy_name, e
-            )))
-        })?;
+        executor.execute_sql(comment).await?;
     }
 
     Ok(())

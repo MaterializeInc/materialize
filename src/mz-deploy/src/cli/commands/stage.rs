@@ -78,6 +78,7 @@ pub async fn run(
     allow_dirty: bool,
     no_rollback: bool,
     dry_run: bool,
+    json_output: bool,
 ) -> Result<(), CliError> {
     let profile = settings.connection();
     let directory = &settings.directory;
@@ -118,6 +119,73 @@ pub async fn run(
             &analysis.replacement_mvs,
         )
         .await?;
+    }
+
+    if dry_run && json_output {
+        let objects_json: Vec<serde_json::Value> = analysis
+            .objects
+            .iter()
+            .map(|(id, _)| {
+                serde_json::json!({
+                    "database": id.database,
+                    "schema": id.schema,
+                    "object": id.object,
+                })
+            })
+            .collect();
+        let sinks_json: Vec<serde_json::Value> = analysis
+            .sinks
+            .iter()
+            .map(|(id, _)| {
+                serde_json::json!({
+                    "database": id.database,
+                    "schema": id.schema,
+                    "object": id.object,
+                })
+            })
+            .collect();
+        let replacement_mvs_json: Vec<serde_json::Value> = analysis
+            .replacement_mvs
+            .iter()
+            .map(|(id, _)| {
+                serde_json::json!({
+                    "database": id.database,
+                    "schema": id.schema,
+                    "object": id.object,
+                })
+            })
+            .collect();
+        let schemas_json: Vec<serde_json::Value> = analysis
+            .schema_set
+            .iter()
+            .map(|sq| {
+                serde_json::json!({
+                    "database": sq.database,
+                    "schema": sq.schema,
+                    "staging_schema": format!("{}{}", sq.schema, staging_suffix),
+                })
+            })
+            .collect();
+        let clusters_json: Vec<serde_json::Value> = analysis
+            .cluster_set
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "production_cluster": c,
+                    "staging_cluster": format!("{}{}", c, staging_suffix),
+                })
+            })
+            .collect();
+        let plan = serde_json::json!({
+            "deploy_id": stage_name,
+            "schemas": schemas_json,
+            "clusters": clusters_json,
+            "objects": objects_json,
+            "sinks": sinks_json,
+            "replacement_mvs": replacement_mvs_json,
+        });
+        println!("{}", serde_json::to_string_pretty(&plan).unwrap());
+        return Ok(());
     }
 
     let success_count = create_resources_with_rollback(

@@ -24,7 +24,11 @@ use owo_colors::OwoColorize;
 ///
 /// # Errors
 /// Returns `CliError::Connection` for database errors
-pub async fn run(settings: &Settings, allowed_lag_secs: i64) -> Result<(), CliError> {
+pub async fn run(
+    settings: &Settings,
+    allowed_lag_secs: i64,
+    json_output: bool,
+) -> Result<(), CliError> {
     let profile = settings.connection();
     let client = Client::connect_with_profile(profile.clone())
         .await
@@ -32,6 +36,34 @@ pub async fn run(settings: &Settings, allowed_lag_secs: i64) -> Result<(), CliEr
 
     client.deployments().create_deployments().await?;
     let deployments = client.deployments().list_staging_deployments().await?;
+
+    if json_output {
+        let mut result = Vec::new();
+        let mut env_names: Vec<_> = deployments.keys().collect();
+        env_names.sort();
+        for env_name in env_names {
+            let deployment = &deployments[env_name];
+            let clusters = match client
+                .deployments()
+                .get_deployment_hydration_status_with_lag(env_name, allowed_lag_secs)
+                .await
+            {
+                Ok(statuses) => statuses,
+                Err(_) => Vec::new(),
+            };
+            result.push(serde_json::json!({
+                "deploy_id": env_name,
+                "deployed_at": deployment.deployed_at,
+                "deployed_by": deployment.deployed_by,
+                "git_commit": deployment.git_commit,
+                "kind": deployment.kind,
+                "schemas": deployment.schemas,
+                "clusters": clusters,
+            }));
+        }
+        println!("{}", serde_json::to_string_pretty(&result).unwrap());
+        return Ok(());
+    }
 
     if deployments.is_empty() {
         println!("No active staging deployments.");

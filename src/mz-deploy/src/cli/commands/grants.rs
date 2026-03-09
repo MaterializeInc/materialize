@@ -1,7 +1,8 @@
 //! Shared helpers for grant reconciliation across apply commands.
 
 use crate::cli::CliError;
-use crate::client::{Client, ConnectionError, ObjectGrant, quote_identifier};
+use crate::cli::executor::DeploymentExecutor;
+use crate::client::{Client, ObjectGrant, quote_identifier};
 use mz_sql_parser::ast::{GrantPrivilegesStatement, PrivilegeSpecification, Raw};
 use owo_colors::OwoColorize;
 use std::collections::BTreeSet;
@@ -58,7 +59,7 @@ impl GrantObjectKind {
 /// Reconcile grants for a single object: apply desired grants, revoke stale ones.
 pub async fn reconcile(
     client: &Client,
-    executor: &crate::cli::executor::DeploymentExecutor<'_>,
+    executor: &DeploymentExecutor<'_>,
     obj_id: &crate::project::object_id::ObjectId,
     grants: &[GrantPrivilegesStatement<Raw>],
     kind: &GrantObjectKind,
@@ -79,7 +80,7 @@ pub async fn reconcile(
         .map_err(CliError::Connection)?;
     let desired = desired_grants(grants, kind.all_privileges());
     let revocations = stale_grant_revocations(&current, &desired, kind.sql_keyword(), &fqn);
-    execute_revocations(client, &revocations, kind.label(), obj_id).await
+    execute_revocations(executor, &revocations, kind.label(), obj_id).await
 }
 
 /// Build a quoted fully-qualified name from components.
@@ -143,24 +144,21 @@ pub fn stale_grant_revocations(
 
 /// Execute REVOKE statements for stale grants, printing status for each.
 pub async fn execute_revocations(
-    client: &Client,
+    executor: &DeploymentExecutor<'_>,
     revocations: &[String],
     object_type_label: &str,
     display_name: &impl fmt::Display,
 ) -> Result<(), CliError> {
     for sql in revocations {
-        println!(
-            "  {} Revoking stale grant on {} '{}'",
-            "-".red().bold(),
-            object_type_label,
-            display_name,
-        );
-        client.execute(sql, &[]).await.map_err(|e| {
-            CliError::Connection(ConnectionError::Message(format!(
-                "Failed to revoke grant on {} '{}': {}",
-                object_type_label, display_name, e
-            )))
-        })?;
+        if !executor.is_dry_run() {
+            println!(
+                "  {} Revoking stale grant on {} '{}'",
+                "-".red().bold(),
+                object_type_label,
+                display_name,
+            );
+        }
+        executor.execute_sql(sql).await?;
     }
     Ok(())
 }

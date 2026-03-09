@@ -46,6 +46,7 @@ pub async fn run(
     once: bool,
     timeout: Option<u64>,
     allowed_lag_secs: i64,
+    json_output: bool,
 ) -> Result<(), CliError> {
     let profile = settings.connection();
     // Connect to database
@@ -54,6 +55,14 @@ pub async fn run(
         .map_err(CliError::Connection)?;
     // Validate staging deployment exists and is not promoted
     client.deployments().validate_staging(deploy_id).await?;
+
+    if json_output {
+        if once {
+            return run_snapshot_json(deploy_id, &client, allowed_lag_secs).await;
+        } else {
+            return run_continuous_json(deploy_id, &mut client, timeout, allowed_lag_secs).await;
+        }
+    }
 
     if once {
         // Snapshot mode: query once and display status
@@ -111,6 +120,129 @@ async fn run_snapshot(
         println!("{}", "  All clusters are ready!".green().bold());
         Ok(())
     }
+}
+
+/// Run in snapshot mode with JSON output.
+async fn run_snapshot_json(
+    deploy_id: &str,
+    client: &crate::client::Client,
+    allowed_lag_secs: i64,
+) -> Result<(), CliError> {
+    let statuses = client
+        .deployments()
+        .get_deployment_hydration_status_with_lag(deploy_id, allowed_lag_secs)
+        .await?;
+
+    let all_ready = statuses
+        .iter()
+        .all(|ctx| matches!(ctx.status, ClusterDeploymentStatus::Ready));
+
+    let json = serde_json::json!({
+        "deploy_id": deploy_id,
+        "ready": all_ready,
+        "clusters": statuses,
+    });
+    println!("{}", serde_json::to_string_pretty(&json).unwrap());
+
+    if statuses
+        .iter()
+        .any(|ctx| matches!(ctx.status, ClusterDeploymentStatus::Failing { .. }))
+    {
+        Err(CliError::DeploymentFailing {
+            name: deploy_id.to_string(),
+        })
+    } else if !all_ready {
+        Err(CliError::ClustersHydrating)
+    } else {
+        Ok(())
+    }
+}
+
+/// Run in continuous mode with NDJSON output.
+async fn run_continuous_json(
+    deploy_id: &str,
+    client: &mut crate::client::Client,
+    timeout: Option<u64>,
+    allowed_lag_secs: i64,
+) -> Result<(), CliError> {
+    let monitor_future = monitor_hydration_ndjson(deploy_id, client, allowed_lag_secs);
+
+    if let Some(secs) = timeout {
+        match tokio::time::timeout(Duration::from_secs(secs), monitor_future).await {
+            Ok(result) => result,
+            Err(_) => Err(CliError::ReadyTimeout {
+                name: deploy_id.to_string(),
+                seconds: secs,
+            }),
+        }
+    } else {
+        monitor_future.await
+    }
+}
+
+/// Monitor hydration via SUBSCRIBE, emitting one NDJSON line per update.
+async fn monitor_hydration_ndjson(
+    deploy_id: &str,
+    client: &mut crate::client::Client,
+    allowed_lag_secs: i64,
+) -> Result<(), CliError> {
+    let initial_statuses = client
+        .deployments()
+        .get_deployment_hydration_status_with_lag(deploy_id, allowed_lag_secs)
+        .await?;
+
+    if initial_statuses.is_empty() {
+        let json = serde_json::json!({"deploy_id": deploy_id, "clusters": [], "all_ready": true});
+        println!("{}", serde_json::to_string(&json).unwrap());
+        return Ok(());
+    }
+
+    let mut cluster_states: BTreeMap<String, ClusterStatusContext> = initial_statuses
+        .into_iter()
+        .map(|ctx| (ctx.cluster_name.clone(), ctx))
+        .collect();
+
+    let mut deployments = client.deployments_mut();
+    let stream = deployments.subscribe_deployment_hydration(deploy_id, allowed_lag_secs);
+    let mut stream = pin!(stream);
+
+    while let Some(result) = stream.next().await {
+        let update = result.map_err(CliError::Connection)?;
+        let status = update_to_status(&update);
+
+        cluster_states.insert(
+            update.cluster_name.clone(),
+            ClusterStatusContext {
+                cluster_name: update.cluster_name,
+                cluster_id: update.cluster_id,
+                status,
+                hydrated_count: update.hydrated_count,
+                total_count: update.total_count,
+                max_lag_secs: update.max_lag_secs,
+                total_replicas: update.total_replicas,
+                problematic_replicas: update.problematic_replicas,
+            },
+        );
+
+        let all_ready = cluster_states
+            .values()
+            .all(|ctx| matches!(ctx.status, ClusterDeploymentStatus::Ready));
+
+        // Emit one NDJSON line per update
+        let statuses: Vec<_> = cluster_states.values().collect();
+        let json = serde_json::json!({
+            "deploy_id": deploy_id,
+            "all_ready": all_ready,
+            "clusters": statuses,
+        });
+        println!("{}", serde_json::to_string(&json).unwrap());
+
+        if all_ready {
+            return Ok(());
+        }
+    }
+
+    Ok(())
 }
 
 /// Print status for a single cluster with visual formatting.

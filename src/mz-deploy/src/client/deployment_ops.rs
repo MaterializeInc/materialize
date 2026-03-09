@@ -22,7 +22,8 @@ use std::fmt;
 use tokio_postgres::types::ToSql;
 
 /// Reason why a cluster deployment is failing.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FailureReason {
     /// Cluster has no replicas configured.
     NoReplicas,
@@ -46,7 +47,8 @@ impl fmt::Display for FailureReason {
 }
 
 /// Status of a cluster in a staging deployment.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ClusterDeploymentStatus {
     /// Cluster is fully hydrated and lag is within threshold.
     Ready,
@@ -59,7 +61,7 @@ pub enum ClusterDeploymentStatus {
 }
 
 /// Full status context for a cluster in a staging deployment.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ClusterStatusContext {
     /// Cluster name (with deployment suffix).
     pub cluster_name: String,

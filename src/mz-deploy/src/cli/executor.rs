@@ -9,8 +9,36 @@ use crate::cli::git::get_git_commit;
 use crate::client::{Client, quote_identifier};
 use crate::project::{self, typed};
 use crate::verbose;
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::path::Path;
+use std::rc::Rc;
+
+/// Collects SQL statements during dry-run for JSON output.
+///
+/// Wraps a shared, mutable vector of SQL strings. Cloning is cheap (Rc refcount bump).
+/// After all commands complete, call [`SqlCollector::into_statements`] to extract the collected SQL.
+#[derive(Clone)]
+pub struct SqlCollector(Rc<RefCell<Vec<String>>>);
+
+impl SqlCollector {
+    /// Create a new empty collector.
+    pub fn new() -> Self {
+        Self(Rc::new(RefCell::new(Vec::new())))
+    }
+
+    /// Push a SQL statement into the collector.
+    pub fn push(&self, sql: String) {
+        self.0.borrow_mut().push(sql);
+    }
+
+    /// Consume the collector and return the collected statements.
+    pub fn into_statements(self) -> Vec<String> {
+        Rc::try_unwrap(self.0)
+            .map(|cell| cell.into_inner())
+            .unwrap_or_else(|rc| rc.borrow().clone())
+    }
+}
 
 /// Collect deployment metadata (user and git commit).
 ///
@@ -71,6 +99,7 @@ pub fn generate_random_env_name() -> String {
 pub struct DeploymentExecutor<'a> {
     client: &'a Client,
     dry_run: bool,
+    collected_sql: Option<SqlCollector>,
 }
 
 impl<'a> DeploymentExecutor<'a> {
@@ -79,12 +108,30 @@ impl<'a> DeploymentExecutor<'a> {
         Self {
             client,
             dry_run: false,
+            collected_sql: None,
         }
     }
 
     /// Create a deployment executor with configurable dry-run mode.
     pub fn with_dry_run(client: &'a Client, dry_run: bool) -> Self {
-        Self { client, dry_run }
+        Self {
+            client,
+            dry_run,
+            collected_sql: None,
+        }
+    }
+
+    /// Create a deployment executor with an optional SQL collector for JSON output.
+    pub fn with_collector(
+        client: &'a Client,
+        dry_run: bool,
+        collector: Option<SqlCollector>,
+    ) -> Self {
+        Self {
+            client,
+            dry_run,
+            collected_sql: collector,
+        }
     }
 
     /// Returns true if this executor is in dry-run mode.
@@ -201,20 +248,29 @@ impl<'a> DeploymentExecutor<'a> {
     }
 
     /// Execute (or print in dry-run mode) a single SQL statement.
+    ///
+    /// When a collector is present (JSON mode), statements are collected instead of printed.
     pub async fn execute_sql(&self, stmt: &impl ToString) -> Result<(), CliError> {
         let sql = stmt.to_string();
 
         if self.dry_run {
-            println!("{};", sql);
-            println!();
-        } else {
-            self.client.execute(&sql, &[]).await.map_err(|source| {
-                CliError::SqlExecutionFailed {
-                    statement: sql,
-                    source,
-                }
-            })?;
+            let formatted = format!("{};", sql);
+            if let Some(ref collector) = self.collected_sql {
+                collector.push(formatted);
+            } else {
+                println!("{}", formatted);
+                println!();
+            }
+            return Ok(());
         }
+
+        self.client
+            .execute(&sql, &[])
+            .await
+            .map_err(|source| CliError::SqlExecutionFailed {
+                statement: sql,
+                source,
+            })?;
         Ok(())
     }
 }

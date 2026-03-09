@@ -10,7 +10,7 @@ use mz_sql_parser::ast::{Ident, RawItemName, UnresolvedItemName};
 ///
 /// Used to uniquely identify database objects across the project.
 /// Format: `database.schema.object`
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
 pub struct ObjectId {
     pub database: String,
     pub schema: String,

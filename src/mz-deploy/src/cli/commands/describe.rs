@@ -25,7 +25,7 @@ use owo_colors::OwoColorize;
 /// # Errors
 /// Returns `CliError::Connection` for database errors
 /// Returns `CliError::Message` if deployment is not found
-pub async fn run(settings: &Settings, deploy_id: &str) -> Result<(), CliError> {
+pub async fn run(settings: &Settings, deploy_id: &str, json_output: bool) -> Result<(), CliError> {
     let profile = settings.connection();
     let client = Client::connect_with_profile(profile.clone())
         .await
@@ -50,6 +50,16 @@ pub async fn run(settings: &Settings, deploy_id: &str) -> Result<(), CliError> {
         .deployments()
         .get_deployment_objects(Some(deploy_id))
         .await?;
+
+    if json_output {
+        let json = serde_json::json!({
+            "deploy_id": deploy_id,
+            "details": details,
+            "objects": snapshot.objects,
+        });
+        println!("{}", serde_json::to_string_pretty(&json).unwrap());
+        return Ok(());
+    }
 
     // Display deployment header
     println!(

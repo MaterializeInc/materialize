@@ -1,9 +1,10 @@
 //! Roles apply command - converge live role state to match definitions.
 
 use crate::cli::CliError;
+use crate::cli::executor::{DeploymentExecutor, SqlCollector};
 use crate::cli::progress;
+use crate::client::Client;
 use crate::client::quote_identifier;
-use crate::client::{Client, ConnectionError};
 use crate::config::Settings;
 use crate::project::roles::{self, RoleDefinition};
 use mz_sql_parser::ast::AlterRoleOption;
@@ -17,7 +18,11 @@ use std::time::Instant;
 /// Loads role definitions from `<directory>/roles/` and converges
 /// the live Materialize state to match: creating missing roles and
 /// applying ALTER, GRANT, and COMMENT statements idempotently.
-pub async fn run(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
+pub async fn run(
+    settings: &Settings,
+    dry_run: bool,
+    collector: Option<SqlCollector>,
+) -> Result<(), CliError> {
     let profile = settings.connection();
     let directory = &settings.directory;
     let start_time = Instant::now();
@@ -40,44 +45,35 @@ pub async fn run(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
         load_start.elapsed(),
     );
 
-    if dry_run {
-        for def in &definitions {
-            println!("-- Would apply role '{}'", def.name);
-            println!("{};", def.create_stmt);
-            for alter in &def.alter_stmts {
-                println!("{};", alter);
-            }
-            for grant in &def.grants {
-                println!("{};", grant);
-            }
-            for comment in &def.comments {
-                println!("{};", comment);
-            }
-        }
-        let total_duration = start_time.elapsed();
-        progress::summary("Roles dry run complete", total_duration);
-        return Ok(());
-    }
-
     // Connect to Materialize
     let client = Client::connect_with_profile(profile.clone())
         .await
         .map_err(CliError::Connection)?;
 
+    let executor = DeploymentExecutor::with_collector(&client, dry_run, collector);
+
     // Apply each role definition
     for def in &definitions {
-        apply_role(&client, def).await?;
+        apply_role(&client, &executor, def).await?;
     }
 
     let total_duration = start_time.elapsed();
-    progress::summary("Roles applied successfully", total_duration);
+    if dry_run {
+        progress::summary("Roles dry run complete", total_duration);
+    } else {
+        progress::summary("Roles applied successfully", total_duration);
+    }
 
     Ok(())
 }
 
 /// Apply a single role definition: create if missing, then execute
-/// ALTER, GRANT, and COMMENT statements idempotently.
-async fn apply_role(client: &Client, def: &RoleDefinition) -> Result<(), CliError> {
+/// ALTER, GRANT, REVOKE, RESET, and COMMENT statements.
+async fn apply_role(
+    client: &Client,
+    executor: &DeploymentExecutor<'_>,
+    def: &RoleDefinition,
+) -> Result<(), CliError> {
     let role_name = &def.name;
 
     // Check if role already exists
@@ -88,50 +84,30 @@ async fn apply_role(client: &Client, def: &RoleDefinition) -> Result<(), CliErro
         .map_err(CliError::Connection)?;
 
     if exists {
-        println!("  {} Role '{}' exists", "=".dimmed(), role_name);
+        if !executor.is_dry_run() {
+            println!("  {} Role '{}' exists", "=".dimmed(), role_name);
+        }
     } else {
         // Create role from the parsed CREATE ROLE statement
-        println!("  {} Creating role '{}'", "+".green().bold(), role_name);
-        let sql = format!("{}", def.create_stmt);
-        client.execute(&sql, &[]).await.map_err(|e| {
-            CliError::Connection(ConnectionError::Message(format!(
-                "Failed to create role '{}': {}",
-                role_name, e
-            )))
-        })?;
+        if !executor.is_dry_run() {
+            println!("  {} Creating role '{}'", "+".green().bold(), role_name);
+        }
+        executor.execute_sql(&def.create_stmt).await?;
     }
 
-    // Execute ALTER ROLE statements (idempotent)
+    // Execute ALTER ROLE statements
     for alter in &def.alter_stmts {
-        let sql = format!("{}", alter);
-        client.execute(&sql, &[]).await.map_err(|e| {
-            CliError::Connection(ConnectionError::Message(format!(
-                "Failed to execute ALTER ROLE on '{}': {}",
-                role_name, e
-            )))
-        })?;
+        executor.execute_sql(alter).await?;
     }
 
-    // Execute GRANT ROLE statements (idempotent — granting an already-granted role is a no-op)
+    // Execute GRANT ROLE statements
     for grant in &def.grants {
-        let sql = format!("{}", grant);
-        client.execute(&sql, &[]).await.map_err(|e| {
-            CliError::Connection(ConnectionError::Message(format!(
-                "Failed to execute GRANT ROLE on '{}': {}",
-                role_name, e
-            )))
-        })?;
+        executor.execute_sql(grant).await?;
     }
 
-    // Execute COMMENT statements (idempotent)
+    // Execute COMMENT statements
     for comment in &def.comments {
-        let sql = format!("{}", comment);
-        client.execute(&sql, &[]).await.map_err(|e| {
-            CliError::Connection(ConnectionError::Message(format!(
-                "Failed to execute COMMENT on role '{}': {}",
-                role_name, e
-            )))
-        })?;
+        executor.execute_sql(comment).await?;
     }
 
     // Revoke stale grants
@@ -149,23 +125,20 @@ async fn apply_role(client: &Client, def: &RoleDefinition) -> Result<(), CliErro
 
     for member in &current_members {
         if !desired_members.contains(&member.to_lowercase()) {
-            println!(
-                "  {} Revoking role '{}' from '{}'",
-                "-".red().bold(),
-                role_name,
-                member
-            );
+            if !executor.is_dry_run() {
+                println!(
+                    "  {} Revoking role '{}' from '{}'",
+                    "-".red().bold(),
+                    role_name,
+                    member
+                );
+            }
             let sql = format!(
                 "REVOKE {} FROM {}",
                 quote_identifier(role_name),
                 quote_identifier(member)
             );
-            client.execute(&sql, &[]).await.map_err(|e| {
-                CliError::Connection(ConnectionError::Message(format!(
-                    "Failed to revoke role '{}' from '{}': {}",
-                    role_name, member, e
-                )))
-            })?;
+            executor.execute_sql(&sql).await?;
         }
     }
 
@@ -189,23 +162,20 @@ async fn apply_role(client: &Client, def: &RoleDefinition) -> Result<(), CliErro
 
     for param in &current_params {
         if !desired_params.contains(&param.to_lowercase()) {
-            println!(
-                "  {} Resetting '{}' on role '{}'",
-                "-".red().bold(),
-                param,
-                role_name
-            );
+            if !executor.is_dry_run() {
+                println!(
+                    "  {} Resetting '{}' on role '{}'",
+                    "-".red().bold(),
+                    param,
+                    role_name
+                );
+            }
             let sql = format!(
                 "ALTER ROLE {} RESET {}",
                 quote_identifier(role_name),
                 quote_identifier(param)
             );
-            client.execute(&sql, &[]).await.map_err(|e| {
-                CliError::Connection(ConnectionError::Message(format!(
-                    "Failed to reset '{}' on role '{}': {}",
-                    param, role_name, e
-                )))
-            })?;
+            executor.execute_sql(&sql).await?;
         }
     }
 

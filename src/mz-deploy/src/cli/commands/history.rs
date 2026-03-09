@@ -27,7 +27,11 @@ use std::process::{Command, Stdio};
 ///
 /// # Errors
 /// Returns `CliError::Connection` for database errors
-pub async fn run(settings: &Settings, limit: Option<usize>) -> Result<(), CliError> {
+pub async fn run(
+    settings: &Settings,
+    limit: Option<usize>,
+    json_output: bool,
+) -> Result<(), CliError> {
     let profile = settings.connection();
     // Connect to database
     let client = Client::connect_with_profile(profile.clone())
@@ -36,6 +40,11 @@ pub async fn run(settings: &Settings, limit: Option<usize>) -> Result<(), CliErr
 
     client.deployments().create_deployments().await?;
     let history = client.deployments().list_deployment_history(limit).await?;
+
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&history).unwrap());
+        return Ok(());
+    }
 
     if history.is_empty() {
         println!("No deployment history found.");

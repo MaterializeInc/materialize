@@ -67,7 +67,7 @@ mod variables;
 pub use planned::ModStatement;
 
 /// A `(database_name, schema_name)` pair identifying a schema within a project.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
 pub struct SchemaQualifier {
     pub database: String,
     pub schema: String,

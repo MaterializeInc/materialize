@@ -1,6 +1,7 @@
 //! Apply secrets command - create missing secrets and update existing ones.
 
 use crate::cli::commands::grants;
+use crate::cli::executor::SqlCollector;
 use crate::cli::progress;
 use crate::cli::{CliError, executor};
 use crate::client::Client;
@@ -17,7 +18,11 @@ use std::time::Instant;
 /// 1. Executes `CREATE SECRET IF NOT EXISTS` (idempotent create)
 /// 2. Executes `ALTER SECRET` (always update the value to match the file)
 /// 3. Applies any associated grants and comments
-pub async fn run(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
+pub async fn run(
+    settings: &Settings,
+    dry_run: bool,
+    collector: Option<SqlCollector>,
+) -> Result<(), CliError> {
     let profile = settings.connection();
     let start_time = Instant::now();
 
@@ -39,7 +44,7 @@ pub async fn run(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
         .await
         .map_err(CliError::Connection)?;
 
-    let executor = executor::DeploymentExecutor::with_dry_run(&client, dry_run);
+    let executor = executor::DeploymentExecutor::with_collector(&client, dry_run, collector);
 
     // Prepare schemas and mod statements for secret schemas
     let secret_schemas = project::SchemaQualifier::collect_from(&secrets);
@@ -67,16 +72,14 @@ pub async fn run(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
             };
             executor.execute_sql(&alter_stmt).await?;
 
-            if !dry_run {
-                grants::reconcile(
-                    &client,
-                    &executor,
-                    &obj.id,
-                    &typed_obj.grants,
-                    &grants::GrantObjectKind::Secret,
-                )
-                .await?;
-            }
+            grants::reconcile(
+                &client,
+                &executor,
+                &obj.id,
+                &typed_obj.grants,
+                &grants::GrantObjectKind::Secret,
+            )
+            .await?;
 
             for comment in &typed_obj.comments {
                 executor.execute_sql(comment).await?;

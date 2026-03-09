@@ -1,6 +1,7 @@
 //! Apply connections command - create missing connections and reconcile drifted ones.
 
 use crate::cli::commands::grants;
+use crate::cli::executor::SqlCollector;
 use crate::cli::progress;
 use crate::cli::{CliError, executor};
 use crate::client::Client;
@@ -23,7 +24,11 @@ use std::time::Instant;
 /// 2. If missing, executes `CREATE CONNECTION IF NOT EXISTS`
 /// 3. If exists, diffs options and emits `ALTER CONNECTION ... SET/DROP`
 /// 4. Applies any associated grants and comments
-pub async fn run(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
+pub async fn run(
+    settings: &Settings,
+    dry_run: bool,
+    collector: Option<SqlCollector>,
+) -> Result<(), CliError> {
     let profile = settings.connection();
     let start_time = Instant::now();
 
@@ -48,7 +53,7 @@ pub async fn run(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
         .await
         .map_err(CliError::Connection)?;
 
-    let executor = executor::DeploymentExecutor::with_dry_run(&client, dry_run);
+    let executor = executor::DeploymentExecutor::with_collector(&client, dry_run, collector);
 
     // Prepare schemas
     let connection_schemas = project::SchemaQualifier::collect_from(&connections);
@@ -122,16 +127,14 @@ pub async fn run(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
             }
         }
 
-        if !dry_run {
-            grants::reconcile(
-                &client,
-                &executor,
-                &obj.id,
-                &typed_obj.grants,
-                &grants::GrantObjectKind::Connection,
-            )
-            .await?;
-        }
+        grants::reconcile(
+            &client,
+            &executor,
+            &obj.id,
+            &typed_obj.grants,
+            &grants::GrantObjectKind::Connection,
+        )
+        .await?;
 
         // Apply comments
         for comment in &typed_obj.comments {

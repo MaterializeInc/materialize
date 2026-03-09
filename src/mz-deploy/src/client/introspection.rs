@@ -20,7 +20,7 @@ use tokio_postgres::types::ToSql;
 ///
 /// Used during apply to identify sinks that need to be repointed to new
 /// upstream objects before the old schemas are dropped with CASCADE.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DependentSink {
     pub sink_database: String,
     pub sink_schema: String,

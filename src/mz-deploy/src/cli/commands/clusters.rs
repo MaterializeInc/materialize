@@ -2,8 +2,9 @@
 
 use crate::cli::CliError;
 use crate::cli::commands::grants;
+use crate::cli::executor::{DeploymentExecutor, SqlCollector};
 use crate::cli::progress;
-use crate::client::{Client, ClusterOptions, ConnectionError, quote_identifier};
+use crate::client::{Client, ClusterOptions, quote_identifier};
 use crate::config::Settings;
 use crate::project::clusters::{self, ClusterDefinition, extract_replication_factor, extract_size};
 use owo_colors::OwoColorize;
@@ -14,7 +15,11 @@ use std::time::Instant;
 /// Loads cluster definitions from `<directory>/clusters/` and converges
 /// the live Materialize state to match: creating missing clusters and
 /// altering ones whose configuration has drifted.
-pub async fn run(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
+pub async fn run(
+    settings: &Settings,
+    dry_run: bool,
+    collector: Option<SqlCollector>,
+) -> Result<(), CliError> {
     let profile = settings.connection();
     let directory = &settings.directory;
     let start_time = Instant::now();
@@ -42,41 +47,35 @@ pub async fn run(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
         load_start.elapsed(),
     );
 
-    if dry_run {
-        for def in &definitions {
-            println!("-- Would apply cluster '{}'", def.name);
-            println!("{};", def.create_stmt);
-            for grant in &def.grants {
-                println!("{};", grant);
-            }
-            for comment in &def.comments {
-                println!("{};", comment);
-            }
-        }
-        let total_duration = start_time.elapsed();
-        progress::summary("Clusters dry run complete", total_duration);
-        return Ok(());
-    }
-
     // Connect to Materialize
     let client = Client::connect_with_profile(profile.clone())
         .await
         .map_err(CliError::Connection)?;
 
+    let executor = DeploymentExecutor::with_collector(&client, dry_run, collector);
+
     // Apply each cluster definition
     for def in &definitions {
-        apply_cluster(&client, def).await?;
+        apply_cluster(&client, &executor, def).await?;
     }
 
     let total_duration = start_time.elapsed();
-    progress::summary("Clusters applied successfully", total_duration);
+    if dry_run {
+        progress::summary("Clusters dry run complete", total_duration);
+    } else {
+        progress::summary("Clusters applied successfully", total_duration);
+    }
 
     Ok(())
 }
 
 /// Apply a single cluster definition: create if missing, alter if drifted,
-/// then execute grants and comments.
-async fn apply_cluster(client: &Client, def: &ClusterDefinition) -> Result<(), CliError> {
+/// then execute grants, revocations, and comments.
+async fn apply_cluster(
+    client: &Client,
+    executor: &DeploymentExecutor<'_>,
+    def: &ClusterDefinition,
+) -> Result<(), CliError> {
     let cluster_name = &def.name;
 
     // Check if cluster already exists
@@ -89,18 +88,14 @@ async fn apply_cluster(client: &Client, def: &ClusterDefinition) -> Result<(), C
     match existing {
         None => {
             // Create cluster from the parsed CREATE CLUSTER statement
-            println!(
-                "  {} Creating cluster '{}'",
-                "+".green().bold(),
-                cluster_name
-            );
-            let sql = format!("{}", def.create_stmt);
-            client.execute(&sql, &[]).await.map_err(|e| {
-                CliError::Connection(ConnectionError::Message(format!(
-                    "Failed to create cluster '{}': {}",
-                    cluster_name, e
-                )))
-            })?;
+            if !executor.is_dry_run() {
+                println!(
+                    "  {} Creating cluster '{}'",
+                    "+".green().bold(),
+                    cluster_name
+                );
+            }
+            executor.execute_sql(&def.create_stmt).await?;
         }
         Some(existing_cluster) => {
             // Compare desired vs actual configuration
@@ -128,21 +123,25 @@ async fn apply_cluster(client: &Client, def: &ClusterDefinition) -> Result<(), C
                         .unwrap_or(1)
                 });
 
-                println!(
-                    "  {} Altering cluster '{}'",
-                    "~".yellow().bold(),
-                    cluster_name
-                );
+                if !executor.is_dry_run() {
+                    println!(
+                        "  {} Altering cluster '{}'",
+                        "~".yellow().bold(),
+                        cluster_name
+                    );
+                }
                 let options = ClusterOptions {
                     size,
                     replication_factor: rf,
                 };
-                client
-                    .provisioning()
-                    .alter_cluster(cluster_name, &options)
-                    .await
-                    .map_err(CliError::Connection)?;
-            } else {
+                let alter_sql = format!(
+                    "ALTER CLUSTER {} SET (SIZE = '{}', REPLICATION FACTOR = {})",
+                    quote_identifier(cluster_name),
+                    options.size,
+                    options.replication_factor
+                );
+                executor.execute_sql(&alter_sql).await?;
+            } else if !executor.is_dry_run() {
                 println!(
                     "  {} Cluster '{}' is up to date",
                     "=".dimmed(),
@@ -152,15 +151,9 @@ async fn apply_cluster(client: &Client, def: &ClusterDefinition) -> Result<(), C
         }
     }
 
-    // Execute GRANT statements (idempotent — re-granting is a no-op in Materialize)
+    // Execute GRANT statements
     for grant in &def.grants {
-        let sql = format!("{}", grant);
-        client.execute(&sql, &[]).await.map_err(|e| {
-            CliError::Connection(ConnectionError::Message(format!(
-                "Failed to execute grant on cluster '{}': {}",
-                cluster_name, e
-            )))
-        })?;
+        executor.execute_sql(grant).await?;
     }
 
     // Revoke stale grants
@@ -176,17 +169,11 @@ async fn apply_cluster(client: &Client, def: &ClusterDefinition) -> Result<(), C
         "CLUSTER",
         &quote_identifier(cluster_name),
     );
-    grants::execute_revocations(client, &revocations, "cluster", &cluster_name).await?;
+    grants::execute_revocations(&executor, &revocations, "cluster", &cluster_name).await?;
 
     // Execute COMMENT statements
     for comment in &def.comments {
-        let sql = format!("{}", comment);
-        client.execute(&sql, &[]).await.map_err(|e| {
-            CliError::Connection(ConnectionError::Message(format!(
-                "Failed to execute comment on cluster '{}': {}",
-                cluster_name, e
-            )))
-        })?;
+        executor.execute_sql(comment).await?;
     }
 
     Ok(())

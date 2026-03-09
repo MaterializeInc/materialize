@@ -1,6 +1,7 @@
 //! Apply tables command - create tables that don't exist in the database.
 
 use crate::cli::commands::grants;
+use crate::cli::executor::SqlCollector;
 use crate::cli::git;
 use crate::cli::progress;
 use crate::cli::{CliError, executor};
@@ -172,15 +173,23 @@ pub async fn run(
 /// Apply only table objects (no deployment tracking).
 ///
 /// Creates tables that don't exist in the database. Existing tables are skipped.
-pub async fn apply_tables(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
-    apply_by_kind(settings, dry_run, ObjectKindFilter::Tables).await
+pub async fn apply_tables(
+    settings: &Settings,
+    dry_run: bool,
+    collector: Option<SqlCollector>,
+) -> Result<(), CliError> {
+    apply_by_kind(settings, dry_run, ObjectKindFilter::Tables, collector).await
 }
 
 /// Apply only source objects (no deployment tracking).
 ///
 /// Creates sources that don't exist in the database. Existing sources are skipped.
-pub async fn apply_sources(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
-    apply_by_kind(settings, dry_run, ObjectKindFilter::Sources).await
+pub async fn apply_sources(
+    settings: &Settings,
+    dry_run: bool,
+    collector: Option<SqlCollector>,
+) -> Result<(), CliError> {
+    apply_by_kind(settings, dry_run, ObjectKindFilter::Sources, collector).await
 }
 
 /// Which object kinds to create.
@@ -194,6 +203,7 @@ async fn apply_by_kind(
     settings: &Settings,
     dry_run: bool,
     filter: ObjectKindFilter,
+    collector: Option<SqlCollector>,
 ) -> Result<(), CliError> {
     let profile = settings.connection();
     let (label, matcher): (&str, Box<dyn Fn(&Statement) -> bool>) = match filter {
@@ -254,7 +264,7 @@ async fn apply_by_kind(
         .collect();
 
     // Reconcile grants on existing target objects
-    if !dry_run {
+    {
         let grant_kind = match filter {
             ObjectKindFilter::Tables => grants::GrantObjectKind::Table,
             ObjectKindFilter::Sources => grants::GrantObjectKind::Source,
@@ -263,7 +273,8 @@ async fn apply_by_kind(
             .iter_objects()
             .map(|obj| (obj.id.clone(), obj))
             .collect();
-        let executor = executor::DeploymentExecutor::with_dry_run(&client, false);
+        let executor =
+            executor::DeploymentExecutor::with_collector(&client, dry_run, collector.clone());
         for obj_id in &existing {
             if let Some(obj) = obj_map.get(obj_id) {
                 grants::reconcile(
@@ -289,7 +300,7 @@ async fn apply_by_kind(
 
     progress::info(&format!("Creating {} new {}(s)...", to_create.len(), label));
 
-    let executor = executor::DeploymentExecutor::with_dry_run(&client, dry_run);
+    let executor = executor::DeploymentExecutor::with_collector(&client, dry_run, collector);
     let schemas: BTreeSet<_> = to_create
         .iter()
         .map(|(id, _)| project::SchemaQualifier::new(id.database.clone(), id.schema.clone()))
