@@ -1464,7 +1464,7 @@ impl Coordinator {
             MAX_CONTINUAL_TASKS.name(),
         )?;
         self.validate_resource_limit(
-            self.catalog().user_continual_tasks().count(),
+            self.catalog().user_network_policies().count(),
             new_network_policies,
             SystemVars::max_network_policies,
             "network_policy",
