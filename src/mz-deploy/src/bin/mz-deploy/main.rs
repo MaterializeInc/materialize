@@ -18,11 +18,50 @@ use std::sync::LazyLock;
 const BUILD_INFO: BuildInfo = build_info!();
 static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 
+// Clap 4's derive API doesn't support subcommand grouping natively.
+// We work around this by hiding all subcommands from the auto-generated flat
+// list (`#[command(hide = true)]` on each variant) and rendering our own
+// grouped listing via `after_help`. The custom `help_template` on `Args`
+// replaces the default `{subcommands}` section with `{after-help}` so the
+// grouped text appears where the command list normally would.
+const GROUPED_HELP: &str = "\
+Getting started:
+  new                  Create a new mz-deploy project
+  debug                Test database connection and display environment information
+
+Develop:
+  compile              Compile and validate SQL without connecting to database [aliases: build]
+  test                 Run SQL unit tests defined in test files
+  gen-data-contracts   Generate types.lock file with external dependency schemas
+
+Infrastructure:
+  apply                Apply infrastructure objects to Materialize (Terraform-like)
+  delete               Delete an object from Materialize and remove its project file
+
+Deploy:
+  stage                Create a staging deployment for testing changes
+  ready                Wait for staging deployment clusters to be hydrated and ready
+  deploy               Promote a staging deployment to production [aliases: promote]
+  abort                Clean up a staging deployment by dropping all resources
+  describe             Show detailed information about a specific deployment [aliases: show]
+  deployments          List all active staging deployments [aliases: branches]
+  history              Show history of promoted deployments [aliases: log]
+
+See 'mz-deploy help <command>' for detailed usage guides.";
+
 /// Materialize deployment tool
 #[derive(Parser, Debug)]
 #[command(name = "mz-deploy", version = VERSION.as_str())]
 #[command(about = "Safe, testable deployments for Materialize")]
 #[command(disable_help_subcommand = true)]
+#[command(after_help = GROUPED_HELP)]
+#[command(help_template = "\
+{about}
+
+{usage-heading} {usage}
+
+{all-args}
+{after-help}")]
 struct Args {
     /// Path to the project root directory containing database schemas
     #[arg(short, long, default_value = ".", global = true)]
@@ -52,6 +91,7 @@ enum Command {
     /// against a local Materialize Docker container. This is useful for local development
     /// and CI/CD pipelines to catch errors before deployment.
     #[command(
+        hide = true,
         visible_alias = "build",
         after_help = "Run 'mz-deploy help compile' for a detailed usage guide."
     )]
@@ -81,7 +121,10 @@ enum Command {
     ///   mz-deploy apply --skip-secrets            # Skip secrets
     ///   mz-deploy apply --dry-run                 # Preview SQL
     ///   mz-deploy apply clusters                  # Apply cluster definitions only
-    #[command(after_help = "Run 'mz-deploy help apply' for a detailed usage guide.")]
+    #[command(
+        hide = true,
+        after_help = "Run 'mz-deploy help apply' for a detailed usage guide."
+    )]
     Apply {
         /// Skip applying secrets (for users without secret access)
         #[arg(long)]
@@ -110,6 +153,7 @@ enum Command {
     ///   mz-deploy deploy abc123 --skip-ready       # Skip hydration check
     ///   mz-deploy deploy abc123 --allowed-lag 600  # Allow up to 10 min lag
     #[command(
+        hide = true,
         visible_alias = "promote",
         after_help = "Run 'mz-deploy help deploy' for a detailed usage guide."
     )]
@@ -159,7 +203,10 @@ enum Command {
     /// Example:
     ///   mz-deploy stage                    # Use random deploy ID
     ///   mz-deploy stage --name abc123      # Use custom deploy ID
-    #[command(after_help = "Run 'mz-deploy help stage' for a detailed usage guide.")]
+    #[command(
+        hide = true,
+        after_help = "Run 'mz-deploy help stage' for a detailed usage guide."
+    )]
     Stage {
         /// Deploy ID for this staging deployment (default: random 7-char hex)
         ///
@@ -190,7 +237,10 @@ enum Command {
     /// Connects to Materialize using the specified profile and displays version,
     /// environment ID, and current role. Useful for verifying connectivity and
     /// configuration before running deployments.
-    #[command(after_help = "Run 'mz-deploy help debug' for a detailed usage guide.")]
+    #[command(
+        hide = true,
+        after_help = "Run 'mz-deploy help debug' for a detailed usage guide."
+    )]
     Debug,
 
     /// Show detailed information about a specific deployment
@@ -202,6 +252,7 @@ enum Command {
     /// Example:
     ///   mz-deploy describe abc123
     #[command(
+        hide = true,
         visible_alias = "show",
         after_help = "Run 'mz-deploy help describe' for a detailed usage guide."
     )]
@@ -217,6 +268,7 @@ enum Command {
     /// (tables/views not managed by this project but referenced in SQL). This
     /// creates a types.lock file used for offline type checking.
     #[command(
+        hide = true,
         name = "gen-data-contracts",
         after_help = "Run 'mz-deploy help gen-data-contracts' for a detailed usage guide."
     )]
@@ -226,7 +278,10 @@ enum Command {
     ///
     /// Executes all test files in the project against a temporary Materialize
     /// Docker container. Tests validate SQL logic without affecting production.
-    #[command(after_help = "Run 'mz-deploy help test' for a detailed usage guide.")]
+    #[command(
+        hide = true,
+        after_help = "Run 'mz-deploy help test' for a detailed usage guide."
+    )]
     Test,
 
     /// Clean up a staging deployment by dropping all resources
@@ -237,7 +292,10 @@ enum Command {
     ///
     /// Example:
     ///   mz-deploy abort abc123
-    #[command(after_help = "Run 'mz-deploy help abort' for a detailed usage guide.")]
+    #[command(
+        hide = true,
+        after_help = "Run 'mz-deploy help abort' for a detailed usage guide."
+    )]
     Abort {
         /// Staging deploy ID to remove
         #[arg(value_name = "DEPLOY_ID")]
@@ -257,6 +315,7 @@ enum Command {
     ///   mz-deploy deployments                  # List with default lag threshold
     ///   mz-deploy deployments --allowed-lag 60 # Stricter lag threshold
     #[command(
+        hide = true,
         visible_alias = "branches",
         after_help = "Run 'mz-deploy help deployments' for a detailed usage guide."
     )]
@@ -279,6 +338,7 @@ enum Command {
     /// Example:
     ///   mz-deploy history --limit 10
     #[command(
+        hide = true,
         visible_alias = "log",
         after_help = "Run 'mz-deploy help history' for a detailed usage guide."
     )]
@@ -296,7 +356,10 @@ enum Command {
     ///
     /// Example:
     ///   mz-deploy new my-project
-    #[command(after_help = "Run 'mz-deploy help new' for a detailed usage guide.")]
+    #[command(
+        hide = true,
+        after_help = "Run 'mz-deploy help new' for a detailed usage guide."
+    )]
     New {
         /// Name of the project directory to create
         #[arg(value_name = "NAME")]
@@ -326,7 +389,10 @@ enum Command {
     ///   mz-deploy ready abc123 --snapshot         # Check once and exit
     ///   mz-deploy ready abc123 --timeout 300      # Wait up to 5 minutes
     ///   mz-deploy ready abc123 --allowed-lag 60   # Require lag under 1 min
-    #[command(after_help = "Run 'mz-deploy help ready' for a detailed usage guide.")]
+    #[command(
+        hide = true,
+        after_help = "Run 'mz-deploy help ready' for a detailed usage guide."
+    )]
     Ready {
         /// Staging deployment ID to monitor
         #[arg(value_name = "DEPLOY_ID")]
@@ -365,7 +431,10 @@ enum Command {
     ///   mz-deploy delete cluster analytics
     ///   mz-deploy delete connection mydb.public.pg_conn
     ///   mz-deploy delete table mydb.public.users --yes
-    #[command(after_help = "Run 'mz-deploy help delete' for a detailed usage guide.")]
+    #[command(
+        hide = true,
+        after_help = "Run 'mz-deploy help delete' for a detailed usage guide."
+    )]
     Delete {
         /// Skip confirmation prompt
         #[arg(short = 'y', long)]
@@ -380,6 +449,7 @@ enum Command {
     /// Prints extended documentation including behavior notes, examples,
     /// error recovery guidance, and related commands. Use --all to print
     /// the complete reference for all commands.
+    #[command(hide = true)]
     Help {
         /// Command name to show help for
         #[arg(value_name = "COMMAND")]
@@ -589,20 +659,12 @@ async fn run(args: Args) -> Result<(), CliError> {
                     .await
                 }
                 Some(ApplyCommand::Sources) => {
-                    cli::commands::apply_tables::apply_sources(
-                        &args.directory,
-                        &profile,
-                        dry_run,
-                    )
-                    .await
+                    cli::commands::apply_tables::apply_sources(&args.directory, &profile, dry_run)
+                        .await
                 }
                 Some(ApplyCommand::Tables) => {
-                    cli::commands::apply_tables::apply_tables(
-                        &args.directory,
-                        &profile,
-                        dry_run,
-                    )
-                    .await?;
+                    cli::commands::apply_tables::apply_tables(&args.directory, &profile, dry_run)
+                        .await?;
                     if !dry_run {
                         cli::commands::gen_data_contracts::run(&profile, &args.directory).await?;
                     }
@@ -725,4 +787,53 @@ fn load_profile(
 ) -> Result<Profile, CliError> {
     ProfilesConfig::load_profile(Some(directory), cli_profile, &settings.profile)
         .map_err(|e| CliError::Connection(ConnectionError::Config(e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn grouped_help_lists_all_subcommands() {
+        let cmd = Args::command();
+        let mut errors = Vec::new();
+        for sub in cmd.get_subcommands() {
+            let name = sub.get_name();
+            // "help" is intentionally omitted from the grouped listing since
+            // the footer line ("See 'mz-deploy help <command>'") already
+            // tells users about it.
+            if name == "help" {
+                continue;
+            }
+
+            // Find the line in GROUPED_HELP that starts with this command name.
+            let line = GROUPED_HELP
+                .lines()
+                .find(|l| l.trim_start().starts_with(&format!("{name} ")));
+
+            match line {
+                None => errors.push(format!("missing command: {name}")),
+                Some(line) => {
+                    let about = sub
+                        .get_about()
+                        .expect("every subcommand should have an about")
+                        .to_string();
+
+                    if !line.contains(&about) {
+                        errors.push(format!(
+                            "description mismatch for '{name}':\n  \
+                             GROUPED_HELP:{line}\n  \
+                             clap about:   {about}"
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            errors.is_empty(),
+            "GROUPED_HELP is out of sync with Command variants:\n{}",
+            errors.join("\n"),
+        );
+    }
 }
