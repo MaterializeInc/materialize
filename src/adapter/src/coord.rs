@@ -3919,6 +3919,7 @@ impl Coordinator {
         if let Some(ws_ids) = self.connection_watch_sets.remove(conn_id) {
             for ws_id in ws_ids {
                 self.installed_watch_sets.remove(&ws_id);
+                self.controller.uninstall_watch_set(&ws_id);
             }
         }
     }
