@@ -40,7 +40,11 @@ def image_of_release_version_exists(version: MzVersion, quiet: bool = False) -> 
 
 
 def image_of_commit_exists(commit_hash: str) -> bool:
-    return mz_image_tag_exists(commit_to_image_tag(commit_hash))
+    try:
+        return mz_image_tag_exists(commit_to_image_tag(commit_hash))
+    except (RuntimeError, requests.exceptions.RequestException) as e:
+        print(f"Failed to check if image of commit {commit_hash} exists: {e}")
+        return False
 
 
 def mz_image_tag_exists_cmdline(image_name: str) -> bool:
@@ -202,12 +206,50 @@ def get_mz_version_from_image_tag(image_tag: str) -> MzVersion:
     return MzVersion.parse_mz(get_version_from_image_tag(image_tag))
 
 
+def _try_construct_image_tag(commit_hash: str) -> str | None:
+    """Construct the expected image tag from git info, avoiding Docker Hub search."""
+    try:
+        cargo_toml = subprocess.check_output(
+            ["git", "show", f"{commit_hash}:src/environmentd/Cargo.toml"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        version = None
+        for line in cargo_toml.splitlines():
+            if line.startswith("version"):
+                match = re.search(r'"([^"]+)"', line)
+                if match:
+                    version = match.group(1)
+                break
+
+        if version is None:
+            return None
+
+        tag = f"v{version}--main.g{commit_hash}"
+        if mz_image_tag_exists(tag, quiet=True):
+            return tag
+
+        return None
+    except Exception:
+        return None
+
+
 def _resolve_image_name_by_commit_hash(commit_hash: str) -> str:
-    if commit_hash in CACHED_IMAGE_NAME_BY_COMMIT_HASH.keys():
+    if commit_hash in CACHED_IMAGE_NAME_BY_COMMIT_HASH:
         return CACHED_IMAGE_NAME_BY_COMMIT_HASH[commit_hash]
 
-    image_name_candidates = _search_docker_hub_for_image_name(search_value=commit_hash)
-    image_name = _select_image_name_from_candidates(image_name_candidates, commit_hash)
+    # Try constructing the tag directly from git info (avoids Docker Hub search)
+    constructed_tag = _try_construct_image_tag(commit_hash)
+    if constructed_tag is not None:
+        image_name = constructed_tag
+    else:
+        # Fall back to Docker Hub search
+        image_name_candidates = _search_docker_hub_for_image_name(
+            search_value=commit_hash
+        )
+        image_name = _select_image_name_from_candidates(
+            image_name_candidates, commit_hash
+        )
 
     CACHED_IMAGE_NAME_BY_COMMIT_HASH[commit_hash] = image_name
     EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True
@@ -216,7 +258,7 @@ def _resolve_image_name_by_commit_hash(commit_hash: str) -> str:
 
 
 def _search_docker_hub_for_image_name(
-    search_value: str, remaining_retries: int = 10
+    search_value: str, remaining_retries: int = 3
 ) -> list[str]:
     try:
         json_response = requests.get(
@@ -225,9 +267,11 @@ def _search_docker_hub_for_image_name(
     except (
         requests.exceptions.ConnectionError,
         requests.exceptions.JSONDecodeError,
-    ) as _:
+    ) as e:
         if remaining_retries > 0:
-            print("Searching Docker Hub for image name failed, retrying in 5 seconds")
+            print(
+                f"Searching Docker Hub for image name failed ({e}), retrying in 5 seconds"
+            )
             time.sleep(5)
             return _search_docker_hub_for_image_name(
                 search_value, remaining_retries - 1
