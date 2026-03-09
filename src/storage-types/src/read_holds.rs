@@ -143,6 +143,13 @@ impl<T: TimelyTimestamp> ReadHold<T> {
             });
         }
 
+        // Skip no-op downgrades: if since already equals the target frontier,
+        // there's nothing to change — avoids creating a ChangeBatch with
+        // canceling entries and sending a useless channel message.
+        if self.since == frontier {
+            return Ok(());
+        }
+
         let mut changes = ChangeBatch::new();
 
         changes.extend(self.since.iter().map(|t| (t.clone(), -1)));
