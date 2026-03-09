@@ -84,6 +84,11 @@ impl std::str::FromStr for SeqNo {
 }
 
 impl SeqNo {
+    /// Returns the previous SeqNo in the sequence, if there is one.
+    pub fn previous(self) -> Option<SeqNo> {
+        Some(SeqNo(self.0.checked_sub(1)?))
+    }
+
     /// Returns the next SeqNo in the sequence.
     pub fn next(self) -> SeqNo {
         SeqNo(self.0 + 1)
