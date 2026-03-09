@@ -831,7 +831,7 @@ mod tests {
         // Need a project.toml for the project to load
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let planned = project::plan(root, "default", Some("_staging")).unwrap();
+        let planned = project::plan(root, "default", Some("_staging"), None).unwrap();
 
         assert_eq!(planned.databases.len(), 1);
         assert_eq!(planned.databases[0].name, "testdb_staging");
@@ -863,7 +863,7 @@ mod tests {
 
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let planned = project::plan(root, "default", Some("_stg")).unwrap();
+        let planned = project::plan(root, "default", Some("_stg"), None).unwrap();
 
         // Find the view in db2_stg
         let db2 = planned
@@ -897,7 +897,7 @@ mod tests {
 
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let planned = project::plan(root, "default", Some("_stg")).unwrap();
+        let planned = project::plan(root, "default", Some("_stg"), None).unwrap();
 
         let view = &planned.databases[0].schemas[0].objects[0];
         let sql = format!("{}", view.typed_object.stmt);
@@ -927,7 +927,7 @@ mod tests {
 
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let planned = project::plan(root, "default", None).unwrap();
+        let planned = project::plan(root, "default", None, None).unwrap();
 
         assert_eq!(planned.databases[0].name, "mydb");
         assert_eq!(

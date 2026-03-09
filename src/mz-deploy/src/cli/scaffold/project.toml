@@ -7,6 +7,12 @@ profile = "default"
 mz_version = "cloud"
 
 ## Per-profile configuration:
+# [profiles.default]
+## Suffix to append to all database names for this profile.
+# suffix = "_staging"
+## Suffix to append to all cluster names for this profile.
+# cluster_suffix = "_staging"
+#
 # [profiles.default.security]
 ## AWS profile name for resolving aws_secret() references in secret files.
 ## When set, enables the aws_secret() provider so CREATE SECRET statements

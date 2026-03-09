@@ -44,7 +44,7 @@
 //!   pipeline.
 //! - **`error`** — Structured error types for every stage.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 pub mod ast;
@@ -90,6 +90,7 @@ pub fn plan<P: AsRef<Path>>(
     root: P,
     profile: &str,
     suffix: Option<&str>,
+    cluster_suffix: Option<&str>,
 ) -> Result<planned::Project, error::ProjectError> {
     let raw_project = raw::load_project(root, profile, suffix)?;
     let db_name_map = raw_project.database_name_map.clone();
@@ -97,6 +98,35 @@ pub fn plan<P: AsRef<Path>>(
     if !db_name_map.is_empty() {
         typed_project.rewrite_database_references(&db_name_map);
     }
+    if let Some(cs) = cluster_suffix {
+        let cluster_name_map = build_cluster_name_map(&typed_project, cs);
+        if !cluster_name_map.is_empty() {
+            typed_project.rewrite_cluster_references(&cluster_name_map);
+        }
+    }
     let planned_project = planned::Project::from(typed_project);
     Ok(planned_project)
+}
+
+/// Build a map from original cluster name → suffixed cluster name for all
+/// clusters referenced across the typed project.
+fn build_cluster_name_map(
+    project: &typed::Project,
+    cluster_suffix: &str,
+) -> BTreeMap<String, String> {
+    let mut names = BTreeSet::new();
+    for db in &project.databases {
+        for schema in &db.schemas {
+            for obj in &schema.objects {
+                names.extend(obj.clusters());
+            }
+        }
+    }
+    names
+        .into_iter()
+        .map(|name| {
+            let suffixed = format!("{}{}", name, cluster_suffix);
+            (name, suffixed)
+        })
+        .collect()
 }

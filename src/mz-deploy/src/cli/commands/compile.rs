@@ -46,7 +46,12 @@ pub async fn run(
     // Stage 1: Parse and validate SQL files
     progress::stage_start("Parsing SQL files");
     let parse_start = Instant::now();
-    let planned_project = project::plan(directory, &settings.profile_name, settings.suffix())?;
+    let planned_project = project::plan(
+        directory,
+        &settings.profile_name,
+        settings.suffix(),
+        settings.cluster_suffix(),
+    )?;
     let parse_duration = parse_start.elapsed();
 
     // Count objects and schemas

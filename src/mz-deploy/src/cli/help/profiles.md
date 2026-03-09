@@ -83,6 +83,32 @@ The profile name is uppercased:
 This takes precedence over the password in `profiles.toml`, including
 `${VAR}` substitution.
 
+## Per-profile database and cluster suffixes
+
+In `project.toml`, you can configure per-profile suffixes that rename
+databases and/or clusters at compile time:
+
+```toml
+profile = "default"
+
+[profiles.staging]
+suffix = "_staging"
+cluster_suffix = "_staging"
+```
+
+- **`suffix`** — Appended to every database name. `materialize` becomes
+  `materialize_staging`.
+- **`cluster_suffix`** — Appended to every cluster name. `analytics` becomes
+  `analytics_staging`. Also rewrites `IN CLUSTER` references in views,
+  sources, sinks, and indexes.
+
+Both suffixes include the delimiter — write `"_staging"`, not `"staging"`.
+
+When combined with staging deployments, the profile suffix is applied first,
+then the staging suffix stacks on top:
+- `cluster_suffix = "_staging"` + staging suffix `_a` →
+  `foo` → `foo_staging` → `foo_staging_a`
+
 ## Per-profile secret configuration
 
 In `project.toml`, you can configure secret resolution settings per profile

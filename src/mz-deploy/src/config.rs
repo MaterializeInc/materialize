@@ -35,6 +35,10 @@ pub struct ProfileConfig {
     /// For example, `suffix = "_staging"` would rename `materialize` to `materialize_staging`.
     /// The suffix includes the delimiter (user provides `"_staging"`, not `"staging"`).
     pub suffix: Option<String>,
+    /// Optional suffix to append to cluster names for this profile.
+    /// For example, `cluster_suffix = "_staging"` would rename `analytics` to `analytics_staging`.
+    /// The suffix includes the delimiter (user provides `"_staging"`, not `"staging"`).
+    pub cluster_suffix: Option<String>,
     /// Security-related configuration (e.g., AWS profile for secret resolution).
     #[serde(default)]
     pub security: SecurityConfig,
@@ -338,6 +342,11 @@ impl Settings {
         self.profile_config.suffix.as_deref()
     }
 
+    /// Cluster name suffix for this profile (e.g., `"_staging"`).
+    pub fn cluster_suffix(&self) -> Option<&str> {
+        self.profile_config.cluster_suffix.as_deref()
+    }
+
     /// Returns the database connection profile.
     ///
     /// # Panics
@@ -412,6 +421,47 @@ mod tests {
         "#;
         let settings: ProjectSettings = toml::from_str(toml).unwrap();
         assert_eq!(settings.suffix_for_profile("staging"), None);
+    }
+
+    #[test]
+    fn test_profile_config_deserializes_cluster_suffix() {
+        let toml = r#"
+            profile = "default"
+
+            [profiles.staging]
+            cluster_suffix = "_staging"
+        "#;
+        let settings: ProjectSettings = toml::from_str(toml).unwrap();
+        let config = settings.config_for_profile("staging");
+        assert_eq!(config.cluster_suffix.as_deref(), Some("_staging"));
+    }
+
+    #[test]
+    fn test_profile_config_cluster_suffix_optional() {
+        let toml = r#"
+            profile = "default"
+
+            [profiles.prod]
+            suffix = "_prod"
+        "#;
+        let settings: ProjectSettings = toml::from_str(toml).unwrap();
+        let config = settings.config_for_profile("prod");
+        assert!(config.cluster_suffix.is_none());
+    }
+
+    #[test]
+    fn test_profile_config_both_suffixes() {
+        let toml = r#"
+            profile = "default"
+
+            [profiles.staging]
+            suffix = "_staging"
+            cluster_suffix = "_staging"
+        "#;
+        let settings: ProjectSettings = toml::from_str(toml).unwrap();
+        let config = settings.config_for_profile("staging");
+        assert_eq!(config.suffix.as_deref(), Some("_staging"));
+        assert_eq!(config.cluster_suffix.as_deref(), Some("_staging"));
     }
 
     #[test]

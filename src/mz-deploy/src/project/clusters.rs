@@ -11,8 +11,8 @@ use crate::project::parser::{parse_statements_with_context, statement_type_name}
 use crate::project::profile_files::collect_and_resolve_sql_files;
 use mz_sql_parser::ast::{
     ClusterOptionName, CommentObjectType, CommentStatement, CreateClusterStatement,
-    GrantPrivilegesStatement, GrantTargetSpecification, GrantTargetSpecificationInner, ObjectType,
-    Raw, RawClusterName, Statement, WithOptionValue,
+    GrantPrivilegesStatement, GrantTargetSpecification, GrantTargetSpecificationInner, Ident,
+    ObjectType, Raw, RawClusterName, Statement, UnresolvedObjectName, WithOptionValue,
 };
 use std::path::{Path, PathBuf};
 
@@ -33,7 +33,13 @@ pub struct ClusterDefinition {
 /// Load all cluster definitions from `<root>/clusters/`.
 ///
 /// Returns an empty vec if `clusters/` doesn't exist (the directory is optional).
-pub fn load_clusters(root: &Path, profile: &str) -> Result<Vec<ClusterDefinition>, ProjectError> {
+/// If `cluster_suffix` is provided, each cluster definition is rewritten with the
+/// suffix appended to all cluster name references (CREATE, GRANT, COMMENT).
+pub fn load_clusters(
+    root: &Path,
+    profile: &str,
+    cluster_suffix: Option<&str>,
+) -> Result<Vec<ClusterDefinition>, ProjectError> {
     let clusters_dir = root.join("clusters");
 
     if !clusters_dir.exists() {
@@ -68,6 +74,13 @@ pub fn load_clusters(root: &Path, profile: &str) -> Result<Vec<ClusterDefinition
 
     if !errors.is_empty() {
         return Err(ValidationErrors::new(errors).into());
+    }
+
+    // Apply cluster suffix after validation (filename-vs-declared-name check uses original names)
+    if let Some(suffix) = cluster_suffix {
+        for def in &mut definitions {
+            apply_cluster_suffix(def, suffix);
+        }
     }
 
     Ok(definitions)
@@ -213,6 +226,45 @@ fn classify_cluster_statements(
     })
 }
 
+/// Apply a suffix to all cluster name references within a `ClusterDefinition`.
+///
+/// Rewrites the definition name, the CREATE statement name, GRANT target names,
+/// and COMMENT target names.
+fn apply_cluster_suffix(def: &mut ClusterDefinition, suffix: &str) {
+    // Rewrite definition name first, then reference it for the CREATE statement
+    def.name = format!("{}{}", def.name, suffix);
+    def.create_stmt.name = Ident::new(&def.name).expect("valid cluster identifier");
+
+    // Rewrite GRANT target cluster names
+    for grant in &mut def.grants {
+        if let GrantTargetSpecification::Object {
+            object_type: ObjectType::Cluster,
+            object_spec_inner: GrantTargetSpecificationInner::Objects { names },
+        } = &mut grant.target
+        {
+            for name in names {
+                if let UnresolvedObjectName::Cluster(ident) = name {
+                    *ident = suffixed_ident(ident, suffix);
+                }
+            }
+        }
+    }
+
+    // Rewrite COMMENT target cluster names
+    for comment in &mut def.comments {
+        if let CommentObjectType::Cluster { name } = &mut comment.object {
+            if let RawClusterName::Unresolved(ident) = name {
+                *ident = suffixed_ident(ident, suffix);
+            }
+        }
+    }
+}
+
+/// Append a suffix to an `Ident`, returning a new `Ident`.
+fn suffixed_ident(ident: &Ident, suffix: &str) -> Ident {
+    Ident::new(&format!("{}{}", ident, suffix)).expect("valid cluster identifier")
+}
+
 /// Extract the desired SIZE from a CreateClusterStatement's options.
 pub fn extract_size(create_stmt: &CreateClusterStatement<Raw>) -> Option<String> {
     for opt in &create_stmt.options {
@@ -250,7 +302,7 @@ mod tests {
     #[test]
     fn test_load_clusters_no_directory() {
         let dir = create_test_dir();
-        let result = load_clusters(dir.path(), "default").unwrap();
+        let result = load_clusters(dir.path(), "default", None).unwrap();
         assert!(
             result.is_empty(),
             "should return empty vec when clusters/ doesn't exist"
@@ -271,7 +323,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path(), "default").unwrap();
+        let result = load_clusters(dir.path(), "default", None).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "analytics");
         assert_eq!(result[0].grants.len(), 1);
@@ -297,7 +349,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path(), "default").unwrap();
+        let result = load_clusters(dir.path(), "default", None).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "quickstart");
         assert!(result[0].grants.is_empty());
@@ -316,7 +368,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path(), "default");
+        let result = load_clusters(dir.path(), "default", None);
         assert!(
             result.is_err(),
             "should error when cluster name doesn't match filename"
@@ -335,7 +387,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path(), "default");
+        let result = load_clusters(dir.path(), "default", None);
         assert!(
             result.is_err(),
             "should error when no CREATE CLUSTER statement"
@@ -355,7 +407,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path(), "default");
+        let result = load_clusters(dir.path(), "default", None);
         assert!(
             result.is_err(),
             "should error on unsupported statement type"
@@ -375,7 +427,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path(), "default");
+        let result = load_clusters(dir.path(), "default", None);
         assert!(
             result.is_err(),
             "should error when grant targets wrong cluster"
@@ -395,7 +447,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path(), "default");
+        let result = load_clusters(dir.path(), "default", None);
         assert!(
             result.is_err(),
             "should error when comment targets wrong cluster"
@@ -420,7 +472,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_clusters(dir.path(), "default").unwrap();
+        let result = load_clusters(dir.path(), "default", None).unwrap();
         assert_eq!(result.len(), 2);
         // Sorted by filename
         assert_eq!(result[0].name, "analytics");

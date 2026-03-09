@@ -41,7 +41,12 @@ pub async fn run(settings: &Settings) -> Result<(), CliError> {
         .map_err(CliError::Connection)?;
 
     // Load and plan the project
-    let planned_project = project::plan(directory, &settings.profile_name, settings.suffix())?;
+    let planned_project = project::plan(
+        directory,
+        &settings.profile_name,
+        settings.suffix(),
+        settings.cluster_suffix(),
+    )?;
 
     if planned_project.external_dependencies.is_empty() {
         progress::info("No external dependencies found - types.lock not needed");

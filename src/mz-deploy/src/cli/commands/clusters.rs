@@ -22,7 +22,7 @@ pub async fn run(settings: &Settings, dry_run: bool) -> Result<(), CliError> {
     // Load cluster definitions
     progress::stage_start("Loading cluster definitions");
     let load_start = Instant::now();
-    let definitions = clusters::load_clusters(directory, &profile.name)?;
+    let definitions = clusters::load_clusters(directory, &profile.name, settings.cluster_suffix())?;
 
     if definitions.is_empty() {
         println!(

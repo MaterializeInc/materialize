@@ -67,7 +67,12 @@ enum TestOutcome {
 /// Returns error if tests fail (exits with code 1)
 pub async fn run(settings: &Settings) -> Result<(), CliError> {
     let directory = &settings.directory;
-    let planned_project = project::plan(directory, &settings.profile_name, settings.suffix())?;
+    let planned_project = project::plan(
+        directory,
+        &settings.profile_name,
+        settings.suffix(),
+        settings.cluster_suffix(),
+    )?;
     let empty_types = Types::default();
     let runtime = DockerRuntime::new().with_image(&settings.docker_image);
     if planned_project.tests.is_empty() {
