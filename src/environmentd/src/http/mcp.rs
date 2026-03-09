@@ -27,6 +27,7 @@ use anyhow::anyhow;
 use axum::Json;
 use axum::response::IntoResponse;
 use http::StatusCode;
+use mz_adapter_types::dyncfgs::{ENABLE_MCP_AGENTS, ENABLE_MCP_OBSERVATORY};
 use mz_sql::parse::parse;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast::display::escaped_string_literal;
@@ -318,6 +319,18 @@ async fn handle_mcp_request(
     request: McpRequest,
     endpoint_type: McpEndpointType,
 ) -> impl IntoResponse {
+    // Check the per-endpoint feature flag via a catalog snapshot, similar to frontend_peek.rs.
+    let catalog = client.client.catalog_snapshot("mcp").await;
+    let dyncfgs = catalog.system_config().dyncfgs();
+    let enabled = match endpoint_type {
+        McpEndpointType::Agents => ENABLE_MCP_AGENTS.get(dyncfgs),
+        McpEndpointType::Observatory => ENABLE_MCP_OBSERVATORY.get(dyncfgs),
+    };
+    if !enabled {
+        debug!(endpoint = %endpoint_type, "MCP endpoint disabled by feature flag");
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+
     let user = client.client.session().user().name.clone();
     let is_notification = request.id.is_none();
 
