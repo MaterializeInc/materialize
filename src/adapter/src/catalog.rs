@@ -958,12 +958,11 @@ impl Catalog {
     }
 
     pub fn resolve_item_id(&self, id: &GlobalId) -> CatalogItemId {
-        self.get_entry_by_global_id(id).id()
+        self.state.resolve_item_id(id)
     }
 
     pub fn try_resolve_item_id(&self, id: &GlobalId) -> Option<CatalogItemId> {
-        let item = self.try_get_entry_by_global_id(id)?;
-        Some(item.id())
+        self.state.try_resolve_item_id(id)
     }
 
     pub fn get_schema(
@@ -2155,7 +2154,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn resolve_item_id(&self, global_id: &GlobalId) -> CatalogItemId {
-        self.state.get_entry_by_global_id(global_id).id()
+        self.state.resolve_item_id(global_id)
     }
 
     fn resolve_global_id(

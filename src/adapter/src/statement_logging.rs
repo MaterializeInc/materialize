@@ -989,7 +989,7 @@ impl WatchSetCreation {
 
         for item_id in input_id_bundle
             .iter()
-            .map(|gid| catalog_state.get_entry_by_global_id(&gid).id())
+            .map(|gid| catalog_state.resolve_item_id(&gid))
             .flat_map(|id| catalog_state.transitive_uses(id))
         {
             let entry = catalog_state.get_entry(&item_id);

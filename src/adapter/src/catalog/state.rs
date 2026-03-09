@@ -432,11 +432,11 @@ impl CatalogState {
                 }
             }
             CatalogItem::Sink(sink) => {
-                let from_item_id = self.get_entry_by_global_id(&sink.from).id();
+                let from_item_id = self.resolve_item_id(&sink.from);
                 self.introspection_dependencies_inner(from_item_id, out)
             }
             CatalogItem::Index(idx) => {
-                let on_item_id = self.get_entry_by_global_id(&idx.on).id();
+                let on_item_id = self.resolve_item_id(&idx.on);
                 self.introspection_dependencies_inner(on_item_id, out)
             }
             CatalogItem::Table(_)
@@ -740,6 +740,20 @@ impl CatalogState {
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id:?}"))
     }
 
+    /// Returns the [`CatalogItemId`] for a [`GlobalId`] via a direct map lookup,
+    /// without cloning the full [`CatalogEntry`].
+    pub fn resolve_item_id(&self, id: &GlobalId) -> CatalogItemId {
+        *self
+            .entry_by_global_id
+            .get(id)
+            .unwrap_or_else(|| panic!("catalog out of sync, missing id {id:?}"))
+    }
+
+    /// Returns the [`CatalogItemId`] for a [`GlobalId`] if it exists.
+    pub fn try_resolve_item_id(&self, id: &GlobalId) -> Option<CatalogItemId> {
+        self.entry_by_global_id.get(id).copied()
+    }
+
     pub fn get_entry_by_global_id(&self, id: &GlobalId) -> CatalogCollectionEntry {
         let item_id = self
             .entry_by_global_id
@@ -752,7 +766,7 @@ impl CatalogState {
                 let (version, _) = table
                     .collections
                     .iter()
-                    .find(|(_verison, gid)| *gid == id)
+                    .find(|(_version, gid)| *gid == id)
                     .expect("version to exist");
                 RelationVersionSelector::Specific(*version)
             }
@@ -1302,7 +1316,7 @@ impl CatalogState {
                 let dependencies: BTreeSet<_> = raw_expr
                     .depends_on()
                     .into_iter()
-                    .map(|gid| self.get_entry_by_global_id(&gid).id())
+                    .map(|gid| self.resolve_item_id(&gid))
                     .collect();
 
                 let typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);
@@ -1387,7 +1401,7 @@ impl CatalogState {
                 let dependencies = raw_expr
                     .depends_on()
                     .into_iter()
-                    .map(|gid| self.get_entry_by_global_id(&gid).id())
+                    .map(|gid| self.resolve_item_id(&gid))
                     .collect();
 
                 CatalogItem::MaterializedView(MaterializedView {

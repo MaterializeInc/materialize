@@ -1728,7 +1728,7 @@ impl CatalogState {
                 .expect("key_parts is filled in during planning"),
             _ => unreachable!(),
         };
-        let on_item_id = self.get_entry_by_global_id(&index.on).id();
+        let on_item_id = self.resolve_item_id(&index.on);
 
         updates.push(BuiltinTableUpdate::row(
             &*MZ_INDEXES,

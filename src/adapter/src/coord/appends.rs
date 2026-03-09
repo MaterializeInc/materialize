@@ -1060,7 +1060,7 @@ pub(crate) fn waiting_on_startup_appends(
         Some(wait_future) => {
             let depends_on = depends_on
                 .into_iter()
-                .map(|gid| catalog.get_entry_by_global_id(&gid).id())
+                .map(|gid| catalog.resolve_item_id(&gid))
                 .collect();
             Some((depends_on, wait_future.boxed()))
         }
