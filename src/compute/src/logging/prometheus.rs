@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use mz_compute_types::dyncfgs::ENABLE_COMPUTE_PROMETHEUS_METRICS;
+use mz_compute_types::dyncfgs::COMPUTE_PROMETHEUS_SCRAPE_INTERVAL;
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::CollectionExt;
@@ -100,11 +100,17 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             if Instant::now() < next_scrape {
                 return;
             }
-            next_scrape = Instant::now() + interval;
+
+            // The effective scrape interval is the maximum of the
+            // configured prometheus interval and the logging interval.
+            // A zero prometheus interval disables scraping.
+            let prom_interval = COMPUTE_PROMETHEUS_SCRAPE_INTERVAL.get(&worker_config);
+            let effective_interval = prom_interval.max(interval);
+            next_scrape = Instant::now() + effective_interval;
 
             // Gather current metrics and build new snapshot, or an empty
             // snapshot when disabled (which retracts any existing data).
-            let new_snapshot = if ENABLE_COMPUTE_PROMETHEUS_METRICS.get(&worker_config) {
+            let new_snapshot = if !prom_interval.is_zero() {
                 let metric_families = metrics_registry.gather();
                 flatten_metrics(metric_families)
             } else {
@@ -155,8 +161,8 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
 
             prev_snapshot = new_snapshot;
 
-            // Reschedule after the current scrape interval.
-            activator.activate_after(interval);
+            // Reschedule after the effective scrape interval.
+            activator.activate_after(effective_interval);
         }
     });
 
