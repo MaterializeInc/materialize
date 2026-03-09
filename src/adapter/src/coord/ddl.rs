@@ -1277,26 +1277,50 @@ impl Coordinator {
             }
         }
 
-        let mut current_aws_privatelink_connections = 0;
+        // Count all user entry types in a single pass over entry_by_id,
+        // instead of 7 separate full scans.
+        let mut current_kafka_connections = 0;
         let mut current_postgres_connections = 0;
         let mut current_mysql_connections = 0;
         let mut current_sql_server_connections = 0;
-        let mut current_kafka_connections = 0;
-        for c in self.catalog().user_connections() {
-            let connection = c
-                .connection()
-                .expect("`user_connections()` only returns connection objects");
-
-            match connection.details {
-                ConnectionDetails::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
-                ConnectionDetails::Postgres(_) => current_postgres_connections += 1,
-                ConnectionDetails::MySql(_) => current_mysql_connections += 1,
-                ConnectionDetails::SqlServer(_) => current_sql_server_connections += 1,
-                ConnectionDetails::Kafka(_) => current_kafka_connections += 1,
-                ConnectionDetails::Csr(_)
-                | ConnectionDetails::Ssh { .. }
-                | ConnectionDetails::Aws(_)
-                | ConnectionDetails::IcebergCatalog(_) => {}
+        let mut current_aws_privatelink_connections = 0;
+        let mut current_tables = 0;
+        let mut current_sources: i64 = 0;
+        let mut current_sinks = 0;
+        let mut current_materialized_views = 0;
+        let mut current_secrets = 0;
+        let mut current_continual_tasks = 0;
+        for entry in self.catalog().entries() {
+            if !entry.id().is_user() {
+                continue;
+            }
+            match entry.item() {
+                CatalogItem::Connection(c) => match c.details {
+                    ConnectionDetails::Kafka(_) => current_kafka_connections += 1,
+                    ConnectionDetails::Postgres(_) => current_postgres_connections += 1,
+                    ConnectionDetails::MySql(_) => current_mysql_connections += 1,
+                    ConnectionDetails::SqlServer(_) => current_sql_server_connections += 1,
+                    ConnectionDetails::AwsPrivatelink(_) => {
+                        current_aws_privatelink_connections += 1
+                    }
+                    ConnectionDetails::Csr(_)
+                    | ConnectionDetails::Ssh { .. }
+                    | ConnectionDetails::Aws(_)
+                    | ConnectionDetails::IcebergCatalog(_) => {}
+                },
+                CatalogItem::Table(_) => current_tables += 1,
+                CatalogItem::Source(source) => {
+                    current_sources += source.user_controllable_persist_shard_count();
+                }
+                CatalogItem::Sink(_) => current_sinks += 1,
+                CatalogItem::MaterializedView(_) => current_materialized_views += 1,
+                CatalogItem::Secret(_) => current_secrets += 1,
+                CatalogItem::ContinualTask(_) => current_continual_tasks += 1,
+                CatalogItem::Log(_)
+                | CatalogItem::View(_)
+                | CatalogItem::Index(_)
+                | CatalogItem::Type(_)
+                | CatalogItem::Func(_) => {}
             }
         }
         self.validate_resource_limit(
@@ -1335,38 +1359,30 @@ impl Coordinator {
             MAX_AWS_PRIVATELINK_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
-            self.catalog().user_tables().count(),
+            current_tables,
             new_tables,
             SystemVars::max_tables,
             "table",
             MAX_TABLES.name(),
         )?;
-
-        let current_sources: usize = self
-            .catalog()
-            .user_sources()
-            .filter_map(|source| source.source())
-            .map(|source| source.user_controllable_persist_shard_count())
-            .sum::<i64>()
-            .try_into()
-            .expect("non-negative sum of sources");
-
         self.validate_resource_limit(
-            current_sources,
+            current_sources
+                .try_into()
+                .expect("non-negative sum of sources"),
             new_sources,
             SystemVars::max_sources,
             "source",
             MAX_SOURCES.name(),
         )?;
         self.validate_resource_limit(
-            self.catalog().user_sinks().count(),
+            current_sinks,
             new_sinks,
             SystemVars::max_sinks,
             "sink",
             MAX_SINKS.name(),
         )?;
         self.validate_resource_limit(
-            self.catalog().user_materialized_views().count(),
+            current_materialized_views,
             new_materialized_views,
             SystemVars::max_materialized_views,
             "materialized view",
@@ -1443,7 +1459,7 @@ impl Coordinator {
             )?;
         }
         self.validate_resource_limit(
-            self.catalog().user_secrets().count(),
+            current_secrets,
             new_secrets,
             SystemVars::max_secrets,
             "secret",
@@ -1457,7 +1473,7 @@ impl Coordinator {
             MAX_ROLES.name(),
         )?;
         self.validate_resource_limit(
-            self.catalog().user_continual_tasks().count(),
+            current_continual_tasks,
             new_continual_tasks,
             SystemVars::max_continual_tasks,
             "continual_task",
