@@ -386,6 +386,7 @@ impl LogVariant {
                 .finish(),
 
             LogVariant::Compute(ComputeLog::PrometheusMetrics) => RelationDesc::builder()
+                .with_column("process_id", SqlScalarType::UInt64.nullable(false))
                 .with_column("metric_name", SqlScalarType::String.nullable(false))
                 .with_column("metric_type", SqlScalarType::String.nullable(false))
                 .with_column(
@@ -398,8 +399,7 @@ impl LogVariant {
                 )
                 .with_column("value", SqlScalarType::Float64.nullable(false))
                 .with_column("help", SqlScalarType::String.nullable(false))
-                .with_column("process_id", SqlScalarType::UInt64.nullable(false))
-                .with_key(vec![0, 2, 5])
+                .with_key(vec![0, 1, 3])
                 .finish(),
         }
     }

@@ -6717,45 +6717,17 @@ def workflow_test_github_11219(c: Composition) -> None:
 
 
 def workflow_test_prometheus_metrics(c: Composition) -> None:
-    """Test that mz_compute_prometheus_metrics_per_worker reports metrics."""
+    """Test that mz_compute_prometheus_metrics reports metrics."""
 
     with c.override(
-        Materialized(
-            additional_system_parameter_defaults={
-                "unsafe_enable_unsafe_functions": "true",
-                "unsafe_enable_unorchestrated_cluster_replicas": "true",
-            },
-            support_external_clusterd=True,
-        ),
-        Clusterd(
-            name="clusterd1",
-            workers=2,
-            process_names=["clusterd1", "clusterd2"],
-        ),
-        Clusterd(
-            name="clusterd2",
-            workers=2,
-            process_names=["clusterd1", "clusterd2"],
-        ),
         Testdrive(no_reset=True, default_timeout="60s"),
     ):
-        c.up("materialized", "clusterd1", "clusterd2")
+        c.up("materialized")
 
         c.sql(
             """
-            CREATE CLUSTER cluster1 REPLICAS (
-                replica1 (
-                    STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
-                    WORKERS 2
-                )
-            );
-            GRANT ALL ON CLUSTER cluster1 TO materialize;
-            """,
-            port=6877,
-            user="mz_system",
+            CREATE CLUSTER cluster1 SIZE 'scale=2,workers=2';
+            """
         )
 
         # Create a materialized view to generate compute activity.
@@ -6773,17 +6745,17 @@ def workflow_test_prometheus_metrics(c: Composition) -> None:
                 > SET cluster = cluster1
 
                 > SELECT count(*) > 0
-                  FROM mz_introspection.mz_compute_prometheus_metrics_per_worker
+                  FROM mz_introspection.mz_compute_prometheus_metrics
                 true
 
                 > SELECT DISTINCT metric_type
-                  FROM mz_introspection.mz_compute_prometheus_metrics_per_worker
+                  FROM mz_introspection.mz_compute_prometheus_metrics
                   WHERE metric_type IN ('counter', 'gauge')
                 counter
                 gauge
 
                 > SELECT DISTINCT process_id
-                  FROM mz_introspection.mz_compute_prometheus_metrics_per_worker
+                  FROM mz_introspection.mz_compute_prometheus_metrics
                   ORDER BY process_id
                 0
                 1
