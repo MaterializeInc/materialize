@@ -14,3 +14,5 @@ pub mod oneshot_source;
 pub mod persist_source;
 pub mod s3_oneshot_sink;
 pub mod stats;
+
+pub mod persist;

@@ -187,6 +187,11 @@ impl<K, KS: Schema<K>, V, VS: Schema<V>> PartBuilder<K, KS, V, VS> {
         }
     }
 
+    /// The number of elements pushed into the builder.
+    pub fn len(&self) -> usize {
+        self.time.len()
+    }
+
     /// Estimate the size of the part this builder will build.
     pub fn goodbytes(&self) -> usize {
         self.key.goodbytes() + self.val.goodbytes() + self.time.goodbytes() + self.diff.goodbytes()
