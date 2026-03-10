@@ -948,9 +948,17 @@ impl ResultSender for WebSocket {
                 desc,
                 notices,
             }) => {
-                let mut msgs = vec![WebSocketResponse::Rows(desc)];
-                msgs.extend(rows.into_iter().map(WebSocketResponse::Row));
-                msgs.push(WebSocketResponse::CommandComplete(tag));
+                // Stream rows directly to avoid buffering all rows as
+                // WebSocketResponse, which inflates memory due to enum sizing.
+                if let Err(e) = send_ws_response(self, WebSocketResponse::Rows(desc)).await {
+                    return (Err(e), None);
+                }
+                for row in rows {
+                    if let Err(e) = send_ws_response(self, WebSocketResponse::Row(row)).await {
+                        return (Err(e), None);
+                    }
+                }
+                let mut msgs = vec![WebSocketResponse::CommandComplete(tag)];
                 msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
                 (false, msgs, None)
             }
