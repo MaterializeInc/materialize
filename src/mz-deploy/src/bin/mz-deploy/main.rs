@@ -295,6 +295,8 @@ enum Command {
         after_help = "Run 'mz-deploy help test' for a detailed usage guide."
     )]
     Test {
+        /// Filter which tests to run (e.g. "db.schema.object#test_name", supports trailing *)
+        filter: Option<String>,
         /// Write test results to a JUnit XML file
         #[arg(long, value_name = "FILE")]
         junit_xml: Option<PathBuf>,
@@ -815,13 +817,13 @@ async fn run(args: Args) -> Result<(), CliError> {
             }
             cli::commands::gen_data_contracts::run(&settings).await
         }
-        Some(Command::Test { junit_xml }) => {
+        Some(Command::Test { filter, junit_xml }) => {
             if json {
                 return Err(CliError::Message(
                     "--output json is not supported for the 'test' command".to_string(),
                 ));
             }
-            cli::commands::test::run(&settings, junit_xml.as_deref()).await
+            cli::commands::test::run(&settings, filter.as_deref(), junit_xml.as_deref()).await
         }
         Some(Command::Abort { deploy_id }) => {
             if json {

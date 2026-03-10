@@ -7,7 +7,7 @@ any remote database.
 
 ## Usage
 
-    mz-deploy test
+    mz-deploy test [FILTER]
 
 ## Writing Tests
 
@@ -100,10 +100,28 @@ so common aliases are interchangeable: `int`/`int4`/`integer`,
 `bigint`/`int8`, `text`/`varchar`/`string`, `float`/`float8`/`double
 precision`, `numeric`/`decimal`, `json`/`jsonb`, etc.
 
+## Filtering Tests
+
+Pass a filter argument to run a subset of tests. The filter matches
+against the fully qualified object name (`database.schema.object`) and
+optionally a test name:
+
+    mz-deploy test 'materialize.*'                     # All tests in the materialize database
+    mz-deploy test 'materialize.public.*'              # All tests in materialize.public
+    mz-deploy test 'materialize.public.my_view'        # All tests for a specific view
+    mz-deploy test 'materialize.public.my_view#test1'  # A single named test
+
+A trailing `*` segment acts as a wildcard — it matches all values for
+that position and any positions after it. Without a filter, all tests
+are run.
+
+If the filter matches no tests, a message is printed and the command
+exits successfully.
+
 ## Examples
 
     mz-deploy test                         # Run all tests
-    mz-deploy test -v                      # Verbose: show executed SQL
+    mz-deploy test 'materialize.public.*'  # Run tests in a specific schema
     mz-deploy test --docker-image img:tag  # Use a specific Docker image
 
 ## Error Recovery

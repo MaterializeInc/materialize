@@ -16,6 +16,108 @@ use std::fs::File;
 use std::path::Path;
 use std::time::Instant;
 
+/// Filter to select a subset of tests to run.
+///
+/// Supports patterns like:
+/// - `database.*` — all tests in a database
+/// - `database.schema.*` — all tests in a schema
+/// - `database.schema.object` — all tests for an object
+/// - `database.schema.object#test_name` — a single named test
+struct TestFilter {
+    database: Option<String>,
+    schema: Option<String>,
+    object: Option<String>,
+    test_name: Option<String>,
+}
+
+impl TestFilter {
+    fn parse(filter: &str) -> Self {
+        let (object_part, test_name) = match filter.split_once('#') {
+            Some((left, name)) => (left, Some(name.to_string())),
+            None => (filter, None),
+        };
+
+        let segments: Vec<&str> = object_part.split('.').collect();
+        let (database, schema, object) = match segments.as_slice() {
+            [db, schema, obj] => {
+                let db = if *db == "*" {
+                    None
+                } else {
+                    Some(db.to_string())
+                };
+                let schema = if *schema == "*" {
+                    None
+                } else {
+                    Some(schema.to_string())
+                };
+                let obj = if *obj == "*" {
+                    None
+                } else {
+                    Some(obj.to_string())
+                };
+                (db, schema, obj)
+            }
+            [db, schema_or_star] => {
+                let db = if *db == "*" {
+                    None
+                } else {
+                    Some(db.to_string())
+                };
+                let schema = if *schema_or_star == "*" {
+                    None
+                } else {
+                    Some(schema_or_star.to_string())
+                };
+                (db, schema, None)
+            }
+            [db_or_star] => {
+                let db = if *db_or_star == "*" {
+                    None
+                } else {
+                    Some(db_or_star.to_string())
+                };
+                (db, None, None)
+            }
+            _ => (None, None, None),
+        };
+
+        TestFilter {
+            database,
+            schema,
+            object,
+            test_name,
+        }
+    }
+
+    fn matches(
+        &self,
+        object_id: &project::object_id::ObjectId,
+        test: &unit_test::UnitTest,
+    ) -> bool {
+        if let Some(ref db) = self.database {
+            if db != &object_id.database {
+                return false;
+            }
+        }
+        if let Some(ref schema) = self.schema {
+            if schema != &object_id.schema {
+                return false;
+            }
+        }
+        if let Some(ref obj) = self.object {
+            if obj != &object_id.object {
+                return false;
+            }
+        }
+        if let Some(ref name) = self.test_name {
+            if name != &test.name {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 /// Final classification for a single test invocation.
 ///
 /// `ValidationFailed` is tracked separately from execution failures so summary output
@@ -116,7 +218,11 @@ impl TestOutcome {
 /// Returns `CliError::Project` if project loading fails
 /// Returns `CliError::Connection` if database connection fails
 /// Returns error if tests fail (exits with code 1)
-pub async fn run(settings: &Settings, junit_xml: Option<&Path>) -> Result<(), CliError> {
+pub async fn run(
+    settings: &Settings,
+    filter: Option<&str>,
+    junit_xml: Option<&Path>,
+) -> Result<(), CliError> {
     let directory = &settings.directory;
     let planned_project = project::plan(
         directory,
@@ -127,6 +233,8 @@ pub async fn run(settings: &Settings, junit_xml: Option<&Path>) -> Result<(), Cl
     )?;
     let empty_types = Types::default();
     let runtime = DockerRuntime::new().with_image(&settings.docker_image);
+    let test_filter = filter.map(TestFilter::parse);
+
     if planned_project.tests.is_empty() {
         progress::info(&format!("No tests found in {}", directory.display()));
         return Ok(());
@@ -146,6 +254,11 @@ pub async fn run(settings: &Settings, junit_xml: Option<&Path>) -> Result<(), Cl
         BTreeMap::new();
     let (mut passed_tests, mut failed_tests, mut validation_failed) = (0, 0, 0);
     for (object_id, test) in &planned_project.tests {
+        if let Some(ref f) = test_filter {
+            if !f.matches(object_id, test) {
+                continue;
+            }
+        }
         let start_time = Instant::now();
         let outcome = run_single_test(
             &planned_project,
@@ -171,6 +284,14 @@ pub async fn run(settings: &Settings, junit_xml: Option<&Path>) -> Result<(), Cl
             TestOutcome::Failed(_) => failed_tests += 1,
             TestOutcome::ValidationFailed(_) => validation_failed += 1,
         }
+    }
+
+    let total_run = passed_tests + failed_tests + validation_failed;
+    if total_run == 0 {
+        if let Some(f) = filter {
+            progress::info(&format!("No tests matched filter '{}'", f));
+        }
+        return Ok(());
     }
 
     if let Some(path) = junit_xml {
