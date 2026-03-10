@@ -82,7 +82,7 @@ struct Args {
     verbose: bool,
 
     /// Database connection profile to use (from profiles.toml)
-    #[arg(short, long, global = true)]
+    #[arg(short, long, global = true, env = "MZ_DEPLOY_PROFILE")]
     profile: Option<String>,
 
     /// Materialize Docker image to use for type checking and tests
@@ -98,7 +98,7 @@ struct Args {
     )]
     profiles_dir: Option<PathBuf>,
 
-    /// Output format for --dry-run results (text or json)
+    /// Output format (text or json)
     #[arg(long, global = true, default_value = "text")]
     output: OutputFormat,
 

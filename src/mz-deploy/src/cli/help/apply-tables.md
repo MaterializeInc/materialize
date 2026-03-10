@@ -36,6 +36,7 @@ use bare `apply` which handles the full dependency chain automatically.
     mz-deploy apply tables           # Create missing tables
     mz-deploy apply tables -v        # Verbose: show executed SQL
     mz-deploy apply tables --dry-run # Print SQL without executing
+    mz-deploy apply tables --dry-run --output json  # Machine-readable SQL list
 
 ## Error Recovery
 

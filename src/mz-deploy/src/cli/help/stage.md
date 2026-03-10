@@ -1,10 +1,12 @@
 # stage — Create a staging deployment for testing changes
 
-Deploys all views, materialized views, indexes, and related objects to
-staging schemas and clusters with a suffixed name (e.g., `public_abc123`).
-Tables and sources are not recreated — they must already exist (see
-`apply`). Staging deployments run in isolation alongside
-production and can be promoted with `promote` or cleaned up with `abort`.
+Compares your project against the current production snapshot and deploys
+only the objects that have changed to staging schemas and clusters with a
+suffixed name (e.g., `public_abc123`). Unchanged objects are skipped
+entirely. Tables and sources are not
+recreated — they must already exist (see `apply`). Staging deployments
+run in isolation alongside production and can be promoted with `promote`
+or cleaned up with `abort`.
 
 ## Usage
 
@@ -16,8 +18,11 @@ production and can be promoted with `promote` or cleaned up with `abort`.
 2. Compiles and validates the project (same as `compile`). The connection
    profile's name is used for file resolution, so `--profile staging` will
    load `__staging` file overrides. See `mz-deploy help profiles`.
-3. Diffs the plan against the current production snapshot to determine
-   what changed. On the first deployment, everything is new.
+3. Diffs the plan against the current production snapshot by comparing
+   hashes of each object's SQL against the last promoted snapshot. Only
+   objects whose definition changed (or whose dependencies changed) are
+   included in the staging deployment. Unchanged objects are not
+   recreated. On the first deployment, everything is new.
 4. Validates privileges, cluster isolation, and sink connections.
 5. Records deployment metadata (object hashes, deferred sinks, replacement
    materialized views).
@@ -25,7 +30,7 @@ production and can be promoted with `promote` or cleaned up with `abort`.
    - Staging schemas with `_<deploy_id>` suffix (e.g., `public_abc123`).
    - Staging clusters cloned from production cluster configuration.
 7. Applies schema setup statements (transformed for staging names).
-8. Deploys all objects except tables and sources to staging schemas.
+8. Deploys changed objects (except tables and sources) to staging schemas.
 9. On failure, automatically rolls back staging schemas and clusters
    (unless `--no-rollback`).
 
@@ -34,24 +39,24 @@ producing until the deployment is promoted.
 
 ### Stable API Schemas (`SET api = stable`)
 
-By default, `stage` recreates every changed object in a staging schema
-and `promote` swaps the entire schema into production. This means any
-downstream consumers — views, materialized views, or sinks that other
-teams have built on top of objects in that schema — would break, because
-the swap replaces the schema and all its contents atomically.
+By default, when an object changes, `stage` recreates it in a staging
+schema and `promote` swaps the entire schema into production. Any
+dependents of the changed objects within the same mz-deploy project are
+detected as dirty and redeployed automatically, so nothing breaks — but
+as projects grow this can cause large cascading redeployments. Consumers
+in **other** mz-deploy projects will break, because this project has no
+knowledge of them and cannot redeploy them.
 
-Adding `SET api = stable` to a schema's mod file marks that schema as
-a **stable API boundary**. Objects in the schema become safe for
-downstream consumers to depend on. When a materialized view in a stable
+`SET api = stable` marks a schema as a **stable API boundary** that
+other teams can safely depend on. When a materialized view in a stable
 schema changes, mz-deploy uses Materialize's replacement protocol
 instead of a schema swap:
 
     ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT ...
 
-This atomically replaces the internal computation of the MV without
-dropping and recreating it. The MV's identity and name stay the same,
-so anything built on top of it — by your team or others — continues
-working without interruption.
+The MV's computation is updated in place and its identity is preserved.
+Downstream consumers — whether in the same project or a different one —
+do not need to be redeployed and do not need to know about the update.
 
 Key points:
 

@@ -77,10 +77,10 @@ sinks to repoint, and resources to drop.
   conflict is acceptable.
 - **Clusters not ready** — Wait for hydration with `mz-deploy wait <ID>`
   or pass `--no-ready-check` to promote anyway.
-- **Interrupted after swap** — Re-run the same `deploy` command. It will
+- **Interrupted after swap** — Re-run the same `promote` command. It will
   detect the post-swap state and resume cleanup.
 - **Sink creation fails post-swap** — The swap already succeeded. Fix the
-  sink definition and re-run `deploy` to retry deferred work.
+  sink definition and re-run `promote` to retry deferred work.
 
 ## Rollback
 
@@ -91,7 +91,7 @@ changes in your project and promote the result:
     mz-deploy stage                  # Stage the reverted project
     mz-deploy promote <NEW_DEPLOY_ID> # Promote to production
 
-Because `deploy` uses atomic `ALTER ... SWAP`, the rollback promotion is
+Because `promote` uses atomic `ALTER ... SWAP`, the rollback promotion is
 itself atomic — production traffic switches back in a single transaction.
 
 ## Related Commands

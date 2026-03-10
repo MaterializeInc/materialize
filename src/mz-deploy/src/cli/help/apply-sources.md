@@ -35,6 +35,7 @@ handles the full dependency chain automatically.
     mz-deploy apply sources           # Create missing sources
     mz-deploy apply sources -v        # Verbose: show executed SQL
     mz-deploy apply sources --dry-run # Print SQL without executing
+    mz-deploy apply sources --dry-run --output json  # Machine-readable SQL list
 
 ## Error Recovery
 

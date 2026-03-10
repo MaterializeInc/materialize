@@ -45,6 +45,6 @@ if they are "ready" or "lagging."
 
 - `mz-deploy stage` — Create a staging deployment.
 - `mz-deploy wait` — Monitor a specific deployment's hydration.
-- `mz-deploy deploy` — Promote a staging deployment.
+- `mz-deploy promote` — Promote a staging deployment.
 - `mz-deploy abort` — Remove a staging deployment.
 - `mz-deploy log` — View promoted (past) deployments.
