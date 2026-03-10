@@ -1881,6 +1881,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_replica_targeted_materialized_views,
+        desc: "replica-targeted materialized views",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: unsafe_enable_table_check_constraint,
         desc: "CREATE TABLE with a check constraint",
         default: false,

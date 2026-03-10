@@ -753,6 +753,42 @@ class MaterializedView(Object):
         raise NotImplementedError
 
 
+class ReplicaTargetedMaterializedView(Object):
+    def create(self) -> str:
+        self.select = (
+            "* FROM " + self.references.name
+            if self.references
+            else "'foo' AS a, 'bar' AS b"
+        )
+        return f"> CREATE MATERIALIZED VIEW {self.name} IN CLUSTER quickstart REPLICA r1 AS SELECT {self.select}"
+
+    def destroy(self) -> str:
+        return f"> DROP MATERIALIZED VIEW {self.name} CASCADE"
+
+    def manipulate(self, kind: int) -> str:
+        manipulations = [
+            lambda: "",
+            lambda: dedent(
+                f"""
+                > DROP MATERIALIZED VIEW IF EXISTS {self.name}_tmp_mv
+                > ALTER MATERIALIZED VIEW {self.name} RENAME TO {self.name}_tmp_mv
+                > ALTER MATERIALIZED VIEW {self.name}_tmp_mv RENAME TO {self.name}
+                """
+            ),
+            lambda: dedent(
+                f"""
+                > DROP MATERIALIZED VIEW IF EXISTS {self.name}_replacement
+                > CREATE REPLACEMENT MATERIALIZED VIEW {self.name}_replacement FOR {self.name} AS SELECT {self.select}
+                > DROP MATERIALIZED VIEW {self.name}_replacement
+                """
+            ),
+        ]
+        return manipulations[kind % len(manipulations)]()
+
+    def verify(self) -> str:
+        raise NotImplementedError
+
+
 class DefaultIndex(Object):
     can_refer: bool = False
 
@@ -986,6 +1022,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.sql("ALTER SYSTEM SET max_secrets = 1000000", user="mz_system", port=6877)
     c.sql(
         "ALTER SYSTEM SET webhook_concurrent_request_limit = 1000000",
+        user="mz_system",
+        port=6877,
+    )
+    c.sql(
+        "ALTER SYSTEM SET enable_replica_targeted_materialized_views = true",
         user="mz_system",
         port=6877,
     )

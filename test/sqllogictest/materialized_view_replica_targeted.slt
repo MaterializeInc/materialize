@@ -1,0 +1,155 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for CREATE MATERIALIZED VIEW ... IN CLUSTER ... REPLICA ... syntax.
+# Replica-targeted MVs require the feature flag to be enabled.
+
+mode cockroach
+
+# Setup
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_replica_targeted_materialized_views = true;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t (a int)
+
+statement ok
+INSERT INTO t VALUES (1), (2), (3)
+
+statement ok
+CREATE CLUSTER test REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1'))
+
+
+# Test: Materialized view targeted at a specific replica can be created.
+
+statement ok
+CREATE MATERIALIZED VIEW mv1 IN CLUSTER test REPLICA r1 AS SELECT sum(a) FROM t;
+
+query I
+SELECT * FROM mv1
+----
+6
+
+
+# Test: Materialized view targeted at a specific replica round-trips through SQL.
+
+query T multiline
+SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW mv1);
+----
+CREATE MATERIALIZED VIEW materialize.public.mv1
+    IN CLUSTER test REPLICA r1
+    WITH (REFRESH = ON COMMIT)
+    AS SELECT pg_catalog.sum(a) FROM materialize.public.t;
+EOF
+
+
+# Test: Materialized view targeted at a nonexistent replica errors.
+
+statement error unknown cluster replica 'does_not_exist'
+CREATE MATERIALIZED VIEW mv_bad IN CLUSTER test REPLICA does_not_exist AS SELECT 1;
+
+
+# Test: IN REPLICA without IN CLUSTER uses the session cluster.
+
+statement ok
+SET cluster = test
+
+statement ok
+CREATE MATERIALIZED VIEW mv_session IN REPLICA r1 AS SELECT sum(a) FROM t;
+
+query I
+SELECT * FROM mv_session
+----
+6
+
+statement ok
+DROP MATERIALIZED VIEW mv_session
+
+statement ok
+SET cluster = quickstart
+
+
+# Test: Without the feature flag, replica-targeted MVs are rejected.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_replica_targeted_materialized_views = false;
+----
+COMPLETE 0
+
+statement error replica\-targeted materialized views is not available
+CREATE MATERIALIZED VIEW mv_bad IN CLUSTER test REPLICA r1 AS SELECT 1;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_replica_targeted_materialized_views = true;
+----
+COMPLETE 0
+
+
+# Test: Data is visible and correct.
+
+statement ok
+INSERT INTO t VALUES (4)
+
+query I
+SELECT * FROM mv1
+----
+10
+
+
+# Test: Another targeted materialized view on a different replica.
+
+statement ok
+CREATE MATERIALIZED VIEW mv2 IN CLUSTER test REPLICA r2 AS SELECT count(a) FROM t;
+
+query I
+SELECT * FROM mv2
+----
+4
+
+
+# Test: OR REPLACE works with REPLICA syntax.
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW mv1 IN CLUSTER test REPLICA r1 AS SELECT sum(a) + 100 FROM t;
+
+query I
+SELECT * FROM mv1
+----
+110
+
+
+# Test: IF NOT EXISTS works with REPLICA syntax.
+
+statement ok
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv1 IN CLUSTER test REPLICA r1 AS SELECT 999;
+
+
+# The original definition is retained.
+query I
+SELECT * FROM mv1
+----
+110
+
+
+# Cleanup
+
+statement ok
+DROP MATERIALIZED VIEW mv1;
+
+statement ok
+DROP MATERIALIZED VIEW mv2;
+
+statement ok
+DROP TABLE t CASCADE
+
+statement ok
+DROP CLUSTER test

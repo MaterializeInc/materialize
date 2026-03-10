@@ -168,6 +168,7 @@ use crate::plan::{
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
     ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
+    ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS,
 };
 use crate::{names, parse};
 
@@ -2767,6 +2768,23 @@ pub fn plan_create_materialized_view(
         print_name: None,
     });
 
+    let target_replica = match &stmt.in_cluster_replica {
+        Some(replica_name) => {
+            scx.require_feature_flag(&ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS)?;
+
+            let cluster = scx.catalog.get_cluster(cluster_id);
+            let replica_id = cluster
+                .replica_ids()
+                .get(replica_name.as_str())
+                .copied()
+                .ok_or_else(|| {
+                    CatalogError::UnknownClusterReplica(replica_name.as_str().to_string())
+                })?;
+            Some(replica_id)
+        }
+        None => None,
+    };
+
     let create_sql =
         normalize::create_statement(scx, Statement::CreateMaterializedView(stmt.clone()))?;
 
@@ -3082,6 +3100,7 @@ pub fn plan_create_materialized_view(
             column_names,
             replacement_target,
             cluster_id,
+            target_replica,
             non_null_assertions,
             compaction_window,
             refresh_schedule,
@@ -3332,6 +3351,7 @@ pub fn plan_create_continual_task(
             column_names,
             replacement_target: None,
             cluster_id,
+            target_replica: None,
             non_null_assertions: Vec::new(),
             compaction_window: None,
             refresh_schedule: None,

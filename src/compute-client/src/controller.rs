@@ -755,24 +755,29 @@ where
 
     /// Creates the described dataflow and initializes state for its output.
     ///
-    /// If a `subscribe_target_replica` is given, any subscribes exported by the dataflow are
-    /// configured to target that replica, i.e., only subscribe responses sent by that replica are
-    /// considered.
+    /// Only materialized views and subscribes are allowed to have a `target_replica`.
+    ///
+    /// Panics if called with a dataflow description that has index exports
+    /// when `target_replica` is set.
     pub fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
         mut dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
-        subscribe_target_replica: Option<ReplicaId>,
+        target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
         use DataflowCreationError::*;
 
         let instance = self.instance(instance_id)?;
 
         // Validation: target replica
-        if let Some(replica_id) = subscribe_target_replica {
+        if let Some(replica_id) = target_replica {
             if !instance.replicas.contains(&replica_id) {
                 return Err(ReplicaMissing(replica_id));
             }
+            assert!(
+                dataflow.exported_index_ids().next().is_none(),
+                "Replica-targeted indexes are not supported"
+            );
         }
 
         // Validation: as_of
@@ -828,8 +833,8 @@ where
             i.create_dataflow(
                 dataflow,
                 import_read_holds,
-                subscribe_target_replica,
                 shared_collection_state,
+                target_replica,
             )
             .expect("validated")
         });
@@ -1176,6 +1181,7 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
 
 #[derive(Debug)]
 struct Collection<T> {
+    /// Whether a collection is write-only, i.e., we cannot read it directly like an index.
     write_only: bool,
     compute_dependencies: BTreeSet<GlobalId>,
     shared: SharedCollectionState<T>,

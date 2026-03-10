@@ -2210,7 +2210,8 @@ impl Coordinator {
                         );
                     }
 
-                    self.ship_dataflow(df_desc, mview.cluster_id, None).await;
+                    self.ship_dataflow(df_desc, mview.cluster_id, mview.target_replica)
+                        .await;
 
                     // If this is a replacement MV, it must remain read-only until the replacement
                     // gets applied.
@@ -3828,9 +3829,9 @@ impl Coordinator {
         &mut self,
         dataflow: DataflowDescription<Plan>,
         instance: ComputeInstanceId,
-        subscribe_target_replica: Option<ReplicaId>,
+        target_replica: Option<ReplicaId>,
     ) {
-        self.try_ship_dataflow(dataflow, instance, subscribe_target_replica)
+        self.try_ship_dataflow(dataflow, instance, target_replica)
             .await
             .unwrap_or_terminate("dataflow creation cannot fail");
     }
@@ -3841,7 +3842,7 @@ impl Coordinator {
         &mut self,
         dataflow: DataflowDescription<Plan>,
         instance: ComputeInstanceId,
-        subscribe_target_replica: Option<ReplicaId>,
+        target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
         // We must only install read policies for indexes, not for sinks.
         // Sinks are write-only compute collections that don't have read policies.
@@ -3849,7 +3850,7 @@ impl Coordinator {
 
         self.controller
             .compute
-            .create_dataflow(instance, dataflow, subscribe_target_replica)?;
+            .create_dataflow(instance, dataflow, target_replica)?;
 
         self.initialize_compute_read_policies(export_ids, instance, CompactionWindow::Default)
             .await;
@@ -3873,13 +3874,14 @@ impl Coordinator {
         dataflow: DataflowDescription<Plan>,
         instance: ComputeInstanceId,
         notice_builtin_updates_fut: Option<BuiltinTableAppendNotify>,
+        target_replica: Option<ReplicaId>,
     ) {
         if let Some(notice_builtin_updates_fut) = notice_builtin_updates_fut {
-            let ship_dataflow_fut = self.ship_dataflow(dataflow, instance, None);
+            let ship_dataflow_fut = self.ship_dataflow(dataflow, instance, target_replica);
             let ((), ()) =
                 futures::future::join(notice_builtin_updates_fut, ship_dataflow_fut).await;
         } else {
-            self.ship_dataflow(dataflow, instance, None).await;
+            self.ship_dataflow(dataflow, instance, target_replica).await;
         }
     }
 

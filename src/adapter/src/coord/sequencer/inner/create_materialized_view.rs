@@ -567,6 +567,7 @@ impl Coordinator {
                             dependencies,
                             replacement_target,
                             cluster_id,
+                            target_replica,
                             non_null_assertions,
                             compaction_window,
                             refresh_schedule,
@@ -674,6 +675,7 @@ impl Coordinator {
                     dependencies,
                     replacement_target,
                     cluster_id,
+                    target_replica,
                     non_null_assertions,
                     custom_logical_compaction_window: compaction_window,
                     refresh_schedule: refresh_schedule.clone(),
@@ -755,6 +757,7 @@ impl Coordinator {
                             df_desc,
                             cluster_id,
                             notice_builtin_updates_fut,
+                            target_replica,
                         )
                         .await;
 

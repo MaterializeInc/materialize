@@ -40,6 +40,7 @@ pub fn ct_item_from_plan(
                 dependencies,
                 column_names: _,
                 replacement_target: _,
+                target_replica: _,
                 non_null_assertions: _,
                 compaction_window: _,
                 refresh_schedule: _,

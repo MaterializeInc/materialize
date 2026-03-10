@@ -270,6 +270,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         storage_sink: bool,
         initial_as_of: Option<Antichain<T>>,
         refresh_schedule: Option<RefreshSchedule>,
+        target_replica: Option<ReplicaId>,
     ) {
         // Add global collection state.
         let dependency_ids: Vec<GlobalId> = compute_dependencies
@@ -295,6 +296,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             Arc::clone(&self.read_hold_tx),
             introspection,
         );
+        state.target_replica = target_replica;
         // If the collection is write-only, clear its read policy to reflect that.
         if write_only {
             state.read_policy = None;
@@ -306,6 +308,9 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
         // Add per-replica collection state.
         for replica in self.replicas.values_mut() {
+            if target_replica.is_some_and(|id| id != replica.id) {
+                continue;
+            }
             replica.add_collection(id, as_of.clone(), replica_input_read_holds.clone());
         }
     }
@@ -341,8 +346,11 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
         // Add per-replica collection state.
         for (collection_id, collection) in &self.collections {
-            // Skip log collections not maintained by this replica.
-            if collection.log_collection && !log_ids.contains(collection_id) {
+            // Skip log collections not maintained by this replica,
+            // and collections targeted at a different replica.
+            if (collection.log_collection && !log_ids.contains(collection_id))
+                || collection.target_replica.is_some_and(|rid| rid != id)
+            {
                 continue;
             }
 
@@ -398,9 +406,9 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
     /// Return the IDs of in-progress subscribes targeting the specified replica.
     fn subscribes_targeting(&self, replica_id: ReplicaId) -> impl Iterator<Item = GlobalId> + '_ {
-        self.subscribes.iter().filter_map(move |(id, subscribe)| {
-            let targeting = subscribe.target_replica == Some(replica_id);
-            targeting.then_some(*id)
+        self.subscribes.keys().copied().filter(move |id| {
+            let collection = self.expect_collection(*id);
+            collection.target_replica == Some(replica_id)
         })
     }
 
@@ -1012,16 +1020,58 @@ where
         );
     }
 
-    /// Sends a command to all replicas of this instance.
+    /// Sends a command to replicas of this instance.
     #[mz_ore::instrument(level = "debug")]
     fn send(&mut self, cmd: ComputeCommand<T>) {
         // Record the command so that new replicas can be brought up to speed.
         self.history.push(cmd.clone());
 
-        // Clone the command for each active replica.
-        for replica in self.replicas.values_mut() {
-            // Swallow error, we'll notice because the replica task has stopped.
-            let _ = replica.client.send(cmd.clone());
+        let target_replica = self.target_replica(&cmd);
+
+        if let Some(rid) = target_replica {
+            if let Some(replica) = self.replicas.get_mut(&rid) {
+                let _ = replica.client.send(cmd);
+            }
+        } else {
+            for replica in self.replicas.values_mut() {
+                let _ = replica.client.send(cmd.clone());
+            }
+        }
+    }
+
+    /// Determine the target replica for a compute command. Retrieves the
+    /// collection named by the command, and returns the target replica if
+    /// it is set, and None if not set, or the command doesn't name a collection.
+    ///
+    /// Panics if a create-dataflow command names collections that have different
+    /// target replicas. It is an error to construct such an object and would
+    /// indicate a bug in [`Self::create_dataflow`].
+    fn target_replica(&self, cmd: &ComputeCommand<T>) -> Option<ReplicaId> {
+        match &cmd {
+            ComputeCommand::Schedule(id)
+            | ComputeCommand::AllowWrites(id)
+            | ComputeCommand::AllowCompaction { id, .. } => {
+                self.expect_collection(*id).target_replica
+            }
+            ComputeCommand::CreateDataflow(desc) => {
+                let mut target_replica = None;
+                for id in desc.export_ids() {
+                    if let Some(replica) = self.expect_collection(id).target_replica {
+                        if target_replica.is_some() {
+                            assert_eq!(target_replica, Some(replica));
+                        }
+                        target_replica = Some(replica);
+                    }
+                }
+                target_replica
+            }
+            // Skip Peek as we don't allow replica-targeted indexes.
+            ComputeCommand::Peek(_)
+            | ComputeCommand::Hello { .. }
+            | ComputeCommand::CreateInstance(_)
+            | ComputeCommand::InitializationComplete
+            | ComputeCommand::UpdateConfiguration(_)
+            | ComputeCommand::CancelPeek { .. } => None,
         }
     }
 
@@ -1059,6 +1109,13 @@ where
 
         // Replay the commands at the client, creating new dataflow identifiers.
         for command in self.history.iter() {
+            // Skip `CreateDataflow` commands targeted at different replicas.
+            if let Some(target_replica) = self.target_replica(command)
+                && target_replica != id
+            {
+                continue;
+            }
+
             if client.send(command.clone()).is_err() {
                 // We swallow the error here. On the next send, we will fail again, and
                 // restart the connection as well as this rehydration.
@@ -1158,21 +1215,20 @@ where
     ///
     /// This method expects a `DataflowDescription` with an `as_of` frontier specified, as well as
     /// for each imported collection a read hold in `import_read_holds` at at least the `as_of`.
-    ///
-    /// If a `subscribe_target_replica` is given, any subscribes exported by the dataflow are
-    /// configured to target that replica, i.e., only subscribe responses sent by that replica are
-    /// considered.
     #[mz_ore::instrument(level = "debug")]
     pub fn create_dataflow(
         &mut self,
         dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
         import_read_holds: Vec<ReadHold<T>>,
-        subscribe_target_replica: Option<ReplicaId>,
         mut shared_collection_state: BTreeMap<GlobalId, SharedCollectionState<T>>,
+        target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
         use DataflowCreationError::*;
 
-        if let Some(replica_id) = subscribe_target_replica {
+        // Validate that the target replica, if specified, exists.
+        // A targeted dataflow is only installed on a single replica; if that
+        // replica doesn't exist, we can't create the dataflow.
+        if let Some(replica_id) = target_replica {
             if !self.replica_exists(replica_id) {
                 return Err(ReplicaMissing(replica_id));
             }
@@ -1243,6 +1299,7 @@ where
                 storage_sink,
                 dataflow.initial_storage_as_of.clone(),
                 dataflow.refresh_schedule.clone(),
+                target_replica,
             );
 
             // If the export is a storage sink, we can advance its write frontier to the write
@@ -1255,7 +1312,7 @@ where
         // Initialize tracking of subscribes.
         for subscribe_id in dataflow.subscribe_ids() {
             self.subscribes
-                .insert(subscribe_id, ActiveSubscribe::new(subscribe_target_replica));
+                .insert(subscribe_id, ActiveSubscribe::default());
         }
 
         // Initialize tracking of copy tos.
@@ -1391,8 +1448,7 @@ where
             );
         } else {
             let collections: Vec<_> = augmented_dataflow.export_ids().collect();
-            let dataflow = Box::new(augmented_dataflow);
-            self.send(ComputeCommand::CreateDataflow(dataflow));
+            self.send(ComputeCommand::CreateDataflow(Box::new(augmented_dataflow)));
 
             for id in collections {
                 self.maybe_schedule_collection(id);
@@ -1991,10 +2047,6 @@ where
         let Some(mut subscribe) = self.subscribes.get(&subscribe_id).cloned() else {
             return;
         };
-        let replica_targeted = subscribe.target_replica.unwrap_or(replica_id) == replica_id;
-        if !replica_targeted {
-            return;
-        }
 
         // Apply a global frontier update.
         // If this is a replica-targeted subscribe, it is important that we advance the global
@@ -2248,6 +2300,8 @@ where
 /// compute dataflow.
 #[derive(Debug)]
 struct CollectionState<T: ComputeControllerTimestamp> {
+    /// If set, this collection is only maintained by the specified replica.
+    target_replica: Option<ReplicaId>,
     /// Whether this collection is a log collection.
     ///
     /// Log collections are special in that they are only maintained by a subset of all replicas.
@@ -2361,6 +2415,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
         };
 
         Self {
+            target_replica: None,
             log_collection: false,
             dropped: false,
             scheduled: false,
@@ -2821,17 +2876,12 @@ struct PendingPeek<T: Timestamp> {
 struct ActiveSubscribe<T> {
     /// Current upper frontier of this subscribe.
     frontier: Antichain<T>,
-    /// For replica-targeted subscribes, this specifies the replica whose responses we should pass on.
-    ///
-    /// If this value is `None`, we pass on the first response for each time slice.
-    target_replica: Option<ReplicaId>,
 }
 
-impl<T: ComputeControllerTimestamp> ActiveSubscribe<T> {
-    fn new(target_replica: Option<ReplicaId>) -> Self {
+impl<T: ComputeControllerTimestamp> Default for ActiveSubscribe<T> {
+    fn default() -> Self {
         Self {
             frontier: Antichain::from_elem(T::minimum()),
-            target_replica,
         }
     }
 }

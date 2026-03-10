@@ -3912,7 +3912,20 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let in_cluster = self.parse_optional_in_cluster()?;
+        let (in_cluster, in_cluster_replica) = if self.parse_keywords(&[IN, CLUSTER]) {
+            let cluster = self.parse_raw_ident()?;
+            let replica = if self.parse_keyword(REPLICA) {
+                Some(self.parse_identifier()?)
+            } else {
+                None
+            };
+            (Some(cluster), replica)
+        } else if self.parse_keywords(&[IN, REPLICA]) {
+            let replica = self.parse_identifier()?;
+            (None, Some(replica))
+        } else {
+            (None, None)
+        };
 
         let with_options = if self.parse_keyword(WITH) {
             self.expect_token(&Token::LParen)?;
@@ -3934,6 +3947,7 @@ impl<'a> Parser<'a> {
                 columns,
                 replacement_for,
                 in_cluster,
+                in_cluster_replica,
                 query,
                 as_of,
                 with_options,

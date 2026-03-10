@@ -1394,6 +1394,7 @@ pub struct CreateMaterializedViewStatement<T: AstInfo> {
     pub columns: Vec<Ident>,
     pub replacement_for: Option<T::ItemName>,
     pub in_cluster: Option<T::ClusterName>,
+    pub in_cluster_replica: Option<Ident>,
     pub query: Query<T>,
     pub as_of: Option<u64>,
     pub with_options: Vec<MaterializedViewOption<T>>,
@@ -1429,9 +1430,22 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
             f.write_node(target);
         }
 
-        if let Some(cluster) = &self.in_cluster {
-            f.write_str(" IN CLUSTER ");
-            f.write_node(cluster);
+        match (&self.in_cluster, &self.in_cluster_replica) {
+            (Some(cluster), Some(replica)) => {
+                f.write_str(" IN CLUSTER ");
+                f.write_node(cluster);
+                f.write_str(" REPLICA ");
+                f.write_node(replica);
+            }
+            (Some(cluster), None) => {
+                f.write_str(" IN CLUSTER ");
+                f.write_node(cluster);
+            }
+            (None, Some(replica)) => {
+                f.write_str(" IN REPLICA ");
+                f.write_node(replica);
+            }
+            (None, None) => {}
         }
 
         if !self.with_options.is_empty() {

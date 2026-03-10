@@ -1406,6 +1406,7 @@ impl Coordinator {
                         columns: cmvs.columns,
                         replacement_for: cmvs.replacement_for,
                         in_cluster: cmvs.in_cluster,
+                        in_cluster_replica: cmvs.in_cluster_replica,
                         query: cmvs.query,
                         with_options: cmvs.with_options,
                         as_of: None,

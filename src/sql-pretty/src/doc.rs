@@ -738,11 +738,27 @@ impl Pretty {
                 target.to_ast_string_simple()
             )));
         }
-        if let Some(cluster) = &v.in_cluster {
-            docs.push(RcDoc::text(format!(
-                "IN CLUSTER {}",
-                cluster.to_ast_string_simple()
-            )));
+        match (&v.in_cluster, &v.in_cluster_replica) {
+            (Some(cluster), Some(replica)) => {
+                docs.push(RcDoc::text(format!(
+                    "IN CLUSTER {} REPLICA {}",
+                    cluster.to_ast_string_simple(),
+                    replica.to_ast_string_simple(),
+                )));
+            }
+            (Some(cluster), None) => {
+                docs.push(RcDoc::text(format!(
+                    "IN CLUSTER {}",
+                    cluster.to_ast_string_simple(),
+                )));
+            }
+            (None, Some(replica)) => {
+                docs.push(RcDoc::text(format!(
+                    "IN REPLICA {}",
+                    replica.to_ast_string_simple(),
+                )));
+            }
+            (None, None) => {}
         }
         if !v.with_options.is_empty() {
             docs.push(bracket(
