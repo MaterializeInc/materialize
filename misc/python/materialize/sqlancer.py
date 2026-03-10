@@ -33,7 +33,6 @@ from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import Materialized
 
 IGNORED_ERROR_PATTERNS = [
-    r"Can't union types",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/10052 is fixed
     r"^(?!.*panic).*not yet supported",
     r"does not exist",
     r"must have",
