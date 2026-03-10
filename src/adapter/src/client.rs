@@ -1184,7 +1184,6 @@ impl SessionClient {
         let catalog = self.catalog_snapshot("standing_query_execute").await;
         let session = self.session.as_ref().expect("session invariant");
         let conn_catalog = catalog.for_session(session);
-        let params = portal.parameters.clone();
         let (resolved_stmt, resolved_ids) =
             mz_sql::names::resolve(&conn_catalog, (**stmt).clone())?;
         let pcx = session.pcx();
@@ -1192,7 +1191,7 @@ impl SessionClient {
             Some(pcx),
             &conn_catalog,
             resolved_stmt,
-            &params,
+            &portal.parameters,
             &resolved_ids,
         )?;
 
@@ -1219,6 +1218,7 @@ impl SessionClient {
         match sq_client.execute(&plan.params).await {
             Ok(rows) => {
                 use mz_repr::IntoRowIterator;
+                // TODO(mh): Should we use `SendingRowsStreaming` instead?
                 Ok(Some(ExecuteResponse::SendingRowsImmediate {
                     rows: Box::new(rows.into_row_iter()),
                 }))

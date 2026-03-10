@@ -44,6 +44,9 @@ pub(crate) struct ActiveStandingQuery {
     pub subscribe_tx: mpsc::UnboundedSender<SubscribeBatch>,
     /// Channel to tell the handler task to advance the param shard upper.
     pub advance_upper_tx: watch::Sender<Timestamp>,
+    /// The initial upper target (as_of + 1). We never lag below this to
+    /// avoid reading at timestamps before the inputs had any data.
+    pub initial_upper: Timestamp,
 }
 
 impl Coordinator {
@@ -77,7 +80,10 @@ impl Coordinator {
             // batch, ~1000 timestamps per second). Without this gap, the
             // batcher would write at the table's exact upper, forcing the
             // subscribe to wait for the next AdvanceTimelines tick (~1s).
-            let target = ts.saturating_sub(1000);
+            //
+            // Clamp to the initial upper so we never read at timestamps
+            // before the inputs had any data (e.g. right after CREATE).
+            let target = ts.saturating_sub(1000).max(asq.initial_upper);
             debug!(item_id = ?asq.item_id, %target, input_frontier = %ts, "advance upper");
             let _ = asq.advance_upper_tx.send(target);
         }

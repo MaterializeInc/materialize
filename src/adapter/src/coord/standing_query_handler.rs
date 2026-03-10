@@ -121,6 +121,7 @@ fn process_batch(
     // Buffer positive diffs per request_id.
     match updates {
         Ok(rows) => {
+            let mut row_buf = SharedRow::get();
             for (_ts, row, diff) in rows {
                 if !diff.is_positive() {
                     continue;
@@ -136,8 +137,7 @@ fn process_batch(
                 };
 
                 let result_row = {
-                    let mut row_buf = SharedRow::get();
-                    row_buf.packer().extend(datums);
+                    row_buf.packer().extend_datum_iter(datums);
                     row_buf.clone()
                 };
 

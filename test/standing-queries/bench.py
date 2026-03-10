@@ -14,6 +14,7 @@ Benchmark standing query execution with configurable concurrency.
 
 Usage:
     python bench.py [--connections N] [--duration SECS] [--setup] [--port PORT] [--query QUERY]
+    python bench.py --dbbench [OPTIONS]
 
 Examples:
     # Setup + benchmark with defaults (64 connections, 60s)
@@ -24,6 +25,9 @@ Examples:
 
     # Benchmark index SELECT for comparison
     python bench.py --query "SELECT id, customer_id, amount FROM orders WHERE customer_id = 42"
+
+    # Generate a dbbench INI file and print the dbbench command
+    python bench.py --dbbench --connections 256 --duration 30
 """
 
 import argparse
@@ -34,7 +38,7 @@ import time
 import psycopg
 from psycopg import sql
 
-NUM_ROWS = 100_000
+NUM_ROWS = 100
 
 
 def setup(port: int) -> None:
@@ -53,6 +57,12 @@ def setup(port: int) -> None:
     sys_cur.execute(sql.SQL("ALTER SYSTEM SET max_result_size = '10GB'"))
     sys_cur.execute(sql.SQL("ALTER SYSTEM SET max_connections = 65536"))
     sys_cur.execute(sql.SQL("ALTER SYSTEM SET enable_standing_queries = true"))
+    sys_cur.execute(
+        sql.SQL(
+            "ALTER SYSTEM SET log_filter = 'mz_adapter::standing_query_client=debug,info'"
+        )
+    )
+    sys_cur.execute(sql.SQL("ALTER SYSTEM SET enable_mz_join_core = false"))
     sys_conn.close()
 
     cur.execute(sql.SQL("DROP STANDING QUERY IF EXISTS orders_by_customer"))
@@ -79,6 +89,7 @@ def setup(port: int) -> None:
         )
     )
     conn.close()
+    time.sleep(1)
     print("Setup complete.")
 
 
@@ -161,6 +172,35 @@ def run_benchmark(port: int, query: str, connections: int, duration: float) -> N
     print()
 
 
+def write_dbbench_ini(args: argparse.Namespace) -> None:
+    lines = [
+        f"duration={int(args.duration)}s",
+        "",
+        "[loadtest]",
+        f"query={args.query}",
+        f"concurrency={args.connections}",
+        "",
+        "[loadtest_select]",
+        "query=SELECT id, customer_id, amount FROM orders WHERE customer_id = 42",
+        f"concurrency={args.connections}",
+    ]
+    ini_text = "\n".join(lines) + "\n"
+
+    out_path = args.dbbench_out
+    with open(out_path, "w") as f:
+        f.write(ini_text)
+    print(f"Wrote {out_path}")
+
+    print("\nRun with:\n")
+    print(
+        f"  dbbench -driver postgres"
+        f" -host 127.0.0.1 -port {args.port}"
+        f" -user materialize -database materialize"
+        f" {out_path}"
+    )
+    print()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark standing queries")
     parser.add_argument(
@@ -186,12 +226,26 @@ def main() -> None:
         default="EXECUTE STANDING QUERY orders_by_customer (42)",
         help="Query to benchmark",
     )
+    parser.add_argument(
+        "--dbbench",
+        action="store_true",
+        help="Generate a dbbench INI file and print the run command instead of benchmarking with Python threads",
+    )
+    parser.add_argument(
+        "--dbbench-out",
+        type=str,
+        default="bench.ini",
+        help="Output path for dbbench INI file (default: bench.ini)",
+    )
     args = parser.parse_args()
 
     if args.setup:
         setup(args.port)
 
-    run_benchmark(args.port, args.query, args.connections, args.duration)
+    if args.dbbench:
+        write_dbbench_ini(args)
+    else:
+        run_benchmark(args.port, args.query, args.connections, args.duration)
 
 
 if __name__ == "__main__":

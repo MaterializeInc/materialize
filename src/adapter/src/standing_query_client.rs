@@ -26,12 +26,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use mz_persist_client::write::WriteHandle;
-use mz_repr::{CatalogItemId, Diff, GlobalId, Row, Timestamp, TimestampManipulation};
+use mz_repr::{CatalogItemId, GlobalId, Row, Timestamp, TimestampManipulation};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, watch};
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 /// Notification sent from the batcher to the handler task when param rows
 /// have been written, so the handler can track in-flight request IDs.
@@ -206,6 +206,7 @@ async fn batcher_task(
     const MAX_COLLECT: Duration = Duration::from_millis(50);
     let mut last_append_duration = MIN_COLLECT;
     let mut cmds: Vec<BatcherCmd> = Vec::new();
+    let mut writes = Vec::new();
 
     loop {
         // Apply the latest upper target before doing anything else.
@@ -220,6 +221,16 @@ async fn batcher_task(
 
         // Wait for at least one command or an upper-advance notification.
         tokio::select! {
+            biased;
+
+            result = advance_upper_rx.changed() => {
+                if result.is_err() {
+                    break;
+                }
+                let target = *advance_upper_rx.borrow_and_update();
+                advance_upper(sink_id, &mut write_handle, &mut current_upper, target).await;
+            }
+
             count = batcher_rx.recv_many(&mut cmds, usize::MAX) => {
                 if count == 0 {
                     break;
@@ -232,64 +243,71 @@ async fn batcher_task(
                 let collect_budget = (2 * last_append_duration).clamp(MIN_COLLECT, MAX_COLLECT);
                 let collect_deadline = Instant::now() + collect_budget;
                 loop {
+                    match batcher_rx.try_recv() {
+                        Ok(cmd) => cmds.push(cmd),
+                        Err(_) => break,
+                    }
                     let remaining = collect_deadline.saturating_duration_since(Instant::now());
                     if remaining.is_zero() {
                         break;
                     }
-                    match tokio::time::timeout(remaining, batcher_rx.recv_many(&mut cmds, usize::MAX)).await {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => {}
-                    }
                 }
 
-                let writes: Vec<WriteRequest> = cmds
+                let lower = current_upper;
+                let retract_ts = TimestampManipulation::step_forward(&lower);
+                let upper = TimestampManipulation::step_forward(&retract_ts);
+
+                let request_ids: Vec<_> = cmds.iter().map(|cmd| match cmd {
+                    BatcherCmd::Write(req) => req.request_id
+                }).collect();
+
+                writes.extend(cmds
                     .drain(..)
-                    .map(|cmd| match cmd {
-                        BatcherCmd::Write(req) => req,
-                    })
-                    .collect();
+                    .flat_map(|cmd| match cmd {
+                        BatcherCmd::Write(req) => {
+                            let data = (SourceData(Ok(req.param_row.clone())), ());
+                            // Insert at ts, retract at ts+1.
+                            [(data.clone(), lower, 1), (data, retract_ts, -1)]
+                        },
+                    }));
 
                 if writes.is_empty() {
                     continue;
                 }
 
                 let append_start = Instant::now();
-                match batch_append(
+                let res = batch_append(
                     sink_id,
                     &mut write_handle,
-                    &mut current_upper,
-                    &writes,
+                    lower,
+                    upper,
+                    writes.drain(..),
                 )
-                .await
-                {
-                    Ok(write_ts) => {
+                .await;
+                match res {
+                    Ok(()) => {
                         last_append_duration = append_start.elapsed();
-                        let request_ids: Vec<u64> =
-                            writes.iter().map(|w| w.request_id).collect();
                         debug!(
                             %sink_id,
-                            %write_ts,
+                            %lower,
+                            %upper,
                             count = request_ids.len(),
+                            ?last_append_duration,
                             "batched param writes",
                         );
                         let _ = flush_tx.send(StandingQueryFlush {
                             sink_id,
-                            write_ts,
+                            write_ts: lower,
                             request_ids,
                         });
+                        current_upper = upper;
                     }
                     Err(e) => {
-                        last_append_duration = append_start.elapsed();
-                        warn!(%sink_id, error = %e, "batch append failed");
+                        error!(%sink_id, upper = ?e, "batch append failed");
+                        // TODO: Retry with new upper.
+                        panic!("Unhandled upper mismatch");
                     }
                 }
-            }
-            result = advance_upper_rx.changed() => {
-                if result.is_err() {
-                    break;
-                }
-                let target = *advance_upper_rx.borrow_and_update();
-                advance_upper(sink_id, &mut write_handle, &mut current_upper, target).await;
             }
         }
     }
@@ -299,58 +317,28 @@ async fn batcher_task(
 /// `compare_and_append`. Each param row is written as `+1` at `ts` and
 /// `-1` at `ts+1`, so it exists for exactly one timestamp. This means
 /// retractions happen automatically and no separate cleanup is needed
-/// on cancellation or disconnect. Returns the write timestamp.
+/// on cancellation or disconnect. Returns the upper timestamp on error.
 async fn batch_append(
     sink_id: GlobalId,
     write_handle: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
-    current_upper: &mut Timestamp,
-    writes: &[WriteRequest],
-) -> Result<Timestamp, String> {
-    let upper = *current_upper;
-    let retract_ts = TimestampManipulation::step_forward(&upper);
-    let new_upper = TimestampManipulation::step_forward(&retract_ts);
-
-    let mut updates: Vec<((SourceData, ()), Timestamp, i64)> = Vec::with_capacity(writes.len() * 2);
-
-    for req in writes {
-        let data = (SourceData(Ok(req.param_row.clone())), ());
-        // Insert at ts, retract at ts+1.
-        updates.push((data.clone(), upper, Diff::from(1i64).into_inner()));
-        updates.push((data, retract_ts, Diff::from(-1i64).into_inner()));
-    }
-
-    debug!(
-        %sink_id,
-        %upper,
-        %new_upper,
-        updates = updates.len(),
-        "batch append",
-    );
-
+    lower: Timestamp,
+    upper: Timestamp,
+    updates: impl IntoIterator<Item = ((SourceData, ()), Timestamp, i64)>,
+) -> Result<(), Antichain<Timestamp>> {
     let res = write_handle
         .compare_and_append(
             updates,
+            Antichain::from_elem(lower),
             Antichain::from_elem(upper),
-            Antichain::from_elem(new_upper),
         )
         .await
         .expect("valid persist usage");
 
     match res {
-        Ok(()) => {
-            *current_upper = new_upper;
-            Ok(upper)
-        }
+        Ok(()) => Ok(()),
         Err(mismatch) => {
-            let err = format!(
-                "upper mismatch: expected {:?}, actual {:?}",
-                mismatch.expected, mismatch.current
-            );
-            warn!(%sink_id, %err, "upper mismatch");
-            if let Some(actual) = mismatch.current.into_option() {
-                *current_upper = actual;
-            }
-            Err(err)
+            warn!(%sink_id, %mismatch, "upper mismatch");
+            Err(mismatch.current)
         }
     }
 }

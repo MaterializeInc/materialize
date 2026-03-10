@@ -2374,6 +2374,7 @@ impl Coordinator {
                             client: sq_client,
                             subscribe_tx,
                             advance_upper_tx,
+                            initial_upper: initial_upper_target,
                         },
                     );
                 }

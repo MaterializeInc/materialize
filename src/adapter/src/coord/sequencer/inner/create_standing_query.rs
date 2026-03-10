@@ -205,16 +205,22 @@ impl Coordinator {
                     physical_plan.set_as_of(as_of.clone());
                     physical_plan.set_initial_as_of(as_of);
 
-                    // The subscribe can't produce output until the param shard
-                    // upper advances past the as_of. Initialize the watch
-                    // channel with as_of + 1 so the batcher immediately
-                    // advances the param shard past the subscribe's snapshot
-                    // point.
-                    let initial_upper_target = physical_plan
-                        .as_of
-                        .as_ref()
-                        .and_then(|a| a.as_option().copied())
-                        .map(|ts| ts.step_forward())
+                    // Build the input bundle (excluding the param collection)
+                    // for upper tracking and initial target computation.
+                    let mut input_bundle = id_bundle;
+                    input_bundle.storage_ids.remove(&param_collection_id);
+
+                    // Advance the param shard to match the input frontiers.
+                    // The subscribe needs all inputs (including params) past
+                    // its as_of, and the first param write lands at
+                    // current_upper. By starting at the inputs' write
+                    // frontier, the first write goes at a timestamp where
+                    // the inputs have already advanced past, so the subscribe
+                    // can resolve immediately.
+                    use crate::coord::timestamp_selection::TimestampProvider;
+                    let initial_upper_target = coord
+                        .least_valid_write(&input_bundle)
+                        .into_option()
                         .unwrap_or_else(mz_repr::Timestamp::minimum);
 
                     tracing::info!(
@@ -244,12 +250,6 @@ impl Coordinator {
 
                     // Register the active standing query state.
                     use crate::coord::standing_query_state::ActiveStandingQuery;
-                    // Build the input bundle for ongoing upper tracking.
-                    // Remove the param collection — we don't want circular
-                    // dependency on ourselves.
-                    let mut input_bundle = id_bundle;
-                    input_bundle.storage_ids.remove(&param_collection_id);
-
                     coord.active_standing_queries.insert(
                         global_id,
                         ActiveStandingQuery {
@@ -259,6 +259,7 @@ impl Coordinator {
                             client: sq_client,
                             subscribe_tx,
                             advance_upper_tx,
+                            initial_upper: initial_upper_target,
                         },
                     );
                 })

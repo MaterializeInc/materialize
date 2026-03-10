@@ -40,7 +40,19 @@ EXECUTE STANDING QUERY orders_by_customer (10)
 2  10  200
 
 query III rowsort
+SELECT id, customer_id, amount FROM orders WHERE customer_id = 10
+----
+1  10  100
+2  10  200
+
+query III rowsort
 EXECUTE STANDING QUERY orders_by_customer (20)
+----
+3  20  300
+4  20  400
+
+query III rowsort
+SELECT id, customer_id, amount FROM orders WHERE customer_id = 20
 ----
 3  20  300
 4  20  400
@@ -51,10 +63,19 @@ query III
 EXECUTE STANDING QUERY orders_by_customer (99)
 ----
 
+query III
+SELECT id, customer_id, amount FROM orders WHERE customer_id = 99
+----
+
 # --- EXECUTE: single matching row ---
 
 query III
 EXECUTE STANDING QUERY orders_by_customer (30)
+----
+5  30  500
+
+query III
+SELECT id, customer_id, amount FROM orders WHERE customer_id = 30
 ----
 5  30  500
 
@@ -65,6 +86,12 @@ CREATE STANDING QUERY all_orders_for_customer (cid INT) AS SELECT * FROM orders 
 
 query III rowsort
 EXECUTE STANDING QUERY all_orders_for_customer (10)
+----
+1  10  100
+2  10  200
+
+query III rowsort
+SELECT * FROM orders WHERE customer_id = 10
 ----
 1  10  100
 2  10  200
