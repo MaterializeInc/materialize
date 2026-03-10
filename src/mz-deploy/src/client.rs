@@ -56,6 +56,7 @@ pub use deployment_ops::{
     HydrationStatusUpdate,
 };
 pub use errors::{ConnectionError, DatabaseValidationError, format_relative_path};
+pub use introspection::DependentSink;
 pub use models::{
     ApplyState, Cluster, ClusterConfig, ClusterOptions, ClusterReplica, ConflictRecord,
     DeploymentDetails, DeploymentHistoryEntry, DeploymentKind, DeploymentMetadata,

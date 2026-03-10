@@ -2,7 +2,9 @@
 
 use crate::cli::CliError;
 use crate::cli::progress;
-use crate::client::{ApplyState, Client, DeploymentKind};
+use crate::client::{
+    ApplyState, Client, DependentSink, DeploymentKind, PendingStatement, ReplacementMvRecord,
+};
 use crate::config::Settings;
 use crate::humanln;
 use crate::output;
@@ -12,96 +14,407 @@ use crate::{project, verbose};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 use std::collections::BTreeSet;
+use std::fmt;
 
-/// Runtime context shared across apply phases.
+/// Central data structure holding everything needed to display and execute a deployment.
 ///
-/// `run` computes this once and reuses it so each phase can focus on its own
-/// responsibility (swap, post-swap work, cleanup) without re-querying state.
-struct ApplyResources {
+/// Computed once by `generate_deployment_plan()` and consumed for display (human + JSON)
+/// and execution. Raw domain objects are stored so execution functions don't re-query.
+struct DeploymentPlan {
+    deploy_id: String,
+    apply_state: ApplyState,
+    staging_suffix: String,
     staging_schemas: BTreeSet<SchemaQualifier>,
     staging_clusters: BTreeSet<String>,
-    staging_suffix: String,
+    pending_statements: Vec<PendingStatement>,
+    replacement_mvs: Vec<ReplacementMvRecord>,
+    dependent_sinks: Vec<DependentSink>,
 }
 
-/// Promote a staging deployment to production using ALTER SWAP.
-///
-/// This command implements a resumable promotion flow:
-/// 1. Check for existing apply state (for resume scenarios)
-/// 2. Create apply state schemas if starting fresh
-/// 3. Execute atomic swap (schemas, clusters, and state schemas in one transaction)
-/// 4. Execute pending sinks (created after swap since they write to external systems)
-/// 5. Clean up old resources and state tracking
-///
-/// # Arguments
-/// * `profile` - Database profile containing connection information
-/// * `deploy_id` - Staging deployment ID
-/// * `force` - Force promotion despite conflicts
-///
-/// # Returns
-/// Ok(()) if promotion succeeds
-///
-/// # Errors
-/// Returns `CliError::StagingEnvironmentNotFound` if deployment doesn't exist
-/// Returns `CliError::StagingAlreadyPromoted` if already promoted
-/// Returns `CliError::DeploymentConflict` if conflicts detected (without --force)
-/// Returns `CliError::Connection` for database errors
-/// JSON-serializable deployment plan for `--dry-run --output json`.
-#[derive(serde::Serialize)]
-struct DeploymentPlanJson {
-    deploy_id: String,
-    apply_state: String,
-    schema_swaps: Vec<SchemaSwapJson>,
-    cluster_swaps: Vec<ClusterSwapJson>,
-    sinks_to_create: Vec<SinkToCreateJson>,
-    replacement_mvs: Vec<ReplacementMvJson>,
-    sinks_to_repoint: Vec<SinkToRepointJson>,
-    resources_to_drop: Vec<ResourceToDropJson>,
-}
+// ---------------------------------------------------------------------------
+// View structs for JSON serialization
+// ---------------------------------------------------------------------------
 
 #[derive(serde::Serialize)]
-struct SchemaSwapJson {
-    database: String,
+struct SchemaSwapView<'a> {
+    database: &'a str,
     production_schema: String,
-    staging_schema: String,
+    staging_schema: &'a str,
 }
 
 #[derive(serde::Serialize)]
-struct ClusterSwapJson {
-    production_cluster: String,
+struct ClusterSwapView<'a> {
+    production_cluster: &'a str,
     staging_cluster: String,
 }
 
 #[derive(serde::Serialize)]
-struct SinkToCreateJson {
-    database: String,
-    schema: String,
-    object: String,
+struct SinkToCreateView<'a> {
+    database: &'a str,
+    schema: &'a str,
+    object: &'a str,
 }
 
 #[derive(serde::Serialize)]
-struct ReplacementMvJson {
-    target_database: String,
-    target_schema: String,
-    target_name: String,
-    replacement_schema: String,
+struct ReplacementMvView<'a> {
+    target_database: &'a str,
+    target_schema: &'a str,
+    target_name: &'a str,
+    replacement_schema: &'a str,
 }
 
 #[derive(serde::Serialize)]
-struct SinkToRepointJson {
-    sink_database: String,
-    sink_schema: String,
-    sink_name: String,
-    dependency_database: String,
-    dependency_schema: String,
-    dependency_name: String,
+struct SinkToRepointView<'a> {
+    sink_database: &'a str,
+    sink_schema: &'a str,
+    sink_name: &'a str,
+    dependency_database: &'a str,
+    dependency_schema: &'a str,
+    dependency_name: &'a str,
 }
 
 #[derive(serde::Serialize)]
-struct ResourceToDropJson {
+struct ResourceToDropView {
     kind: String,
     name: String,
 }
 
+// ---------------------------------------------------------------------------
+// DeploymentPlan helper methods
+// ---------------------------------------------------------------------------
+
+impl DeploymentPlan {
+    fn apply_state_str(&self) -> &'static str {
+        match self.apply_state {
+            ApplyState::NotStarted => "not_started",
+            ApplyState::PreSwap => "pre_swap",
+            ApplyState::PostSwap => "post_swap",
+        }
+    }
+
+    fn schema_swaps(&self) -> Vec<SchemaSwapView<'_>> {
+        self.staging_schemas
+            .iter()
+            .map(|sq| {
+                let prod_schema = sq.schema.trim_end_matches(&self.staging_suffix).to_string();
+                SchemaSwapView {
+                    database: &sq.database,
+                    production_schema: prod_schema,
+                    staging_schema: &sq.schema,
+                }
+            })
+            .collect()
+    }
+
+    fn cluster_swaps(&self) -> Vec<ClusterSwapView<'_>> {
+        self.staging_clusters
+            .iter()
+            .map(|cluster| ClusterSwapView {
+                production_cluster: cluster,
+                staging_cluster: format!("{}{}", cluster, self.staging_suffix),
+            })
+            .collect()
+    }
+
+    fn sinks_to_create(&self) -> Vec<SinkToCreateView<'_>> {
+        self.pending_statements
+            .iter()
+            .map(|stmt| SinkToCreateView {
+                database: &stmt.database,
+                schema: &stmt.schema,
+                object: &stmt.object,
+            })
+            .collect()
+    }
+
+    fn replacement_mv_views(&self) -> Vec<ReplacementMvView<'_>> {
+        self.replacement_mvs
+            .iter()
+            .map(|r| ReplacementMvView {
+                target_database: &r.target_database,
+                target_schema: &r.target_schema,
+                target_name: &r.target_name,
+                replacement_schema: &r.replacement_schema,
+            })
+            .collect()
+    }
+
+    fn sinks_to_repoint(&self) -> Vec<SinkToRepointView<'_>> {
+        self.dependent_sinks
+            .iter()
+            .map(|sink| SinkToRepointView {
+                sink_database: &sink.sink_database,
+                sink_schema: &sink.sink_schema,
+                sink_name: &sink.sink_name,
+                dependency_database: &sink.dependency_database,
+                dependency_schema: &sink.dependency_schema,
+                dependency_name: &sink.dependency_name,
+            })
+            .collect()
+    }
+
+    fn replacement_schemas(&self) -> BTreeSet<SchemaQualifier> {
+        self.replacement_mvs
+            .iter()
+            .map(|r| SchemaQualifier::new(r.target_database.clone(), r.replacement_schema.clone()))
+            .collect()
+    }
+
+    fn resources_to_drop(&self) -> Vec<ResourceToDropView> {
+        let mut drops = Vec::new();
+        for sq in &self.staging_schemas {
+            let prod_schema = sq.schema.trim_end_matches(&self.staging_suffix);
+            let old_schema = format!("{}{}", prod_schema, self.staging_suffix);
+            drops.push(ResourceToDropView {
+                kind: "schema".to_string(),
+                name: format!("{}.{}", sq.database, old_schema),
+            });
+        }
+        for cluster in &self.staging_clusters {
+            let old_cluster = format!("{}{}", cluster, self.staging_suffix);
+            drops.push(ResourceToDropView {
+                kind: "cluster".to_string(),
+                name: old_cluster,
+            });
+        }
+        for sq in &self.replacement_schemas() {
+            drops.push(ResourceToDropView {
+                kind: "schema".to_string(),
+                name: format!("{}.{}", sq.database, sq.schema),
+            });
+        }
+        drops
+    }
+
+    fn has_work(&self) -> bool {
+        !self.staging_schemas.is_empty()
+            || !self.staging_clusters.is_empty()
+            || !self.pending_statements.is_empty()
+            || !self.replacement_mvs.is_empty()
+            || !self.dependent_sinks.is_empty()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Serialize impl — produces the exact same JSON shape as old DeploymentPlanJson
+// ---------------------------------------------------------------------------
+
+impl serde::Serialize for DeploymentPlan {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("DeploymentPlan", 8)?;
+        state.serialize_field("deploy_id", &self.deploy_id)?;
+        state.serialize_field("apply_state", self.apply_state_str())?;
+        state.serialize_field("schema_swaps", &self.schema_swaps())?;
+        state.serialize_field("cluster_swaps", &self.cluster_swaps())?;
+        state.serialize_field("sinks_to_create", &self.sinks_to_create())?;
+        state.serialize_field("replacement_mvs", &self.replacement_mv_views())?;
+        state.serialize_field("sinks_to_repoint", &self.sinks_to_repoint())?;
+        state.serialize_field("resources_to_drop", &self.resources_to_drop())?;
+        state.end()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Display impl — human-readable deployment plan
+// ---------------------------------------------------------------------------
+
+impl fmt::Display for DeploymentPlan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Note resume state if applicable
+        match self.apply_state {
+            ApplyState::PreSwap => {
+                writeln!(
+                    f,
+                    "\n  {} Resuming from pre-swap state (apply state schemas already created)",
+                    "note:".yellow().bold()
+                )?;
+            }
+            ApplyState::PostSwap => {
+                writeln!(
+                    f,
+                    "\n  {} Resuming from post-swap state (swap already completed, showing remaining work)",
+                    "note:".yellow().bold()
+                )?;
+            }
+            ApplyState::NotStarted => {}
+        }
+
+        // Schema Swaps
+        writeln!(f, "\n  {}", "Schema Swaps:".bold())?;
+        if self.staging_schemas.is_empty() {
+            writeln!(f, "    (none)")?;
+        } else {
+            for swap in &self.schema_swaps() {
+                writeln!(
+                    f,
+                    "    {} {}.{} {} {}.{}",
+                    "~".yellow(),
+                    swap.database,
+                    swap.production_schema,
+                    "<->".dimmed(),
+                    swap.database,
+                    swap.staging_schema
+                )?;
+            }
+        }
+
+        // Cluster Swaps
+        writeln!(f, "\n  {}", "Cluster Swaps:".bold())?;
+        if self.staging_clusters.is_empty() {
+            writeln!(f, "    (none)")?;
+        } else {
+            for swap in &self.cluster_swaps() {
+                writeln!(
+                    f,
+                    "    {} {} {} {}",
+                    "~".yellow(),
+                    swap.production_cluster,
+                    "<->".dimmed(),
+                    swap.staging_cluster
+                )?;
+            }
+        }
+
+        // Sinks to Create
+        writeln!(f, "\n  {}", "Sinks to Create:".bold())?;
+        if self.pending_statements.is_empty() {
+            writeln!(f, "    (none)")?;
+        } else {
+            for stmt in &self.pending_statements {
+                writeln!(
+                    f,
+                    "    {} {}.{}.{}",
+                    "+".green(),
+                    stmt.database,
+                    stmt.schema,
+                    stmt.object
+                )?;
+            }
+        }
+
+        // Replacement MVs
+        writeln!(f, "\n  {}", "Replacement Materialized Views:".bold())?;
+        if self.replacement_mvs.is_empty() {
+            writeln!(f, "    (none)")?;
+        } else {
+            for record in &self.replacement_mvs {
+                writeln!(
+                    f,
+                    "    {} {}.{}.{} {} {}.{}.{}",
+                    "~".yellow(),
+                    record.target_database,
+                    record.target_schema,
+                    record.target_name,
+                    "<-".dimmed(),
+                    record.target_database,
+                    record.replacement_schema,
+                    record.target_name
+                )?;
+            }
+        }
+
+        // Sinks to Repoint
+        writeln!(f, "\n  {}", "Sinks to Repoint:".bold())?;
+        if self.dependent_sinks.is_empty() {
+            writeln!(f, "    (none)")?;
+        } else {
+            for sink in &self.dependent_sinks {
+                writeln!(
+                    f,
+                    "    {} {}.{}.{} {} {}.{}.{}",
+                    "~".yellow(),
+                    sink.sink_database,
+                    sink.sink_schema,
+                    sink.sink_name,
+                    "->".dimmed(),
+                    sink.dependency_database,
+                    sink.dependency_schema,
+                    sink.dependency_name
+                )?;
+            }
+        }
+
+        // Old Resources to Drop
+        writeln!(f, "\n  {}", "Old Resources to Drop:".bold())?;
+        let drops = self.resources_to_drop();
+        if drops.is_empty() {
+            writeln!(f, "    (none)")?;
+        } else {
+            for drop in &drops {
+                writeln!(f, "    {} {}", "-".red(), drop.name)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Plan generation
+// ---------------------------------------------------------------------------
+
+/// Build a complete deployment plan by querying the database once for all data.
+async fn generate_deployment_plan(
+    client: &Client,
+    deploy_id: &str,
+    apply_state: ApplyState,
+    force: bool,
+) -> Result<DeploymentPlan, CliError> {
+    // 1. Gather swap resources (empty for PostSwap)
+    let (staging_schemas, staging_clusters, staging_suffix) = if apply_state == ApplyState::PostSwap
+    {
+        verbose!("Resuming post-swap: skipping conflict check and resource gathering");
+        (BTreeSet::new(), BTreeSet::new(), format!("_{}", deploy_id))
+    } else {
+        gather_resources_and_check_conflicts(client, deploy_id, force).await?
+    };
+
+    // 2. Query pending statements once
+    let pending_statements = client
+        .deployments()
+        .get_pending_statements(deploy_id)
+        .await?;
+
+    // 3. Query replacement MVs once
+    let replacement_mvs = client.deployments().get_replacement_mvs(deploy_id).await?;
+
+    // 4. Query dependent sinks for display (pre-swap schema names)
+    let dependent_sinks = if staging_schemas.is_empty() {
+        Vec::new()
+    } else {
+        let prod_schemas: Vec<SchemaQualifier> = staging_schemas
+            .iter()
+            .map(|sq| {
+                let prod_schema = sq.schema.trim_end_matches(&staging_suffix);
+                SchemaQualifier::new(sq.database.clone(), prod_schema.to_string())
+            })
+            .collect();
+
+        client
+            .introspection()
+            .find_sinks_depending_on_schemas(&prod_schemas)
+            .await
+            .map_err(CliError::Connection)?
+    };
+
+    Ok(DeploymentPlan {
+        deploy_id: deploy_id.to_string(),
+        apply_state,
+        staging_suffix,
+        staging_schemas,
+        staging_clusters,
+        pending_statements,
+        replacement_mvs,
+        dependent_sinks,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
+/// Promote a staging deployment to production using ALTER SWAP.
 pub async fn run(
     settings: &Settings,
     deploy_id: &str,
@@ -136,20 +449,28 @@ pub async fn run(
         staging_snapshot.objects.len()
     );
 
-    let resources = prepare_apply_resources(&client, deploy_id, apply_state, force).await?;
+    let plan = generate_deployment_plan(&client, deploy_id, apply_state, force).await?;
 
     if json_output {
-        print_deployment_plan_json(&client, deploy_id, apply_state, &resources).await?;
-    } else {
-        print_deployment_plan(&client, deploy_id, apply_state, &resources).await?;
+        output::machine(&plan);
     }
+
     if dry_run {
+        humanln!("{}", plan);
+        if plan.has_work() {
+            progress::info(&format!(
+                "To execute this plan, run: mz-deploy deploy {}",
+                deploy_id
+            ));
+        } else {
+            progress::info("Nothing to do.");
+        }
         return Ok(());
     }
 
-    execute_swap_phase(&client, deploy_id, apply_state, &resources).await?;
-    run_post_swap_steps(&client, deploy_id, &resources).await?;
-    cleanup_apply_state(&client, deploy_id).await?;
+    execute_swap_phase(&client, &plan).await?;
+    run_post_swap_steps(&client, &plan).await?;
+    cleanup_apply_state(&client, &plan.deploy_id).await?;
 
     progress::success("Deployment completed successfully!");
     progress::info(&format!(
@@ -160,389 +481,25 @@ pub async fn run(
     Ok(())
 }
 
-/// Print a human-readable deployment plan showing what would happen.
-///
-/// Queries the database for read-only state and prints a structured plan
-/// with sections for swaps, creates, repoints, and drops.
-async fn print_deployment_plan(
-    client: &Client,
-    deploy_id: &str,
-    apply_state: ApplyState,
-    resources: &ApplyResources,
-) -> Result<(), CliError> {
-    let staging_suffix = &resources.staging_suffix;
-    let mut has_work = false;
-
-    // Note resume state if applicable
-    match apply_state {
-        ApplyState::PreSwap => {
-            humanln!(
-                "\n  {} Resuming from pre-swap state (apply state schemas already created)",
-                "note:".yellow().bold()
-            );
-        }
-        ApplyState::PostSwap => {
-            humanln!(
-                "\n  {} Resuming from post-swap state (swap already completed, showing remaining work)",
-                "note:".yellow().bold()
-            );
-        }
-        ApplyState::NotStarted => {}
-    }
-
-    // Schema Swaps
-    humanln!("\n  {}", "Schema Swaps:".bold());
-    if resources.staging_schemas.is_empty() {
-        humanln!("    (none)");
-    } else {
-        has_work = true;
-        for sq in &resources.staging_schemas {
-            let prod_schema = sq.schema.trim_end_matches(staging_suffix);
-            humanln!(
-                "    {} {}.{} {} {}.{}",
-                "~".yellow(),
-                sq.database,
-                prod_schema,
-                "<->".dimmed(),
-                sq.database,
-                sq.schema
-            );
-        }
-    }
-
-    // Cluster Swaps
-    humanln!("\n  {}", "Cluster Swaps:".bold());
-    if resources.staging_clusters.is_empty() {
-        humanln!("    (none)");
-    } else {
-        has_work = true;
-        for cluster in &resources.staging_clusters {
-            let staging_cluster = format!("{}{}", cluster, staging_suffix);
-            humanln!(
-                "    {} {} {} {}",
-                "~".yellow(),
-                cluster,
-                "<->".dimmed(),
-                staging_cluster
-            );
-        }
-    }
-
-    // Sinks to Create
-    let pending = client
-        .deployments()
-        .get_pending_statements(deploy_id)
-        .await?;
-    humanln!("\n  {}", "Sinks to Create:".bold());
-    if pending.is_empty() {
-        humanln!("    (none)");
-    } else {
-        has_work = true;
-        for stmt in &pending {
-            humanln!(
-                "    {} {}.{}.{}",
-                "+".green(),
-                stmt.database,
-                stmt.schema,
-                stmt.object
-            );
-        }
-    }
-
-    // Replacement MVs
-    let replacement_mvs = client.deployments().get_replacement_mvs(deploy_id).await?;
-    humanln!("\n  {}", "Replacement Materialized Views:".bold());
-    if replacement_mvs.is_empty() {
-        humanln!("    (none)");
-    } else {
-        has_work = true;
-        for record in &replacement_mvs {
-            humanln!(
-                "    {} {}.{}.{} {} {}.{}.{}",
-                "~".yellow(),
-                record.target_database,
-                record.target_schema,
-                record.target_name,
-                "<-".dimmed(),
-                record.target_database,
-                record.replacement_schema,
-                record.target_name
-            );
-        }
-    }
-
-    // Sinks to Repoint — query production schemas (pre-swap equivalent)
-    humanln!("\n  {}", "Sinks to Repoint:".bold());
-    if resources.staging_schemas.is_empty() {
-        humanln!("    (none)");
-    } else {
-        // In dry-run the swap hasn't happened, so current production schemas
-        // (without suffix) hold the objects that sinks depend on. After swap,
-        // those schemas would get the staging suffix and be dropped, so we
-        // query the production schemas now to find sinks that would need repointing.
-        let prod_schemas: Vec<SchemaQualifier> = resources
-            .staging_schemas
-            .iter()
-            .map(|sq| {
-                let prod_schema = sq.schema.trim_end_matches(staging_suffix);
-                SchemaQualifier::new(sq.database.clone(), prod_schema.to_string())
-            })
-            .collect();
-
-        let dependent_sinks = client
-            .introspection()
-            .find_sinks_depending_on_schemas(&prod_schemas)
-            .await
-            .map_err(CliError::Connection)?;
-
-        if dependent_sinks.is_empty() {
-            humanln!("    (none)");
-        } else {
-            has_work = true;
-            for sink in &dependent_sinks {
-                humanln!(
-                    "    {} {}.{}.{} {} {}.{}.{}",
-                    "~".yellow(),
-                    sink.sink_database,
-                    sink.sink_schema,
-                    sink.sink_name,
-                    "->".dimmed(),
-                    sink.dependency_database,
-                    sink.dependency_schema,
-                    sink.dependency_name
-                );
-            }
-        }
-    }
-
-    // Old Resources to Drop
-    humanln!("\n  {}", "Old Resources to Drop:".bold());
-    let replacement_schemas: BTreeSet<SchemaQualifier> = replacement_mvs
-        .iter()
-        .map(|r| SchemaQualifier::new(r.target_database.clone(), r.replacement_schema.clone()))
-        .collect();
-    let has_drops = !resources.staging_schemas.is_empty()
-        || !resources.staging_clusters.is_empty()
-        || !replacement_schemas.is_empty();
-
-    if !has_drops {
-        humanln!("    (none)");
-    } else {
-        has_work = true;
-        // After swap, old production schemas get the staging suffix and are dropped
-        for sq in &resources.staging_schemas {
-            let prod_schema = sq.schema.trim_end_matches(staging_suffix);
-            let old_schema = format!("{}{}", prod_schema, staging_suffix);
-            humanln!("    {} {}.{}", "-".red(), sq.database, old_schema);
-        }
-        // Old production clusters get the staging suffix and are dropped
-        for cluster in &resources.staging_clusters {
-            let old_cluster = format!("{}{}", cluster, staging_suffix);
-            humanln!("    {} {}", "-".red(), old_cluster);
-        }
-        // Replacement staging schemas are dropped after APPLY REPLACEMENT
-        for sq in &replacement_schemas {
-            humanln!("    {} {}.{}", "-".red(), sq.database, sq.schema);
-        }
-    }
-
-    // Summary
-    humanln!();
-    if has_work {
-        progress::info(&format!(
-            "To execute this plan, run: mz-deploy deploy {}",
-            deploy_id
-        ));
-    } else {
-        progress::info("Nothing to do.");
-    }
-
-    Ok(())
-}
-
-/// Print JSON deployment plan for `--dry-run --output json`.
-async fn print_deployment_plan_json(
-    client: &Client,
-    deploy_id: &str,
-    apply_state: ApplyState,
-    resources: &ApplyResources,
-) -> Result<(), CliError> {
-    let staging_suffix = &resources.staging_suffix;
-
-    let schema_swaps: Vec<SchemaSwapJson> = resources
-        .staging_schemas
-        .iter()
-        .map(|sq| {
-            let prod_schema = sq.schema.trim_end_matches(staging_suffix).to_string();
-            SchemaSwapJson {
-                database: sq.database.clone(),
-                production_schema: prod_schema,
-                staging_schema: sq.schema.clone(),
-            }
-        })
-        .collect();
-
-    let cluster_swaps: Vec<ClusterSwapJson> = resources
-        .staging_clusters
-        .iter()
-        .map(|cluster| ClusterSwapJson {
-            production_cluster: cluster.clone(),
-            staging_cluster: format!("{}{}", cluster, staging_suffix),
-        })
-        .collect();
-
-    let pending = client
-        .deployments()
-        .get_pending_statements(deploy_id)
-        .await?;
-    let sinks_to_create: Vec<SinkToCreateJson> = pending
-        .iter()
-        .map(|stmt| SinkToCreateJson {
-            database: stmt.database.clone(),
-            schema: stmt.schema.clone(),
-            object: stmt.object.clone(),
-        })
-        .collect();
-
-    let replacement_mvs = client.deployments().get_replacement_mvs(deploy_id).await?;
-    let replacement_mvs_json: Vec<ReplacementMvJson> = replacement_mvs
-        .iter()
-        .map(|record| ReplacementMvJson {
-            target_database: record.target_database.clone(),
-            target_schema: record.target_schema.clone(),
-            target_name: record.target_name.clone(),
-            replacement_schema: record.replacement_schema.clone(),
-        })
-        .collect();
-
-    let mut sinks_to_repoint = Vec::new();
-    if !resources.staging_schemas.is_empty() {
-        let prod_schemas: Vec<SchemaQualifier> = resources
-            .staging_schemas
-            .iter()
-            .map(|sq| {
-                let prod_schema = sq.schema.trim_end_matches(staging_suffix);
-                SchemaQualifier::new(sq.database.clone(), prod_schema.to_string())
-            })
-            .collect();
-
-        let dependent_sinks = client
-            .introspection()
-            .find_sinks_depending_on_schemas(&prod_schemas)
-            .await
-            .map_err(CliError::Connection)?;
-
-        sinks_to_repoint = dependent_sinks
-            .iter()
-            .map(|sink| SinkToRepointJson {
-                sink_database: sink.sink_database.clone(),
-                sink_schema: sink.sink_schema.clone(),
-                sink_name: sink.sink_name.clone(),
-                dependency_database: sink.dependency_database.clone(),
-                dependency_schema: sink.dependency_schema.clone(),
-                dependency_name: sink.dependency_name.clone(),
-            })
-            .collect();
-    }
-
-    let mut resources_to_drop = Vec::new();
-    for sq in &resources.staging_schemas {
-        let prod_schema = sq.schema.trim_end_matches(staging_suffix);
-        let old_schema = format!("{}{}", prod_schema, staging_suffix);
-        resources_to_drop.push(ResourceToDropJson {
-            kind: "schema".to_string(),
-            name: format!("{}.{}", sq.database, old_schema),
-        });
-    }
-    for cluster in &resources.staging_clusters {
-        let old_cluster = format!("{}{}", cluster, staging_suffix);
-        resources_to_drop.push(ResourceToDropJson {
-            kind: "cluster".to_string(),
-            name: old_cluster,
-        });
-    }
-    let replacement_schemas: BTreeSet<SchemaQualifier> = replacement_mvs
-        .iter()
-        .map(|r| SchemaQualifier::new(r.target_database.clone(), r.replacement_schema.clone()))
-        .collect();
-    for sq in &replacement_schemas {
-        resources_to_drop.push(ResourceToDropJson {
-            kind: "schema".to_string(),
-            name: format!("{}.{}", sq.database, sq.schema),
-        });
-    }
-
-    let apply_state_str = match apply_state {
-        ApplyState::NotStarted => "not_started",
-        ApplyState::PreSwap => "pre_swap",
-        ApplyState::PostSwap => "post_swap",
-    };
-
-    let plan = DeploymentPlanJson {
-        deploy_id: deploy_id.to_string(),
-        apply_state: apply_state_str.to_string(),
-        schema_swaps,
-        cluster_swaps,
-        sinks_to_create,
-        replacement_mvs: replacement_mvs_json,
-        sinks_to_repoint,
-        resources_to_drop,
-    };
-
-    output::machine(&plan);
-    Ok(())
-}
-
-/// Collects swap targets for the current apply attempt.
-///
-/// During `PostSwap` resume we intentionally skip discovery because swap already happened;
-/// the returned empty sets signal later phases to avoid swap-specific cleanup.
-async fn prepare_apply_resources(
-    client: &Client,
-    deploy_id: &str,
-    apply_state: ApplyState,
-    force: bool,
-) -> Result<ApplyResources, CliError> {
-    if apply_state == ApplyState::PostSwap {
-        verbose!("Resuming post-swap: skipping conflict check and resource gathering");
-        return Ok(ApplyResources {
-            staging_schemas: BTreeSet::new(),
-            staging_clusters: BTreeSet::new(),
-            staging_suffix: format!("_{}", deploy_id),
-        });
-    }
-    let (staging_schemas, staging_clusters, staging_suffix) =
-        gather_resources_and_check_conflicts(client, deploy_id, force).await?;
-    Ok(ApplyResources {
-        staging_schemas,
-        staging_clusters,
-        staging_suffix,
-    })
-}
+// ---------------------------------------------------------------------------
+// Execution functions
+// ---------------------------------------------------------------------------
 
 /// Runs the swap portion of apply according to persisted resume state.
-///
-/// This function is the state-machine boundary for apply: it decides whether
-/// to create state schemas, execute swap, or skip directly to post-swap work.
-async fn execute_swap_phase(
-    client: &Client,
-    deploy_id: &str,
-    apply_state: ApplyState,
-    resources: &ApplyResources,
-) -> Result<(), CliError> {
-    match apply_state {
+async fn execute_swap_phase(client: &Client, plan: &DeploymentPlan) -> Result<(), CliError> {
+    match plan.apply_state {
         ApplyState::NotStarted => {
             verbose!("Creating apply state schemas...");
             client
                 .deployments()
-                .create_apply_state_schemas(deploy_id)
+                .create_apply_state_schemas(&plan.deploy_id)
                 .await?;
             verbose!("Executing atomic swap...");
             execute_atomic_swap(
                 client,
-                deploy_id,
-                &resources.staging_schemas,
-                &resources.staging_clusters,
+                &plan.deploy_id,
+                &plan.staging_schemas,
+                &plan.staging_clusters,
             )
             .await?;
         }
@@ -550,9 +507,9 @@ async fn execute_swap_phase(
             verbose!("Resuming from pre-swap state...");
             execute_atomic_swap(
                 client,
-                deploy_id,
-                &resources.staging_schemas,
-                &resources.staging_clusters,
+                &plan.deploy_id,
+                &plan.staging_schemas,
+                &plan.staging_clusters,
             )
             .await?;
         }
@@ -564,49 +521,29 @@ async fn execute_swap_phase(
 }
 
 /// Completes promotion work that must happen after schemas/clusters are swapped.
-///
-/// Includes deferred sink execution, replacement MV apply, promoted timestamp update,
-/// and best-effort dropping of old production resources when their identities are known.
-async fn run_post_swap_steps(
-    client: &Client,
-    deploy_id: &str,
-    resources: &ApplyResources,
-) -> Result<(), CliError> {
-    execute_pending_sinks(client, deploy_id).await?;
-    apply_replacement_mvs(client, deploy_id).await?;
+async fn run_post_swap_steps(client: &Client, plan: &DeploymentPlan) -> Result<(), CliError> {
+    execute_pending_sinks(client, plan).await?;
+    apply_replacement_mvs(client, plan).await?;
 
-    if !resources.staging_schemas.is_empty() {
-        repoint_dependent_sinks(
-            client,
-            &resources.staging_schemas,
-            &resources.staging_suffix,
-        )
-        .await?;
+    if !plan.staging_schemas.is_empty() {
+        repoint_dependent_sinks(client, plan).await?;
     }
 
     verbose!("\nUpdating deployment table...");
     client
         .deployments()
-        .update_promoted_at(deploy_id)
+        .update_promoted_at(&plan.deploy_id)
         .await
         .map_err(|source| CliError::DeploymentStateWriteFailed { source })?;
 
-    if !resources.staging_schemas.is_empty() || !resources.staging_clusters.is_empty() {
+    if !plan.staging_schemas.is_empty() || !plan.staging_clusters.is_empty() {
         progress::info("Dropping old production objects...");
-        drop_old_resources(
-            client,
-            &resources.staging_schemas,
-            &resources.staging_clusters,
-            &resources.staging_suffix,
-        )
-        .await;
+        drop_old_resources(client, plan).await;
     }
     Ok(())
 }
 
 /// Removes deployment bookkeeping that is only needed while apply is in-flight.
-///
-/// This finalizes apply by clearing resume metadata and deferred-operation tables.
 async fn cleanup_apply_state(client: &Client, deploy_id: &str) -> Result<(), CliError> {
     verbose!("Cleaning up apply state...");
     client
@@ -766,11 +703,6 @@ async fn gather_resources_and_check_conflicts(
 }
 
 /// Execute the atomic swap of schemas, clusters, and state schemas.
-///
-/// This transaction includes:
-/// - Swapping user schemas (production <-> staging)
-/// - Swapping clusters (production <-> staging)
-/// - Swapping apply state schemas (pre <-> post, which moves the 'swapped=true' comment to _pre)
 async fn execute_atomic_swap(
     client: &Client,
     deploy_id: &str,
@@ -826,10 +758,8 @@ async fn execute_atomic_swap(
     }
 
     // Swap the apply state schemas - this atomically marks the swap as complete
-    // After this swap, apply_<id>_pre will have comment 'swapped=true' (it was _post before)
     let pre_schema = format!("apply_{}_pre", deploy_id);
     let post_schema = format!("apply_{}_post", deploy_id);
-    // Note: second schema name is NOT fully qualified (same database: _mz_deploy)
     let state_swap_sql = format!(
         "ALTER SCHEMA _mz_deploy.\"{}\" SWAP WITH \"{}\";",
         pre_schema, post_schema
@@ -857,24 +787,19 @@ async fn execute_atomic_swap(
     Ok(())
 }
 
-/// Execute pending sink statements (created after swap).
+/// Execute pending sink statements using data from the plan.
 ///
-/// Sinks are created in production after the swap because they immediately
-/// start writing to external systems. Like tables, sinks are only created if
-/// they don't already exist - the hash is ignored.
-async fn execute_pending_sinks(client: &Client, deploy_id: &str) -> Result<(), CliError> {
-    let pending = client
-        .deployments()
-        .get_pending_statements(deploy_id)
-        .await?;
-
-    if pending.is_empty() {
+/// Uses `plan.pending_statements` instead of re-querying. Still checks sink
+/// existence at execution time for idempotency.
+async fn execute_pending_sinks(client: &Client, plan: &DeploymentPlan) -> Result<(), CliError> {
+    if plan.pending_statements.is_empty() {
         verbose!("No pending sinks to execute");
         return Ok(());
     }
 
     // Build set of sink ObjectIds from pending statements
-    let sink_ids: BTreeSet<ObjectId> = pending
+    let sink_ids: BTreeSet<ObjectId> = plan
+        .pending_statements
         .iter()
         .map(|stmt| ObjectId {
             database: stmt.database.clone(),
@@ -887,7 +812,8 @@ async fn execute_pending_sinks(client: &Client, deploy_id: &str) -> Result<(), C
     let existing_sinks = client.introspection().check_sinks_exist(&sink_ids).await?;
 
     // Filter to only sinks that don't exist
-    let sinks_to_create: Vec<_> = pending
+    let sinks_to_create: Vec<_> = plan
+        .pending_statements
         .iter()
         .filter(|stmt| {
             let obj_id = ObjectId {
@@ -935,7 +861,6 @@ async fn execute_pending_sinks(client: &Client, deploy_id: &str) -> Result<(), C
 
         // Execute the sink creation statement
         if let Err(e) = client.execute(&stmt.statement_sql, &[]).await {
-            // Log the error - the statement will remain unexecuted for retry
             eprintln!(
                 "Error creating sink {}.{}.{}: {}",
                 stmt.database, stmt.schema, stmt.object, e
@@ -949,7 +874,7 @@ async fn execute_pending_sinks(client: &Client, deploy_id: &str) -> Result<(), C
         // Mark the statement as executed
         client
             .deployments()
-            .mark_statement_executed(deploy_id, stmt.sequence_num)
+            .mark_statement_executed(&plan.deploy_id, stmt.sequence_num)
             .await?;
 
         progress::success(&format!(
@@ -961,27 +886,21 @@ async fn execute_pending_sinks(client: &Client, deploy_id: &str) -> Result<(), C
     Ok(())
 }
 
-/// Apply replacement materialized views after the swap.
+/// Apply replacement materialized views using data from the plan.
 ///
-/// For each replacement MV record, executes:
-///   ALTER MATERIALIZED VIEW "db"."schema"."target" APPLY REPLACEMENT "db"."staging_schema"."name"
-///
-/// After applying, the replacement MVs are absorbed into their targets and the
-/// replacement staging schemas become empty. Those schemas are then dropped.
-async fn apply_replacement_mvs(client: &Client, deploy_id: &str) -> Result<(), CliError> {
-    let records = client.deployments().get_replacement_mvs(deploy_id).await?;
-
-    if records.is_empty() {
+/// Uses `plan.replacement_mvs` instead of re-querying.
+async fn apply_replacement_mvs(client: &Client, plan: &DeploymentPlan) -> Result<(), CliError> {
+    if plan.replacement_mvs.is_empty() {
         verbose!("No replacement MVs to apply");
         return Ok(());
     }
 
     progress::info(&format!(
         "Applying {} replacement materialized view(s)...",
-        records.len()
+        plan.replacement_mvs.len()
     ));
 
-    for record in &records {
+    for record in &plan.replacement_mvs {
         let alter_sql = format!(
             "ALTER MATERIALIZED VIEW \"{}\".\"{}\".\"{}\"\
              APPLY REPLACEMENT \"{}\".\"{}\".\"{}\";",
@@ -1012,10 +931,7 @@ async fn apply_replacement_mvs(client: &Client, deploy_id: &str) -> Result<(), C
     }
 
     // Drop now-empty replacement staging schemas
-    let replacement_schemas: BTreeSet<SchemaQualifier> = records
-        .iter()
-        .map(|r| SchemaQualifier::new(r.target_database.clone(), r.replacement_schema.clone()))
-        .collect();
+    let replacement_schemas = plan.replacement_schemas();
 
     for sq in &replacement_schemas {
         let drop_sql = format!(
@@ -1036,20 +952,15 @@ async fn apply_replacement_mvs(client: &Client, deploy_id: &str) -> Result<(), C
 
 /// Repoint sinks that depend on objects in schemas about to be dropped.
 ///
-/// After the swap, old production objects are in schemas with the staging suffix.
-/// Before dropping those schemas, we need to ALTER SINK any sinks that depend
-/// on those objects to point to the new production objects instead.
-///
-/// This prevents sinks from being transitively dropped by CASCADE when the
-/// old schemas are dropped.
-async fn repoint_dependent_sinks(
-    client: &Client,
-    staging_schemas: &BTreeSet<SchemaQualifier>,
-    staging_suffix: &str,
-) -> Result<(), CliError> {
+/// Re-queries post-swap (cannot use `plan.dependent_sinks` because schema names
+/// differ after swap). Reads `plan.staging_schemas` and `plan.staging_suffix`.
+async fn repoint_dependent_sinks(client: &Client, plan: &DeploymentPlan) -> Result<(), CliError> {
+    let staging_suffix = &plan.staging_suffix;
+
     // Build list of old schema names (database, old_schema_with_suffix)
     // After swap, old production schemas have the staging suffix
-    let old_schemas: Vec<SchemaQualifier> = staging_schemas
+    let old_schemas: Vec<SchemaQualifier> = plan
+        .staging_schemas
         .iter()
         .map(|sq| {
             let prod_schema = sq.schema.trim_end_matches(staging_suffix);
@@ -1159,19 +1070,12 @@ async fn repoint_dependent_sinks(
 }
 
 /// Drop old production resources after the swap.
-///
-/// After the swap, old production objects now have the staging suffix.
-/// This function drops them to clean up.
-async fn drop_old_resources(
-    client: &Client,
-    staging_schemas: &BTreeSet<SchemaQualifier>,
-    staging_clusters: &BTreeSet<String>,
-    staging_suffix: &str,
-) {
+async fn drop_old_resources(client: &Client, plan: &DeploymentPlan) {
+    let staging_suffix = &plan.staging_suffix;
+
     // Drop schemas
-    for sq in staging_schemas {
+    for sq in &plan.staging_schemas {
         let prod_schema = sq.schema.trim_end_matches(staging_suffix);
-        // After swap, the old production schema is now named with the staging suffix
         let old_schema = format!("{}{}", prod_schema, staging_suffix);
         let drop_sql = format!(
             "DROP SCHEMA IF EXISTS \"{}\".\"{}\" CASCADE;",
@@ -1188,8 +1092,7 @@ async fn drop_old_resources(
     }
 
     // Drop clusters
-    for cluster in staging_clusters {
-        // After swap, the old production cluster is now named with the staging suffix
+    for cluster in &plan.staging_clusters {
         let old_cluster = format!("{}{}", cluster, staging_suffix);
         let drop_sql = format!("DROP CLUSTER IF EXISTS \"{}\" CASCADE;", old_cluster);
 
