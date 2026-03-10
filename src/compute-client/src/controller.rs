@@ -755,7 +755,7 @@ where
 
     /// Creates the described dataflow and initializes state for its output.
     ///
-    /// Only materialized views are allowed to have a `target_replica`.
+    /// Only materialized views and subscribes are allowed to have a `target_replica`.
     ///
     /// Panics if called with a dataflow description that has index exports
     /// when `target_replica` is set.
