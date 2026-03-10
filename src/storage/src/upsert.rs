@@ -54,6 +54,7 @@ use types::{
 #[cfg(test)]
 pub mod memory;
 pub(crate) mod rocksdb;
+pub(crate) mod stash;
 // TODO(aljoscha): Move next to upsert module, rename to upsert_types.
 pub(crate) mod types;
 
@@ -251,14 +252,6 @@ where
     let rocksdb_cleanup_tries =
         dyncfgs::STORAGE_ROCKSDB_CLEANUP_TRIES.get(storage_configuration.config_set());
 
-    // Whether or not to partially drain the input buffer
-    // to prevent buffering of the _upstream_ snapshot.
-    let prevent_snapshot_buffering =
-        dyncfgs::STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING.get(storage_configuration.config_set());
-    // If the above is true, the number of timely batches to process at once.
-    let snapshot_buffering_max = dyncfgs::STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING
-        .get(storage_configuration.config_set());
-
     // Whether we should provide the upsert state merge operator to the RocksDB instance
     // (for faster performance during snapshot hydration).
     let rocksdb_use_native_merge_operator =
@@ -299,6 +292,12 @@ where
     let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
     let rocksdb_instance_metrics = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
 
+    let stash_rocksdb_dir = rocksdb_dir.join("stash");
+    let stash_env = instance_context.rocksdb_env.clone();
+    let stash_tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
+    let stash_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
+    let stash_instance_metrics = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
+
     let env = instance_context.rocksdb_env.clone();
 
     // A closure that will initialize and return a configured RocksDB instance
@@ -332,6 +331,34 @@ where
         )
     };
 
+    // A closure that will initialize and return the RocksDB-backed stash
+    let stash_init_fn = move || async move {
+        use crate::upsert::stash::{StashValue, stash_merge_function, UpsertStash};
+
+        let merge_operator = Some((
+            "upsert_stash_merge_v1".to_string(),
+            |_key: &[u8], values: ValueIterator<BincodeOpts, StashValue<FromTime>>| {
+                stash_merge_function(_key, values)
+            },
+        ));
+
+        let rocksdb_instance = mz_rocksdb::RocksDBInstance::new(
+            &stash_rocksdb_dir,
+            mz_rocksdb::InstanceOptions::new(
+                stash_env,
+                rocksdb_cleanup_tries,
+                merge_operator,
+                upsert_bincode_opts(),
+            ),
+            stash_tuning,
+            stash_shared_metrics,
+            stash_instance_metrics,
+        )
+        .unwrap();
+
+        UpsertStash::new(rocksdb_instance)
+    };
+
     upsert_operator(
         thin_input,
         upsert_envelope.key_indices,
@@ -341,16 +368,15 @@ where
         upsert_metrics,
         source_config,
         rocksdb_init_fn,
+        stash_init_fn,
         upsert_config,
         storage_configuration,
-        prevent_snapshot_buffering,
-        snapshot_buffering_max,
     )
 }
 
 // A shim so we can dispatch based on the dyncfg that tells us which upsert
 // operator to use.
-fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
+fn upsert_operator<G: Scope, FromTime, F, Fut, US, SF, SFut>(
     input: VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
@@ -359,10 +385,9 @@ fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::SourceExportCreationConfig,
     state: F,
+    stash_fn: SF,
     upsert_config: UpsertConfig,
     _storage_configuration: &StorageConfiguration,
-    prevent_snapshot_buffering: bool,
-    snapshot_buffering_max: Option<usize>,
 ) -> (
     VecCollection<G, Result<Row, DataflowError>, Diff>,
     StreamVec<G, (Option<GlobalId>, HealthStatusUpdate)>,
@@ -375,6 +400,8 @@ where
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
     US: UpsertStateBackend<G::Timestamp, FromTime>,
+    SF: FnOnce() -> SFut + 'static,
+    SFut: std::future::Future<Output = stash::UpsertStash<G::Timestamp, FromTime>>,
     FromTime: Debug + timely::ExchangeData + Clone + Ord + Sync,
 {
     // Hard-coded to true because classic UPSERT cannot be used safely with
@@ -394,9 +421,8 @@ where
             upsert_metrics,
             source_config,
             state,
+            stash_fn,
             upsert_config,
-            prevent_snapshot_buffering,
-            snapshot_buffering_max,
         )
     } else {
         upsert_classic(
@@ -409,8 +435,6 @@ where
             source_config,
             state,
             upsert_config,
-            prevent_snapshot_buffering,
-            snapshot_buffering_max,
         )
     }
 }
@@ -504,12 +528,10 @@ fn stage_input<T, FromTime>(
     }
 }
 
-/// The style of drain we are performing on the stash. `AtTime`-drains cannot
-/// assume that all values have been seen, and must leave tombstones behind for deleted values.
+/// The style of drain we are performing on the stash.
 #[derive(Debug)]
 enum DrainStyle<'a, T> {
     ToUpper(&'a Antichain<T>),
-    AtTime(T),
 }
 
 /// Helper method for `upsert_inner` used to stage `data` updates
@@ -535,7 +557,6 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     // Find the prefix that we can emit
     let idx = stash.partition_point(|(ts, _, _, _)| match &drain_style {
         DrainStyle::ToUpper(upper) => !upper.less_equal(ts),
-        DrainStyle::AtTime(time) => ts <= time,
     });
 
     tracing::trace!(?drain_style, updates = idx, "draining stash in upsert");
@@ -584,7 +605,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     // This "mini-upsert" technique is actually useful in `UpsertState`'s
     // `consolidate_snapshot_read_write_inner` implementation, minimizing gets and puts on
     // the `UpsertStateBackend` implementations. In some sense, its "upsert all the way down".
-    while let Some((ts, key, from_time, value)) = commands.next() {
+    while let Some((ts, key, _from_time, value)) = commands.next() {
         let mut command_state = if let Entry::Occupied(command_state) = commands_state.entry(key) {
             command_state
         } else {
@@ -595,20 +616,6 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
 
         if let Some(cs) = existing_value.as_mut() {
             cs.ensure_decoded(bincode_opts, source_config.id);
-        }
-
-        // Skip this command if its order key is below the one in the upsert state.
-        // Note that the existing order key may be `None` if the existing value
-        // is from snapshotting, which always sorts below new values/deletes.
-        let existing_order = existing_value
-            .as_ref()
-            .and_then(|cs| cs.provisional_order(&ts));
-        if existing_order >= Some(&from_time.0) {
-            // Skip this update. If no later updates adjust this key, then we just
-            // end up writing the same value back to state. If there
-            // is nothing in the state, `existing_order` is `None`, and this
-            // does not occur.
-            continue;
         }
 
         match value {
@@ -678,8 +685,6 @@ fn upsert_classic<G: Scope, FromTime, F, Fut, US>(
     source_config: crate::source::SourceExportCreationConfig,
     state: F,
     upsert_config: UpsertConfig,
-    prevent_snapshot_buffering: bool,
-    snapshot_buffering_max: Option<usize>,
 ) -> (
     VecCollection<G, Result<Row, DataflowError>, Diff>,
     StreamVec<G, (Option<GlobalId>, HealthStatusUpdate)>,
@@ -845,15 +850,13 @@ where
             // produced in this worker until we yield to timely.
             let events = [event]
                 .into_iter()
-                .chain(std::iter::from_fn(|| input.next().now_or_never().flatten()))
-                .enumerate();
+                .chain(std::iter::from_fn(|| input.next().now_or_never().flatten()));
 
-            let mut partial_drain_time = None;
-            for (i, event) in events {
+            for event in events {
                 match event {
-                    AsyncEvent::Data(cap, mut data) => {
+                    AsyncEvent::Data(_cap, mut data) => {
                         tracing::trace!(
-                            time=?cap.time(),
+                            time=?_cap.time(),
                             updates=%data.len(),
                             "received data in upsert"
                         );
@@ -864,17 +867,6 @@ where
                             &resume_upper,
                             upsert_config.shrink_upsert_unused_buffers_by_ratio,
                         );
-
-                        let event_time = cap.time();
-                        // If the data is at _exactly_ the output frontier, we can preemptively drain it into the state.
-                        // Data within this set events strictly beyond this time are staged as
-                        // normal.
-                        //
-                        // This is a load-bearing optimization, as it is required to avoid buffering
-                        // the entire source snapshot in the `stash`.
-                        if prevent_snapshot_buffering && output_cap.time() == event_time {
-                            partial_drain_time = Some(event_time.clone());
-                        }
                     }
                     AsyncEvent::Progress(upper) => {
                         tracing::trace!(?upper, "received progress in upsert");
@@ -884,9 +876,6 @@ where
                             continue;
                         }
 
-                        // Disable the partial drain as this progress event covers
-                        // the `output_cap` time.
-                        partial_drain_time = None;
                         drain_staged_input::<_, G, _, _, _>(
                             &mut stash,
                             &mut commands_state,
@@ -907,36 +896,6 @@ where
                         input_upper = upper;
                     }
                 }
-                let events_processed = i + 1;
-                if let Some(max) = snapshot_buffering_max {
-                    if events_processed >= max {
-                        break;
-                    }
-                }
-            }
-
-            // If there were staged events that occurred at the capability time, drain
-            // them. This is safe because out-of-order updates to the same key that are
-            // drained in separate calls to `drain_staged_input` are correctly ordered by
-            // their `FromTime` in `drain_staged_input`.
-            //
-            // Note also that this may result in more updates in the output collection than
-            // the minimum. However, because the frontier only advances on `Progress` updates,
-            // the collection always accumulates correctly for all keys.
-            if let Some(partial_drain_time) = partial_drain_time {
-                drain_staged_input::<_, G, _, _, _>(
-                    &mut stash,
-                    &mut commands_state,
-                    &mut output_updates,
-                    &mut multi_get_scratch,
-                    DrainStyle::AtTime(partial_drain_time),
-                    &mut error_emitter,
-                    &mut state,
-                    &source_config,
-                )
-                .await;
-
-                output_handle.give_container(&output_cap, &mut output_updates);
             }
         }
     });

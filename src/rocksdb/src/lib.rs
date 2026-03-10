@@ -305,6 +305,10 @@ enum Command<K, V> {
     ManualCompaction {
         done_sender: oneshot::Sender<()>,
     },
+    PrefixScan {
+        prefix: Vec<u8>,
+        response_sender: oneshot::Sender<Result<Vec<(Vec<u8>, V)>, Error>>,
+    },
 }
 
 /// An async wrapper around RocksDB.
@@ -553,6 +557,24 @@ where
                 Err(e)
             }
         }
+    }
+
+    /// Scan all keys that start with the given prefix bytes.
+    ///
+    /// Returns pairs of `(raw_key_bytes, deserialized_value)` for each matching entry.
+    /// The raw key bytes are returned as `Vec<u8>` so that callers can convert them
+    /// to their own key type without requiring additional trait bounds on `K`.
+    pub async fn prefix_scan(&mut self, prefix: Vec<u8>) -> Result<Vec<(Vec<u8>, V)>, Error> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(Command::PrefixScan {
+                prefix,
+                response_sender: tx,
+            })
+            .await
+            .map_err(|_| Error::RocksDBThreadGoneAway)?;
+
+        rx.await.map_err(|_| Error::RocksDBThreadGoneAway)?
     }
 
     /// Trigger manual compaction of the RocksDB instance.
@@ -904,6 +926,28 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                         }
                     }
                 };
+            }
+            Command::PrefixScan {
+                prefix,
+                response_sender,
+            } => {
+                let result = (|| -> Result<Vec<(Vec<u8>, V)>, Error> {
+                    let mut results = Vec::new();
+                    let iter = db.iterator(rocksdb::IteratorMode::From(
+                        &prefix,
+                        rocksdb::Direction::Forward,
+                    ));
+                    for item in iter {
+                        let (key, value) = item?;
+                        if !key.starts_with(&prefix) {
+                            break;
+                        }
+                        let v: V = options.bincode.deserialize(&value)?;
+                        results.push((key.to_vec(), v));
+                    }
+                    Ok(results)
+                })();
+                let _ = response_sender.send(result);
             }
         }
     }
