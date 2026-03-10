@@ -11,17 +11,17 @@
 //!   against a Docker container.
 //! - **[`stage`]** — Deploy the project to a staging environment using
 //!   blue/green schemas.
-//! - **[`ready`]** — Check hydration status of a staged deployment.
+//! - **[`wait`]** — Check hydration status of a staged deployment.
 //! - **[`deploy`]** — Promote a staged deployment to production.
 //! - **[`apply_all`]** — Orchestrate all infrastructure apply steps.
 //! - **[`abort`]** — Roll back a staged deployment.
 //! - **[`apply_tables`]** — Helpers for creating tables and sources.
-//! - **[`gen_data_contracts`]** — Generate or refresh the `types.lock` file from
+//! - **[`lock`]** — Generate or refresh the `types.lock` file from
 //!   the live region.
 //! - **[`describe`]** — Print a summary of the compiled project.
 //! - **[`debug`]** — Dump internal state for troubleshooting.
-//! - **[`deployments`]** — List active deployments.
-//! - **[`history`]** — Show deployment history.
+//! - **[`list`]** — List active deployments.
+//! - **[`log`]** — Show deployment history.
 //! - **[`clusters`]** — List or inspect cluster definitions.
 //! - **[`roles`]** — List or inspect role definitions.
 //! - **[`apply_network_policies`]** — Apply network policy definitions.
@@ -54,14 +54,14 @@ pub mod compile;
 pub mod debug;
 pub mod delete;
 pub mod deploy;
-pub mod deployments;
 pub mod describe;
-pub mod gen_data_contracts;
 pub mod grants;
-pub mod history;
+pub mod list;
+pub mod lock;
+pub mod log;
 pub mod new_project;
 pub mod profiles;
-pub mod ready;
 pub mod roles;
 pub mod stage;
 pub mod test;
+pub mod wait;

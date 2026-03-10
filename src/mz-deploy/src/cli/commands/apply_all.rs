@@ -53,7 +53,7 @@ pub async fn run(
 
     // Regenerate data contracts after tables are applied
     if !dry_run {
-        super::gen_data_contracts::run(settings).await?;
+        super::lock::run(settings).await?;
     }
 
     progress::success("All infrastructure objects applied successfully!");

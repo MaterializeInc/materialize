@@ -751,7 +751,7 @@ async fn run(args: Args) -> Result<(), CliError> {
                     )
                     .await;
                     if r.is_ok() && !dry_run {
-                        cli::commands::gen_data_contracts::run(&settings).await?;
+                        cli::commands::lock::run(&settings).await?;
                     }
                     r
                 }
@@ -780,7 +780,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             dry_run,
         }) => {
             if !no_ready_check && !dry_run {
-                cli::commands::ready::run(&settings, &deploy_id, true, None, allowed_lag, false)
+                cli::commands::wait::run(&settings, &deploy_id, true, None, allowed_lag, false)
                     .await?;
             }
             cli::commands::deploy::run(&settings, &deploy_id, force, dry_run, json).await
@@ -818,7 +818,7 @@ async fn run(args: Args) -> Result<(), CliError> {
                     "--output json is not supported for the 'lock' command".to_string(),
                 ));
             }
-            cli::commands::gen_data_contracts::run(&settings).await
+            cli::commands::lock::run(&settings).await
         }
         Some(Command::Test { filter, junit_xml }) => {
             if json {
@@ -832,15 +832,15 @@ async fn run(args: Args) -> Result<(), CliError> {
             cli::commands::abort::run(&settings, &deploy_id, json).await
         }
         Some(Command::List { allowed_lag }) => {
-            cli::commands::deployments::run(&settings, allowed_lag, json).await
+            cli::commands::list::run(&settings, allowed_lag, json).await
         }
-        Some(Command::Log { limit }) => cli::commands::history::run(&settings, limit, json).await,
+        Some(Command::Log { limit }) => cli::commands::log::run(&settings, limit, json).await,
         Some(Command::Wait {
             name,
             once,
             timeout,
             allowed_lag,
-        }) => cli::commands::ready::run(&settings, &name, once, timeout, allowed_lag, json).await,
+        }) => cli::commands::wait::run(&settings, &name, once, timeout, allowed_lag, json).await,
         Some(Command::Delete { yes, subcommand }) => {
             if json {
                 return Err(CliError::Message(
