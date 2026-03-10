@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.9.6 - 2026-03-10
+
+* Add `strict_mode` to enforce production-ready cluster and schema isolation
+  rules, and improve cluster health monitoring
+  ([#34538](https://github.com/MaterializeInc/materialize/pull/34538)).
+
 * Fix unit test failures in dbt-core by adding support for the `column_name_to_quoted`
   parameter in the unit test materialization. This parameter is required for handling
   of quoted column identifiers in unit tests
