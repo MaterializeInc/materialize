@@ -8,28 +8,15 @@
 # by the Apache License, Version 2.0.
 import argparse
 import os
-import subprocess
-import sys
-import threading
-import time
-from datetime import datetime, timedelta
 from pathlib import Path
 
-from materialize import MZ_ROOT, buildkite
-from materialize.terminal import (
-    COLOR_ERROR,
-    COLOR_OK,
-    STYLE_BOLD,
-    with_formatting,
-    with_formattings,
-)
+from materialize import MZ_ROOT
+from materialize.parallel_task import FAIL, OK, TaskThread, _prefix, _SpinnerThread
 
 MAIN_PATH = MZ_ROOT / "ci" / "test" / "lint-main"
 MAIN_CHECKS_PATH = MAIN_PATH / "checks"
 CHECK_BEFORE_PATH = MAIN_PATH / "before"
 CHECK_AFTER_PATH = MAIN_PATH / "after"
-OK = with_formatting("✓", COLOR_OK)
-FAIL = with_formattings("✗", [COLOR_ERROR, STYLE_BOLD])
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,10 +44,6 @@ def main() -> int:
     return return_code
 
 
-def prefix(ci: str = "---") -> str:
-    return ci + " " if buildkite.is_in_buildkite() else ""
-
-
 class LintManager:
     def __init__(self, print_duration: bool, verbose_output: bool, offline: bool):
         self.print_duration = print_duration
@@ -81,7 +64,7 @@ class LintManager:
         success = len(failed_checks) == 0
 
         print(
-            prefix("+++") + f"{OK} All checks successful"
+            _prefix("+++") + f"{OK} All checks successful"
             if success
             else f"{FAIL} Checks failed: {failed_checks}"
         )
@@ -96,7 +79,7 @@ class LintManager:
     ) -> list[str]:
         if len(previous_failures) > 0:
             print(
-                f"{prefix()}Skipping checks in '{checks_path}' due to previous failures"
+                f"{_prefix()}Skipping checks in '{checks_path}' due to previous failures"
             )
             return previous_failures
         else:
@@ -116,24 +99,26 @@ class LintManager:
         ]
         lint_files.sort()
 
-        threads = []
-
         check = "check" if len(lint_files) == 1 else "checks"
 
-        status_printer_thread = StatusPrinterThread(
+        spinner = _SpinnerThread(
             f"{len(lint_files)} {check} in {checks_path.relative_to(MZ_ROOT)}"
         )
-        status_printer_thread.start()
+        spinner.start()
 
+        threads = []
         for lint_file in lint_files:
-            thread = LintingThread(checks_path, lint_file, offline=self.offline)
+            command = [str(checks_path / lint_file)]
+            if self.offline:
+                command.append("--offline")
+            thread = TaskThread(name=lint_file, command=command)
             thread.start()
             threads.append(thread)
 
         for thread in threads:
             thread.join()
 
-        status_printer_thread.stop()
+        spinner.stop()
 
         failed_checks = []
 
@@ -145,79 +130,16 @@ class LintManager:
             )
             if thread.success:
                 status = f"{OK}{formatted_duration}"
-                print(f"{prefix('---')}{status} {thread.name}")
+                print(f"{_prefix('---')}{status} {thread.name}")
             else:
                 status = f"{FAIL}{formatted_duration}"
-                print(f"{prefix('+++')}{status} {thread.name}")
+                print(f"{_prefix('+++')}{status} {thread.name}")
                 failed_checks.append(thread.name)
 
-            if thread.has_output() and (not thread.success or self.verbose_output):
+            if thread.output and (not thread.success or self.verbose_output):
                 print(thread.output)
 
         return failed_checks
-
-
-class LintingThread(threading.Thread):
-    def __init__(self, checks_path: Path, lint_file: str, offline: bool):
-        super().__init__(target=self.run_single_script, args=(checks_path, lint_file))
-        self.name = lint_file
-        self.offline = offline
-        self.output: str = ""
-        self.success = False
-        self.duration: timedelta | None = None
-
-    def run_single_script(self, directory_path: Path, file_name: str) -> None:
-        start_time = datetime.now()
-        command = [str(directory_path / file_name)]
-
-        if self.offline:
-            command.append("--offline")
-
-        try:
-            # Note that coloring gets lost (e.g., in git diff)
-            proc = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-            )
-            stdout, _ = proc.communicate()
-            self.success = proc.returncode == 0
-            self.capture_output(stdout)
-        except Exception as e:
-            print(f"Error: {e}")
-            self.success = False
-
-        end_time = datetime.now()
-        self.duration = end_time - start_time
-
-    def capture_output(self, stdout: bytes) -> None:
-        # stdout contains both stdout and stderr because stderr is piped there
-        self.output = stdout.decode("utf-8").strip()
-
-    def has_output(self) -> bool:
-        return len(self.output) > 0
-
-
-class StatusPrinterThread(threading.Thread):
-    def __init__(self, current_step: str) -> None:
-        super().__init__(target=self.print_status, args=())
-        self.active = not buildkite.is_in_buildkite() and sys.stdout.isatty()
-        self.current_step = current_step
-
-    def print_status(self) -> None:
-        symbols = ["⣾", "⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽"]
-
-        i = 0
-        while self.active:
-            print(f"\r\033[K{symbols[i]} {self.current_step}", end="", flush=True)
-            i = (i + 1) % len(symbols)
-            time.sleep(0.1)
-
-    def stop(self) -> None:
-        if self.active:
-            self.active = False
-            print(f"\r\033[K{prefix()}{self.current_step}", end="", flush=True)
-            print()
 
 
 if __name__ == "__main__":

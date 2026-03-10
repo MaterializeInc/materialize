@@ -9,7 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# check-python-formatting.sh — check Python formatting.
+# check-formatting.sh — check code formatting (Rust, Python, Protobuf).
 
 set -euo pipefail
 
@@ -17,12 +17,9 @@ cd "$(dirname "$0")/../../../.."
 
 . misc/shlib/shlib.bash
 
-if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
-    try bin/pyfmt --check --diff
-    if try_last_failed; then
-        echo "lint: $(red error:) python formatting discrepancies found"
-        echo "hint: run bin/pyfmt" >&2
-    fi
+try bin/fmt --check
+if try_last_failed; then
+    echo "hint: run bin/fmt" >&2
 fi
 
 try_status_report

@@ -9,19 +9,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# fmt — formats Rust and Python code as well as Protobuf files.
+# fmt — formats Rust, Python & Protobuf files
 
-set -euo pipefail
-
-cd "$(dirname "$0")/.."
-
-. misc/shlib/shlib.bash
-
-try cargo fmt -- --config error_on_line_overflow=true
-try buf format src -w
-
-if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
-  bin/pyfmt
-fi
-
-try_status_report
+exec "$(dirname "$0")"/pyactivate -m materialize.cli.fmt "$@"
