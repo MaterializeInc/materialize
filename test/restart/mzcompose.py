@@ -23,7 +23,7 @@ from psycopg.errors import (
     OperationalError,
 )
 
-from materialize import buildkite
+from materialize import MZ_ROOT, buildkite
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -426,6 +426,74 @@ def workflow_allow_user_sessions(c: Composition) -> None:
     # The cursor from the beginning of the test should still work.
     cursor.execute("SELECT 1")
     assert cursor.fetchall() == [(1,)]
+
+
+def workflow_mcp_feature_flags(c: Composition) -> None:
+    """Test that enable_mcp_agents and enable_mcp_observatory dyncfg flags
+    can disable MCP endpoints without a restart."""
+
+    mcp_request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "0.1.0"},
+        },
+    }
+
+    with c.override(
+        Materialized(
+            listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json",
+        )
+    ):
+        c.up("materialized")
+        http_port = c.port("materialized", 6876)
+
+        agents_url = f"http://localhost:{http_port}/api/mcp/agents"
+        observatory_url = f"http://localhost:{http_port}/api/mcp/observatory"
+
+        # Both endpoints should work by default.
+        assert requests.post(agents_url, json=mcp_request).status_code == 200
+        assert requests.post(observatory_url, json=mcp_request).status_code == 200
+
+        # Disable the agents endpoint.
+        c.sql(
+            "ALTER SYSTEM SET enable_mcp_agents = false",
+            port=6877,
+            user="mz_system",
+        )
+
+        assert requests.post(agents_url, json=mcp_request).status_code == 503
+        # Observatory should still work.
+        assert requests.post(observatory_url, json=mcp_request).status_code == 200
+
+        # Disable observatory too.
+        c.sql(
+            "ALTER SYSTEM SET enable_mcp_observatory = false",
+            port=6877,
+            user="mz_system",
+        )
+
+        assert requests.post(observatory_url, json=mcp_request).status_code == 503
+
+        # Re-enable both.
+        c.sql(
+            "ALTER SYSTEM SET enable_mcp_agents = true",
+            port=6877,
+            user="mz_system",
+        )
+        c.sql(
+            "ALTER SYSTEM SET enable_mcp_observatory = true",
+            port=6877,
+            user="mz_system",
+        )
+
+        assert requests.post(agents_url, json=mcp_request).status_code == 200
+        assert requests.post(observatory_url, json=mcp_request).status_code == 200
+
+        c.kill("materialized")
 
 
 def workflow_network_policies(c: Composition) -> None:

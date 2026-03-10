@@ -154,6 +154,20 @@ pub const ENABLE_S3_TABLES_REGION_CHECK: Config<bool> = Config::new(
     "Whether to enforce that S3 Tables connections are in the same region as the environment.",
 );
 
+/// Whether the MCP agents endpoint is enabled.
+pub const ENABLE_MCP_AGENTS: Config<bool> = Config::new(
+    "enable_mcp_agents",
+    true,
+    "Whether the MCP agents HTTP endpoint is enabled. When false, requests to /api/mcp/agents return 503 Service Unavailable.",
+);
+
+/// Whether the MCP observatory endpoint is enabled.
+pub const ENABLE_MCP_OBSERVATORY: Config<bool> = Config::new(
+    "enable_mcp_observatory",
+    true,
+    "Whether the MCP observatory HTTP endpoint is enabled. When false, requests to /api/mcp/observatory return 503 Service Unavailable.",
+);
+
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -177,4 +191,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&OIDC_AUTHENTICATION_CLAIM)
         .add(&PERSIST_FAST_PATH_ORDER)
         .add(&ENABLE_S3_TABLES_REGION_CHECK)
+        .add(&ENABLE_MCP_AGENTS)
+        .add(&ENABLE_MCP_OBSERVATORY)
 }
