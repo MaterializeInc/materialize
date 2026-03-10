@@ -370,13 +370,6 @@ impl Consensus for FdbConsensus {
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
         let expected = new.seqno.previous();
-        if let Some(expected) = expected {
-            if new.seqno <= expected {
-                return Err(Error::from(
-                    format!("new seqno must be strictly greater than expected. Got new: {:?} expected: {:?}",
-                            new.seqno, expected)).into());
-            }
-        }
         if new.seqno.0 > i64::MAX.try_into().expect("i64::MAX known to fit in u64") {
             return Err(ExternalError::from(anyhow!(
                 "sequence numbers must fit within [0, i64::MAX], received: {:?}",

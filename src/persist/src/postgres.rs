@@ -383,13 +383,6 @@ impl Consensus for PostgresConsensus {
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
         let expected = new.seqno.previous();
-        if let Some(expected) = expected {
-            if new.seqno <= expected {
-                return Err(Error::from(
-                        format!("new seqno must be strictly greater than expected. Got new: {:?} expected: {:?}",
-                                 new.seqno, expected)).into());
-            }
-        }
 
         let result = if let Some(expected) = expected {
             /// This query has been written to execute within a single
