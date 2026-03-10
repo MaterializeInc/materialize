@@ -10,7 +10,8 @@ use crate::types::{self, TypeCheckError, Types};
 use crate::unit_test;
 use mz_sql_parser::ast::Ident;
 use owo_colors::OwoColorize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write;
 use std::fs::File;
 use std::path::Path;
 use std::time::Instant;
@@ -21,15 +22,56 @@ use std::time::Instant;
 /// can distinguish broken test definitions from assertion/runtime failures.
 enum TestOutcome {
     Passed,
-    Failed,
-    ValidationFailed,
+    Failed(ExecutionFailure),
+    ValidationFailed(ValidationFailure),
 }
 
-/// Result of running a single test, combining the outcome with an optional error message
-/// for JUnit reporting.
-struct TestResult {
-    outcome: TestOutcome,
-    message: Option<String>,
+enum ValidationFailure {
+    UnitTest(unit_test::TestValidationError),
+    AtTime(unit_test::InvalidAtTimeError),
+}
+
+enum ExecutionFailure {
+    /// Setup or query execution error.
+    Error(String),
+    /// Test assertion mismatch with pre-formatted display output.
+    AssertionFailed(String),
+}
+
+impl TestOutcome {
+    fn to_test_case(
+        &self,
+        name: &str,
+        object_id: &project::object_id::ObjectId,
+        elapsed: time::Duration,
+    ) -> junit_report::TestCase {
+        let mut test_case = match self {
+            TestOutcome::Passed => junit_report::TestCase::success(name, elapsed),
+            TestOutcome::Failed(failure) => {
+                let msg = match failure {
+                    ExecutionFailure::Error(msg) => msg.replace('\n', "&#10;"),
+                    ExecutionFailure::AssertionFailed(_) => "test assertion failed".to_string(),
+                };
+                junit_report::TestCase::failure(name, elapsed, "failure", &msg)
+            }
+            TestOutcome::ValidationFailed(failure) => {
+                let msg = match failure {
+                    ValidationFailure::UnitTest(e) => e.to_string().replace('\n', "&#10;"),
+                    ValidationFailure::AtTime(e) => e.to_string().replace('\n', "&#10;"),
+                };
+                junit_report::TestCase::failure(name, elapsed, "validation", &msg)
+            }
+        };
+        test_case.set_classname(&format!(
+            "{}.{}.{}",
+            object_id.database, object_id.schema, object_id.object
+        ));
+        test_case.set_filepath(&format!(
+            "models/{}/{}/{}.sql",
+            object_id.database, object_id.schema, object_id.object
+        ));
+        test_case
+    }
 }
 
 /// Run unit tests against the database.
@@ -100,11 +142,12 @@ pub async fn run(settings: &Settings, junit_xml: Option<&Path>) -> Result<(), Cl
         format!("Running tests from {}:", directory.display()).bold()
     );
 
-    let mut junit_suite = junit_xml.map(|_| junit_report::TestSuite::new("mz-deploy"));
+    let mut junit_suites: BTreeMap<project::object_id::ObjectId, junit_report::TestSuite> =
+        BTreeMap::new();
     let (mut passed_tests, mut failed_tests, mut validation_failed) = (0, 0, 0);
     for (object_id, test) in &planned_project.tests {
         let start_time = Instant::now();
-        let result = run_single_test(
+        let outcome = run_single_test(
             &planned_project,
             object_id,
             test,
@@ -114,47 +157,25 @@ pub async fn run(settings: &Settings, junit_xml: Option<&Path>) -> Result<(), Cl
         )
         .await?;
 
-        if let Some(junit_suite) = &mut junit_suite {
-            let elapsed =
-                time::Duration::try_from(start_time.elapsed()).unwrap_or(time::Duration::ZERO);
-            let mut test_case = match &result.outcome {
-                TestOutcome::Passed => junit_report::TestCase::success(&test.name, elapsed),
-                TestOutcome::Failed => junit_report::TestCase::failure(
-                    &test.name,
-                    elapsed,
-                    "failure",
-                    &result
-                        .message
-                        .as_deref()
-                        .unwrap_or("test failed")
-                        .replace('\n', "&#10;"),
-                ),
-                TestOutcome::ValidationFailed => junit_report::TestCase::failure(
-                    &test.name,
-                    elapsed,
-                    "validation",
-                    &result
-                        .message
-                        .as_deref()
-                        .unwrap_or("validation failed")
-                        .replace('\n', "&#10;"),
-                ),
-            };
-            test_case.set_classname("mz-deploy");
-            junit_suite.add_testcase(test_case);
-        }
+        let elapsed =
+            time::Duration::try_from(start_time.elapsed()).unwrap_or(time::Duration::ZERO);
 
-        match result.outcome {
+        print_test_outcome(&test.name, &outcome);
+        junit_suites
+            .entry(object_id.clone())
+            .or_insert_with(|| junit_report::TestSuite::new(&object_id.to_string()))
+            .add_testcase(outcome.to_test_case(&test.name, object_id, elapsed));
+
+        match &outcome {
             TestOutcome::Passed => passed_tests += 1,
-            TestOutcome::Failed => failed_tests += 1,
-            TestOutcome::ValidationFailed => validation_failed += 1,
+            TestOutcome::Failed(_) => failed_tests += 1,
+            TestOutcome::ValidationFailed(_) => validation_failed += 1,
         }
     }
 
-    if let Some(junit_suite) = junit_suite {
-        let path = junit_xml.expect("junit_suite is Some only when junit_xml is Some");
+    if let Some(path) = junit_xml {
         let report = junit_report::ReportBuilder::new()
-            .add_testsuite(junit_suite)
+            .add_testsuites(junit_suites.into_values())
             .build();
         let mut file = File::create(path)
             .map_err(|e| CliError::Message(format!("failed to create JUnit XML file: {}", e)))?;
@@ -163,28 +184,9 @@ pub async fn run(settings: &Settings, junit_xml: Option<&Path>) -> Result<(), Cl
             .map_err(|e| CliError::Message(format!("failed to write JUnit XML report: {}", e)))?;
     }
 
-    let total_failed = failed_tests + validation_failed;
-    print!("\n{}: ", "test result".bold());
-    if total_failed == 0 {
-        print!("{}. ", "ok".green().bold());
-    } else {
-        print!("{}. ", "FAILED".red().bold());
-    }
-    print!("{}; ", format!("{} passed", passed_tests).green());
-    if failed_tests > 0 {
-        print!("{}; ", format!("{} failed", failed_tests).red());
-    } else {
-        print!("{} failed; ", failed_tests);
-    }
-    if validation_failed > 0 {
-        println!(
-            "{}",
-            format!("{} validation errors", validation_failed).red()
-        );
-    } else {
-        println!("{} validation errors", validation_failed);
-    }
+    print_summary(passed_tests, failed_tests, validation_failed);
 
+    let total_failed = failed_tests + validation_failed;
     if total_failed > 0 {
         return Err(CliError::TestsFailed {
             failed: total_failed,
@@ -197,8 +199,8 @@ pub async fn run(settings: &Settings, junit_xml: Option<&Path>) -> Result<(), Cl
 
 /// Executes one test case through validation, setup SQL, assertion query, and cleanup.
 ///
-/// Returns a `TestResult` instead of mutating counters so top-level `run` remains
-/// a simple coordinator over independent per-test executions.
+/// Returns a `TestOutcome` without performing any terminal output so the caller
+/// can own all presentation (printing, JUnit building, counting).
 async fn run_single_test(
     planned_project: &project::planned::Project,
     object_id: &project::object_id::ObjectId,
@@ -206,7 +208,7 @@ async fn run_single_test(
     combined_types: &Types,
     runtime: &DockerRuntime,
     empty_types: &Types,
-) -> Result<TestResult, CliError> {
+) -> Result<TestOutcome, CliError> {
     let dependencies = planned_project
         .dependency_graph
         .get(object_id)
@@ -214,37 +216,21 @@ async fn run_single_test(
         .unwrap_or_else(BTreeSet::new);
 
     if let Err(e) = unit_test::validate_unit_test(test, object_id, combined_types, &dependencies) {
-        println!(
-            "{} {} ... {}",
-            "test".cyan(),
-            test.name.cyan(),
-            "VALIDATION FAILED".red().bold()
-        );
-        print_test_validation_error(&e);
-        return Ok(TestResult {
-            outcome: TestOutcome::ValidationFailed,
-            message: Some(e.to_string()),
-        });
+        return Ok(TestOutcome::ValidationFailed(ValidationFailure::UnitTest(
+            e,
+        )));
     }
 
     let client = runtime_client(runtime, empty_types).await?;
-    if let Some(msg) = validate_test_at_time_message(&client, test).await? {
-        return Ok(TestResult {
-            outcome: TestOutcome::ValidationFailed,
-            message: Some(msg),
-        });
+    if let Err(e) = validate_at_time(&client, test).await? {
+        return Ok(TestOutcome::ValidationFailed(ValidationFailure::AtTime(e)));
     }
 
-    print!("{} {} ... ", "test".cyan(), test.name.cyan());
-
     let Some(target_obj) = planned_project.find_object(object_id) else {
-        println!("{}", "FAILED".red().bold());
-        let msg = format!("target object '{}' not found in project", object_id);
-        eprintln!("  {}: {}", "error".red().bold(), msg);
-        return Ok(TestResult {
-            outcome: TestOutcome::Failed,
-            message: Some(msg),
-        });
+        return Ok(TestOutcome::Failed(ExecutionFailure::Error(format!(
+            "target object '{}' not found in project",
+            object_id
+        ))));
     };
 
     let typed_fqn = typed_fqn_from_object_id(object_id);
@@ -253,48 +239,94 @@ async fn run_single_test(
 
     for sql in &sql_statements[..sql_statements.len() - 1] {
         if let Err(e) = client.execute(sql, &[]).await {
-            println!("{}", "FAILED".red().bold());
-            let msg = format!("failed to execute SQL: {:?}\n  statement: {}", e, sql);
-            eprintln!("  {}: {}", "error".red().bold(), msg);
-            return Ok(TestResult {
-                outcome: TestOutcome::Failed,
-                message: Some(msg),
-            });
+            return Ok(TestOutcome::Failed(ExecutionFailure::Error(format!(
+                "failed to execute SQL: {:?}\n  statement: {}",
+                e, sql
+            ))));
         }
     }
 
     let test_query = &sql_statements[sql_statements.len() - 1];
-    let result = match client.query(test_query, &[]).await {
-        Ok(rows) if rows.is_empty() => {
-            println!("{}", "ok".green().bold());
-            TestResult {
-                outcome: TestOutcome::Passed,
-                message: None,
-            }
-        }
-        Ok(rows) => {
-            println!("{}", "FAILED".red().bold());
-            print_test_assertion_rows(&rows);
-            TestResult {
-                outcome: TestOutcome::Failed,
-                message: Some("test assertion failed".to_string()),
-            }
-        }
-        Err(e) => {
-            println!("{}", "FAILED".red().bold());
-            let msg = format!("failed to execute test query: {}", e);
-            eprintln!("  {}: {}", "error".red().bold(), msg);
-            TestResult {
-                outcome: TestOutcome::Failed,
-                message: Some(msg),
-            }
-        }
+    let outcome = match client.query(test_query, &[]).await {
+        Ok(rows) if rows.is_empty() => TestOutcome::Passed,
+        Ok(rows) => TestOutcome::Failed(ExecutionFailure::AssertionFailed(format_assertion_rows(
+            &rows,
+        ))),
+        Err(e) => TestOutcome::Failed(ExecutionFailure::Error(format!(
+            "failed to execute test query: {}",
+            e
+        ))),
     };
 
     if let Err(e) = client.execute("DISCARD ALL", &[]).await {
         eprintln!("warning: failed to execute DISCARD ALL: {}", e);
     }
-    Ok(result)
+    Ok(outcome)
+}
+
+/// Prints the test summary line showing pass/fail counts.
+fn print_summary(passed: usize, failed: usize, validation_failed: usize) {
+    let total_failed = failed + validation_failed;
+    print!("\n{}: ", "test result".bold());
+    if total_failed == 0 {
+        print!("{}. ", "ok".green().bold());
+    } else {
+        print!("{}. ", "FAILED".red().bold());
+    }
+    print!("{}; ", format!("{} passed", passed).green());
+    if failed > 0 {
+        print!("{}; ", format!("{} failed", failed).red());
+    } else {
+        print!("{} failed; ", failed);
+    }
+    if validation_failed > 0 {
+        println!(
+            "{}",
+            format!("{} validation errors", validation_failed).red()
+        );
+    } else {
+        println!("{} validation errors", validation_failed);
+    }
+}
+
+/// Prints the complete status line and any detail output for a single test outcome.
+fn print_test_outcome(name: &str, outcome: &TestOutcome) {
+    match outcome {
+        TestOutcome::Passed => {
+            println!(
+                "{} {} ... {}",
+                "test".cyan(),
+                name.cyan(),
+                "ok".green().bold()
+            );
+        }
+        TestOutcome::ValidationFailed(failure) => {
+            println!(
+                "{} {} ... {}",
+                "test".cyan(),
+                name.cyan(),
+                "VALIDATION FAILED".red().bold()
+            );
+            match failure {
+                ValidationFailure::UnitTest(e) => print_test_validation_error(e),
+                ValidationFailure::AtTime(e) => eprintln!("{}", e),
+            }
+        }
+        TestOutcome::Failed(failure) => {
+            println!(
+                "{} {} ... {}",
+                "test".cyan(),
+                name.cyan(),
+                "FAILED".red().bold()
+            );
+            match failure {
+                ExecutionFailure::AssertionFailed(display) => eprint!("{}", display),
+                ExecutionFailure::Error(msg) => {
+                    eprintln!("  {}: {}", "error".red().bold(), msg)
+                }
+            }
+        }
+    }
 }
 
 /// Renders validation failures with the same detail shape as legacy test output.
@@ -333,30 +365,24 @@ async fn runtime_client(runtime: &DockerRuntime, empty_types: &Types) -> Result<
 
 /// Pre-validates optional `AT TIME` test expressions against `mz_timestamp` casting.
 ///
-/// Returns `Some(error_message)` on validation failure, `None` on success.
-async fn validate_test_at_time_message(
+/// Returns `Ok(Ok(()))` when valid, `Ok(Err(message))` on validation failure,
+/// and `Err(CliError)` on connection errors.
+async fn validate_at_time(
     client: &Client,
     test: &unit_test::UnitTest,
-) -> Result<Option<String>, CliError> {
+) -> Result<Result<(), unit_test::InvalidAtTimeError>, CliError> {
     if let Some(at_time) = &test.at_time {
         let validation_query = format!("SELECT {}::mz_timestamp", at_time);
         if let Err(e) = client.query(&validation_query, &[]).await {
-            println!(
-                "{} {} ... {}",
-                "test".cyan(),
-                test.name.cyan(),
-                "VALIDATION FAILED".red().bold()
-            );
             let error = unit_test::InvalidAtTimeError {
                 test_name: test.name.clone(),
                 at_time_value: at_time.clone(),
                 db_error: e.to_string(),
             };
-            eprintln!("{}", error);
-            return Ok(Some(error.to_string()));
+            return Ok(Err(error));
         }
     }
-    Ok(None)
+    Ok(Ok(()))
 }
 
 /// Converts planned object identity into the AST form expected by unit test desugaring.
@@ -371,11 +397,12 @@ fn typed_fqn_from_object_id(object_id: &project::object_id::ObjectId) -> typed::
     ]))
 }
 
-/// Prints failing assertion rows in a readable table-like format.
+/// Formats failing assertion rows into a readable table-like string.
 ///
 /// This is intentionally display-only and does not affect pass/fail decisions.
-fn print_test_assertion_rows(rows: &[tokio_postgres::Row]) {
-    eprintln!("  {}:", "Test assertion failed".yellow().bold());
+fn format_assertion_rows(rows: &[tokio_postgres::Row]) -> String {
+    let mut out = String::new();
+    writeln!(out, "  {}:", "Test assertion failed".yellow().bold()).unwrap();
     if let Some(first_row) = rows.first() {
         let columns: Vec<String> = first_row
             .columns()
@@ -383,8 +410,8 @@ fn print_test_assertion_rows(rows: &[tokio_postgres::Row]) {
             .map(|col| col.name().to_string())
             .collect();
         let header = columns.join(" | ");
-        eprintln!("  {}", header.bold().cyan());
-        eprintln!("  {}", "-".repeat(header.len()).cyan());
+        writeln!(out, "  {}", header.bold().cyan()).unwrap();
+        writeln!(out, "  {}", "-".repeat(header.len()).cyan()).unwrap();
     }
 
     for row in rows {
@@ -415,8 +442,9 @@ fn print_test_assertion_rows(rows: &[tokio_postgres::Row]) {
                 values.push(value_str);
             }
         }
-        eprintln!("  {}", values.join(" | "));
+        writeln!(out, "  {}", values.join(" | ")).unwrap();
     }
+    out
 }
 
 /// Load types.cache or generate it by running type checking if stale/missing.
