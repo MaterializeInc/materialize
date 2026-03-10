@@ -19,6 +19,7 @@ import {
   SelfManagedAuthMode,
 } from "~/config/AppConfig";
 import { ContextHolder } from "~/external-library-wrappers/frontegg";
+import { getOidcIdToken } from "~/external-library-wrappers/oidc";
 
 import { logoutAndRedirect } from "./materialize/auth";
 import {
@@ -179,6 +180,21 @@ export class SelfManagedApiClient
     return response;
   };
 
+  #oidcAuthMiddleware: Middleware = (next) => {
+    return async (...fetchArgs) => {
+      const [input, options = {}] = fetchArgs;
+      const idToken = getOidcIdToken();
+
+      const headers = copyHeaders(fetchArgs);
+      if (idToken) {
+        headers.set("Authorization", `Bearer ${idToken}`);
+      }
+
+      const request = new Request(input, { ...options, headers });
+      return next(request);
+    };
+  };
+
   constructor({ appConfig }: { appConfig: Readonly<SelfManagedAppConfig> }) {
     this.#appConfig = appConfig;
     this.mzHttpUrlScheme = this.#appConfig.environmentdScheme;
@@ -186,10 +202,18 @@ export class SelfManagedApiClient
     this.authApiBasePath = `${this.#appConfig.environmentdScheme}://${this.#appConfig.environmentdConfig.environmentdHttpAddress}`;
     this.authMode = this.#appConfig.authMode;
 
-    this.mzApiFetch =
-      this.authMode === "None" ? globalFetch : this.#mzApiWithAuthRedirect;
+    if (this.authMode === "Oidc") {
+      this.mzApiFetch = withMiddleware(globalFetch, this.#oidcAuthMiddleware);
+    } else if (this.authMode === "None") {
+      this.mzApiFetch = globalFetch;
+    } else {
+      this.mzApiFetch = this.#mzApiWithAuthRedirect;
+    }
 
     this.getWsAuthConfig = () => {
+      if (this.authMode === "Oidc") {
+        return buildTokenAuthConfig(getOidcIdToken() ?? "");
+      }
       // Unintuitively, we return an auth config when authMode is "None". This is because
       // the authenticated websocket API gets the necessary information via the http-only cookie
       // and errors if you try to send a websocket message with the auth config.

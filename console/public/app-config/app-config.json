@@ -1,5 +1,9 @@
 {
   "auth": {
-    "mode": "None"
+    "mode": "Oidc",
+    "issuer": "https://dev-dwh4yhsej4542zfl.us.auth0.com",
+    "clientId": "jM1iDueUB3ucXyUgPbsZg9yfXDCHqhWA",
+    "scopes": "openid profile email",
+    "audience": "https://materialize.com/api"
   }
 }

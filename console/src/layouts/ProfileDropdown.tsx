@@ -37,6 +37,7 @@ import {
   AuthState,
   type User,
 } from "~/external-library-wrappers/frontegg";
+import { getOidcUserManager } from "~/external-library-wrappers/oidc";
 import { AUTH_ROUTES } from "~/fronteggRoutes";
 import { NAV_HORIZONTAL_SPACING, NAV_HOVER_STYLES } from "~/layouts/constants";
 import docUrls from "~/mz-doc-urls.json";
@@ -112,10 +113,16 @@ const SignOutMenuItem = () => {
         if (appConfig.authMode === "None") {
           return null;
         }
+        const handleLogout =
+          appConfig.authMode === "Oidc"
+            ? () => {
+                getOidcUserManager()?.signoutRedirect();
+              }
+            : logoutAndRedirectOrThrow;
         return (
           <>
             <MenuDivider />
-            <MenuItem fontWeight="medium" onClick={logoutAndRedirectOrThrow}>
+            <MenuItem fontWeight="medium" onClick={handleLogout}>
               Sign out
             </MenuItem>
           </>
