@@ -13872,6 +13872,7 @@ dependencies = [
  "idna",
  "indexmap 2.11.4",
  "insta",
+ "ipnet",
  "itertools 0.13.0",
  "jiff",
  "libc",

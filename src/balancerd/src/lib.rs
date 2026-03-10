@@ -1378,9 +1378,9 @@ impl BalancerResolver {
                         let (hostname, port_str) = hostname_with_port
                             .rsplit_once(':')
                             .ok_or_else(|| anyhow::anyhow!("port required in addr_template"))?;
-                        let port: u16 = port_str
-                            .parse()
-                            .with_context(|| format!("invalid port in addr_template: {}", port_str))?;
+                        let port: u16 = port_str.parse().with_context(|| {
+                            format!("invalid port in addr_template: {}", port_str)
+                        })?;
                         let (addr, _) = dns_resolver.resolve(hostname, port).await?;
                         let tenant = auth_session.tenant_id().to_string();
                         debug!("Frontegg resolved tenant: {}", tenant);
@@ -1557,7 +1557,6 @@ impl TenantDnsResolver {
         host: &str,
         port: u16,
     ) -> Result<(SocketAddr, Option<String>), anyhow::Error> {
-
         // Resolve CNAME with caching (these are generally static).
         // Extract tenant from CNAME if present.
         let (ip, tenant) = if let Some(cname) = self.resolve_cname(host).await {
