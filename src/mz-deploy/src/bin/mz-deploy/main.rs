@@ -63,6 +63,7 @@ See 'mz-deploy help <command>' for detailed usage guides.";
 #[command(name = "mz-deploy", version = VERSION.as_str())]
 #[command(about = "Safe, testable deployments for Materialize")]
 #[command(disable_help_subcommand = true)]
+#[command(override_usage = "mz-deploy [OPTIONS] <COMMAND>")]
 #[command(after_help = GROUPED_HELP)]
 #[command(help_template = "\
 {about}
