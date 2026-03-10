@@ -11,6 +11,7 @@ use mz_deploy::cli::CliError;
 use mz_deploy::cli::commands::delete;
 use mz_deploy::config::Settings;
 use mz_deploy::log;
+use mz_deploy::output;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
@@ -627,7 +628,7 @@ async fn main() {
             let error_json = serde_json::json!({
                 "error": e.to_string(),
             });
-            println!("{}", serde_json::to_string_pretty(&error_json).unwrap());
+            output::machine(&error_json);
             std::process::exit(1);
         } else {
             cli::display_error(&e);
@@ -639,10 +640,10 @@ async fn run(args: Args) -> Result<(), CliError> {
     // Handle commands that don't require an existing project
     if let Some(Command::Help { command, all }) = &args.command {
         if *all {
-            print!("{}", cli::extended_help::all_help());
+            eprint!("{}", cli::extended_help::all_help());
         } else if let Some(cmd) = command {
             match cli::extended_help::help_for(cmd) {
-                Some(text) => print!("{text}"),
+                Some(text) => eprint!("{text}"),
                 None => {
                     cli::extended_help::print_unknown_command(cmd);
                     std::process::exit(1);
@@ -767,7 +768,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             if let Some(c) = collector {
                 let statements = c.into_statements();
                 let json_output = serde_json::json!({ "statements": statements });
-                println!("{}", serde_json::to_string_pretty(&json_output).unwrap());
+                output::machine(&json_output);
             }
             result
         }
@@ -778,11 +779,6 @@ async fn run(args: Args) -> Result<(), CliError> {
             allowed_lag,
             dry_run,
         }) => {
-            if json && !dry_run {
-                return Err(CliError::Message(
-                    "--output json requires --dry-run for the 'deploy' command".to_string(),
-                ));
-            }
             if !skip_ready && !dry_run {
                 cli::commands::ready::run(&settings, &deploy_id, true, None, allowed_lag, false)
                     .await?;
@@ -795,11 +791,6 @@ async fn run(args: Args) -> Result<(), CliError> {
             no_rollback,
             dry_run,
         }) => {
-            if json && !dry_run {
-                return Err(CliError::Message(
-                    "--output json requires --dry-run for the 'stage' command".to_string(),
-                ));
-            }
             cli::commands::stage::run(
                 &settings,
                 deploy_id.as_deref(),

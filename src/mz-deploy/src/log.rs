@@ -28,7 +28,7 @@ pub fn verbose_enabled() -> bool {
 macro_rules! verbose {
     ($($arg:tt)*) => {
         if $crate::log::verbose_enabled() {
-            println!($($arg)*);
+            eprintln!($($arg)*);
         }
     };
 }

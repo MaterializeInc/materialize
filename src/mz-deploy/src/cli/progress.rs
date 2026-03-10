@@ -15,7 +15,7 @@ use std::time::Duration;
 /// // Output: → Parsing SQL files...
 /// ```
 pub fn stage_start(name: &str) {
-    println!("\n{} {}...", "→".yellow(), name);
+    eprintln!("\n{} {}...", "→".yellow(), name);
 }
 
 /// Print a stage completion message with green checkmark and duration.
@@ -27,7 +27,7 @@ pub fn stage_start(name: &str) {
 /// ```
 pub fn stage_success(message: &str, duration: Duration) {
     let seconds = duration.as_secs_f64();
-    println!(
+    eprintln!(
         "  {} {} {}",
         "✓".green(),
         message,
@@ -43,7 +43,7 @@ pub fn stage_success(message: &str, duration: Duration) {
 /// // Output:   ℹ 3 external dependencies detected
 /// ```
 pub fn info(message: &str) {
-    println!("  {} {}", "ℹ".blue(), message);
+    eprintln!("  {} {}", "ℹ".blue(), message);
 }
 
 /// Print a success message with green checkmark.
@@ -54,12 +54,12 @@ pub fn info(message: &str) {
 /// // Output:   ✓ All objects validated
 /// ```
 pub fn success(message: &str) {
-    println!("  {} {}", "✓".green(), message);
+    eprintln!("  {} {}", "✓".green(), message);
 }
 
 /// Print a warning message with yellow exclamation symbol.
 pub fn warn(message: &str) {
-    println!("  {} {}", "⚠".yellow(), message);
+    eprintln!("  {} {}", "⚠".yellow(), message);
 }
 
 /// Print an error message with red X symbol.
@@ -70,7 +70,7 @@ pub fn warn(message: &str) {
 /// // Output:   ✗ Type checking failed
 /// ```
 pub fn error(message: &str) {
-    println!("  {} {}", "✗".red(), message);
+    eprintln!("  {} {}", "✗".red(), message);
 }
 
 /// Print a final summary message with green checkmark and total duration.
@@ -82,7 +82,7 @@ pub fn error(message: &str) {
 /// ```
 pub fn summary(message: &str, duration: Duration) {
     let seconds = duration.as_secs_f64();
-    println!(
+    eprintln!(
         "\n{} {} {}",
         "✓".green().bold(),
         message,

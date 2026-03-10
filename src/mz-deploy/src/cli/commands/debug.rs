@@ -3,6 +3,7 @@
 use crate::cli::CliError;
 use crate::client::{Client, Profile};
 use crate::config::Settings;
+use crate::humanln;
 use crate::types::docker_runtime::{DockerRuntime, DockerStatus};
 use crossterm::style::Stylize;
 use owo_colors::OwoColorize;
@@ -20,7 +21,7 @@ use owo_colors::OwoColorize;
 pub async fn run(settings: &Settings) -> Result<(), CliError> {
     let profile = settings.connection();
     let profile_display = profile.name.as_str();
-    println!("{}: {}", "Profile".green(), profile_display.cyan());
+    humanln!("{}: {}", "Profile".green(), profile_display.cyan());
 
     // Run database connection and Docker check in parallel since they're independent.
     let (db_result, docker_status) = tokio::join!(
@@ -30,34 +31,34 @@ pub async fn run(settings: &Settings) -> Result<(), CliError> {
 
     let (version, environment_id, role, cluster) = db_result?;
 
-    println!(
+    humanln!(
         "{} {}:{}",
         "Connected to".green(),
         profile.host.to_string().cyan(),
         profile.port.to_string().cyan()
     );
-    println!("  {}: {}", "Environment".dimmed(), environment_id);
-    println!("  {}: {}", "Cluster".dimmed(), cluster);
-    println!("  {}: {}", "Version".dimmed(), version);
-    println!("  {}: {}", "Role".dimmed(), role.yellow());
+    humanln!("  {}: {}", "Environment".dimmed(), environment_id);
+    humanln!("  {}: {}", "Cluster".dimmed(), cluster);
+    humanln!("  {}: {}", "Version".dimmed(), version);
+    humanln!("  {}: {}", "Role".dimmed(), role.yellow());
 
     match docker_status {
         DockerStatus::Running => {
-            println!(
+            humanln!(
                 "{}: {}",
                 "Docker".green(),
                 "installed, daemon running".green()
             );
         }
         DockerStatus::NotRunning => {
-            println!(
+            humanln!(
                 "{}: {}",
                 "Docker".green(),
                 "installed, daemon not running".yellow()
             );
         }
         DockerStatus::NotInstalled => {
-            println!("{}: {}", "Docker".green(), "not installed".yellow());
+            humanln!("{}: {}", "Docker".green(), "not installed".yellow());
         }
     }
 

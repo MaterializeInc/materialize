@@ -3,6 +3,8 @@
 use crate::cli::CliError;
 use crate::client::Client;
 use crate::config::Settings;
+use crate::output;
+use crate::{human, humanln};
 use chrono::{DateTime, Local};
 use owo_colors::OwoColorize;
 use std::io::Write;
@@ -42,16 +44,16 @@ pub async fn run(
     let history = client.deployments().list_deployment_history(limit).await?;
 
     if json_output {
-        println!("{}", serde_json::to_string_pretty(&history).unwrap());
+        output::machine(&history);
         return Ok(());
     }
 
     if history.is_empty() {
-        println!("No deployment history found.");
-        println!();
-        println!("To create and promote a deployment, run:");
-        println!("  {} {} {}", "mz-deploy".cyan(), "stage".cyan(), ".".cyan());
-        println!(
+        humanln!("No deployment history found.");
+        humanln!();
+        humanln!("To create and promote a deployment, run:");
+        humanln!("  {} {} {}", "mz-deploy".cyan(), "stage".cyan(), ".".cyan());
+        humanln!(
             "  {} {} {}",
             "mz-deploy".cyan(),
             "apply".cyan(),
@@ -119,6 +121,6 @@ fn display_with_pager(content: &str) {
         let _ = child.wait();
     } else {
         // Fallback: print directly if less isn't available
-        print!("{}", content);
+        human!("{}", content);
     }
 }

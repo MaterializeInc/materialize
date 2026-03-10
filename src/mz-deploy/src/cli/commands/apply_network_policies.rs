@@ -6,6 +6,7 @@ use crate::cli::executor::{DeploymentExecutor, SqlCollector};
 use crate::cli::progress;
 use crate::client::{Client, quote_identifier};
 use crate::config::Settings;
+use crate::humanln;
 use crate::project::network_policies::{self, NetworkPolicyDefinition};
 use mz_sql_parser::ast::AlterNetworkPolicyStatement;
 use owo_colors::OwoColorize;
@@ -32,7 +33,7 @@ pub async fn run(
         network_policies::load_network_policies(directory, &profile.name, settings.variables())?;
 
     if definitions.is_empty() {
-        println!(
+        humanln!(
             "  {} No network_policies/ directory or no .sql files found — nothing to do.",
             "info:".blue().bold()
         );
@@ -85,7 +86,7 @@ async fn apply_network_policy(
     if exists {
         // ALTER NETWORK POLICY to converge rules
         if !executor.is_dry_run() {
-            println!(
+            humanln!(
                 "  {} Altering network policy '{}'",
                 "~".yellow().bold(),
                 policy_name
@@ -99,7 +100,7 @@ async fn apply_network_policy(
     } else {
         // Create network policy from the parsed CREATE NETWORK POLICY statement
         if !executor.is_dry_run() {
-            println!(
+            humanln!(
                 "  {} Creating network policy '{}'",
                 "+".green().bold(),
                 policy_name

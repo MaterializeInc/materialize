@@ -5,6 +5,7 @@ use crate::cli::{git, progress};
 use crate::client::quote_identifier;
 use crate::client::{Client, ClusterConfig, DeploymentKind, PendingStatement, ReplacementMvRecord};
 use crate::config::Settings;
+use crate::output;
 use crate::project::SchemaQualifier;
 use crate::project::ast::Statement;
 use crate::project::changeset::ChangeSet;
@@ -184,7 +185,7 @@ pub async fn run(
             "sinks": sinks_json,
             "replacement_mvs": replacement_mvs_json,
         });
-        println!("{}", serde_json::to_string_pretty(&plan).unwrap());
+        output::machine(&plan);
         return Ok(());
     }
 
@@ -203,13 +204,19 @@ pub async fn run(
     .await?;
 
     let total_duration = start_time.elapsed();
-    progress::summary(
-        &format!(
-            "Successfully deployed to {} objects to '{}' staging environment",
-            success_count, stage_name
-        ),
-        total_duration,
-    );
+    if json_output {
+        output::machine(&serde_json::json!({
+            "deploy_id": stage_name,
+        }));
+    } else {
+        progress::summary(
+            &format!(
+                "Successfully deployed to {} objects to '{}' staging environment",
+                success_count, stage_name
+            ),
+            total_duration,
+        );
+    }
     Ok(())
 }
 

@@ -3,6 +3,8 @@
 use crate::cli::CliError;
 use crate::client::Client;
 use crate::config::Settings;
+use crate::humanln;
+use crate::output;
 use chrono::Utc;
 use owo_colors::OwoColorize;
 
@@ -58,20 +60,20 @@ pub async fn run(
                 "clusters": clusters,
             }));
         }
-        println!("{}", serde_json::to_string_pretty(&result).unwrap());
+        output::machine(&result);
         return Ok(());
     }
 
     if deployments.is_empty() {
-        println!("No active staging deployments.");
-        println!();
-        println!("To create a staging deployment, run:");
-        println!("  {} {} {}", "mz-deploy".cyan(), "stage".cyan(), ".".cyan());
+        humanln!("No active staging deployments.");
+        humanln!();
+        humanln!("To create a staging deployment, run:");
+        humanln!("  {} {} {}", "mz-deploy".cyan(), "stage".cyan(), ".".cyan());
         return Ok(());
     }
 
-    println!("Active staging deployments:");
-    println!();
+    humanln!("Active staging deployments:");
+    humanln!();
 
     let mut env_names: Vec<_> = deployments.keys().collect();
     env_names.sort();
@@ -97,7 +99,7 @@ pub async fn run(
             }
         };
 
-        println!(
+        humanln!(
             "  {} {} by {} {} [{}]",
             "●".green(),
             env_name.cyan().bold(),
@@ -108,7 +110,7 @@ pub async fn run(
 
         // Display commit if available
         if let Some(commit_sha) = &deployment.git_commit {
-            println!("    commit: {}", commit_sha.dimmed());
+            humanln!("    commit: {}", commit_sha.dimmed());
         }
 
         // Get hydration status for this deployment
@@ -134,7 +136,7 @@ pub async fn run(
                 } else {
                     format!("clusters: {} of {} ready", ready_count, total_clusters)
                 };
-                println!("    {}\n", text.blue());
+                humanln!("    {}\n", text.blue());
             }
             Ok(_) => {
                 // Empty hydration status - deployment has no clusters
@@ -146,9 +148,9 @@ pub async fn run(
         }
 
         for sq in &deployment.schemas {
-            println!("    {}.{}", sq.database.dimmed(), sq.schema);
+            humanln!("    {}.{}", sq.database.dimmed(), sq.schema);
         }
-        println!();
+        humanln!();
     }
 
     Ok(())

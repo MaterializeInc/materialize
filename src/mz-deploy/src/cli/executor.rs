@@ -8,7 +8,7 @@ use crate::cli::CliError;
 use crate::cli::git::get_git_commit;
 use crate::client::{Client, quote_identifier};
 use crate::project::{self, typed};
-use crate::verbose;
+use crate::{humanln, verbose};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -258,8 +258,8 @@ impl<'a> DeploymentExecutor<'a> {
             if let Some(ref collector) = self.collected_sql {
                 collector.push(formatted);
             } else {
-                println!("{}", formatted);
-                println!();
+                humanln!("{}", formatted);
+                humanln!();
             }
             return Ok(());
         }

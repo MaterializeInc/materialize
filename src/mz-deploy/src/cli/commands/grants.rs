@@ -3,6 +3,7 @@
 use crate::cli::CliError;
 use crate::cli::executor::DeploymentExecutor;
 use crate::client::{Client, ObjectGrant, quote_identifier};
+use crate::humanln;
 use mz_sql_parser::ast::{GrantPrivilegesStatement, PrivilegeSpecification, Raw};
 use owo_colors::OwoColorize;
 use std::collections::BTreeSet;
@@ -151,7 +152,7 @@ pub async fn execute_revocations(
 ) -> Result<(), CliError> {
     for sql in revocations {
         if !executor.is_dry_run() {
-            println!(
+            humanln!(
                 "  {} Revoking stale grant on {} '{}'",
                 "-".red().bold(),
                 object_type_label,

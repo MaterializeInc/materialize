@@ -3,6 +3,8 @@
 use crate::cli::CliError;
 use crate::client::{Client, DeploymentKind};
 use crate::config::Settings;
+use crate::humanln;
+use crate::output;
 use chrono::{DateTime, Local};
 use owo_colors::OwoColorize;
 
@@ -57,12 +59,12 @@ pub async fn run(settings: &Settings, deploy_id: &str, json_output: bool) -> Res
             "details": details,
             "objects": snapshot.objects,
         });
-        println!("{}", serde_json::to_string_pretty(&json).unwrap());
+        output::machine(&json);
         return Ok(());
     }
 
     // Display deployment header
-    println!(
+    humanln!(
         "{} {} [{}]",
         "deployment".yellow().bold(),
         deploy_id.cyan(),
@@ -70,10 +72,10 @@ pub async fn run(settings: &Settings, deploy_id: &str, json_output: bool) -> Res
     );
 
     if let Some(commit_sha) = &details.git_commit {
-        println!("{}: {}", "Commit".dimmed(), commit_sha);
+        humanln!("{}: {}", "Commit".dimmed(), commit_sha);
     }
 
-    println!(
+    humanln!(
         "{}: {}",
         "Deployed by".dimmed(),
         details.deployed_by.yellow()
@@ -83,7 +85,7 @@ pub async fn run(settings: &Settings, deploy_id: &str, json_output: bool) -> Res
     let deployed_str = deployed_datetime
         .format("%a %b %d %H:%M:%S %Y %z")
         .to_string();
-    println!("{}: {}", "Deployed at".dimmed(), deployed_str);
+    humanln!("{}: {}", "Deployed at".dimmed(), deployed_str);
 
     if let Some(promoted) = details.promoted_at {
         if details.kind == DeploymentKind::Objects {
@@ -91,25 +93,25 @@ pub async fn run(settings: &Settings, deploy_id: &str, json_output: bool) -> Res
             let promoted_str = promoted_datetime
                 .format("%a %b %d %H:%M:%S %Y %z")
                 .to_string();
-            println!("{}: {}", "Promoted at".dimmed(), promoted_str);
+            humanln!("{}: {}", "Promoted at".dimmed(), promoted_str);
         }
     } else {
-        println!("{}: {}", "Status".dimmed(), "staging".yellow());
+        humanln!("{}: {}", "Status".dimmed(), "staging".yellow());
     }
 
-    println!();
+    humanln!();
 
     // Display schemas
-    println!("{} ({}):", "Schemas".bold(), details.schemas.len());
+    humanln!("{} ({}):", "Schemas".bold(), details.schemas.len());
     for sq in &details.schemas {
-        println!("    {}.{}", sq.database.dimmed(), sq.schema);
+        humanln!("    {}.{}", sq.database.dimmed(), sq.schema);
     }
-    println!();
+    humanln!();
 
     // Display objects
-    println!("{} ({}):", "Objects".bold(), snapshot.objects.len());
+    humanln!("{} ({}):", "Objects".bold(), snapshot.objects.len());
     for (object_id, hash) in &snapshot.objects {
-        println!(
+        humanln!(
             "    {}.{}.{}  {}",
             object_id.database.dimmed(),
             object_id.schema.dimmed(),

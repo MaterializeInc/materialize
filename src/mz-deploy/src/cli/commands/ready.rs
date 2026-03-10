@@ -5,6 +5,8 @@ use crate::client::{
     Client, ClusterDeploymentStatus, ClusterStatusContext, FailureReason, HydrationStatusUpdate,
 };
 use crate::config::Settings;
+use crate::output;
+use crate::{human, humanln};
 use crossterm::{
     cursor::{Hide, MoveToColumn, MoveUp, Show},
     execute,
@@ -85,13 +87,13 @@ async fn run_snapshot(
         .await?;
 
     if statuses.is_empty() {
-        println!("No clusters found in staging deployment '{}'", deploy_id);
+        humanln!("No clusters found in staging deployment '{}'", deploy_id);
         return Ok(());
     }
 
-    println!();
-    println!("{}", format!("  Deployment: {}", deploy_id).cyan().bold());
-    println!();
+    humanln!();
+    humanln!("{}", format!("  Deployment: {}", deploy_id).cyan().bold());
+    humanln!();
 
     let mut has_failures = false;
     let mut has_non_ready = false;
@@ -106,9 +108,9 @@ async fn run_snapshot(
         }
     }
 
-    println!();
+    humanln!();
     print_summary(&statuses);
-    println!();
+    humanln!();
 
     if has_failures {
         Err(CliError::DeploymentFailing {
@@ -117,7 +119,7 @@ async fn run_snapshot(
     } else if has_non_ready {
         Err(CliError::ClustersHydrating)
     } else {
-        println!("{}", "  All clusters are ready!".green().bold());
+        humanln!("{}", "  All clusters are ready!".green().bold());
         Ok(())
     }
 }
@@ -142,7 +144,7 @@ async fn run_snapshot_json(
         "ready": all_ready,
         "clusters": statuses,
     });
-    println!("{}", serde_json::to_string_pretty(&json).unwrap());
+    output::machine(&json);
 
     if statuses
         .iter()
@@ -193,7 +195,7 @@ async fn monitor_hydration_ndjson(
 
     if initial_statuses.is_empty() {
         let json = serde_json::json!({"deploy_id": deploy_id, "clusters": [], "all_ready": true});
-        println!("{}", serde_json::to_string(&json).unwrap());
+        output::machine(&json);
         return Ok(());
     }
 
@@ -235,7 +237,7 @@ async fn monitor_hydration_ndjson(
             "all_ready": all_ready,
             "clusters": statuses,
         });
-        println!("{}", serde_json::to_string(&json).unwrap());
+        output::machine(&json);
 
         if all_ready {
             return Ok(());
@@ -248,31 +250,31 @@ async fn monitor_hydration_ndjson(
 /// Print status for a single cluster with visual formatting.
 fn print_cluster_status(ctx: &ClusterStatusContext, allowed_lag_secs: i64) {
     // Cluster name header
-    println!("  {}", ctx.cluster_name.as_str().bold());
+    humanln!("  {}", ctx.cluster_name.as_str().bold());
 
     // Progress bar
     let bar = render_progress_bar(ctx.hydrated_count, ctx.total_count, 40);
     let progress_str = format!("{}/{} objects", ctx.hydrated_count, ctx.total_count);
 
-    print!("  {} ", bar);
+    human!("  {} ", bar);
     match &ctx.status {
-        ClusterDeploymentStatus::Ready => print!("{} {}", "✓".green(), "ready".green()),
+        ClusterDeploymentStatus::Ready => human!("{} {}", "✓".green(), "ready".green()),
         ClusterDeploymentStatus::Hydrating { .. } => {
-            print!("{} {}", "◐".yellow(), "hydrating".yellow())
+            human!("{} {}", "◐".yellow(), "hydrating".yellow())
         }
         ClusterDeploymentStatus::Lagging { .. } => {
-            print!("{} {}", "⚠".yellow(), "lagging".yellow())
+            human!("{} {}", "⚠".yellow(), "lagging".yellow())
         }
         ClusterDeploymentStatus::Failing { .. } => {
-            print!("{} {}", "✗".red(), "failing".red())
+            human!("{} {}", "✗".red(), "failing".red())
         }
     }
-    println!("  {}", progress_str.dimmed());
+    humanln!("  {}", progress_str.dimmed());
 
     // Additional context based on status
     match &ctx.status {
         ClusterDeploymentStatus::Ready => {
-            println!(
+            humanln!(
                 "  {} lag: {}s",
                 "└".dimmed(),
                 ctx.max_lag_secs.to_string().green()
@@ -285,10 +287,10 @@ fn print_cluster_status(ctx: &ClusterStatusContext, allowed_lag_secs: i64) {
             } else {
                 0
             };
-            println!("  {} {}% complete", "└".dimmed(), pct.to_string().yellow());
+            humanln!("  {} {}% complete", "└".dimmed(), pct.to_string().yellow());
         }
         ClusterDeploymentStatus::Lagging { max_lag_secs } => {
-            println!(
+            humanln!(
                 "  {} lag: {}s (threshold: {}s)",
                 "└".dimmed(),
                 max_lag_secs.to_string().yellow().bold(),
@@ -296,10 +298,10 @@ fn print_cluster_status(ctx: &ClusterStatusContext, allowed_lag_secs: i64) {
             );
         }
         ClusterDeploymentStatus::Failing { reason } => {
-            println!("  {} {}", "└".dimmed(), reason.to_string().red());
+            humanln!("  {} {}", "└".dimmed(), reason.to_string().red());
         }
     }
-    println!();
+    humanln!();
 }
 
 /// Render a Unicode progress bar.
@@ -335,7 +337,7 @@ fn print_summary(statuses: &[ClusterStatusContext]) {
         }
     }
 
-    print!("  ");
+    human!("  ");
     let mut parts = Vec::new();
     if ready > 0 {
         parts.push(format!("{} ready", ready).green().to_string());
@@ -349,7 +351,7 @@ fn print_summary(statuses: &[ClusterStatusContext]) {
     if failing > 0 {
         parts.push(format!("{} failing", failing).red().to_string());
     }
-    println!("{}", parts.join(" · "));
+    humanln!("{}", parts.join(" · "));
 }
 
 /// Run in continuous mode: subscribe to hydration updates and show live dashboard.
@@ -366,7 +368,7 @@ async fn run_continuous(
         .await?;
 
     if initial_statuses.is_empty() {
-        println!("No clusters found in staging deployment '{}'", deploy_id);
+        humanln!("No clusters found in staging deployment '{}'", deploy_id);
         return Ok(());
     }
 
@@ -456,7 +458,7 @@ async fn monitor_hydration_live(
         execute!(stdout, MoveUp(lines), MoveToColumn(0)).ok();
         for _ in 0..lines_per_render {
             execute!(stdout, Clear(ClearType::CurrentLine)).ok();
-            println!();
+            humanln!();
         }
         execute!(stdout, MoveUp(lines), MoveToColumn(0)).ok();
 
@@ -474,8 +476,8 @@ async fn monitor_hydration_live(
 
         if all_ready {
             execute!(stdout, Show).ok();
-            println!();
-            println!("{}", "  All clusters are ready!".green().bold());
+            humanln!();
+            humanln!("{}", "  All clusters are ready!".green().bold());
             return Ok(());
         }
     }
@@ -523,15 +525,15 @@ fn render_dashboard(
     let elapsed_str = format_duration(elapsed);
 
     // Header
-    println!();
-    println!(
+    humanln!();
+    humanln!(
         "{}",
         format!("  mz-deploy wait · deployment: {}", deploy_id)
             .cyan()
             .bold()
     );
-    println!("  {} {}", "elapsed:".dimmed(), elapsed_str.dimmed());
-    println!();
+    humanln!("  {} {}", "elapsed:".dimmed(), elapsed_str.dimmed());
+    humanln!();
 
     // Sort clusters by name for consistent ordering
     let mut cluster_names: Vec<_> = cluster_states.keys().collect();

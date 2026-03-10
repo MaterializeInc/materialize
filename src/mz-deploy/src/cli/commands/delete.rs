@@ -5,6 +5,7 @@ use crate::cli::progress;
 use crate::client::{Client, ConnectionError, quote_identifier};
 use crate::config::Settings;
 use crate::project::object_id::ObjectId;
+use crate::{human, humanln};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -117,18 +118,18 @@ pub async fn run(
     }
 
     if !yes {
-        println!(
+        humanln!(
             "This will drop {} '{}' from Materialize and remove {}",
             label,
             name,
             target.file_path.display()
         );
-        print!("Continue? [y/N] ");
+        human!("Continue? [y/N] ");
         io::stdout().flush()?;
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
         if !input.trim().eq_ignore_ascii_case("y") {
-            println!("Aborted.");
+            humanln!("Aborted.");
             return Ok(());
         }
     }
