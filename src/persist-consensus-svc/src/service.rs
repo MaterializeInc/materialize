@@ -7,60 +7,146 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! gRPC service implementation that dispatches to the actor.
+//! gRPC service implementations for the acceptor and learner.
 
 use tracing::debug;
 
-use mz_persist::generated::consensus_service::consensus_service_server::ConsensusService;
+use mz_persist::generated::consensus_service::consensus_acceptor_server::ConsensusAcceptor;
+use mz_persist::generated::consensus_service::consensus_learner_server::ConsensusLearner;
 use mz_persist::generated::consensus_service::{
-    ProtoCompareAndSetRequest, ProtoCompareAndSetResponse, ProtoHeadRequest, ProtoHeadResponse,
-    ProtoListKeysRequest, ProtoListKeysResponse, ProtoScanRequest, ProtoScanResponse,
-    ProtoTruncateRequest, ProtoTruncateResponse,
+    ProtoAppendRequest, ProtoAppendResponse, ProtoAwaitResultRequest, ProtoCompareAndSetResponse,
+    ProtoHeadRequest, ProtoHeadResponse, ProtoLatestCommittedBatchRequest,
+    ProtoLatestCommittedBatchResponse, ProtoListKeysRequest, ProtoListKeysResponse,
+    ProtoScanRequest, ProtoScanResponse, ProtoTruncateResponse,
 };
 
-use crate::actor::{ActorError, ActorHandle};
+use crate::acceptor::{AcceptorError, AcceptorHandle};
+use crate::learner::{LearnerError, LearnerHandle};
 
-impl From<ActorError> for tonic::Status {
-    fn from(e: ActorError) -> Self {
+// ---------------------------------------------------------------------------
+// Error conversions
+// ---------------------------------------------------------------------------
+
+impl From<AcceptorError> for tonic::Status {
+    fn from(e: AcceptorError) -> Self {
         match e {
-            ActorError::Shutdown => tonic::Status::unavailable("actor shut down"),
-            ActorError::DroppedReply => tonic::Status::internal("actor dropped reply"),
-            ActorError::Command(msg) => tonic::Status::internal(msg),
+            AcceptorError::Shutdown => tonic::Status::unavailable("acceptor shut down"),
+            AcceptorError::DroppedReply => tonic::Status::internal("acceptor dropped reply"),
+            AcceptorError::Command(msg) => tonic::Status::internal(msg),
         }
     }
 }
 
-/// The gRPC service implementation that dispatches to the actor.
+impl From<LearnerError> for tonic::Status {
+    fn from(e: LearnerError) -> Self {
+        match e {
+            LearnerError::Shutdown => tonic::Status::unavailable("learner shut down"),
+            LearnerError::DroppedReply => tonic::Status::internal("learner dropped reply"),
+            LearnerError::Command(msg) => tonic::Status::internal(msg),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Acceptor gRPC service
+// ---------------------------------------------------------------------------
+
+/// gRPC service for the acceptor (blind group commit).
 #[derive(Debug)]
-pub struct ConsensusGrpcService {
-    pub handle: ActorHandle,
+pub struct AcceptorGrpcService {
+    pub handle: AcceptorHandle,
 }
 
 #[tonic::async_trait]
-impl ConsensusService for ConsensusGrpcService {
+impl ConsensusAcceptor for AcceptorGrpcService {
+    async fn append(
+        &self,
+        request: tonic::Request<ProtoAppendRequest>,
+    ) -> Result<tonic::Response<ProtoAppendResponse>, tonic::Status> {
+        let req = request.into_inner();
+        let proposal = req
+            .proposal
+            .ok_or_else(|| tonic::Status::invalid_argument("missing proposal"))?;
+        let resp = self.handle.append(proposal).await?;
+        Ok(tonic::Response::new(resp))
+    }
+
+    async fn latest_committed_batch(
+        &self,
+        _request: tonic::Request<ProtoLatestCommittedBatchRequest>,
+    ) -> Result<tonic::Response<ProtoLatestCommittedBatchResponse>, tonic::Status> {
+        let batch = self.handle.latest_committed_batch().await?;
+        Ok(tonic::Response::new(ProtoLatestCommittedBatchResponse {
+            batch_number: batch,
+        }))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Learner gRPC service
+// ---------------------------------------------------------------------------
+
+/// gRPC service for the learner (reads + result queries).
+///
+/// Read operations are linearized: the service queries the acceptor's latest
+/// committed batch and tells the learner to serve only after materializing
+/// through that batch.
+#[derive(Debug)]
+pub struct LearnerGrpcService {
+    pub acceptor_handle: AcceptorHandle,
+    pub learner_handle: LearnerHandle,
+}
+
+#[tonic::async_trait]
+impl ConsensusLearner for LearnerGrpcService {
+    async fn await_cas_result(
+        &self,
+        request: tonic::Request<ProtoAwaitResultRequest>,
+    ) -> Result<tonic::Response<ProtoCompareAndSetResponse>, tonic::Status> {
+        let req = request.into_inner();
+        debug!(
+            batch = req.batch_number,
+            position = req.position,
+            "await_cas_result"
+        );
+        let resp = self
+            .learner_handle
+            .await_cas_result(req.batch_number, req.position)
+            .await?;
+        Ok(tonic::Response::new(resp))
+    }
+
+    async fn await_truncate_result(
+        &self,
+        request: tonic::Request<ProtoAwaitResultRequest>,
+    ) -> Result<tonic::Response<ProtoTruncateResponse>, tonic::Status> {
+        let req = request.into_inner();
+        debug!(
+            batch = req.batch_number,
+            position = req.position,
+            "await_truncate_result"
+        );
+        let resp = self
+            .learner_handle
+            .await_truncate_result(req.batch_number, req.position)
+            .await?;
+        Ok(tonic::Response::new(resp))
+    }
+
     async fn head(
         &self,
         request: tonic::Request<ProtoHeadRequest>,
     ) -> Result<tonic::Response<ProtoHeadResponse>, tonic::Status> {
         let req = request.into_inner();
         debug!(key = %req.key, "head");
-        let resp = self.handle.head(req.key).await?;
-        Ok(tonic::Response::new(resp))
-    }
-
-    async fn compare_and_set(
-        &self,
-        request: tonic::Request<ProtoCompareAndSetRequest>,
-    ) -> Result<tonic::Response<ProtoCompareAndSetResponse>, tonic::Status> {
-        let req = request.into_inner();
-        debug!(key = %req.key, expected = req.expected, new_seqno = req.new.as_ref().map(|v| v.seqno), "cas");
-        let new = req
-            .new
-            .ok_or_else(|| tonic::Status::invalid_argument("missing `new` field"))?;
-        let resp = self
-            .handle
-            .compare_and_set(req.key, req.expected, new)
-            .await?;
+        // Linearize reads: ensure the learner has materialized through the
+        // acceptor's latest committed batch before serving.
+        let target = self
+            .acceptor_handle
+            .latest_committed_batch()
+            .await
+            .map_err(|e| tonic::Status::unavailable(e.to_string()))?;
+        let resp = self.learner_handle.head(req.key, target).await?;
         Ok(tonic::Response::new(resp))
     }
 
@@ -70,17 +156,15 @@ impl ConsensusService for ConsensusGrpcService {
     ) -> Result<tonic::Response<ProtoScanResponse>, tonic::Status> {
         let req = request.into_inner();
         debug!(key = %req.key, from = req.from, limit = req.limit, "scan");
-        let resp = self.handle.scan(req.key, req.from, req.limit).await?;
-        Ok(tonic::Response::new(resp))
-    }
-
-    async fn truncate(
-        &self,
-        request: tonic::Request<ProtoTruncateRequest>,
-    ) -> Result<tonic::Response<ProtoTruncateResponse>, tonic::Status> {
-        let req = request.into_inner();
-        debug!(key = %req.key, seqno = req.seqno, "truncate");
-        let resp = self.handle.truncate(req.key, req.seqno).await?;
+        let target = self
+            .acceptor_handle
+            .latest_committed_batch()
+            .await
+            .map_err(|e| tonic::Status::unavailable(e.to_string()))?;
+        let resp = self
+            .learner_handle
+            .scan(req.key, req.from, req.limit, target)
+            .await?;
         Ok(tonic::Response::new(resp))
     }
 
@@ -92,7 +176,12 @@ impl ConsensusService for ConsensusGrpcService {
         _request: tonic::Request<ProtoListKeysRequest>,
     ) -> Result<tonic::Response<Self::ListKeysStream>, tonic::Status> {
         debug!("list_keys");
-        let keys = self.handle.list_keys().await?;
+        let target = self
+            .acceptor_handle
+            .latest_committed_batch()
+            .await
+            .map_err(|e| tonic::Status::unavailable(e.to_string()))?;
+        let keys = self.learner_handle.list_keys(target).await?;
         let (stream_tx, stream_rx) = tokio::sync::mpsc::channel(64);
         mz_ore::task::spawn(|| "list-keys-stream", async move {
             for key in keys {

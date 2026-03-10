@@ -1,5 +1,4 @@
 name: "smoke"
-description: "1 shard"
 
 num_shards: 1
 writers_per_shard: 1
@@ -19,5 +18,5 @@ flush_interval_ms: 1
 
 wal_latency: "zero"
 
-duration: 30
-warmup: 10
+duration: 5
+warmup: 2

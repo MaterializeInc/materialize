@@ -1,0 +1,26 @@
+name: "production-100k-1hz"
+
+num_shards: 100000
+writers_per_shard: 1
+value_size: 750
+max_entries: 1000
+
+cas_pct: 90
+scan_pct: 8
+head_pct: 1
+truncate_pct: 1
+
+scan_limit: 10
+truncate_to: 500
+
+write_rate_per_second: 1.0
+flush_interval_ms: 5
+max_pending_age_ms: 10
+
+grpc_connections: 1000
+wal_latency: "s3-express"
+snapshot_interval: 100
+transport: grpc
+
+duration: 60
+warmup: 10

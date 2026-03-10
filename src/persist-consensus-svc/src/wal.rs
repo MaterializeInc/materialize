@@ -10,6 +10,8 @@
 //! WAL and snapshot read/write interface for the consensus service.
 
 pub mod s3;
+#[cfg(test)]
+pub mod sim;
 
 use std::collections::BTreeMap;
 
@@ -17,7 +19,7 @@ use mz_persist::generated::consensus_service::{
     ProtoShardState, ProtoSnapshot, ProtoVersionedData, ProtoWalBatch,
 };
 
-use crate::actor::{ShardState, VersionedEntry};
+use crate::{ShardState, VersionedEntry};
 
 /// Error type for WAL write operations that distinguishes recoverable states.
 #[derive(Debug)]
@@ -214,166 +216,3 @@ impl WalWriter for LatencyWalWriter {
     }
 }
 
-/// A recording WAL writer for testing that records calls.
-#[cfg(test)]
-pub struct RecordingWalWriter {
-    pub batches: std::sync::Mutex<Vec<ProtoWalBatch>>,
-    pub snapshots: std::sync::Mutex<Vec<(BTreeMap<String, ShardState>, u64)>>,
-}
-
-#[cfg(test)]
-impl RecordingWalWriter {
-    pub fn new() -> Self {
-        RecordingWalWriter {
-            batches: std::sync::Mutex::new(Vec::new()),
-            snapshots: std::sync::Mutex::new(Vec::new()),
-        }
-    }
-}
-
-#[cfg(test)]
-#[async_trait::async_trait]
-impl WalWriter for RecordingWalWriter {
-    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), WalWriteError> {
-        self.batches.lock().unwrap().push(batch.clone());
-        Ok(())
-    }
-    async fn write_snapshot(
-        &self,
-        shards: &BTreeMap<String, ShardState>,
-        through_batch: u64,
-    ) -> Result<(), anyhow::Error> {
-        self.snapshots
-            .lock()
-            .unwrap()
-            .push((shards.clone(), through_batch));
-        Ok(())
-    }
-    async fn read_snapshot(&self) -> Result<Option<ProtoSnapshot>, anyhow::Error> {
-        Ok(None)
-    }
-    async fn read_batch(&self, _batch_number: u64) -> Result<Option<ProtoWalBatch>, anyhow::Error> {
-        Ok(None)
-    }
-}
-
-/// Injectable fault types for SimWalWriter.
-#[cfg(test)]
-#[derive(Debug, Clone)]
-pub enum SimWriteFault {
-    /// Transient failure — batch NOT stored. Actor retries.
-    TransientError,
-    /// Ambiguous failure — batch IS stored but response looks like error.
-    /// Actor retries, gets AlreadyExists, treats as success.
-    AmbiguousError,
-}
-
-/// In-memory WAL writer with fault injection for simulation testing.
-///
-/// Models object store conditional-write semantics: `write_batch` returns
-/// `AlreadyExists` if the batch number already exists in the store.
-/// Faults are consumed FIFO from the `faults` queue.
-#[cfg(test)]
-pub struct SimWalWriter {
-    batches: std::sync::Mutex<BTreeMap<u64, ProtoWalBatch>>,
-    snapshot: std::sync::Mutex<Option<ProtoSnapshot>>,
-    pub faults: std::sync::Mutex<std::collections::VecDeque<SimWriteFault>>,
-}
-
-#[cfg(test)]
-impl SimWalWriter {
-    pub fn new() -> Self {
-        SimWalWriter {
-            batches: std::sync::Mutex::new(BTreeMap::new()),
-            snapshot: std::sync::Mutex::new(None),
-            faults: std::sync::Mutex::new(std::collections::VecDeque::new()),
-        }
-    }
-
-    /// Inject a fault to be consumed on the next `write_batch` call.
-    pub fn inject_fault(&self, fault: SimWriteFault) {
-        self.faults.lock().unwrap().push_back(fault);
-    }
-
-    /// Returns a clone of all stored batches (for recovery testing).
-    pub fn batches_snapshot(&self) -> BTreeMap<u64, ProtoWalBatch> {
-        self.batches.lock().unwrap().clone()
-    }
-
-    /// Returns a clone of the stored snapshot (for recovery testing).
-    pub fn snapshot_copy(&self) -> Option<ProtoSnapshot> {
-        self.snapshot.lock().unwrap().clone()
-    }
-
-    /// Directly insert a batch (bypasses fault injection). For recovery tests.
-    pub fn write_batch_direct(&self, batch_number: u64, batch: ProtoWalBatch) {
-        self.batches.lock().unwrap().insert(batch_number, batch);
-    }
-
-    /// Directly set the snapshot. For recovery tests.
-    pub fn set_snapshot(&self, snapshot: ProtoSnapshot) {
-        *self.snapshot.lock().unwrap() = Some(snapshot);
-    }
-}
-
-#[cfg(test)]
-#[async_trait::async_trait]
-impl WalWriter for SimWalWriter {
-    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), WalWriteError> {
-        // Simulate object store latency. With `start_paused = true`, this costs zero
-        // wall-clock time but creates a yield point that exercises
-        // `serve_reads_until` in the actor's flush path.
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-
-        // Check for injected faults first.
-        let fault = self.faults.lock().unwrap().pop_front();
-        match fault {
-            Some(SimWriteFault::TransientError) => {
-                // Don't store the batch — transient failure.
-                return Err(WalWriteError::Failed(anyhow::anyhow!(
-                    "sim: transient error for batch {}",
-                    batch.batch_number,
-                )));
-            }
-            Some(SimWriteFault::AmbiguousError) => {
-                // Store the batch, then return failure (ambiguous).
-                self.batches
-                    .lock()
-                    .unwrap()
-                    .insert(batch.batch_number, batch.clone());
-                return Err(WalWriteError::Failed(anyhow::anyhow!(
-                    "sim: ambiguous error for batch {}",
-                    batch.batch_number,
-                )));
-            }
-            None => {}
-        }
-
-        // Normal path: conditional write.
-        let mut store = self.batches.lock().unwrap();
-        if store.contains_key(&batch.batch_number) {
-            Err(WalWriteError::AlreadyExists)
-        } else {
-            store.insert(batch.batch_number, batch.clone());
-            Ok(())
-        }
-    }
-
-    async fn write_snapshot(
-        &self,
-        shards: &BTreeMap<String, ShardState>,
-        through_batch: u64,
-    ) -> Result<(), anyhow::Error> {
-        let snapshot = serialize_snapshot(shards, through_batch);
-        *self.snapshot.lock().unwrap() = Some(snapshot);
-        Ok(())
-    }
-
-    async fn read_snapshot(&self) -> Result<Option<ProtoSnapshot>, anyhow::Error> {
-        Ok(self.snapshot.lock().unwrap().clone())
-    }
-
-    async fn read_batch(&self, batch_number: u64) -> Result<Option<ProtoWalBatch>, anyhow::Error> {
-        Ok(self.batches.lock().unwrap().get(&batch_number).cloned())
-    }
-}

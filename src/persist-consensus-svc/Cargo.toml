@@ -19,11 +19,6 @@ bench = false
 name = "mz-persist-consensus-svc"
 bench = false
 
-# Single consolidated bench target (saves linking time).
-[[bench]]
-name = "benches"
-harness = false
-
 [[example]]
 name = "specsheet"
 
@@ -48,7 +43,6 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-criterion = { version = "0.8.2", features = ["html_reports"] }
 mz-ore = { path = "../ore", features = ["metrics", "test"] }
 rand = "0.8"
 serde = { version = "1.0.219", features = ["derive"] }

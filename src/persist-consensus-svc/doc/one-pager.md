@@ -183,11 +183,19 @@ corrupted. But the losing instance doesn't know it lost — a 412 is indistingui
 landed" vs "someone else wrote this slot." If the loser assumes success, it resolves pending CAS callers as committed
 for writes that never durably landed. This is silent data loss.
 
-This needs to be solved before production use. A possible solution would involve fencing with a writer identity stamped
-into each WAL entry — either a UUID generated at startup, or an epoch number itself obtained via CAS against S3. On
-412, the service would read the batch back and compare identities: a match means our earlier attempt landed, a mismatch
-means we've been fenced and must halt (or, more ambitiously, roll back in-memory state, replay the foreign batch, and
-return `ExpectationMismatch` to pending callers so persist retries cleanly). The exact mechanism needs more design work.
+This needs to be solved before production use. Two approaches under consideration:
+
+**Identity-stamped WAL entries**: Each writer stamps a UUID or epoch number into every WAL batch. On 412, the service
+reads the batch back and compares identities: a match means our earlier attempt landed, a mismatch means we've been
+fenced and must halt (or, more ambitiously, roll back in-memory state, replay the foreign batch, and return
+`ExpectationMismatch` to pending callers so persist retries cleanly).
+
+**Era-based log sealing**: Each actor incarnation writes to an era-scoped WAL prefix: `wal/{era}/{batch_number}`. A new
+actor taking over writes a `seal/{old_era}` object recording the final batch number, reads up to that seal point to
+catch up, then starts writing to `wal/{new_era}/0`. The old actor discovers it's been fenced when it either sees the
+seal record or gets a 412 on a slot the new actor already claimed. This cleanly separates "my retry landed" from
+"someone else took over" — a sealed era is unambiguous. Delos' VirtualLog (Balakrishnan et al., OSDI 2020) uses this
+pattern in production at Meta.
 
 ## The Cost Story
 

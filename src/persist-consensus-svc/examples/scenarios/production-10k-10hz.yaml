@@ -1,25 +1,26 @@
-name: "scale-out-no-contention"
-description: "10000 shards with 4KiB values, high write rate, with no writer contention"
+name: "production-10k-10hz"
 
 num_shards: 10000
 writers_per_shard: 1
 value_size: 4096
-max_entries: 500
-transport: grpc
+max_entries: 1000
 
 cas_pct: 90
 scan_pct: 8
 head_pct: 1
 truncate_pct: 1
 
-scan_limit: 100
-truncate_to: 250
+scan_limit: 10
+truncate_to: 500
 
 write_rate_per_second: 5.0
 flush_interval_ms: 5
 max_pending_age_ms: 10
 
+grpc_connections: 50
 wal_latency: "s3-express"
+snapshot_interval: 100
+transport: grpc
 
-duration: 30
-warmup: 5
+duration: 60
+warmup: 10

@@ -1,8 +1,7 @@
-name: "production-10k"
-description: "10K shards with 2 concurrent writers, 4KiB inline values"
+name: "production-10k-1hz"
 
 num_shards: 10000
-writers_per_shard: 2
+writers_per_shard: 1
 value_size: 4096
 max_entries: 1000
 
@@ -16,8 +15,12 @@ truncate_to: 500
 
 write_rate_per_second: 1.0
 flush_interval_ms: 5
+max_pending_age_ms: 10
 
+grpc_connections: 50
 wal_latency: "s3-express"
+snapshot_interval: 100
+transport: grpc
 
 duration: 60
 warmup: 10

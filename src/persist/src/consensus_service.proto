@@ -11,17 +11,59 @@ syntax = "proto3";
 
 package mz_persist.gen.consensus_service;
 
-// --- gRPC Service ---
+// --- gRPC Services ---
 
-service ConsensusService {
+// Acceptor: blind group commit. Receives proposals, batches them, flushes to
+// the WAL. Returns receipts identifying each proposal's position in the log.
+// Does not evaluate CAS — proposals are appended unconditionally.
+service ConsensusAcceptor {
+    // Append a proposal to the shared log. Blocks until the group commit flush
+    // durably lands. Returns a receipt with the batch number and position.
+    rpc Append(ProtoAppendRequest) returns (ProtoAppendResponse);
+    // Returns the latest committed batch number.
+    rpc LatestCommittedBatch(ProtoLatestCommittedBatchRequest) returns (ProtoLatestCommittedBatchResponse);
+}
+
+// Learner: state machine that tails the shared log, evaluates CAS during
+// playback, maintains materialized state, and serves reads + result queries.
+service ConsensusLearner {
+    // Block until the given batch is materialized, then return the CAS result
+    // for the proposal at the given position.
+    rpc AwaitCasResult(ProtoAwaitResultRequest) returns (ProtoCompareAndSetResponse);
+    // Block until the given batch is materialized, then return the truncate
+    // result for the proposal at the given position.
+    rpc AwaitTruncateResult(ProtoAwaitResultRequest) returns (ProtoTruncateResponse);
+    // Read operations, served from materialized state. Linearizable: the
+    // learner ensures it has materialized through the acceptor's latest
+    // committed batch before serving.
     rpc Head(ProtoHeadRequest) returns (ProtoHeadResponse);
-    rpc CompareAndSet(ProtoCompareAndSetRequest) returns (ProtoCompareAndSetResponse);
     rpc Scan(ProtoScanRequest) returns (ProtoScanResponse);
-    rpc Truncate(ProtoTruncateRequest) returns (ProtoTruncateResponse);
     rpc ListKeys(ProtoListKeysRequest) returns (stream ProtoListKeysResponse);
 }
 
-// --- Request/Response messages ---
+// --- Acceptor request/response messages ---
+
+message ProtoAppendRequest {
+    ProtoWalProposal proposal = 1;
+}
+
+message ProtoAppendResponse {
+    uint64 batch_number = 1;
+    uint32 position = 2;
+}
+
+message ProtoLatestCommittedBatchRequest {}
+
+message ProtoLatestCommittedBatchResponse {
+    optional uint64 batch_number = 1;
+}
+
+message ProtoAwaitResultRequest {
+    uint64 batch_number = 1;
+    uint32 position = 2;
+}
+
+// --- Learner request/response messages ---
 
 message ProtoVersionedData {
     uint64 seqno = 1;
@@ -74,29 +116,35 @@ message ProtoListKeysResponse {
     string key = 1;
 }
 
-// --- WAL serialization ---
+// --- WAL serialization (proposal-based, blind writes) ---
 
-message ProtoWalWrite {
+// A CAS proposal as appended to the shared log. Contains the full CAS
+// precondition (expected seqno) so the learner can evaluate it during playback.
+message ProtoCasProposal {
     string key = 1;
-    uint64 seqno = 2;
-    bytes data = 3;
+    // The seqno the proposer expects the shard to be at. Absent means the
+    // proposer expects no data at this key yet.
+    optional uint64 expected = 2;
+    uint64 new_seqno = 3;
+    bytes data = 4;
 }
 
-message ProtoWalTruncate {
+// A truncate proposal as appended to the shared log.
+message ProtoTruncateProposal {
     string key = 1;
     uint64 seqno = 2;
 }
 
-message ProtoWalOp {
+message ProtoWalProposal {
     oneof op {
-        ProtoWalWrite write = 1;
-        ProtoWalTruncate truncate = 2;
+        ProtoCasProposal cas = 1;
+        ProtoTruncateProposal truncate = 2;
     }
 }
 
 message ProtoWalBatch {
     uint64 batch_number = 1;
-    repeated ProtoWalOp ops = 2;
+    repeated ProtoWalProposal proposals = 2;
 }
 
 // --- Snapshot serialization ---

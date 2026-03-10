@@ -16,7 +16,7 @@ use prost::Message;
 
 use mz_persist::generated::consensus_service::{ProtoSnapshot, ProtoWalBatch};
 
-use crate::actor::ShardState;
+use crate::ShardState;
 use crate::wal::{WalWriteError, WalWriter, serialize_snapshot};
 
 /// S3-backed WAL and snapshot writer.

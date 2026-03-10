@@ -10,15 +10,18 @@
 //! Binary entry point for the group commit consensus service.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use clap::Parser;
 use tonic::transport::Server;
 use tracing::info;
 
-use mz_persist::generated::consensus_service::consensus_service_server::ConsensusServiceServer;
-use mz_persist_consensus_svc::actor::{Actor, ActorConfig};
-use mz_persist_consensus_svc::metrics::ConsensusMetrics;
-use mz_persist_consensus_svc::service::ConsensusGrpcService;
+use mz_persist::generated::consensus_service::consensus_acceptor_server::ConsensusAcceptorServer;
+use mz_persist::generated::consensus_service::consensus_learner_server::ConsensusLearnerServer;
+use mz_persist_consensus_svc::acceptor::{Acceptor, AcceptorConfig};
+use mz_persist_consensus_svc::learner::{Learner, LearnerConfig};
+use mz_persist_consensus_svc::metrics::{AcceptorMetrics, LearnerMetrics};
+use mz_persist_consensus_svc::service::{AcceptorGrpcService, LearnerGrpcService};
 use mz_persist_consensus_svc::wal::s3::S3WalWriter;
 
 /// CLI arguments for the consensus service.
@@ -49,8 +52,7 @@ struct Args {
     #[arg(long, env = "CONSENSUS_S3_REGION", default_value = "us-east-1")]
     s3_region: String,
 
-    /// Flush collection window in milliseconds. This is the time spent
-    /// accumulating CAS ops between object store writes, not the total period.
+    /// Flush collection window in milliseconds.
     #[arg(long, default_value = "5")]
     flush_interval_ms: u64,
 
@@ -69,9 +71,8 @@ fn main() {
         )
         .init();
 
-    // Multi-threaded runtime for gRPC + metrics. The actor gets its own
-    // dedicated single-threaded runtime on a separate OS thread (via
-    // Actor::spawn), so gRPC handler tasks never compete with it for CPU.
+    // Multi-threaded runtime for gRPC + metrics. The acceptor gets its own
+    // dedicated single-threaded runtime on a separate OS thread.
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -82,29 +83,74 @@ fn main() {
 
 async fn run(args: Args) {
     let metrics_registry = mz_ore::metrics::MetricsRegistry::new();
-    let metrics = ConsensusMetrics::register(&metrics_registry);
+    let acceptor_metrics = AcceptorMetrics::register(&metrics_registry);
+    let learner_metrics = LearnerMetrics::register(&metrics_registry);
 
-    let wal_writer = S3WalWriter::new(
-        &args.s3_bucket,
-        &args.s3_prefix,
-        args.s3_endpoint.as_deref(),
-        &args.s3_region,
-    )
-    .await;
+    let wal_writer = Arc::new(
+        S3WalWriter::new(
+            &args.s3_bucket,
+            &args.s3_prefix,
+            args.s3_endpoint.as_deref(),
+            &args.s3_region,
+        )
+        .await,
+    );
 
-    let config = ActorConfig {
+    // Batch push channel: acceptor → learner (performance optimization).
+    let (batch_tx, batch_rx) = tokio::sync::mpsc::channel(256);
+
+    // Spawn acceptor on a dedicated OS thread with its own single-threaded
+    // tokio runtime. Isolates flush timer precision from learner CPU work.
+    let acceptor_config = AcceptorConfig {
         flush_interval_ms: args.flush_interval_ms,
+        ..Default::default()
+    };
+    let acceptor_wal = Arc::clone(&wal_writer);
+    let acceptor_handle = {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let _thread = std::thread::Builder::new()
+            .name("acceptor".to_string())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build acceptor runtime");
+                rt.block_on(async {
+                    let (handle, _task) = Acceptor::spawn(
+                        acceptor_config,
+                        acceptor_wal,
+                        Some(batch_tx),
+                        acceptor_metrics,
+                    );
+                    let _ = tx.send(handle.clone());
+                    _task.await;
+                });
+            })
+            .expect("failed to spawn acceptor thread");
+        rx.await.expect("acceptor thread failed to send handle")
+    };
+
+    // Spawn learner on the current runtime.
+    let learner_config = LearnerConfig {
         snapshot_interval: args.snapshot_interval,
         ..Default::default()
     };
-    // Actor::spawn starts the actor on a dedicated OS thread with its own
-    // single-threaded tokio runtime. The returned handle is Send and works
-    // from this runtime.
-    let (handle, _actor_thread) = Actor::spawn(config, wal_writer, metrics);
+    let (learner_handle, _learner_task) = Learner::spawn(
+        learner_config,
+        Arc::clone(&wal_writer),
+        batch_rx,
+        learner_metrics,
+    );
 
-    // Recover state from object storage via the actor's command channel.
+    // Recover state from object storage via the learner.
     info!("recovering state from object storage...");
-    handle.recover().await.expect("recovery failed");
+    let next_batch = learner_handle.recover().await.expect("recovery failed");
+
+    // Tell the acceptor where to start writing.
+    acceptor_handle
+        .set_batch_number(next_batch)
+        .await
+        .expect("failed to set acceptor batch number");
 
     // Spawn HTTP metrics server.
     let metrics_addr = args.metrics_listen_addr;
@@ -125,11 +171,20 @@ async fn run(args: Args) {
             .expect("metrics server failed");
     });
 
-    let grpc_service = ConsensusGrpcService { handle };
+    // Build gRPC services.
+    let acceptor_service = AcceptorGrpcService {
+        handle: acceptor_handle.clone(),
+    };
+    let learner_service = LearnerGrpcService {
+        acceptor_handle,
+        learner_handle,
+    };
+
     info!(addr = %args.listen_addr, "starting gRPC server");
 
     Server::builder()
-        .add_service(ConsensusServiceServer::new(grpc_service))
+        .add_service(ConsensusAcceptorServer::new(acceptor_service))
+        .add_service(ConsensusLearnerServer::new(learner_service))
         .serve(args.listen_addr)
         .await
         .expect("gRPC server failed");

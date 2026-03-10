@@ -7,7 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A [`Consensus`] implementation backed by a gRPC service.
+//! A [`Consensus`] implementation backed by the two-tier shared log service.
+//!
+//! Writes go to the acceptor (blind append), then the learner is queried for
+//! the CAS result. Reads go directly to the learner.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -19,10 +22,12 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use tonic::transport::Channel;
 
-use crate::generated::consensus_service::consensus_service_client::ConsensusServiceClient;
+use crate::generated::consensus_service::consensus_acceptor_client::ConsensusAcceptorClient;
+use crate::generated::consensus_service::consensus_learner_client::ConsensusLearnerClient;
 use crate::generated::consensus_service::{
-    ProtoCompareAndSetRequest, ProtoHeadRequest, ProtoListKeysRequest, ProtoScanRequest,
-    ProtoTruncateRequest, ProtoVersionedData,
+    ProtoAppendRequest, ProtoAwaitResultRequest, ProtoCasProposal, ProtoHeadRequest,
+    ProtoListKeysRequest, ProtoScanRequest, ProtoTruncateProposal, ProtoVersionedData,
+    ProtoWalProposal, proto_wal_proposal,
 };
 use crate::location::{CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData};
 
@@ -67,27 +72,32 @@ impl RpcConsensusConfig {
     }
 }
 
-/// A [`Consensus`] implementation that delegates to a remote gRPC
-/// `ConsensusService`.
+/// A [`Consensus`] implementation backed by the two-tier shared log service.
+///
+/// Writes (CAS, truncate) go to the acceptor as blind proposals, then the
+/// learner is queried for the result after materialization. Reads (head, scan,
+/// list_keys) go directly to the learner.
 ///
 /// Maintains a pool of independent HTTP/2 connections with round-robin
 /// selection to spread h2 mux contention under high concurrency.
 #[derive(Debug)]
 pub struct RpcConsensus {
-    clients: Vec<ConsensusServiceClient<Channel>>,
+    acceptors: Vec<ConsensusAcceptorClient<Channel>>,
+    learners: Vec<ConsensusLearnerClient<Channel>>,
     next: AtomicUsize,
 }
 
 impl RpcConsensus {
     /// Opens `config.pool_size` connections to the remote consensus service.
     ///
-    /// Channels are created with `connect_lazy` so tonic will automatically
-    /// reconnect after a dead connection is detected (via keepalive or a
-    /// failed RPC). We verify the endpoint is reachable by issuing a
-    /// health-check `head` call after creating the pool.
+    /// Both the acceptor and learner services are expected at the same endpoint
+    /// (they're served by the same process today). Channels are created with
+    /// `connect_lazy` so tonic will automatically reconnect after a dead
+    /// connection is detected.
     pub async fn open(config: RpcConsensusConfig) -> Result<Self, ExternalError> {
         let pool_size = config.pool_size.max(1);
-        let mut clients = Vec::with_capacity(pool_size);
+        let mut acceptors = Vec::with_capacity(pool_size);
+        let mut learners = Vec::with_capacity(pool_size);
         for _ in 0..pool_size {
             let channel = Channel::from_shared(config.endpoint.clone())
                 .map_err(|e| ExternalError::from(anyhow!("invalid rpc endpoint: {}", e)))?
@@ -97,18 +107,18 @@ impl RpcConsensus {
                 .keep_alive_timeout(config.http2_keep_alive_timeout)
                 .keep_alive_while_idle(true)
                 .connect_lazy();
-            clients.push(ConsensusServiceClient::new(channel));
+            acceptors.push(ConsensusAcceptorClient::new(channel.clone()));
+            learners.push(ConsensusLearnerClient::new(channel));
         }
         let consensus = RpcConsensus {
-            clients,
+            acceptors,
+            learners,
             next: AtomicUsize::new(0),
         };
 
-        // Health check: verify the endpoint is reachable by issuing a
-        // lightweight RPC. This eagerly surfaces connection errors at
-        // startup rather than deferring them to the first real call.
-        let mut client = consensus.get_client();
-        client
+        // Health check: verify the endpoint is reachable.
+        let mut learner = consensus.get_learner();
+        learner
             .head(ProtoHeadRequest {
                 key: String::new(),
             })
@@ -118,20 +128,14 @@ impl RpcConsensus {
         Ok(consensus)
     }
 
-    /// Returns a client from the pool using round-robin selection.
-    ///
-    /// The returned client is cheap to clone (Arc bump on the underlying
-    /// channel), so callers don't need to return it.
-    pub fn get_client(&self) -> ConsensusServiceClient<Channel> {
-        let idx = self.next.fetch_add(1, Ordering::Relaxed) % self.clients.len();
-        self.clients[idx].clone()
+    fn get_acceptor(&self) -> ConsensusAcceptorClient<Channel> {
+        let idx = self.next.fetch_add(1, Ordering::Relaxed) % self.acceptors.len();
+        self.acceptors[idx].clone()
     }
-}
 
-fn to_proto_versioned_data(v: &VersionedData) -> ProtoVersionedData {
-    ProtoVersionedData {
-        seqno: v.seqno.0,
-        data: v.data.to_vec(),
+    fn get_learner(&self) -> ConsensusLearnerClient<Channel> {
+        let idx = self.next.fetch_add(1, Ordering::Relaxed) % self.learners.len();
+        self.learners[idx].clone()
     }
 }
 
@@ -145,7 +149,7 @@ fn from_proto_versioned_data(p: ProtoVersionedData) -> VersionedData {
 #[async_trait]
 impl Consensus for RpcConsensus {
     fn list_keys(&self) -> ResultStream<'_, String> {
-        let mut client = self.get_client();
+        let mut client = self.get_learner();
         Box::pin(try_stream! {
             let response = client
                 .list_keys(ProtoListKeysRequest {})
@@ -163,7 +167,7 @@ impl Consensus for RpcConsensus {
     }
 
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
-        let mut client = self.get_client();
+        let mut client = self.get_learner();
         let response = client
             .head(ProtoHeadRequest {
                 key: key.to_string(),
@@ -180,17 +184,35 @@ impl Consensus for RpcConsensus {
         expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
-        let mut client = self.get_client();
-        let response = client
-            .compare_and_set(ProtoCompareAndSetRequest {
-                key: key.to_string(),
-                expected: expected.map(|s| s.0),
-                new: Some(to_proto_versioned_data(&new)),
+        // 1. Append proposal to acceptor (blocks until group commit flush).
+        let mut acceptor = self.get_acceptor();
+        let receipt = acceptor
+            .append(ProtoAppendRequest {
+                proposal: Some(ProtoWalProposal {
+                    op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+                        key: key.to_string(),
+                        expected: expected.map(|s| s.0),
+                        new_seqno: new.seqno.0,
+                        data: new.data.to_vec(),
+                    })),
+                }),
             })
             .await
-            .map_err(|e| ExternalError::from(anyhow!("rpc compare_and_set failed: {}", e)))?;
-        let inner = response.into_inner();
-        if inner.committed {
+            .map_err(|e| ExternalError::from(anyhow!("rpc append failed: {}", e)))?
+            .into_inner();
+
+        // 2. Wait for learner to materialize and return CAS result.
+        let mut learner = self.get_learner();
+        let result = learner
+            .await_cas_result(ProtoAwaitResultRequest {
+                batch_number: receipt.batch_number,
+                position: receipt.position,
+            })
+            .await
+            .map_err(|e| ExternalError::from(anyhow!("rpc await_cas_result failed: {}", e)))?
+            .into_inner();
+
+        if result.committed {
             Ok(CaSResult::Committed)
         } else {
             Ok(CaSResult::ExpectationMismatch)
@@ -203,7 +225,7 @@ impl Consensus for RpcConsensus {
         from: SeqNo,
         limit: usize,
     ) -> Result<Vec<VersionedData>, ExternalError> {
-        let mut client = self.get_client();
+        let mut client = self.get_learner();
         let response = client
             .scan(ProtoScanRequest {
                 key: key.to_string(),
@@ -217,16 +239,35 @@ impl Consensus for RpcConsensus {
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
-        let mut client = self.get_client();
-        let response = client
-            .truncate(ProtoTruncateRequest {
-                key: key.to_string(),
-                seqno: seqno.0,
+        // 1. Append truncate proposal to acceptor.
+        let mut acceptor = self.get_acceptor();
+        let receipt = acceptor
+            .append(ProtoAppendRequest {
+                proposal: Some(ProtoWalProposal {
+                    op: Some(proto_wal_proposal::Op::Truncate(ProtoTruncateProposal {
+                        key: key.to_string(),
+                        seqno: seqno.0,
+                    })),
+                }),
             })
             .await
-            .map_err(|e| ExternalError::from(anyhow!("rpc truncate failed: {}", e)))?;
-        let inner = response.into_inner();
-        Ok(inner.deleted.map(|d| d as usize))
+            .map_err(|e| ExternalError::from(anyhow!("rpc append failed: {}", e)))?
+            .into_inner();
+
+        // 2. Wait for learner to materialize and return truncate result.
+        let mut learner = self.get_learner();
+        let result = learner
+            .await_truncate_result(ProtoAwaitResultRequest {
+                batch_number: receipt.batch_number,
+                position: receipt.position,
+            })
+            .await
+            .map_err(|e| ExternalError::from(anyhow!("rpc await_truncate_result failed: {}", e)))?
+            .into_inner();
+
+        Ok(result
+            .deleted
+            .map(|d| usize::try_from(d).expect("deleted count fits in usize")))
     }
 }
 
