@@ -19,7 +19,6 @@
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
-use prost::Message;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Interval;
 use tracing::{debug, info, warn};
@@ -30,6 +29,7 @@ use mz_persist::generated::consensus_service::{
     ProtoVersionedData, ProtoWalBatch, proto_wal_proposal,
 };
 
+use crate::acceptor::AcceptorHandle;
 use crate::metrics::LearnerMetrics;
 use crate::wal::{WalWriter, deserialize_snapshot};
 use crate::{ShardState, VersionedEntry};
@@ -89,24 +89,22 @@ impl std::fmt::Display for LearnerError {
 
 /// Commands dispatched to the learner.
 pub enum LearnerCommand {
-    /// Read the head (latest entry) for a shard. Linearized: only served after
-    /// materializing through `after_batch`.
+    /// Read the head (latest entry) for a shard.
     Head {
         key: String,
-        after_batch: Option<u64>,
         reply: oneshot::Sender<ProtoHeadResponse>,
+        received_at: std::time::Instant,
     },
-    /// Scan entries for a shard. Linearized.
+    /// Scan entries for a shard.
     Scan {
         key: String,
         from: u64,
         limit: u64,
-        after_batch: Option<u64>,
         reply: oneshot::Sender<ProtoScanResponse>,
+        received_at: std::time::Instant,
     },
-    /// List all known shard keys. Linearized.
+    /// List all known shard keys.
     ListKeys {
-        after_batch: Option<u64>,
         reply: oneshot::Sender<Vec<String>>,
     },
     /// Wait for a batch to be materialized and return the CAS result for the
@@ -115,6 +113,7 @@ pub enum LearnerCommand {
         batch_number: u64,
         position: u32,
         reply: oneshot::Sender<ProtoCompareAndSetResponse>,
+        received_at: std::time::Instant,
     },
     /// Wait for a batch to be materialized and return the truncate result.
     /// The inner Result carries a truncate validation error (seqno > head,
@@ -123,6 +122,7 @@ pub enum LearnerCommand {
         batch_number: u64,
         position: u32,
         reply: oneshot::Sender<Result<ProtoTruncateResponse, String>>,
+        received_at: std::time::Instant,
     },
     /// Recover state from snapshot + WAL replay. Returns the next expected
     /// batch number (for configuring the acceptor).
@@ -149,14 +149,13 @@ impl LearnerHandle {
     pub async fn head(
         &self,
         key: String,
-        after_batch: Option<u64>,
     ) -> Result<ProtoHeadResponse, LearnerError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(LearnerCommand::Head {
                 key,
-                after_batch,
                 reply: reply_tx,
+                received_at: std::time::Instant::now(),
             })
             .await
             .map_err(|_| LearnerError::Shutdown)?;
@@ -168,7 +167,6 @@ impl LearnerHandle {
         key: String,
         from: u64,
         limit: u64,
-        after_batch: Option<u64>,
     ) -> Result<ProtoScanResponse, LearnerError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
@@ -176,22 +174,18 @@ impl LearnerHandle {
                 key,
                 from,
                 limit,
-                after_batch,
                 reply: reply_tx,
+                received_at: std::time::Instant::now(),
             })
             .await
             .map_err(|_| LearnerError::Shutdown)?;
         reply_rx.await.map_err(|_| LearnerError::DroppedReply)
     }
 
-    pub async fn list_keys(
-        &self,
-        after_batch: Option<u64>,
-    ) -> Result<Vec<String>, LearnerError> {
+    pub async fn list_keys(&self) -> Result<Vec<String>, LearnerError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(LearnerCommand::ListKeys {
-                after_batch,
                 reply: reply_tx,
             })
             .await
@@ -210,6 +204,7 @@ impl LearnerHandle {
                 batch_number,
                 position,
                 reply: reply_tx,
+                received_at: std::time::Instant::now(),
             })
             .await
             .map_err(|_| LearnerError::Shutdown)?;
@@ -227,6 +222,7 @@ impl LearnerHandle {
                 batch_number,
                 position,
                 reply: reply_tx,
+                received_at: std::time::Instant::now(),
             })
             .await
             .map_err(|_| LearnerError::Shutdown)?;
@@ -267,10 +263,12 @@ enum ResultWaiter {
     Cas {
         position: u32,
         reply: oneshot::Sender<ProtoCompareAndSetResponse>,
+        received_at: std::time::Instant,
     },
     Truncate {
         position: u32,
         reply: oneshot::Sender<Result<ProtoTruncateResponse, String>>,
+        received_at: std::time::Instant,
     },
 }
 
@@ -280,6 +278,7 @@ enum ReadWaiter {
         key: String,
         after_batch: u64,
         reply: oneshot::Sender<ProtoHeadResponse>,
+        received_at: std::time::Instant,
     },
     Scan {
         key: String,
@@ -287,6 +286,7 @@ enum ReadWaiter {
         limit: u64,
         after_batch: u64,
         reply: oneshot::Sender<ProtoScanResponse>,
+        received_at: std::time::Instant,
     },
     ListKeys {
         after_batch: u64,
@@ -339,6 +339,15 @@ pub struct Learner<W: WalWriter> {
     // --- WAL reader/writer ---
     wal_writer: W,
 
+    // --- Linearization ---
+    /// Handle to the acceptor, used to query `latest_committed_batch` for
+    /// read linearization. This provides linearizable reads because the
+    /// acceptor is the single writer — its committed batch counter is the
+    /// authoritative high-water mark. With striped/partitioned acceptors,
+    /// this would need to query all acceptors or use a shared coordination
+    /// mechanism.
+    acceptor: AcceptorHandle,
+
     // --- Metrics ---
     metrics: LearnerMetrics,
     running_entry_count: i64,
@@ -351,6 +360,7 @@ impl<W: WalWriter> Learner<W> {
         config: LearnerConfig,
         wal_writer: W,
         batch_rx: mpsc::Receiver<ProtoWalBatch>,
+        acceptor_handle: AcceptorHandle,
         metrics: LearnerMetrics,
     ) -> (Self, LearnerHandle) {
         let (cmd_tx, cmd_rx) = mpsc::channel(config.queue_depth);
@@ -366,6 +376,7 @@ impl<W: WalWriter> Learner<W> {
             cmd_rx,
             batch_rx,
             wal_writer,
+            acceptor: acceptor_handle,
             metrics,
             running_entry_count: 0,
             running_byte_count: 0,
@@ -432,21 +443,32 @@ impl<W: WalWriter> Learner<W> {
     }
 
     async fn handle_command(&mut self, cmd: LearnerCommand) {
+        // Record command queue delay (time from handle send to actor processing).
+        let cmd_received_at = match &cmd {
+            LearnerCommand::Head { received_at, .. }
+            | LearnerCommand::Scan { received_at, .. }
+            | LearnerCommand::AwaitCasResult { received_at, .. }
+            | LearnerCommand::AwaitTruncateResult { received_at, .. } => Some(*received_at),
+            LearnerCommand::ListKeys { .. } | LearnerCommand::Recover { .. } => None,
+        };
+        if let Some(at) = cmd_received_at {
+            self.metrics.cmd_queue_seconds.observe(at.elapsed().as_secs_f64());
+        }
+
         match cmd {
-            LearnerCommand::Head {
-                key,
-                after_batch,
-                reply,
-            } => {
+            LearnerCommand::Head { key, reply, received_at } => {
+                let after_batch = self.linearization_target();
                 if self.is_caught_up(after_batch) {
                     self.metrics.head_ops.inc();
                     let resp = self.serve_head(&key);
                     let _ = reply.send(resp);
+                    self.metrics.head_seconds.observe(received_at.elapsed().as_secs_f64());
                 } else {
                     self.read_waiters.push(ReadWaiter::Head {
                         key,
                         after_batch: after_batch.unwrap(), // safe: is_caught_up returned false
                         reply,
+                        received_at,
                     });
                 }
             }
@@ -454,13 +476,15 @@ impl<W: WalWriter> Learner<W> {
                 key,
                 from,
                 limit,
-                after_batch,
                 reply,
+                received_at,
             } => {
+                let after_batch = self.linearization_target();
                 if self.is_caught_up(after_batch) {
                     self.metrics.scan_ops.inc();
                     let resp = self.serve_scan(&key, from, limit);
                     let _ = reply.send(resp);
+                    self.metrics.scan_seconds.observe(received_at.elapsed().as_secs_f64());
                 } else {
                     self.read_waiters.push(ReadWaiter::Scan {
                         key,
@@ -468,10 +492,12 @@ impl<W: WalWriter> Learner<W> {
                         limit,
                         after_batch: after_batch.unwrap(),
                         reply,
+                        received_at,
                     });
                 }
             }
-            LearnerCommand::ListKeys { after_batch, reply } => {
+            LearnerCommand::ListKeys { reply } => {
+                let after_batch = self.linearization_target();
                 if self.is_caught_up(after_batch) {
                     self.metrics.list_keys_ops.inc();
                     let keys = self.shards.keys().cloned().collect();
@@ -487,12 +513,14 @@ impl<W: WalWriter> Learner<W> {
                 batch_number,
                 position,
                 reply,
+                received_at,
             } => {
                 if let Some(results) = self.results.get(&batch_number) {
                     if let Some(ProposalResult::Cas(result)) =
                         results.get(usize::cast_from(position))
                     {
                         let _ = reply.send(result.clone());
+                        self.metrics.cas_result_seconds.observe(received_at.elapsed().as_secs_f64());
                         return;
                     }
                 }
@@ -500,31 +528,39 @@ impl<W: WalWriter> Learner<W> {
                 self.result_waiters
                     .entry(batch_number)
                     .or_default()
-                    .push(ResultWaiter::Cas { position, reply });
+                    .push(ResultWaiter::Cas { position, reply, received_at });
             }
             LearnerCommand::AwaitTruncateResult {
                 batch_number,
                 position,
                 reply,
+                received_at,
             } => {
                 if let Some(results) = self.results.get(&batch_number) {
                     if let Some(ProposalResult::Truncate(result)) =
                         results.get(usize::cast_from(position))
                     {
                         let _ = reply.send(result.clone());
+                        self.metrics.truncate_result_seconds.observe(received_at.elapsed().as_secs_f64());
                         return;
                     }
                 }
                 self.result_waiters
                     .entry(batch_number)
                     .or_default()
-                    .push(ResultWaiter::Truncate { position, reply });
+                    .push(ResultWaiter::Truncate { position, reply, received_at });
             }
             LearnerCommand::Recover { reply } => {
                 let result = self.recover().await;
                 let _ = reply.send(result);
             }
         }
+    }
+
+    /// Read the acceptor's latest committed batch for read linearization.
+    /// This is a lock-free atomic read — it never blocks behind WAL writes.
+    fn linearization_target(&self) -> Option<u64> {
+        self.acceptor.latest_committed_batch()
     }
 
     /// Returns true if the learner has materialized through `after_batch`
@@ -591,14 +627,14 @@ impl<W: WalWriter> Learner<W> {
 
         let mut batch_results = Vec::with_capacity(num_proposals);
 
-        for proposal in &batch.proposals {
-            match &proposal.op {
+        for proposal in batch.proposals {
+            match proposal.op {
                 Some(proto_wal_proposal::Op::Cas(cas)) => {
                     let result = self.evaluate_cas(cas);
                     batch_results.push(ProposalResult::Cas(result));
                 }
                 Some(proto_wal_proposal::Op::Truncate(trunc)) => {
-                    let result = self.evaluate_truncate(trunc);
+                    let result = self.evaluate_truncate(&trunc);
                     batch_results.push(ProposalResult::Truncate(result));
                 }
                 None => {
@@ -643,7 +679,7 @@ impl<W: WalWriter> Learner<W> {
 
     fn evaluate_cas(
         &mut self,
-        cas: &mz_persist::generated::consensus_service::ProtoCasProposal,
+        cas: mz_persist::generated::consensus_service::ProtoCasProposal,
     ) -> ProtoCompareAndSetResponse {
         let current_seqno = self
             .shards
@@ -660,10 +696,10 @@ impl<W: WalWriter> Learner<W> {
                 i64::try_from(cas.data.len()).expect("data length fits i64");
             let entry = VersionedEntry {
                 seqno: cas.new_seqno,
-                data: Bytes::from(cas.data.clone()),
+                data: Bytes::from(cas.data),
             };
             self.shards
-                .entry(cas.key.clone())
+                .entry(cas.key)
                 .or_default()
                 .entries
                 .push(entry);
@@ -700,23 +736,20 @@ impl<W: WalWriter> Learner<W> {
             ));
         }
 
-        // Now take a mutable reference to perform the truncation.
+        // Single pass: partition_point gives us the index of the first entry
+        // to keep (entries are sorted by seqno). Drain the prefix.
         let shard = self.shards.get_mut(&trunc.key).unwrap();
-        let before = shard.entries.len();
-        let deleted_bytes: i64 = shard
-            .entries
-            .iter()
-            .filter(|e| e.seqno < trunc.seqno)
-            .map(|e| i64::try_from(e.data.len()).expect("data length"))
-            .sum();
-        shard.entries.retain(|e| e.seqno >= trunc.seqno);
-        let removed = before - shard.entries.len();
+        let keep_from = shard.entries.partition_point(|e| e.seqno < trunc.seqno);
+        let mut deleted_bytes: i64 = 0;
+        for entry in shard.entries.drain(..keep_from) {
+            deleted_bytes += i64::try_from(entry.data.len()).expect("data length");
+        }
         self.running_entry_count -=
-            i64::try_from(removed).expect("removed count fits i64");
+            i64::try_from(keep_from).expect("removed count fits i64");
         self.running_byte_count -= deleted_bytes;
 
         Ok(ProtoTruncateResponse {
-            deleted: Some(u64::cast_from(removed)),
+            deleted: Some(u64::cast_from(keep_from)),
         })
     }
 
@@ -736,18 +769,20 @@ impl<W: WalWriter> Learner<W> {
 
         for waiter in waiters {
             match waiter {
-                ResultWaiter::Cas { position, reply } => {
+                ResultWaiter::Cas { position, reply, received_at } => {
                     if let Some(ProposalResult::Cas(result)) =
                         results.get(usize::cast_from(position))
                     {
                         let _ = reply.send(result.clone());
+                        self.metrics.cas_result_seconds.observe(received_at.elapsed().as_secs_f64());
                     }
                 }
-                ResultWaiter::Truncate { position, reply } => {
+                ResultWaiter::Truncate { position, reply, received_at } => {
                     if let Some(ProposalResult::Truncate(result)) =
                         results.get(usize::cast_from(position))
                     {
                         let _ = reply.send(result.clone());
+                        self.metrics.truncate_result_seconds.observe(received_at.elapsed().as_secs_f64());
                     }
                 }
             }
@@ -768,21 +803,24 @@ impl<W: WalWriter> Learner<W> {
 
         for waiter in ready {
             match waiter {
-                ReadWaiter::Head { key, reply, .. } => {
+                ReadWaiter::Head { key, reply, received_at, .. } => {
                     self.metrics.head_ops.inc();
                     let resp = self.serve_head(&key);
                     let _ = reply.send(resp);
+                    self.metrics.head_seconds.observe(received_at.elapsed().as_secs_f64());
                 }
                 ReadWaiter::Scan {
                     key,
                     from,
                     limit,
                     reply,
+                    received_at,
                     ..
                 } => {
                     self.metrics.scan_ops.inc();
                     let resp = self.serve_scan(&key, from, limit);
                     let _ = reply.send(resp);
+                    self.metrics.scan_seconds.observe(received_at.elapsed().as_secs_f64());
                 }
                 ReadWaiter::ListKeys { reply, .. } => {
                     self.metrics.list_keys_ops.inc();
@@ -797,7 +835,8 @@ impl<W: WalWriter> Learner<W> {
         if let Some(through) = self.materialized_through {
             if through >= self.config.result_retention_batches {
                 let cutoff = through - self.config.result_retention_batches;
-                self.results.retain(|&batch, _| batch >= cutoff);
+                // O(log n) range delete via split_off instead of O(n) retain.
+                self.results = self.results.split_off(&cutoff);
             }
         }
     }
@@ -914,14 +953,17 @@ impl<W: WalWriter> Learner<W> {
                 warn!("snapshot write failed: {}", e);
             }
             Ok(()) => {
-                let encoded = crate::wal::serialize_snapshot(&self.shards, through);
                 self.metrics
                     .object_store_snapshot_write_latency_seconds
                     .observe(snap_start.elapsed().as_secs_f64());
                 self.metrics.object_store_snapshot_writes.inc();
+                // Use the running byte counter as an approximation rather than
+                // re-serializing all shard state just to measure encoded_len().
+                // At 10K+ shards, that serialization takes hundreds of ms and
+                // blocks the actor loop.
                 self.metrics
                     .object_store_snapshot_write_bytes
-                    .inc_by(u64::cast_from(encoded.encoded_len()));
+                    .inc_by(u64::try_from(self.running_byte_count).unwrap_or(0));
                 self.batches_since_snapshot = 0;
             }
         }
@@ -934,10 +976,35 @@ impl<W: WalWriter + Send + Sync + 'static> Learner<W> {
         config: LearnerConfig,
         wal_writer: W,
         batch_rx: mpsc::Receiver<ProtoWalBatch>,
+        acceptor_handle: AcceptorHandle,
         metrics: LearnerMetrics,
     ) -> (LearnerHandle, mz_ore::task::JoinHandle<()>) {
-        let (learner, handle) = Self::new(config, wal_writer, batch_rx, metrics);
+        let (learner, handle) = Self::new(config, wal_writer, batch_rx, acceptor_handle, metrics);
         let task = mz_ore::task::spawn(|| "learner", learner.run());
         (handle, task)
+    }
+
+    /// Spawns the learner on a dedicated OS thread with its own single-threaded
+    /// tokio runtime, isolating it from gRPC and other runtime task scheduling.
+    /// Returns the handle and a thread join handle.
+    pub fn spawn_threaded(
+        config: LearnerConfig,
+        wal_writer: W,
+        batch_rx: mpsc::Receiver<ProtoWalBatch>,
+        acceptor_handle: AcceptorHandle,
+        metrics: LearnerMetrics,
+    ) -> (LearnerHandle, std::thread::JoinHandle<()>) {
+        let (learner, handle) = Self::new(config, wal_writer, batch_rx, acceptor_handle, metrics);
+        let thread = std::thread::Builder::new()
+            .name("learner".to_string())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build learner runtime");
+                rt.block_on(learner.run());
+            })
+            .expect("failed to spawn learner thread");
+        (handle, thread)
     }
 }

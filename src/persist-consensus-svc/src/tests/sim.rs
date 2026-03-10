@@ -171,7 +171,7 @@ impl OpGenerator {
 }
 
 // ---------------------------------------------------------------------------
-// WAL consistency checks
+// Verification
 // ---------------------------------------------------------------------------
 
 /// Assert that a value observed via Head or Scan exists as a CAS proposal in
@@ -200,6 +200,43 @@ fn assert_value_in_wal(
     );
 }
 
+/// Tracks the highest seqno observed per shard and asserts that reads never
+/// go backwards. A linearizability violation would mean a read returned a
+/// stale value after a newer one was already observed.
+struct LinearizabilityChecker {
+    /// Highest seqno observed per shard via Head.
+    high_water: BTreeMap<String, u64>,
+    seed: u64,
+}
+
+impl LinearizabilityChecker {
+    fn new(seed: u64) -> Self {
+        LinearizabilityChecker {
+            high_water: BTreeMap::new(),
+            seed,
+        }
+    }
+
+    /// Record a Head observation and assert monotonicity.
+    fn observe_head(&mut self, shard: &str, seqno: u64) {
+        let prev = self.high_water.entry(shard.to_string()).or_insert(0);
+        assert!(
+            seqno >= *prev,
+            "seed={}: linearizability violation on Head({}): \
+             saw seqno={} after previously observing seqno={}",
+            self.seed, shard, seqno, *prev,
+        );
+        *prev = seqno;
+    }
+
+    /// Reset after crash/recovery — observations from before the crash
+    /// are not comparable to post-recovery reads (the recovered state
+    /// is authoritative).
+    fn reset(&mut self) {
+        self.high_water.clear();
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Single-acceptor simulator
 // ---------------------------------------------------------------------------
@@ -210,6 +247,7 @@ struct Simulator {
     _acceptor_task: mz_ore::task::AbortOnDropHandle<()>,
     _learner_task: mz_ore::task::AbortOnDropHandle<()>,
     wal: Arc<SimWalWriter>,
+    linearizability: LinearizabilityChecker,
     seed: u64,
 }
 
@@ -231,6 +269,7 @@ impl Simulator {
             test_learner_config(),
             Arc::clone(&wal),
             batch_rx,
+            acceptor_handle.clone(),
             test_learner_metrics(),
         );
         let learner_task =
@@ -242,6 +281,7 @@ impl Simulator {
             _acceptor_task: acceptor_task,
             _learner_task: learner_task,
             wal,
+            linearizability: LinearizabilityChecker::new(seed),
             seed,
         }
     }
@@ -269,20 +309,20 @@ impl Simulator {
                     .unwrap();
             }
             SimOp::Head { shard } => {
-                // Read from learner (no linearization in sim).
                 let resp = self
                     .learner_handle
-                    .head(shard.clone(), None)
+                    .head(shard.clone())
                     .await
                     .unwrap();
                 if let Some(data) = &resp.data {
                     assert_value_in_wal(&self.wal, &shard, data.seqno, &data.data, self.seed);
+                    self.linearizability.observe_head(&shard, data.seqno);
                 }
             }
             SimOp::Scan { shard, from, limit } => {
                 let resp = self
                     .learner_handle
-                    .scan(shard.clone(), from, limit, None)
+                    .scan(shard.clone(), from, limit)
                     .await
                     .unwrap();
                 for entry in &resp.data {
@@ -348,6 +388,7 @@ impl Simulator {
             test_learner_config(),
             Arc::clone(&self.wal),
             batch_rx,
+            self.acceptor_handle.clone(),
             test_learner_metrics(),
         );
         self._learner_task =
@@ -361,12 +402,15 @@ impl Simulator {
             .await
             .unwrap();
 
-        // Verify recovered state against WAL.
-        let keys = self.learner_handle.list_keys(None).await.unwrap();
+        // Verify recovered state against WAL and seed the linearizability
+        // checker with the recovered high-water marks.
+        self.linearizability.reset();
+        let keys = self.learner_handle.list_keys().await.unwrap();
         for shard in &keys {
-            let resp = self.learner_handle.head(shard.clone(), None).await.unwrap();
+            let resp = self.learner_handle.head(shard.clone()).await.unwrap();
             if let Some(data) = &resp.data {
                 assert_value_in_wal(&self.wal, shard, data.seqno, &data.data, self.seed);
+                self.linearizability.observe_head(shard, data.seqno);
             }
         }
 
@@ -410,10 +454,12 @@ impl MultiAcceptorHarness {
         }
         drop(batch_tx);
 
+        // Use the first acceptor's handle for read linearization.
         let (learner, learner_handle) = Learner::new(
             test_learner_config(),
             Arc::clone(&wal),
             batch_rx,
+            acceptor_handles[0].clone(),
             test_learner_metrics(),
         );
         let learner_task =
@@ -552,9 +598,9 @@ async fn sim_multi_acceptor_fencing() {
         );
 
         // Verify WAL consistency: every learner-visible value exists in WAL.
-        let keys = h.learner_handle.list_keys(None).await.unwrap();
+        let keys = h.learner_handle.list_keys().await.unwrap();
         for shard in &keys {
-            let resp = h.learner_handle.head(shard.clone(), None).await.unwrap();
+            let resp = h.learner_handle.head(shard.clone()).await.unwrap();
             if let Some(data) = &resp.data {
                 assert_value_in_wal(&h.wal, shard, data.seqno, &data.data, seed);
             }

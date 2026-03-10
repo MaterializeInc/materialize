@@ -35,7 +35,6 @@ fn test_acceptor_config() -> AcceptorConfig {
     AcceptorConfig {
         // Very long flush interval — tests flush explicitly.
         flush_interval_ms: 86_400_000,
-        max_pending_age_ms: None,
         ..Default::default()
     }
 }
@@ -76,6 +75,7 @@ impl TestHarness {
             test_learner_config(),
             Arc::clone(&wal),
             batch_rx,
+            acceptor_handle.clone(),
             test_learner_metrics(),
         );
         let learner_task =
@@ -140,12 +140,12 @@ async fn test_head_read() {
     let h = TestHarness::new(wal);
 
     // Head on empty key → None.
-    let resp = h.learner_handle.head("s0".into(), None).await.unwrap();
+    let resp = h.learner_handle.head("s0".into()).await.unwrap();
     assert!(resp.data.is_none());
 
     // Write then read.
     assert!(h.cas("s0", None, 1, b"data").await);
-    let resp = h.learner_handle.head("s0".into(), None).await.unwrap();
+    let resp = h.learner_handle.head("s0".into()).await.unwrap();
     let data = resp.data.unwrap();
     assert_eq!(data.seqno, 1);
     assert_eq!(data.data, b"data");
@@ -162,7 +162,7 @@ async fn test_scan() {
 
     let resp = h
         .learner_handle
-        .scan("s0".into(), 0, 100, None)
+        .scan("s0".into(), 0, 100)
         .await
         .unwrap();
     assert_eq!(resp.data.len(), 3);
@@ -172,7 +172,7 @@ async fn test_scan() {
     // Scan with from=2, limit=1.
     let resp = h
         .learner_handle
-        .scan("s0".into(), 2, 1, None)
+        .scan("s0".into(), 2, 1)
         .await
         .unwrap();
     assert_eq!(resp.data.len(), 1);
@@ -209,7 +209,7 @@ async fn test_truncate() {
     // Scan should now start at seqno 2.
     let resp = h
         .learner_handle
-        .scan("s0".into(), 0, 100, None)
+        .scan("s0".into(), 0, 100)
         .await
         .unwrap();
     assert_eq!(resp.data.len(), 2);
@@ -369,7 +369,7 @@ async fn test_intra_batch_cas_chaining() {
     assert!(c0.committed);
     assert!(c1.committed);
 
-    let head = h.learner_handle.head("s0".into(), None).await.unwrap();
+    let head = h.learner_handle.head("s0".into()).await.unwrap();
     assert_eq!(head.data.unwrap().seqno, 2);
 }
 
@@ -382,7 +382,7 @@ async fn test_list_keys() {
     assert!(h.cas("s1", None, 1, b"b").await);
     assert!(h.cas("s2", None, 1, b"c").await);
 
-    let mut keys = h.learner_handle.list_keys(None).await.unwrap();
+    let mut keys = h.learner_handle.list_keys().await.unwrap();
     keys.sort();
     assert_eq!(keys, vec!["s0", "s1", "s2"]);
 }
@@ -415,6 +415,7 @@ async fn test_recovery_from_wal() {
         test_learner_config(),
         Arc::clone(&wal),
         batch_rx,
+        acceptor_handle.clone(),
         test_learner_metrics(),
     );
     let _learner_task =
@@ -425,10 +426,10 @@ async fn test_recovery_from_wal() {
     acceptor_handle.set_batch_number(next_batch).await.unwrap();
 
     // Verify recovered state.
-    let head = learner_handle.head("s0".into(), None).await.unwrap();
+    let head = learner_handle.head("s0".into()).await.unwrap();
     assert_eq!(head.data.unwrap().seqno, 2);
 
-    let head = learner_handle.head("s1".into(), None).await.unwrap();
+    let head = learner_handle.head("s1".into()).await.unwrap();
     assert_eq!(head.data.unwrap().seqno, 1);
 
     // New writes should work.

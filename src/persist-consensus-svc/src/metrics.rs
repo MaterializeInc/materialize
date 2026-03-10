@@ -19,10 +19,15 @@ pub struct AcceptorMetrics {
     // --- Flush metrics ---
     pub flush_count: IntCounter,
     pub flush_timer_triggered: IntCounter,
-    pub flush_age_triggered: IntCounter,
+    pub flush_timer_ticked: IntCounter,
     pub flush_explicit_triggered: IntCounter,
     pub flush_latency_seconds: Histogram,
     pub flush_proposals_per_batch: Histogram,
+
+    // --- Per-proposal latency ---
+    /// Time from when a proposal arrives at the acceptor to when the flush
+    /// containing it begins. Measures queuing delay in the pending buffer.
+    pub proposal_queue_seconds: Histogram,
 
     // --- Object store WAL write metrics ---
     pub object_store_wal_writes: IntCounter,
@@ -44,9 +49,9 @@ impl AcceptorMetrics {
                 name: "mz_consensus_svc_acceptor_flush_timer_triggered_total",
                 help: "Flushes triggered by the periodic flush interval timer.",
             )),
-            flush_age_triggered: registry.register(metric!(
-                name: "mz_consensus_svc_acceptor_flush_age_triggered_total",
-                help: "Flushes triggered by max pending age deadline.",
+            flush_timer_ticked: registry.register(metric!(
+                name: "mz_consensus_svc_acceptor_flush_timer_ticked_total",
+                help: "Total timer ticks (including empty ones with no pending proposals).",
             )),
             flush_explicit_triggered: registry.register(metric!(
                 name: "mz_consensus_svc_acceptor_flush_explicit_triggered_total",
@@ -61,6 +66,14 @@ impl AcceptorMetrics {
                 name: "mz_consensus_svc_acceptor_flush_proposals_per_batch",
                 help: "Histogram of proposals per flush batch.",
                 buckets: vec![1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0],
+            )),
+            proposal_queue_seconds: registry.register(metric!(
+                name: "mz_consensus_svc_acceptor_proposal_queue_seconds",
+                help: "Time from proposal arrival to flush start (queuing delay).",
+                buckets: vec![
+                    0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.003, 0.004, 0.005,
+                    0.006, 0.008, 0.01, 0.015, 0.02, 0.03, 0.05, 0.1, 0.25, 0.5, 1.0,
+                ],
             )),
             object_store_wal_writes: registry.register(metric!(
                 name: "mz_consensus_svc_object_store_wal_writes_total",
@@ -110,6 +123,18 @@ pub struct LearnerMetrics {
     pub object_store_snapshot_write_bytes: IntCounter,
     pub object_store_snapshot_write_latency_seconds: Histogram,
 
+    // --- Server-side operation latencies ---
+    /// Time from command send to actor processing (mpsc channel + select delay).
+    pub cmd_queue_seconds: Histogram,
+    /// Total server-side head latency (including linearization wait).
+    pub head_seconds: Histogram,
+    /// Total server-side scan latency (including linearization wait).
+    pub scan_seconds: Histogram,
+    /// Time from AwaitCasResult command to response (includes materialization wait).
+    pub cas_result_seconds: Histogram,
+    /// Time from AwaitTruncateResult command to response (includes materialization wait).
+    pub truncate_result_seconds: Histogram,
+
     // --- In-memory state gauges ---
     pub active_shards: IntGauge,
     pub total_entries: IntGauge,
@@ -153,6 +178,46 @@ impl LearnerMetrics {
                 help: "Histogram of per-batch materialization latency in seconds.",
                 buckets: vec![
                     0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0,
+                ],
+            )),
+            cmd_queue_seconds: registry.register(metric!(
+                name: "mz_consensus_svc_learner_cmd_queue_seconds",
+                help: "Time from command send to learner actor processing.",
+                buckets: vec![
+                    0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01,
+                    0.02, 0.05, 0.1, 0.25, 0.5, 1.0,
+                ],
+            )),
+            head_seconds: registry.register(metric!(
+                name: "mz_consensus_svc_learner_head_seconds",
+                help: "Server-side head latency including linearization wait.",
+                buckets: vec![
+                    0.0001, 0.0005, 0.001, 0.002, 0.005, 0.008, 0.01, 0.015,
+                    0.02, 0.03, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1.0,
+                ],
+            )),
+            scan_seconds: registry.register(metric!(
+                name: "mz_consensus_svc_learner_scan_seconds",
+                help: "Server-side scan latency including linearization wait.",
+                buckets: vec![
+                    0.0001, 0.0005, 0.001, 0.002, 0.005, 0.008, 0.01, 0.015,
+                    0.02, 0.03, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1.0,
+                ],
+            )),
+            cas_result_seconds: registry.register(metric!(
+                name: "mz_consensus_svc_learner_cas_result_seconds",
+                help: "Server-side CAS result latency including materialization wait.",
+                buckets: vec![
+                    0.0001, 0.0005, 0.001, 0.002, 0.005, 0.008, 0.01, 0.015,
+                    0.02, 0.03, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1.0,
+                ],
+            )),
+            truncate_result_seconds: registry.register(metric!(
+                name: "mz_consensus_svc_learner_truncate_result_seconds",
+                help: "Server-side truncate result latency including materialization wait.",
+                buckets: vec![
+                    0.0001, 0.0005, 0.001, 0.002, 0.005, 0.008, 0.01, 0.015,
+                    0.02, 0.03, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1.0,
                 ],
             )),
             object_store_snapshot_writes: registry.register(metric!(

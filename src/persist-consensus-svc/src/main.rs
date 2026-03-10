@@ -130,15 +130,18 @@ async fn run(args: Args) {
         rx.await.expect("acceptor thread failed to send handle")
     };
 
-    // Spawn learner on the current runtime.
+    // Spawn learner on a dedicated OS thread with its own single-threaded
+    // tokio runtime, matching the acceptor's isolation pattern. Prevents
+    // gRPC handler tasks from competing with learner materialization.
     let learner_config = LearnerConfig {
         snapshot_interval: args.snapshot_interval,
         ..Default::default()
     };
-    let (learner_handle, _learner_task) = Learner::spawn(
+    let (learner_handle, _learner_thread) = Learner::spawn_threaded(
         learner_config,
         Arc::clone(&wal_writer),
         batch_rx,
+        acceptor_handle.clone(),
         learner_metrics,
     );
 
@@ -176,7 +179,6 @@ async fn run(args: Args) {
         handle: acceptor_handle.clone(),
     };
     let learner_service = LearnerGrpcService {
-        acceptor_handle,
         learner_handle,
     };
 

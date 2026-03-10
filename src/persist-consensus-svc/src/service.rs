@@ -75,7 +75,7 @@ impl ConsensusAcceptor for AcceptorGrpcService {
         &self,
         _request: tonic::Request<ProtoLatestCommittedBatchRequest>,
     ) -> Result<tonic::Response<ProtoLatestCommittedBatchResponse>, tonic::Status> {
-        let batch = self.handle.latest_committed_batch().await?;
+        let batch = self.handle.latest_committed_batch();
         Ok(tonic::Response::new(ProtoLatestCommittedBatchResponse {
             batch_number: batch,
         }))
@@ -88,12 +88,10 @@ impl ConsensusAcceptor for AcceptorGrpcService {
 
 /// gRPC service for the learner (reads + result queries).
 ///
-/// Read operations are linearized: the service queries the acceptor's latest
-/// committed batch and tells the learner to serve only after materializing
-/// through that batch.
+/// Read linearization is handled by the [`LearnerHandle`] — it queries the
+/// acceptor's latest committed batch internally before each read.
 #[derive(Debug)]
 pub struct LearnerGrpcService {
-    pub acceptor_handle: AcceptorHandle,
     pub learner_handle: LearnerHandle,
 }
 
@@ -139,14 +137,7 @@ impl ConsensusLearner for LearnerGrpcService {
     ) -> Result<tonic::Response<ProtoHeadResponse>, tonic::Status> {
         let req = request.into_inner();
         debug!(key = %req.key, "head");
-        // Linearize reads: ensure the learner has materialized through the
-        // acceptor's latest committed batch before serving.
-        let target = self
-            .acceptor_handle
-            .latest_committed_batch()
-            .await
-            .map_err(|e| tonic::Status::unavailable(e.to_string()))?;
-        let resp = self.learner_handle.head(req.key, target).await?;
+        let resp = self.learner_handle.head(req.key).await?;
         Ok(tonic::Response::new(resp))
     }
 
@@ -156,14 +147,9 @@ impl ConsensusLearner for LearnerGrpcService {
     ) -> Result<tonic::Response<ProtoScanResponse>, tonic::Status> {
         let req = request.into_inner();
         debug!(key = %req.key, from = req.from, limit = req.limit, "scan");
-        let target = self
-            .acceptor_handle
-            .latest_committed_batch()
-            .await
-            .map_err(|e| tonic::Status::unavailable(e.to_string()))?;
         let resp = self
             .learner_handle
-            .scan(req.key, req.from, req.limit, target)
+            .scan(req.key, req.from, req.limit)
             .await?;
         Ok(tonic::Response::new(resp))
     }
@@ -176,12 +162,7 @@ impl ConsensusLearner for LearnerGrpcService {
         _request: tonic::Request<ProtoListKeysRequest>,
     ) -> Result<tonic::Response<Self::ListKeysStream>, tonic::Status> {
         debug!("list_keys");
-        let target = self
-            .acceptor_handle
-            .latest_committed_batch()
-            .await
-            .map_err(|e| tonic::Status::unavailable(e.to_string()))?;
-        let keys = self.learner_handle.list_keys(target).await?;
+        let keys = self.learner_handle.list_keys().await?;
         let (stream_tx, stream_rx) = tokio::sync::mpsc::channel(64);
         mz_ore::task::spawn(|| "list-keys-stream", async move {
             for key in keys {

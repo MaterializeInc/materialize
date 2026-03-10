@@ -16,6 +16,9 @@
 //! Stateless with respect to shard data. The only state is the batch counter
 //! and the pending proposal buffer.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Interval;
 use tracing::{debug, error, info, warn};
@@ -37,11 +40,6 @@ pub struct AcceptorConfig {
     pub queue_depth: usize,
     /// How often to flush pending proposals to the WAL, in milliseconds.
     pub flush_interval_ms: u64,
-    /// Maximum time any single proposal may sit in the pending buffer before a
-    /// flush is forced, in milliseconds. Bounds worst-case latency to
-    /// `max_pending_age_ms + object_store_write_latency`.
-    /// When `None`, only the fixed `flush_interval_ms` timer drives flushes.
-    pub max_pending_age_ms: Option<u64>,
 }
 
 impl Default for AcceptorConfig {
@@ -49,7 +47,6 @@ impl Default for AcceptorConfig {
         AcceptorConfig {
             queue_depth: 4096,
             flush_interval_ms: 5,
-            max_pending_age_ms: Some(10),
         }
     }
 }
@@ -75,6 +72,41 @@ impl std::fmt::Display for AcceptorError {
     }
 }
 
+/// Sentinel value for [`LastCommitted`] indicating no batch has been committed.
+const NO_BATCH_COMMITTED: u64 = u64::MAX;
+
+/// Shared atomic for the latest committed batch number. Readable by the
+/// learner without going through the acceptor's command channel, so
+/// linearization queries don't block behind WAL writes.
+#[derive(Debug, Clone)]
+pub struct LastCommitted(Arc<AtomicU64>);
+
+impl LastCommitted {
+    fn new() -> Self {
+        LastCommitted(Arc::new(AtomicU64::new(NO_BATCH_COMMITTED)))
+    }
+
+    /// Read the latest committed batch number, or `None` if no batch has
+    /// been committed yet.
+    pub fn get(&self) -> Option<u64> {
+        match self.0.load(Ordering::Acquire) {
+            NO_BATCH_COMMITTED => None,
+            n => Some(n),
+        }
+    }
+
+    fn set(&self, batch_number: u64) {
+        self.0.store(batch_number, Ordering::Release);
+    }
+
+    fn set_from_recovery(&self, batch_number: u64) {
+        // After recovery, everything before batch_number was committed.
+        if let Some(prev) = batch_number.checked_sub(1) {
+            self.set(prev);
+        }
+    }
+}
+
 /// Commands dispatched to the acceptor.
 pub enum AcceptorCommand {
     /// Append a proposal to the next batch. Reply is sent after flush with a
@@ -82,11 +114,6 @@ pub enum AcceptorCommand {
     Append {
         proposal: ProtoWalProposal,
         reply: oneshot::Sender<Result<ProtoAppendResponse, String>>,
-    },
-    /// Returns the latest committed batch number, or `None` if no batch has
-    /// been committed. Used by learners to linearize reads.
-    LatestCommittedBatch {
-        reply: oneshot::Sender<Option<u64>>,
     },
     /// Set the starting batch number (called after learner recovery).
     SetBatchNumber {
@@ -104,11 +131,12 @@ pub enum AcceptorCommand {
 #[derive(Debug, Clone)]
 pub struct AcceptorHandle {
     tx: mpsc::Sender<AcceptorCommand>,
+    last_committed: LastCommitted,
 }
 
 impl AcceptorHandle {
-    pub fn new(tx: mpsc::Sender<AcceptorCommand>) -> Self {
-        AcceptorHandle { tx }
+    pub fn new(tx: mpsc::Sender<AcceptorCommand>, last_committed: LastCommitted) -> Self {
+        AcceptorHandle { tx, last_committed }
     }
 
     /// Access the raw command sender.
@@ -134,13 +162,10 @@ impl AcceptorHandle {
             .map_err(AcceptorError::Command)
     }
 
-    pub async fn latest_committed_batch(&self) -> Result<Option<u64>, AcceptorError> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.tx
-            .send(AcceptorCommand::LatestCommittedBatch { reply: reply_tx })
-            .await
-            .map_err(|_| AcceptorError::Shutdown)?;
-        reply_rx.await.map_err(|_| AcceptorError::DroppedReply)
+    /// Read the latest committed batch number. This is a lock-free atomic
+    /// read — it never blocks behind WAL writes or flushes.
+    pub fn latest_committed_batch(&self) -> Option<u64> {
+        self.last_committed.get()
     }
 
     pub async fn set_batch_number(&self, batch_number: u64) -> Result<(), AcceptorError> {
@@ -169,6 +194,7 @@ impl AcceptorHandle {
 struct PendingAppend {
     proposal: ProtoWalProposal,
     reply: oneshot::Sender<Result<ProtoAppendResponse, String>>,
+    received_at: std::time::Instant,
 }
 
 /// The acceptor actor: blind group commit.
@@ -180,16 +206,14 @@ pub struct Acceptor<W: WalWriter> {
     batch_number: u64,
     pending: Vec<PendingAppend>,
     flush_interval: Interval,
-    max_pending_age: Option<std::time::Duration>,
-    oldest_pending_time: Option<tokio::time::Instant>,
     metrics: AcceptorMetrics,
     rx: mpsc::Receiver<AcceptorCommand>,
     /// Optional push channel to learner(s). Carries batch data only — no
     /// client context. The learner can also read batches from the WAL.
     learner_push_tx: Option<mpsc::Sender<ProtoWalBatch>>,
-    /// The last committed batch number, or `None` before any batch is committed.
-    /// Returned by LatestCommittedBatch for learner read linearization.
-    last_committed: Option<u64>,
+    /// Shared atomic for the latest committed batch number. Updated after
+    /// each successful flush; readable by learners via [`AcceptorHandle`].
+    last_committed: LastCommitted,
 }
 
 impl<W: WalWriter> Acceptor<W> {
@@ -204,25 +228,20 @@ impl<W: WalWriter> Acceptor<W> {
             tokio::time::interval(std::time::Duration::from_millis(config.flush_interval_ms));
         flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-        let max_pending_age = config
-            .max_pending_age_ms
-            .map(std::time::Duration::from_millis);
-
         let (tx, rx) = mpsc::channel(config.queue_depth);
+        let last_committed = LastCommitted::new();
 
         let acceptor = Acceptor {
             wal_writer,
             batch_number: 0,
             pending: Vec::new(),
             flush_interval,
-            max_pending_age,
-            oldest_pending_time: None,
             metrics,
             rx,
             learner_push_tx,
-            last_committed: None,
+            last_committed: last_committed.clone(),
         };
-        let handle = AcceptorHandle::new(tx);
+        let handle = AcceptorHandle::new(tx, last_committed);
         (acceptor, handle)
     }
 
@@ -230,40 +249,26 @@ impl<W: WalWriter> Acceptor<W> {
         !self.pending.is_empty()
     }
 
-    fn pending_age_deadline(&self) -> tokio::time::Sleep {
-        match (self.max_pending_age, self.oldest_pending_time) {
-            (Some(age), Some(t)) => tokio::time::sleep_until(t + age),
-            _ => tokio::time::sleep(std::time::Duration::MAX),
-        }
-    }
-
-    fn mark_pending_nonempty(&mut self) {
-        if self.oldest_pending_time.is_none() {
-            self.oldest_pending_time = Some(tokio::time::Instant::now());
-        }
-    }
-
     /// Runs the acceptor loop until the channel is closed or the acceptor is
     /// fenced by a competing writer.
     pub async fn run(mut self) {
         self.flush_interval.tick().await; // consume immediate first tick
         loop {
-            let age_deadline = self.pending_age_deadline();
             tokio::select! {
                 biased;
                 cmd = self.rx.recv() => match cmd {
                     Some(AcceptorCommand::Append { proposal, reply }) => {
-                        self.pending.push(PendingAppend { proposal, reply });
-                        self.mark_pending_nonempty();
-                    }
-                    Some(AcceptorCommand::LatestCommittedBatch { reply }) => {
-                        let _ = reply.send(self.last_committed);
+                        self.pending.push(PendingAppend {
+                            proposal,
+                            reply,
+                            received_at: std::time::Instant::now(),
+                        });
                     }
                     Some(AcceptorCommand::SetBatchNumber { batch_number, reply }) => {
                         self.batch_number = batch_number;
                         // Everything before batch_number was committed by a
                         // prior incarnation (recovered from WAL).
-                        self.last_committed = batch_number.checked_sub(1);
+                        self.last_committed.set_from_recovery(batch_number);
                         info!(batch_number, "acceptor batch number set");
                         let _ = reply.send(());
                     }
@@ -284,16 +289,9 @@ impl<W: WalWriter> Acceptor<W> {
                     }
                 },
                 _ = self.flush_interval.tick() => {
+                    self.metrics.flush_timer_ticked.inc();
                     if self.has_pending() {
                         self.metrics.flush_timer_triggered.inc();
-                        if !self.flush().await {
-                            return; // fenced
-                        }
-                    }
-                }
-                _ = age_deadline => {
-                    if self.has_pending() {
-                        self.metrics.flush_age_triggered.inc();
                         if !self.flush().await {
                             return; // fenced
                         }
@@ -312,7 +310,6 @@ impl<W: WalWriter> Acceptor<W> {
     async fn flush(&mut self) -> bool {
         let flush_start = std::time::Instant::now();
         let pending = std::mem::take(&mut self.pending);
-        self.oldest_pending_time = None;
 
         if pending.is_empty() {
             return true;
@@ -325,9 +322,18 @@ impl<W: WalWriter> Acceptor<W> {
             "flush"
         );
 
-        // Serialize proposals into a WAL batch.
-        let proposals: Vec<ProtoWalProposal> =
-            pending.iter().map(|p| p.proposal.clone()).collect();
+        // Record per-proposal queue time (time waiting in the pending buffer).
+        for p in &pending {
+            self.metrics
+                .proposal_queue_seconds
+                .observe((flush_start - p.received_at).as_secs_f64());
+        }
+
+        // Split proposals from reply senders — avoids cloning proposal data.
+        let (proposals, replies): (Vec<_>, Vec<_>) = pending
+            .into_iter()
+            .map(|p| (p.proposal, p.reply))
+            .unzip();
         let batch = ProtoWalBatch {
             batch_number: self.batch_number,
             proposals,
@@ -373,8 +379,8 @@ impl<W: WalWriter> Acceptor<W> {
                             "acceptor fenced: batch {} was written by another acceptor",
                             self.batch_number,
                         );
-                        for pending_append in pending {
-                            let _ = pending_append.reply.send(Err(msg.clone()));
+                        for reply in replies {
+                            let _ = reply.send(Err(msg.clone()));
                         }
                         return false;
                     }
@@ -419,14 +425,14 @@ impl<W: WalWriter> Acceptor<W> {
         }
 
         // Resolve all pending replies with receipts.
-        for (position, pending_append) in pending.into_iter().enumerate() {
-            let _ = pending_append.reply.send(Ok(ProtoAppendResponse {
+        for (position, reply) in replies.into_iter().enumerate() {
+            let _ = reply.send(Ok(ProtoAppendResponse {
                 batch_number: self.batch_number,
                 position: u32::try_from(position).expect("batch position fits u32"),
             }));
         }
 
-        self.last_committed = Some(self.batch_number);
+        self.last_committed.set(self.batch_number);
         self.batch_number += 1;
         true
     }

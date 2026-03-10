@@ -164,8 +164,6 @@ struct Cli {
     #[arg(long)]
     flush_interval_ms: Option<u64>,
     #[arg(long)]
-    max_pending_age_ms: Option<u64>,
-    #[arg(long)]
     queue_depth: Option<usize>,
     #[arg(long)]
     snapshot_interval: Option<u64>,
@@ -193,8 +191,9 @@ struct Cli {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 struct WorkloadConfig {
+    /// Derived from the YAML filename, not deserialized.
+    #[serde(skip)]
     name: String,
-    description: String,
     num_shards: u64,
     writers_per_shard: u64,
     value_size: usize,
@@ -207,9 +206,9 @@ struct WorkloadConfig {
     truncate_to: u64,
     write_rate_per_second: f64,
     flush_interval_ms: u64,
-    max_pending_age_ms: Option<u64>,
     queue_depth: usize,
     snapshot_interval: u64,
+    grpc_connections: u64,
     wal_latency: WalLatency,
     transport: TransportMode,
     duration: u64,
@@ -223,7 +222,6 @@ impl Default for WorkloadConfig {
     fn default() -> Self {
         WorkloadConfig {
             name: "default".to_string(),
-            description: "Default workload".to_string(),
             num_shards: 1000,
             writers_per_shard: 2,
             value_size: 64,
@@ -236,9 +234,9 @@ impl Default for WorkloadConfig {
             truncate_to: 500,
             write_rate_per_second: 1.0,
             flush_interval_ms: 5,
-            max_pending_age_ms: Some(10),
             queue_depth: 4096,
             snapshot_interval: u64::MAX,
+            grpc_connections: 1,
             wal_latency: WalLatency::Zero,
             transport: TransportMode::Direct,
             duration: 60,
@@ -263,8 +261,14 @@ impl WorkloadConfig {
             Some(path) => {
                 let contents = std::fs::read_to_string(path)
                     .unwrap_or_else(|e| panic!("failed to read workload file {}: {}", path, e));
-                serde_yaml::from_str(&contents)
-                    .unwrap_or_else(|e| panic!("failed to parse workload file {}: {}", path, e))
+                let mut cfg: WorkloadConfig = serde_yaml::from_str(&contents)
+                    .unwrap_or_else(|e| panic!("failed to parse workload file {}: {}", path, e));
+                cfg.name = std::path::Path::new(path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                cfg
             }
             None => WorkloadConfig::default(),
         };
@@ -292,11 +296,6 @@ impl WorkloadConfig {
             duration,
             warmup,
         );
-        // max_pending_age_ms is Option<u64> in both CLI and config,
-        // so only override if CLI explicitly provided it.
-        if cli.max_pending_age_ms.is_some() {
-            cfg.max_pending_age_ms = cli.max_pending_age_ms;
-        }
         cfg.json = cli.json;
 
         cfg
@@ -419,7 +418,7 @@ impl Transport {
     async fn head(&mut self, key: &str) -> Option<(u64, usize)> {
         match self {
             Transport::Direct { learner, .. } => {
-                let resp = learner.head(key.to_string(), None).await.ok()?;
+                let resp = learner.head(key.to_string()).await.ok()?;
                 resp.data.map(|d| (d.seqno, d.data.len()))
             }
             Transport::Grpc { learner, .. } => {
@@ -437,7 +436,7 @@ impl Transport {
     async fn scan(&mut self, key: &str, from: u64, limit: u64) -> bool {
         match self {
             Transport::Direct { learner, .. } => learner
-                .scan(key.to_string(), from, limit, None)
+                .scan(key.to_string(), from, limit)
                 .await
                 .is_ok(),
             Transport::Grpc { learner, .. } => learner
@@ -526,6 +525,48 @@ struct PercentileStats {
     max: Duration,
 }
 
+/// Extract approximate percentile stats from a prometheus Histogram.
+///
+/// Uses bucket boundaries as approximations — values are upper bounds of the
+/// bucket the percentile falls into.
+fn histogram_stats(h: &prometheus::Histogram) -> PercentileStats {
+    use prometheus::core::Metric as _;
+    let m = h.metric();
+    let hist = m.get_histogram();
+    let total = hist.get_sample_count();
+    if total == 0 {
+        return PercentileStats::default();
+    }
+    let buckets = hist.get_bucket();
+    let percentile = |pct: f64| -> Duration {
+        let target = ((pct / 100.0) * total as f64).ceil() as u64;
+        for b in buckets {
+            if b.cumulative_count() >= target {
+                let bound = b.upper_bound();
+                if bound.is_finite() {
+                    return Duration::from_secs_f64(bound);
+                }
+                break;
+            }
+        }
+        // Fallback: last finite bucket or mean.
+        for b in buckets.iter().rev() {
+            if b.upper_bound().is_finite() {
+                return Duration::from_secs_f64(b.upper_bound());
+            }
+        }
+        Duration::from_secs_f64(hist.get_sample_sum() / total as f64)
+    };
+    PercentileStats {
+        count: total,
+        p50: percentile(50.0),
+        p90: percentile(90.0),
+        p95: percentile(95.0),
+        p99: percentile(99.0),
+        max: percentile(100.0),
+    }
+}
+
 fn compute_percentiles(samples: &mut Vec<Duration>) -> PercentileStats {
     if samples.is_empty() {
         return PercentileStats::default();
@@ -579,6 +620,11 @@ async fn client_task(
     let mut rng = StdRng::seed_from_u64(cfg.seed);
     let data_template: Vec<u8> = (0..cfg.value_size).map(|_| rng.r#gen()).collect();
     let sleep_dur = Duration::from_secs_f64(1.0 / cfg.op_rate);
+
+    // Jitter start time to avoid phase-locking all clients.
+    // Each client delays by a random fraction of the sleep interval.
+    let jitter = Duration::from_secs_f64(rng.r#gen::<f64>() * sleep_dur.as_secs_f64());
+    tokio::time::sleep(jitter).await;
 
     // CAS state for this shard.
     let mut expected_seqno: Option<u64> = None;
@@ -913,6 +959,72 @@ fn print_report(
         "Estimated", client_dist.target_ops_per_sec,
     );
 
+    // --- Server-Side Latencies ---
+    // --- Server-Side Latencies (Acceptor) ---
+    let acceptor_histograms: Vec<(&str, PercentileStats)> = vec![
+        ("Queue delay", histogram_stats(&acceptor_metrics.proposal_queue_seconds)),
+        ("WAL write", histogram_stats(&acceptor_metrics.object_store_wal_write_latency_seconds)),
+        ("Flush (total)", histogram_stats(&acceptor_metrics.flush_latency_seconds)),
+    ];
+    let has_acceptor_data = acceptor_histograms.iter().any(|(_, s)| s.count > 0);
+    if has_acceptor_data {
+        println!();
+        println!("--- Acceptor Latencies (ms, includes warmup) ---");
+        println!(
+            "  {:<18} {:>10} {:>8} {:>8} {:>8} {:>8} {:>8}",
+            "Metric", "count", "p50", "p90", "p95", "p99", "max"
+        );
+        for (name, stats) in &acceptor_histograms {
+            if stats.count == 0 {
+                continue;
+            }
+            println!(
+                "  {:<18} {:>10} {:>8.2} {:>8.2} {:>8.2} {:>8.2} {:>8.2}",
+                name,
+                format_count(stats.count),
+                ms(stats.p50),
+                ms(stats.p90),
+                ms(stats.p95),
+                ms(stats.p99),
+                ms(stats.max),
+            );
+        }
+    }
+
+    // --- Server-Side Latencies (Learner) ---
+    let learner_histograms: Vec<(&str, PercentileStats)> = vec![
+        ("Cmd queue delay", histogram_stats(&learner_metrics.cmd_queue_seconds)),
+        ("Batch apply", histogram_stats(&learner_metrics.batch_materialize_latency_seconds)),
+        ("Head", histogram_stats(&learner_metrics.head_seconds)),
+        ("Scan", histogram_stats(&learner_metrics.scan_seconds)),
+        ("CAS result", histogram_stats(&learner_metrics.cas_result_seconds)),
+        ("Truncate result", histogram_stats(&learner_metrics.truncate_result_seconds)),
+    ];
+    let has_learner_data = learner_histograms.iter().any(|(_, s)| s.count > 0);
+    if has_learner_data {
+        println!();
+        println!("--- Learner Latencies (ms, includes warmup) ---");
+        println!(
+            "  {:<18} {:>10} {:>8} {:>8} {:>8} {:>8} {:>8}",
+            "Metric", "count", "p50", "p90", "p95", "p99", "max"
+        );
+        for (name, stats) in &learner_histograms {
+            if stats.count == 0 {
+                continue;
+            }
+            println!(
+                "  {:<18} {:>10} {:>8.2} {:>8.2} {:>8.2} {:>8.2} {:>8.2}",
+                name,
+                format_count(stats.count),
+                ms(stats.p50),
+                ms(stats.p90),
+                ms(stats.p95),
+                ms(stats.p99),
+                ms(stats.max),
+            );
+        }
+    }
+
     // --- Service State ---
     println!();
     println!("--- Service State (includes warmup) ---");
@@ -1016,6 +1128,22 @@ fn print_json(
         .collect::<serde_json::Map<_, _>>()
         .into();
 
+    // Server-side histogram stats.
+    let server_hist = |h: &prometheus::Histogram| -> serde_json::Value {
+        let s = histogram_stats(h);
+        if s.count == 0 {
+            return serde_json::Value::Null;
+        }
+        serde_json::json!({
+            "count": s.count,
+            "p50_ms": round2(ms(s.p50)),
+            "p90_ms": round2(ms(s.p90)),
+            "p95_ms": round2(ms(s.p95)),
+            "p99_ms": round2(ms(s.p99)),
+            "max_ms": round2(ms(s.max)),
+        })
+    };
+
     let result = serde_json::json!({
         "scenario": cfg.name,
         "config": {
@@ -1029,6 +1157,19 @@ fn print_json(
             "transport": cfg.transport.to_string(),
         },
         "latencies": latencies,
+        "acceptor_latencies": {
+            "queue_delay": server_hist(&acceptor_metrics.proposal_queue_seconds),
+            "wal_write": server_hist(&acceptor_metrics.object_store_wal_write_latency_seconds),
+            "flush_total": server_hist(&acceptor_metrics.flush_latency_seconds),
+        },
+        "learner_latencies": {
+            "cmd_queue_delay": server_hist(&learner_metrics.cmd_queue_seconds),
+            "batch_apply": server_hist(&learner_metrics.batch_materialize_latency_seconds),
+            "head": server_hist(&learner_metrics.head_seconds),
+            "scan": server_hist(&learner_metrics.scan_seconds),
+            "cas_result": server_hist(&learner_metrics.cas_result_seconds),
+            "truncate_result": server_hist(&learner_metrics.truncate_result_seconds),
+        },
         "clients": {
             "num_clients": client_dist.num_clients,
             "target_ops_per_sec": round2(client_dist.target_ops_per_sec),
@@ -1105,22 +1246,42 @@ async fn main() {
     let acceptor_config = AcceptorConfig {
         queue_depth,
         flush_interval_ms: cfg.flush_interval_ms,
-        max_pending_age_ms: cfg.max_pending_age_ms,
     };
-    let (acceptor_handle, _acceptor_task) = Acceptor::spawn(
-        acceptor_config,
-        Arc::clone(&wal),
-        Some(batch_tx),
-        acceptor_metrics,
-    );
+    // Spawn acceptor on a dedicated OS thread with its own single-threaded
+    // tokio runtime, matching the production layout in main.rs. Isolates
+    // flush timer precision from learner CPU work.
+    let acceptor_wal = Arc::clone(&wal);
+    let acceptor_handle = {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let _thread = std::thread::Builder::new()
+            .name("acceptor".to_string())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build acceptor runtime");
+                rt.block_on(async {
+                    let (handle, _task) = Acceptor::spawn(
+                        acceptor_config,
+                        acceptor_wal,
+                        Some(batch_tx),
+                        acceptor_metrics,
+                    );
+                    let _ = tx.send(handle.clone());
+                    _task.await;
+                });
+            })
+            .expect("failed to spawn acceptor thread");
+        rx.await.expect("acceptor thread failed to send handle")
+    };
 
     let learner_config = LearnerConfig {
         queue_depth,
         snapshot_interval: cfg.snapshot_interval,
         ..Default::default()
     };
-    let (learner_handle, learner_task) =
-        Learner::spawn(learner_config, wal, batch_rx, learner_metrics);
+    let (learner_handle, learner_thread) =
+        Learner::spawn_threaded(learner_config, wal, batch_rx, acceptor_handle.clone(), learner_metrics);
 
     // --- Create transport ---
     let grpc_server_handle = if cfg.transport == TransportMode::Grpc {
@@ -1128,7 +1289,6 @@ async fn main() {
             handle: acceptor_handle.clone(),
         };
         let learner_svc = LearnerGrpcService {
-            acceptor_handle: acceptor_handle.clone(),
             learner_handle: learner_handle.clone(),
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -1150,23 +1310,25 @@ async fn main() {
         None
     };
 
-    let transport = if let Some((addr, _)) = &grpc_server_handle {
+    let transports: Vec<Transport> = if let Some((addr, _)) = &grpc_server_handle {
         let addr_str = format!("http://{}", addr);
-        let acceptor_client = ConsensusAcceptorClient::connect(addr_str.clone())
-            .await
-            .expect("failed to connect acceptor gRPC client");
-        let learner_client = ConsensusLearnerClient::connect(addr_str)
-            .await
-            .expect("failed to connect learner gRPC client");
-        Transport::Grpc {
-            acceptor: acceptor_client,
-            learner: learner_client,
+        let n_conns = usize::try_from(cfg.grpc_connections.max(1)).unwrap();
+        let mut pool = Vec::with_capacity(n_conns);
+        for _ in 0..n_conns {
+            let acceptor = ConsensusAcceptorClient::connect(addr_str.clone())
+                .await
+                .expect("failed to connect acceptor gRPC client");
+            let learner = ConsensusLearnerClient::connect(addr_str.clone())
+                .await
+                .expect("failed to connect learner gRPC client");
+            pool.push(Transport::Grpc { acceptor, learner });
         }
+        pool
     } else {
-        Transport::Direct {
+        vec![Transport::Direct {
             acceptor: acceptor_handle.clone(),
             learner: learner_handle.clone(),
-        }
+        }]
     };
 
     // --- Timing ---
@@ -1191,7 +1353,8 @@ async fn main() {
         .flat_map(|s| (0..cfg.writers_per_shard).map(move |w| (s, w)))
         .enumerate()
     {
-        let t = transport.clone();
+        // Round-robin clients across the transport pool (gRPC connection pool).
+        let t = transports[seed % transports.len()].clone();
         let stop = Arc::clone(&stop);
         let client_cfg = ClientConfig {
             shard_key: format!("shard-{:06}", shard_idx),
@@ -1209,11 +1372,11 @@ async fn main() {
         }));
     }
 
-    // Drop our handle clones and transport so the service shuts down when
+    // Drop our handle clones and transports so the service shuts down when
     // client tasks finish (they hold the remaining clones).
     drop(acceptor_handle);
     drop(learner_handle);
-    drop(transport);
+    drop(transports);
 
     // --- Wait for duration ---
     tokio::time::sleep(total_dur).await;
@@ -1247,7 +1410,7 @@ async fn main() {
         drop(handle);
     }
 
-    let _ = learner_task.await;
+    let _ = learner_thread.join();
 
     let measurement_elapsed = Duration::from_secs(cfg.duration);
 
