@@ -12,7 +12,7 @@
 //! - **[`stage`]** — Deploy the project to a staging environment using
 //!   blue/green schemas.
 //! - **[`wait`]** — Check hydration status of a staged deployment.
-//! - **[`deploy`]** — Promote a staged deployment to production.
+//! - **[`promote`]** — Promote a staged deployment to production.
 //! - **[`apply_all`]** — Orchestrate all infrastructure apply steps.
 //! - **[`abort`]** — Roll back a staged deployment.
 //! - **[`apply_tables`]** — Helpers for creating tables and sources.
@@ -53,7 +53,6 @@ pub mod clusters;
 pub mod compile;
 pub mod debug;
 pub mod delete;
-pub mod deploy;
 pub mod describe;
 pub mod grants;
 pub mod list;
@@ -61,6 +60,7 @@ pub mod lock;
 pub mod log;
 pub mod new_project;
 pub mod profiles;
+pub mod promote;
 pub mod roles;
 pub mod stage;
 pub mod test;

@@ -60,5 +60,5 @@ Status indicators:
 ## Related Commands
 
 - `mz-deploy stage` — Create the staging deployment to monitor.
-- `mz-deploy deploy` — Promote once all clusters are ready.
+- `mz-deploy promote` — Promote once all clusters are ready.
 - `mz-deploy list` — List deployments with cluster status summary.

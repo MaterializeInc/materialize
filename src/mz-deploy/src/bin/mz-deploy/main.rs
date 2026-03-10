@@ -50,7 +50,7 @@ Infrastructure:
 Deploy:
   stage                Create a staging deployment for testing changes
   wait                 Wait for staging deployment clusters to be hydrated and ready
-  deploy               Promote a staging deployment to production [aliases: promote]
+  promote              Promote a staging deployment to production [aliases: deploy]
   abort                Clean up a staging deployment by dropping all resources
   describe             Show detailed information about a specific deployment [aliases: show]
   list                 List all active staging deployments [aliases: deployments]
@@ -170,15 +170,16 @@ enum Command {
     /// and caught up (unless --no-ready-check is specified).
     ///
     /// Examples:
-    ///   mz-deploy deploy abc123                    # Promote staging deployment
-    ///   mz-deploy deploy abc123 --no-ready-check    # Skip hydration check
-    ///   mz-deploy deploy abc123 --allowed-lag 600  # Allow up to 10 min lag
+    ///   mz-deploy promote abc123                    # Promote staging deployment
+    ///   mz-deploy promote abc123 --no-ready-check    # Skip hydration check
+    ///   mz-deploy promote abc123 --allowed-lag 600  # Allow up to 10 min lag
     #[command(
         hide = true,
-        visible_alias = "promote",
-        after_help = "Run 'mz-deploy help deploy' for a detailed usage guide."
+        name = "promote",
+        visible_alias = "deploy",
+        after_help = "Run 'mz-deploy help promote' for a detailed usage guide."
     )]
-    Deploy {
+    Promote {
         /// Staging deployment ID to promote to production
         ///
         /// The deployment ID was assigned when running 'mz-deploy stage'. You can
@@ -221,7 +222,7 @@ enum Command {
     ///
     /// Deploys schemas and objects to staging with suffixed names (e.g., 'public_abc123').
     /// This allows testing changes in isolation before promoting to production.
-    /// Staging deployments can be listed with 'list' and promoted with 'deploy'.
+    /// Staging deployments can be listed with 'list' and promoted with 'promote'.
     ///
     /// Example:
     ///   mz-deploy stage                    # Use random deploy ID
@@ -772,7 +773,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             }
             result
         }
-        Some(Command::Deploy {
+        Some(Command::Promote {
             deploy_id,
             force,
             no_ready_check,
@@ -783,7 +784,7 @@ async fn run(args: Args) -> Result<(), CliError> {
                 cli::commands::wait::run(&settings, &deploy_id, true, None, allowed_lag, false)
                     .await?;
             }
-            cli::commands::deploy::run(&settings, &deploy_id, force, dry_run, json).await
+            cli::commands::promote::run(&settings, &deploy_id, force, dry_run, json).await
         }
         Some(Command::Stage {
             deploy_id,

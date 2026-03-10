@@ -1,4 +1,4 @@
-# deploy — Promote a staging deployment to production
+# promote — Promote a staging deployment to production
 
 Atomically swaps a staging deployment into production using `ALTER ... SWAP`.
 Supports resumable execution — if interrupted, re-running the same command
@@ -6,7 +6,7 @@ picks up where it left off.
 
 ## Usage
 
-    mz-deploy deploy <DEPLOY_ID> [FLAGS]
+    mz-deploy promote <DEPLOY_ID> [FLAGS]
 
 ## Behavior
 
@@ -32,7 +32,7 @@ picks up where it left off.
 6. Cleans up apply-state tracking tables.
 
 The command is **resumable**: if it crashes after the swap but before
-cleanup, re-running `mz-deploy deploy <DEPLOY_ID>` detects the post-swap
+cleanup, re-running `mz-deploy promote <DEPLOY_ID>` detects the post-swap
 state and skips directly to step 5.
 
 ## Flags
@@ -49,12 +49,12 @@ state and skips directly to step 5.
 
 ## Examples
 
-    mz-deploy deploy abc123                    # Promote staging deployment
-    mz-deploy deploy abc123 --no-ready-check       # Skip hydration check
-    mz-deploy deploy abc123 --force            # Ignore conflicts
-    mz-deploy deploy abc123 --allowed-lag 600  # 10 min lag tolerance
-    mz-deploy deploy abc123 --dry-run                # Preview plan (text)
-    mz-deploy deploy abc123 --dry-run --output json  # Machine-readable plan
+    mz-deploy promote abc123                    # Promote staging deployment
+    mz-deploy promote abc123 --no-ready-check       # Skip hydration check
+    mz-deploy promote abc123 --force            # Ignore conflicts
+    mz-deploy promote abc123 --allowed-lag 600  # 10 min lag tolerance
+    mz-deploy promote abc123 --dry-run                # Preview plan (text)
+    mz-deploy promote abc123 --dry-run --output json  # Machine-readable plan
 
 ## CI/CD Usage
 
@@ -64,7 +64,7 @@ type: schema swaps, cluster swaps, sinks to create, replacement MVs,
 sinks to repoint, and resources to drop.
 
     # Save deployment plan as artifact
-    mz-deploy deploy abc123 --dry-run --output json > plan.json
+    mz-deploy promote abc123 --dry-run --output json > plan.json
 
 ## Error Recovery
 
@@ -89,7 +89,7 @@ changes in your project and promote the result:
 
     git revert <commit>              # Create a new commit undoing the change
     mz-deploy stage                  # Stage the reverted project
-    mz-deploy deploy <NEW_DEPLOY_ID> # Promote to production
+    mz-deploy promote <NEW_DEPLOY_ID> # Promote to production
 
 Because `deploy` uses atomic `ALTER ... SWAP`, the rollback promotion is
 itself atomic — production traffic switches back in a single transaction.

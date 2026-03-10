@@ -26,7 +26,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("compile", include_str!("help/compile.md")),
     ("debug", include_str!("help/debug.md")),
     ("delete", include_str!("help/delete.md")),
-    ("deploy", include_str!("help/deploy.md")),
+    ("promote", include_str!("help/promote.md")),
     ("describe", include_str!("help/describe.md")),
     ("list", include_str!("help/list.md")),
     ("lock", include_str!("help/lock.md")),
@@ -48,7 +48,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("gen-data-contracts", "lock"),
     ("history", "log"),
     ("network-policies", "apply-network-policies"),
-    ("promote", "deploy"),
+    ("deploy", "promote"),
     ("ready", "wait"),
     ("roles", "apply-roles"),
     ("secrets", "apply-secrets"),
@@ -136,7 +136,7 @@ mod tests {
         assert!(help_for("compile").is_some());
         assert!(help_for("stage").is_some());
         assert!(help_for("apply").is_some());
-        assert!(help_for("deploy").is_some());
+        assert!(help_for("promote").is_some());
     }
 
     #[test]
@@ -150,7 +150,7 @@ mod tests {
         assert_eq!(help_for("ready"), help_for("wait"));
         assert_eq!(help_for("clusters"), help_for("apply-clusters"));
         assert_eq!(help_for("roles"), help_for("apply-roles"));
-        assert_eq!(help_for("promote"), help_for("deploy"));
+        assert_eq!(help_for("deploy"), help_for("promote"));
     }
 
     #[test]

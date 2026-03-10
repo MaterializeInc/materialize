@@ -19,6 +19,7 @@ ones whose rules have changed. Grants and comments are applied idempotently.
 3. Reports status per policy:
    - `+` created
    - `~` altered (converging rules)
+   - `=` up-to-date (no changes needed)
 
 The command is **idempotent** — running it multiple times produces the
 same result. Grants and comments are safe to re-apply.

@@ -49,4 +49,4 @@ multiple times safely.
 
 - `mz-deploy stage` — Create a staging deployment.
 - `mz-deploy list` — List active staging deployments.
-- `mz-deploy deploy` — Promote instead of aborting.
+- `mz-deploy promote` — Promote instead of aborting.

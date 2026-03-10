@@ -1,4 +1,4 @@
-//! Deploy command - promote staging deployment to production via ALTER SWAP.
+//! Promote command - promote staging deployment to production via ALTER SWAP.
 
 use crate::cli::CliError;
 use crate::cli::progress;
@@ -427,7 +427,7 @@ pub async fn run(
     if dry_run {
         progress::info(&format!("Previewing deployment plan for '{}'", deploy_id));
     } else {
-        progress::info(&format!("Deploying '{}' to production", deploy_id));
+        progress::info(&format!("Promoting '{}' to production", deploy_id));
     }
 
     let client = Client::connect_with_profile(profile.clone())
@@ -459,7 +459,7 @@ pub async fn run(
         humanln!("{}", plan);
         if plan.has_work() {
             progress::info(&format!(
-                "To execute this plan, run: mz-deploy deploy {}",
+                "To execute this plan, run: mz-deploy promote {}",
                 deploy_id
             ));
         } else {
