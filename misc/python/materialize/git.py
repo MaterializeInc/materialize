@@ -42,6 +42,19 @@ def rev_count(rev: str) -> int:
     return int(spawn.capture(["git", "rev-list", "--count", rev, "--"]).strip())
 
 
+def get_first_parent_commits(rev: str, limit: int) -> list[str]:
+    """Get commit hashes along the first-parent chain starting from rev.
+
+    Returns up to `limit` commit hashes (including rev itself), following
+    only first parents (i.e., staying on the main branch).
+    """
+    return (
+        spawn.capture(["git", "rev-list", "--first-parent", f"-{limit}", rev])
+        .strip()
+        .splitlines()
+    )
+
+
 def rev_parse(rev: str, *, abbrev: bool = False) -> str:
     """Compute the hash for a revision.
 
