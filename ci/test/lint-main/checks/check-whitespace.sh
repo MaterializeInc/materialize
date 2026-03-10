@@ -24,7 +24,7 @@ files=$(git_files "$@")
 # a trailing newline to the text file instead.
 newline_files=$(grep -vE '(_scratch|\.(png|jpe?g|pb|avro|ico|so|patch|woff2?))$' <<< "$files")
 
-try xargs misc/lint/trailing-newline.sh <<< "$newline_files"
+try xargs misc/lint/trailing-newline.py <<< "$newline_files"
 try xargs git --no-pager diff --check "$(git_empty_tree)" <<< "$newline_files"
 
 try_status_report
