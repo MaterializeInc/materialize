@@ -22,6 +22,7 @@ ALTER SYSTEM SET enable_copy_from_remote = true;
 > CREATE TABLE t1_bad_cast (a jsonb, b int);
 > CREATE TABLE t1_single_col (a text);
 > CREATE TABLE t1_not_null (a text, b int, c float NOT NULL);
+> CREATE TABLE t1_not_nullable (a text NOT NULL, b int NOT NULL);
 > CREATE TABLE t1_fun_house (y int, z text, c float NOT NULL DEFAULT 1.11, d bigint);
 
 $ s3-file-upload bucket=copytos3 key=csv/1.csv repeat=2
@@ -50,7 +51,12 @@ contains:wrong number of columns
 
 # Cannot perform this COPY because column c is NOT NULL, has no default value, and is not being copied into.
 ! COPY INTO t1_not_null (a, b) FROM '${1_csv_url}' (FORMAT CSV);
-contains:violates not-null constraint
+contains:did not match desc
+
+> COPY INTO t1_not_nullable FROM '${1_csv_url}' (FORMAT CSV);
+> SELECT * FROM t1_not_nullable;
+none 100
+none 100
 
 # The last row of this csv contains a NULL value in the third column
 $ s3-file-upload bucket=copytos3 key=csv2/nulls.csv repeat=1
