@@ -411,6 +411,82 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rocksdb_create_default_env` on OS `linux`
+async fn prefix_scan_test() -> Result<(), anyhow::Error> {
+    let t = tempfile::tempdir()?;
+
+    let mut instance = RocksDBInstance::<Vec<u8>, String>::new(
+        t.path(),
+        InstanceOptions::<bincode::DefaultOptions, String, StubMergeOperator<String>>::new(
+            rocksdb::Env::new()?,
+            2,
+            None,
+            bincode::DefaultOptions::new(),
+        ),
+        RocksDBConfig::new(Default::default(), None),
+        shared_metrics_for_tests()?,
+        instance_metrics_for_tests()?,
+    )?;
+
+    // Insert several entries with keys sharing common prefixes.
+    instance
+        .multi_update(vec![
+            (
+                b"prefix_a_1".to_vec(),
+                KeyUpdate::Put("value_a1".to_string()),
+                None,
+            ),
+            (
+                b"prefix_a_2".to_vec(),
+                KeyUpdate::Put("value_a2".to_string()),
+                None,
+            ),
+            (
+                b"prefix_b_1".to_vec(),
+                KeyUpdate::Put("value_b1".to_string()),
+                None,
+            ),
+            (
+                b"other_key".to_vec(),
+                KeyUpdate::Put("other_value".to_string()),
+                None,
+            ),
+        ])
+        .await?;
+
+    // Scan for keys with prefix "prefix_a" - should return exactly 2 entries.
+    let mut results = instance.prefix_scan(b"prefix_a".to_vec()).await?;
+    results.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].0, b"prefix_a_1".to_vec());
+    assert_eq!(results[0].1, "value_a1");
+    assert_eq!(results[1].0, b"prefix_a_2".to_vec());
+    assert_eq!(results[1].1, "value_a2");
+
+    // Scan for keys with prefix "prefix_b" - should return exactly 1 entry.
+    let results = instance.prefix_scan(b"prefix_b".to_vec()).await?;
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].0, b"prefix_b_1".to_vec());
+    assert_eq!(results[0].1, "value_b1");
+
+    // Scan with a non-existent prefix - should return empty results.
+    let results = instance.prefix_scan(b"nonexistent".to_vec()).await?;
+    assert_eq!(results.len(), 0);
+
+    // Scan with "prefix_" - should return all 3 prefix entries but not "other_key".
+    let mut results = instance.prefix_scan(b"prefix_".to_vec()).await?;
+    results.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(results.len(), 3);
+    assert_eq!(results[0].0, b"prefix_a_1".to_vec());
+    assert_eq!(results[1].0, b"prefix_a_2".to_vec());
+    assert_eq!(results[2].0, b"prefix_b_1".to_vec());
+
+    instance.close().await?;
+
+    Ok(())
+}
+
 /// A small validation test; Ensure that if a directory is empty, we don't fail to destroy.
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rocksdb_create_default_env` on OS `linux`

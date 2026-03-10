@@ -216,41 +216,11 @@ pub const ENFORCE_EXTERNAL_ADDRESSES: Config<bool> = Config::new(
 
 // Upsert
 
-/// Whether or not to prevent buffering the entire _upstream_ snapshot in
-/// memory when processing it in memory. This is generally understood to reduce
-/// memory consumption.
-///
-/// When false, in general the memory utilization while processing the snapshot is:
-/// # of snapshot updates + (# of unique keys in snapshot * N), where N is some small
-/// integer number of buffers
-///
-/// When true, in general the memory utilization while processing the snapshot is:
-/// # of snapshot updates + (RocksDB buffers + # of keys in batch produced by upstream) * # of
-/// workers.
-///
-/// Without hydration flow control, which is not yet implemented, there are workloads that may
-/// cause the latter to use more memory, which is why we offer this configuration.
-pub const STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING: Config<bool> = Config::new(
-    "storage_upsert_prevent_snapshot_buffering",
-    true,
-    "Prevent snapshot buffering in upsert.",
-);
-
 /// Whether to enable the merge operator in upsert for the RocksDB backend.
 pub const STORAGE_ROCKSDB_USE_MERGE_OPERATOR: Config<bool> = Config::new(
     "storage_rocksdb_use_merge_operator",
     true,
     "Use the native rocksdb merge operator where possible.",
-);
-
-/// If `storage_upsert_prevent_snapshot_buffering` is true, this prevents the upsert
-/// operator from buffering too many events from the upstream snapshot. In the absence
-/// of hydration flow control, this could prevent certain workloads from causing egregiously
-/// large writes to RocksDB.
-pub const STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING: Config<Option<usize>> = Config::new(
-    "storage_upsert_max_snapshot_batch_buffering",
-    None,
-    "Limit snapshot buffering in upsert.",
 );
 
 // RocksDB
@@ -345,8 +315,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
         .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
         .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
-        .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
-        .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
         .add(&STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT)
         .add(&SUSPENDABLE_SOURCES)
         .add(&WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL)
