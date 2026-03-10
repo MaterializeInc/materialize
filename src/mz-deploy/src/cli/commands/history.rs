@@ -7,7 +7,7 @@ use crate::output;
 use crate::{human, humanln};
 use chrono::{DateTime, Local};
 use owo_colors::OwoColorize;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::process::{Command, Stdio};
 
 /// Show deployment history in chronological order (promoted deployments only).
@@ -96,8 +96,12 @@ pub async fn run(
         output.push('\n');
     }
 
-    // Display with pager (spawned after async work is complete)
-    display_with_pager(&output);
+    // Display with pager when interactive; print directly in CI/pipes.
+    if std::io::stderr().is_terminal() {
+        display_with_pager(&output);
+    } else {
+        human!("{}", output);
+    }
 
     Ok(())
 }

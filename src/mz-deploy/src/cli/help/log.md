@@ -17,7 +17,9 @@ production, similar to `git log`. Newest promotions appear first.
    - Git commit (if available)
    - Promoted by and promotion timestamp
    - Schemas included in the deployment
-4. Pipes output through `less` if available; falls back to direct printing.
+4. When running in a terminal, pipes output through `less`; prints
+   directly when output is redirected or in non-interactive environments
+   (CI, scripts).
 
 ## Flags
 
