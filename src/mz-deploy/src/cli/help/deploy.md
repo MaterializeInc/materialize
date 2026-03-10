@@ -11,7 +11,7 @@ picks up where it left off.
 ## Behavior
 
 1. Validates the deployment exists and has not already been promoted.
-2. Runs a readiness check (unless `--skip-ready`): all staging clusters
+2. Runs a readiness check (unless `--no-ready-check`): all staging clusters
    must be hydrated and within the `--allowed-lag` threshold.
 3. Detects conflicts — checks whether production schemas were touched by
    another deployment after this staging deployment was created. Use
@@ -39,7 +39,7 @@ state and skips directly to step 5.
 
 - `--force` — Skip conflict detection. May overwrite changes made to
   production after the staging deployment was created.
-- `--skip-ready` — Skip the readiness/hydration check before promoting.
+- `--no-ready-check` — Skip the readiness/hydration check before promoting.
 - `--allowed-lag <SECONDS>` — Maximum wallclock lag (in seconds) for the
   readiness check (default: 300 = 5 minutes).
 - `--dry-run` — Preview the deployment plan without executing any changes.
@@ -50,7 +50,7 @@ state and skips directly to step 5.
 ## Examples
 
     mz-deploy deploy abc123                    # Promote staging deployment
-    mz-deploy deploy abc123 --skip-ready       # Skip hydration check
+    mz-deploy deploy abc123 --no-ready-check       # Skip hydration check
     mz-deploy deploy abc123 --force            # Ignore conflicts
     mz-deploy deploy abc123 --allowed-lag 600  # 10 min lag tolerance
     mz-deploy deploy abc123 --dry-run                # Preview plan (text)
@@ -76,7 +76,7 @@ sinks to repoint, and resources to drop.
   Review with `mz-deploy log`, then re-run with `--force` if the
   conflict is acceptable.
 - **Clusters not ready** — Wait for hydration with `mz-deploy wait <ID>`
-  or pass `--skip-ready` to promote anyway.
+  or pass `--no-ready-check` to promote anyway.
 - **Interrupted after swap** — Re-run the same `deploy` command. It will
   detect the post-swap state and resume cleanup.
 - **Sink creation fails post-swap** — The swap already succeeded. Fix the

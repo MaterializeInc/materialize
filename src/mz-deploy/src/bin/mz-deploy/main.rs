@@ -167,11 +167,11 @@ enum Command {
     ///
     /// Atomically swaps a staging deployment into production using ALTER SWAP.
     /// Before promoting, verifies that all staging clusters are fully hydrated
-    /// and caught up (unless --skip-ready is specified).
+    /// and caught up (unless --no-ready-check is specified).
     ///
     /// Examples:
     ///   mz-deploy deploy abc123                    # Promote staging deployment
-    ///   mz-deploy deploy abc123 --skip-ready       # Skip hydration check
+    ///   mz-deploy deploy abc123 --no-ready-check    # Skip hydration check
     ///   mz-deploy deploy abc123 --allowed-lag 600  # Allow up to 10 min lag
     #[command(
         hide = true,
@@ -200,7 +200,7 @@ enum Command {
         /// up before promoting. Use this flag to skip that check and promote
         /// immediately, which may result in stale data being served briefly.
         #[arg(long)]
-        skip_ready: bool,
+        no_ready_check: bool,
 
         /// Maximum lag threshold in seconds for readiness check
         ///
@@ -776,11 +776,11 @@ async fn run(args: Args) -> Result<(), CliError> {
         Some(Command::Deploy {
             deploy_id,
             force,
-            skip_ready,
+            no_ready_check,
             allowed_lag,
             dry_run,
         }) => {
-            if !skip_ready && !dry_run {
+            if !no_ready_check && !dry_run {
                 cli::commands::ready::run(&settings, &deploy_id, true, None, allowed_lag, false)
                     .await?;
             }
