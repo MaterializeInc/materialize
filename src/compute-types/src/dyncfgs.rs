@@ -330,8 +330,8 @@ pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
 /// The collection interval for the Prometheus metrics introspection source.
 ///
 /// Set to zero to disable scraping and retract any existing data.
-pub const COMPUTE_PROMETHEUS_SCRAPE_INTERVAL: Config<Duration> = Config::new(
-    "compute_prometheus_scrape_interval",
+pub const COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL: Config<Duration> = Config::new(
+    "compute_prometheus_introspection_scrape_interval",
     Duration::from_secs(1),
     "The collection interval for the Prometheus metrics introspection source. Set to zero to disable.",
 );
@@ -385,6 +385,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES)
         .add(&PEEK_STASH_NUM_BATCHES)
         .add(&PEEK_STASH_BATCH_SIZE)
-        .add(&COMPUTE_PROMETHEUS_SCRAPE_INTERVAL)
+        .add(&COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL)
         .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
 }
