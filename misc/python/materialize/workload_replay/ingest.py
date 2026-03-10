@@ -26,6 +26,7 @@ import aiohttp
 import confluent_kafka  # type: ignore
 import psycopg
 import pymysql
+from confluent_kafka import KafkaError  # type: ignore
 from confluent_kafka.schema_registry import SchemaRegistryClient  # type: ignore
 from confluent_kafka.schema_registry.avro import AvroSerializer  # type: ignore
 from confluent_kafka.serialization import (  # type: ignore
@@ -47,7 +48,7 @@ from materialize.workload_replay.util import (
 )
 
 
-def delivery_report(err: str, msg: Any) -> None:
+def delivery_report(err: KafkaError | None, msg: Any) -> None:
     """Kafka delivery report callback."""
     assert err is None, f"Delivery failed for user record {msg.key()}: {err}"
 
@@ -271,14 +272,14 @@ def get_kafka_objects(
 
         value_serializer = AvroSerializer(
             registry,
-            json.dumps(envelope_schema),
-            lambda d, ctx: d,
+            schema_str=json.dumps(envelope_schema),
+            to_dict=lambda d, ctx: d,
         )
 
         key_serializer = AvroSerializer(
             registry,
-            json.dumps(key_schema),
-            lambda d, ctx: d,
+            schema_str=json.dumps(key_schema),
+            to_dict=lambda d, ctx: d,
         )
 
     else:
@@ -317,14 +318,14 @@ def get_kafka_objects(
 
         value_serializer = AvroSerializer(
             registry,
-            json.dumps(value_schema),
-            lambda d, ctx: d,
+            schema_str=json.dumps(value_schema),
+            to_dict=lambda d, ctx: d,
         )
 
         key_serializer = AvroSerializer(
             registry,
-            json.dumps(key_schema),
-            lambda d, ctx: d,
+            schema_str=json.dumps(key_schema),
+            to_dict=lambda d, ctx: d,
         )
 
     value_ctx = SerializationContext(topic, MessageField.VALUE)
