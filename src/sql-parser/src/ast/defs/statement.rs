@@ -620,7 +620,17 @@ pub struct ConnectionAwsPrivatelinkPattern<T: AstInfo> {
     pub to: KafkaBrokerAwsPrivatelink<T>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
 /// Parsed from a string, with optional leading and trailing '*' wildcards.
 pub struct ConnectionRulePattern {
     /// If true, allow any combination of characters before the literal match.

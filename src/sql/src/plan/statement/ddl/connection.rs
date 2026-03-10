@@ -32,12 +32,11 @@ use mz_storage_types::connections::aws::{
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use mz_storage_types::connections::{
-    AwsPrivatelink, AwsPrivatelinkConnection, AwsPrivatelinkRule, ConnectionRulePattern,
-    CsrConnection, CsrConnectionHttpAuth, IcebergCatalogConnection, IcebergCatalogImpl,
-    IcebergCatalogType, KafkaConnection, KafkaSaslConfig, KafkaTlsConfig, KafkaTopicOptions,
-    MySqlConnection, MySqlSslMode, PostgresConnection, RestIcebergCatalog,
-    S3TablesRestIcebergCatalog, SqlServerConnectionDetails, SshConnection, SshTunnel, TlsIdentity,
-    Tunnel,
+    AwsPrivatelink, AwsPrivatelinkConnection, AwsPrivatelinkRule, CsrConnection,
+    CsrConnectionHttpAuth, IcebergCatalogConnection, IcebergCatalogImpl, IcebergCatalogType,
+    KafkaConnection, KafkaSaslConfig, KafkaTlsConfig, KafkaTopicOptions, MySqlConnection,
+    MySqlSslMode, PostgresConnection, RestIcebergCatalog, S3TablesRestIcebergCatalog,
+    SqlServerConnectionDetails, SshConnection, SshTunnel, TlsIdentity, Tunnel,
 };
 
 use crate::names::Aug;
@@ -1002,11 +1001,7 @@ pub(crate) fn build_tunnel_definition(
                     };
 
                     Ok(AwsPrivatelinkRule{
-                        pattern: ConnectionRulePattern{
-                            prefix_wildcard: pattern.pattern.prefix_wildcard,
-                            literal_match: pattern.pattern.literal_match.clone(),
-                            suffix_wildcard: pattern.pattern.suffix_wildcard,
-                        },
+                        pattern: pattern.pattern.clone(),
                         to: plan_privatelink(scx, &pattern.to)?,
                     })
                 }).collect::<Result<Vec<_>, _>>()?;

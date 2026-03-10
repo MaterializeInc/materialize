@@ -31,7 +31,8 @@ use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader, vpc_endpoint_host};
 use mz_dyncfg::ConfigSet;
 use mz_kafka_util::client::{
-    BrokerAddr, BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
+    BrokerAddr, BrokerRewrite, HostMappingRules, MzClientContext, MzKafkaError, TunnelConfig,
+    TunnelingClientContext,
 };
 use mz_mysql_util::{MySqlConn, MySqlError};
 use mz_ore::assert_none;
@@ -41,6 +42,7 @@ use mz_ore::netio::resolve_address;
 use mz_ore::num::NonNeg;
 use mz_repr::{CatalogItemId, GlobalId};
 use mz_secrets::SecretsReader;
+use mz_sql_parser::ast::ConnectionRulePattern;
 use mz_ssh_util::keys::SshKeyPair;
 use mz_ssh_util::tunnel::SshTunnelConfig;
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
@@ -1068,12 +1070,16 @@ impl KafkaConnection {
                 // By default, don't offer a default override for broker address lookup.
             }
             Tunnel::AwsPrivatelink(pl) => {
-                context.set_default_tunnel(TunnelConfig::StaticHost(vpc_endpoint_host(
-                    pl.connection_id,
-                    None, // Default tunnel does not support availability zones.
-                )));
+                context.set_default_tunnel(TunnelConfig::StaticHost(
+                    // Possible bug: We have been ignoring the configured port.
+                    KafkaConnection::from_default_aws_privatelink(pl).host,
+                ));
             }
-            Tunnel::AwsPrivatelinks(x) => todo!(),
+            Tunnel::AwsPrivatelinks(pl) => {
+                context.set_default_tunnel(TunnelConfig::Rules(
+                    KafkaConnection::from_aws_privatelinks(pl),
+                ));
+            }
             Tunnel::Ssh(ssh_tunnel) => {
                 let secret = storage_configuration
                     .connection_context
@@ -1126,17 +1132,9 @@ impl KafkaConnection {
                     // in the `TunnelingClientContext`.
                 }
                 Tunnel::AwsPrivatelink(aws_privatelink) => {
-                    let host = mz_cloud_resources::vpc_endpoint_host(
-                        aws_privatelink.connection_id,
-                        aws_privatelink.availability_zone.as_deref(),
-                    );
-                    let port = aws_privatelink.port;
                     context.add_broker_rewrite(
                         addr,
-                        BrokerRewrite {
-                            host: host.clone(),
-                            port,
-                        },
+                        KafkaConnection::from_aws_privatelink(aws_privatelink),
                     );
                 }
                 Tunnel::AwsPrivatelinks(x) => todo!(),
@@ -1237,6 +1235,49 @@ impl KafkaConnection {
                     None => Err(err.into()),
                 }
             }
+        }
+    }
+
+    /// The "default" PrivateLink connection is used for bootstrapping Kafka.
+    fn from_default_aws_privatelink(pl: &AwsPrivatelink) -> BrokerRewrite {
+        BrokerRewrite {
+            host: vpc_endpoint_host(
+                pl.connection_id,
+                None, // Default tunnel does not support availability zones.
+            ),
+            port: pl.port,
+        }
+    }
+
+    /// The "not default" PrivateLink connections are used for routing to specific Kafka brokers.
+    fn from_aws_privatelink(pl: &AwsPrivatelink) -> BrokerRewrite {
+        BrokerRewrite {
+            host: vpc_endpoint_host(pl.connection_id, pl.availability_zone.as_deref()),
+            port: pl.port,
+        }
+    }
+
+    fn from_aws_privatelink_rule(
+        AwsPrivatelinkRule { pattern, to }: &AwsPrivatelinkRule,
+    ) -> (mz_kafka_util::client::ConnectionRulePattern, BrokerRewrite) {
+        (
+            mz_kafka_util::client::ConnectionRulePattern {
+                prefix_wildcard: pattern.prefix_wildcard,
+                literal_match: pattern.literal_match.clone(),
+                suffix_wildcard: pattern.suffix_wildcard,
+            },
+            KafkaConnection::from_aws_privatelink(to),
+        )
+    }
+
+    fn from_aws_privatelinks(pl: &AwsPrivatelinks) -> HostMappingRules {
+        HostMappingRules {
+            rules: pl
+                .rules
+                .iter()
+                .map(KafkaConnection::from_aws_privatelink_rule)
+                .collect_vec(),
+            default_host: KafkaConnection::from_default_aws_privatelink(&pl.default),
         }
     }
 }
@@ -2584,16 +2625,6 @@ pub struct AwsPrivatelinkRule {
     pub pattern: ConnectionRulePattern,
     /// Route to the broker through this PrivateLink connection.
     pub to: AwsPrivatelink,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct ConnectionRulePattern {
-    /// If true, allow any combination of characters before the literal match.
-    pub prefix_wildcard: bool,
-    /// We expect the broker's host:port to match these characters in their entirety.
-    pub literal_match: String,
-    /// If true, allow any combination of characters after the literal match.
-    pub suffix_wildcard: bool,
 }
 
 /// Specifies an SSH tunnel connection.

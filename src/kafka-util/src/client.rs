@@ -313,6 +313,26 @@ enum BrokerRewriteHandle {
     FailedDefaultSshTunnel(String),
 }
 
+#[derive(Clone)]
+/// Parsed from a string, with optional leading and trailing '*' wildcards.
+pub struct ConnectionRulePattern {
+    /// If true, allow any combination of characters before the literal match.
+    pub prefix_wildcard: bool,
+    /// We expect the broker's host:port to match these characters in their entirety.
+    pub literal_match: String,
+    /// If true, allow any combination of characters after the literal match.
+    pub suffix_wildcard: bool,
+}
+
+#[derive(Clone)]
+/// Given a host address, map it to a different host.
+pub struct HostMappingRules {
+    /// Map matching hosts to a different host. First applicable rule wins.
+    pub rules: Vec<(ConnectionRulePattern, BrokerRewrite)>,
+    /// If no rules match, use this host.
+    pub default_host: BrokerRewrite,
+}
+
 /// Tunneling clients
 /// used for re-writing ports / hosts
 #[derive(Clone)]
@@ -321,6 +341,8 @@ pub enum TunnelConfig {
     Ssh(SshTunnelConfig),
     /// Re-writes internal hosts using the value, used for privatelink
     StaticHost(String),
+    /// Re-writes internal hosts according to an ordered list of rules, also used for privatelink
+    Rules(HostMappingRules),
     /// Performs no re-writes
     None,
 }
@@ -601,6 +623,9 @@ where
                     TunnelConfig::StaticHost(host) => (host.as_str(), port)
                         .to_socket_addrs()
                         .map(|addrs| addrs.collect()),
+                    TunnelConfig::Rules(rules) => {
+                        todo!()
+                    }
                     // We leave the broker's address as it is.
                     TunnelConfig::None => {
                         (host, port).to_socket_addrs().map(|addrs| addrs.collect())
