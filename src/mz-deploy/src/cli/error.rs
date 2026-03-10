@@ -108,6 +108,10 @@ pub enum CliError {
         plural = if *failed == 1 { "" } else { "s" })]
     TestsFailed { failed: usize, passed: usize },
 
+    /// Tests filter did not match anythinh
+    #[error("no tests matched filter '{filter}'")]
+    TestsFilterMissed { filter: String },
+
     /// Test validation failed (schema mismatch, missing mocks)
     #[error(transparent)]
     TestValidationFailed(#[from] TestValidationError),
@@ -314,7 +318,7 @@ impl CliError {
                 // These errors provide their own context via transparent wrapping
                 None
             }
-            Self::Io(_) | Self::Message(_) => None,
+            Self::Io(_) | Self::Message(_) | Self::TestsFilterMissed { .. } => None,
         }
     }
 }

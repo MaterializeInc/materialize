@@ -30,6 +30,8 @@ same result. Grants and comments are safe to re-apply.
 
     mz-deploy apply clusters      # Converge all cluster definitions
     mz-deploy apply clusters -v   # Verbose: show executed SQL
+    mz-deploy apply clusters --dry-run                # Print SQL without executing
+    mz-deploy apply clusters --dry-run --output json  # Machine-readable SQL list
 
 ## Error Recovery
 

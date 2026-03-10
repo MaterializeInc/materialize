@@ -3,8 +3,7 @@
 Compares your project against the current production snapshot and deploys
 only the objects that have changed to staging schemas and clusters with a
 suffixed name (e.g., `public_abc123`). Unchanged objects are skipped
-entirely. Tables and sources are not
-recreated — they must already exist (see `apply`). Staging deployments
+entirely. Tables and sources are not recreated — they must already exist (see `apply`). Staging deployments
 run in isolation alongside production and can be promoted with `promote`
 or cleaned up with `abort`.
 
@@ -89,6 +88,19 @@ during a deployment.
   changes. Combine with `--output json` for machine-readable output
   including staging schemas, clusters, objects, deferred sinks, and
   replacement MVs.
+
+## Concurrent Deployments
+
+Multiple staging deployments can run in parallel. Each deployment gets
+its own suffixed schemas and clusters (e.g., `public_abc123`,
+`public_def456`), so independent deployments — ones that touch different
+schemas and clusters — do not interact at all.
+
+When two deployments overlap (modify the same schemas), conflict
+detection at `promote` time ensures safety: the first deployment to
+promote wins, and the second is rejected with a conflict error because
+production was modified after it was staged. Re-stage to pick up the
+latest production state and try again.
 
 ## Examples
 

@@ -47,6 +47,8 @@ Other expressions are passed through to Materialize unchanged.
 
     mz-deploy apply secrets      # Create/update all secrets
     mz-deploy apply secrets -v   # Verbose: show executed SQL
+    mz-deploy apply secrets --dry-run                # Print SQL without executing
+    mz-deploy apply secrets --dry-run --output json  # Machine-readable SQL list
 
 ## Error Recovery
 

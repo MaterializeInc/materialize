@@ -66,6 +66,19 @@ sinks to repoint, and resources to drop.
     # Save deployment plan as artifact
     mz-deploy promote abc123 --dry-run --output json > plan.json
 
+## Concurrent Deployments
+
+Multiple staging deployments can be promoted independently as long as
+they touch different schemas and clusters. When two deployments overlap,
+conflict detection prevents the second from overwriting the first:
+`promote` checks whether any production schema was modified after the
+staging deployment was created. If a conflict is detected, the command
+fails and the deployment must be re-staged against the latest production
+state.
+
+Use `--force` to bypass conflict detection when you are certain you want
+to force a promotion.
+
 ## Error Recovery
 
 - **Staging environment not found** — Verify the deploy ID with

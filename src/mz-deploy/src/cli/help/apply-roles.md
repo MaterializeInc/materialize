@@ -32,6 +32,8 @@ same result.
 
     mz-deploy apply roles      # Converge all role definitions
     mz-deploy apply roles -v   # Verbose: show executed SQL
+    mz-deploy apply roles --dry-run                # Print SQL without executing
+    mz-deploy apply roles --dry-run --output json  # Machine-readable SQL list
 
 ## Error Recovery
 

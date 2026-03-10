@@ -44,6 +44,8 @@ which matches the project's normalized format.
 
     mz-deploy apply connections      # Create/reconcile all connections
     mz-deploy apply connections -v   # Verbose: show executed SQL
+    mz-deploy apply connections --dry-run                # Print SQL without executing
+    mz-deploy apply connections --dry-run --output json  # Machine-readable SQL list
 
 ## Error Recovery
 

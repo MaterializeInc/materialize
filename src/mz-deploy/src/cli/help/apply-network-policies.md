@@ -28,6 +28,8 @@ same result. Grants and comments are safe to re-apply.
 
     mz-deploy apply network-policies      # Converge all network policy definitions
     mz-deploy apply network-policies -v   # Verbose: show executed SQL
+    mz-deploy apply network-policies --dry-run                # Print SQL without executing
+    mz-deploy apply network-policies --dry-run --output json  # Machine-readable SQL list
 
 ## Error Recovery
 

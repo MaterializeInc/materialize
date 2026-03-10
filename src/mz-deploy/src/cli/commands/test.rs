@@ -290,7 +290,7 @@ pub async fn run(
     let total_run = passed_tests + failed_tests + validation_failed;
     if total_run == 0 {
         if let Some(f) = filter {
-            progress::info(&format!("No tests matched filter '{}'", f));
+            return Err(CliError::TestsFilterMissed { filter: f.into() });
         }
         return Ok(());
     }

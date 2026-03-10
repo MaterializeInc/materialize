@@ -40,6 +40,8 @@ Status indicators:
   default, waits indefinitely.
 - `--allowed-lag <SECONDS>` — Maximum wallclock lag for "ready" status
   (default: 300 = 5 minutes).
+- `--output json` — Print hydration status as JSON to stdout. In
+  continuous mode, emits one JSON object per update.
 
 ## Examples
 
@@ -47,6 +49,8 @@ Status indicators:
     mz-deploy wait abc123 --once               # One-time check
     mz-deploy wait abc123 --timeout 300        # Wait up to 5 minutes
     mz-deploy wait abc123 --allowed-lag 60     # Require lag under 1 min
+    mz-deploy wait abc123 --output json          # Machine-readable output
+    mz-deploy wait abc123 --once --output json   # One-time JSON snapshot
 
 ## Error Recovery
 
