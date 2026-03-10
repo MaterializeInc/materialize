@@ -1166,7 +1166,7 @@ class ClusterdCpu(Modification):
     def validate(self, mods: dict[type[Modification], Any]) -> None:
         version = MzVersion.parse_mz(mods[EnvironmentdImageRef])
         environmentd_supports_cpu_request = version >= MzVersion.parse_mz(
-            "v26.14.0-dev.0"
+            "v26.15.0-dev.0"
         )
 
         environmentd = get_environmentd_data()
@@ -1748,7 +1748,8 @@ def workflow_documentation_defaults(
             ["kubectl", "apply", "-f", os.path.join(dir, "sample-materialize.yaml")]
         )
 
-        for i in range(240):
+        # TODO: Shorten when https://github.com/MaterializeInc/database-issues/issues/11225 is fixed
+        for i in range(480):
             try:
                 data = json.loads(
                     spawn.capture(
