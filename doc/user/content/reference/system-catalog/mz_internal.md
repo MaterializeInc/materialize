@@ -1317,7 +1317,6 @@ i.e., the [freshness](/concepts/reaction-time/#freshness), for each table, sourc
 
 The `mz_wallclock_global_lag_history` view contains historical wallclock lag for tables, sources, indexes, materialized views, and sinks, binned by minute.
 Unlike [`mz_wallclock_lag_history`](#mz_wallclock_lag_history), this view aggregates across replicas, reporting the minimum lag per object per minute.
-Data is retained for up to 30 days.
 
 <!-- RELATION_SPEC mz_internal.mz_wallclock_global_lag_history -->
 | Field         | Type         | Meaning
