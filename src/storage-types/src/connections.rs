@@ -2572,7 +2572,8 @@ impl AlterCompatible for AwsPrivatelink {
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct AwsPrivatelinks {
     /// Route to brokers through PrivateLink connections according to these rules.
-    rules: Vec<AwsPrivatelinkRule>,
+    /// First applicable rule wins.
+    pub rules: Vec<AwsPrivatelinkRule>,
     /// Bootstrap through this PrivateLink connection.
     pub default: AwsPrivatelink,
 }
@@ -2580,9 +2581,9 @@ pub struct AwsPrivatelinks {
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct AwsPrivatelinkRule {
     /// Given a broker's host:port, should we use this route?
-    pattern: ConnectionRulePattern,
+    pub pattern: ConnectionRulePattern,
     /// Route to the broker through this PrivateLink connection.
-    to: AwsPrivatelink,
+    pub to: AwsPrivatelink,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
