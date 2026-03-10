@@ -1558,7 +1558,7 @@ pub enum DataSourceDesc {
     },
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct WebhookValidation {
     /// The expression used to validate a request.
     pub expression: MirScalarExpr,
@@ -1613,7 +1613,7 @@ impl WebhookValidation {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct WebhookHeaders {
     /// Optionally include a column named `headers` whose content is possibly filtered.
     pub header_column: Option<WebhookHeaderFilters>,
@@ -1631,13 +1631,13 @@ impl WebhookHeaders {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct WebhookHeaderFilters {
     pub block: BTreeSet<String>,
     pub allow: BTreeSet<String>,
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Arbitrary)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Arbitrary)]
 pub enum WebhookBodyFormat {
     Json { array: bool },
     Bytes,
@@ -1654,7 +1654,7 @@ impl From<WebhookBodyFormat> for SqlScalarType {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct WebhookValidationSecret {
     /// Identifies the secret by [`CatalogItemId`].
     pub id: CatalogItemId,

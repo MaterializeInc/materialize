@@ -719,6 +719,7 @@ mz_aggregates
 mz_aws_connections
 mz_aws_privatelink_connection_status_history
 mz_aws_privatelink_connection_statuses
+mz_catalog_raw
 mz_cluster_deployment_lineage
 mz_cluster_replica_history
 mz_cluster_replica_metrics

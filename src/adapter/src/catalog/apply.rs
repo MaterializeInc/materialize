@@ -31,8 +31,8 @@ use mz_catalog::durable::objects::{
 use mz_catalog::durable::{CatalogError, SystemObjectMapping};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Index, Log,
-    NetworkPolicy, Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
+    CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database, Func, Index, Log, NetworkPolicy,
+    Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
     TableDataSource, TemporaryItem, Type, UpdateFrom,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
@@ -887,7 +887,7 @@ impl CatalogState {
                     name.clone(),
                     CatalogItem::Source(Source {
                         create_sql: None,
-                        data_source: DataSourceDesc::Introspection(coll.data_source),
+                        data_source: coll.data_source.clone(),
                         desc: coll.desc.clone(),
                         global_id,
                         timeline: Timeline::EpochMilliseconds,

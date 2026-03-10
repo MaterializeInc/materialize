@@ -1281,8 +1281,8 @@ impl Coordinator {
             }
             DataSourceDesc::Progress => DataSource::Progress,
             DataSourceDesc::Webhook { .. } => DataSource::Webhook,
-            DataSourceDesc::Introspection(_) => {
-                unreachable!("cannot create sources with introspection data sources")
+            DataSourceDesc::Introspection(_) | DataSourceDesc::Catalog => {
+                unreachable!("cannot create sources with internal data sources")
             }
         };
 

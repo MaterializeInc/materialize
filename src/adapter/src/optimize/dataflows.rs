@@ -467,7 +467,9 @@ impl<'a> DataflowBuilder<'a> {
                     .expect("ingestion export must reference a source");
                 data_config.monotonic(&source_desc.connection)
             }
-            DataSourceDesc::Introspection(_) | DataSourceDesc::Progress => false,
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Catalog => false,
         }
     }
 
