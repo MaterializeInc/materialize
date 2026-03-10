@@ -304,7 +304,7 @@ mod support {
             {
                 if let Some(new_type) = types.get(i) {
                     // Assert that the column length has not changed.
-                    if !new_type.column_types.len() == typ.column_types.len() {
+                    if new_type.column_types.len() != typ.column_types.len() {
                         Err(crate::TransformError::Internal(format!(
                             "column lengths do not match: {:?} v {:?}",
                             new_type.column_types, typ.column_types
