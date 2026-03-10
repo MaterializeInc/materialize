@@ -87,7 +87,16 @@ struct Args {
     #[arg(long, value_name = "IMAGE", global = true)]
     docker_image: Option<String>,
 
-    /// Output format (text or json)
+    /// Directory to search for profiles.toml (default: ~/.mz)
+    #[arg(
+        long,
+        value_name = "DIR",
+        global = true,
+        env = "MZ_DEPLOY_PROFILES_DIR"
+    )]
+    profiles_dir: Option<PathBuf>,
+
+    /// Output format for --dry-run results (text or json)
     #[arg(long, global = true, default_value = "text")]
     output: OutputFormat,
 
@@ -142,11 +151,9 @@ enum Command {
         #[arg(long)]
         skip_secrets: bool,
 
-        /// Print SQL statements without executing them
-        ///
-        /// Runs the full compilation and validation pipeline but prints the SQL
-        /// that would be executed instead of actually running it. Useful for
-        /// reviewing changes before deployment.
+        /// Preview what would be applied without executing any changes.
+        /// Shows the SQL statements that would be run.
+        /// Combine with --output json for machine-readable output.
         #[arg(long)]
         dry_run: bool,
 
@@ -201,7 +208,9 @@ enum Command {
         #[arg(long, value_name = "SECONDS", default_value = "300")]
         allowed_lag: i64,
 
-        /// Preview what would happen without executing any changes
+        /// Preview the deployment plan without executing any changes.
+        /// Shows what would be swapped, created, repointed, and dropped.
+        /// Combine with --output json for machine-readable output.
         #[arg(long)]
         dry_run: bool,
     },
@@ -235,11 +244,9 @@ enum Command {
         #[arg(long)]
         no_rollback: bool,
 
-        /// Print SQL statements without executing them
-        ///
-        /// Runs the full compilation and validation pipeline but prints the SQL
-        /// that would be executed instead of actually running it. Useful for
-        /// reviewing changes before deployment.
+        /// Preview what would be deployed without executing any changes.
+        /// Shows the staging resources that would be created.
+        /// Combine with --output json for machine-readable output.
         #[arg(long)]
         dry_run: bool,
     },
@@ -657,7 +664,11 @@ async fn run(args: Args) -> Result<(), CliError> {
     }
 
     if let Some(Command::Profiles) = &args.command {
-        return cli::commands::profiles::run(&args.directory, args.profile.as_deref());
+        return cli::commands::profiles::run(
+            &args.directory,
+            args.profile.as_deref(),
+            args.profiles_dir.as_deref(),
+        );
     }
 
     let needs_connection = !matches!(
@@ -669,6 +680,7 @@ async fn run(args: Args) -> Result<(), CliError> {
         args.profile.as_deref(),
         args.docker_image.as_deref(),
         needs_connection,
+        args.profiles_dir.as_deref(),
     )
     .map_err(CliError::Config)?;
 

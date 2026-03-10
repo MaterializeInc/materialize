@@ -43,12 +43,14 @@ type is applied.
 - `--skip-secrets` — Skip applying secrets (bare `apply` only). Useful
   for users without access to secret values.
 - `--dry-run` — Print the SQL that would be executed without running it.
+  Combine with `--output json` for machine-readable output.
 
 ## Examples
 
     mz-deploy apply                     # All infrastructure
     mz-deploy apply --skip-secrets      # Skip secrets
-    mz-deploy apply --dry-run           # Preview SQL
+    mz-deploy apply --dry-run                 # Preview SQL
+    mz-deploy apply --dry-run --output json  # Machine-readable SQL list
     mz-deploy apply clusters            # Clusters only
     mz-deploy apply secrets             # Secrets only
     mz-deploy apply tables              # Tables only

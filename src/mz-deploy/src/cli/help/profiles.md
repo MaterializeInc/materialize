@@ -21,13 +21,21 @@ Each profile contains:
 
 ## Where profiles are stored
 
-Profiles are defined in a `profiles.toml` file. mz-deploy searches two
-locations in order:
+Profiles are defined in a `profiles.toml` file. The directory containing
+`profiles.toml` is resolved in this order:
 
-1. **Project-local:** `.mz/profiles.toml` in the project directory.
-2. **Global:** `~/.mz/profiles.toml` in your home directory.
+1. **`--profiles-dir` CLI flag** — Highest priority.
+2. **`MZ_DEPLOY_PROFILES_DIR` environment variable** — Checked if the flag is not set.
+3. **`~/.mz`** — Default fallback.
 
-The first file found is used; they are not merged.
+For example:
+
+    # Use an explicit directory
+    mz-deploy profiles --profiles-dir /path/to/config
+
+    # Or set via environment variable
+    export MZ_DEPLOY_PROFILES_DIR=/path/to/config
+    mz-deploy profiles
 
 ## profiles.toml format
 

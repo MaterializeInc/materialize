@@ -80,13 +80,17 @@ during a deployment.
 - `--allow-dirty` — Deploy with uncommitted git changes.
 - `--no-rollback` — On failure, leave staging resources in place for
   debugging instead of cleaning them up automatically.
-- `--dry-run` — Print the SQL that would be executed without running it.
+- `--dry-run` — Preview what would be deployed without executing any
+  changes. Combine with `--output json` for machine-readable output
+  including staging schemas, clusters, objects, deferred sinks, and
+  replacement MVs.
 
 ## Examples
 
     mz-deploy stage                           # Random deploy ID
     mz-deploy stage --deploy-id dev           # Custom ID → public_dev
     mz-deploy stage --dry-run                 # Preview SQL
+    mz-deploy stage --dry-run --output json  # Machine-readable plan
     mz-deploy stage --no-rollback             # Keep resources on failure
 
 ## Error Recovery

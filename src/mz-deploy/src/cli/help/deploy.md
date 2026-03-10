@@ -44,7 +44,8 @@ state and skips directly to step 5.
   readiness check (default: 300 = 5 minutes).
 - `--dry-run` — Preview the deployment plan without executing any changes.
   Connects to the database to discover resources, then prints what would
-  be swapped, created, repointed, and dropped.
+  be swapped, created, repointed, and dropped. Combine with
+  `--output json` for machine-readable output suitable for CI pipelines.
 
 ## Examples
 
@@ -52,7 +53,18 @@ state and skips directly to step 5.
     mz-deploy deploy abc123 --skip-ready       # Skip hydration check
     mz-deploy deploy abc123 --force            # Ignore conflicts
     mz-deploy deploy abc123 --allowed-lag 600  # 10 min lag tolerance
-    mz-deploy deploy abc123 --dry-run          # Preview deployment plan
+    mz-deploy deploy abc123 --dry-run                # Preview plan (text)
+    mz-deploy deploy abc123 --dry-run --output json  # Machine-readable plan
+
+## CI/CD Usage
+
+Use `--dry-run --output json` to integrate deployment plans into CI
+pipelines. The JSON output includes structured arrays for each operation
+type: schema swaps, cluster swaps, sinks to create, replacement MVs,
+sinks to repoint, and resources to drop.
+
+    # Save deployment plan as artifact
+    mz-deploy deploy abc123 --dry-run --output json > plan.json
 
 ## Error Recovery
 

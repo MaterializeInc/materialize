@@ -10,8 +10,13 @@ use std::path::Path;
 /// # Arguments
 /// * `directory` - Project directory to search for configuration files.
 /// * `cli_profile` - Optional profile name from the `--profile` CLI flag.
-pub fn run(directory: &Path, cli_profile: Option<&str>) -> Result<(), CliError> {
-    let profiles_config = ProfilesConfig::load(Some(directory)).map_err(CliError::Config)?;
+/// * `profiles_dir` - Optional directory containing `profiles.toml`.
+pub fn run(
+    directory: &Path,
+    cli_profile: Option<&str>,
+    profiles_dir: Option<&Path>,
+) -> Result<(), CliError> {
+    let profiles_config = ProfilesConfig::load(profiles_dir).map_err(CliError::Config)?;
 
     let default_profile = ProjectSettings::load(directory).ok().map(|s| s.profile);
 

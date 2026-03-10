@@ -1,7 +1,7 @@
 //! Configuration loading for profiles and project settings.
 //!
-//! Loads connection profiles from `profiles.toml` (searched in the project's
-//! `.mz/` directory, then the global `~/.mz/` directory) and project settings
+//! Loads connection profiles from `profiles.toml` (resolved via `--profiles-dir`,
+//! `MZ_DEPLOY_PROFILES_DIR`, or `~/.mz/` default) and project settings
 //! from `project.toml`. Key types:
 //!
 //! - [`Profile`] — Resolved connection details (host, port, credentials).
@@ -104,12 +104,9 @@ impl ProjectSettings {
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error(
-        "profiles configuration file not found. Searched:\n  - {project_path}\n  - {global_path}\n\nCreate a profiles.toml file in one of these locations with connection details."
+        "profiles configuration file not found at {path}\n\nCreate a profiles.toml file at this location with connection details."
     )]
-    ProfilesNotFound {
-        project_path: String,
-        global_path: String,
-    },
+    ProfilesNotFound { path: String },
     #[error("failed to read profiles configuration from {path}: {source}")]
     ReadError {
         path: String,
@@ -158,40 +155,34 @@ pub struct ProfilesConfig {
 }
 
 impl ProfilesConfig {
-    /// Load profiles configuration, checking project directory first, then global directory
+    /// Load profiles configuration from a directory.
     ///
     /// # Arguments
-    /// * `project_directory` - Optional project directory to search for profiles.toml.
-    ///                        If None, uses current working directory.
-    pub fn load(project_directory: Option<&Path>) -> Result<Self, ConfigError> {
-        let project_path = project_directory
-            .map(|dir| dir.join(".mz/profiles.toml"))
-            .unwrap_or_else(|| PathBuf::from(".mz/profiles.toml"));
+    /// * `profiles_dir` - Optional directory containing `profiles.toml`.
+    ///                     If None, defaults to `~/.mz`.
+    pub fn load(profiles_dir: Option<&Path>) -> Result<Self, ConfigError> {
+        let dir = match profiles_dir {
+            Some(d) => d.to_path_buf(),
+            None => dirs::home_dir()
+                .map(|home| home.join(".mz"))
+                .unwrap_or_else(|| PathBuf::from("~/.mz")),
+        };
 
-        let global_path = dirs::home_dir()
-            .map(|home| home.join(".mz/profiles.toml"))
-            .unwrap_or_else(|| PathBuf::from("~/.mz/profiles.toml"));
+        let path = dir.join("profiles.toml");
 
-        // Try project directory first
-        let (path, content) = if project_path.exists() {
-            let content =
-                fs::read_to_string(&project_path).map_err(|source| ConfigError::ReadError {
-                    path: project_path.display().to_string(),
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(ConfigError::ProfilesNotFound {
+                    path: path.display().to_string(),
+                });
+            }
+            Err(source) => {
+                return Err(ConfigError::ReadError {
+                    path: path.display().to_string(),
                     source,
-                })?;
-            (project_path, content)
-        } else if global_path.exists() {
-            let content =
-                fs::read_to_string(&global_path).map_err(|source| ConfigError::ReadError {
-                    path: global_path.display().to_string(),
-                    source,
-                })?;
-            (global_path, content)
-        } else {
-            return Err(ConfigError::ProfilesNotFound {
-                project_path: project_path.display().to_string(),
-                global_path: global_path.display().to_string(),
-            });
+                });
+            }
         };
 
         let profiles_data: BTreeMap<String, ProfileData> =
@@ -267,15 +258,15 @@ impl ProfilesConfig {
     /// Convenience method to load profiles and get a specific profile in one call
     ///
     /// # Arguments
-    /// * `project_directory` - Optional project directory to search for profiles.toml
+    /// * `profiles_dir` - Optional directory containing `profiles.toml`
     /// * `cli_profile` - Optional profile name from CLI flag override
     /// * `default_profile` - Default profile name from project.toml
     pub fn load_profile(
-        project_directory: Option<&Path>,
+        profiles_dir: Option<&Path>,
         cli_profile: Option<&str>,
         default_profile: &str,
     ) -> Result<Profile, ConfigError> {
-        let config = Self::load(project_directory)?;
+        let config = Self::load(profiles_dir)?;
         let name = cli_profile.unwrap_or(default_profile);
         let profile = config.get_profile(name)?;
         config.expand_env_vars(profile)
@@ -311,6 +302,7 @@ impl Settings {
         cli_profile: Option<&str>,
         docker_image_override: Option<&str>,
         needs_connection: bool,
+        profiles_dir: Option<&Path>,
     ) -> Result<Self, ConfigError> {
         let project_settings = ProjectSettings::load(&directory)?;
         let profile_name = cli_profile.unwrap_or(&project_settings.profile).to_string();
@@ -324,7 +316,7 @@ impl Settings {
 
         let connection = if needs_connection {
             Some(ProfilesConfig::load_profile(
-                Some(&directory),
+                profiles_dir,
                 cli_profile,
                 &project_settings.profile,
             )?)
