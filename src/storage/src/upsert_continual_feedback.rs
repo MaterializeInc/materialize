@@ -13,10 +13,12 @@
 use std::cmp::Reverse;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::time::Instant;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, VecCollection};
 use indexmap::map::Entry;
+use mz_ore::cast::CastFrom;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, EnvelopeError};
 use mz_timely_util::builder_async::{
@@ -372,12 +374,20 @@ where
                                 if PartialOrder::less_equal(&input_upper, &resume_upper) {
                                     data.retain(|(_, ts, _)| resume_upper.less_equal(ts));
                                 }
-                                let batch = data.drain(..).map(|((key, value, order), time, diff)| {
-                                    assert!(diff.is_positive(), "invalid upsert input");
-                                    (time, key, order, value)
-                                });
+                                let batch: Vec<_> = data.drain(..)
+                                    .map(|((key, value, order), time, diff)| {
+                                        assert!(diff.is_positive(), "invalid upsert input");
+                                        (time, key, order, value)
+                                    }).collect();
+                                let batch_len = batch.len();
+                                let stage_start = Instant::now();
                                 match stash.stage_batch(batch).await {
-                                    Ok(()) => {}
+                                    Ok(()) => {
+                                        upsert_metrics.shared.stash_stage_latency
+                                            .observe(stage_start.elapsed().as_secs_f64());
+                                        upsert_metrics.stash_stage_size
+                                            .inc_by(u64::cast_from(batch_len));
+                                    }
                                     Err(e) => {
                                         UpsertErrorEmitter::<G>::emit(
                                             &mut error_emitter,
@@ -456,16 +466,28 @@ where
                     stash_len = stash.len(),
                     "stashed updates");
 
-                let eligible_updates = match stash.drain(|ts| {
-                    !input_upper.less_equal(ts) && !persist_upper.less_than(ts)
-                }).await {
-                    Ok(updates) => updates,
+                let drain_start = Instant::now();
+                let eligible_updates = match stash
+                    .drain(|ts| !input_upper.less_equal(ts) && !persist_upper.less_than(ts))
+                    .await
+                {
+                    Ok(updates) => {
+                        upsert_metrics
+                            .shared
+                            .stash_drain_latency
+                            .observe(drain_start.elapsed().as_secs_f64());
+                        upsert_metrics
+                            .stash_drain_size
+                            .inc_by(u64::cast_from(updates.len()));
+                        updates
+                    }
                     Err(e) => {
                         UpsertErrorEmitter::<G>::emit(
                             &mut error_emitter,
                             "Failed to drain stash".to_string(),
                             e,
-                        ).await;
+                        )
+                        .await;
                         vec![]
                     }
                 };
@@ -485,7 +507,8 @@ where
                     &mut error_emitter,
                     &mut state,
                     &source_config,
-                ).await;
+                )
+                .await;
 
                 tracing::trace!(
                     worker_id = %source_config.worker_id,
@@ -657,9 +680,12 @@ mod test {
         // Helper to wrap timestamps in the appropriate types
         let new_ts = |ts| (MzTimestamp::new(ts), Subtime::minimum());
 
+        let stash_dir = tempfile::tempdir().unwrap();
+        let stash_path = stash_dir.path().to_path_buf();
+
         let output_handle = timely::execute_directly(move |worker| {
-            let (mut input_handle, mut persist_handle, output_probe, output_handle) = worker
-                .dataflow::<MzTimestamp, _, _>(|scope| {
+            let (mut input_handle, mut persist_handle, output_probe, output_handle) =
+                worker.dataflow::<MzTimestamp, _, _>(|scope| {
                     // Enter a subscope since the upsert operator expects to work a backpressure
                     // enabled scope.
                     scope.scoped::<(MzTimestamp, Subtime), _, _>("upsert", |scope| {
@@ -705,9 +731,11 @@ mod test {
 
                         let stash_shared = Arc::clone(&upsert_metrics.rocksdb_shared);
                         let stash_instance = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
-                        let stash_dir = tempfile::tempdir().unwrap();
+                        let stash_path = stash_path.clone();
                         let stash_fn = || async move {
-                            use crate::upsert::stash::{StashValue, stash_merge_function, UpsertStash};
+                            use crate::upsert::stash::{
+                                StashValue, UpsertStash, stash_merge_function,
+                            };
                             let env = Env::mem_env().unwrap();
                             let merge_op = Some((
                                 "test_stash_merge".to_string(),
@@ -717,12 +745,18 @@ mod test {
                             ));
                             UpsertStash::new(
                                 mz_rocksdb::RocksDBInstance::new(
-                                    stash_dir.path(),
-                                    mz_rocksdb::InstanceOptions::new(env, 1, merge_op, upsert_bincode_opts()),
+                                    &stash_path,
+                                    mz_rocksdb::InstanceOptions::new(
+                                        env,
+                                        1,
+                                        merge_op,
+                                        upsert_bincode_opts(),
+                                    ),
                                     RocksDBConfig::new(Default::default(), None),
                                     stash_shared,
                                     stash_instance,
-                                ).unwrap()
+                                )
+                                .unwrap(),
                             )
                         };
 
@@ -833,6 +867,8 @@ mod test {
         let (tx, rx) = mpsc::channel::<std::thread::JoinHandle<()>>();
 
         let rocksdb_dir = tempfile::tempdir().unwrap();
+        let stash_dir = tempfile::tempdir().unwrap();
+        let stash_path = stash_dir.path().to_path_buf();
         let output_handle = timely::execute_directly(move |worker| {
             let tx = tx.clone();
             let (mut input_handle, mut persist_handle, output_probe, output_handle) =
@@ -923,9 +959,11 @@ mod test {
 
                         let stash_shared = Arc::clone(&upsert_metrics.rocksdb_shared);
                         let stash_instance = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
-                        let stash_dir = tempfile::tempdir().unwrap();
+                        let stash_path = stash_path.clone();
                         let stash_fn = || async move {
-                            use crate::upsert::stash::{StashValue, stash_merge_function, UpsertStash};
+                            use crate::upsert::stash::{
+                                StashValue, UpsertStash, stash_merge_function,
+                            };
                             let env = Env::mem_env().unwrap();
                             let merge_op = Some((
                                 "test_stash_merge".to_string(),
@@ -935,12 +973,18 @@ mod test {
                             ));
                             UpsertStash::new(
                                 mz_rocksdb::RocksDBInstance::new(
-                                    stash_dir.path(),
-                                    mz_rocksdb::InstanceOptions::new(env, 1, merge_op, upsert_bincode_opts()),
+                                    &stash_path,
+                                    mz_rocksdb::InstanceOptions::new(
+                                        env,
+                                        1,
+                                        merge_op,
+                                        upsert_bincode_opts(),
+                                    ),
                                     RocksDBConfig::new(Default::default(), None),
                                     stash_shared,
                                     stash_instance,
-                                ).unwrap()
+                                )
+                                .unwrap(),
                             )
                         };
 
