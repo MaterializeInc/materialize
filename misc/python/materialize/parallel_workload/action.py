@@ -1498,6 +1498,11 @@ class FlipFlagsAction(Action):
             "'1s'",
             "'10s'",
         ]
+        self.flags_with_values["compute_prometheus_scrape_interval"] = [
+            "'0s'",
+            "'1s'",
+            "'10s'",
+        ]
         # Note: it's not safe to re-enable this flag after writing with `persist_validate_part_bounds_on_write`,
         # since those new-style parts may fail our old-style validation.
         self.flags_with_values["persist_validate_part_bounds_on_read"] = ["FALSE"]

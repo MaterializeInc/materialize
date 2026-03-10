@@ -186,7 +186,7 @@ Differential␠Logging␠Demux  Consolidate␠Differential(BatcherRecords)  allo
 Differential␠Logging␠Demux  Consolidate␠Differential(BatcherSize)  alloc::vec::Vec<((usize,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Differential␠Logging␠Demux  Consolidate␠Differential(Sharing)  alloc::vec::Vec<((usize,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 FlatMapReachability  Consolidate␠Timely(Reachability)  mz_timely_util::columnar::Column<(((bool,␠usize,␠usize,␠usize,␠mz_repr::timestamp::Timestamp),␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
-PrometheusMetrics  ToRow␠PrometheusMetrics  mz_timely_util::columnar::Column<(((alloc::string::String,␠alloc::string::String),␠(f64,␠alloc::string::String,␠alloc::string::String)),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
+PrometheusMetrics  Arrange␠PrometheusMetrics  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Replay␠compute␠logs  Compute␠Logging␠Demux  mz_timely_util::columnar::Column<(core::time::Duration,␠mz_compute::logging::compute::ComputeEvent)>
 Replay␠differential␠logs  Differential␠Logging␠Demux  alloc::vec::Vec<(core::time::Duration,␠differential_dataflow::logging::DifferentialEvent)>
 Replay␠reachability␠logs  FlatMapReachability  mz_timely_util::columnar::Column<(core::time::Duration,␠(usize,␠alloc::vec::Vec<(usize,␠usize,␠bool,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>))>
@@ -209,7 +209,6 @@ ToRow␠Differential(BatcherCapacity)  Arrange␠Differential(BatcherCapacity)  
 ToRow␠Differential(BatcherRecords)  Arrange␠Differential(BatcherRecords)  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 ToRow␠Differential(BatcherSize)  Arrange␠Differential(BatcherSize)  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 ToRow␠Differential(Sharing)  Arrange␠Differential(Sharing)  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
-ToRow␠PrometheusMetrics  Arrange␠PrometheusMetrics  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 ToRow␠Timely(Addresses)  Arrange␠Timely(Addresses)  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 ToRow␠Timely(BatchesReceived)  Arrange␠Timely(BatchesReceived)  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 ToRow␠Timely(BatchesSent)  Arrange␠Timely(BatchesSent)  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
@@ -241,7 +240,6 @@ GROUP BY type;
 1  alloc::vec::Vec<alloc::vec::Vec<differential_dataflow::containers::TimelyStack<((mz_compute::logging::timely::ScheduleHistogramDatum,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>
 1  alloc::vec::Vec<alloc::vec::Vec<differential_dataflow::containers::TimelyStack<((usize,␠alloc::string::String),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>
 1  alloc::vec::Vec<alloc::vec::Vec<differential_dataflow::containers::TimelyStack<((usize,␠alloc::vec::Vec<usize>),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>
-1  mz_timely_util::columnar::Column<(((alloc::string::String,␠alloc::string::String),␠(f64,␠alloc::string::String,␠alloc::string::String)),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 1  mz_timely_util::columnar::Column<(((bool,␠usize,␠usize,␠usize,␠mz_repr::timestamp::Timestamp),␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 1  mz_timely_util::columnar::Column<((mz_compute::logging::timely::ChannelDatum,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 1  mz_timely_util::columnar::Column<(core::time::Duration,␠(usize,␠alloc::vec::Vec<(usize,␠usize,␠bool,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>))>
