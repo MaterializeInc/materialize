@@ -9,6 +9,10 @@ any remote database.
 
     mz-deploy test [FILTER]
 
+## Flags
+
+- `--junit-xml <FILE>` — Write test results in JUnit XML format.
+
 ## Writing Tests
 
 Tests are written inline in the same `.sql` file as the view they test,
@@ -123,6 +127,15 @@ exits successfully.
     mz-deploy test                         # Run all tests
     mz-deploy test 'materialize.public.*'  # Run tests in a specific schema
     mz-deploy test --docker-image img:tag  # Use a specific Docker image
+    mz-deploy test --junit-xml results.xml # Export results as JUnit XML
+
+## CI/CD Usage
+
+Use `--junit-xml` to export test results for CI systems like GitHub Actions,
+Jenkins, and GitLab CI. The JUnit XML format is the standard for test result
+annotations and trend tracking.
+
+    mz-deploy test --junit-xml results.xml
 
 ## Error Recovery
 
