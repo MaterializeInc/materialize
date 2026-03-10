@@ -27,11 +27,13 @@ if they are "ready" or "lagging."
 - `--allowed-lag <SECONDS>` — Maximum wallclock lag threshold for cluster
   status (default: 300 = 5 minutes). Clusters exceeding this are shown as
   lagging.
+- `--output json` — Print deployment list as JSON to stdout.
 
 ## Examples
 
     mz-deploy list                    # Default lag threshold
     mz-deploy list --allowed-lag 60   # Stricter 1-minute threshold
+    mz-deploy list --output json          # Machine-readable output
 
 ## Error Recovery
 

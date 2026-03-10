@@ -8,6 +8,10 @@ their content hashes.
 
     mz-deploy describe <DEPLOY_ID>
 
+## Flags
+
+- `--output json` — Print deployment details as JSON to stdout.
+
 ## Behavior
 
 1. Connects to the database.
@@ -24,6 +28,7 @@ their content hashes.
 
     mz-deploy describe abc123              # Describe a deployment
     mz-deploy describe abc123 --profile staging   # Use a specific profile
+    mz-deploy describe abc123 --output json    # Machine-readable output
 
 ## Error Recovery
 

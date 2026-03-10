@@ -49,7 +49,7 @@ Infrastructure:
 
 Deploy:
   stage                Create a staging deployment for testing changes
-  wait                 Wait for staging deployment clusters to be hydrated and ready [aliases: ready]
+  wait                 Wait for staging deployment clusters to be hydrated and ready
   deploy               Promote a staging deployment to production [aliases: promote]
   abort                Clean up a staging deployment by dropping all resources
   describe             Show detailed information about a specific deployment [aliases: show]
@@ -433,7 +433,6 @@ enum Command {
     #[command(
         hide = true,
         name = "wait",
-        visible_alias = "ready",
         after_help = "Run 'mz-deploy help wait' for a detailed usage guide."
     )]
     Wait {
@@ -830,12 +829,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             cli::commands::test::run(&settings, filter.as_deref(), junit_xml.as_deref()).await
         }
         Some(Command::Abort { deploy_id }) => {
-            if json {
-                return Err(CliError::Message(
-                    "--output json is not supported for the 'abort' command".to_string(),
-                ));
-            }
-            cli::commands::abort::run(&settings, &deploy_id).await
+            cli::commands::abort::run(&settings, &deploy_id, json).await
         }
         Some(Command::List { allowed_lag }) => {
             cli::commands::deployments::run(&settings, allowed_lag, json).await

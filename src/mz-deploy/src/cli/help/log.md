@@ -23,12 +23,14 @@ production, similar to `git log`. Newest promotions appear first.
 
 - `--limit <N>` / `-l <N>` — Maximum number of deployments to show
   (default: unlimited).
+- `--output json` — Print deployment history as JSON to stdout.
 
 ## Examples
 
     mz-deploy log               # Full history
     mz-deploy log --limit 10    # Last 10 promotions
     mz-deploy log -l 1          # Most recent promotion only
+    mz-deploy log --output json           # Machine-readable output
 
 ## Error Recovery
 

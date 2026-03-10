@@ -8,6 +8,10 @@ staging deployments — it permanently removes the staging environment.
 
     mz-deploy abort <DEPLOY_ID>
 
+## Flags
+
+- `--output json` — Print abort summary as JSON to stdout.
+
 ## Behavior
 
 1. Validates the deployment exists and has not been promoted.
@@ -30,6 +34,7 @@ multiple times safely.
 
     mz-deploy abort abc123                   # Clean up staging deployment
     mz-deploy abort abc123 --profile prod    # Use a specific profile
+    mz-deploy abort abc123 --output json       # Machine-readable output
 
 ## Error Recovery
 
