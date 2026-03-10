@@ -15,10 +15,9 @@
 # limitations under the License.
 
 import os
-from distutils.core import setup
 from pathlib import Path
 
-from setuptools import find_packages
+from setuptools import find_packages, setup
 
 README = Path(__file__).parent / "README.md"
 
