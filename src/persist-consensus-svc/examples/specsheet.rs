@@ -30,6 +30,7 @@ use clap::Parser;
 use mz_ore::cast::{CastFrom, CastLossy};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use prometheus::core::Metric;
 use serde::Deserialize;
 use tokio::sync::{mpsc, oneshot};
 use tonic::transport::Server;
@@ -41,7 +42,8 @@ use mz_persist::generated::consensus_service::{
     ProtoCompareAndSetRequest, ProtoHeadRequest, ProtoScanRequest, ProtoTruncateRequest,
     ProtoVersionedData,
 };
-use mz_persist_consensus_svc::actor::{Actor, ActorCommand, ActorConfig};
+use mz_persist::rpc::{RpcConsensus, RpcConsensusConfig};
+use mz_persist_consensus_svc::actor::{Actor, ActorCommand, ActorConfig, SharedShards};
 use mz_persist_consensus_svc::metrics::ConsensusMetrics;
 use mz_persist_consensus_svc::service::ConsensusGrpcService;
 use mz_persist_consensus_svc::wal::{LatencyProfile, LatencyWalWriter};
@@ -175,6 +177,12 @@ struct Cli {
     #[arg(long, value_enum)]
     transport: Option<TransportMode>,
 
+    /// Number of gRPC client connections (HTTP/2 connections) to the server.
+    /// More connections reduce h2 mutex contention at the cost of more TCP
+    /// sockets. Only meaningful with --transport grpc.
+    #[arg(long)]
+    grpc_connections: Option<usize>,
+
     #[arg(long)]
     duration: Option<u64>,
     #[arg(long)]
@@ -191,7 +199,6 @@ struct Cli {
 #[serde(default)]
 struct WorkloadConfig {
     name: String,
-    description: String,
     num_shards: u64,
     writers_per_shard: u64,
     value_size: usize,
@@ -209,6 +216,7 @@ struct WorkloadConfig {
     snapshot_interval: u64,
     wal_latency: WalLatency,
     transport: TransportMode,
+    grpc_connections: usize,
     duration: u64,
     warmup: u64,
     // Not in YAML — CLI-only flag.
@@ -220,7 +228,6 @@ impl Default for WorkloadConfig {
     fn default() -> Self {
         WorkloadConfig {
             name: "default".to_string(),
-            description: "Default workload".to_string(),
             num_shards: 1000,
             writers_per_shard: 2,
             value_size: 64,
@@ -238,6 +245,7 @@ impl Default for WorkloadConfig {
             snapshot_interval: u64::MAX,
             wal_latency: WalLatency::Zero,
             transport: TransportMode::Direct,
+            grpc_connections: 1,
             duration: 60,
             warmup: 10,
             json: false,
@@ -286,6 +294,7 @@ impl WorkloadConfig {
             snapshot_interval,
             wal_latency,
             transport,
+            grpc_connections,
             duration,
             warmup,
         );
@@ -330,8 +339,11 @@ impl WorkloadConfig {
 /// own clone — the gRPC client is cheap to clone (shared HTTP/2 connection).
 #[derive(Clone)]
 enum Transport {
-    /// Direct mpsc channel to the actor (no serialization overhead).
-    Direct(mpsc::Sender<ActorCommand>),
+    /// Direct channel + shared state (no serialization overhead).
+    Direct {
+        tx: mpsc::Sender<ActorCommand>,
+        shared_shards: SharedShards,
+    },
     /// gRPC client connected to a loopback tonic server.
     Grpc(ConsensusServiceClient<tonic::transport::Channel>),
 }
@@ -351,7 +363,7 @@ impl Transport {
         data: Vec<u8>,
     ) -> CasResult {
         match self {
-            Transport::Direct(tx) => {
+            Transport::Direct { tx, .. } => {
                 let (reply_tx, reply_rx) = oneshot::channel();
                 if tx
                     .send(ActorCommand::CompareAndSet {
@@ -395,16 +407,12 @@ impl Transport {
 
     async fn head(&mut self, key: &str) -> Option<(u64, usize)> {
         match self {
-            Transport::Direct(tx) => {
-                let (reply_tx, reply_rx) = oneshot::channel();
-                tx.send(ActorCommand::Head {
-                    key: key.to_string(),
-                    reply: reply_tx,
-                })
-                .await
-                .ok()?;
-                let resp = reply_rx.await.ok()?.ok()?;
-                resp.data.map(|d| (d.seqno, d.data.len()))
+            Transport::Direct { shared_shards, .. } => {
+                let shards = shared_shards.read().ok()?;
+                shards
+                    .get(key)
+                    .and_then(|s| s.entries.last())
+                    .map(|e| (e.seqno, e.data.len()))
             }
             Transport::Grpc(client) => {
                 let resp = client
@@ -420,21 +428,17 @@ impl Transport {
 
     async fn scan(&mut self, key: &str, from: u64, limit: u64) -> bool {
         match self {
-            Transport::Direct(tx) => {
-                let (reply_tx, reply_rx) = oneshot::channel();
-                if tx
-                    .send(ActorCommand::Scan {
-                        key: key.to_string(),
-                        from,
-                        limit,
-                        reply: reply_tx,
-                    })
-                    .await
-                    .is_err()
-                {
+            Transport::Direct { shared_shards, .. } => {
+                let Ok(shards) = shared_shards.read() else {
                     return false;
+                };
+                if let Some(shard) = shards.get(key) {
+                    let from_idx = shard.entries.partition_point(|e| e.seqno < from);
+                    let lim = usize::try_from(limit).unwrap_or(usize::MAX);
+                    let slice = &shard.entries[from_idx..];
+                    let _ = &slice[..usize::min(lim, slice.len())];
                 }
-                reply_rx.await.is_ok()
+                true
             }
             Transport::Grpc(client) => client
                 .scan(ProtoScanRequest {
@@ -449,7 +453,7 @@ impl Transport {
 
     async fn truncate(&mut self, key: &str, seqno: u64) -> bool {
         match self {
-            Transport::Direct(tx) => {
+            Transport::Direct { tx, .. } => {
                 let (reply_tx, reply_rx) = oneshot::channel();
                 if tx
                     .send(ActorCommand::Truncate {
@@ -742,8 +746,14 @@ fn print_report(
         format_count(u64::cast_lossy(target_writes_per_sec)),
     );
     println!(
-        "Transport: {}, WAL latency: {}",
-        cfg.transport, cfg.wal_latency
+        "Transport: {}{}, WAL latency: {}",
+        cfg.transport,
+        if cfg.transport == TransportMode::Grpc {
+            format!(" ({} connections)", cfg.grpc_connections)
+        } else {
+            String::new()
+        },
+        cfg.wal_latency
     );
     println!(
         "Duration: {}s ({}s warmup), flush interval: {}ms",
@@ -787,6 +797,49 @@ fn print_report(
             ms(cas_rejected.p99),
             ms(cas_rejected.max),
         );
+    }
+
+    // --- Server-side latencies (gRPC service layer) ---
+    if cfg.transport == TransportMode::Grpc {
+        println!();
+        println!("--- Server-side Latencies (ms, from gRPC handler) ---");
+        println!(
+            "  {:<16} {:>10} {:>8} {:>8} {:>8} {:>8} {:>8}",
+            "Operation", "count", "p50", "p90", "p95", "p99", "max"
+        );
+        for (name, hist) in [
+            ("CAS", &metrics.grpc_cas_latency_seconds),
+            ("Head", &metrics.grpc_head_latency_seconds),
+            ("Scan", &metrics.grpc_scan_latency_seconds),
+        ] {
+            let proto = hist.metric();
+            let h = proto.get_histogram();
+            let count = h.get_sample_count();
+            if count == 0 {
+                continue;
+            }
+            // Extract percentiles from the histogram buckets.
+            let buckets = h.get_bucket();
+            let percentiles: [f64; 5] = [50.0, 90.0, 95.0, 99.0, 100.0];
+            let mut values = Vec::new();
+            for pct in &percentiles {
+                let target = (pct / 100.0 * count as f64).ceil() as u64;
+                let mut val: f64 = 0.0;
+                for b in buckets {
+                    val = b.get_upper_bound();
+                    if b.get_cumulative_count() >= target {
+                        break;
+                    }
+                }
+                values.push(val * 1000.0); // seconds -> ms
+            }
+            println!(
+                "  {:<16} {:>10} {:>8.2} {:>8.2} {:>8.2} {:>8.2} {:>8.2}",
+                name,
+                format_count(count),
+                values[0], values[1], values[2], values[3], values[4],
+            );
+        }
     }
 
     // --- Throughput ---
@@ -931,6 +984,8 @@ fn print_json(
     let total_ops: u64 = ops.iter().map(|o| o.stats.count).sum();
     let flush_count = metrics.flush_count.get();
     let wal_bytes = metrics.object_store_wal_write_bytes.get();
+    let target_writes_per_sec =
+        f64::cast_lossy(cfg.num_shards) * f64::cast_lossy(cfg.writers_per_shard) * cfg.write_rate_per_second;
 
     // Only include operations that actually occurred.
     let mut latency_map: serde_json::Map<String, serde_json::Value> = ops
@@ -1004,11 +1059,13 @@ fn print_json(
             "num_shards": cfg.num_shards,
             "writers_per_shard": cfg.writers_per_shard,
             "value_size": cfg.value_size,
+            "target_writes_per_sec": u64::cast_lossy(target_writes_per_sec.round()),
             "duration": cfg.duration,
             "warmup": cfg.warmup,
             "flush_interval_ms": cfg.flush_interval_ms,
             "wal_latency": cfg.wal_latency.to_string(),
             "transport": cfg.transport.to_string(),
+            "grpc_connections": cfg.grpc_connections,
         },
         "latencies": latencies,
         "clients": {
@@ -1081,14 +1138,15 @@ async fn main() {
     };
     let latency_profile = cfg.latency_profile();
     let wal = LatencyWalWriter::new(latency_profile);
-    let (actor, handle) = Actor::new(config, wal, metrics);
+    let (handle, _actor_thread) = Actor::spawn(config, wal, metrics);
     let tx = handle.sender().clone();
-    let actor_handle = mz_ore::task::spawn(|| "specsheet-actor", actor.run());
+    let shared_shards = handle.shared_shards().clone();
 
     // --- Create transport ---
     let grpc_server_handle = if cfg.transport == TransportMode::Grpc {
         let grpc_service = ConsensusGrpcService {
             handle: handle.clone(),
+            metrics: metrics_for_report.clone(),
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -1108,14 +1166,26 @@ async fn main() {
         None
     };
 
-    let transport = if let Some((addr, _)) = &grpc_server_handle {
-        let client = ConsensusServiceClient::connect(format!("http://{}", addr))
-            .await
-            .expect("failed to connect gRPC client");
-        Transport::Grpc(client)
-    } else {
-        Transport::Direct(tx.clone())
-    };
+    // For gRPC, use RpcConsensus's connection pool to create multiple
+    // independent HTTP/2 connections with round-robin selection, same code
+    // path as production.
+    let grpc_pool: Option<RpcConsensus> =
+        if let Some((addr, _)) = &grpc_server_handle {
+            Some(
+                RpcConsensus::open(RpcConsensusConfig {
+                    endpoint: format!("http://{}", addr),
+                    pool_size: cfg.grpc_connections,
+                    connect_timeout: Duration::from_secs(5),
+                    request_timeout: Duration::from_secs(5),
+                    http2_keep_alive_interval: Duration::from_secs(3),
+                    http2_keep_alive_timeout: Duration::from_secs(60),
+                })
+                .await
+                .expect("failed to connect gRPC client pool"),
+            )
+        } else {
+            None
+        };
 
     // --- Timing ---
     let warmup_dur = Duration::from_secs(cfg.warmup);
@@ -1139,7 +1209,11 @@ async fn main() {
         .flat_map(|s| (0..cfg.writers_per_shard).map(move |w| (s, w)))
         .enumerate()
     {
-        let t = transport.clone();
+        let t = if let Some(pool) = &grpc_pool {
+            Transport::Grpc(pool.get_client())
+        } else {
+            Transport::Direct { tx: tx.clone(), shared_shards: shared_shards.clone() }
+        };
         let stop = Arc::clone(&stop);
         let client_cfg = ClientConfig {
             shard_key: format!("shard-{:06}", shard_idx),
@@ -1160,8 +1234,9 @@ async fn main() {
     // Drop our sender clones so the actor shuts down when tasks finish.
     // The original `handle` also holds a sender — drop it too.
     drop(tx);
+    drop(shared_shards);
     drop(handle);
-    drop(transport);
+    drop(grpc_pool);
 
     // --- Wait for duration ---
     tokio::time::sleep(total_dur).await;
@@ -1196,7 +1271,7 @@ async fn main() {
         drop(handle);
     }
 
-    let _ = actor_handle.await;
+    let _ = _actor_thread.join();
 
     let measurement_elapsed = Duration::from_secs(cfg.duration);
     let metrics = metrics_for_report;
