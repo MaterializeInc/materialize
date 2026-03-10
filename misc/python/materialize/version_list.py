@@ -193,7 +193,7 @@ class AncestorImageResolutionBase:
     def __init__(self, ancestor_overrides: dict[str, MzVersion]):
         self.ancestor_overrides = ancestor_overrides
 
-    def resolve_image_tag(self) -> tuple[str, str]:
+    def resolve_image_tag(self) -> tuple[str, str] | None:
         raise NotImplementedError
 
     def _get_override_commit_instead_of_version(

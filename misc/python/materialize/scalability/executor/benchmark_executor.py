@@ -38,6 +38,8 @@ from materialize.scalability.workload.workloads.self_test_workloads import *  # 
 # number of retries in addition to the first run
 MAX_RETRIES_ON_REGRESSION = 2
 
+next_worker_id: int = 0
+
 
 class BenchmarkExecutor:
     def __init__(

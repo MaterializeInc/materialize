@@ -63,7 +63,9 @@ class TypedVersionBase(Version):
         if drop_dev_suffix:
             version, _, _ = version.partition("-dev")
 
-        return super().parse(version)
+        result = super().parse(version)
+        assert isinstance(result, cls)
+        return result
 
     @classmethod
     def try_parse(
