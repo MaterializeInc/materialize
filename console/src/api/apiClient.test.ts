@@ -296,3 +296,64 @@ describe("SelfManagedApiClient", () => {
     server.resetHandlers();
   });
 });
+
+const MOCK_OIDC_CONFIG = {
+  ...MOCK_SELF_MANAGED_CONFIG,
+  authMode: "Oidc" as const,
+} as SelfManagedAppConfig;
+
+describe("SelfManagedApiClient (Oidc)", () => {
+  it("should send Bearer header and return token ws config when OIDC token exists", async () => {
+    const MOCK_TOKEN = "test-oidc-id-token";
+    const client = new SelfManagedApiClient({
+      appConfig: MOCK_OIDC_CONFIG,
+    });
+    await client.oidcManagerInitializationPromise;
+    client.oidcManager = { getIdToken: () => MOCK_TOKEN } as any;
+
+    const TEST_URL = "https://oidc.example.com";
+    let headers: Headers | null = null;
+    server.use(
+      http.get(TEST_URL, ({ request }) => {
+        headers = request.headers;
+        return HttpResponse.json({});
+      }),
+    );
+
+    await client.mzApiFetch(TEST_URL);
+    expect(headers!.get("Authorization")).toBe(`Bearer ${MOCK_TOKEN}`);
+    expect(client.getWsAuthConfig()).toEqual({ token: MOCK_TOKEN });
+    server.resetHandlers();
+  });
+
+  it("should skip Bearer header, return null ws config, and redirect on 401 when no OIDC token", async () => {
+    const client = new SelfManagedApiClient({
+      appConfig: MOCK_OIDC_CONFIG,
+    });
+    client.oidcManager = { getIdToken: () => undefined } as any;
+
+    expect(client.getWsAuthConfig()).toBeNull();
+
+    const TEST_URL = "https://oidc-no-token.example.com";
+    let headers: Headers | null = null;
+    const logoutSpy = vi.fn();
+    server.use(
+      http.get(TEST_URL, ({ request }) => {
+        headers = request.headers;
+        return new HttpResponse(null, { status: 401 });
+      }),
+      http.post(`${client.authApiBasePath}/api/logout`, () => {
+        logoutSpy();
+        return new HttpResponse(null, { status: 200 });
+      }),
+    );
+
+    await client.mzApiFetch(TEST_URL);
+    expect(headers!.get("Authorization")).toBeNull();
+    await vi.waitFor(() => {
+      expect(logoutSpy).toHaveBeenCalled();
+    });
+
+    server.resetHandlers();
+  });
+});

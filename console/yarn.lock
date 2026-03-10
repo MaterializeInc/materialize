@@ -10765,6 +10765,7 @@ __metadata:
     mitt: "npm:^3.0.1"
     module-alias: "npm:^2.2.3"
     msw: "npm:^2.6.4"
+    oidc-client-ts: "npm:^3.4.1"
     openapi-fetch: "npm:^0.17.0"
     openapi-typescript: "npm:^7.13.0"
     p-retry: "npm:^4.6.1"
@@ -10778,6 +10779,7 @@ __metadata:
     react-dom: "npm:^18.3.1"
     react-hook-form: "npm:^7.53.1"
     react-intersection-observer: "npm:^9.13.1"
+    react-oidc-context: "npm:^3.3.0"
     react-refresh: "npm:^0.14.2"
     react-router-dom: "npm:^6.27.0"
     react-select: "npm:^5.8.3"
@@ -11437,6 +11439,15 @@ __metadata:
   version: 1.1.2
   resolution: "obuf@npm:1.1.2"
   checksum: 10c0/520aaac7ea701618eacf000fc96ae458e20e13b0569845800fc582f81b386731ab22d55354b4915d58171db00e79cfcd09c1638c02f89577ef092b38c65b7d81
+  languageName: node
+  linkType: hard
+
+"oidc-client-ts@npm:^3.4.1":
+  version: 3.4.1
+  resolution: "oidc-client-ts@npm:3.4.1"
+  dependencies:
+    jwt-decode: "npm:^4.0.0"
+  checksum: 10c0/cf22e9bdb032daa33213e70c6c0dce374aa7cfaa82fca7c82205ace67d7efc2c59200d02ac4c57bf436afd1c0e46dc99e0867ec6e1958e943cbc4e1389131fb7
   languageName: node
   linkType: hard
 
@@ -12333,6 +12344,16 @@ __metadata:
     react: ^0.14 || ^15.0.0 || ^16.0.0 || ^17.0.0 || ^18.0.0
     react-dom: ^0.14 || ^15.0.0 || ^16.0.0 || ^17.0.0 || ^18.0.0
   checksum: 10c0/a9ab7ed90cfc74eb07c3dce1916c17f3f068db29f069c1cae361c8340b860ccf5a7e6cb9048f68dd698d7ed6fe0ad04d987670d50589d1f17b113f546c35d719
+  languageName: node
+  linkType: hard
+
+"react-oidc-context@npm:^3.3.0":
+  version: 3.3.0
+  resolution: "react-oidc-context@npm:3.3.0"
+  peerDependencies:
+    oidc-client-ts: ^3.1.0
+    react: ">=16.14.0"
+  checksum: 10c0/b0d18593a086625d9e4b842f2a2ccd06d54c962119ebcdf83f843b6d5222532129bd9b2c5409aa52da75e92a029f19e231aa9065c7eb00b9e7021343fcc4caf8
   languageName: node
   linkType: hard
 
