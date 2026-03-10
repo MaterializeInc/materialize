@@ -1457,7 +1457,9 @@ impl CsrConnection {
                     .collect();
                 client_config = client_config.resolve_to_addrs(host, &addrs)
             }
-            Tunnel::AwsPrivatelinks(x) => todo!(),
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("AWS PRIVATELINKS syntax is only available for Kafka connections.");
+            }
         }
 
         Ok(client_config.build()?)
@@ -1716,7 +1718,9 @@ impl PostgresConnection<InlinedConnection> {
                     connection_id: connection.connection_id,
                 }
             }
-            Tunnel::AwsPrivatelinks(x) => todo!(),
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("AWS PRIVATELINKS syntax is only available for Kafka connections.");
+            }
         };
 
         Ok(mz_postgres_util::Config::new(
@@ -2070,7 +2074,9 @@ impl MySqlConnection<InlinedConnection> {
                     connection_id: connection.connection_id,
                 }
             }
-            Tunnel::AwsPrivatelinks(aws_privatelinks) => todo!(),
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("AWS PRIVATELINKS syntax is only available for Kafka connections.");
+            }
         };
 
         let aws_config = match self.aws_connection.as_ref() {
@@ -2397,7 +2403,9 @@ impl SqlServerConnectionDetails<InlinedConnection> {
                     port: self.port,
                 }
             }
-            Tunnel::AwsPrivatelinks(x) => todo!(),
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("AWS PRIVATELINKS syntax is only available for Kafka connections.");
+            }
         };
 
         Ok(mz_sql_server_util::Config::new(

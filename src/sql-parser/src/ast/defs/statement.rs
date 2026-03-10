@@ -606,14 +606,14 @@ impl_display_t!(ConnectionDefaultAwsPrivatelink);
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ConnectionAwsPrivatelinkRule<T: AstInfo> {
     /// Route to brokers through PrivateLink connections according to these rules.
-    AwsPrivatelinkRule(ConnectionRuleAwsPrivatelink<T>),
+    AwsPrivatelinkRule(ConnectionAwsPrivatelinkPattern<T>),
     /// Bootstrap through this PrivateLink connection.
     AwsPrivatelinkRuleDefault(ConnectionDefaultAwsPrivatelink<T>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 /// Match this pattern against some brokers' host:port.
-pub struct ConnectionRuleAwsPrivatelink<T: AstInfo> {
+pub struct ConnectionAwsPrivatelinkPattern<T: AstInfo> {
     /// Given a broker's host:port, should we use this route?
     pub pattern: ConnectionRulePattern,
     /// Route to the broker through this PrivateLink connection.
@@ -644,7 +644,7 @@ impl<T: AstInfo> AstDisplay for ConnectionAwsPrivatelinkRule<T> {
 }
 impl_display_t!(ConnectionAwsPrivatelinkRule);
 
-impl<T: AstInfo> AstDisplay for ConnectionRuleAwsPrivatelink<T> {
+impl<T: AstInfo> AstDisplay for ConnectionAwsPrivatelinkPattern<T> {
     fn fmt<W>(&self, f: &mut AstFormatter<W>)
     where
         W: fmt::Write,
@@ -659,7 +659,7 @@ impl<T: AstInfo> AstDisplay for ConnectionRuleAwsPrivatelink<T> {
         }
     }
 }
-impl_display_t!(ConnectionRuleAwsPrivatelink);
+impl_display_t!(ConnectionAwsPrivatelinkPattern);
 
 impl AstDisplay for ConnectionRulePattern {
     fn fmt<W>(&self, f: &mut AstFormatter<W>)
