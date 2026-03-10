@@ -1546,6 +1546,7 @@ pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType
         CommentObjectId::Cluster(_) => ObjectType::Cluster,
         CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
         CommentObjectId::ContinualTask(_) => ObjectType::ContinualTask,
+        CommentObjectId::StandingQuery(_) => ObjectType::StandingQuery,
         CommentObjectId::NetworkPolicy(_) => ObjectType::NetworkPolicy,
     }
 }
@@ -1577,6 +1578,7 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::Schema => ObjectType::Schema,
             mz_sql::catalog::ObjectType::Func => ObjectType::Func,
             mz_sql::catalog::ObjectType::ContinualTask => ObjectType::ContinualTask,
+            mz_sql::catalog::ObjectType::StandingQuery => ObjectType::StandingQuery,
             mz_sql::catalog::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
         },
         SystemObjectType::System => ObjectType::System,

@@ -152,7 +152,7 @@ async fn append_webhook(
     let rows = pack_rows(body, &body_format, headers, &header_tys)?;
 
     // Send the row to get appended.
-    tx.append(rows).await?;
+    let _ = tx.append(rows).await?;
 
     Ok(())
 }

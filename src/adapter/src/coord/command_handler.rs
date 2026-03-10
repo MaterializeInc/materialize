@@ -212,6 +212,10 @@ impl Coordinator {
                     self.handle_get_webhook(database, schema, name, tx);
                 }
 
+                Command::GetStandingQueryClient { item_id, tx } => {
+                    let _ = tx.send(self.standing_query_client(item_id));
+                }
+
                 Command::GetSystemVars { tx } => {
                     let _ = tx.send(self.catalog.system_config().clone());
                 }
@@ -1182,6 +1186,7 @@ impl Coordinator {
                     | Statement::CreateIndex(_)
                     | Statement::CreateMaterializedView(_)
                     | Statement::CreateContinualTask(_)
+                    | Statement::CreateStandingQuery(_)
                     | Statement::CreateRole(_)
                     | Statement::CreateSchema(_)
                     | Statement::CreateSecret(_)
@@ -1197,6 +1202,7 @@ impl Coordinator {
                     | Statement::DropOwned(_)
                     | Statement::GrantPrivileges(_)
                     | Statement::GrantRole(_)
+                    | Statement::ExecuteStandingQuery(_)
                     | Statement::Insert(_)
                     | Statement::ReassignOwned(_)
                     | Statement::RevokePrivileges(_)

@@ -529,6 +529,17 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
+  - id: standing-queries
+    label: Standing queries
+    depends_on: build-aarch64
+    timeout_in_minutes: 180
+    inputs: [test/standing-queries]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: standing-queries
+    agents:
+      queue: hetzner-aarch64-16cpu-32gb
+
   - id: dbt-materialize
     label: dbt-materialize
     depends_on: build-aarch64

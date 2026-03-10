@@ -35,6 +35,7 @@ use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, ColumnName, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
+    SqlScalarType,
 };
 use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
@@ -792,6 +793,11 @@ pub trait CatalogItem {
     /// If the catalog item is not a connection, it returns an error.
     fn connection(&self) -> Result<Connection<ReferencedConnection>, CatalogError>;
 
+    /// Returns the standing query's parameter names and types.
+    ///
+    /// If the catalog item is not a standing query, it returns an error.
+    fn standing_query_params(&self) -> Result<&[(String, SqlScalarType)], CatalogError>;
+
     /// Returns the type of the catalog item.
     fn item_type(&self) -> CatalogItemType;
 
@@ -917,6 +923,8 @@ pub enum CatalogItemType {
     Connection,
     /// A continual task.
     ContinualTask,
+    /// A standing query.
+    StandingQuery,
 }
 
 impl CatalogItemType {
@@ -951,6 +959,7 @@ impl CatalogItemType {
             CatalogItemType::Secret => false,
             CatalogItemType::Connection => false,
             CatalogItemType::ContinualTask => true,
+            CatalogItemType::StandingQuery => true,
         }
     }
 }
@@ -969,6 +978,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Secret => f.write_str("secret"),
             CatalogItemType::Connection => f.write_str("connection"),
             CatalogItemType::ContinualTask => f.write_str("continual task"),
+            CatalogItemType::StandingQuery => f.write_str("standing query"),
         }
     }
 }
@@ -987,6 +997,7 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::Secret => ObjectType::Secret,
             CatalogItemType::Connection => ObjectType::Connection,
             CatalogItemType::ContinualTask => ObjectType::ContinualTask,
+            CatalogItemType::StandingQuery => ObjectType::StandingQuery,
         }
     }
 }
@@ -1005,6 +1016,7 @@ impl From<CatalogItemType> for mz_audit_log::ObjectType {
             CatalogItemType::Secret => mz_audit_log::ObjectType::Secret,
             CatalogItemType::Connection => mz_audit_log::ObjectType::Connection,
             CatalogItemType::ContinualTask => mz_audit_log::ObjectType::ContinualTask,
+            CatalogItemType::StandingQuery => mz_audit_log::ObjectType::StandingQuery,
         }
     }
 }
@@ -1532,6 +1544,7 @@ pub enum ObjectType {
     Schema,
     Func,
     ContinualTask,
+    StandingQuery,
     NetworkPolicy,
 }
 
@@ -1543,7 +1556,8 @@ impl ObjectType {
             | ObjectType::View
             | ObjectType::MaterializedView
             | ObjectType::Source
-            | ObjectType::ContinualTask => true,
+            | ObjectType::ContinualTask
+            | ObjectType::StandingQuery => true,
             ObjectType::Sink
             | ObjectType::Index
             | ObjectType::Type
@@ -1580,6 +1594,7 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Schema => ObjectType::Schema,
             mz_sql_parser::ast::ObjectType::Func => ObjectType::Func,
             mz_sql_parser::ast::ObjectType::ContinualTask => ObjectType::ContinualTask,
+            mz_sql_parser::ast::ObjectType::StandingQuery => ObjectType::StandingQuery,
             mz_sql_parser::ast::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
         }
     }
@@ -1604,6 +1619,7 @@ impl From<CommentObjectId> for ObjectType {
             CommentObjectId::Cluster(_) => ObjectType::Cluster,
             CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
             CommentObjectId::ContinualTask(_) => ObjectType::ContinualTask,
+            CommentObjectId::StandingQuery(_) => ObjectType::StandingQuery,
             CommentObjectId::NetworkPolicy(_) => ObjectType::NetworkPolicy,
         }
     }
@@ -1628,6 +1644,7 @@ impl Display for ObjectType {
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
             ObjectType::ContinualTask => "CONTINUAL TASK",
+            ObjectType::StandingQuery => "STANDING QUERY",
             ObjectType::NetworkPolicy => "NETWORK POLICY",
         })
     }

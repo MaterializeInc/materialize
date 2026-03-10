@@ -425,6 +425,9 @@ pub fn show_objects<'a>(
         ShowObjectType::ContinualTask { in_cluster } => {
             show_continual_tasks(scx, from, in_cluster, filter)
         }
+        ShowObjectType::StandingQuery { in_cluster: _ } => {
+            bail_unsupported!("SHOW STANDING QUERIES")
+        }
         ShowObjectType::NetworkPolicy => {
             assert_none!(from, "parser should reject from");
             show_network_policies(scx, filter)
@@ -715,7 +718,8 @@ pub fn show_columns<'a>(
         | CatalogItemType::Table
         | CatalogItemType::View
         | CatalogItemType::MaterializedView
-        | CatalogItemType::ContinualTask => (),
+        | CatalogItemType::ContinualTask
+        | CatalogItemType::StandingQuery => (),
         ty @ CatalogItemType::Connection
         | ty @ CatalogItemType::Index
         | ty @ CatalogItemType::Func

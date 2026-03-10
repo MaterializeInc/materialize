@@ -124,7 +124,9 @@ mod copy_from;
 mod create_continual_task;
 mod create_index;
 mod create_materialized_view;
+mod create_standing_query;
 mod create_view;
+mod execute_standing_query;
 mod explain_timestamp;
 mod peek;
 mod secret;
@@ -2375,6 +2377,13 @@ impl Coordinator {
                 plan::ExplaineeStatement::CreateIndex { .. } => {
                     self.explain_create_index(ctx, plan).await;
                 }
+                plan::ExplaineeStatement::CreateStandingQuery { .. } => {
+                    self.explain_create_standing_query(ctx, plan).await;
+                }
+                plan::ExplaineeStatement::ExecuteStandingQuery { .. } => {
+                    let result = self.explain_execute_standing_query(plan);
+                    ctx.retire(result);
+                }
                 plan::ExplaineeStatement::Select { .. } => {
                     self.explain_peek(ctx, plan, target_cluster).await;
                 }
@@ -2711,7 +2720,7 @@ impl Coordinator {
                         }
                     }
                     match entry.item().typ() {
-                        typ @ (Func | View | MaterializedView | ContinualTask) => {
+                        typ @ (Func | View | MaterializedView | ContinualTask | StandingQuery) => {
                             ids_to_check.extend(entry.uses());
                             let valid_id = id.is_user() || matches!(typ, Func);
                             valid_id
@@ -3116,7 +3125,8 @@ impl Coordinator {
                     CatalogItem::Table(_)
                     | CatalogItem::MaterializedView(_)
                     | CatalogItem::Source(_)
-                    | CatalogItem::ContinualTask(_) => None,
+                    | CatalogItem::ContinualTask(_)
+                    | CatalogItem::StandingQuery(_) => None,
                     CatalogItem::Index(index) => Some(index.cluster_id),
                     CatalogItem::Log(_)
                     | CatalogItem::View(_)

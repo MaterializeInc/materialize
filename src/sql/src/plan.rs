@@ -107,7 +107,7 @@ use crate::plan::with_options::OptionalDuration;
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
 pub use hir::{
-    AggregateExpr, CoercibleScalarExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind,
+    AggregateExpr, CoercibleScalarExpr, ColumnRef, Hir, HirRelationExpr, HirScalarExpr, JoinKind,
     WindowExprType,
 };
 pub use lowering::Config as HirToMirConfig;
@@ -145,6 +145,7 @@ pub enum Plan {
     CreateView(CreateViewPlan),
     CreateMaterializedView(CreateMaterializedViewPlan),
     CreateContinualTask(CreateContinualTaskPlan),
+    CreateStandingQuery(CreateStandingQueryPlan),
     CreateNetworkPolicy(CreateNetworkPolicyPlan),
     CreateIndex(CreateIndexPlan),
     CreateType(CreateTypePlan),
@@ -201,6 +202,7 @@ pub enum Plan {
     ReadThenWrite(ReadThenWritePlan),
     Prepare(PreparePlan),
     Execute(ExecutePlan),
+    ExecuteStandingQuery(ExecuteStandingQueryPlan),
     Deallocate(DeallocatePlan),
     Raise(RaisePlan),
     GrantRole(GrantRolePlan),
@@ -277,6 +279,8 @@ impl Plan {
             StatementKind::CreateNetworkPolicy => &[PlanKind::CreateNetworkPolicy],
             StatementKind::CreateMaterializedView => &[PlanKind::CreateMaterializedView],
             StatementKind::CreateContinualTask => &[PlanKind::CreateContinualTask],
+            StatementKind::CreateStandingQuery => &[PlanKind::CreateStandingQuery],
+            StatementKind::ExecuteStandingQuery => &[PlanKind::ExecuteStandingQuery],
             StatementKind::CreateRole => &[PlanKind::CreateRole],
             StatementKind::CreateSchema => &[PlanKind::CreateSchema],
             StatementKind::CreateSecret => &[PlanKind::CreateSecret],
@@ -349,6 +353,7 @@ impl Plan {
             Plan::CreateView(_) => "create view",
             Plan::CreateMaterializedView(_) => "create materialized view",
             Plan::CreateContinualTask(_) => "create continual task",
+            Plan::CreateStandingQuery(_) => "create standing query",
             Plan::CreateIndex(_) => "create index",
             Plan::CreateType(_) => "create type",
             Plan::CreateNetworkPolicy(_) => "create network policy",
@@ -372,6 +377,7 @@ impl Plan {
                 ObjectType::Schema => "drop schema",
                 ObjectType::Func => "drop function",
                 ObjectType::ContinualTask => "drop continual task",
+                ObjectType::StandingQuery => "drop standing query",
                 ObjectType::NetworkPolicy => "drop network policy",
             },
             Plan::DropOwned(_) => "drop owned",
@@ -413,6 +419,7 @@ impl Plan {
                 ObjectType::Schema => "alter schema",
                 ObjectType::Func => "alter function",
                 ObjectType::ContinualTask => "alter continual task",
+                ObjectType::StandingQuery => "alter standing query",
                 ObjectType::NetworkPolicy => "alter network policy",
             },
             Plan::AlterCluster(_) => "alter cluster",
@@ -449,6 +456,7 @@ impl Plan {
                 ObjectType::Schema => "alter schema owner",
                 ObjectType::Func => "alter function owner",
                 ObjectType::ContinualTask => "alter continual task owner",
+                ObjectType::StandingQuery => "alter standing query owner",
                 ObjectType::NetworkPolicy => "alter network policy owner",
             },
             Plan::AlterTableAddColumn(_) => "alter table add column",
@@ -465,6 +473,7 @@ impl Plan {
             },
             Plan::Prepare(_) => "prepare",
             Plan::Execute(_) => "execute",
+            Plan::ExecuteStandingQuery(_) => "execute standing query",
             Plan::Deallocate(_) => "deallocate",
             Plan::Raise(_) => "raise",
             Plan::GrantRole(_) => "grant role",
@@ -781,6 +790,19 @@ pub struct CreateContinualTaskPlan {
 }
 
 #[derive(Debug, Clone)]
+pub struct CreateStandingQueryPlan {
+    pub name: QualifiedItemName,
+    pub standing_query: StandingQuery,
+    pub if_not_exists: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExecuteStandingQueryPlan {
+    pub id: CatalogItemId,
+    pub params: Vec<(Row, SqlScalarType)>,
+}
+
+#[derive(Debug, Clone)]
 pub struct CreateNetworkPolicyPlan {
     pub name: String,
     pub rules: Vec<NetworkPolicyRule>,
@@ -1082,6 +1104,18 @@ pub enum ExplaineeStatement {
         broken: bool,
         plan: plan::CreateIndexPlan,
     },
+    /// The object to be explained is a CREATE STANDING QUERY.
+    CreateStandingQuery {
+        /// Broken flag (see [`ExplaineeStatement::broken()`]).
+        broken: bool,
+        plan: plan::CreateStandingQueryPlan,
+    },
+    /// The object to be explained is an EXECUTE STANDING QUERY.
+    ExecuteStandingQuery {
+        /// Broken flag (see [`ExplaineeStatement::broken()`]).
+        broken: bool,
+        plan: plan::ExecuteStandingQueryPlan,
+    },
     /// The object to be explained is a SUBSCRIBE statement.
     Subscribe {
         /// Broken flag (see [`ExplaineeStatement::broken()`]).
@@ -1097,6 +1131,9 @@ impl ExplaineeStatement {
             Self::CreateView { plan, .. } => plan.view.expr.depends_on(),
             Self::CreateMaterializedView { plan, .. } => plan.materialized_view.expr.depends_on(),
             Self::CreateIndex { plan, .. } => btreeset! {plan.index.on},
+            Self::CreateStandingQuery { plan, .. } => plan.standing_query.expr.depends_on(),
+            // EXECUTE STANDING QUERY references an existing catalog item, not expressions.
+            Self::ExecuteStandingQuery { .. } => BTreeSet::new(),
             Self::Subscribe { plan, .. } => plan.from.depends_on(),
         }
     }
@@ -1117,6 +1154,8 @@ impl ExplaineeStatement {
             Self::CreateView { broken, .. } => *broken,
             Self::CreateMaterializedView { broken, .. } => *broken,
             Self::CreateIndex { broken, .. } => *broken,
+            Self::CreateStandingQuery { broken, .. } => *broken,
+            Self::ExecuteStandingQuery { broken, .. } => *broken,
             Self::Subscribe { broken, .. } => *broken,
         }
     }
@@ -1130,6 +1169,11 @@ impl ExplaineeStatementKind {
             Self::CreateView => ![GlobalPlan, PhysicalPlan].contains(stage),
             Self::CreateMaterializedView => true,
             Self::CreateIndex => ![RawPlan, DecorrelatedPlan, LocalPlan].contains(stage),
+            // Standing queries support all stages like materialized views.
+            Self::CreateStandingQuery => true,
+            // EXECUTE STANDING QUERY produces a simple textual description
+            // regardless of the stage, so it supports all stages.
+            Self::ExecuteStandingQuery => true,
             // SUBSCRIBE doesn't support RAW, DECORRELATED, or LOCAL stages because
             // it takes MIR directly rather than going through HIR lowering.
             Self::Subscribe => ![RawPlan, DecorrelatedPlan, LocalPlan].contains(stage),
@@ -1144,6 +1188,8 @@ impl std::fmt::Display for ExplaineeStatementKind {
             Self::CreateView => write!(f, "CREATE VIEW"),
             Self::CreateMaterializedView => write!(f, "CREATE MATERIALIZED VIEW"),
             Self::CreateIndex => write!(f, "CREATE INDEX"),
+            Self::CreateStandingQuery => write!(f, "CREATE STANDING QUERY"),
+            Self::ExecuteStandingQuery => write!(f, "EXECUTE STANDING QUERY"),
             Self::Subscribe => write!(f, "SUBSCRIBE"),
         }
     }
@@ -1885,6 +1931,24 @@ pub struct MaterializedView {
     pub compaction_window: Option<CompactionWindow>,
     pub refresh_schedule: Option<RefreshSchedule>,
     pub as_of: Option<Timestamp>,
+}
+
+#[derive(Clone, Debug)]
+pub struct StandingQuery {
+    /// Parse-able SQL that is stored durably and defines this standing query.
+    pub create_sql: String,
+    /// Unoptimized high-level expression from parsing the `create_sql`.
+    pub expr: HirRelationExpr,
+    /// All of the catalog objects that are referenced by this standing query.
+    pub dependencies: DependencyIds,
+    /// Columns of this standing query's output.
+    pub column_names: Vec<ColumnName>,
+    /// The output relation description.
+    pub desc: RelationDesc,
+    /// Parameter names and types.
+    pub params: Vec<(String, SqlScalarType)>,
+    /// Cluster this standing query will get installed on.
+    pub cluster_id: ClusterId,
 }
 
 #[derive(Clone, Debug)]

@@ -2085,6 +2085,19 @@ impl RowPacker<'_> {
         }
     }
 
+    /// Extend an existing `Row` with additional `Datum`s from a
+    /// [`DatumListIter`], copying the raw bytes directly.
+    #[inline]
+    pub fn extend_datum_iter(&mut self, iter: DatumListIter) {
+        // SAFETY: `DatumListIter::data` is the remaining byte slice within a
+        // `DatumList`, which itself is decoded from a valid `Row`. The slice
+        // contains only encoded datums (no list header/tag/length prefix), so
+        // appending it produces a valid row suffix.
+        unsafe {
+            self.extend_by_slice_unchecked(iter.data);
+        }
+    }
+
     /// Extend an existing `Row` with additional `Datum`s.
     ///
     /// In the case the iterator produces an error, the pushing of

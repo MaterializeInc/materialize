@@ -80,6 +80,7 @@ from materialize.feature_benchmark.scenarios.customer import *  # noqa: F401 F40
 from materialize.feature_benchmark.scenarios.optbench import *  # noqa: F401 F403
 from materialize.feature_benchmark.scenarios.scale import *  # noqa: F401 F403
 from materialize.feature_benchmark.scenarios.skew import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.standing_query import *  # noqa: F401 F403
 from materialize.feature_benchmark.scenarios.subscribe import *  # noqa: F401 F403
 from materialize.feature_benchmark.termination import (
     NormalDistributionOverlap,
@@ -632,7 +633,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         scenario_classes_remaining = [
             scenario_class
             for scenario_class in scenario_classes_remaining
-            if report.has_scenario_regression(scenario_class.__name__)
+            if report.has_scenario_result(scenario_class.__name__)
+            and report.has_scenario_regression(scenario_class.__name__)
         ]
         if not scenario_classes_remaining:
             if run_number < args.runs_per_scenario:

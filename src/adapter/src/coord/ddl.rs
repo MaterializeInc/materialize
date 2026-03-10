@@ -1131,6 +1131,9 @@ impl Coordinator {
                         CatalogItem::ContinualTask(_) => {
                             new_continual_tasks += 1;
                         }
+                        CatalogItem::StandingQuery(_) => {
+                            new_continual_tasks += 1;
+                        }
                         CatalogItem::Log(_)
                         | CatalogItem::View(_)
                         | CatalogItem::Index(_)
@@ -1213,6 +1216,9 @@ impl Coordinator {
                                     CatalogItem::ContinualTask(_) => {
                                         new_continual_tasks -= 1;
                                     }
+                                    CatalogItem::StandingQuery(_) => {
+                                        new_continual_tasks -= 1;
+                                    }
                                     CatalogItem::Log(_)
                                     | CatalogItem::View(_)
                                     | CatalogItem::Index(_)
@@ -1248,7 +1254,8 @@ impl Coordinator {
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
-                    | CatalogItem::ContinualTask(_) => {}
+                    | CatalogItem::ContinualTask(_)
+                    | CatalogItem::StandingQuery(_) => {}
                 },
                 Op::AlterRole { .. }
                 | Op::AlterRetainHistory { .. }

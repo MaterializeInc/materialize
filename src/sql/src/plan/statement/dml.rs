@@ -768,6 +768,39 @@ fn plan_explainee(
 
             crate::plan::Explainee::Statement(ExplaineeStatement::CreateIndex { broken, plan })
         }
+        Explainee::CreateStandingQuery(mut stmt, broken) => {
+            if !stmt.if_not_exists {
+                // If we don't force this parameter to true planning will
+                // fail for names that already exist in the catalog.
+                stmt.if_not_exists = true;
+            } else {
+                sql_bail!(
+                    "Cannot EXPLAIN a CREATE STANDING QUERY that explictly sets IF NOT EXISTS \
+                     (the behavior is implied within the scope of an enclosing EXPLAIN)"
+                );
+            }
+
+            let Plan::CreateStandingQuery(plan) = ddl::plan_create_standing_query(scx, *stmt)?
+            else {
+                sql_bail!("expected CreateStandingQueryPlan plan");
+            };
+
+            crate::plan::Explainee::Statement(ExplaineeStatement::CreateStandingQuery {
+                broken,
+                plan,
+            })
+        }
+        Explainee::ExecuteStandingQuery(stmt, broken) => {
+            let Plan::ExecuteStandingQuery(plan) = ddl::plan_execute_standing_query(scx, *stmt)?
+            else {
+                sql_bail!("expected ExecuteStandingQueryPlan plan");
+            };
+
+            crate::plan::Explainee::Statement(ExplaineeStatement::ExecuteStandingQuery {
+                broken,
+                plan,
+            })
+        }
         Explainee::Subscribe(stmt, broken) => {
             let Plan::Subscribe(plan) = plan_subscribe(scx, *stmt, params, None)? else {
                 sql_bail!("expected SubscribePlan");

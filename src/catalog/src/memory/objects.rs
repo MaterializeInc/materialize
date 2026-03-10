@@ -32,7 +32,7 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, ColumnName, Diff, GlobalId, RelationDesc, RelationVersion,
-    RelationVersionSelector, SqlColumnType, Timestamp, VersionedRelationDesc,
+    RelationVersionSelector, SqlColumnType, SqlScalarType, Timestamp, VersionedRelationDesc,
 };
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
@@ -734,6 +734,10 @@ impl mz_sql::catalog::CatalogItem for CatalogCollectionEntry {
         mz_sql::catalog::CatalogItem::connection(&self.entry)
     }
 
+    fn standing_query_params(&self) -> Result<&[(String, SqlScalarType)], SqlCatalogError> {
+        self.entry.standing_query_params()
+    }
+
     fn create_sql(&self) -> &str {
         self.entry.create_sql()
     }
@@ -840,6 +844,7 @@ pub enum CatalogItem {
     Secret(Secret),
     Connection(Connection),
     ContinualTask(ContinualTask),
+    StandingQuery(StandingQuery),
 }
 
 impl From<CatalogEntry> for durable::Item {
@@ -1626,6 +1631,37 @@ impl ContinualTask {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct StandingQuery {
+    /// Parse-able SQL that defines this standing query.
+    pub create_sql: String,
+    /// [`GlobalId`] used to reference this standing query from outside the catalog.
+    pub global_id: GlobalId,
+    /// The raw HirRelationExpr for the standing query (the user's original query).
+    pub raw_expr: Arc<HirRelationExpr>,
+    /// The optimized MIR expression (the rewritten join with parameter table).
+    pub optimized_expr: Arc<OptimizedMirRelationExpr>,
+    /// Columns for this standing query's result (excludes internal request_id column).
+    pub desc: RelationDesc,
+    /// Parameter names and their scalar types.
+    pub params: Vec<(String, SqlScalarType)>,
+    /// The [`GlobalId`] of the internal parameter storage collection.
+    pub param_collection_id: GlobalId,
+    /// Other catalog items that this standing query references, determined at name resolution.
+    pub resolved_ids: ResolvedIds,
+    /// All of the catalog objects that are referenced by this standing query.
+    pub dependencies: DependencyIds,
+    /// Cluster that this standing query runs on.
+    pub cluster_id: ClusterId,
+}
+
+impl StandingQuery {
+    /// The single [`GlobalId`] used to reference this standing query.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct NetworkPolicy {
     pub name: String,
@@ -1708,6 +1744,7 @@ impl CatalogItem {
             CatalogItem::Secret(_) => CatalogItemType::Secret,
             CatalogItem::Connection(_) => CatalogItemType::Connection,
             CatalogItem::ContinualTask(_) => CatalogItemType::ContinualTask,
+            CatalogItem::StandingQuery(_) => CatalogItemType::StandingQuery,
         }
     }
 
@@ -1722,6 +1759,7 @@ impl CatalogItem {
                 return itertools::Either::Left(mv.collections.values().copied());
             }
             CatalogItem::ContinualTask(ct) => ct.global_id,
+            CatalogItem::StandingQuery(sq) => sq.global_id,
             CatalogItem::Index(index) => index.global_id,
             CatalogItem::Func(func) => func.global_id,
             CatalogItem::Type(ty) => ty.global_id,
@@ -1745,6 +1783,7 @@ impl CatalogItem {
             CatalogItem::View(view) => view.global_id,
             CatalogItem::MaterializedView(mv) => mv.global_id_writes(),
             CatalogItem::ContinualTask(ct) => ct.global_id,
+            CatalogItem::StandingQuery(sq) => sq.global_id,
             CatalogItem::Index(index) => index.global_id,
             CatalogItem::Func(func) => func.global_id,
             CatalogItem::Type(ty) => ty.global_id,
@@ -1761,7 +1800,8 @@ impl CatalogItem {
             | CatalogItem::Source(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Sink(_)
-            | CatalogItem::ContinualTask(_) => true,
+            | CatalogItem::ContinualTask(_)
+            | CatalogItem::StandingQuery(_) => true,
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Index(_)
@@ -1790,6 +1830,7 @@ impl CatalogItem {
                 Some(Cow::Owned(mview.desc.at_version(version)))
             }
             CatalogItem::ContinualTask(ct) => Some(Cow::Borrowed(&ct.desc)),
+            CatalogItem::StandingQuery(sq) => Some(Cow::Borrowed(&sq.desc)),
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
@@ -1862,6 +1903,7 @@ impl CatalogItem {
             CatalogItem::Secret(_) => &*EMPTY,
             CatalogItem::Connection(connection) => &connection.resolved_ids,
             CatalogItem::ContinualTask(ct) => &ct.resolved_ids,
+            CatalogItem::StandingQuery(sq) => &sq.resolved_ids,
         }
     }
 
@@ -1887,6 +1929,7 @@ impl CatalogItem {
                 uses.extend(mview.dependencies.0.iter().copied())
             }
             CatalogItem::ContinualTask(ct) => uses.extend(ct.dependencies.0.iter().copied()),
+            CatalogItem::StandingQuery(sq) => uses.extend(sq.dependencies.0.iter().copied()),
             CatalogItem::Secret(_) => {}
             CatalogItem::Connection(_) => {}
         }
@@ -1908,7 +1951,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => None,
+            | CatalogItem::ContinualTask(_)
+            | CatalogItem::StandingQuery(_) => None,
         }
     }
 
@@ -1927,7 +1971,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => (),
+            | CatalogItem::ContinualTask(_)
+            | CatalogItem::StandingQuery(_) => (),
         }
     }
 
@@ -2012,6 +2057,11 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::ContinualTask(i))
             }
+            CatalogItem::StandingQuery(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::StandingQuery(i))
+            }
         }
     }
 
@@ -2087,6 +2137,11 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::ContinualTask(i))
             }
+            CatalogItem::StandingQuery(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::StandingQuery(i))
+            }
         }
     }
 
@@ -2153,6 +2208,11 @@ impl CatalogItem {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql);
                 CatalogItem::ContinualTask(i)
+            }
+            CatalogItem::StandingQuery(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::StandingQuery(i)
             }
         }
     }
@@ -2330,7 +2390,8 @@ impl CatalogItem {
             | CatalogItem::Index(Index { create_sql, .. })
             | CatalogItem::Secret(Secret { create_sql, .. })
             | CatalogItem::Connection(Connection { create_sql, .. })
-            | CatalogItem::ContinualTask(ContinualTask { create_sql, .. }) => Some(create_sql),
+            | CatalogItem::ContinualTask(ContinualTask { create_sql, .. })
+            | CatalogItem::StandingQuery(StandingQuery { create_sql, .. }) => Some(create_sql),
             CatalogItem::Func(_) | CatalogItem::Log(_) => None,
         };
         let Some(create_sql) = create_sql else {
@@ -2366,7 +2427,8 @@ impl CatalogItem {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => None,
+            | CatalogItem::ContinualTask(_)
+            | CatalogItem::StandingQuery(_) => None,
         }
     }
 
@@ -2386,6 +2448,7 @@ impl CatalogItem {
             },
             CatalogItem::Sink(sink) => Some(sink.cluster_id),
             CatalogItem::ContinualTask(ct) => Some(ct.cluster_id),
+            CatalogItem::StandingQuery(sq) => Some(sq.cluster_id),
             CatalogItem::Table(_)
             | CatalogItem::Log(_)
             | CatalogItem::View(_)
@@ -2411,7 +2474,8 @@ impl CatalogItem {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => None,
+            | CatalogItem::ContinualTask(_)
+            | CatalogItem::StandingQuery(_) => None,
         }
     }
 
@@ -2433,7 +2497,8 @@ impl CatalogItem {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => return None,
+            | CatalogItem::ContinualTask(_)
+            | CatalogItem::StandingQuery(_) => return None,
         };
         Some(cw)
     }
@@ -2451,7 +2516,8 @@ impl CatalogItem {
             | CatalogItem::Source(_)
             | CatalogItem::Index(_)
             | CatalogItem::MaterializedView(_)
-            | CatalogItem::ContinualTask(_) => self.custom_logical_compaction_window(),
+            | CatalogItem::ContinualTask(_)
+            | CatalogItem::StandingQuery(_) => self.custom_logical_compaction_window(),
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
@@ -2479,7 +2545,8 @@ impl CatalogItem {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => false,
+            | CatalogItem::ContinualTask(_)
+            | CatalogItem::StandingQuery(_) => false,
         }
     }
 
@@ -2539,6 +2606,9 @@ impl CatalogItem {
             CatalogItem::ContinualTask(ct) => {
                 (ct.create_sql.clone(), ct.global_id, BTreeMap::new())
             }
+            CatalogItem::StandingQuery(sq) => {
+                (sq.create_sql.clone(), sq.global_id, BTreeMap::new())
+            }
         }
     }
 
@@ -2585,6 +2655,7 @@ impl CatalogItem {
             }
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
             CatalogItem::ContinualTask(ct) => (ct.create_sql, ct.global_id, BTreeMap::new()),
+            CatalogItem::StandingQuery(sq) => (sq.create_sql, sq.global_id, BTreeMap::new()),
         }
     }
 
@@ -2604,6 +2675,7 @@ impl CatalogItem {
             CatalogItem::Secret(secret) => return Some(secret.global_id),
             CatalogItem::Connection(conn) => return Some(conn.global_id),
             CatalogItem::ContinualTask(ct) => return Some(ct.global_id),
+            CatalogItem::StandingQuery(sq) => return Some(sq.global_id),
         };
         match version {
             RelationVersionSelector::Latest => collections.values().last().copied(),
@@ -2808,7 +2880,8 @@ impl CatalogEntry {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => None,
+            | CatalogItem::ContinualTask(_)
+            | CatalogItem::StandingQuery(_) => None,
         }
     }
 
@@ -2937,6 +3010,7 @@ impl CatalogEntry {
             Type => CommentObjectId::Type(self.id),
             Secret => CommentObjectId::Secret(self.id),
             ContinualTask => CommentObjectId::ContinualTask(self.id),
+            StandingQuery => CommentObjectId::StandingQuery(self.id),
         }
     }
 }
@@ -3530,6 +3604,17 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         Ok(self.connection()?.details.to_connection())
     }
 
+    fn standing_query_params(&self) -> Result<&[(String, SqlScalarType)], SqlCatalogError> {
+        match self.item() {
+            CatalogItem::StandingQuery(sq) => Ok(&sq.params),
+            _ => Err(SqlCatalogError::UnexpectedType {
+                name: self.name().item.clone(),
+                actual_type: self.item_type(),
+                expected_type: CatalogItemType::StandingQuery,
+            }),
+        }
+    }
+
     fn create_sql(&self) -> &str {
         match self.item() {
             CatalogItem::Table(Table { create_sql, .. }) => {
@@ -3550,6 +3635,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Func(_) => "<builtin>",
             CatalogItem::Log(_) => "<builtin>",
             CatalogItem::ContinualTask(ContinualTask { create_sql, .. }) => create_sql,
+            CatalogItem::StandingQuery(StandingQuery { create_sql, .. }) => create_sql,
         }
     }
 

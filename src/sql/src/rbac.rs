@@ -639,6 +639,26 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
+        Plan::CreateStandingQuery(plan::CreateStandingQueryPlan {
+            name,
+            standing_query,
+            if_not_exists: _,
+        }) => RbacRequirements {
+            privileges: vec![
+                (
+                    SystemObjectId::Object(name.qualifiers.clone().into()),
+                    AclMode::CREATE,
+                    role_id,
+                ),
+                (
+                    SystemObjectId::Object(standing_query.cluster_id.into()),
+                    AclMode::CREATE,
+                    role_id,
+                ),
+            ],
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
         Plan::CreateIndex(plan::CreateIndexPlan {
             name,
             index,
@@ -1552,6 +1572,7 @@ fn generate_rbac_requirements(
             sql: _,
         })
         | Plan::Execute(plan::ExecutePlan { name: _, params: _ })
+        | Plan::ExecuteStandingQuery(plan::ExecuteStandingQueryPlan { id: _, params: _ })
         | Plan::Deallocate(plan::DeallocatePlan { name: _ })
         | Plan::Raise(plan::RaisePlan { severity: _ }) => Default::default(),
     }
@@ -1691,7 +1712,10 @@ fn generate_read_privileges_inner(
                 CatalogItemType::Type | CatalogItemType::Secret | CatalogItemType::Connection => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::USAGE, role_id));
                 }
-                CatalogItemType::Sink | CatalogItemType::Index | CatalogItemType::Func => {}
+                CatalogItemType::Sink
+                | CatalogItemType::Index
+                | CatalogItemType::Func
+                | CatalogItemType::StandingQuery => {}
             }
         }
     }
@@ -1823,6 +1847,7 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::Schema) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::Func) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::ContinualTask) => AclMode::SELECT,
+        SystemObjectType::Object(ObjectType::StandingQuery) => AclMode::SELECT,
         SystemObjectType::System => ALL_SYSTEM_PRIVILEGES,
     }
 }
@@ -1841,7 +1866,8 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         | ObjectType::View
         | ObjectType::MaterializedView
         | ObjectType::Source
-        | ObjectType::ContinualTask => AclMode::SELECT,
+        | ObjectType::ContinualTask
+        | ObjectType::StandingQuery => AclMode::SELECT,
         ObjectType::Type | ObjectType::Schema => AclMode::USAGE,
         ObjectType::Sink
         | ObjectType::Index

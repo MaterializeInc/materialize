@@ -2152,6 +2152,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_standing_queries,
+        desc: "CREATE STANDING QUERY",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_network_policies,
         desc: "ENABLE NETWORK POLICIES",
         default: true,

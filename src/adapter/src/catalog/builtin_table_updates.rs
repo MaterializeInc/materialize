@@ -829,6 +829,10 @@ impl CatalogState {
             CatalogItem::ContinualTask(ct) => self.pack_continual_task_update(
                 id, oid, schema_id, name, owner_id, privileges, ct, diff,
             ),
+            CatalogItem::StandingQuery(_) => {
+                // TODO: Add dedicated builtin table updates for standing queries.
+                vec![]
+            }
         };
 
         if !entry.item().is_temporary() {
@@ -2300,7 +2304,8 @@ impl CatalogState {
             | CommentObjectId::Connection(global_id)
             | CommentObjectId::Secret(global_id)
             | CommentObjectId::Type(global_id)
-            | CommentObjectId::ContinualTask(global_id) => global_id.to_string(),
+            | CommentObjectId::ContinualTask(global_id)
+            | CommentObjectId::StandingQuery(global_id) => global_id.to_string(),
             CommentObjectId::Role(role_id) => role_id.to_string(),
             CommentObjectId::Database(database_id) => database_id.to_string(),
             CommentObjectId::Schema((_, schema_id)) => schema_id.to_string(),

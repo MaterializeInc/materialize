@@ -690,6 +690,21 @@ impl Coordinator {
                     let result = self.sequence_reassign_owned(ctx.session_mut(), plan).await;
                     ctx.retire(result);
                 }
+                Plan::CreateStandingQuery(plan) => {
+                    let res = self
+                        .sequence_create_standing_query(&mut ctx, plan, resolved_ids)
+                        .await;
+                    ctx.retire(res);
+                }
+                Plan::ExecuteStandingQuery(plan) => {
+                    // sequence_execute_standing_query does NOT retire the ctx
+                    // on success — it stays open until results arrive.
+                    // On error, it returns the ctx so we can retire it.
+                    match self.sequence_execute_standing_query(ctx, plan).await {
+                        Ok(()) => {}
+                        Err((err, ctx)) => ctx.retire(Err(err)),
+                    }
+                }
                 Plan::ValidateConnection(plan) => {
                     let connection = plan
                         .connection

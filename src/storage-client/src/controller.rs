@@ -716,7 +716,7 @@ pub trait StorageController: Debug {
         type_: IntrospectionType,
     ) -> mpsc::UnboundedSender<(
         Vec<AppendOnlyUpdate>,
-        oneshot::Sender<Result<(), StorageError<Self::Timestamp>>>,
+        oneshot::Sender<Result<Self::Timestamp, StorageError<Self::Timestamp>>>,
     )>;
 
     /// Returns a sender for updates to the specified differential introspection collection.
@@ -861,7 +861,7 @@ pub struct MonotonicAppender<T> {
     /// Channel that sends to a [`tokio::task`] which pushes updates to Persist.
     tx: mpsc::UnboundedSender<(
         Vec<AppendOnlyUpdate>,
-        oneshot::Sender<Result<(), StorageError<T>>>,
+        oneshot::Sender<Result<T, StorageError<T>>>,
     )>,
 }
 
@@ -869,13 +869,14 @@ impl<T> MonotonicAppender<T> {
     pub fn new(
         tx: mpsc::UnboundedSender<(
             Vec<AppendOnlyUpdate>,
-            oneshot::Sender<Result<(), StorageError<T>>>,
+            oneshot::Sender<Result<T, StorageError<T>>>,
         )>,
     ) -> Self {
         MonotonicAppender { tx }
     }
 
-    pub async fn append(&self, updates: Vec<AppendOnlyUpdate>) -> Result<(), StorageError<T>> {
+    /// Append updates and return the timestamp at which they were written.
+    pub async fn append(&self, updates: Vec<AppendOnlyUpdate>) -> Result<T, StorageError<T>> {
         let (tx, rx) = oneshot::channel();
 
         // Send our update to the CollectionManager.

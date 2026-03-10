@@ -2050,7 +2050,9 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     let mut builtin_index_additions = Vec::new();
     for (builtin_item_update, ts, diff) in builtin_item_updates {
         match &builtin_item_update.description.object_type {
-            CatalogItemType::Index | CatalogItemType::ContinualTask => push_update(
+            CatalogItemType::Index
+            | CatalogItemType::ContinualTask
+            | CatalogItemType::StandingQuery => push_update(
                 StateUpdate {
                     kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
                     ts,
@@ -2144,7 +2146,9 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 | CatalogItemType::MaterializedView
                 | CatalogItemType::Index => derived_items.push(update),
                 CatalogItemType::Sink => sinks.push(update),
-                CatalogItemType::ContinualTask => continual_tasks.push(update),
+                CatalogItemType::ContinualTask | CatalogItemType::StandingQuery => {
+                    continual_tasks.push(update)
+                }
             }
         }
 
@@ -2214,7 +2218,9 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 | CatalogItemType::MaterializedView
                 | CatalogItemType::Index => derived_items.push(update),
                 CatalogItemType::Sink => sinks.push(update),
-                CatalogItemType::ContinualTask => continual_tasks.push(update),
+                CatalogItemType::ContinualTask | CatalogItemType::StandingQuery => {
+                    continual_tasks.push(update)
+                }
             }
         }
 
