@@ -487,7 +487,7 @@ impl Migration {
             .filter(|(_, info)| {
                 use Builtin::*;
                 match info.builtin {
-                    Table(..) | ContinualTask(..) => true,
+                    Table(..) | MaterializedView(..) | ContinualTask(..) => true,
                     Source(source) => **source != *MZ_CATALOG_RAW,
                     Log(..) | View(..) | Type(..) | Func(..) | Index(..) | Connection(..) => false,
                 }
@@ -552,6 +552,7 @@ impl Migration {
         let target_desc = match object_info.builtin {
             Builtin::Table(table) => &table.desc,
             Builtin::Source(source) => &source.desc,
+            Builtin::MaterializedView(mv) => &mv.desc,
             Builtin::ContinualTask(ct) => &ct.desc,
             _ => bail!("not a storage collection: {object:?}"),
         };

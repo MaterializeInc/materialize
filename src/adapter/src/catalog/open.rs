@@ -884,6 +884,11 @@ fn add_new_remove_old_builtin_items_migration(
             Builtin::Source(s) => (CommentObjectId::Source(id), &s.desc, &s.column_comments),
             Builtin::View(v) => (CommentObjectId::View(id), &v.desc, &v.column_comments),
             Builtin::Table(t) => (CommentObjectId::Table(id), &t.desc, &t.column_comments),
+            Builtin::MaterializedView(mv) => (
+                CommentObjectId::MaterializedView(id),
+                &mv.desc,
+                &mv.column_comments,
+            ),
             Builtin::Log(_)
             | Builtin::Type(_)
             | Builtin::Func(_)
@@ -922,8 +927,8 @@ fn add_new_remove_old_builtin_items_migration(
             CatalogItemType::Table => CommentObjectId::Table(id),
             CatalogItemType::Source => CommentObjectId::Source(id),
             CatalogItemType::View => CommentObjectId::View(id),
+            CatalogItemType::MaterializedView => CommentObjectId::MaterializedView(id),
             CatalogItemType::Sink
-            | CatalogItemType::MaterializedView
             | CatalogItemType::Index
             | CatalogItemType::Type
             | CatalogItemType::Func
