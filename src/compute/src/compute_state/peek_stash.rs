@@ -123,14 +123,13 @@ impl StashUpload {
         //
         // TODO: We _could_ work around the above by teaching the bare columnar
         // Row encoder about zero-column rows.
-        let batch_builder = client
-            .batch_builder::<SourceData, (), Timestamp, i64>(
-                shard_id,
-                write_schemas,
-                lower,
-                Some(batch_max_runs),
-            )
-            .await;
+        let batch_builder = client.batch_builder::<SourceData, (), Timestamp, i64>(
+            shard_id,
+            "peek_stash",
+            write_schemas,
+            lower,
+            Some(batch_max_runs),
+        );
 
         Ok(Self {
             relation_desc,

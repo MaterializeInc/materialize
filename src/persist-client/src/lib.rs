@@ -551,9 +551,10 @@ impl PersistClient {
     /// enough that we can reasonably chunk them up: O(KB) is definitely fine,
     /// O(MB) come talk to us.
     #[instrument(level = "debug", fields(shard = %shard_id))]
-    pub async fn batch_builder<K, V, T, D>(
+    pub fn batch_builder<K, V, T, D>(
         &self,
         shard_id: ShardId,
+        shard_name: &str,
         write_schemas: Schemas<K, V>,
         lower: Antichain<T>,
         max_runs: Option<usize>,
@@ -570,7 +571,7 @@ impl PersistClient {
             &self.cfg,
             compact_cfg,
             Arc::clone(&self.metrics),
-            self.metrics.shards.shard(&shard_id, "peek_stash"),
+            self.metrics.shards.shard(&shard_id, shard_name),
             &self.metrics.user,
             Arc::clone(&self.isolated_runtime),
             Arc::clone(&self.blob),
