@@ -1498,7 +1498,7 @@ class FlipFlagsAction(Action):
             "'1s'",
             "'10s'",
         ]
-        self.flags_with_values["compute_prometheus_scrape_interval"] = [
+        self.flags_with_values["compute_prometheus_introspection_scrape_interval"] = [
             "'0s'",
             "'1s'",
             "'10s'",

@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use mz_compute_types::dyncfgs::COMPUTE_PROMETHEUS_SCRAPE_INTERVAL;
+use mz_compute_types::dyncfgs::COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL;
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::CollectionExt;
@@ -88,8 +88,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             let Some(cap) = &mut cap else { return };
 
             // Compute the timestamp for the next scrape and downgrade
-            // the capability to it. This avoids frontier churn from
-            // premature wakeups between scrapes.
+            // the capability to it.
             let next_scrape_elapsed = next_scrape - now;
             let next_ms = next_scrape_elapsed.as_millis();
             let time_ms: u128 =
@@ -97,14 +96,11 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             let ts: Timestamp = time_ms.try_into().expect("must fit");
             cap.downgrade(&ts);
 
-            if Instant::now() < next_scrape {
-                return;
-            }
-
             // The effective scrape interval is the maximum of the
             // configured prometheus interval and the logging interval.
             // A zero prometheus interval disables scraping.
-            let prom_interval = COMPUTE_PROMETHEUS_SCRAPE_INTERVAL.get(&worker_config);
+            let prom_interval =
+                COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL.get(&worker_config);
             let effective_interval = prom_interval.max(interval);
             next_scrape = Instant::now() + effective_interval;
 

@@ -6766,7 +6766,7 @@ def workflow_test_prometheus_metrics(c: Composition) -> None:
         # Disable scraping by setting the interval to 0s.
         c.sql(
             """
-            ALTER SYSTEM SET compute_prometheus_scrape_interval = '0s';
+            ALTER SYSTEM SET compute_prometheus_introspection_scrape_interval = '0s';
             """,
             port=6877,
             user="mz_system",
