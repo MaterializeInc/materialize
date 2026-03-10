@@ -1695,7 +1695,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
             deploy_generation=0,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             external_metadata_store=True,
-            environment_extra=["FAILPOINTS=fail_state_multi_put=return"],
+            environment_extra=["FAILPOINTS=fail_state_multi_get=return"],
             default_replication_factor=2,
         )
     ):

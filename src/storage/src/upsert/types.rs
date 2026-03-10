@@ -265,14 +265,6 @@ impl<T, O> StateValue<T, O> {
         }
     }
 
-    /// Pull out the `Value` value for a `StateValue`, after `ensure_decoded` has been called.
-    pub fn into_decoded(self) -> Value<T, O> {
-        match self {
-            Self::Value(value) => value,
-            _ => panic!("called `into_decoded without calling `ensure_decoded`"),
-        }
-    }
-
     /// The size of a `StateValue`, in memory. This is:
     /// 1. only used in the `InMemoryHashMap` implementation.
     /// 2. An estimate (it only looks at value sizes, and not errors)
@@ -600,12 +592,6 @@ pub struct PutStats {
     /// If the current call to `multi_put` deletes a lot of values,
     /// or updates values to smaller ones, this can be negative!
     pub size_diff: i64,
-    /// The number of inserts
-    pub inserts: u64,
-    /// The number of updates
-    pub updates: u64,
-    /// The number of deletes
-    pub deletes: u64,
 }
 
 impl PutStats {
@@ -1136,54 +1122,6 @@ where
         }
 
         Ok(stats)
-    }
-
-    /// Insert or delete for all `puts` keys, prioritizing the last value for
-    /// repeated keys.
-    pub async fn multi_put<P>(
-        &mut self,
-        update_per_record_stats: bool,
-        puts: P,
-    ) -> Result<(), anyhow::Error>
-    where
-        P: IntoIterator<Item = (UpsertKey, PutValue<Value<T, O>>)>,
-    {
-        fail::fail_point!("fail_state_multi_put", |_| {
-            Err(anyhow::anyhow!("Error putting values into state"))
-        });
-        let now = Instant::now();
-        let stats = self
-            .inner
-            .multi_put(puts.into_iter().map(|(k, pv)| {
-                (
-                    k,
-                    PutValue {
-                        value: pv.value.map(StateValue::Value),
-                        previous_value_metadata: pv.previous_value_metadata,
-                    },
-                )
-            }))
-            .await?;
-
-        self.metrics
-            .multi_put_latency
-            .observe(now.elapsed().as_secs_f64());
-        self.worker_metrics
-            .multi_put_size
-            .inc_by(stats.processed_puts);
-
-        if update_per_record_stats {
-            self.worker_metrics.upsert_inserts.inc_by(stats.inserts);
-            self.worker_metrics.upsert_updates.inc_by(stats.updates);
-            self.worker_metrics.upsert_deletes.inc_by(stats.deletes);
-
-            self.stats.update_bytes_indexed_by(stats.size_diff);
-            self.stats.update_records_indexed_by(stats.values_diff);
-            self.stats
-                .update_envelope_state_tombstones_by(stats.tombstones_diff);
-        }
-
-        Ok(())
     }
 
     /// Get the `gets` keys, which must be unique, placing the results in `results_out`.
