@@ -1,4 +1,4 @@
-# persist-consensus-svc
+# persist-shared-log
 
 A group commit consensus service for Materialize persist. Batches independent
 cross-shard CAS writes into a single durable S3 Express One Zone PUT per flush
@@ -31,7 +31,7 @@ Snapshots are written periodically for faster recovery.
 ### 1. Start the consensus service
 
 ```bash
-AWS_PROFILE=mz-scratch-admin cargo run -p mz-persist-consensus-svc -- \
+AWS_PROFILE=mz-scratch-admin cargo run -p mz-persist-shared-log -- \
   --s3-bucket <your-s3-express-bucket> \
   --s3-prefix consensus/ \
   --s3-region us-east-1
@@ -42,7 +42,7 @@ The service listens on `0.0.0.0:6890` by default.
 For local development with LocalStack/MinIO, pass `--s3-endpoint`:
 
 ```bash
-cargo run -p mz-persist-consensus-svc -- \
+cargo run -p mz-persist-shared-log -- \
   --s3-bucket test-bucket \
   --s3-prefix consensus/ \
   --s3-endpoint http://localhost:4566

@@ -39,7 +39,7 @@ RAM.
   Group Commit: O(1/batch_window) writes to S3
 
   ┌──────────────┐        ┌────────────────────────────────┐
-  │ environmentd │        │     persist-consensus-svc      │
+  │ environmentd │        │     persist-shared-log      │
   │              │──┐     │                                │
   │   persist    │  │     │  ┌──────────────────────────┐  │     ┌─────────┐
   │              │──┼─────┼─▶│ Actor (single-threaded)  │──┼────▶│   S3    │
@@ -53,7 +53,7 @@ RAM.
 
 ## What We Built
 
-### 1. A Consensus Service (`persist-consensus-svc`)
+### 1. A Consensus Service (`persist-shared-log`)
 
 A standalone gRPC service that implements persist's `Consensus` trait — the same `head`, `compare_and_set`, `scan`,
 `truncate`, and `list_keys` interface that Postgres implements today.
@@ -120,7 +120,7 @@ environmentd. No changes to persist's write/read paths, compaction, or any other
     └────────────────────────┼───────────────────────┘
                              │ gRPC
                              ▼
-                      persist-consensus-svc
+                      persist-shared-log
 ```
 
 ## How Durability Works
@@ -226,7 +226,7 @@ consensus — down from a dedicated Postgres/CRDB instance.
 
 The changes to Materialize itself are minimal and non-invasive:
 
-- **New crate**: `src/persist-consensus-svc` — the service binary (~1,200 lines)
+- **New crate**: `src/persist-shared-log` — the service binary (~1,200 lines)
 - **New proto**: `consensus_service.proto` — gRPC service definition + WAL format
 - **New file**: `src/persist/src/rpc.rs` — `RpcConsensus` client (~150 lines)
 - **Modified**: `src/persist/src/cfg.rs` — route `rpc://` URLs to `RpcConsensus`
@@ -263,5 +263,5 @@ by an object storage WAL.
 
 _Maintaining an object storage-backed log sounds a lot like what persist does already. Did you just rewrite persist?_
 
-This is not untrue. You could very likely replace the backend of `persist-consensus-svc` with a `persist` shard, itself
+This is not untrue. You could very likely replace the backend of `persist-shared-log` with a `persist` shard, itself
 backed by Cockroach/Postgres. It's turtles all the way down.

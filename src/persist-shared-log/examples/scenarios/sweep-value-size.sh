@@ -15,7 +15,7 @@ printf "%-10s %10s %10s %10s %10s %10s %10s %12s\n" \
     "val_size" "CAS/s" "CAS p50" "CAS p99" "flushes/s" "ops/flush" "bytes/flush" "memory"
 
 for size in "${SIZES[@]}"; do
-    json=$(cargo run --release -p mz-persist-consensus-svc --example specsheet -- \
+    json=$(cargo run --release -p mz-persist-shared-log --example specsheet -- \
         --workload "$SCENARIO" --value-size "$size" --json "$@" 2>/dev/null)
 
     cas_per_sec=$(echo "$json" | jq -r '.throughput.ops_per_sec_by_type["CAS committed"].actual // 0')

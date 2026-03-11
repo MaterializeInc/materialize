@@ -18,15 +18,15 @@ use tracing::info;
 
 use mz_persist::generated::consensus_service::consensus_acceptor_server::ConsensusAcceptorServer;
 use mz_persist::generated::consensus_service::consensus_learner_server::ConsensusLearnerServer;
-use mz_persist_consensus_svc::acceptor::{Acceptor, AcceptorConfig};
-use mz_persist_consensus_svc::learner::{Learner, LearnerConfig};
-use mz_persist_consensus_svc::metrics::{AcceptorMetrics, LearnerMetrics};
-use mz_persist_consensus_svc::service::{AcceptorGrpcService, LearnerGrpcService};
-use mz_persist_consensus_svc::wal::s3::S3WalWriter;
+use mz_persist_shared_log::acceptor::{Acceptor, AcceptorConfig};
+use mz_persist_shared_log::learner::{Learner, LearnerConfig};
+use mz_persist_shared_log::metrics::{AcceptorMetrics, LearnerMetrics};
+use mz_persist_shared_log::service::{AcceptorGrpcService, LearnerGrpcService};
+use mz_persist_shared_log::storage::s3::S3Storage;
 
 /// CLI arguments for the consensus service.
 #[derive(Parser, Debug)]
-#[command(name = "mz-persist-consensus-svc")]
+#[command(name = "mz-persist-shared-log")]
 struct Args {
     /// Address to listen on for gRPC connections.
     #[arg(long, default_value = "0.0.0.0:6890")]
@@ -86,8 +86,8 @@ async fn run(args: Args) {
     let acceptor_metrics = AcceptorMetrics::register(&metrics_registry);
     let learner_metrics = LearnerMetrics::register(&metrics_registry);
 
-    let wal_writer = Arc::new(
-        S3WalWriter::new(
+    let store = Arc::new(
+        S3Storage::new(
             &args.s3_bucket,
             &args.s3_prefix,
             args.s3_endpoint.as_deref(),
@@ -105,7 +105,7 @@ async fn run(args: Args) {
         flush_interval_ms: args.flush_interval_ms,
         ..Default::default()
     };
-    let acceptor_wal = Arc::clone(&wal_writer);
+    let acceptor_store = Arc::clone(&store);
     let acceptor_handle = {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let _thread = std::thread::Builder::new()
@@ -118,7 +118,7 @@ async fn run(args: Args) {
                 rt.block_on(async {
                     let (handle, _task) = Acceptor::spawn(
                         acceptor_config,
-                        acceptor_wal,
+                        acceptor_store,
                         Some(batch_tx),
                         acceptor_metrics,
                     );
@@ -139,7 +139,7 @@ async fn run(args: Args) {
     };
     let (learner_handle, _learner_thread) = Learner::spawn_threaded(
         learner_config,
-        Arc::clone(&wal_writer),
+        Arc::clone(&store),
         batch_rx,
         acceptor_handle.clone(),
         learner_metrics,
@@ -178,9 +178,7 @@ async fn run(args: Args) {
     let acceptor_service = AcceptorGrpcService {
         handle: acceptor_handle.clone(),
     };
-    let learner_service = LearnerGrpcService {
-        learner_handle,
-    };
+    let learner_service = LearnerGrpcService { learner_handle };
 
     info!(addr = %args.listen_addr, "starting gRPC server");
 

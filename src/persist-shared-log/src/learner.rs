@@ -31,7 +31,7 @@ use mz_persist::generated::consensus_service::{
 
 use crate::acceptor::AcceptorHandle;
 use crate::metrics::LearnerMetrics;
-use crate::wal::{WalWriter, deserialize_snapshot};
+use crate::storage::{Storage, deserialize_snapshot};
 use crate::{ShardState, VersionedEntry};
 
 /// Configuration for the [`Learner`].
@@ -104,9 +104,7 @@ pub enum LearnerCommand {
         received_at: std::time::Instant,
     },
     /// List all known shard keys.
-    ListKeys {
-        reply: oneshot::Sender<Vec<String>>,
-    },
+    ListKeys { reply: oneshot::Sender<Vec<String>> },
     /// Wait for a batch to be materialized and return the CAS result for the
     /// proposal at the given position.
     AwaitCasResult {
@@ -146,10 +144,7 @@ impl LearnerHandle {
         LearnerHandle { tx }
     }
 
-    pub async fn head(
-        &self,
-        key: String,
-    ) -> Result<ProtoHeadResponse, LearnerError> {
+    pub async fn head(&self, key: String) -> Result<ProtoHeadResponse, LearnerError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(LearnerCommand::Head {
@@ -185,9 +180,7 @@ impl LearnerHandle {
     pub async fn list_keys(&self) -> Result<Vec<String>, LearnerError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
-            .send(LearnerCommand::ListKeys {
-                reply: reply_tx,
-            })
+            .send(LearnerCommand::ListKeys { reply: reply_tx })
             .await
             .map_err(|_| LearnerError::Shutdown)?;
         reply_rx.await.map_err(|_| LearnerError::DroppedReply)
@@ -312,7 +305,7 @@ impl ReadWaiter {
 ///
 /// Receives WAL batches, evaluates CAS during playback, maintains materialized
 /// state, and serves reads and result queries.
-pub struct Learner<W: WalWriter> {
+pub struct Learner<W: Storage> {
     // --- Shard state ---
     shards: BTreeMap<String, ShardState>,
     /// The batch number of the last materialized batch, or `None` if nothing
@@ -337,7 +330,7 @@ pub struct Learner<W: WalWriter> {
     batch_rx: mpsc::Receiver<ProtoWalBatch>,
 
     // --- WAL reader/writer ---
-    wal_writer: W,
+    storage: W,
 
     // --- Linearization ---
     /// Handle to the acceptor, used to query `latest_committed_batch` for
@@ -354,11 +347,11 @@ pub struct Learner<W: WalWriter> {
     running_byte_count: i64,
 }
 
-impl<W: WalWriter> Learner<W> {
+impl<W: Storage> Learner<W> {
     /// Creates a new learner and returns a handle for sending commands.
     pub fn new(
         config: LearnerConfig,
-        wal_writer: W,
+        storage: W,
         batch_rx: mpsc::Receiver<ProtoWalBatch>,
         acceptor_handle: AcceptorHandle,
         metrics: LearnerMetrics,
@@ -375,7 +368,7 @@ impl<W: WalWriter> Learner<W> {
             batches_since_snapshot: 0,
             cmd_rx,
             batch_rx,
-            wal_writer,
+            storage,
             acceptor: acceptor_handle,
             metrics,
             running_entry_count: 0,
@@ -387,8 +380,7 @@ impl<W: WalWriter> Learner<W> {
 
     fn wal_poll_interval(&self) -> Option<Interval> {
         self.config.wal_poll_interval_ms.map(|ms| {
-            let mut interval =
-                tokio::time::interval(std::time::Duration::from_millis(ms));
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(ms));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             interval
         })
@@ -452,17 +444,25 @@ impl<W: WalWriter> Learner<W> {
             LearnerCommand::ListKeys { .. } | LearnerCommand::Recover { .. } => None,
         };
         if let Some(at) = cmd_received_at {
-            self.metrics.cmd_queue_seconds.observe(at.elapsed().as_secs_f64());
+            self.metrics
+                .cmd_queue_seconds
+                .observe(at.elapsed().as_secs_f64());
         }
 
         match cmd {
-            LearnerCommand::Head { key, reply, received_at } => {
+            LearnerCommand::Head {
+                key,
+                reply,
+                received_at,
+            } => {
                 let after_batch = self.linearization_target();
                 if self.is_caught_up(after_batch) {
                     self.metrics.head_ops.inc();
                     let resp = self.serve_head(&key);
                     let _ = reply.send(resp);
-                    self.metrics.head_seconds.observe(received_at.elapsed().as_secs_f64());
+                    self.metrics
+                        .head_seconds
+                        .observe(received_at.elapsed().as_secs_f64());
                 } else {
                     self.read_waiters.push(ReadWaiter::Head {
                         key,
@@ -484,7 +484,9 @@ impl<W: WalWriter> Learner<W> {
                     self.metrics.scan_ops.inc();
                     let resp = self.serve_scan(&key, from, limit);
                     let _ = reply.send(resp);
-                    self.metrics.scan_seconds.observe(received_at.elapsed().as_secs_f64());
+                    self.metrics
+                        .scan_seconds
+                        .observe(received_at.elapsed().as_secs_f64());
                 } else {
                     self.read_waiters.push(ReadWaiter::Scan {
                         key,
@@ -520,7 +522,9 @@ impl<W: WalWriter> Learner<W> {
                         results.get(usize::cast_from(position))
                     {
                         let _ = reply.send(result.clone());
-                        self.metrics.cas_result_seconds.observe(received_at.elapsed().as_secs_f64());
+                        self.metrics
+                            .cas_result_seconds
+                            .observe(received_at.elapsed().as_secs_f64());
                         return;
                     }
                 }
@@ -528,7 +532,11 @@ impl<W: WalWriter> Learner<W> {
                 self.result_waiters
                     .entry(batch_number)
                     .or_default()
-                    .push(ResultWaiter::Cas { position, reply, received_at });
+                    .push(ResultWaiter::Cas {
+                        position,
+                        reply,
+                        received_at,
+                    });
             }
             LearnerCommand::AwaitTruncateResult {
                 batch_number,
@@ -541,14 +549,20 @@ impl<W: WalWriter> Learner<W> {
                         results.get(usize::cast_from(position))
                     {
                         let _ = reply.send(result.clone());
-                        self.metrics.truncate_result_seconds.observe(received_at.elapsed().as_secs_f64());
+                        self.metrics
+                            .truncate_result_seconds
+                            .observe(received_at.elapsed().as_secs_f64());
                         return;
                     }
                 }
                 self.result_waiters
                     .entry(batch_number)
                     .or_default()
-                    .push(ResultWaiter::Truncate { position, reply, received_at });
+                    .push(ResultWaiter::Truncate {
+                        position,
+                        reply,
+                        received_at,
+                    });
             }
             LearnerCommand::Recover { reply } => {
                 let result = self.recover().await;
@@ -692,17 +706,12 @@ impl<W: WalWriter> Learner<W> {
         if committed {
             self.metrics.cas_committed.inc();
             self.running_entry_count += 1;
-            self.running_byte_count +=
-                i64::try_from(cas.data.len()).expect("data length fits i64");
+            self.running_byte_count += i64::try_from(cas.data.len()).expect("data length fits i64");
             let entry = VersionedEntry {
                 seqno: cas.new_seqno,
                 data: Bytes::from(cas.data),
             };
-            self.shards
-                .entry(cas.key)
-                .or_default()
-                .entries
-                .push(entry);
+            self.shards.entry(cas.key).or_default().entries.push(entry);
         } else {
             self.metrics.cas_rejected.inc();
         }
@@ -744,8 +753,7 @@ impl<W: WalWriter> Learner<W> {
         for entry in shard.entries.drain(..keep_from) {
             deleted_bytes += i64::try_from(entry.data.len()).expect("data length");
         }
-        self.running_entry_count -=
-            i64::try_from(keep_from).expect("removed count fits i64");
+        self.running_entry_count -= i64::try_from(keep_from).expect("removed count fits i64");
         self.running_byte_count -= deleted_bytes;
 
         Ok(ProtoTruncateResponse {
@@ -769,20 +777,32 @@ impl<W: WalWriter> Learner<W> {
 
         for waiter in waiters {
             match waiter {
-                ResultWaiter::Cas { position, reply, received_at } => {
+                ResultWaiter::Cas {
+                    position,
+                    reply,
+                    received_at,
+                } => {
                     if let Some(ProposalResult::Cas(result)) =
                         results.get(usize::cast_from(position))
                     {
                         let _ = reply.send(result.clone());
-                        self.metrics.cas_result_seconds.observe(received_at.elapsed().as_secs_f64());
+                        self.metrics
+                            .cas_result_seconds
+                            .observe(received_at.elapsed().as_secs_f64());
                     }
                 }
-                ResultWaiter::Truncate { position, reply, received_at } => {
+                ResultWaiter::Truncate {
+                    position,
+                    reply,
+                    received_at,
+                } => {
                     if let Some(ProposalResult::Truncate(result)) =
                         results.get(usize::cast_from(position))
                     {
                         let _ = reply.send(result.clone());
-                        self.metrics.truncate_result_seconds.observe(received_at.elapsed().as_secs_f64());
+                        self.metrics
+                            .truncate_result_seconds
+                            .observe(received_at.elapsed().as_secs_f64());
                     }
                 }
             }
@@ -803,11 +823,18 @@ impl<W: WalWriter> Learner<W> {
 
         for waiter in ready {
             match waiter {
-                ReadWaiter::Head { key, reply, received_at, .. } => {
+                ReadWaiter::Head {
+                    key,
+                    reply,
+                    received_at,
+                    ..
+                } => {
                     self.metrics.head_ops.inc();
                     let resp = self.serve_head(&key);
                     let _ = reply.send(resp);
-                    self.metrics.head_seconds.observe(received_at.elapsed().as_secs_f64());
+                    self.metrics
+                        .head_seconds
+                        .observe(received_at.elapsed().as_secs_f64());
                 }
                 ReadWaiter::Scan {
                     key,
@@ -820,7 +847,9 @@ impl<W: WalWriter> Learner<W> {
                     self.metrics.scan_ops.inc();
                     let resp = self.serve_scan(&key, from, limit);
                     let _ = reply.send(resp);
-                    self.metrics.scan_seconds.observe(received_at.elapsed().as_secs_f64());
+                    self.metrics
+                        .scan_seconds
+                        .observe(received_at.elapsed().as_secs_f64());
                 }
                 ReadWaiter::ListKeys { reply, .. } => {
                     self.metrics.list_keys_ops.inc();
@@ -851,7 +880,7 @@ impl<W: WalWriter> Learner<W> {
     async fn catch_up_from_wal(&mut self) {
         let mut next = self.materialized_through.map_or(0, |n| n + 1);
         loop {
-            match self.wal_writer.read_batch(next).await {
+            match self.storage.read_batch(next).await {
                 Ok(Some(batch)) => {
                     debug!(
                         batch_number = batch.batch_number,
@@ -878,7 +907,7 @@ impl<W: WalWriter> Learner<W> {
     /// batch number for the acceptor.
     async fn recover(&mut self) -> Result<u64, String> {
         // 1. Load snapshot.
-        let (shards, through_batch) = match self.wal_writer.read_snapshot().await {
+        let (shards, through_batch) = match self.storage.read_snapshot().await {
             Ok(Some(snapshot)) => {
                 let (shards, through_batch) = deserialize_snapshot(&snapshot);
                 info!(through_batch, shards = shards.len(), "loaded snapshot");
@@ -908,11 +937,9 @@ impl<W: WalWriter> Learner<W> {
         self.running_entry_count = 0;
         self.running_byte_count = 0;
         for state in self.shards.values() {
-            self.running_entry_count +=
-                i64::try_from(state.entries.len()).expect("entry count");
+            self.running_entry_count += i64::try_from(state.entries.len()).expect("entry count");
             for entry in &state.entries {
-                self.running_byte_count +=
-                    i64::try_from(entry.data.len()).expect("data length");
+                self.running_byte_count += i64::try_from(entry.data.len()).expect("data length");
             }
         }
 
@@ -948,7 +975,7 @@ impl<W: WalWriter> Learner<W> {
         };
 
         let snap_start = std::time::Instant::now();
-        match self.wal_writer.write_snapshot(&self.shards, through).await {
+        match self.storage.write_snapshot(&self.shards, through).await {
             Err(e) => {
                 warn!("snapshot write failed: {}", e);
             }
@@ -970,16 +997,16 @@ impl<W: WalWriter> Learner<W> {
     }
 }
 
-impl<W: WalWriter + Send + Sync + 'static> Learner<W> {
+impl<W: Storage + Send + Sync + 'static> Learner<W> {
     /// Spawns the learner as a tokio task on the current runtime.
     pub fn spawn(
         config: LearnerConfig,
-        wal_writer: W,
+        storage: W,
         batch_rx: mpsc::Receiver<ProtoWalBatch>,
         acceptor_handle: AcceptorHandle,
         metrics: LearnerMetrics,
     ) -> (LearnerHandle, mz_ore::task::JoinHandle<()>) {
-        let (learner, handle) = Self::new(config, wal_writer, batch_rx, acceptor_handle, metrics);
+        let (learner, handle) = Self::new(config, storage, batch_rx, acceptor_handle, metrics);
         let task = mz_ore::task::spawn(|| "learner", learner.run());
         (handle, task)
     }
@@ -989,12 +1016,12 @@ impl<W: WalWriter + Send + Sync + 'static> Learner<W> {
     /// Returns the handle and a thread join handle.
     pub fn spawn_threaded(
         config: LearnerConfig,
-        wal_writer: W,
+        storage: W,
         batch_rx: mpsc::Receiver<ProtoWalBatch>,
         acceptor_handle: AcceptorHandle,
         metrics: LearnerMetrics,
     ) -> (LearnerHandle, std::thread::JoinHandle<()>) {
-        let (learner, handle) = Self::new(config, wal_writer, batch_rx, acceptor_handle, metrics);
+        let (learner, handle) = Self::new(config, storage, batch_rx, acceptor_handle, metrics);
         let thread = std::thread::Builder::new()
             .name("learner".to_string())
             .spawn(move || {

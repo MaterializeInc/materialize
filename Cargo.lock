@@ -7391,7 +7391,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-persist-consensus-svc"
+name = "mz-persist-proc"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-persist-shared-log"
 version = "0.0.0"
 dependencies = [
  "anyhow",
@@ -7416,16 +7426,6 @@ dependencies = [
  "tonic",
  "tracing",
  "tracing-subscriber",
- "workspace-hack",
-]
-
-[[package]]
-name = "mz-persist-proc"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.114",
  "workspace-hack",
 ]
 

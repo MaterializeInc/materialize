@@ -7,24 +7,24 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! In-memory WAL implementations for testing and simulation.
+//! In-memory storage implementations for testing and simulation.
 
 use std::collections::BTreeMap;
 
 use mz_persist::generated::consensus_service::{ProtoSnapshot, ProtoWalBatch};
 
-use super::{WalWriteError, WalWriter, serialize_snapshot};
+use super::{Storage, StorageError, serialize_snapshot};
 use crate::ShardState;
 
-/// A recording WAL writer for testing that records calls.
-pub struct RecordingWalWriter {
+/// A recording storage backend for testing that records calls.
+pub struct RecordingStorage {
     pub batches: std::sync::Mutex<Vec<ProtoWalBatch>>,
     pub snapshots: std::sync::Mutex<Vec<(BTreeMap<String, ShardState>, u64)>>,
 }
 
-impl RecordingWalWriter {
+impl RecordingStorage {
     pub fn new() -> Self {
-        RecordingWalWriter {
+        RecordingStorage {
             batches: std::sync::Mutex::new(Vec::new()),
             snapshots: std::sync::Mutex::new(Vec::new()),
         }
@@ -32,8 +32,8 @@ impl RecordingWalWriter {
 }
 
 #[async_trait::async_trait]
-impl WalWriter for RecordingWalWriter {
-    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), WalWriteError> {
+impl Storage for RecordingStorage {
+    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), StorageError> {
         self.batches.lock().unwrap().push(batch.clone());
         Ok(())
     }
@@ -56,7 +56,7 @@ impl WalWriter for RecordingWalWriter {
     }
 }
 
-/// Injectable fault types for [`SimWalWriter`].
+/// Injectable fault types for [`SimStorage`].
 #[derive(Debug, Clone)]
 pub enum SimWriteFault {
     /// Transient failure — batch NOT stored. Actor retries.
@@ -66,20 +66,20 @@ pub enum SimWriteFault {
     AmbiguousError,
 }
 
-/// In-memory WAL writer with fault injection for simulation testing.
+/// In-memory storage backend with fault injection for simulation testing.
 ///
 /// Models object store conditional-write semantics: `write_batch` returns
 /// `AlreadyExists` if the batch number already exists in the store.
 /// Faults are consumed FIFO from the `faults` queue.
-pub struct SimWalWriter {
+pub struct SimStorage {
     batches: std::sync::Mutex<BTreeMap<u64, ProtoWalBatch>>,
     snapshot: std::sync::Mutex<Option<ProtoSnapshot>>,
     pub faults: std::sync::Mutex<std::collections::VecDeque<SimWriteFault>>,
 }
 
-impl SimWalWriter {
+impl SimStorage {
     pub fn new() -> Self {
-        SimWalWriter {
+        SimStorage {
             batches: std::sync::Mutex::new(BTreeMap::new()),
             snapshot: std::sync::Mutex::new(None),
             faults: std::sync::Mutex::new(std::collections::VecDeque::new()),
@@ -113,8 +113,8 @@ impl SimWalWriter {
 }
 
 #[async_trait::async_trait]
-impl WalWriter for SimWalWriter {
-    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), WalWriteError> {
+impl Storage for SimStorage {
+    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), StorageError> {
         // Simulate object store latency. With `start_paused = true`, this costs zero
         // wall-clock time but creates a yield point that exercises
         // `serve_reads_until` in the actor's flush path.
@@ -125,7 +125,7 @@ impl WalWriter for SimWalWriter {
         match fault {
             Some(SimWriteFault::TransientError) => {
                 // Don't store the batch — transient failure.
-                return Err(WalWriteError::Failed(anyhow::anyhow!(
+                return Err(StorageError::Failed(anyhow::anyhow!(
                     "sim: transient error for batch {}",
                     batch.batch_number,
                 )));
@@ -136,7 +136,7 @@ impl WalWriter for SimWalWriter {
                     .lock()
                     .unwrap()
                     .insert(batch.batch_number, batch.clone());
-                return Err(WalWriteError::Failed(anyhow::anyhow!(
+                return Err(StorageError::Failed(anyhow::anyhow!(
                     "sim: ambiguous error for batch {}",
                     batch.batch_number,
                 )));
@@ -147,7 +147,7 @@ impl WalWriter for SimWalWriter {
         // Normal path: conditional write.
         let mut store = self.batches.lock().unwrap();
         if store.contains_key(&batch.batch_number) {
-            Err(WalWriteError::AlreadyExists)
+            Err(StorageError::AlreadyExists)
         } else {
             store.insert(batch.batch_number, batch.clone());
             Ok(())

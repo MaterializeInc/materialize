@@ -1,5 +1,5 @@
 [package]
-name = "mz-persist-consensus-svc"
+name = "mz-persist-shared-log"
 description = "Group commit consensus service for Materialize persist."
 version = "0.0.0"
 edition.workspace = true
@@ -16,7 +16,7 @@ workspace = true
 bench = false
 
 [[bin]]
-name = "mz-persist-consensus-svc"
+name = "mz-persist-shared-log"
 bench = false
 
 [[example]]

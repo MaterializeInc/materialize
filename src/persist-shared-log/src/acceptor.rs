@@ -16,8 +16,8 @@
 //! Stateless with respect to shard data. The only state is the batch counter
 //! and the pending proposal buffer.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Interval;
@@ -31,7 +31,7 @@ use mz_persist::generated::consensus_service::{
 };
 
 use crate::metrics::AcceptorMetrics;
-use crate::wal::{WalWriteError, WalWriter};
+use crate::storage::{Storage, StorageError};
 
 /// Configuration for the [`Acceptor`].
 #[derive(Debug, Clone)]
@@ -122,9 +122,7 @@ pub enum AcceptorCommand {
     },
     /// Explicitly trigger a flush. Used in tests.
     #[allow(dead_code)]
-    Flush {
-        reply: oneshot::Sender<()>,
-    },
+    Flush { reply: oneshot::Sender<()> },
 }
 
 /// A typed handle to the acceptor's command channel.
@@ -201,8 +199,8 @@ struct PendingAppend {
 ///
 /// Receives proposals, batches them, flushes to the WAL, and returns receipts.
 /// Does not evaluate CAS or maintain shard state.
-pub struct Acceptor<W: WalWriter> {
-    wal_writer: W,
+pub struct Acceptor<W: Storage> {
+    storage: W,
     batch_number: u64,
     pending: Vec<PendingAppend>,
     flush_interval: Interval,
@@ -216,11 +214,11 @@ pub struct Acceptor<W: WalWriter> {
     last_committed: LastCommitted,
 }
 
-impl<W: WalWriter> Acceptor<W> {
+impl<W: Storage> Acceptor<W> {
     /// Creates a new acceptor and returns a handle for sending commands.
     pub fn new(
         config: AcceptorConfig,
-        wal_writer: W,
+        storage: W,
         learner_push_tx: Option<mpsc::Sender<ProtoWalBatch>>,
         metrics: AcceptorMetrics,
     ) -> (Self, AcceptorHandle) {
@@ -232,7 +230,7 @@ impl<W: WalWriter> Acceptor<W> {
         let last_committed = LastCommitted::new();
 
         let acceptor = Acceptor {
-            wal_writer,
+            storage,
             batch_number: 0,
             pending: Vec::new(),
             flush_interval,
@@ -330,10 +328,8 @@ impl<W: WalWriter> Acceptor<W> {
         }
 
         // Split proposals from reply senders — avoids cloning proposal data.
-        let (proposals, replies): (Vec<_>, Vec<_>) = pending
-            .into_iter()
-            .map(|p| (p.proposal, p.reply))
-            .unzip();
+        let (proposals, replies): (Vec<_>, Vec<_>) =
+            pending.into_iter().map(|p| (p.proposal, p.reply)).unzip();
         let batch = ProtoWalBatch {
             batch_number: self.batch_number,
             proposals,
@@ -347,13 +343,13 @@ impl<W: WalWriter> Acceptor<W> {
         let mut backoff = std::time::Duration::from_millis(125);
         let max_backoff = std::time::Duration::from_secs(2);
         loop {
-            match self.wal_writer.write_batch(&batch).await {
+            match self.storage.write_batch(&batch).await {
                 Ok(()) => break,
-                Err(WalWriteError::AlreadyExists) => {
+                Err(StorageError::AlreadyExists) => {
                     // Read back the existing batch to determine if this is our
                     // own prior write (ambiguous error → retry → AlreadyExists)
                     // or a competing acceptor's write (fencing violation).
-                    let is_ours = match self.wal_writer.read_batch(batch.batch_number).await {
+                    let is_ours = match self.storage.read_batch(batch.batch_number).await {
                         Ok(Some(existing)) => existing == batch,
                         _ => false,
                     };
@@ -385,13 +381,10 @@ impl<W: WalWriter> Acceptor<W> {
                         return false;
                     }
                 }
-                Err(WalWriteError::Failed(e)) => {
+                Err(StorageError::Failed(e)) => {
                     warn!(
                         batch = self.batch_number,
-                        attempt,
-                        "WAL write failed: {}, retrying in {:?}",
-                        e,
-                        backoff
+                        attempt, "WAL write failed: {}, retrying in {:?}", e, backoff
                     );
                     self.metrics.object_store_write_retries.inc();
                     tokio::time::sleep(backoff).await;
@@ -438,15 +431,15 @@ impl<W: WalWriter> Acceptor<W> {
     }
 }
 
-impl<W: WalWriter + Send + Sync + 'static> Acceptor<W> {
+impl<W: Storage + Send + Sync + 'static> Acceptor<W> {
     /// Spawns the acceptor as a tokio task on the current runtime.
     pub fn spawn(
         config: AcceptorConfig,
-        wal_writer: W,
+        storage: W,
         learner_push_tx: Option<mpsc::Sender<ProtoWalBatch>>,
         metrics: AcceptorMetrics,
     ) -> (AcceptorHandle, mz_ore::task::JoinHandle<()>) {
-        let (acceptor, handle) = Self::new(config, wal_writer, learner_push_tx, metrics);
+        let (acceptor, handle) = Self::new(config, storage, learner_push_tx, metrics);
         let task = mz_ore::task::spawn(|| "acceptor", acceptor.run());
         (handle, task)
     }

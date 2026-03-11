@@ -19,7 +19,7 @@
 //! Failures are reproduced by replaying the seed:
 //!
 //! ```text
-//! SEED=42 cargo test -p mz-persist-consensus-svc sim_single
+//! SEED=42 cargo test -p mz-persist-shared-log sim_single
 //! ```
 
 use std::collections::BTreeMap;
@@ -34,9 +34,11 @@ use mz_persist::generated::consensus_service::{
 
 use crate::acceptor::{Acceptor, AcceptorHandle};
 use crate::learner::{Learner, LearnerHandle};
-use crate::wal::sim::{SimWalWriter, SimWriteFault};
+use crate::storage::sim::{SimStorage, SimWriteFault};
 
-use super::{test_acceptor_config, test_acceptor_metrics, test_learner_config, test_learner_metrics};
+use super::{
+    test_acceptor_config, test_acceptor_metrics, test_learner_config, test_learner_metrics,
+};
 
 // ---------------------------------------------------------------------------
 // Operations
@@ -149,7 +151,7 @@ impl OpGenerator {
         }
     }
 
-    fn sync_from_wal(&mut self, wal: &SimWalWriter) {
+    fn sync_from_wal(&mut self, wal: &SimStorage) {
         let batches = wal.batches_snapshot();
         self.shard_seqno.clear();
         for (_batch_num, batch) in &batches {
@@ -176,13 +178,7 @@ impl OpGenerator {
 
 /// Assert that a value observed via Head or Scan exists as a CAS proposal in
 /// some WAL batch.
-fn assert_value_in_wal(
-    wal: &SimWalWriter,
-    shard: &str,
-    seqno: u64,
-    data: &[u8],
-    seed: u64,
-) {
+fn assert_value_in_wal(wal: &SimStorage, shard: &str, seqno: u64, data: &[u8], seed: u64) {
     let batches = wal.batches_snapshot();
     for (_batch_num, batch) in &batches {
         for proposal in &batch.proposals {
@@ -224,7 +220,10 @@ impl LinearizabilityChecker {
             seqno >= *prev,
             "seed={}: linearizability violation on Head({}): \
              saw seqno={} after previously observing seqno={}",
-            self.seed, shard, seqno, *prev,
+            self.seed,
+            shard,
+            seqno,
+            *prev,
         );
         *prev = seqno;
     }
@@ -246,14 +245,14 @@ struct Simulator {
     learner_handle: LearnerHandle,
     _acceptor_task: mz_ore::task::AbortOnDropHandle<()>,
     _learner_task: mz_ore::task::AbortOnDropHandle<()>,
-    wal: Arc<SimWalWriter>,
+    wal: Arc<SimStorage>,
     linearizability: LinearizabilityChecker,
     seed: u64,
 }
 
 impl Simulator {
     fn new(seed: u64) -> Self {
-        let wal = Arc::new(SimWalWriter::new());
+        let wal = Arc::new(SimStorage::new());
         let (batch_tx, batch_rx) = tokio::sync::mpsc::channel(256);
 
         let (acceptor, acceptor_handle) = Acceptor::new(
@@ -262,8 +261,7 @@ impl Simulator {
             Some(batch_tx),
             test_acceptor_metrics(),
         );
-        let acceptor_task =
-            mz_ore::task::spawn(|| "sim-acceptor", acceptor.run()).abort_on_drop();
+        let acceptor_task = mz_ore::task::spawn(|| "sim-acceptor", acceptor.run()).abort_on_drop();
 
         let (learner, learner_handle) = Learner::new(
             test_learner_config(),
@@ -272,8 +270,7 @@ impl Simulator {
             acceptor_handle.clone(),
             test_learner_metrics(),
         );
-        let learner_task =
-            mz_ore::task::spawn(|| "sim-learner", learner.run()).abort_on_drop();
+        let learner_task = mz_ore::task::spawn(|| "sim-learner", learner.run()).abort_on_drop();
 
         Simulator {
             acceptor_handle,
@@ -309,11 +306,7 @@ impl Simulator {
                     .unwrap();
             }
             SimOp::Head { shard } => {
-                let resp = self
-                    .learner_handle
-                    .head(shard.clone())
-                    .await
-                    .unwrap();
+                let resp = self.learner_handle.head(shard.clone()).await.unwrap();
                 if let Some(data) = &resp.data {
                     assert_value_in_wal(&self.wal, &shard, data.seqno, &data.data, self.seed);
                     self.linearizability.observe_head(&shard, data.seqno);
@@ -326,13 +319,7 @@ impl Simulator {
                     .await
                     .unwrap();
                 for entry in &resp.data {
-                    assert_value_in_wal(
-                        &self.wal,
-                        &shard,
-                        entry.seqno,
-                        &entry.data,
-                        self.seed,
-                    );
+                    assert_value_in_wal(&self.wal, &shard, entry.seqno, &entry.data, self.seed);
                 }
             }
             SimOp::Truncate { shard, seqno } => {
@@ -391,8 +378,7 @@ impl Simulator {
             self.acceptor_handle.clone(),
             test_learner_metrics(),
         );
-        self._learner_task =
-            mz_ore::task::spawn(|| "sim-learner", learner.run()).abort_on_drop();
+        self._learner_task = mz_ore::task::spawn(|| "sim-learner", learner.run()).abort_on_drop();
         self.learner_handle = learner_handle;
 
         // Recover.
@@ -429,12 +415,12 @@ struct MultiAcceptorHarness {
     learner_handle: LearnerHandle,
     _acceptor_tasks: Vec<mz_ore::task::AbortOnDropHandle<()>>,
     _learner_task: mz_ore::task::AbortOnDropHandle<()>,
-    wal: Arc<SimWalWriter>,
+    wal: Arc<SimStorage>,
 }
 
 impl MultiAcceptorHarness {
     fn new(num_acceptors: usize) -> Self {
-        let wal = Arc::new(SimWalWriter::new());
+        let wal = Arc::new(SimStorage::new());
         let (batch_tx, batch_rx) = tokio::sync::mpsc::channel(256);
 
         let mut acceptor_handles = Vec::new();
@@ -447,8 +433,7 @@ impl MultiAcceptorHarness {
                 Some(batch_tx.clone()),
                 test_acceptor_metrics(),
             );
-            let task =
-                mz_ore::task::spawn(|| "sim-acceptor", acceptor.run()).abort_on_drop();
+            let task = mz_ore::task::spawn(|| "sim-acceptor", acceptor.run()).abort_on_drop();
             acceptor_handles.push(handle);
             acceptor_tasks.push(task);
         }
@@ -462,8 +447,7 @@ impl MultiAcceptorHarness {
             acceptor_handles[0].clone(),
             test_learner_metrics(),
         );
-        let learner_task =
-            mz_ore::task::spawn(|| "sim-learner", learner.run()).abort_on_drop();
+        let learner_task = mz_ore::task::spawn(|| "sim-learner", learner.run()).abort_on_drop();
 
         MultiAcceptorHarness {
             acceptor_handles,
@@ -625,7 +609,7 @@ async fn sim_multi_acceptor_fencing() {
 /// Fuzz-forever test. Loops over increasing seeds.
 ///
 /// ```text
-/// SEED=0 cargo test -p mz-persist-consensus-svc sim_fuzz -- --ignored
+/// SEED=0 cargo test -p mz-persist-shared-log sim_fuzz -- --ignored
 /// ```
 #[tokio::test(start_paused = true)]
 #[ignore]

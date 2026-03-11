@@ -6,7 +6,7 @@
 #   2. Wait for provisioning (~5 min)
 #   3. bin/scratch ssh <instance-id>
 #   4. cd materialize
-#   5. ./src/persist-consensus-svc/demo/aws-setup.sh
+#   5. ./src/persist-shared-log/demo/aws-setup.sh
 #
 # What this does:
 #   - Installs and configures PostgreSQL (logical replication, trust auth)
@@ -15,7 +15,7 @@
 #   - Starts consensus-svc and environmentd in a tmux session
 #
 # After setup completes, run the demo:
-#   ./src/persist-consensus-svc/demo/aws-run-demo.sh
+#   ./src/persist-shared-log/demo/aws-run-demo.sh
 
 set -euo pipefail
 
@@ -102,7 +102,7 @@ echo "  Monitoring stack up (Grafana :3001, Prometheus :9090)."
 # =========================================================================
 echo "=== [4/5] Building consensus service (release) ==="
 source "$HOME/.cargo/env" 2>/dev/null || true
-cargo build --release -p mz-persist-consensus-svc
+cargo build --release -p mz-persist-shared-log
 echo "  Consensus service built."
 
 # =========================================================================
@@ -114,7 +114,7 @@ tmux kill-session -t demo 2>/dev/null || true
 # Window 0: Consensus service
 tmux new-session -d -s demo -n consensus
 tmux send-keys -t demo:consensus \
-  "cd $REPO_ROOT && ./target/release/mz-persist-consensus-svc \
+  "cd $REPO_ROOT && ./target/release/mz-persist-shared-log \
     --s3-bucket $S3_BUCKET \
     --s3-prefix '$S3_PREFIX' \
     --s3-region $S3_REGION \
@@ -143,5 +143,5 @@ echo "  environmentd is building + starting (may take 10-30 min"
 echo "  on first run). Watch progress: tmux attach -t demo"
 echo ""
 echo "  Once environmentd is ready (you'll see 'listening on'), run:"
-echo "    ./src/persist-consensus-svc/demo/aws-run-demo.sh"
+echo "    ./src/persist-shared-log/demo/aws-run-demo.sh"
 echo "============================================================"

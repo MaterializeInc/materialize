@@ -15,10 +15,10 @@
 //! efficiency. See `examples/README.md` for full documentation.
 //!
 //! ```text
-//! cargo run --release -p mz-persist-consensus-svc --example specsheet -- \
+//! cargo run --release -p mz-persist-shared-log --example specsheet -- \
 //!     --workload examples/scenarios/small-smoke.yaml
 //!
-//! cargo run --release -p mz-persist-consensus-svc --example specsheet -- \
+//! cargo run --release -p mz-persist-shared-log --example specsheet -- \
 //!     --workload examples/scenarios/production-10k.yaml --transport grpc
 //! ```
 
@@ -43,12 +43,12 @@ use mz_persist::generated::consensus_service::{
     ProtoAppendRequest, ProtoAwaitResultRequest, ProtoCasProposal, ProtoHeadRequest,
     ProtoScanRequest, ProtoTruncateProposal, ProtoWalProposal, proto_wal_proposal,
 };
-use mz_persist_consensus_svc::acceptor::{Acceptor, AcceptorConfig};
-use mz_persist_consensus_svc::ctp;
-use mz_persist_consensus_svc::learner::{Learner, LearnerConfig};
-use mz_persist_consensus_svc::metrics::{AcceptorMetrics, LearnerMetrics};
-use mz_persist_consensus_svc::service::{AcceptorGrpcService, LearnerGrpcService};
-use mz_persist_consensus_svc::wal::{LatencyProfile, LatencyWalWriter};
+use mz_persist_shared_log::acceptor::{Acceptor, AcceptorConfig};
+use mz_persist_shared_log::ctp;
+use mz_persist_shared_log::learner::{Learner, LearnerConfig};
+use mz_persist_shared_log::metrics::{AcceptorMetrics, LearnerMetrics};
+use mz_persist_shared_log::service::{AcceptorGrpcService, LearnerGrpcService};
+use mz_persist_shared_log::storage::{LatencyProfile, LatencyStorage};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -346,8 +346,8 @@ impl WorkloadConfig {
 enum Transport {
     /// Direct handles to the acceptor and learner (no serialization overhead).
     Direct {
-        acceptor: mz_persist_consensus_svc::acceptor::AcceptorHandle,
-        learner: mz_persist_consensus_svc::learner::LearnerHandle,
+        acceptor: mz_persist_shared_log::acceptor::AcceptorHandle,
+        learner: mz_persist_shared_log::learner::LearnerHandle,
     },
     /// gRPC clients connected to a loopback tonic server.
     Grpc {
@@ -355,9 +355,7 @@ enum Transport {
         learner: ConsensusLearnerClient<tonic::transport::Channel>,
     },
     /// Multiplexed CTP client — many callers share one connection.
-    Ctp {
-        client: ctp::CtpClient,
-    },
+    Ctp { client: ctp::CtpClient },
 }
 
 enum CasResult {
@@ -479,10 +477,9 @@ impl Transport {
 
     async fn scan(&mut self, key: &str, from: u64, limit: u64) -> bool {
         match self {
-            Transport::Direct { learner, .. } => learner
-                .scan(key.to_string(), from, limit)
-                .await
-                .is_ok(),
+            Transport::Direct { learner, .. } => {
+                learner.scan(key.to_string(), from, limit).await.is_ok()
+            }
             Transport::Grpc { learner, .. } => learner
                 .scan(ProtoScanRequest {
                     key: key.to_string(),
@@ -491,16 +488,14 @@ impl Transport {
                 })
                 .await
                 .is_ok(),
-            Transport::Ctp { client } => {
-                client
-                    .scan(ctp::ScanRequest {
-                        key: key.to_string(),
-                        from,
-                        limit,
-                    })
-                    .await
-                    .is_ok()
-            }
+            Transport::Ctp { client } => client
+                .scan(ctp::ScanRequest {
+                    key: key.to_string(),
+                    from,
+                    limit,
+                })
+                .await
+                .is_ok(),
         }
     }
 
@@ -546,15 +541,13 @@ impl Transport {
                     .await
                     .is_ok()
             }
-            Transport::Ctp { client } => {
-                client
-                    .truncate(ctp::TruncateProposal {
-                        key: key.to_string(),
-                        seqno,
-                    })
-                    .await
-                    .is_ok()
-            }
+            Transport::Ctp { client } => client
+                .truncate(ctp::TruncateProposal {
+                    key: key.to_string(),
+                    seqno,
+                })
+                .await
+                .is_ok(),
         }
     }
 }
@@ -608,7 +601,8 @@ fn histogram_stats(h: &prometheus::Histogram) -> PercentileStats {
     }
     let buckets = hist.get_bucket();
     let percentile = |pct: f64| -> Duration {
-        let target = ((pct / 100.0) * total as f64).ceil() as u64;
+        #[allow(clippy::as_conversions)]
+        let target = ((pct / 100.0) * f64::cast_lossy(total)).ceil() as u64;
         for b in buckets {
             if b.cumulative_count() >= target {
                 let bound = b.upper_bound();
@@ -624,7 +618,7 @@ fn histogram_stats(h: &prometheus::Histogram) -> PercentileStats {
                 return Duration::from_secs_f64(b.upper_bound());
             }
         }
-        Duration::from_secs_f64(hist.get_sample_sum() / total as f64)
+        Duration::from_secs_f64(hist.get_sample_sum() / f64::cast_lossy(total))
     };
     PercentileStats {
         count: total,
@@ -863,8 +857,9 @@ fn print_report(
     // --- Overview ---
     println!();
     println!("=== Consensus Service Spec Sheet ===");
-    let target_writes_per_sec =
-        f64::cast_lossy(cfg.num_shards) * f64::cast_lossy(cfg.writers_per_shard) * cfg.write_rate_per_second;
+    let target_writes_per_sec = f64::cast_lossy(cfg.num_shards)
+        * f64::cast_lossy(cfg.writers_per_shard)
+        * cfg.write_rate_per_second;
     println!(
         "Scenario: {} ({} shards, {} writers/shard, {} values, {} target writes/s)",
         cfg.name,
@@ -1031,9 +1026,18 @@ fn print_report(
     // --- Server-Side Latencies ---
     // --- Server-Side Latencies (Acceptor) ---
     let acceptor_histograms: Vec<(&str, PercentileStats)> = vec![
-        ("Queue delay", histogram_stats(&acceptor_metrics.proposal_queue_seconds)),
-        ("WAL write", histogram_stats(&acceptor_metrics.object_store_wal_write_latency_seconds)),
-        ("Flush (total)", histogram_stats(&acceptor_metrics.flush_latency_seconds)),
+        (
+            "Queue delay",
+            histogram_stats(&acceptor_metrics.proposal_queue_seconds),
+        ),
+        (
+            "WAL write",
+            histogram_stats(&acceptor_metrics.object_store_wal_write_latency_seconds),
+        ),
+        (
+            "Flush (total)",
+            histogram_stats(&acceptor_metrics.flush_latency_seconds),
+        ),
     ];
     let has_acceptor_data = acceptor_histograms.iter().any(|(_, s)| s.count > 0);
     if has_acceptor_data {
@@ -1062,12 +1066,24 @@ fn print_report(
 
     // --- Server-Side Latencies (Learner) ---
     let learner_histograms: Vec<(&str, PercentileStats)> = vec![
-        ("Cmd queue delay", histogram_stats(&learner_metrics.cmd_queue_seconds)),
-        ("Batch apply", histogram_stats(&learner_metrics.batch_materialize_latency_seconds)),
+        (
+            "Cmd queue delay",
+            histogram_stats(&learner_metrics.cmd_queue_seconds),
+        ),
+        (
+            "Batch apply",
+            histogram_stats(&learner_metrics.batch_materialize_latency_seconds),
+        ),
         ("Head", histogram_stats(&learner_metrics.head_seconds)),
         ("Scan", histogram_stats(&learner_metrics.scan_seconds)),
-        ("CAS result", histogram_stats(&learner_metrics.cas_result_seconds)),
-        ("Truncate result", histogram_stats(&learner_metrics.truncate_result_seconds)),
+        (
+            "CAS result",
+            histogram_stats(&learner_metrics.cas_result_seconds),
+        ),
+        (
+            "Truncate result",
+            histogram_stats(&learner_metrics.truncate_result_seconds),
+        ),
     ];
     let has_learner_data = learner_histograms.iter().any(|(_, s)| s.count > 0);
     if has_learner_data {
@@ -1099,11 +1115,15 @@ fn print_report(
     println!("--- Service State (includes warmup) ---");
     println!(
         "  Shards:       {:>10}",
-        format_count(u64::try_from(learner_metrics.active_shards.get()).expect("non-negative gauge"))
+        format_count(
+            u64::try_from(learner_metrics.active_shards.get()).expect("non-negative gauge")
+        )
     );
     println!(
         "  Entries:      {:>10}",
-        format_count(u64::try_from(learner_metrics.total_entries.get()).expect("non-negative gauge"))
+        format_count(
+            u64::try_from(learner_metrics.total_entries.get()).expect("non-negative gauge")
+        )
     );
     println!(
         "  Memory:       {:>10}",
@@ -1279,8 +1299,9 @@ async fn main() {
     let cfg = WorkloadConfig::from_cli(cli);
     cfg.validate();
 
-    let target_writes_per_sec =
-        f64::cast_lossy(cfg.num_shards) * f64::cast_lossy(cfg.writers_per_shard) * cfg.write_rate_per_second;
+    let target_writes_per_sec = f64::cast_lossy(cfg.num_shards)
+        * f64::cast_lossy(cfg.writers_per_shard)
+        * cfg.write_rate_per_second;
     if !json {
         eprintln!(
             "specsheet: {} shards, {} writers/shard, {} values, {} target writes/s, {}s run + {}s warmup, transport: {}",
@@ -1302,7 +1323,7 @@ async fn main() {
     let learner_metrics_for_report = learner_metrics.clone();
 
     let latency_profile = cfg.latency_profile();
-    let wal = Arc::new(LatencyWalWriter::new(latency_profile));
+    let wal = Arc::new(LatencyStorage::new(latency_profile));
 
     let queue_depth = cfg
         .queue_depth
@@ -1349,8 +1370,13 @@ async fn main() {
         snapshot_interval: cfg.snapshot_interval,
         ..Default::default()
     };
-    let (learner_handle, learner_thread) =
-        Learner::spawn_threaded(learner_config, wal, batch_rx, acceptor_handle.clone(), learner_metrics);
+    let (learner_handle, learner_thread) = Learner::spawn_threaded(
+        learner_config,
+        wal,
+        batch_rx,
+        acceptor_handle.clone(),
+        learner_metrics,
+    );
 
     // --- Create transport ---
     let num_clients = cfg.num_shards * cfg.writers_per_shard;
@@ -1364,8 +1390,7 @@ async fn main() {
         .await
         .expect("failed to bind CTP server");
         let addr = server.local_addr().unwrap();
-        let handle = mz_ore::task::spawn(|| "specsheet-ctp-server", server.serve())
-            .abort_on_drop();
+        let handle = mz_ore::task::spawn(|| "specsheet-ctp-server", server.serve()).abort_on_drop();
         Some((addr, handle))
     } else {
         None

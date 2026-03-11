@@ -29,8 +29,8 @@
 
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
@@ -186,7 +186,10 @@ impl CtpServer {
             stream.set_nodelay(true).ok();
             let acceptor = self.acceptor.clone();
             let learner = self.learner.clone();
-            mz_ore::task::spawn(|| "ctp-connection", handle_connection(stream, acceptor, learner));
+            mz_ore::task::spawn(
+                || "ctp-connection",
+                handle_connection(stream, acceptor, learner),
+            );
         }
     }
 }
@@ -198,17 +201,16 @@ struct ResponseFrame {
     payload: Vec<u8>,
 }
 
-async fn handle_connection(
-    stream: TcpStream,
-    acceptor: AcceptorHandle,
-    learner: LearnerHandle,
-) {
+async fn handle_connection(stream: TcpStream, acceptor: AcceptorHandle, learner: LearnerHandle) {
     let (rd, wr) = stream.into_split();
     let mut reader = BufReader::new(rd);
     let (resp_tx, resp_rx) = mpsc::unbounded_channel::<ResponseFrame>();
 
     // Writer task: drains response channel, coalesces writes, flushes once.
-    mz_ore::task::spawn(|| "ctp-server-writer", server_writer_task(BufWriter::new(wr), resp_rx));
+    mz_ore::task::spawn(
+        || "ctp-server-writer",
+        server_writer_task(BufWriter::new(wr), resp_rx),
+    );
 
     // Reader loop: reads multiplexed request frames, spawns dispatch tasks.
     loop {
@@ -233,11 +235,11 @@ async fn handle_connection(
         let learner = learner.clone();
         let resp_tx = resp_tx.clone();
         mz_ore::task::spawn(|| "ctp-dispatch", async move {
-            let (status, resp_payload) =
-                match dispatch(opcode, &payload, &acceptor, &learner).await {
-                    Ok(data) => (STATUS_OK, data),
-                    Err(msg) => (STATUS_ERR, msg.into_bytes()),
-                };
+            let (status, resp_payload) = match dispatch(opcode, &payload, &acceptor, &learner).await
+            {
+                Ok(data) => (STATUS_OK, data),
+                Err(msg) => (STATUS_ERR, msg.into_bytes()),
+            };
             let _ = resp_tx.send(ResponseFrame {
                 req_id,
                 status,
@@ -284,8 +286,7 @@ async fn dispatch(
 
     match opcode {
         OP_APPEND => {
-            let req: AppendRequest =
-                bincode::deserialize(payload).map_err(|e| e.to_string())?;
+            let req: AppendRequest = bincode::deserialize(payload).map_err(|e| e.to_string())?;
             let proposal = match req {
                 AppendRequest::Cas(cas) => ProtoWalProposal {
                     op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
@@ -302,7 +303,10 @@ async fn dispatch(
                     })),
                 },
             };
-            let resp = acceptor.append(proposal).await.map_err(|e| format!("{e:?}"))?;
+            let resp = acceptor
+                .append(proposal)
+                .await
+                .map_err(|e| format!("{e:?}"))?;
             let out = AppendResponse {
                 batch_number: resp.batch_number,
                 position: resp.position,
@@ -334,8 +338,7 @@ async fn dispatch(
             bincode::serialize(&out).map_err(|e| e.to_string())
         }
         OP_HEAD => {
-            let req: HeadRequest =
-                bincode::deserialize(payload).map_err(|e| e.to_string())?;
+            let req: HeadRequest = bincode::deserialize(payload).map_err(|e| e.to_string())?;
             let resp = learner.head(req.key).await.map_err(|e| format!("{e:?}"))?;
             let out = HeadResponse {
                 seqno: resp.data.as_ref().map(|d| d.seqno),
@@ -344,8 +347,7 @@ async fn dispatch(
             bincode::serialize(&out).map_err(|e| e.to_string())
         }
         OP_SCAN => {
-            let req: ScanRequest =
-                bincode::deserialize(payload).map_err(|e| e.to_string())?;
+            let req: ScanRequest = bincode::deserialize(payload).map_err(|e| e.to_string())?;
             let resp = learner
                 .scan(req.key, req.from, req.limit)
                 .await
@@ -363,8 +365,7 @@ async fn dispatch(
             bincode::serialize(&out).map_err(|e| e.to_string())
         }
         OP_CAS => {
-            let req: CasProposal =
-                bincode::deserialize(payload).map_err(|e| e.to_string())?;
+            let req: CasProposal = bincode::deserialize(payload).map_err(|e| e.to_string())?;
             let proposal = ProtoWalProposal {
                 op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
                     key: req.key,
@@ -373,7 +374,10 @@ async fn dispatch(
                     data: req.data,
                 })),
             };
-            let receipt = acceptor.append(proposal).await.map_err(|e| format!("{e:?}"))?;
+            let receipt = acceptor
+                .append(proposal)
+                .await
+                .map_err(|e| format!("{e:?}"))?;
             let resp = learner
                 .await_cas_result(receipt.batch_number, receipt.position)
                 .await
@@ -384,15 +388,17 @@ async fn dispatch(
             bincode::serialize(&out).map_err(|e| e.to_string())
         }
         OP_TRUNCATE => {
-            let req: TruncateProposal =
-                bincode::deserialize(payload).map_err(|e| e.to_string())?;
+            let req: TruncateProposal = bincode::deserialize(payload).map_err(|e| e.to_string())?;
             let proposal = ProtoWalProposal {
                 op: Some(proto_wal_proposal::Op::Truncate(ProtoTruncateProposal {
                     key: req.key,
                     seqno: req.seqno,
                 })),
             };
-            let receipt = acceptor.append(proposal).await.map_err(|e| format!("{e:?}"))?;
+            let receipt = acceptor
+                .append(proposal)
+                .await
+                .map_err(|e| format!("{e:?}"))?;
             let resp = learner
                 .await_truncate_result(receipt.batch_number, receipt.position)
                 .await
@@ -454,9 +460,15 @@ impl CtpClient {
         // Reader task gets only the pending map — NOT an Arc<ClientInner>.
         // This lets ClientInner drop (closing write_tx) when all CtpClients
         // are dropped, enabling clean TCP shutdown.
-        mz_ore::task::spawn(|| "ctp-client-reader", client_reader_task(BufReader::new(rd), pending));
+        mz_ore::task::spawn(
+            || "ctp-client-reader",
+            client_reader_task(BufReader::new(rd), pending),
+        );
         // Writer task owns the write half and drains the request channel.
-        mz_ore::task::spawn(|| "ctp-client-writer", client_writer_task(BufWriter::new(wr), write_rx));
+        mz_ore::task::spawn(
+            || "ctp-client-writer",
+            client_writer_task(BufWriter::new(wr), write_rx),
+        );
 
         Ok(CtpClient { inner })
     }
@@ -489,10 +501,7 @@ impl CtpClient {
         self.request(OP_APPEND, &req).await
     }
 
-    pub async fn await_cas_result(
-        &self,
-        req: AwaitResultRequest,
-    ) -> Result<CasResponse, String> {
+    pub async fn await_cas_result(&self, req: AwaitResultRequest) -> Result<CasResponse, String> {
         self.request(OP_AWAIT_CAS, &req).await
     }
 

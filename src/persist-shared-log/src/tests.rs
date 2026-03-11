@@ -21,7 +21,7 @@ use mz_persist::generated::consensus_service::{
 use crate::acceptor::{Acceptor, AcceptorConfig, AcceptorHandle};
 use crate::learner::{Learner, LearnerConfig, LearnerHandle};
 use crate::metrics::{AcceptorMetrics, LearnerMetrics};
-use crate::wal::sim::SimWalWriter;
+use crate::storage::sim::SimStorage;
 
 fn test_acceptor_metrics() -> AcceptorMetrics {
     AcceptorMetrics::register(&MetricsRegistry::new())
@@ -55,11 +55,11 @@ struct TestHarness {
     learner_handle: LearnerHandle,
     _acceptor_task: mz_ore::task::AbortOnDropHandle<()>,
     _learner_task: mz_ore::task::AbortOnDropHandle<()>,
-    _wal: Arc<SimWalWriter>,
+    _wal: Arc<SimStorage>,
 }
 
 impl TestHarness {
-    fn new(wal: Arc<SimWalWriter>) -> Self {
+    fn new(wal: Arc<SimStorage>) -> Self {
         let (batch_tx, batch_rx) = tokio::sync::mpsc::channel(256);
 
         let (acceptor, acceptor_handle) = Acceptor::new(
@@ -68,8 +68,7 @@ impl TestHarness {
             Some(batch_tx),
             test_acceptor_metrics(),
         );
-        let acceptor_task =
-            mz_ore::task::spawn(|| "test-acceptor", acceptor.run()).abort_on_drop();
+        let acceptor_task = mz_ore::task::spawn(|| "test-acceptor", acceptor.run()).abort_on_drop();
 
         let (learner, learner_handle) = Learner::new(
             test_learner_config(),
@@ -78,8 +77,7 @@ impl TestHarness {
             acceptor_handle.clone(),
             test_learner_metrics(),
         );
-        let learner_task =
-            mz_ore::task::spawn(|| "test-learner", learner.run()).abort_on_drop();
+        let learner_task = mz_ore::task::spawn(|| "test-learner", learner.run()).abort_on_drop();
 
         TestHarness {
             acceptor_handle,
@@ -121,7 +119,7 @@ impl TestHarness {
 
 #[tokio::test(start_paused = true)]
 async fn test_cas_commit_and_reject() {
-    let wal = Arc::new(SimWalWriter::new());
+    let wal = Arc::new(SimStorage::new());
     let h = TestHarness::new(wal);
 
     // First CAS on empty key → committed.
@@ -136,7 +134,7 @@ async fn test_cas_commit_and_reject() {
 
 #[tokio::test(start_paused = true)]
 async fn test_head_read() {
-    let wal = Arc::new(SimWalWriter::new());
+    let wal = Arc::new(SimStorage::new());
     let h = TestHarness::new(wal);
 
     // Head on empty key → None.
@@ -153,35 +151,27 @@ async fn test_head_read() {
 
 #[tokio::test(start_paused = true)]
 async fn test_scan() {
-    let wal = Arc::new(SimWalWriter::new());
+    let wal = Arc::new(SimStorage::new());
     let h = TestHarness::new(wal);
 
     assert!(h.cas("s0", None, 1, b"a").await);
     assert!(h.cas("s0", Some(1), 2, b"b").await);
     assert!(h.cas("s0", Some(2), 3, b"c").await);
 
-    let resp = h
-        .learner_handle
-        .scan("s0".into(), 0, 100)
-        .await
-        .unwrap();
+    let resp = h.learner_handle.scan("s0".into(), 0, 100).await.unwrap();
     assert_eq!(resp.data.len(), 3);
     assert_eq!(resp.data[0].seqno, 1);
     assert_eq!(resp.data[2].seqno, 3);
 
     // Scan with from=2, limit=1.
-    let resp = h
-        .learner_handle
-        .scan("s0".into(), 2, 1)
-        .await
-        .unwrap();
+    let resp = h.learner_handle.scan("s0".into(), 2, 1).await.unwrap();
     assert_eq!(resp.data.len(), 1);
     assert_eq!(resp.data[0].seqno, 2);
 }
 
 #[tokio::test(start_paused = true)]
 async fn test_truncate() {
-    let wal = Arc::new(SimWalWriter::new());
+    let wal = Arc::new(SimStorage::new());
     let h = TestHarness::new(wal);
 
     assert!(h.cas("s0", None, 1, b"a").await);
@@ -207,18 +197,14 @@ async fn test_truncate() {
     assert_eq!(result.deleted, Some(1));
 
     // Scan should now start at seqno 2.
-    let resp = h
-        .learner_handle
-        .scan("s0".into(), 0, 100)
-        .await
-        .unwrap();
+    let resp = h.learner_handle.scan("s0".into(), 0, 100).await.unwrap();
     assert_eq!(resp.data.len(), 2);
     assert_eq!(resp.data[0].seqno, 2);
 }
 
 #[tokio::test(start_paused = true)]
 async fn test_truncate_errors() {
-    let wal = Arc::new(SimWalWriter::new());
+    let wal = Arc::new(SimStorage::new());
     let h = TestHarness::new(wal);
 
     // Truncate on nonexistent key → error.
@@ -261,7 +247,7 @@ async fn test_truncate_errors() {
 
 #[tokio::test(start_paused = true)]
 async fn test_batch_grouping() {
-    let wal = Arc::new(SimWalWriter::new());
+    let wal = Arc::new(SimStorage::new());
     let h = TestHarness::new(wal);
 
     // Submit 3 proposals concurrently — they all land in the same batch
@@ -326,7 +312,7 @@ async fn test_batch_grouping() {
 
 #[tokio::test(start_paused = true)]
 async fn test_intra_batch_cas_chaining() {
-    let wal = Arc::new(SimWalWriter::new());
+    let wal = Arc::new(SimStorage::new());
     let h = TestHarness::new(wal);
 
     // Two CAS proposals in the same batch for the same shard.
@@ -375,7 +361,7 @@ async fn test_intra_batch_cas_chaining() {
 
 #[tokio::test(start_paused = true)]
 async fn test_list_keys() {
-    let wal = Arc::new(SimWalWriter::new());
+    let wal = Arc::new(SimStorage::new());
     let h = TestHarness::new(wal);
 
     assert!(h.cas("s0", None, 1, b"a").await);
@@ -389,7 +375,7 @@ async fn test_list_keys() {
 
 #[tokio::test(start_paused = true)]
 async fn test_recovery_from_wal() {
-    let wal = Arc::new(SimWalWriter::new());
+    let wal = Arc::new(SimStorage::new());
 
     // Write some data with the first harness.
     {
@@ -408,8 +394,7 @@ async fn test_recovery_from_wal() {
         Some(batch_tx),
         test_acceptor_metrics(),
     );
-    let _acceptor_task =
-        mz_ore::task::spawn(|| "test-acceptor", acceptor.run()).abort_on_drop();
+    let _acceptor_task = mz_ore::task::spawn(|| "test-acceptor", acceptor.run()).abort_on_drop();
 
     let (learner, learner_handle) = Learner::new(
         test_learner_config(),
@@ -418,8 +403,7 @@ async fn test_recovery_from_wal() {
         acceptor_handle.clone(),
         test_learner_metrics(),
     );
-    let _learner_task =
-        mz_ore::task::spawn(|| "test-learner", learner.run()).abort_on_drop();
+    let _learner_task = mz_ore::task::spawn(|| "test-learner", learner.run()).abort_on_drop();
 
     // Recover.
     let next_batch = learner_handle.recover().await.unwrap();

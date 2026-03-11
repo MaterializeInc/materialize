@@ -11,7 +11,7 @@
 # Before running, start the other three services:
 #
 #   # Terminal 1: Consensus service
-#   AWS_PROFILE=mz-scratch-admin cargo run -p mz-persist-consensus-svc -- \
+#   AWS_PROFILE=mz-scratch-admin cargo run -p mz-persist-shared-log -- \
 #     --s3-bucket phemberger-s3-directory-test--use1-az4--x-s3 \
 #     --s3-prefix consensus/ \
 #     --s3-region us-east-1
@@ -25,7 +25,7 @@
 #     --system-parameter-default=default_timestamp_interval=100ms
 #
 #   # Terminal 4: This script
-#   src/persist-consensus-svc/demo/demo.sh
+#   src/persist-shared-log/demo/demo.sh
 #
 # Then open Grafana: http://localhost:3001/d/consensus-svc-demo
 

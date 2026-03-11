@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! WAL and snapshot read/write interface for the consensus service.
+//! Storage interface for the shared log service (WAL batches and snapshots).
 
 pub mod s3;
 #[cfg(test)]
@@ -21,9 +21,9 @@ use mz_persist::generated::consensus_service::{
 
 use crate::{ShardState, VersionedEntry};
 
-/// Error type for WAL write operations that distinguishes recoverable states.
+/// Error type for storage write operations that distinguishes recoverable states.
 #[derive(Debug)]
-pub enum WalWriteError {
+pub enum StorageError {
     /// The write failed and the object does NOT exist.
     Failed(anyhow::Error),
     /// The object already exists (conditional write conflict). This means a
@@ -31,21 +31,21 @@ pub enum WalWriteError {
     AlreadyExists,
 }
 
-impl std::fmt::Display for WalWriteError {
+impl std::fmt::Display for StorageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            WalWriteError::Failed(e) => write!(f, "{}", e),
-            WalWriteError::AlreadyExists => write!(f, "batch already exists"),
+            StorageError::Failed(e) => write!(f, "{}", e),
+            StorageError::AlreadyExists => write!(f, "batch already exists"),
         }
     }
 }
 
-/// Trait for WAL writing, enabling mock implementations in tests.
+/// Trait for durable storage of WAL batches and snapshots.
 #[async_trait::async_trait]
-pub trait WalWriter: Send {
-    /// Write a WAL batch to durable storage. Returns `WalWriteError::AlreadyExists`
+pub trait Storage: Send {
+    /// Write a batch to durable storage. Returns `StorageError::AlreadyExists`
     /// if the batch already exists (e.g., from a prior write that appeared to fail).
-    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), WalWriteError>;
+    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), StorageError>;
     /// Write a full snapshot to durable storage.
     async fn write_snapshot(
         &self,
@@ -59,8 +59,8 @@ pub trait WalWriter: Send {
 }
 
 #[async_trait::async_trait]
-impl<W: WalWriter + Sync> WalWriter for std::sync::Arc<W> {
-    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), WalWriteError> {
+impl<W: Storage + Sync> Storage for std::sync::Arc<W> {
+    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), StorageError> {
         (**self).write_batch(batch).await
     }
     async fn write_snapshot(
@@ -123,12 +123,12 @@ pub fn deserialize_snapshot(snapshot: &ProtoSnapshot) -> (BTreeMap<String, Shard
     (shards, snapshot.through_batch)
 }
 
-/// A no-op WAL writer for testing and benchmarking.
-pub struct NoopWalWriter;
+/// A no-op storage backend for testing and benchmarking.
+pub struct NoopStorage;
 
 #[async_trait::async_trait]
-impl WalWriter for NoopWalWriter {
-    async fn write_batch(&self, _batch: &ProtoWalBatch) -> Result<(), WalWriteError> {
+impl Storage for NoopStorage {
+    async fn write_batch(&self, _batch: &ProtoWalBatch) -> Result<(), StorageError> {
         Ok(())
     }
     async fn write_snapshot(
@@ -146,11 +146,11 @@ impl WalWriter for NoopWalWriter {
     }
 }
 
-/// Latency profile for [`LatencyWalWriter`]. Defines how long `write_batch`
+/// Latency profile for [`LatencyStorage`]. Defines how long `write_batch`
 /// sleeps before returning.
 #[derive(Debug, Clone)]
 pub enum LatencyProfile {
-    /// Return immediately (same as `NoopWalWriter`).
+    /// Return immediately (same as `NoopStorage`).
     Zero,
     /// Fixed latency for every write.
     Fixed(std::time::Duration),
@@ -162,20 +162,20 @@ pub enum LatencyProfile {
     },
 }
 
-/// A WAL writer that simulates storage latency for benchmarking. Writes are
+/// A storage backend that simulates latency for benchmarking. Writes are
 /// no-ops (data is discarded) but `write_batch` sleeps according to the
 /// configured [`LatencyProfile`]. This lets benchmarks measure end-to-end
 /// actor behavior under realistic flush times.
-pub struct LatencyWalWriter {
+pub struct LatencyStorage {
     profile: LatencyProfile,
     /// Simple counter-based "random" for p50/p99 selection to avoid pulling
     /// in rand as a non-dev dependency.
     counter: std::sync::atomic::AtomicU64,
 }
 
-impl LatencyWalWriter {
+impl LatencyStorage {
     pub fn new(profile: LatencyProfile) -> Self {
-        LatencyWalWriter {
+        LatencyStorage {
             profile,
             counter: std::sync::atomic::AtomicU64::new(0),
         }
@@ -183,8 +183,8 @@ impl LatencyWalWriter {
 }
 
 #[async_trait::async_trait]
-impl WalWriter for LatencyWalWriter {
-    async fn write_batch(&self, _batch: &ProtoWalBatch) -> Result<(), WalWriteError> {
+impl Storage for LatencyStorage {
+    async fn write_batch(&self, _batch: &ProtoWalBatch) -> Result<(), StorageError> {
         match &self.profile {
             LatencyProfile::Zero => {}
             LatencyProfile::Fixed(d) => {
@@ -215,4 +215,3 @@ impl WalWriter for LatencyWalWriter {
         Ok(None)
     }
 }
-

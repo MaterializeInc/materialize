@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! S3-backed WAL and snapshot writer.
+//! S3-backed storage for WAL batches and snapshots.
 
 use std::collections::BTreeMap;
 
@@ -17,17 +17,17 @@ use prost::Message;
 use mz_persist::generated::consensus_service::{ProtoSnapshot, ProtoWalBatch};
 
 use crate::ShardState;
-use crate::wal::{WalWriteError, WalWriter, serialize_snapshot};
+use crate::storage::{Storage, StorageError, serialize_snapshot};
 
-/// S3-backed WAL and snapshot writer.
-pub struct S3WalWriter {
+/// S3-backed storage for WAL batches and snapshots.
+pub struct S3Storage {
     client: mz_aws_util::s3::Client,
     bucket: String,
     prefix: String,
 }
 
-impl S3WalWriter {
-    /// Creates a new S3WalWriter.
+impl S3Storage {
+    /// Creates a new S3-backed storage backend.
     pub async fn new(bucket: &str, prefix: &str, endpoint: Option<&str>, region: &str) -> Self {
         let mut config_loader =
             mz_aws_util::defaults().region(aws_sdk_s3::config::Region::new(region.to_owned()));
@@ -36,7 +36,7 @@ impl S3WalWriter {
         }
         let config = config_loader.load().await;
         let client = mz_aws_util::s3::new_client(&config);
-        S3WalWriter {
+        S3Storage {
             client,
             bucket: bucket.to_owned(),
             prefix: prefix.to_owned(),
@@ -53,8 +53,8 @@ impl S3WalWriter {
 }
 
 #[async_trait::async_trait]
-impl WalWriter for S3WalWriter {
-    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), WalWriteError> {
+impl Storage for S3Storage {
+    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), StorageError> {
         let key = self.wal_key(batch.batch_number);
         let body = batch.encode_to_vec();
         match self
@@ -74,9 +74,9 @@ impl WalWriter for S3WalWriter {
                 // standard S3 returns "PreconditionFailed".
                 let code = service_err.meta().code().unwrap_or("");
                 if code == "PreconditionFailed" || code == "ConditionalRequestConflict" {
-                    Err(WalWriteError::AlreadyExists)
+                    Err(StorageError::AlreadyExists)
                 } else {
-                    Err(WalWriteError::Failed(anyhow::anyhow!(
+                    Err(StorageError::Failed(anyhow::anyhow!(
                         "S3 PUT wal/{}: {}",
                         batch.batch_number,
                         service_err

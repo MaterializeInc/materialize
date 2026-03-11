@@ -9,9 +9,9 @@ Fixed micro-scenarios for regression detection. Criterion benchmarks live in
 `benches/` and are always compiled in release mode by cargo.
 
 ```bash
-cargo bench -p mz-persist-consensus-svc                     # all benchmarks
-cargo bench -p mz-persist-consensus-svc -- cas_single_shard  # by name
-cargo bench -p mz-persist-consensus-svc -- --list            # list available
+cargo bench -p mz-persist-shared-log                     # all benchmarks
+cargo bench -p mz-persist-shared-log -- cas_single_shard  # by name
+cargo bench -p mz-persist-shared-log -- --list            # list available
 ```
 
 Benchmarks are split into **plumbing** (direct actor channel) and **porcelain**
@@ -28,23 +28,23 @@ flush efficiency, and memory usage.
 
 ```bash
 # Smoke test — 100 shards, 5 second run
-cargo run --release -p mz-persist-consensus-svc --example specsheet -- \
+cargo run --release -p mz-persist-shared-log --example specsheet -- \
     --num-shards 100 --writers-per-shard 1 --duration 5 --warmup 2
 
 # From a YAML scenario file
-cargo run --release -p mz-persist-consensus-svc --example specsheet -- \
+cargo run --release -p mz-persist-shared-log --example specsheet -- \
     --workload examples/scenarios/small-smoke.yaml
 
 # Full gRPC stack (measures serialization + HTTP/2 overhead)
-cargo run --release -p mz-persist-consensus-svc --example specsheet -- \
+cargo run --release -p mz-persist-shared-log --example specsheet -- \
     --workload examples/scenarios/small-smoke.yaml --transport grpc
 
 # YAML scenario with CLI overrides
-cargo run --release -p mz-persist-consensus-svc --example specsheet -- \
+cargo run --release -p mz-persist-shared-log --example specsheet -- \
     --workload examples/scenarios/production-10k.yaml --duration 30
 
 # JSON output for scripting
-cargo run --release -p mz-persist-consensus-svc --example specsheet -- \
+cargo run --release -p mz-persist-shared-log --example specsheet -- \
     --workload examples/scenarios/small-smoke.yaml --json | jq '.throughput'
 ```
 
@@ -86,7 +86,7 @@ Comparing the two directly quantifies gRPC overhead.
 
 ### WAL latency profiles
 
-The actor's WAL writer is replaced with a `LatencyWalWriter` that simulates
+The actor's storage backend is replaced with a `LatencyStorage` that simulates
 storage latency without touching S3. Use `--wal-latency` to select a profile:
 
 | Profile | Behavior |
@@ -271,7 +271,7 @@ Use the same pattern for any parameter. For example, sweeping shard count:
 
 ```bash
 for shards in 100 1000 5000 10000 50000; do
-    cargo run --release -p mz-persist-consensus-svc --example specsheet -- \
+    cargo run --release -p mz-persist-shared-log --example specsheet -- \
         --workload examples/scenarios/scale-out-no-contention.yaml \
         --num-shards "$shards" --json 2>/dev/null \
     | jq -r "[\"$shards\", .throughput.ops_per_sec,
@@ -284,7 +284,7 @@ Or sweeping WAL latency profiles:
 
 ```bash
 for profile in zero fixed-5ms s3-express s3-standard; do
-    cargo run --release -p mz-persist-consensus-svc --example specsheet -- \
+    cargo run --release -p mz-persist-shared-log --example specsheet -- \
         --workload examples/scenarios/scale-out-no-contention.yaml \
         --wal-latency "$profile" --json 2>/dev/null \
     | jq -r "[\"$profile\", .throughput.ops_per_sec,

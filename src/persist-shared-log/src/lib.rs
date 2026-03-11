@@ -26,11 +26,10 @@ pub mod ctp;
 pub mod learner;
 pub mod metrics;
 pub mod service;
-pub mod wal;
+pub mod storage;
 
 #[cfg(test)]
 mod tests;
-
 
 /// Per-shard committed state. Shared between the learner (which owns it) and
 /// the WAL snapshot serialization layer.
