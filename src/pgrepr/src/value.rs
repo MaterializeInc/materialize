@@ -461,6 +461,8 @@ impl Value {
                 Ok(postgres_types::IsNull::No)
             }
             Value::Int2Vector { elements } => {
+                // this should always be `false`, but there are exceptions in postgres
+                // feels better to compute this than to assert otherwise
                 let has_null = elements.iter().any(|e| e.is_none());
                 buf.put_i32(1);
                 buf.put_i32(has_null.into());

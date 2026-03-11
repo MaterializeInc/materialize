@@ -13,10 +13,11 @@ $ set-regex match=s\d+ replacement=<SID>
 
 > CREATE DEFAULT INDEX ON t;
 
-> CREATE INDEX complex_index ON t (t::varchar, i::string);
+> CREATE INDEX complex_index ON t (t, i::string);
 
-> SELECT ix.indkey
+# check the indkey answers both as an int2vec and cast to a string
+> SELECT ix.indkey, ix.indkey::text
   FROM pg_class t
   JOIN pg_index ix ON t.oid = ix.indrelid
   WHERE t.oid = 't'::regclass AND ix.indexrelid = 'complex_index'::regclass;
-"2 0"
+"[0:1]={2,0}" "2 0"
