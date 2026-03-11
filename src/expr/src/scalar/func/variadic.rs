@@ -395,7 +395,7 @@ fn array_index<'a, T: FromDatum<'a>>(
             .expect("previous bounds check ensures physical index is at least 0");
     }
 
-    array.elements().iter_typed().nth(final_idx)
+    array.elements().typed_iter().nth(final_idx)
 }
 
 #[sqlfunc]

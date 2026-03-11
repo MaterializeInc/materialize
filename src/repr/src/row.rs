@@ -750,7 +750,7 @@ pub struct RowPacker<'a> {
 
 /// Infallible conversion from a [`Datum`] to a typed value.
 ///
-/// Used by [`DatumList::iter_typed`] to yield elements as `T` rather than
+/// Used by [`DatumList::typed_iter`] to yield elements as `T` rather than
 /// raw `Datum`s. At runtime, `T` is always `Datum<'a>`, so the conversion
 /// is identity.
 pub trait FromDatum<'a>: Sized + PartialEq + std::borrow::Borrow<Datum<'a>> {
@@ -814,6 +814,17 @@ pub struct DatumList<'a, T = Datum<'a>> {
     _phantom: PhantomData<fn() -> T>,
 }
 
+impl<'a, T> DatumList<'a, T> {
+    /// Private constructor. All `DatumList` values should be created through
+    /// this function to keep the `PhantomData` bookkeeping in one place.
+    pub(crate) fn new(data: &'a [u8]) -> Self {
+        DatumList {
+            data,
+            _phantom: PhantomData,
+        }
+    }
+}
+
 impl<'a, T> Clone for DatumList<'a, T> {
     fn clone(&self) -> Self {
         *self
@@ -870,6 +881,17 @@ pub struct DatumMap<'a, T = Datum<'a>> {
     /// Points at the serialized datums, which should be sorted in key order
     data: &'a [u8],
     _phantom: PhantomData<fn() -> T>,
+}
+
+impl<'a, T> DatumMap<'a, T> {
+    /// Private constructor. All `DatumMap` values should be created through
+    /// this function to keep the `PhantomData` bookkeeping in one place.
+    pub(crate) fn new(data: &'a [u8]) -> Self {
+        DatumMap {
+            data,
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl<'a, T> Clone for DatumMap<'a, T> {
@@ -1170,10 +1192,9 @@ unsafe fn read_lengthed_datum<'a>(data: &mut &'a [u8], tag: Tag) -> Datum<'a> {
         Tag::StringTiny | Tag::StringShort | Tag::StringLong | Tag::StringHuge => {
             Datum::String(str::from_utf8_unchecked(bytes))
         }
-        Tag::ListTiny | Tag::ListShort | Tag::ListLong | Tag::ListHuge => Datum::List(DatumList {
-            data: bytes,
-            _phantom: PhantomData,
-        }),
+        Tag::ListTiny | Tag::ListShort | Tag::ListLong | Tag::ListHuge => {
+            Datum::List(DatumList::new(bytes))
+        }
         _ => unreachable!(),
     }
 }
@@ -1506,18 +1527,12 @@ pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
             let bytes = read_untagged_bytes(data);
             Datum::Array(Array {
                 dims: ArrayDimensions { data: dims },
-                elements: DatumList {
-                    data: bytes,
-                    _phantom: PhantomData,
-                },
+                elements: DatumList::new(bytes),
             })
         }
         Tag::Dict => {
             let bytes = read_untagged_bytes(data);
-            Datum::Map(DatumMap {
-                data: bytes,
-                _phantom: PhantomData,
-            })
+            Datum::Map(DatumMap::new(bytes))
         }
         Tag::JsonNull => Datum::JsonNull,
         Tag::Dummy => Datum::Dummy,
@@ -2818,7 +2833,7 @@ impl<'a, T> DatumList<'a, T> {
     /// Each datum is decoded and converted via [`FromDatum`]. Since generic
     /// type parameters in `#[sqlfunc]` are erased to `Datum<'a>` before code
     /// generation, this is monomorphized to an identity conversion at runtime.
-    pub fn iter_typed(&self) -> DatumListTypedIter<'a, T>
+    pub fn typed_iter(&self) -> DatumListTypedIter<'a, T>
     where
         T: FromDatum<'a>,
     {
@@ -2836,10 +2851,7 @@ impl<'a, T> DatumList<'a, T> {
 
 impl<T> DatumList<'static, T> {
     pub fn empty() -> Self {
-        DatumList {
-            data: &[],
-            _phantom: PhantomData,
-        }
+        DatumList::new(&[])
     }
 }
 
@@ -2882,7 +2894,7 @@ impl<'a, T> DatumMap<'a, T> {
     /// Each value datum is converted via [`FromDatum`]. Since generic type
     /// parameters in `#[sqlfunc]` are erased to `Datum<'a>` before code
     /// generation, this is monomorphized to an identity conversion at runtime.
-    pub fn iter_typed(&self) -> DatumDictTypedIter<'a, T>
+    pub fn typed_iter(&self) -> DatumDictTypedIter<'a, T>
     where
         T: FromDatum<'a>,
     {
@@ -2900,10 +2912,7 @@ impl<'a, T> DatumMap<'a, T> {
 
 impl<T> DatumMap<'static, T> {
     pub fn empty() -> Self {
-        DatumMap {
-            data: &[],
-            _phantom: PhantomData,
-        }
+        DatumMap::new(&[])
     }
 }
 
@@ -3094,10 +3103,7 @@ impl RowArena {
                 }
             });
         });
-        DatumList {
-            data: datum.unwrap_list().data(),
-            _phantom: PhantomData,
-        }
+        DatumList::new(datum.unwrap_list().data())
     }
 
     /// Convenience function identical to `make_datum` but instead returns a
