@@ -5997,6 +5997,19 @@ pub fn plan_drop_owned(
         );
     }
 
+    // Network policies
+    for network_policy in scx.catalog.get_network_policies() {
+        if role_ids.contains(&network_policy.owner_id()) {
+            drop_ids.push(ObjectId::NetworkPolicy(network_policy.id()));
+        }
+        update_privilege_revokes(
+            SystemObjectId::Object(ObjectId::NetworkPolicy(network_policy.id())),
+            network_policy.privileges(),
+            &role_ids,
+            &mut privilege_revokes,
+        );
+    }
+
     // System
     update_privilege_revokes(
         SystemObjectId::System,

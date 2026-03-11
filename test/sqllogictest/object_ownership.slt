@@ -3074,6 +3074,71 @@ REASSIGN OWNED BY materialize TO PUBLIC;
 db error: ERROR: role name "public" is reserved
 DETAIL: The role "public" and the prefixes "mz_" and "pg_" are reserved for system roles.
 
+# Test DROP OWNED BY with network policies
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB, CREATECLUSTER, CREATENETWORKPOLICY ON SYSTEM TO materialize;
+----
+COMPLETE 0
+
+statement ok
+CREATE NETWORK POLICY np_drop (RULES (r1 (address='0.0.0.0/0', action='allow', direction='ingress')))
+
+query T
+SELECT name FROM mz_internal.mz_network_policies WHERE name = 'np_drop'
+----
+np_drop
+
+simple conn=mz_system,user=mz_system
+DROP OWNED BY materialize;
+----
+COMPLETE 0
+
+query T
+SELECT name FROM mz_internal.mz_network_policies WHERE name = 'np_drop'
+----
+
+# Test REASSIGN OWNED BY with network policies
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB, CREATECLUSTER, CREATENETWORKPOLICY ON SYSTEM TO materialize;
+----
+COMPLETE 0
+
+statement ok
+CREATE NETWORK POLICY np_reassign (RULES (r1 (address='0.0.0.0/0', action='allow', direction='ingress')))
+
+query T
+SELECT mz_roles.name
+  FROM mz_internal.mz_network_policies
+  LEFT JOIN mz_roles ON mz_internal.mz_network_policies.owner_id = mz_roles.id
+  WHERE mz_internal.mz_network_policies.name = 'np_reassign'
+----
+materialize
+
+simple conn=mz_system,user=mz_system
+REASSIGN OWNED BY materialize TO joe;
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_internal.mz_network_policies
+  LEFT JOIN mz_roles ON mz_internal.mz_network_policies.owner_id = mz_roles.id
+  WHERE mz_internal.mz_network_policies.name = 'np_reassign'
+----
+joe
+
+simple conn=mz_system,user=mz_system
+DROP NETWORK POLICY np_reassign;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REASSIGN OWNED BY joe TO materialize;
+----
+COMPLETE 0
+
 # Disable rbac checks.
 
 simple conn=mz_system,user=mz_system
