@@ -507,29 +507,34 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             None => BTreeMap::new(),
         };
 
+        // For collections that sink into storage, we need to ask the storage controller to know
+        // whether they're currently readable.
+        let readable_storage_collections: BTreeSet<_> = self
+            .collections
+            .keys()
+            .filter_map(|id| {
+                let frontiers = self.storage_collections.collection_frontiers(*id).ok()?;
+                PartialOrder::less_than(&frontiers.read_capabilities, &frontiers.write_frontier)
+                    .then_some(*id)
+            })
+            .collect();
+
         // First, iterate over all collections and collect histogram measurements.
-        // We keep a record of unreadable collections, so we can emit undefined lags for those here
-        // and below when we collect history measurements.
-        let mut unreadable_collections = BTreeSet::new();
         for (id, collection) in &mut self.collections {
-            // We need to ask the storage controller for the read frontiers of storage collections.
-            let read_frontier = match self.storage_collections.collection_frontiers(*id) {
-                Ok(f) => f.read_capabilities,
-                Err(_) => collection.read_frontier(),
-            };
             let write_frontier = collection.write_frontier();
-            let collection_unreadable = PartialOrder::less_equal(&write_frontier, &read_frontier);
-            if collection_unreadable {
-                unreadable_collections.insert(id);
-            }
+            let readable = if self.storage_collections.check_exists(*id).is_ok() {
+                readable_storage_collections.contains(id)
+            } else {
+                PartialOrder::less_than(&collection.read_frontier(), &write_frontier)
+            };
 
             if let Some(stash) = &mut collection.wallclock_lag_histogram_stash {
-                let bucket = if collection_unreadable {
-                    WallclockLag::Undefined
-                } else {
+                let bucket = if readable {
                     let lag = frontier_lag(&write_frontier);
                     let lag = lag.as_secs().next_power_of_two();
                     WallclockLag::Seconds(lag)
+                } else {
+                    WallclockLag::Undefined
                 };
 
                 let key = (histogram_period, bucket, histogram_labels.clone());
@@ -540,11 +545,17 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         // Second, iterate over all per-replica collections and collect history measurements.
         for replica in self.replicas.values_mut() {
             for (id, collection) in &mut replica.collections {
-                let lag = if unreadable_collections.contains(&id) {
-                    WallclockLag::Undefined
-                } else {
+                // A per-replica collection is considered readable in the context of lag
+                // measurement if either:
+                //  (a) it sinks into a storage collection that is readable
+                //  (b) it is hydrated
+                let readable = readable_storage_collections.contains(id) || collection.hydrated();
+
+                let lag = if readable {
                     let lag = frontier_lag(&collection.write_frontier);
                     WallclockLag::Seconds(lag.as_secs())
+                } else {
+                    WallclockLag::Undefined
                 };
 
                 if let Some(wallclock_lag_max) = &mut collection.wallclock_lag_max {
