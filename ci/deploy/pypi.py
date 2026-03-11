@@ -73,7 +73,11 @@ def get_metadata_from_pyproject(path: Path) -> tuple[str, str]:
 
 
 def build_package_setup_py(path: Path) -> None:
-    spawn.runv([sys.executable, "setup.py", "build", "sdist"], cwd=path)
+    spawn.runv(
+        [sys.executable, "setup.py", "build", "sdist"],
+        cwd=path,
+        env={**os.environ, "RELEASE_BUILD": "1"},
+    )
 
 
 def build_package_pyproject(path: Path) -> None:
@@ -83,7 +87,7 @@ def build_package_pyproject(path: Path) -> None:
 def upload_to_pypi(path: Path) -> None:
     dist_files = list((path / "dist").iterdir())
     spawn.runv(
-        ["twine", "upload", *dist_files],
+        ["twine", "upload", "--verbose", *dist_files],
         env={
             **os.environ,
             "TWINE_USERNAME": "__token__",
