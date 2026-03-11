@@ -205,42 +205,18 @@ impl<T, O> std::fmt::Debug for StateValue<T, O> {
 
 /// A totally consolidated value stored within the `UpsertStateBackend`.
 ///
-/// This type contains support for _tombstones_, that contain an _order key_,
-/// and provisional values.
-///
-/// What is considered finalized and provisional depends on the implementation
-/// of the UPSERT operator: it might consider everything that it writes to its
-/// state finalized, and assume that what it emits will be written down in the
-/// output exactly as presented. Or it might consider everything it writes down
-/// provisional, and only consider updates that it _knows_ to be persisted as
-/// finalized.
-///
-/// Provisional values should only be considered while still "working off"
-/// updates with the same timestamp at which the provisional update was
-/// recorded.
+/// This type contains support for _tombstones_. A `None` finalized value
+/// indicates that the key has been deleted and acts as a tombstone.
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct Value<T, O> {
     /// The finalized value of a key is the value we know to be correct for the last complete
     /// timestamp that got processed. A finalized value of None means that the key has been deleted
     /// and acts as a tombstone.
     pub finalized: Option<UpsertValue>,
-    /// When `Some(_)` it contains the upsert value has been processed for a yet incomplete
-    /// timestamp. When None, no provisional update has been emitted yet.
-    pub provisional: Option<ProvisionalValue<T, O>>,
-}
-
-/// A provisional value emitted for a timestamp. This struct contains enough information to
-#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
-pub struct ProvisionalValue<T, O> {
-    /// The timestamp at which this provisional value occured at
-    pub timestamp: T,
-    /// The order of this upsert command *within* the timestamp. Commands that happen at the same
-    /// timestamp with lower order get ignored. Commands with higher order override this one. If
-    /// there a case of equal order then the value itself is used as a tie breaker.
-    pub order: O,
-    /// The provisional value. A provisional value of None means that the key has been deleted and
-    /// acts as a tombstone.
-    pub value: Option<UpsertValue>,
+    // NOTE: The `T` and `O` parameters are retained for serialization compatibility
+    // with existing RocksDB state. They are not used at runtime.
+    #[serde(skip)]
+    _phantom: std::marker::PhantomData<(T, O)>,
 }
 
 /// A value as produced during consolidation.
@@ -268,7 +244,7 @@ impl<T, O> StateValue<T, O> {
     pub fn finalized_value(value: UpsertValue) -> Self {
         Self::Value(Value {
             finalized: Some(value),
-            provisional: None,
+            _phantom: std::marker::PhantomData,
         })
     }
 
@@ -277,7 +253,7 @@ impl<T, O> StateValue<T, O> {
     pub fn tombstone() -> Self {
         Self::Value(Value {
             finalized: None,
-            provisional: None,
+            _phantom: std::marker::PhantomData,
         })
     }
 
@@ -286,14 +262,6 @@ impl<T, O> StateValue<T, O> {
         match self {
             Self::Value(value) => value.finalized.is_none(),
             _ => false,
-        }
-    }
-
-    /// Pull out the `Value` value for a `StateValue`, after `ensure_decoded` has been called.
-    pub fn into_decoded(self) -> Value<T, O> {
-        match self {
-            Self::Value(value) => value,
-            _ => panic!("called `into_decoded without calling `ensure_decoded`"),
         }
     }
 
@@ -310,7 +278,7 @@ impl<T, O> StateValue<T, O> {
         let heap_size = match self {
             Self::Consolidating(Consolidating { value_xor, .. }) => value_xor.len(),
             Self::Value(value) => {
-                let finalized_heap_size = match value.finalized {
+                match value.finalized {
                     Some(Ok(ref row)) => {
                         // `Row::byte_len` includes the size of `Row`, which is also in `Self`, so we
                         // subtract it.
@@ -318,20 +286,7 @@ impl<T, O> StateValue<T, O> {
                     }
                     // Assume errors are rare enough to not move the needle.
                     _ => 0,
-                };
-                let provisional_heap_size = match value.provisional {
-                    Some(ref provisional) => match provisional.value {
-                        Some(Ok(ref row)) => {
-                            // `Row::byte_len` includes the size of `Row`, which is also in `Self`, so we
-                            // subtract it.
-                            row.byte_len() - size_of::<Row>()
-                        }
-                        // Assume errors are rare enough to not move the needle.
-                        _ => 0,
-                    },
-                    None => 0,
-                };
-                finalized_heap_size + provisional_heap_size
+                }
             }
         };
         heap_size + size_of::<Self>()
@@ -339,98 +294,17 @@ impl<T, O> StateValue<T, O> {
 }
 
 impl<T: Eq, O> StateValue<T, O> {
-    /// Creates a new provisional value, occurring at some order key, observed
-    /// at the given timestamp.
-    pub fn new_provisional_value(value: UpsertValue, timestamp: T, order: O) -> Self {
-        Self::Value(Value {
-            finalized: None,
-            provisional: Some(ProvisionalValue {
-                value: Some(value),
-                timestamp,
-                order,
-            }),
-        })
-    }
-
-    /// Creates a provisional value, that retains the finalized value in this `StateValue`.
-    pub fn into_provisional_value(self, value: UpsertValue, timestamp: T, order: O) -> Self {
+    /// Returns a reference to the finalized value, if one is present.
+    pub fn finalized_value_ref(&self) -> Option<&UpsertValue> {
         match self {
-            StateValue::Value(finalized) => Self::Value(Value {
-                finalized: finalized.finalized,
-                provisional: Some(ProvisionalValue {
-                    value: Some(value),
-                    timestamp,
-                    order,
-                }),
-            }),
-            StateValue::Consolidating(_) => {
-                panic!("called `into_provisional_value` without calling `ensure_decoded`")
-            }
-        }
-    }
-
-    /// Creates a new provisional tombstone occurring at some order key,
-    /// observed at the given timestamp.
-    pub fn new_provisional_tombstone(timestamp: T, order: O) -> Self {
-        Self::Value(Value {
-            finalized: None,
-            provisional: Some(ProvisionalValue {
-                value: None,
-                timestamp,
-                order,
-            }),
-        })
-    }
-
-    /// Creates a provisional tombstone, that retains the finalized value in this `StateValue`.
-    ///
-    /// We record the current finalized value, so that we can present it when
-    /// needed or when trying to read a provisional value at a different
-    /// timestamp.
-    pub fn into_provisional_tombstone(self, timestamp: T, order: O) -> Self {
-        match self {
-            StateValue::Value(finalized) => Self::Value(Value {
-                finalized: finalized.finalized,
-                provisional: Some(ProvisionalValue {
-                    value: None,
-                    timestamp,
-                    order,
-                }),
-            }),
-            StateValue::Consolidating(_) => {
-                panic!("called `into_provisional_tombstone` without calling `ensure_decoded`")
-            }
-        }
-    }
-
-    /// Returns the order of a provisional value at the given timestamp, if any.
-    pub fn provisional_order(&self, ts: &T) -> Option<&O> {
-        match self {
-            Self::Value(value) => match &value.provisional {
-                Some(p) if &p.timestamp == ts => Some(&p.order),
-                _ => None,
-            },
+            Self::Value(value) => value.finalized.as_ref(),
             Self::Consolidating(_) => {
-                panic!("called `provisional_order` without calling `ensure_decoded`")
+                panic!("called `finalized_value_ref` without calling `ensure_decoded`")
             }
         }
     }
 
-    /// Returns the provisional value, if one is present at the given timestamp.
-    /// Falls back to the finalized value, or `None` if there is neither.
-    pub fn provisional_value_ref(&self, ts: &T) -> Option<&UpsertValue> {
-        match self {
-            Self::Value(value) => match &value.provisional {
-                Some(p) if &p.timestamp == ts => p.value.as_ref(),
-                _ => value.finalized.as_ref(),
-            },
-            Self::Consolidating(_) => {
-                panic!("called `provisional_value_ref` without calling `ensure_decoded`")
-            }
-        }
-    }
-
-    /// Returns the the finalized value, if one is present.
+    /// Returns the finalized value, if one is present.
     pub fn into_finalized_value(self) -> Option<UpsertValue> {
         match self {
             Self::Value(v) => v.finalized,
@@ -718,12 +592,6 @@ pub struct PutStats {
     /// If the current call to `multi_put` deletes a lot of values,
     /// or updates values to smaller ones, this can be negative!
     pub size_diff: i64,
-    /// The number of inserts
-    pub inserts: u64,
-    /// The number of updates
-    pub updates: u64,
-    /// The number of deletes
-    pub deletes: u64,
 }
 
 impl PutStats {
@@ -1256,54 +1124,6 @@ where
         Ok(stats)
     }
 
-    /// Insert or delete for all `puts` keys, prioritizing the last value for
-    /// repeated keys.
-    pub async fn multi_put<P>(
-        &mut self,
-        update_per_record_stats: bool,
-        puts: P,
-    ) -> Result<(), anyhow::Error>
-    where
-        P: IntoIterator<Item = (UpsertKey, PutValue<Value<T, O>>)>,
-    {
-        fail::fail_point!("fail_state_multi_put", |_| {
-            Err(anyhow::anyhow!("Error putting values into state"))
-        });
-        let now = Instant::now();
-        let stats = self
-            .inner
-            .multi_put(puts.into_iter().map(|(k, pv)| {
-                (
-                    k,
-                    PutValue {
-                        value: pv.value.map(StateValue::Value),
-                        previous_value_metadata: pv.previous_value_metadata,
-                    },
-                )
-            }))
-            .await?;
-
-        self.metrics
-            .multi_put_latency
-            .observe(now.elapsed().as_secs_f64());
-        self.worker_metrics
-            .multi_put_size
-            .inc_by(stats.processed_puts);
-
-        if update_per_record_stats {
-            self.worker_metrics.upsert_inserts.inc_by(stats.inserts);
-            self.worker_metrics.upsert_updates.inc_by(stats.updates);
-            self.worker_metrics.upsert_deletes.inc_by(stats.deletes);
-
-            self.stats.update_bytes_indexed_by(stats.size_diff);
-            self.stats.update_records_indexed_by(stats.values_diff);
-            self.stats
-                .update_envelope_state_tombstones_by(stats.tombstones_diff);
-        }
-
-        Ok(())
-    }
-
     /// Get the `gets` keys, which must be unique, placing the results in `results_out`.
     ///
     /// Panics if `gets` and `results_out` are not the same length.
@@ -1374,22 +1194,6 @@ mod tests {
             finalized_value.memory_size() <= 64,
             "memory size is {}",
             finalized_value.memory_size(),
-        );
-
-        let provisional_value_with_finalized_value: StateValue<(), ()> =
-            finalized_value.into_provisional_value(Ok(Row::default()), (), ());
-        assert!(
-            provisional_value_with_finalized_value.memory_size() <= 64,
-            "memory size is {}",
-            provisional_value_with_finalized_value.memory_size(),
-        );
-
-        let provisional_value_without_finalized_value: StateValue<(), ()> =
-            StateValue::new_provisional_value(Ok(Row::default()), (), ());
-        assert!(
-            provisional_value_without_finalized_value.memory_size() <= 64,
-            "memory size is {}",
-            provisional_value_without_finalized_value.memory_size(),
         );
 
         let mut consolidating_value: StateValue<(), ()> = StateValue::default();

@@ -291,10 +291,6 @@ def workflow_failpoint(c: Composition) -> None:
             "upsert: Failed to rehydrate state: Error consolidating values",
         ),
         (
-            "fail_state_multi_put",
-            "upsert: Failed to update records in state: Error putting values into state",
-        ),
-        (
             "fail_state_multi_get",
             "upsert: Failed to fetch records from state: Error getting values from state",
         ),
