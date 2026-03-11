@@ -656,6 +656,10 @@ impl EagerUnaryFunc for CastStringToChar {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastCharToString)
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        self.length.is_none()
+    }
 }
 
 impl fmt::Display for CastStringToChar {
