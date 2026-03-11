@@ -16,7 +16,7 @@
 //! bottom-up so inner CaseLiterals are created first, then outer If nodes
 //! fold into them.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
 use mz_expr::visit::Visit;
@@ -323,6 +323,7 @@ fn collect_if_chain_arms(
     MirScalarExpr,
 ) {
     let mut cases = Vec::new();
+    let mut seen = BTreeSet::new();
     let mut common_candidate: Option<MirScalarExpr> = None;
     let mut remaining = chain;
 
@@ -343,10 +344,7 @@ fn collect_if_chain_arms(
                     }
 
                     // First occurrence of each literal wins (SQL CASE semantics).
-                    if !cases
-                        .iter()
-                        .any(|(row, _): &(Row, MirScalarExpr)| *row == literal_row)
-                    {
+                    if seen.insert(literal_row.clone()) {
                         cases.push((literal_row, *then));
                     }
 
