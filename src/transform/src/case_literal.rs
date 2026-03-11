@@ -276,7 +276,8 @@ fn count_if_chain_arms(expr: &MirScalarExpr) -> usize {
     count
 }
 
-/// Like `extract_eq_literal` but returns references instead of clones.
+/// Inspects an `Eq(expr, literal)` condition and returns references to the
+/// non-literal expression and the literal `Row`.
 /// Returns `(non_literal_expr_ref, literal_row_ref)`.
 fn peek_eq_literal(cond: &MirScalarExpr) -> Option<(&MirScalarExpr, &Row)> {
     let MirScalarExpr::CallBinary {
@@ -330,13 +331,13 @@ fn collect_if_chain_arms(
     loop {
         match remaining {
             MirScalarExpr::If { cond, then, els } => {
-                if let Some((expr_side, literal_row)) = extract_eq_literal(&cond) {
+                if let Some((expr_side, literal_row)) = peek_eq_literal(&cond) {
                     match &common_candidate {
                         None => {
-                            common_candidate = Some(expr_side);
+                            common_candidate = Some(expr_side.clone());
                         }
                         Some(existing) => {
-                            if *existing != expr_side {
+                            if existing != expr_side {
                                 remaining = MirScalarExpr::If { cond, then, els };
                                 break;
                             }
@@ -345,7 +346,7 @@ fn collect_if_chain_arms(
 
                     // First occurrence of each literal wins (SQL CASE semantics).
                     if seen.insert(literal_row.clone()) {
-                        cases.push((literal_row, *then));
+                        cases.push((literal_row.clone(), *then));
                     }
 
                     remaining = *els;
@@ -359,30 +360,6 @@ fn collect_if_chain_arms(
     }
 
     (cases, common_candidate, remaining)
-}
-
-/// Extracts `(non_literal_expr, literal_row)` from an `Eq(expr, literal)` condition.
-fn extract_eq_literal(cond: &MirScalarExpr) -> Option<(MirScalarExpr, Row)> {
-    let MirScalarExpr::CallBinary {
-        func: BinaryFunc::Eq(_),
-        expr1,
-        expr2,
-    } = cond
-    else {
-        return None;
-    };
-
-    if let Some(row) = peek_non_null_literal(expr1) {
-        if !expr2.is_literal() {
-            return Some((expr2.as_ref().clone(), row.clone()));
-        }
-    }
-    if let Some(row) = peek_non_null_literal(expr2) {
-        if !expr1.is_literal() {
-            return Some((expr1.as_ref().clone(), row.clone()));
-        }
-    }
-    None
 }
 
 #[cfg(test)]
