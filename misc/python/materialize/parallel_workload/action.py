@@ -542,7 +542,10 @@ class CopyToS3Action(Action):
         return result
 
     def run(self, exe: Executor) -> bool:
-        obj = self.rng.choice(exe.db.db_objects())
+        db_objs = exe.db.db_objects()
+        if not db_objs:
+            return False
+        obj = self.rng.choice(db_objs)
         obj_name = str(obj)
         with exe.db.lock:
             location = exe.db.s3_path
@@ -583,6 +586,8 @@ class CopyFromS3Action(Action):
         return result
 
     def run(self, exe: Executor) -> bool:
+        if not exe.db.s3_objects:
+            return False
         s3_obj = self.rng.choice(exe.db.s3_objects)
         from_query = f"COPY INTO t1 FROM 's3://{s3_obj.bucket}/{s3_obj.key}' (FORMAT {format.upper()}, AWS CONNECTION = aws_conn)"
         s3_obj.create(exe)
