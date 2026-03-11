@@ -1528,28 +1528,25 @@ range_fn!(overleft, overleft, "&<");
 range_fn!(overright, overright, "&>");
 range_fn!(adjacent, adjacent, "-|-");
 
-#[sqlfunc(
-    output_type_expr = "input_types[0].scalar_type.without_modifiers().nullable(true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
-fn range_union<'a>(
-    l: Range<Datum<'a>>,
-    r: Range<Datum<'a>>,
-) -> Result<Range<Datum<'a>>, EvalError> {
+#[sqlfunc(is_infix_op = true, sqlname = "+")]
+fn range_union<'a, T: Copy + Ord + std::fmt::Display + std::fmt::Debug>(
+    l: Range<T>,
+    r: Range<T>,
+) -> Result<Range<T>, EvalError>
+where
+    Datum<'a>: From<T>,
+{
     Ok(l.union(&r)?)
 }
 
-#[sqlfunc(
-    output_type_expr = "input_types[0].scalar_type.without_modifiers().nullable(true)",
-    is_infix_op = true,
-    sqlname = "*",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
-fn range_intersection<'a>(l: Range<Datum<'a>>, r: Range<Datum<'a>>) -> Range<Datum<'a>> {
+#[sqlfunc(is_infix_op = true, sqlname = "*")]
+fn range_intersection<'a, T: Copy + Ord + std::fmt::Display + std::fmt::Debug>(
+    l: Range<T>,
+    r: Range<T>,
+) -> Range<T>
+where
+    Datum<'a>: From<T>,
+{
     l.intersection(&r)
 }
 
