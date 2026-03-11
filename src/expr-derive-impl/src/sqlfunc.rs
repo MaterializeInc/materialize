@@ -515,16 +515,28 @@ fn derive_output_type_for_generic(
         }
         // Output is bare T, source is a container → unwrap element type.
         (GenericUsage::Bare, GenericUsage::InDatumList) => {
-            quote! { #input_access.scalar_type.unwrap_list_element_type().clone().nullable(#nullable) }
+            quote! {
+                #input_access.scalar_type
+                    .unwrap_list_element_type().clone().nullable(#nullable)
+            }
         }
         (GenericUsage::Bare, GenericUsage::InArray) => {
-            quote! { #input_access.scalar_type.unwrap_array_element_type().clone().nullable(#nullable) }
+            quote! {
+                #input_access.scalar_type
+                    .unwrap_array_element_type().clone().nullable(#nullable)
+            }
         }
         (GenericUsage::Bare, GenericUsage::InDatumMap) => {
-            quote! { #input_access.scalar_type.unwrap_map_value_type().clone().nullable(#nullable) }
+            quote! {
+                #input_access.scalar_type
+                    .unwrap_map_value_type().clone().nullable(#nullable)
+            }
         }
         (GenericUsage::Bare, GenericUsage::InRange) => {
-            quote! { #input_access.scalar_type.unwrap_range_element_type().clone().nullable(#nullable) }
+            quote! {
+                #input_access.scalar_type
+                    .unwrap_range_element_type().clone().nullable(#nullable)
+            }
         }
         // Output container, source is bare T — we can't construct a container type
         // from just T. User must provide explicit output_type_expr.

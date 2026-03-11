@@ -2931,7 +2931,10 @@ fn list_list_concat<'a, T>(
         return Some(a);
     };
 
-    Some(temp_storage.make_datum_list(|packer| packer.push_list(a.iter().chain(b.iter()))))
+    Some(
+        temp_storage
+            .make_datum_list(|packer| packer.push_list(a.iter_typed().chain(b.iter_typed()))),
+    )
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "||", propagates_nulls = false)]
@@ -2942,7 +2945,7 @@ fn list_element_concat<'a, T>(
 ) -> DatumList<'a, T> {
     temp_storage.make_datum_list(|packer| {
         if let Some(a) = a {
-            for elem in a.iter() {
+            for elem in a.iter_typed() {
                 packer.push(elem);
             }
         }
@@ -2960,7 +2963,7 @@ fn element_list_concat<'a, T>(
     temp_storage.make_datum_list(|packer| {
         packer.push(a);
         if let Some(b) = b {
-            for elem in b.iter() {
+            for elem in b.iter_typed() {
                 packer.push(elem);
             }
         }
@@ -2970,7 +2973,7 @@ fn element_list_concat<'a, T>(
 #[sqlfunc(sqlname = "list_remove", propagates_nulls = false)]
 fn list_remove<'a, T>(a: DatumList<'a, T>, b: T, temp_storage: &'a RowArena) -> DatumList<'a, T> {
     temp_storage.make_datum_list(|packer| {
-        for elem in a.iter() {
+        for elem in a.iter_typed() {
             if elem != b {
                 packer.push(elem);
             }
