@@ -952,10 +952,10 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
-ArrangeBy[[CallUnary(CastStringToVarChar(CastStringToVarChar { length: None, fail_on_len: false }), Column(1, "t")), CallUnary(CastInt64ToString(CastInt64ToString), Column(0, "i"))]]
-ArrangeBy[[CallUnary(CastStringToVarChar(CastStringToVarChar { length: None, fail_on_len: false }), Column(1, "t")), CallUnary(CastInt64ToString(CastInt64ToString), Column(0, "i"))]]-errors
 ArrangeBy[[Column(0, "i"), Column(1, "t")]]
 ArrangeBy[[Column(0, "i"), Column(1, "t")]]-errors
+ArrangeBy[[Column(1, "t"), CallUnary(CastInt64ToString(CastInt64ToString), Column(0, "i"))]]
+ArrangeBy[[Column(1, "t"), CallUnary(CastInt64ToString(CastInt64ToString), Column(0, "i"))]]-errors
 
 statement ok
 DROP TABLE t CASCADE
