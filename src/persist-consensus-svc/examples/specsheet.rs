@@ -44,6 +44,7 @@ use mz_persist::generated::consensus_service::{
     ProtoScanRequest, ProtoTruncateProposal, ProtoWalProposal, proto_wal_proposal,
 };
 use mz_persist_consensus_svc::acceptor::{Acceptor, AcceptorConfig};
+use mz_persist_consensus_svc::ctp;
 use mz_persist_consensus_svc::learner::{Learner, LearnerConfig};
 use mz_persist_consensus_svc::metrics::{AcceptorMetrics, LearnerMetrics};
 use mz_persist_consensus_svc::service::{AcceptorGrpcService, LearnerGrpcService};
@@ -116,6 +117,8 @@ enum TransportMode {
     Direct,
     /// gRPC client through a loopback tonic server (full stack).
     Grpc,
+    /// Custom TCP Protocol — length-prefixed bincode over raw TCP.
+    Ctp,
 }
 
 impl std::fmt::Display for TransportMode {
@@ -123,6 +126,7 @@ impl std::fmt::Display for TransportMode {
         match self {
             TransportMode::Direct => write!(f, "direct"),
             TransportMode::Grpc => write!(f, "grpc (loopback)"),
+            TransportMode::Ctp => write!(f, "ctp (loopback)"),
         }
     }
 }
@@ -180,6 +184,9 @@ struct Cli {
     duration: Option<u64>,
     #[arg(long)]
     warmup: Option<u64>,
+
+    #[arg(long)]
+    grpc_connections: Option<u64>,
 
     /// Emit JSON output instead of human-readable text.
     #[arg(long)]
@@ -295,6 +302,7 @@ impl WorkloadConfig {
             transport,
             duration,
             warmup,
+            grpc_connections,
         );
         cfg.json = cli.json;
 
@@ -346,6 +354,10 @@ enum Transport {
         acceptor: ConsensusAcceptorClient<tonic::transport::Channel>,
         learner: ConsensusLearnerClient<tonic::transport::Channel>,
     },
+    /// Multiplexed CTP client — many callers share one connection.
+    Ctp {
+        client: ctp::CtpClient,
+    },
 }
 
 enum CasResult {
@@ -362,16 +374,16 @@ impl Transport {
         seqno: u64,
         data: Vec<u8>,
     ) -> CasResult {
-        let proposal = ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
-                key: key.to_string(),
-                expected,
-                new_seqno: seqno,
-                data,
-            })),
-        };
         match self {
             Transport::Direct { acceptor, learner } => {
+                let proposal = ProtoWalProposal {
+                    op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+                        key: key.to_string(),
+                        expected,
+                        new_seqno: seqno,
+                        data,
+                    })),
+                };
                 let receipt = match acceptor.append(proposal).await {
                     Ok(r) => r,
                     Err(_) => return CasResult::Shutdown,
@@ -386,6 +398,14 @@ impl Transport {
                 }
             }
             Transport::Grpc { acceptor, learner } => {
+                let proposal = ProtoWalProposal {
+                    op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+                        key: key.to_string(),
+                        expected,
+                        new_seqno: seqno,
+                        data: data.clone(),
+                    })),
+                };
                 let receipt = match acceptor
                     .append(ProtoAppendRequest {
                         proposal: Some(proposal),
@@ -412,6 +432,21 @@ impl Transport {
                     Err(_) => CasResult::Shutdown,
                 }
             }
+            Transport::Ctp { client } => {
+                match client
+                    .cas(ctp::CasProposal {
+                        key: key.to_string(),
+                        expected,
+                        new_seqno: seqno,
+                        data,
+                    })
+                    .await
+                {
+                    Ok(r) if r.committed => CasResult::Committed,
+                    Ok(_) => CasResult::Rejected,
+                    Err(_) => CasResult::Shutdown,
+                }
+            }
         }
     }
 
@@ -430,6 +465,15 @@ impl Transport {
                     .ok()?;
                 resp.into_inner().data.map(|d| (d.seqno, d.data.len()))
             }
+            Transport::Ctp { client } => {
+                let resp = client
+                    .head(ctp::HeadRequest {
+                        key: key.to_string(),
+                    })
+                    .await
+                    .ok()?;
+                resp.seqno.map(|s| (s, resp.data_len))
+            }
         }
     }
 
@@ -447,18 +491,28 @@ impl Transport {
                 })
                 .await
                 .is_ok(),
+            Transport::Ctp { client } => {
+                client
+                    .scan(ctp::ScanRequest {
+                        key: key.to_string(),
+                        from,
+                        limit,
+                    })
+                    .await
+                    .is_ok()
+            }
         }
     }
 
     async fn truncate(&mut self, key: &str, seqno: u64) -> bool {
-        let proposal = ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Truncate(ProtoTruncateProposal {
-                key: key.to_string(),
-                seqno,
-            })),
-        };
         match self {
             Transport::Direct { acceptor, learner } => {
+                let proposal = ProtoWalProposal {
+                    op: Some(proto_wal_proposal::Op::Truncate(ProtoTruncateProposal {
+                        key: key.to_string(),
+                        seqno,
+                    })),
+                };
                 let receipt = match acceptor.append(proposal).await {
                     Ok(r) => r,
                     Err(_) => return false,
@@ -469,6 +523,12 @@ impl Transport {
                     .is_ok()
             }
             Transport::Grpc { acceptor, learner } => {
+                let proposal = ProtoWalProposal {
+                    op: Some(proto_wal_proposal::Op::Truncate(ProtoTruncateProposal {
+                        key: key.to_string(),
+                        seqno,
+                    })),
+                };
                 let receipt = match acceptor
                     .append(ProtoAppendRequest {
                         proposal: Some(proposal),
@@ -482,6 +542,15 @@ impl Transport {
                     .await_truncate_result(ProtoAwaitResultRequest {
                         batch_number: receipt.batch_number,
                         position: receipt.position,
+                    })
+                    .await
+                    .is_ok()
+            }
+            Transport::Ctp { client } => {
+                client
+                    .truncate(ctp::TruncateProposal {
+                        key: key.to_string(),
+                        seqno,
                     })
                     .await
                     .is_ok()
@@ -1284,6 +1353,24 @@ async fn main() {
         Learner::spawn_threaded(learner_config, wal, batch_rx, acceptor_handle.clone(), learner_metrics);
 
     // --- Create transport ---
+    let num_clients = cfg.num_shards * cfg.writers_per_shard;
+
+    let ctp_server_handle = if cfg.transport == TransportMode::Ctp {
+        let server = ctp::CtpServer::bind(
+            "127.0.0.1:0",
+            acceptor_handle.clone(),
+            learner_handle.clone(),
+        )
+        .await
+        .expect("failed to bind CTP server");
+        let addr = server.local_addr().unwrap();
+        let handle = mz_ore::task::spawn(|| "specsheet-ctp-server", server.serve())
+            .abort_on_drop();
+        Some((addr, handle))
+    } else {
+        None
+    };
+
     let grpc_server_handle = if cfg.transport == TransportMode::Grpc {
         let acceptor_svc = AcceptorGrpcService {
             handle: acceptor_handle.clone(),
@@ -1310,7 +1397,31 @@ async fn main() {
         None
     };
 
-    let transports: Vec<Transport> = if let Some((addr, _)) = &grpc_server_handle {
+    let transports: Vec<Transport> = if let Some((addr, _)) = &ctp_server_handle {
+        // CTP supports multiplexing — many callers share one connection via
+        // request IDs. Open grpc_connections TCP connections and distribute
+        // clones round-robin.
+        let n = usize::try_from(cfg.grpc_connections.max(1)).unwrap();
+        if !json {
+            eprintln!("specsheet: opening {} CTP connections...", n);
+        }
+        let mut clients = Vec::with_capacity(n);
+        for _ in 0..n {
+            let client = ctp::CtpClient::connect(*addr)
+                .await
+                .expect("failed to connect CTP client");
+            clients.push(client);
+        }
+        // Each client task gets a clone (cheap Arc clone) of one connection.
+        let num = usize::try_from(num_clients).unwrap();
+        let mut pool = Vec::with_capacity(num);
+        for i in 0..num {
+            pool.push(Transport::Ctp {
+                client: clients[i % n].clone(),
+            });
+        }
+        pool
+    } else if let Some((addr, _)) = &grpc_server_handle {
         let addr_str = format!("http://{}", addr);
         let n_conns = usize::try_from(cfg.grpc_connections.max(1)).unwrap();
         let mut pool = Vec::with_capacity(n_conns);
@@ -1347,7 +1458,6 @@ async fn main() {
         cfg.write_rate_per_second
     };
 
-    let num_clients = cfg.num_shards * cfg.writers_per_shard;
     let mut client_handles = Vec::new();
     for (seed, (shard_idx, _writer_idx)) in (0..cfg.num_shards)
         .flat_map(|s| (0..cfg.writers_per_shard).map(move |w| (s, w)))
@@ -1403,10 +1513,12 @@ async fn main() {
         }
     }
 
-    // Shut down the gRPC server (which holds handle clones) so the acceptor
-    // and learner can drain and exit. Dropping the AbortOnDropHandle aborts
-    // the task.
+    // Shut down the network server (which holds handle clones) so the
+    // acceptor and learner can drain and exit.
     if let Some((_, handle)) = grpc_server_handle {
+        drop(handle);
+    }
+    if let Some((_, handle)) = ctp_server_handle {
         drop(handle);
     }
 
