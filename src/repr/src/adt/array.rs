@@ -20,6 +20,7 @@ use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::Datum;
 use crate::row::DatumList;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.array.rs"));
@@ -28,10 +29,15 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.array.rs"));
 pub const MAX_ARRAY_DIMENSIONS: u8 = 6;
 
 /// A variable-length multi-dimensional array.
+///
+/// The type parameter `T` represents the element type of the array. It is a
+/// phantom parameter propagated through the inner [`DatumList`] — the actual
+/// elements are stored as serialized bytes. The default `T = Datum<'a>` means
+/// existing code that writes `Array<'a>` continues to work unchanged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct Array<'a> {
+pub struct Array<'a, T = Datum<'a>> {
     /// The elements in the array.
-    pub(crate) elements: DatumList<'a>,
+    pub(crate) elements: DatumList<'a, T>,
     /// The dimensions of the array.
     pub(crate) dims: ArrayDimensions<'a>,
 }

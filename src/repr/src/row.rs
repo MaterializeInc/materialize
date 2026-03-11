@@ -13,6 +13,7 @@ use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug};
 use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
 use std::mem::{size_of, transmute};
 use std::ops::Deref;
 use std::str;
@@ -747,9 +748,32 @@ pub struct RowPacker<'a> {
     row: &'a mut Row,
 }
 
+/// Infallible conversion from a [`Datum`] to a typed value.
+///
+/// Used by [`DatumList::iter_typed`] to yield elements as `T` rather than
+/// raw `Datum`s. Since generic type parameters in `#[sqlfunc]` are erased
+/// to `Datum<'a>` before code generation, this trait is only ever
+/// monomorphized with `T = Datum<'a>` at runtime.
+pub trait FromDatum<'a>: Sized {
+    fn from_datum(datum: Datum<'a>) -> Self;
+}
+
+impl<'a> FromDatum<'a> for Datum<'a> {
+    #[inline]
+    fn from_datum(datum: Datum<'a>) -> Self {
+        datum
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DatumListIter<'a> {
     data: &'a [u8],
+}
+
+#[derive(Debug, Clone)]
+pub struct DatumListTypedIter<'a, T> {
+    data: &'a [u8],
+    _phantom: PhantomData<fn() -> T>,
 }
 
 #[derive(Debug, Clone)]
@@ -773,28 +797,42 @@ pub struct RowArena {
 // DatumList and DatumDict defined here rather than near Datum because we need private access to the unsafe data field
 
 /// A sequence of Datums
-#[derive(Clone, Copy)]
-pub struct DatumList<'a> {
+///
+/// The type parameter `T` represents the element type of the list. It is a
+/// phantom parameter that carries no runtime data — the actual elements are
+/// stored as serialized bytes and decoded as `Datum<'a>` on iteration.
+/// The default `T = Datum<'a>` means existing code that writes `DatumList<'a>`
+/// continues to work unchanged.
+pub struct DatumList<'a, T = Datum<'a>> {
     /// Points at the serialized datums
     data: &'a [u8],
+    _phantom: PhantomData<fn() -> T>,
 }
 
-impl<'a> Debug for DatumList<'a> {
+impl<'a, T> Clone for DatumList<'a, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'a, T> Copy for DatumList<'a, T> {}
+
+impl<'a, T> Debug for DatumList<'a, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list().entries(self.iter()).finish()
     }
 }
 
-impl<'a> PartialEq for DatumList<'a> {
+impl<'a, T> PartialEq for DatumList<'a, T> {
     #[inline(always)]
-    fn eq(&self, other: &DatumList<'a>) -> bool {
+    fn eq(&self, other: &DatumList<'a, T>) -> bool {
         self.iter().eq(other.iter())
     }
 }
 
-impl<'a> Eq for DatumList<'a> {}
+impl<'a, T> Eq for DatumList<'a, T> {}
 
-impl<'a> Hash for DatumList<'a> {
+impl<'a, T> Hash for DatumList<'a, T> {
     #[inline(always)]
     fn hash<H: Hasher>(&self, state: &mut H) {
         for d in self.iter() {
@@ -803,37 +841,50 @@ impl<'a> Hash for DatumList<'a> {
     }
 }
 
-impl Ord for DatumList<'_> {
+impl<T> Ord for DatumList<'_, T> {
     #[inline(always)]
-    fn cmp(&self, other: &DatumList) -> Ordering {
+    fn cmp(&self, other: &DatumList<'_, T>) -> Ordering {
         self.iter().cmp(other.iter())
     }
 }
 
-impl PartialOrd for DatumList<'_> {
+impl<T> PartialOrd for DatumList<'_, T> {
     #[inline(always)]
-    fn partial_cmp(&self, other: &DatumList) -> Option<Ordering> {
+    fn partial_cmp(&self, other: &DatumList<'_, T>) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 /// A mapping from string keys to Datums
-#[derive(Clone, Copy)]
-pub struct DatumMap<'a> {
+///
+/// The type parameter `T` represents the value type of the map. It is a
+/// phantom parameter — the actual values are stored as serialized bytes and
+/// decoded as `Datum<'a>` on iteration. The default `T = Datum<'a>` means
+/// existing code that writes `DatumMap<'a>` continues to work unchanged.
+pub struct DatumMap<'a, T = Datum<'a>> {
     /// Points at the serialized datums, which should be sorted in key order
     data: &'a [u8],
+    _phantom: PhantomData<fn() -> T>,
 }
 
-impl<'a> PartialEq for DatumMap<'a> {
+impl<'a, T> Clone for DatumMap<'a, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'a, T> Copy for DatumMap<'a, T> {}
+
+impl<'a, T> PartialEq for DatumMap<'a, T> {
     #[inline(always)]
-    fn eq(&self, other: &DatumMap<'a>) -> bool {
+    fn eq(&self, other: &DatumMap<'a, T>) -> bool {
         self.iter().eq(other.iter())
     }
 }
 
-impl<'a> Eq for DatumMap<'a> {}
+impl<'a, T> Eq for DatumMap<'a, T> {}
 
-impl<'a> Hash for DatumMap<'a> {
+impl<'a, T> Hash for DatumMap<'a, T> {
     #[inline(always)]
     fn hash<H: Hasher>(&self, state: &mut H) {
         for (k, v) in self.iter() {
@@ -843,16 +894,16 @@ impl<'a> Hash for DatumMap<'a> {
     }
 }
 
-impl<'a> Ord for DatumMap<'a> {
+impl<'a, T> Ord for DatumMap<'a, T> {
     #[inline(always)]
-    fn cmp(&self, other: &DatumMap<'a>) -> Ordering {
+    fn cmp(&self, other: &DatumMap<'a, T>) -> Ordering {
         self.iter().cmp(other.iter())
     }
 }
 
-impl<'a> PartialOrd for DatumMap<'a> {
+impl<'a, T> PartialOrd for DatumMap<'a, T> {
     #[inline(always)]
-    fn partial_cmp(&self, other: &DatumMap<'a>) -> Option<Ordering> {
+    fn partial_cmp(&self, other: &DatumMap<'a, T>) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
@@ -1114,9 +1165,10 @@ unsafe fn read_lengthed_datum<'a>(data: &mut &'a [u8], tag: Tag) -> Datum<'a> {
         Tag::StringTiny | Tag::StringShort | Tag::StringLong | Tag::StringHuge => {
             Datum::String(str::from_utf8_unchecked(bytes))
         }
-        Tag::ListTiny | Tag::ListShort | Tag::ListLong | Tag::ListHuge => {
-            Datum::List(DatumList { data: bytes })
-        }
+        Tag::ListTiny | Tag::ListShort | Tag::ListLong | Tag::ListHuge => Datum::List(DatumList {
+            data: bytes,
+            _phantom: PhantomData,
+        }),
         _ => unreachable!(),
     }
 }
@@ -1449,12 +1501,18 @@ pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
             let bytes = read_untagged_bytes(data);
             Datum::Array(Array {
                 dims: ArrayDimensions { data: dims },
-                elements: DatumList { data: bytes },
+                elements: DatumList {
+                    data: bytes,
+                    _phantom: PhantomData,
+                },
             })
         }
         Tag::Dict => {
             let bytes = read_untagged_bytes(data);
-            Datum::Map(DatumMap { data: bytes })
+            Datum::Map(DatumMap {
+                data: bytes,
+                _phantom: PhantomData,
+            })
         }
         Tag::JsonNull => Datum::JsonNull,
         Tag::Dummy => Datum::Dummy,
@@ -2705,18 +2763,38 @@ impl fmt::Display for Row {
     }
 }
 
-impl<'a> DatumList<'a> {
-    pub fn empty() -> DatumList<'static> {
-        DatumList { data: &[] }
-    }
-
+impl<'a, T> DatumList<'a, T> {
     pub fn iter(&self) -> DatumListIter<'a> {
         DatumListIter { data: self.data }
+    }
+
+    /// Iterate elements as typed `T` values rather than raw `Datum`s.
+    ///
+    /// Each datum is decoded and converted via [`FromDatum`]. Since generic
+    /// type parameters in `#[sqlfunc]` are erased to `Datum<'a>` before code
+    /// generation, this is monomorphized to an identity conversion at runtime.
+    pub fn iter_typed(&self) -> DatumListTypedIter<'a, T>
+    where
+        T: FromDatum<'a>,
+    {
+        DatumListTypedIter {
+            data: self.data,
+            _phantom: PhantomData,
+        }
     }
 
     /// For debugging only
     pub fn data(&self) -> &'a [u8] {
         self.data
+    }
+}
+
+impl<'a> DatumList<'a> {
+    pub fn empty() -> DatumList<'static> {
+        DatumList {
+            data: &[],
+            _phantom: PhantomData,
+        }
     }
 }
 
@@ -2739,11 +2817,18 @@ impl<'a> Iterator for DatumListIter<'a> {
     }
 }
 
-impl<'a> DatumMap<'a> {
-    pub fn empty() -> DatumMap<'static> {
-        DatumMap { data: &[] }
+impl<'a, T: FromDatum<'a>> Iterator for DatumListTypedIter<'a, T> {
+    type Item = T;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.data.is_empty() {
+            None
+        } else {
+            Some(T::from_datum(unsafe { read_datum(&mut self.data) }))
+        }
     }
+}
 
+impl<'a, T> DatumMap<'a, T> {
     pub fn iter(&self) -> DatumDictIter<'a> {
         DatumDictIter {
             data: self.data,
@@ -2754,6 +2839,15 @@ impl<'a> DatumMap<'a> {
     /// For debugging only
     pub fn data(&self) -> &'a [u8] {
         self.data
+    }
+}
+
+impl<'a> DatumMap<'a> {
+    pub fn empty() -> DatumMap<'static> {
+        DatumMap {
+            data: &[],
+            _phantom: PhantomData,
+        }
     }
 }
 
