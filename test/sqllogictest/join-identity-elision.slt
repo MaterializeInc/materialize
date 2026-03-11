@@ -1,0 +1,71 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for join identity elision in outer joins
+
+mode cockroach
+
+# Start from a pristine server
+reset-server
+
+# A "join identity" is a Constant with 1 row and 0 columns, produced by
+# `SELECT` (with no result columns). The join() method elides joins when
+# one side is a join identity and ON is TRUE, but ignores the join kind.
+# This is correct for INNER JOIN but wrong for some outer joins.
+
+statement ok
+CREATE TABLE empty_t (a int, b int)
+
+# Baseline: INNER JOIN with join identity is correctly elided.
+# (SELECT) has 1 row, 0 cols; INNER JOIN with empty table = 0 rows.
+query II
+SELECT * FROM (SELECT) AS sub INNER JOIN empty_t ON true
+----
+
+# LEFT JOIN should preserve left rows when right is empty.
+# Left = (SELECT) = 1 row, 0 columns. Right = empty_t = 0 rows.
+# Expected: 1 row with NULLs for right columns → (NULL, NULL)
+query II
+SELECT * FROM (SELECT) AS sub LEFT JOIN empty_t ON true
+----
+NULL  NULL
+
+# Verify: LEFT JOIN with a non-identity left side (1 column) works correctly.
+# This does NOT trigger the join identity elision code path.
+query III
+SELECT * FROM (SELECT 1 AS x) AS sub LEFT JOIN empty_t ON true
+----
+1  NULL  NULL
+
+# RIGHT JOIN where the identity is on the right side.
+# Left = empty_t = 0 rows. Right = (SELECT) = 1 row, 0 cols.
+# Expected: 1 row with NULLs for left columns → (NULL, NULL)
+query II
+SELECT * FROM empty_t RIGHT JOIN (SELECT) AS sub ON true
+----
+NULL  NULL
+
+# FULL JOIN where the identity is on the left.
+# Left = (SELECT) = 1 row, 0 cols. Right = empty_t = 0 rows.
+# Expected: 1 row with NULLs for right columns → (NULL, NULL)
+query II
+SELECT * FROM (SELECT) AS sub FULL JOIN empty_t ON true
+----
+NULL  NULL
+
+# FULL JOIN where the identity is on the right.
+# Left = empty_t = 0 rows. Right = (SELECT) = 1 row, 0 cols.
+# Expected: 1 row with NULLs for left columns → (NULL, NULL)
+query II
+SELECT * FROM empty_t FULL JOIN (SELECT) AS sub ON true
+----
+NULL  NULL
+
+statement ok
+DROP TABLE empty_t
