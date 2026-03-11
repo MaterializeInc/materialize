@@ -3117,17 +3117,21 @@ impl RowArena {
         self.push_unary_row(row)
     }
 
-    /// Convenience function to build a list datum and return it as a typed
-    /// `DatumList<'a, T>`. The closure receives a `RowPacker` to push elements.
+    /// Convenience function to build a list datum from an iterator of typed
+    /// elements and return it as a `DatumList<'a, T>`.
     ///
-    /// This enforces at the type level that the returned list carries the
-    /// element type `T`, even though the underlying representation is the same.
-    pub fn make_datum_list<'a, T, F>(&'a self, f: F) -> DatumList<'a, T>
-    where
-        F: FnOnce(&mut RowPacker),
-    {
+    /// By accepting an iterator of `T: IntoDatum` instead of a raw `RowPacker`
+    /// closure, this guarantees that only elements of type `T` are pushed.
+    pub fn make_datum_list<'a, T: IntoDatum<'a>>(
+        &'a self,
+        iter: impl IntoIterator<Item = T>,
+    ) -> DatumList<'a, T> {
         let datum = self.make_datum(|packer| {
-            packer.push_list_with(f);
+            packer.push_list_with(|packer| {
+                for elem in iter {
+                    packer.push(elem.into_datum());
+                }
+            });
         });
         DatumList {
             data: datum.unwrap_list().data(),
