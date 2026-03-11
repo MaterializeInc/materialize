@@ -256,14 +256,17 @@ impl Coordinator {
         // a durable transaction (persist write/read) just to bump the storage usage
         // id allocator. That id is unused — no view or query references it — so we
         // use a cheap local counter instead.
+        //
+        // All updates within one collection batch share the same id so that
+        // downstream consumers can identify which rows were collected together.
+        let batch_id = self.storage_usage_next_id;
+        self.storage_usage_next_id += 1;
         let updates: Vec<_> = shards_usage
             .by_shard
             .into_iter()
             .map(|(shard_id, shard_usage)| {
-                let id = self.storage_usage_next_id;
-                self.storage_usage_next_id += 1;
                 let event = VersionedStorageUsage::new(
-                    id,
+                    batch_id,
                     Some(shard_id.to_string()),
                     shard_usage.size_bytes(),
                     collection_timestamp,

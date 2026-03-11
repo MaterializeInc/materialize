@@ -1921,7 +1921,9 @@ pub struct Coordinator {
     storage_usage_client: StorageUsageClient,
     /// The interval at which to collect storage usage information.
     storage_usage_collection_interval: Duration,
-    /// Local counter for storage usage row IDs. The id column in
+    /// Local counter for storage usage batch IDs. All rows collected in
+    /// one batch share the same id so that consumers can identify which
+    /// rows were collected together. The id column in
     /// mz_storage_usage_by_shard is unused by any view or query, so a
     /// cheap non-durable counter suffices.
     storage_usage_next_id: u64,
