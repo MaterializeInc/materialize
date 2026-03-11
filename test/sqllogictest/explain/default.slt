@@ -517,7 +517,7 @@ Explained Query:
       →Arranged l1
     cte l3 =
       →Consolidating Monotonic Top1
-        Group By#0
+        Group By #0
         →Differential Join %0 » %1
           Join stage 0 in %1 with lookup key #1{b}
             filter=((#0{b}) IS NOT NULL)
@@ -525,7 +525,7 @@ Explained Query:
           →Arranged materialize.public.iv
     cte l4 =
       →Consolidating Monotonic Top1
-        Group By#0
+        Group By #0
         →Differential Join %0 » %1
           Join stage 0 in %1 with lookup key #1{b}
           →Arranged l2
