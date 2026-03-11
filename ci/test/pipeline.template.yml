@@ -657,14 +657,14 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
-  - id: copy-to-s3
-    label: Copy to S3
+  - id: copy
+    label: Copy
     depends_on: build-aarch64
     timeout_in_minutes: 30
-    inputs: [test/copy-to-s3]
+    inputs: [test/copy]
     plugins:
       - ./ci/plugins/mzcompose:
-          composition: copy-to-s3
+          composition: copy
           run: ci
     agents:
       queue: hetzner-aarch64-4cpu-8gb

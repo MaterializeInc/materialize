@@ -2219,27 +2219,27 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
-  - group: "Copy To S3"
-    key: copy-to-s3
+  - group: "Copy"
+    key: copy
     steps:
-    - id: copy-to-s3-1-replica
-      label: "Copy To S3 (1 replica)"
+    - id: copy-1-replica
+      label: "Copy (1 replica)"
       depends_on: build-aarch64
       timeout_in_minutes: 60
       plugins:
         - ./ci/plugins/mzcompose:
-            composition: copy-to-s3
+            composition: copy
             run: nightly
       agents:
         queue: hetzner-aarch64-8cpu-16gb
 
-    - id: copy-to-s3-2-replicas
-      label: "Copy To S3 (2 replicas)"
+    - id: copy-2-replicas
+      label: "Copy (2 replicas)"
       depends_on: build-aarch64
       timeout_in_minutes: 60
       plugins:
         - ./ci/plugins/mzcompose:
-            composition: copy-to-s3
+            composition: copy
             run: nightly
             args: [--default-size=2]
       agents:
