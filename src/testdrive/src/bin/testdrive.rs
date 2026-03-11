@@ -387,7 +387,12 @@ async fn main() {
         mz_license_keys::validate(license_key_text.trim())
             .unwrap_or_else(|e| die!("testdrive: failed to validate license key: {}", e))
     } else {
-        ValidatedLicenseKey::default()
+        // Use `disabled()` to match environmentd's behavior when no license
+        // key is provided. `disabled()` sets
+        // `allow_credit_consumption_override: true`, which skips memory-based
+        // credit recalculation. Using `default()` here would cause a mismatch
+        // with environmentd's catalog state in the consistency check.
+        ValidatedLicenseKey::disabled()
     };
 
     let cluster_replica_sizes = ClusterReplicaSizeMap::parse_from_str(
