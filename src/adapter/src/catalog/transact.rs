@@ -3124,18 +3124,26 @@ mod tests {
     async fn test_transact_incremental_dry_run_processes_only_new_ops() {
         Catalog::with_debug(|catalog| async move {
             // Resolve default database and schema.
-            let database = catalog.resolve_database(DEFAULT_DATABASE_NAME).unwrap();
+            let database = catalog
+                .resolve_database(DEFAULT_DATABASE_NAME)
+                .expect("default database");
             let database_name = database.name.clone();
             let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
             let schema = catalog
                 .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
-                .unwrap();
+                .expect("default schema");
             let schema_name = schema.name.schema.clone();
             let schema_spec = schema.id.clone();
 
             // Allocate IDs for two tables.
-            let (id_t1, global_id_t1) = catalog.allocate_user_id_for_test().await.unwrap();
-            let (id_t2, global_id_t2) = catalog.allocate_user_id_for_test().await.unwrap();
+            let (id_t1, global_id_t1) = catalog
+                .allocate_user_id_for_test()
+                .await
+                .expect("allocate id for t1");
+            let (id_t2, global_id_t2) = catalog
+                .allocate_user_id_for_test()
+                .await
+                .expect("allocate id for t2");
 
             let oracle_write_ts = catalog.current_upper().await;
 
@@ -3181,7 +3189,7 @@ mod tests {
                     oracle_write_ts,
                 )
                 .await
-                .unwrap();
+                .expect("first dry run");
 
             // After first dry run: t1 exists, t2 does not.
             assert!(
@@ -3189,7 +3197,11 @@ mod tests {
                 "t1 should exist after first dry run"
             );
             assert_eq!(
-                state_after_t1.try_get_entry(&id_t1).unwrap().name().item,
+                state_after_t1
+                    .try_get_entry(&id_t1)
+                    .expect("t1 entry")
+                    .name()
+                    .item,
                 "t1"
             );
             assert!(
@@ -3207,7 +3219,7 @@ mod tests {
                     oracle_write_ts,
                 )
                 .await
-                .unwrap();
+                .expect("second dry run");
 
             // After second dry run: both t1 and t2 exist.
             assert!(
@@ -3230,7 +3242,7 @@ mod tests {
                     oracle_write_ts,
                 )
                 .await
-                .unwrap();
+                .expect("all-at-once dry run");
 
             assert!(
                 state_all_at_once.try_get_entry(&id_t1).is_some(),
@@ -3243,13 +3255,13 @@ mod tests {
 
             // --- Compare: both paths produce equivalent items ---
 
-            let inc_t1 = state_incremental.try_get_entry(&id_t1).unwrap();
-            let all_t1 = state_all_at_once.try_get_entry(&id_t1).unwrap();
+            let inc_t1 = state_incremental.try_get_entry(&id_t1).expect("inc t1");
+            let all_t1 = state_all_at_once.try_get_entry(&id_t1).expect("all t1");
             assert_eq!(inc_t1.name(), all_t1.name());
             assert_eq!(inc_t1.owner_id, all_t1.owner_id);
 
-            let inc_t2 = state_incremental.try_get_entry(&id_t2).unwrap();
-            let all_t2 = state_all_at_once.try_get_entry(&id_t2).unwrap();
+            let inc_t2 = state_incremental.try_get_entry(&id_t2).expect("inc t2");
+            let all_t2 = state_all_at_once.try_get_entry(&id_t2).expect("all t2");
             assert_eq!(inc_t2.name(), all_t2.name());
             assert_eq!(inc_t2.owner_id, all_t2.owner_id);
 
