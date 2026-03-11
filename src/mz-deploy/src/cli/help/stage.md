@@ -129,6 +129,13 @@ again.
 - **Staging fails with `--no-rollback`** — Inspect the partial deployment,
   then run `mz-deploy abort <ID>` to clean up manually.
 
+## Exit Codes
+
+- **0** — Deployment staged successfully, no changes detected, or dry-run
+  completed.
+- **1** — Uncommitted changes (without `--allow-dirty`), deployment name
+  conflict, validation error, or connection error.
+
 ## Related Commands
 
 - `mz-deploy compile` — Validate SQL before staging.

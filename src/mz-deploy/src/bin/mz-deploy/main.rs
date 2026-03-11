@@ -132,7 +132,7 @@ enum Command {
     /// Subcommands:
     ///   clusters          Apply cluster definitions from clusters/ directory
     ///   roles             Apply role definitions from roles/ directory
-    ///   network-policies  Apply network policy definitions from network_policies/ directory
+    ///   network-policies  Apply network policy definitions from network-policies/ directory
     ///   secrets           Apply secret definitions from the project
     ///   connections  Apply connection definitions from the project
     ///   sources      Apply source definitions from the project
@@ -525,7 +525,7 @@ enum ApplyCommand {
     ///   mz-deploy apply roles
     #[command(after_help = "Run 'mz-deploy help apply-roles' for a detailed usage guide.")]
     Roles,
-    /// Apply network policy definitions from network_policies/ directory
+    /// Apply network policy definitions from network-policies/ directory
     ///
     /// Converges the live Materialize state to match the network policy definitions.
     /// Creates policies that don't exist and alters ones whose rules have changed.
@@ -605,6 +605,12 @@ enum DeleteCommand {
     /// Delete a secret
     Secret {
         /// Fully-qualified secret name (database.schema.name)
+        #[arg(value_name = "NAME")]
+        name: String,
+    },
+    /// Delete a source
+    Source {
+        /// Fully-qualified source name (database.schema.name)
         #[arg(value_name = "NAME")]
         name: String,
     },
@@ -836,6 +842,7 @@ async fn run(args: Args) -> Result<(), CliError> {
                 DeleteCommand::NetworkPolicy { name } => (delete::ObjectKind::NetworkPolicy, name),
                 DeleteCommand::Role { name } => (delete::ObjectKind::Role, name),
                 DeleteCommand::Secret { name } => (delete::ObjectKind::Secret, name),
+                DeleteCommand::Source { name } => (delete::ObjectKind::Source, name),
                 DeleteCommand::Table { name } => (delete::ObjectKind::Table, name),
             };
             delete::run(&settings, kind, &name, yes).await

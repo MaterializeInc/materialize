@@ -32,7 +32,7 @@ pub fn run(name: &str, init_git: bool) -> Result<(), CliError> {
     create_dir(project_dir, "models/materialize/public")?;
     create_dir(project_dir, "clusters")?;
     create_dir(project_dir, "roles")?;
-    create_dir(project_dir, "network_policies")?;
+    create_dir(project_dir, "network-policies")?;
     create_dir(project_dir, ".agents/skills/mz-deploy/references")?;
     create_dir(project_dir, ".claude/skills")?;
     add_file(project_dir, "models/materialize/public/.gitkeep", "")?;

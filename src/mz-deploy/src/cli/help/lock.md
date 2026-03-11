@@ -32,6 +32,11 @@ lock file. The lock file is also automatically regenerated after
 - **External object not found** — The referenced table or view does not
   exist in the database yet. Create it first, then re-run.
 
+## Exit Codes
+
+- **0** — Lock file written successfully, or no external dependencies found.
+- **1** — Project loading error or connection error.
+
 ## Related Commands
 
 - `mz-deploy compile` — Uses `types.lock` for type checking.

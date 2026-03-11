@@ -39,6 +39,11 @@ production, similar to `git log`. Newest promotions appear first.
 - **No history found** — No deployments have been promoted yet. Use
   `mz-deploy list` to see active staging deployments.
 
+## Exit Codes
+
+- **0** — Always exits 0, even if no promotion history exists.
+- **1** — Connection error.
+
 ## Related Commands
 
 - `mz-deploy describe` — Drill into a specific deployment's details.

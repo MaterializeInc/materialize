@@ -46,6 +46,11 @@ handles the full dependency chain automatically.
 - **Connection fails** — Check your profile configuration and network
   access to the Materialize region.
 
+## Exit Codes
+
+- **0** — All sources created, or no source files found.
+- **1** — Compilation, validation, or connection error.
+
 ## Related Commands
 
 - `mz-deploy apply` — Apply all object types in dependency order.

@@ -40,6 +40,11 @@ same result. Grants and comments are safe to re-apply.
 - **Permission denied** — Ensure your profile's role has `CREATE CLUSTER`
   privileges.
 
+## Exit Codes
+
+- **0** — All cluster definitions applied, or no cluster files found.
+- **1** — Failed to load definitions or connect to Materialize.
+
 ## Related Commands
 
 - `mz-deploy apply` — Apply all object types in dependency order.

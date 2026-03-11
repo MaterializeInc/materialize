@@ -50,6 +50,12 @@ generated SQL plan. A passing `compile` guarantees that `stage` and
 - **Docker unavailable** — Type checking is skipped with a warning. Install
   Docker or pass `--skip-typecheck` to silence the warning.
 
+## Exit Codes
+
+- **0** — Project parsed, validated, and type-checked successfully. Also
+  exits 0 if Docker is unavailable (type-checking is skipped with a warning).
+- **1** — Parse error, validation error, dependency cycle, or type-check failure.
+
 ## Related Commands
 
 - `mz-deploy stage` — Deploys the compiled plan to a staging environment.

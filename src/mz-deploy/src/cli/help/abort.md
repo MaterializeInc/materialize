@@ -45,6 +45,11 @@ multiple times safely.
 - **Partial cleanup** — If some drops fail, re-run `abort` to retry.
   The command is idempotent for already-dropped resources.
 
+## Exit Codes
+
+- **0** — Deployment cleaned up successfully, or user cancelled the prompt.
+- **1** — Deployment not found, already promoted, or cleanup failed.
+
 ## Related Commands
 
 - `mz-deploy stage` — Create a staging deployment.

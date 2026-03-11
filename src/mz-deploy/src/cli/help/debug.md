@@ -45,6 +45,11 @@ connectivity and configuration before running deployments.
 - **Docker daemon not running** — Start Docker Desktop or the Docker daemon
   (`sudo systemctl start docker` on Linux).
 
+## Exit Codes
+
+- **0** — Connection succeeded and test query returned results.
+- **1** — Connection failed or query error.
+
 ## Related Commands
 
 - `mz-deploy list` — List active deployments (also tests connectivity).

@@ -19,6 +19,7 @@ pub enum ObjectKind {
     NetworkPolicy,
     Role,
     Secret,
+    Source,
     Table,
 }
 
@@ -30,6 +31,7 @@ impl ObjectKind {
             ObjectKind::NetworkPolicy => "network policy",
             ObjectKind::Role => "role",
             ObjectKind::Secret => "secret",
+            ObjectKind::Source => "source",
             ObjectKind::Table => "table",
         }
     }
@@ -41,6 +43,7 @@ impl ObjectKind {
             ObjectKind::NetworkPolicy => "NETWORK POLICY",
             ObjectKind::Role => "ROLE",
             ObjectKind::Secret => "SECRET",
+            ObjectKind::Source => "SOURCE",
             ObjectKind::Table => "TABLE",
         }
     }
@@ -79,7 +82,7 @@ impl DeleteTarget {
             ),
             ObjectKind::NetworkPolicy => (
                 directory
-                    .join("network_policies")
+                    .join("network-policies")
                     .join(format!("{}.sql", name)),
                 format!("DROP {} {}", keyword, quote_identifier(name)),
             ),
@@ -87,7 +90,7 @@ impl DeleteTarget {
                 directory.join("roles").join(format!("{}.sql", name)),
                 format!("DROP {} {}", keyword, quote_identifier(name)),
             ),
-            ObjectKind::Connection | ObjectKind::Secret | ObjectKind::Table => {
+            ObjectKind::Connection | ObjectKind::Secret | ObjectKind::Source | ObjectKind::Table => {
                 let oid = ObjectId::from_fqn(name).map_err(CliError::Message)?;
                 (
                     directory

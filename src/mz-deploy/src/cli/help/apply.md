@@ -17,7 +17,7 @@ When run without a subcommand (`mz-deploy apply`):
    alters drifted configuration.
 2. Applies role definitions from `roles/` — creates missing, applies
    ALTER, GRANT, COMMENT statements.
-3. Applies network policy definitions from `network_policies/` — creates
+3. Applies network policy definitions from `network-policies/` — creates
    missing, alters drifted rules.
 4. Applies secrets — creates missing, updates values (skip with
    `--skip-secrets`).
@@ -35,7 +35,7 @@ type is applied.
 
 - `clusters` — Apply cluster definitions from `clusters/` directory.
 - `roles` — Apply role definitions from `roles/` directory.
-- `network-policies` — Apply network policy definitions from `network_policies/` directory.
+- `network-policies` — Apply network policy definitions from `network-policies/` directory.
 - `secrets` — Create missing secrets and update existing values.
 - `connections` — Create missing connections, reconcile drift.
 - `sources` — Create sources that don't exist.
@@ -66,6 +66,12 @@ type is applied.
   credentials are available, or use `--skip-secrets`.
 - **Table/source creation fails** — Already-created objects remain.
   Fix the failing SQL and re-run; existing objects will be skipped.
+
+## Exit Codes
+
+- **0** — All objects applied successfully (or nothing to apply).
+- **1** — Compilation, validation, or connection error. Fails on the first
+  error encountered.
 
 ## Related Commands
 

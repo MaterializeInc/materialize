@@ -41,6 +41,11 @@ if they are "ready" or "lagging."
   with `mz-deploy stage`.
 - **Connection failed** — Verify your profile with `mz-deploy debug`.
 
+## Exit Codes
+
+- **0** — Always exits 0, even if no deployments exist.
+- **1** — Connection error.
+
 ## Related Commands
 
 - `mz-deploy stage` — Create a staging deployment.

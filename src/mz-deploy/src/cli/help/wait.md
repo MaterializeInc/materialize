@@ -62,6 +62,12 @@ A cluster is considered "ready" when all three conditions are met:
 - **Already promoted** — The deployment has already been promoted. No need to
   monitor.
 
+## Exit Codes
+
+- **0** — All clusters ready, or no clusters exist in the deployment.
+- **1** — Deployment not found, already promoted, clusters still hydrating,
+  cluster failure detected, or timeout reached.
+
 ## Related Commands
 
 - `mz-deploy stage` — Create the staging deployment to monitor.

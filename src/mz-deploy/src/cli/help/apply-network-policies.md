@@ -1,6 +1,6 @@
 # apply network-policies — Converge network policy definitions to match project files
 
-Reads network policy definitions from the `network_policies/` directory and converges
+Reads network policy definitions from the `network-policies/` directory and converges
 the live Materialize state to match. Creates missing network policies and alters
 ones whose rules have changed. Grants and comments are applied idempotently.
 
@@ -37,6 +37,11 @@ same result. Grants and comments are safe to re-apply.
   Already-created policies from this run remain.
 - **Permission denied** — Ensure your profile's role has privileges to
   manage network policies.
+
+## Exit Codes
+
+- **0** — All network policies applied, or no policy files found.
+- **1** — Failed to load definitions or connect to Materialize.
 
 ## Related Commands
 

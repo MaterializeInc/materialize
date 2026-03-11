@@ -159,6 +159,12 @@ annotations and trend tracking.
 - **Types cache stale** — Delete `.mz-deploy/types.cache` and re-run, or
   run `mz-deploy lock` to refresh `types.lock`.
 
+## Exit Codes
+
+- **0** — All tests passed, or no test files found (without a filter).
+- **1** — One or more tests failed, validation errors found, or a filter
+  was provided that matched no tests.
+
 ## Related Commands
 
 - `mz-deploy compile` — Validate SQL without running tests.

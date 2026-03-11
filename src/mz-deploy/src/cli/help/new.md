@@ -37,6 +37,12 @@ repository.
 - **Directory already exists** — Choose a different name or remove the
   existing directory.
 
+## Exit Codes
+
+- **0** — Project scaffolded successfully. Also exits 0 if optional npm
+  skill installation fails (a warning is printed).
+- **1** — Target directory already exists, file I/O error, or git init failed.
+
 ## Related Commands
 
 - `mz-deploy compile` — Validate the project after adding SQL files.

@@ -213,7 +213,7 @@ Profile file overrides apply to all SQL object directories:
   views — see restriction above)
 - `clusters/` — cluster definitions
 - `roles/` — role definitions
-- `network_policies/` — network policy definitions
+- `network-policies/` — network policy definitions
 
 ### Example
 
@@ -248,6 +248,11 @@ Then:
 
     mz-deploy profiles                    # List profiles, mark default active
     mz-deploy profiles --profile staging  # List profiles, mark staging active
+
+## Exit Codes
+
+- **0** — Profiles listed successfully.
+- **1** — Configuration error.
 
 ## Related Commands
 

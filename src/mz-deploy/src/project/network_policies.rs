@@ -1,6 +1,6 @@
 //! Network policy definition loading and validation.
 //!
-//! Loads network policy definitions from `<root>/network_policies/` directory. Each `.sql` file
+//! Loads network policy definitions from `<root>/network-policies/` directory. Each `.sql` file
 //! defines a single network policy with a required `CREATE NETWORK POLICY` statement and optional
 //! `GRANT` and `COMMENT` statements.
 
@@ -17,7 +17,7 @@ use mz_sql_parser::ast::{
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// A parsed network policy definition from a `.sql` file in the `network_policies/` directory.
+/// A parsed network policy definition from a `.sql` file in the `network-policies/` directory.
 pub struct NetworkPolicyDefinition {
     /// Network policy name (derived from filename and validated against CREATE statement).
     pub name: String,
@@ -31,9 +31,9 @@ pub struct NetworkPolicyDefinition {
     pub comments: Vec<CommentStatement<Raw>>,
 }
 
-/// Load all network policy definitions from `<root>/network_policies/`.
+/// Load all network policy definitions from `<root>/network-policies/`.
 ///
-/// Returns an empty vec if `network_policies/` doesn't exist (the directory is optional).
+/// Returns an empty vec if `network-policies/` doesn't exist (the directory is optional).
 pub fn load_network_policies(
     root: &Path,
     profile: &str,
@@ -268,7 +268,7 @@ mod tests {
         let result = load_network_policies(dir.path(), "default", &BTreeMap::new()).unwrap();
         assert!(
             result.is_empty(),
-            "should return empty vec when network_policies/ doesn't exist"
+            "should return empty vec when network-policies/ doesn't exist"
         );
     }
 

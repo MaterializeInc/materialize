@@ -42,6 +42,11 @@ same result.
 - **Revoke fails** — The stale grant may have already been removed.
   Re-running the command will skip it.
 
+## Exit Codes
+
+- **0** — All roles applied, or no role files found.
+- **1** — Failed to load definitions or connect to Materialize.
+
 ## Related Commands
 
 - `mz-deploy apply` — Apply all object types in dependency order.

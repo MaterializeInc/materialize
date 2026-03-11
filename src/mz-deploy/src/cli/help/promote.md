@@ -110,6 +110,12 @@ changes in your project and promote the result:
 Because `promote` uses atomic `ALTER ... SWAP`, the rollback promotion is
 itself atomic — production traffic switches back in a single transaction.
 
+## Exit Codes
+
+- **0** — Deployment promoted successfully, or nothing to promote (no work).
+- **1** — No active deployment, deployment already promoted, deployment
+  conflict (unless `--force`), or swap/cleanup error.
+
 ## Related Commands
 
 - `mz-deploy stage` — Create the staging deployment to promote.

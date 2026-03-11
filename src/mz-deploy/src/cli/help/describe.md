@@ -35,6 +35,11 @@ their content hashes.
 - **Deployment not found** — Verify the deploy ID with
   `mz-deploy list` (staging) or `mz-deploy log` (promoted).
 
+## Exit Codes
+
+- **0** — Deployment found and details printed.
+- **1** — Deployment not found or connection error.
+
 ## Related Commands
 
 - `mz-deploy list` — List active staging deployments.
