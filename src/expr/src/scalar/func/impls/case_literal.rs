@@ -89,7 +89,9 @@ impl LazyVariadicFunc for CaseLiteral {
     }
 
     fn could_error(&self) -> bool {
-        true
+        // The function itself does not error; errors in sub-expressions are
+        // checked separately by MirScalarExpr::could_error.
+        false
     }
 
     fn is_monotone(&self) -> bool {
@@ -101,6 +103,8 @@ impl LazyVariadicFunc for CaseLiteral {
     }
 }
 
+// Note: this Display impl is unused at runtime because CaseLiteral has
+// custom printing in src/expr/src/explain/text.rs.
 impl fmt::Display for CaseLiteral {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "case_literal[{} cases]", self.lookup.len())

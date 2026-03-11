@@ -1317,7 +1317,7 @@ where
                 use crate::VariadicFunc::*;
                 if let CaseLiteral(cl) = func {
                     let input = self.child::<MirScalarExpr>(&exprs[0]);
-                    write!(f, "case {}", input)?;
+                    write!(f, "case_lookup {}", input)?;
                     for (literal_row, &idx) in &cl.lookup {
                         let result = self.child::<MirScalarExpr>(&exprs[idx]);
                         write!(f, " when ")?;

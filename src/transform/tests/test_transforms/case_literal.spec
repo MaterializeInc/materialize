@@ -23,7 +23,7 @@ apply pipeline=case_literal
 Map (case when (#0 = 0) then 10 else case when (#0 = 1) then 20 else case when (#0 = 2) then 30 else 40 end end end)
   Get t0
 ----
-Map (case #0 when 0 then 10 when 1 then 20 when 2 then 30 else 40 end)
+Map (case_lookup #0 when 0 then 10 when 1 then 20 when 2 then 30 else 40 end)
   Get t0
 
 # 2-arm chain (minimum): should produce a CaseLiteral.
@@ -32,7 +32,7 @@ apply pipeline=case_literal
 Map (case when (#0 = 1) then 10 else case when (#0 = 2) then 20 else 0 end end)
   Get t0
 ----
-Map (case #0 when 1 then 10 when 2 then 20 else 0 end)
+Map (case_lookup #0 when 1 then 10 when 2 then 20 else 0 end)
   Get t0
 
 # Single arm: should NOT produce a CaseLiteral.
@@ -61,7 +61,7 @@ apply pipeline=case_literal
 Map (case when (#0 = 1) then 10 else case when (#0 = 2) then 20 else case when (#1 = 3) then 30 else 0 end end end)
   Get t0
 ----
-Map (case #0 when 1 then 10 when 2 then 20 else case when (#1 = 3) then 30 else 0 end end)
+Map (case_lookup #0 when 1 then 10 when 2 then 20 else case when (#1 = 3) then 30 else 0 end end)
   Get t0
 
 # Interrupting arm in the middle: first 2 on #0, then #1, then 2 on #0.
@@ -71,7 +71,7 @@ apply pipeline=case_literal
 Map (case when (#0 = 1) then 100 else case when (#0 = 2) then 200 else case when (#1 = 99) then 999 else case when (#0 = 3) then 300 else case when (#0 = 4) then 400 else 0 end end end end end)
   Get t0
 ----
-Map (case #0 when 1 then 100 when 2 then 200 else case when (#1 = 99) then 999 else case #0 when 3 then 300 when 4 then 400 else 0 end end end)
+Map (case_lookup #0 when 1 then 100 when 2 then 200 else case when (#1 = 99) then 999 else case_lookup #0 when 3 then 300 when 4 then 400 else 0 end end end)
   Get t0
 
 # Nested CaseLiteral in a result arm: the inner chain (in the then branch)
@@ -81,7 +81,7 @@ apply pipeline=case_literal
 Map (case when (#0 = 1) then case when (#1 = 10) then 100 else case when (#1 = 20) then 200 else 0 end end else case when (#0 = 2) then 50 else case when (#0 = 3) then 60 else 0 end end end)
   Get t0
 ----
-Map (case #0 when 1 then case #1 when 10 then 100 when 20 then 200 else 0 end when 2 then 50 when 3 then 60 else 0 end)
+Map (case_lookup #0 when 1 then case_lookup #1 when 10 then 100 when 20 then 200 else 0 end when 2 then 50 when 3 then 60 else 0 end)
   Get t0
 
 # CaseLiteral in a filter predicate.
@@ -90,7 +90,7 @@ apply pipeline=case_literal
 Filter (case when (#0 = 1) then true else case when (#0 = 2) then true else false end end)
   Get t0
 ----
-Filter case #0 when 1 then true when 2 then true else false end
+Filter case_lookup #0 when 1 then true when 2 then true else false end
   Get t0
 
 # Duplicate literal: second occurrence should be ignored (first wins).
@@ -99,5 +99,5 @@ apply pipeline=case_literal
 Map (case when (#0 = 1) then 10 else case when (#0 = 1) then 99 else case when (#0 = 2) then 20 else 0 end end end)
   Get t0
 ----
-Map (case when (#0 = 1) then 10 else case #0 when 1 then 99 when 2 then 20 else 0 end end)
+Map (case when (#0 = 1) then 10 else case_lookup #0 when 1 then 99 when 2 then 20 else 0 end end)
   Get t0

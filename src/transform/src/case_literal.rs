@@ -23,15 +23,15 @@ use mz_expr::visit::Visit;
 use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr, VariadicFunc};
 use mz_repr::{ReprColumnType, Row, SqlColumnType};
 
-use crate::TransformCtx;
 use crate::analysis::{DerivedBuilder, ReprRelationType};
+use crate::{Transform, TransformCtx, TransformError};
 
 /// Rewrites If-chains matching a single expression against literals
 /// into a `CaseLiteral` variadic function with `BTreeMap` lookup.
 #[derive(Debug)]
 pub struct CaseLiteralTransform;
 
-impl crate::Transform for CaseLiteralTransform {
+impl Transform for CaseLiteralTransform {
     fn name(&self) -> &'static str {
         "CaseLiteralTransform"
     }
@@ -45,7 +45,7 @@ impl crate::Transform for CaseLiteralTransform {
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,
-    ) -> Result<(), crate::TransformError> {
+    ) -> Result<(), TransformError> {
         // Pre-compute column types for all nodes in a single pass.
         let mut builder = DerivedBuilder::new(ctx.features);
         builder.require(ReprRelationType);
@@ -111,11 +111,11 @@ impl crate::Transform for CaseLiteralTransform {
 
 impl CaseLiteralTransform {
     /// Rewrites a scalar expression tree bottom-up, replacing If-chains of
-    /// `If(Eq(common_expr, literal), result, ...)` with `CaseLiteral`.
+    /// `If(Eq(common_candidate, literal), result, ...)` with `CaseLiteral`.
     fn rewrite_scalar(
         expr: &mut MirScalarExpr,
         column_types: &[ReprColumnType],
-    ) -> Result<(), crate::TransformError> {
+    ) -> Result<(), TransformError> {
         expr.try_visit_mut_post(&mut |node: &mut MirScalarExpr| {
             try_fold_into_case_literal(node);
             try_create_case_literal(node, column_types);
@@ -131,7 +131,7 @@ fn try_fold_into_case_literal(expr: &mut MirScalarExpr) {
     let MirScalarExpr::If { cond, then, els } = expr else {
         return;
     };
-    let Some((common_expr, literal_row)) = peek_eq_literal(cond) else {
+    let Some((common_candidate, literal_row)) = peek_eq_literal(cond) else {
         return;
     };
     let MirScalarExpr::CallVariadic {
@@ -143,7 +143,7 @@ fn try_fold_into_case_literal(expr: &mut MirScalarExpr) {
     };
 
     // Check that the CaseLiteral's input matches the If's common expression.
-    if exprs[0] != *common_expr {
+    if exprs[0] != *common_candidate {
         return;
     }
 
@@ -154,14 +154,12 @@ fn try_fold_into_case_literal(expr: &mut MirScalarExpr) {
 
     // Insert: push `then` before `els` (which is the last element), and update lookup.
     let new_idx = exprs.len() - 1;
-    let then_expr = std::mem::replace(then.as_mut(), MirScalarExpr::literal_false());
-    // Insert the new result before the fallback (last position).
-    exprs.insert(new_idx, then_expr);
+    // Insert the new result before the fallback (last position), and update lookup.
+    exprs.insert(new_idx, then.take());
     cl.lookup.insert(literal_row.clone(), new_idx);
 
     // Replace the If with the CaseLiteral.
-    let inner = std::mem::replace(els.as_mut(), MirScalarExpr::literal_false());
-    *expr = inner;
+    *expr = els.take();
 }
 
 /// Chain-walk rule: if node is an If-chain with >= 2 consecutive arms matching
@@ -173,11 +171,10 @@ fn try_create_case_literal(expr: &mut MirScalarExpr, column_types: &[ReprColumnT
     }
 
     // Take the expression and dismantle it.
-    let chain = std::mem::replace(expr, MirScalarExpr::literal_false());
+    let chain = expr.take();
     let (collected_cases, common, els) = collect_if_chain_arms(chain);
 
     let common = common.expect("common expr must be set when arm_count >= 2");
-    let els = els;
 
     // Compute the return type as the union of all branch types and els type.
     let mut return_type: Option<ReprColumnType> = None;
@@ -185,12 +182,12 @@ fn try_create_case_literal(expr: &mut MirScalarExpr, column_types: &[ReprColumnT
         let t = result.typ(column_types);
         return_type = Some(match return_type {
             None => t,
-            Some(prev) => prev.union(&t).unwrap_or(t),
+            Some(prev) => prev.union(&t).expect("incompatible branch types"),
         });
     }
     let els_type = els.typ(column_types);
     let return_type = match return_type {
-        Some(prev) => prev.union(&els_type).unwrap_or(els_type),
+        Some(prev) => prev.union(&els_type).expect("incompatible else type"),
         None => els_type,
     };
     let sql_return_type = SqlColumnType::from_repr(&return_type);
@@ -218,16 +215,16 @@ fn try_create_case_literal(expr: &mut MirScalarExpr, column_types: &[ReprColumnT
 /// Counts matching If-chain arms without modifying the expression.
 fn count_if_chain_arms(expr: &MirScalarExpr) -> usize {
     let mut count = 0;
-    let mut common_expr: Option<&MirScalarExpr> = None;
+    let mut common_candidate: Option<&MirScalarExpr> = None;
     let mut current = expr;
 
     loop {
         match current {
             MirScalarExpr::If { cond, then: _, els } => {
                 if let Some((expr_side, _literal_row)) = peek_eq_literal(cond) {
-                    match common_expr {
+                    match common_candidate {
                         None => {
-                            common_expr = Some(expr_side);
+                            common_candidate = Some(expr_side);
                         }
                         Some(existing) => {
                             if existing != expr_side {
@@ -261,12 +258,12 @@ fn peek_eq_literal(cond: &MirScalarExpr) -> Option<(&MirScalarExpr, &Row)> {
     };
 
     if let Some(row) = peek_non_null_literal(expr1) {
-        if !is_literal(expr2) {
+        if !expr2.is_literal() {
             return Some((expr2.as_ref(), row));
         }
     }
     if let Some(row) = peek_non_null_literal(expr2) {
-        if !is_literal(expr1) {
+        if !expr1.is_literal() {
             return Some((expr1.as_ref(), row));
         }
     }
@@ -286,7 +283,7 @@ fn peek_non_null_literal(expr: &MirScalarExpr) -> Option<&Row> {
 /// Walks an If-chain and collects `(literal_row, result_expr)` pairs.
 ///
 /// The input `chain` is consumed and dismantled.
-/// Returns `(cases, common_expr, els)`.
+/// Returns `(cases, common_candidate, els)`.
 fn collect_if_chain_arms(
     chain: MirScalarExpr,
 ) -> (
@@ -295,16 +292,16 @@ fn collect_if_chain_arms(
     MirScalarExpr,
 ) {
     let mut cases = Vec::new();
-    let mut common_expr: Option<MirScalarExpr> = None;
+    let mut common_candidate: Option<MirScalarExpr> = None;
     let mut remaining = chain;
 
     loop {
         match remaining {
             MirScalarExpr::If { cond, then, els } => {
                 if let Some((expr_side, literal_row)) = extract_eq_literal(&cond) {
-                    match &common_expr {
+                    match &common_candidate {
                         None => {
-                            common_expr = Some(expr_side);
+                            common_candidate = Some(expr_side);
                         }
                         Some(existing) => {
                             if *existing != expr_side {
@@ -332,7 +329,7 @@ fn collect_if_chain_arms(
         }
     }
 
-    (cases, common_expr, remaining)
+    (cases, common_candidate, remaining)
 }
 
 /// Extracts `(non_literal_expr, literal_row)` from an `Eq(expr, literal)` condition.
@@ -347,21 +344,16 @@ fn extract_eq_literal(cond: &MirScalarExpr) -> Option<(MirScalarExpr, Row)> {
     };
 
     if let Some(row) = peek_non_null_literal(expr1) {
-        if !is_literal(expr2) {
+        if !expr2.is_literal() {
             return Some((expr2.as_ref().clone(), row.clone()));
         }
     }
     if let Some(row) = peek_non_null_literal(expr2) {
-        if !is_literal(expr1) {
+        if !expr1.is_literal() {
             return Some((expr1.as_ref().clone(), row.clone()));
         }
     }
     None
-}
-
-/// Returns true if the expression is any `Literal`.
-fn is_literal(expr: &MirScalarExpr) -> bool {
-    matches!(expr, MirScalarExpr::Literal(..))
 }
 
 #[cfg(test)]
