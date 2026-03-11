@@ -339,6 +339,42 @@ def workflow_http(c: Composition) -> None:
         assert "unsupported via this API" in result.stdout
 
 
+def workflow_test_column_dedup(c: Composition):
+    """
+    Regression test: column name deduplication can produce duplicate names.
+    For columns ["a", "a2", "a"], dedup produces ["a", "a2", "a2"] instead of
+    unique names, causing data corruption in parquet output.
+    """
+
+    with c.override(Testdrive(no_reset=True)):
+        c.up("materialized", "minio")
+
+        c.testdrive(
+            dedent(
+                """
+                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER SYSTEM SET enable_copy_to_expr = true;
+
+                > CREATE SECRET aws_secret AS '${arg.aws-secret-access-key}'
+                > CREATE CONNECTION aws_conn
+                  TO AWS (
+                    ACCESS KEY ID = '${arg.aws-access-key-id}',
+                    SECRET ACCESS KEY = SECRET aws_secret,
+                    ENDPOINT = '${arg.aws-endpoint}',
+                    REGION = 'us-east-1'
+                  )
+
+                > COPY (SELECT 1::int4 AS a, 2::int4 AS a2, 3::int4 AS a)
+                  TO 's3://copytos3/test/column_dedup/'
+                  WITH (AWS CONNECTION = aws_conn, FORMAT = 'parquet');
+
+                $ s3-verify-data bucket=copytos3 key=test/column_dedup
+                1 2 3
+                """
+            )
+        )
+
+
 def workflow_test_github_9627(c: Composition):
     """
     Regression test for database-issues#9627, in which per-replica read holds
