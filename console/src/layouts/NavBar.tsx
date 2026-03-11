@@ -24,9 +24,11 @@ import * as React from "react";
 import { Link as RouterLink } from "react-router-dom";
 import useResizeObserver from "use-resize-observer";
 
+import { apiClient } from "~/api/apiClient";
 import ConnectModal from "~/components/ConnectModal";
 import FreeTrialNotice from "~/components/FreeTrialNotice";
 import { MaterializeLogo } from "~/components/MaterializeLogo";
+import OidcConnectModal from "~/components/OidcConnectModal";
 import { AppConfigSwitch } from "~/config/AppConfigSwitch";
 import EnvironmentSelectField from "~/layouts/EnvironmentSelect";
 import ProfileDropdown from "~/layouts/ProfileDropdown";
@@ -276,6 +278,23 @@ export const NavBar = ({ isCollapsed }: NavBarProps) => {
                   />
                 </HideIfEnvironmentDisabled>
               )
+            }
+            selfManagedConfigElement={({ appConfig }) =>
+              appConfig.authMode === "Oidc" &&
+              apiClient.type === "self-managed" &&
+              apiClient.oidcManager?.getIdToken() ? (
+                <HideIfEnvironmentDisabled>
+                  <ConnectMenuItem
+                    isCollapsed={isCollapsed}
+                    width="100%"
+                    onClick={onOpenConnectModal}
+                  />
+                  <OidcConnectModal
+                    onClose={onCloseConnectModal}
+                    isOpen={isConnectModalOpen}
+                  />
+                </HideIfEnvironmentDisabled>
+              ) : null
             }
           />
         )}
