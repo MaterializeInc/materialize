@@ -2931,10 +2931,7 @@ fn list_list_concat<'a, T: FromDatum<'a>>(
         return Some(a);
     };
 
-    Some(
-        temp_storage
-            .make_datum_list(|packer| packer.push_list_elems(a.iter_typed().chain(b.iter_typed()))),
-    )
+    Some(temp_storage.make_datum_list(a.iter_typed().chain(b.iter_typed())))
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "||", propagates_nulls = false)]
@@ -2943,14 +2940,8 @@ fn list_element_concat<'a, T: FromDatum<'a>>(
     b: T,
     temp_storage: &'a RowArena,
 ) -> DatumList<'a, T> {
-    temp_storage.make_datum_list(|packer| {
-        if let Some(a) = a {
-            for elem in a.iter_typed() {
-                packer.push_datum(elem);
-            }
-        }
-        packer.push_datum(b);
-    })
+    let a_elems = a.into_iter().flat_map(|a| a.iter_typed());
+    temp_storage.make_datum_list(a_elems.chain(std::iter::once(b)))
 }
 
 // Note that the output type corresponds to the _second_ parameter's input type.
@@ -2960,14 +2951,8 @@ fn element_list_concat<'a, T: FromDatum<'a>>(
     b: Option<DatumList<'a, T>>,
     temp_storage: &'a RowArena,
 ) -> DatumList<'a, T> {
-    temp_storage.make_datum_list(|packer| {
-        packer.push_datum(a);
-        if let Some(b) = b {
-            for elem in b.iter_typed() {
-                packer.push_datum(elem);
-            }
-        }
-    })
+    let b_elems = b.into_iter().flat_map(|b| b.iter_typed());
+    temp_storage.make_datum_list(std::iter::once(a).chain(b_elems))
 }
 
 #[sqlfunc(sqlname = "list_remove", propagates_nulls = false)]
@@ -2976,13 +2961,7 @@ fn list_remove<'a, T: FromDatum<'a>>(
     b: T,
     temp_storage: &'a RowArena,
 ) -> DatumList<'a, T> {
-    temp_storage.make_datum_list(|packer| {
-        for elem in a.iter_typed() {
-            if elem != b {
-                packer.push_datum(elem);
-            }
-        }
-    })
+    temp_storage.make_datum_list(a.iter_typed().filter(|elem| *elem != b))
 }
 
 #[sqlfunc(sqlname = "digest")]
