@@ -3019,10 +3019,20 @@ impl ObjectsToDrop {
 
 #[cfg(test)]
 mod tests {
+    use mz_catalog::SYSTEM_CONN_ID;
+    use mz_catalog::memory::objects::{CatalogItem, Table, TableDataSource};
     use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
     use mz_repr::role_id::RoleId;
+    use mz_repr::{RelationDesc, RelationVersion, VersionedRelationDesc};
+    use mz_sql::DEFAULT_SCHEMA;
+    use mz_sql::catalog::CatalogDatabase;
+    use mz_sql::names::{
+        ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
+    };
+    use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 
-    use crate::catalog::Catalog;
+    use crate::catalog::{Catalog, Op};
+    use crate::session::DEFAULT_DATABASE_NAME;
 
     #[mz_ore::test]
     fn test_update_privilege_owners() {
@@ -3101,5 +3111,150 @@ mod tests {
             }],
             privileges.all_values_owned().collect::<Vec<_>>()
         );
+    }
+
+    /// Verifies that `transact_incremental_dry_run` processes only new ops
+    /// against the accumulated state, not all ops from scratch. Two paths are
+    /// compared:
+    ///   - Incremental: two separate calls, each with one op
+    ///   - All-at-once: one call with both ops
+    /// Both must produce equivalent catalog state.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn test_transact_incremental_dry_run_processes_only_new_ops() {
+        Catalog::with_debug(|catalog| async move {
+            // Resolve default database and schema.
+            let database = catalog.resolve_database(DEFAULT_DATABASE_NAME).unwrap();
+            let database_name = database.name.clone();
+            let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
+            let schema = catalog
+                .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
+                .unwrap();
+            let schema_name = schema.name.schema.clone();
+            let schema_spec = schema.id.clone();
+
+            // Allocate IDs for two tables.
+            let (id_t1, global_id_t1) = catalog.allocate_user_id_for_test().await.unwrap();
+            let (id_t2, global_id_t2) = catalog.allocate_user_id_for_test().await.unwrap();
+
+            let oracle_write_ts = catalog.current_upper().await;
+
+            // Build two CreateItem ops.
+            let make_table_op = |id, global_id, name: &str| Op::CreateItem {
+                id,
+                name: QualifiedItemName {
+                    qualifiers: ItemQualifiers {
+                        database_spec: database_spec.clone(),
+                        schema_spec: schema_spec.clone(),
+                    },
+                    item: name.to_string(),
+                },
+                item: CatalogItem::Table(Table {
+                    create_sql: Some(format!(
+                        "CREATE TABLE {database_name}.{schema_name}.{name} ()"
+                    )),
+                    desc: VersionedRelationDesc::new(RelationDesc::empty()),
+                    collections: [(RelationVersion::root(), global_id)].into_iter().collect(),
+                    conn_id: None,
+                    resolved_ids: ResolvedIds::empty(),
+                    custom_logical_compaction_window: None,
+                    is_retained_metrics_object: false,
+                    data_source: TableDataSource::TableWrites { defaults: vec![] },
+                }),
+                owner_id: MZ_SYSTEM_ROLE_ID,
+            };
+
+            let op_t1 = make_table_op(id_t1, global_id_t1, "t1");
+            let op_t2 = make_table_op(id_t2, global_id_t2, "t2");
+
+            let base_state = catalog.state().clone();
+
+            // --- Path A: Incremental (two separate dry-run calls) ---
+
+            // First call: only op_t1, no previous snapshot.
+            let (state_after_t1, snapshot_after_t1) = catalog
+                .transact_incremental_dry_run(
+                    &base_state,
+                    vec![op_t1.clone()],
+                    None,
+                    None,
+                    oracle_write_ts,
+                )
+                .await
+                .unwrap();
+
+            // After first dry run: t1 exists, t2 does not.
+            assert!(
+                state_after_t1.try_get_entry(&id_t1).is_some(),
+                "t1 should exist after first dry run"
+            );
+            assert_eq!(
+                state_after_t1.try_get_entry(&id_t1).unwrap().name().item,
+                "t1"
+            );
+            assert!(
+                state_after_t1.try_get_entry(&id_t2).is_none(),
+                "t2 should NOT exist after first dry run"
+            );
+
+            // Second call: only op_t2, using state/snapshot from first call.
+            let (state_incremental, _) = catalog
+                .transact_incremental_dry_run(
+                    &state_after_t1,
+                    vec![op_t2.clone()],
+                    None,
+                    Some(snapshot_after_t1),
+                    oracle_write_ts,
+                )
+                .await
+                .unwrap();
+
+            // After second dry run: both t1 and t2 exist.
+            assert!(
+                state_incremental.try_get_entry(&id_t1).is_some(),
+                "t1 should exist in incremental result"
+            );
+            assert!(
+                state_incremental.try_get_entry(&id_t2).is_some(),
+                "t2 should exist in incremental result"
+            );
+
+            // --- Path B: All-at-once (single dry-run call with both ops) ---
+
+            let (state_all_at_once, _) = catalog
+                .transact_incremental_dry_run(
+                    &base_state,
+                    vec![op_t1.clone(), op_t2.clone()],
+                    None,
+                    None,
+                    oracle_write_ts,
+                )
+                .await
+                .unwrap();
+
+            assert!(
+                state_all_at_once.try_get_entry(&id_t1).is_some(),
+                "t1 should exist in all-at-once result"
+            );
+            assert!(
+                state_all_at_once.try_get_entry(&id_t2).is_some(),
+                "t2 should exist in all-at-once result"
+            );
+
+            // --- Compare: both paths produce equivalent items ---
+
+            let inc_t1 = state_incremental.try_get_entry(&id_t1).unwrap();
+            let all_t1 = state_all_at_once.try_get_entry(&id_t1).unwrap();
+            assert_eq!(inc_t1.name(), all_t1.name());
+            assert_eq!(inc_t1.owner_id, all_t1.owner_id);
+
+            let inc_t2 = state_incremental.try_get_entry(&id_t2).unwrap();
+            let all_t2 = state_all_at_once.try_get_entry(&id_t2).unwrap();
+            assert_eq!(inc_t2.name(), all_t2.name());
+            assert_eq!(inc_t2.owner_id, all_t2.owner_id);
+
+            catalog.expire().await;
+        })
+        .await
     }
 }
