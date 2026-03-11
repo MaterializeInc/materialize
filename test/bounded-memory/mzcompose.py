@@ -1470,8 +1470,8 @@ SCENARIOS = [
             {REPEAT}
             """
         ),
-        materialized_memory="4Gb",
-        clusterd_memory="3.5Gb",
+        materialized_memory="1.8Gb",
+        clusterd_memory="0.5Gb",
     ),
 ]
 

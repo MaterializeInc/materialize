@@ -29,15 +29,14 @@ class CopyToS3(Action):
         self.table = random.choice(capabilities.get(TableExists))
         super().__init__(capabilities)
         self.s3_key = f"zippy/{self.seqno}"
-        self.min_val = self.table.watermarks.min
-        self.max_val = self.table.watermarks.max
+        self.s3_object = S3ObjectExists(
+            s3_key=self.s3_key,
+            min_val=self.table.watermarks.min,
+            max_val=self.table.watermarks.max,
+        )
 
     def provides(self) -> list[Capability]:
-        return [
-            S3ObjectExists(
-                s3_key=self.s3_key, min_val=self.min_val, max_val=self.max_val
-            )
-        ]
+        return [self.s3_object]
 
     def run(self, c: Composition, state: State) -> None:
         conn_name = f"zippy_aws_conn_{self.seqno}"
@@ -55,6 +54,8 @@ class CopyToS3(Action):
             ),
             mz_service=state.mz_service,
         )
+        self.s3_object.min_val = self.table.watermarks.min
+        self.s3_object.max_val = self.table.watermarks.max
 
 
 class CopyFromS3(Action):

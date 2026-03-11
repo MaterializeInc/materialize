@@ -3124,7 +3124,7 @@ read_action_list = ActionList(
         (
             CopyToS3Action,
             100,
-        ),  # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9661 is fixed
+        ),
         (CopyFromS3Action, 100),
         (SetClusterAction, 1),
         (CommitRollbackAction, 30),
