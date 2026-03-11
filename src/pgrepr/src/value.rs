@@ -15,6 +15,7 @@ use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use itertools::Itertools;
 use mz_ore::cast::ReinterpretCast;
+use mz_pgrepr_consts::oid::TYPE_INT2_OID;
 use mz_pgwire_common::Format;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
@@ -459,9 +460,17 @@ impl Value {
                 }
                 Ok(postgres_types::IsNull::No)
             }
-            // TODO: what is the binary format of vector types?
-            Value::Int2Vector { .. } => {
-                Err("binary encoding of int2vector is not implemented".into())
+            Value::Int2Vector { elements } => {
+                let has_null = elements.iter().any(|e| e.is_none());
+                buf.put_i32(1);
+                buf.put_i32(has_null.into());
+                buf.put_u32(TYPE_INT2_OID);
+                buf.put_i32(pg_len("int2vector dimension length", elements.len())?);
+                buf.put_i32(0);
+                for elem in elements {
+                    encode_element(buf, elem.as_ref(), &Type::Int2)?;
+                }
+                Ok(postgres_types::IsNull::No)
             }
             Value::Bool(b) => b.to_sql(&PgType::BOOL, buf),
             Value::Bytea(b) => b.to_sql(&PgType::BYTEA, buf),
@@ -610,7 +619,7 @@ impl Value {
             SqlScalarType::Jsonb => true,
             SqlScalarType::Uuid => true,
             SqlScalarType::Array(elem_type) => Self::can_encode_binary(elem_type),
-            SqlScalarType::Int2Vector => false, // "binary encoding of int2vector is not implemented"
+            SqlScalarType::Int2Vector => true,
             SqlScalarType::List { .. } => false, // "binary encoding of list types is not implemented"
             SqlScalarType::Map { .. } => false, // "binary encoding of map types is not implemented"
             SqlScalarType::Record { fields, .. } => fields
