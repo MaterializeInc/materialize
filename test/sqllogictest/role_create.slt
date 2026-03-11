@@ -156,7 +156,8 @@ DETAIL: You must be a superuser to alter superuser role
 simple conn=regress_role_admin,user=regress_role_admin
 ALTER ROLE regress_createdb NOSUPERUSER;
 ----
-db error: ERROR: SUPERUSER, PASSWORD, and LOGIN attributes is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+db error: ERROR: permission denied to alter superuser role
+DETAIL: You must be a superuser to alter superuser role
 
 simple conn=regress_role_admin,user=regress_role_admin
 CREATE ROLE regress_createrole;

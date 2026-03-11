@@ -1196,7 +1196,7 @@ fn generate_rbac_requirements(
         }) => match option {
             // Only superusers can alter the superuserness of a role.
             plan::PlannedAlterRoleOption::Attributes(attributes)
-                if attributes.superuser.unwrap_or(false) =>
+                if attributes.superuser.is_some() =>
             {
                 RbacRequirements {
                     superuser_action: Some("alter superuser role".to_string()),

@@ -299,6 +299,43 @@ REVOKE CREATEROLE ON SYSTEM FROM joe;
 ----
 COMPLETE 0
 
+# ALTER ROLE - superuser attribute changes require superuser, not just CREATEROLE.
+# Both SUPERUSER and NOSUPERUSER must be guarded.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_password_auth TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+# A non-superuser with CREATEROLE cannot grant SUPERUSER.
+simple conn=joe,user=joe
+ALTER ROLE r SUPERUSER;
+----
+db error: ERROR: permission denied to alter superuser role
+DETAIL: You must be a superuser to alter superuser role
+
+# A non-superuser with CREATEROLE cannot strip NOSUPERUSER either.
+simple conn=joe,user=joe
+ALTER ROLE r NOSUPERUSER;
+----
+db error: ERROR: permission denied to alter superuser role
+DETAIL: You must be a superuser to alter superuser role
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEROLE ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_password_auth TO false;
+----
+COMPLETE 0
+
 # CREATE SOURCE
 
 simple conn=joe,user=joe
