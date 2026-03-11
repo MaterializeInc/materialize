@@ -807,6 +807,12 @@ pub fn plan_reassign_owned(
             reassign_ids.push(database.id().into());
         }
     }
+    // Network policies
+    for network_policy in scx.catalog.get_network_policies() {
+        if old_roles.contains(&network_policy.owner_id()) {
+            reassign_ids.push(ObjectId::NetworkPolicy(network_policy.id()));
+        }
+    }
 
     let system_ids: Vec<_> = reassign_ids.iter().filter(|id| id.is_system()).collect();
     if !system_ids.is_empty() {
