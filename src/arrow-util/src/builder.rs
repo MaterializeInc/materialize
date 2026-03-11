@@ -12,7 +12,7 @@
 #![allow(clippy::disallowed_types)]
 
 use std::any::Any;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, builder::*};
@@ -43,7 +43,11 @@ pub struct ArrowBuilder {
 pub fn desc_to_schema(desc: &RelationDesc) -> Result<Schema, anyhow::Error> {
     let mut fields = vec![];
     let mut errs = vec![];
-    let mut seen_names = BTreeMap::new();
+    let mut seen_names = BTreeSet::new();
+    let mut all_names = BTreeSet::new();
+    for col_name in desc.iter_names() {
+        all_names.insert(col_name.to_string());
+    }
     for (col_name, col_type) in desc.iter() {
         let mut col_name = col_name.to_string();
         // If we allow columns with the same name we encounter two issues:
@@ -51,13 +55,19 @@ pub fn desc_to_schema(desc: &RelationDesc) -> Result<Schema, anyhow::Error> {
         // 2. Many parquet readers will error when trying to read the file metadata
         // Instead we append a number to the end of the column name for any duplicates.
         // TODO(roshan): We should document this when writing the copy-to-s3 MZ docs.
-        seen_names
-            .entry(col_name.clone())
-            .and_modify(|e: &mut u32| {
-                *e += 1;
-                col_name += &e.to_string();
-            })
-            .or_insert(1);
+
+        if seen_names.contains(&col_name) {
+            let mut new_col_name = col_name.clone();
+            let mut e = 2;
+            while all_names.contains(&new_col_name) {
+                new_col_name = format!("{}{}", col_name, e);
+                e += 1;
+            }
+            col_name = new_col_name;
+        }
+
+        seen_names.insert(col_name.clone());
+        all_names.insert(col_name.clone());
         match scalar_to_arrow_datatype(&col_type.scalar_type) {
             Ok((data_type, extension_type_name)) => {
                 fields.push(field_with_typename(
