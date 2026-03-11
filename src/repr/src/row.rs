@@ -782,6 +782,12 @@ pub struct DatumDictIter<'a> {
     prev_key: Option<&'a str>,
 }
 
+#[derive(Debug, Clone)]
+pub struct DatumDictTypedIter<'a, T> {
+    inner: DatumDictIter<'a>,
+    _phantom: PhantomData<fn() -> T>,
+}
+
 /// `RowArena` is used to hold on to temporary `Row`s for functions like `eval` that need to create complex `Datum`s but don't have a `Row` to put them in yet.
 #[derive(Debug)]
 pub struct RowArena {
@@ -2829,8 +2835,8 @@ impl<'a, T> DatumList<'a, T> {
     }
 }
 
-impl<'a> DatumList<'a> {
-    pub fn empty() -> DatumList<'static> {
+impl<T> DatumList<'static, T> {
+    pub fn empty() -> Self {
         DatumList {
             data: &[],
             _phantom: PhantomData,
@@ -2876,14 +2882,29 @@ impl<'a, T> DatumMap<'a, T> {
         }
     }
 
+    /// Iterate entries as `(&str, T)` pairs rather than `(&str, Datum)`.
+    ///
+    /// Each value datum is converted via [`FromDatum`]. Since generic type
+    /// parameters in `#[sqlfunc]` are erased to `Datum<'a>` before code
+    /// generation, this is monomorphized to an identity conversion at runtime.
+    pub fn iter_typed(&self) -> DatumDictTypedIter<'a, T>
+    where
+        T: FromDatum<'a>,
+    {
+        DatumDictTypedIter {
+            inner: self.iter(),
+            _phantom: PhantomData,
+        }
+    }
+
     /// For debugging only
     pub fn data(&self) -> &'a [u8] {
         self.data
     }
 }
 
-impl<'a> DatumMap<'a> {
-    pub fn empty() -> DatumMap<'static> {
+impl<T> DatumMap<'static, T> {
+    pub fn empty() -> Self {
         DatumMap {
             data: &[],
             _phantom: PhantomData,
@@ -2891,7 +2912,7 @@ impl<'a> DatumMap<'a> {
     }
 }
 
-impl<'a> Debug for DatumMap<'a> {
+impl<'a, T> Debug for DatumMap<'a, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_map().entries(self.iter()).finish()
     }
@@ -2939,6 +2960,13 @@ impl<'a> Iterator for DatumDictIter<'a> {
 
             Some((key, val))
         }
+    }
+}
+
+impl<'a, T: FromDatum<'a>> Iterator for DatumDictTypedIter<'a, T> {
+    type Item = (&'a str, T);
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(k, v)| (k, T::from_datum(v)))
     }
 }
 
@@ -3052,6 +3080,24 @@ impl RowArena {
         let mut row = Row::default();
         f(&mut row.packer());
         self.push_unary_row(row)
+    }
+
+    /// Convenience function to build a list datum and return it as a typed
+    /// `DatumList<'a, T>`. The closure receives a `RowPacker` to push elements.
+    ///
+    /// This enforces at the type level that the returned list carries the
+    /// element type `T`, even though the underlying representation is the same.
+    pub fn make_datum_list<'a, T, F>(&'a self, f: F) -> DatumList<'a, T>
+    where
+        F: FnOnce(&mut RowPacker),
+    {
+        let datum = self.make_datum(|packer| {
+            packer.push_list_with(f);
+        });
+        DatumList {
+            data: datum.unwrap_list().data(),
+            _phantom: PhantomData,
+        }
     }
 
     /// Convenience function identical to `make_datum` but instead returns a

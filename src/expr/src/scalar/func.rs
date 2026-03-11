@@ -1770,11 +1770,10 @@ fn map_contains_map<'a>(map_a: DatumMap<'a>, b: DatumMap<'a>) -> bool {
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "->", propagates_nulls = true)]
-fn map_get_value<'a, T>(a: DatumMap<'a, T>, target_key: &str) -> T {
-    match a.iter().find(|(key, _v)| target_key == *key) {
-        Some((_k, v)) => v,
-        None => Datum::Null,
-    }
+fn map_get_value<'a, T>(a: DatumMap<'a, T>, target_key: &str) -> Option<T> {
+    a.iter_typed()
+        .find(|(key, _v)| target_key == *key)
+        .map(|(_k, v)| v)
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "@>")]
@@ -2932,8 +2931,7 @@ fn list_list_concat<'a, T>(
         return Some(a);
     };
 
-    let datum = temp_storage.make_datum(|packer| packer.push_list(a.iter().chain(b.iter())));
-    Some(datum.unwrap_list())
+    Some(temp_storage.make_datum_list(|packer| packer.push_list(a.iter().chain(b.iter()))))
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "||", propagates_nulls = false)]
@@ -2942,17 +2940,14 @@ fn list_element_concat<'a, T>(
     b: T,
     temp_storage: &'a RowArena,
 ) -> DatumList<'a, T> {
-    let datum = temp_storage.make_datum(|packer| {
-        packer.push_list_with(|packer| {
-            if let Some(a) = a {
-                for elem in a.iter() {
-                    packer.push(elem);
-                }
+    temp_storage.make_datum_list(|packer| {
+        if let Some(a) = a {
+            for elem in a.iter() {
+                packer.push(elem);
             }
-            packer.push(b);
-        })
-    });
-    datum.unwrap_list()
+        }
+        packer.push(b);
+    })
 }
 
 // Note that the output type corresponds to the _second_ parameter's input type.
@@ -2962,32 +2957,25 @@ fn element_list_concat<'a, T>(
     b: Option<DatumList<'a, T>>,
     temp_storage: &'a RowArena,
 ) -> DatumList<'a, T> {
-    let datum = temp_storage.make_datum(|packer| {
-        packer.push_list_with(|packer| {
-            packer.push(a);
-            if let Some(b) = b {
-                for elem in b.iter() {
-                    packer.push(elem);
-                }
+    temp_storage.make_datum_list(|packer| {
+        packer.push(a);
+        if let Some(b) = b {
+            for elem in b.iter() {
+                packer.push(elem);
             }
-        })
-    });
-    datum.unwrap_list()
+        }
+    })
 }
 
 #[sqlfunc(sqlname = "list_remove", propagates_nulls = false)]
 fn list_remove<'a, T>(a: DatumList<'a, T>, b: T, temp_storage: &'a RowArena) -> DatumList<'a, T> {
-    temp_storage
-        .make_datum(|packer| {
-            packer.push_list_with(|packer| {
-                for elem in a.iter() {
-                    if elem != b {
-                        packer.push(elem);
-                    }
-                }
-            })
-        })
-        .unwrap_list()
+    temp_storage.make_datum_list(|packer| {
+        for elem in a.iter() {
+            if elem != b {
+                packer.push(elem);
+            }
+        }
+    })
 }
 
 #[sqlfunc(sqlname = "digest")]
