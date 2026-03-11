@@ -387,7 +387,7 @@ impl Plan {
                         ctx.indented(|ctx| {
                             if plan.group_key.len() > 0 {
                                 let group_by = CompactScalars(mode.seq(&plan.group_key, None));
-                                writeln!(f, "{}Group By{group_by}", ctx.indent)?;
+                                writeln!(f, "{}Group By {group_by}", ctx.indent)?;
                             }
                             if plan.order_key.len() > 0 {
                                 let order_by = separated(", ", mode.seq(&plan.order_key, None));
@@ -406,7 +406,7 @@ impl Plan {
                         ctx.indented(|ctx| {
                             if plan.group_key.len() > 0 {
                                 let group_by = CompactScalars(mode.seq(&plan.group_key, None));
-                                writeln!(f, "{}Group By{group_by}", ctx.indent)?;
+                                writeln!(f, "{}Group By {group_by}", ctx.indent)?;
                             }
                             if plan.order_key.len() > 0 {
                                 let order_by = separated(", ", mode.seq(&plan.order_key, None));
@@ -425,7 +425,7 @@ impl Plan {
                         ctx.indented(|ctx| {
                             if plan.group_key.len() > 0 {
                                 let group_by = CompactScalars(mode.seq(&plan.group_key, None));
-                                writeln!(f, "{}Group By{group_by}", ctx.indent)?;
+                                writeln!(f, "{}Group By {group_by}", ctx.indent)?;
                             }
                             if plan.order_key.len() > 0 {
                                 let order_by = separated(", ", mode.seq(&plan.order_key, None));
