@@ -432,8 +432,7 @@ impl Coordinator {
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
         let (item_id, global_id) = if let ExplainContext::None = explain_ctx {
-            let id_ts = self.get_catalog_write_ts().await;
-            self.catalog().allocate_user_id(id_ts).await?
+            self.allocate_user_id().await?
         } else {
             self.allocate_transient_id()
         };
