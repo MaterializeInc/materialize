@@ -18,10 +18,13 @@ use tracing::info;
 
 use mz_persist::generated::consensus_service::consensus_acceptor_server::ConsensusAcceptorServer;
 use mz_persist::generated::consensus_service::consensus_learner_server::ConsensusLearnerServer;
-use mz_persist_shared_log::acceptor::{Acceptor, AcceptorConfig};
-use mz_persist_shared_log::learner::{Learner, LearnerConfig};
+use mz_persist::generated::consensus_service::persist_shared_log_server::PersistSharedLogServer;
+use mz_persist_shared_log::acceptor::{AcceptorConfig, ActorAcceptor};
+use mz_persist_shared_log::learner::{ActorLearner, LearnerConfig};
 use mz_persist_shared_log::metrics::{AcceptorMetrics, LearnerMetrics};
-use mz_persist_shared_log::service::{AcceptorGrpcService, LearnerGrpcService};
+use mz_persist_shared_log::service::{
+    AcceptorGrpcService, LearnerGrpcService, PersistSharedLogGrpcService,
+};
 use mz_persist_shared_log::storage::s3::S3Storage;
 
 /// CLI arguments for the consensus service.
@@ -116,7 +119,7 @@ async fn run(args: Args) {
                     .build()
                     .expect("failed to build acceptor runtime");
                 rt.block_on(async {
-                    let (handle, _task) = Acceptor::spawn(
+                    let (handle, _task) = ActorAcceptor::spawn(
                         acceptor_config,
                         acceptor_store,
                         Some(batch_tx),
@@ -137,7 +140,7 @@ async fn run(args: Args) {
         snapshot_interval: args.snapshot_interval,
         ..Default::default()
     };
-    let (learner_handle, _learner_thread) = Learner::spawn_threaded(
+    let (learner_handle, _learner_thread) = ActorLearner::spawn_threaded(
         learner_config,
         Arc::clone(&store),
         batch_rx,
@@ -177,14 +180,22 @@ async fn run(args: Args) {
     // Build gRPC services.
     let acceptor_service = AcceptorGrpcService {
         handle: acceptor_handle.clone(),
+        actor_handle: acceptor_handle.clone(),
     };
-    let learner_service = LearnerGrpcService { learner_handle };
+    let learner_service = LearnerGrpcService {
+        learner_handle: learner_handle.clone(),
+    };
+    let persist_shared_log_service = PersistSharedLogGrpcService {
+        acceptor: acceptor_handle.clone(),
+        learner: learner_handle.clone(),
+    };
 
     info!(addr = %args.listen_addr, "starting gRPC server");
 
     Server::builder()
         .add_service(ConsensusAcceptorServer::new(acceptor_service))
         .add_service(ConsensusLearnerServer::new(learner_service))
+        .add_service(PersistSharedLogServer::new(persist_shared_log_service))
         .serve(args.listen_addr)
         .await
         .expect("gRPC server failed");

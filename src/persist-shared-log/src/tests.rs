@@ -18,10 +18,11 @@ use mz_persist::generated::consensus_service::{
     ProtoCasProposal, ProtoTruncateProposal, ProtoWalProposal, proto_wal_proposal,
 };
 
-use crate::acceptor::{Acceptor, AcceptorConfig, AcceptorHandle};
-use crate::learner::{Learner, LearnerConfig, LearnerHandle};
+use crate::acceptor::{AcceptorConfig, AcceptorHandle, ActorAcceptor};
+use crate::learner::{ActorLearner, LearnerConfig, LearnerHandle};
 use crate::metrics::{AcceptorMetrics, LearnerMetrics};
 use crate::storage::sim::SimStorage;
+use crate::traits::Acceptor as _;
 
 fn test_acceptor_metrics() -> AcceptorMetrics {
     AcceptorMetrics::register(&MetricsRegistry::new())
@@ -62,7 +63,7 @@ impl TestHarness {
     fn new(wal: Arc<SimStorage>) -> Self {
         let (batch_tx, batch_rx) = tokio::sync::mpsc::channel(256);
 
-        let (acceptor, acceptor_handle) = Acceptor::new(
+        let (acceptor, acceptor_handle) = ActorAcceptor::new(
             test_acceptor_config(),
             Arc::clone(&wal),
             Some(batch_tx),
@@ -70,7 +71,7 @@ impl TestHarness {
         );
         let acceptor_task = mz_ore::task::spawn(|| "test-acceptor", acceptor.run()).abort_on_drop();
 
-        let (learner, learner_handle) = Learner::new(
+        let (learner, learner_handle) = ActorLearner::new(
             test_learner_config(),
             Arc::clone(&wal),
             batch_rx,
@@ -388,7 +389,7 @@ async fn test_recovery_from_wal() {
 
     // New harness recovers from the same WAL.
     let (batch_tx, batch_rx) = tokio::sync::mpsc::channel(256);
-    let (acceptor, acceptor_handle) = Acceptor::new(
+    let (acceptor, acceptor_handle) = ActorAcceptor::new(
         test_acceptor_config(),
         Arc::clone(&wal),
         Some(batch_tx),
@@ -396,7 +397,7 @@ async fn test_recovery_from_wal() {
     );
     let _acceptor_task = mz_ore::task::spawn(|| "test-acceptor", acceptor.run()).abort_on_drop();
 
-    let (learner, learner_handle) = Learner::new(
+    let (learner, learner_handle) = ActorLearner::new(
         test_learner_config(),
         Arc::clone(&wal),
         batch_rx,

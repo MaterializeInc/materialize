@@ -27,6 +27,7 @@ pub mod learner;
 pub mod metrics;
 pub mod service;
 pub mod storage;
+pub mod traits;
 
 #[cfg(test)]
 mod tests;

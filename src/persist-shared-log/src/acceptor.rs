@@ -33,7 +33,7 @@ use mz_persist::generated::consensus_service::{
 use crate::metrics::AcceptorMetrics;
 use crate::storage::{Storage, StorageError};
 
-/// Configuration for the [`Acceptor`].
+/// Configuration for the [`ActorAcceptor`].
 #[derive(Debug, Clone)]
 pub struct AcceptorConfig {
     /// Depth of the command channel (mpsc queue).
@@ -142,24 +142,6 @@ impl AcceptorHandle {
         &self.tx
     }
 
-    pub async fn append(
-        &self,
-        proposal: ProtoWalProposal,
-    ) -> Result<ProtoAppendResponse, AcceptorError> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.tx
-            .send(AcceptorCommand::Append {
-                proposal,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|_| AcceptorError::Shutdown)?;
-        reply_rx
-            .await
-            .map_err(|_| AcceptorError::DroppedReply)?
-            .map_err(AcceptorError::Command)
-    }
-
     /// Read the latest committed batch number. This is a lock-free atomic
     /// read — it never blocks behind WAL writes or flushes.
     pub fn latest_committed_batch(&self) -> Option<u64> {
@@ -188,6 +170,27 @@ impl AcceptorHandle {
     }
 }
 
+#[async_trait::async_trait]
+impl crate::traits::Acceptor for AcceptorHandle {
+    async fn append(
+        &self,
+        proposal: ProtoWalProposal,
+    ) -> Result<ProtoAppendResponse, AcceptorError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(AcceptorCommand::Append {
+                proposal,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| AcceptorError::Shutdown)?;
+        reply_rx
+            .await
+            .map_err(|_| AcceptorError::DroppedReply)?
+            .map_err(AcceptorError::Command)
+    }
+}
+
 /// A pending proposal waiting for the next flush.
 struct PendingAppend {
     proposal: ProtoWalProposal,
@@ -199,7 +202,7 @@ struct PendingAppend {
 ///
 /// Receives proposals, batches them, flushes to the WAL, and returns receipts.
 /// Does not evaluate CAS or maintain shard state.
-pub struct Acceptor<W: Storage> {
+pub struct ActorAcceptor<W: Storage> {
     storage: W,
     batch_number: u64,
     pending: Vec<PendingAppend>,
@@ -214,7 +217,7 @@ pub struct Acceptor<W: Storage> {
     last_committed: LastCommitted,
 }
 
-impl<W: Storage> Acceptor<W> {
+impl<W: Storage> ActorAcceptor<W> {
     /// Creates a new acceptor and returns a handle for sending commands.
     pub fn new(
         config: AcceptorConfig,
@@ -229,7 +232,7 @@ impl<W: Storage> Acceptor<W> {
         let (tx, rx) = mpsc::channel(config.queue_depth);
         let last_committed = LastCommitted::new();
 
-        let acceptor = Acceptor {
+        let acceptor = ActorAcceptor {
             storage,
             batch_number: 0,
             pending: Vec::new(),
@@ -431,7 +434,7 @@ impl<W: Storage> Acceptor<W> {
     }
 }
 
-impl<W: Storage + Send + Sync + 'static> Acceptor<W> {
+impl<W: Storage + Send + Sync + 'static> ActorAcceptor<W> {
     /// Spawns the acceptor as a tokio task on the current runtime.
     pub fn spawn(
         config: AcceptorConfig,

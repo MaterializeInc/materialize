@@ -38,8 +38,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::acceptor::AcceptorHandle;
-use crate::learner::LearnerHandle;
+use crate::traits::{Acceptor, Learner};
 
 // ---------------------------------------------------------------------------
 // Wire protocol constants
@@ -50,7 +49,6 @@ const OP_AWAIT_CAS: u8 = 2;
 const OP_AWAIT_TRUNCATE: u8 = 3;
 const OP_HEAD: u8 = 4;
 const OP_SCAN: u8 = 5;
-const OP_LATEST_BATCH: u8 = 7;
 /// Combined CAS: append + await result in one round-trip.
 const OP_CAS: u8 = 8;
 /// Combined truncate: append + await result in one round-trip.
@@ -142,28 +140,22 @@ pub struct ScanResponse {
     pub count: u64,
 }
 
-/// Latest committed batch response.
-#[derive(Serialize, Deserialize)]
-pub struct LatestBatchResponse {
-    pub batch_number: Option<u64>,
-}
-
 // ---------------------------------------------------------------------------
 // Server
 // ---------------------------------------------------------------------------
 
 /// CTP server that accepts TCP connections and dispatches to acceptor/learner.
-pub struct CtpServer {
+pub struct CtpServer<A: Acceptor, L: Learner> {
     listener: TcpListener,
-    acceptor: AcceptorHandle,
-    learner: LearnerHandle,
+    acceptor: A,
+    learner: L,
 }
 
-impl CtpServer {
+impl<A: Acceptor, L: Learner> CtpServer<A, L> {
     pub async fn bind(
         addr: impl tokio::net::ToSocketAddrs,
-        acceptor: AcceptorHandle,
-        learner: LearnerHandle,
+        acceptor: A,
+        learner: L,
     ) -> std::io::Result<Self> {
         let listener = TcpListener::bind(addr).await?;
         Ok(CtpServer {
@@ -201,7 +193,7 @@ struct ResponseFrame {
     payload: Vec<u8>,
 }
 
-async fn handle_connection(stream: TcpStream, acceptor: AcceptorHandle, learner: LearnerHandle) {
+async fn handle_connection<A: Acceptor, L: Learner>(stream: TcpStream, acceptor: A, learner: L) {
     let (rd, wr) = stream.into_split();
     let mut reader = BufReader::new(rd);
     let (resp_tx, resp_rx) = mpsc::unbounded_channel::<ResponseFrame>();
@@ -274,11 +266,11 @@ async fn write_response_frame(writer: &mut BufWriter<OwnedWriteHalf>, frame: &Re
     let _ = writer.write_all(&frame.payload).await;
 }
 
-async fn dispatch(
+async fn dispatch<A: Acceptor, L: Learner>(
     opcode: u8,
     payload: &[u8],
-    acceptor: &AcceptorHandle,
-    learner: &LearnerHandle,
+    acceptor: &A,
+    learner: &L,
 ) -> Result<Vec<u8>, String> {
     use mz_persist::generated::consensus_service::{
         ProtoCasProposal, ProtoTruncateProposal, ProtoWalProposal, proto_wal_proposal,
@@ -354,13 +346,6 @@ async fn dispatch(
                 .map_err(|e| format!("{e:?}"))?;
             let out = ScanResponse {
                 count: u64::try_from(resp.data.len()).unwrap_or(0),
-            };
-            bincode::serialize(&out).map_err(|e| e.to_string())
-        }
-        OP_LATEST_BATCH => {
-            let batch = acceptor.latest_committed_batch();
-            let out = LatestBatchResponse {
-                batch_number: batch,
             };
             bincode::serialize(&out).map_err(|e| e.to_string())
         }

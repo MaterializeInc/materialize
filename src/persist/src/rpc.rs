@@ -7,10 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A [`Consensus`] implementation backed by the two-tier shared log service.
+//! A [`Consensus`] implementation backed by the PersistSharedLog gRPC service.
 //!
-//! Writes go to the acceptor (blind append), then the learner is queried for
-//! the CAS result. Reads go directly to the learner.
+//! Each `Consensus` trait method maps to exactly one RPC: the server handles
+//! the acceptor-append → learner-await pipeline internally.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -22,12 +22,10 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use tonic::transport::Channel;
 
-use crate::generated::consensus_service::consensus_acceptor_client::ConsensusAcceptorClient;
-use crate::generated::consensus_service::consensus_learner_client::ConsensusLearnerClient;
+use crate::generated::consensus_service::persist_shared_log_client::PersistSharedLogClient;
 use crate::generated::consensus_service::{
-    ProtoAppendRequest, ProtoAwaitResultRequest, ProtoCasProposal, ProtoHeadRequest,
-    ProtoListKeysRequest, ProtoScanRequest, ProtoTruncateProposal, ProtoVersionedData,
-    ProtoWalProposal, proto_wal_proposal,
+    ProtoCompareAndSetRequest, ProtoHeadRequest, ProtoListKeysRequest, ProtoScanRequest,
+    ProtoTruncateRequest, ProtoVersionedData,
 };
 use crate::location::{CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData};
 
@@ -72,32 +70,27 @@ impl RpcConsensusConfig {
     }
 }
 
-/// A [`Consensus`] implementation backed by the two-tier shared log service.
+/// A [`Consensus`] implementation backed by the PersistSharedLog gRPC service.
 ///
-/// Writes (CAS, truncate) go to the acceptor as blind proposals, then the
-/// learner is queried for the result after materialization. Reads (head, scan,
-/// list_keys) go directly to the learner.
+/// Each `Consensus` trait method maps to exactly one RPC. The server handles
+/// the acceptor-append → learner-await pipeline internally for CAS and truncate.
 ///
 /// Maintains a pool of independent HTTP/2 connections with round-robin
 /// selection to spread h2 mux contention under high concurrency.
 #[derive(Debug)]
 pub struct RpcConsensus {
-    acceptors: Vec<ConsensusAcceptorClient<Channel>>,
-    learners: Vec<ConsensusLearnerClient<Channel>>,
+    clients: Vec<PersistSharedLogClient<Channel>>,
     next: AtomicUsize,
 }
 
 impl RpcConsensus {
     /// Opens `config.pool_size` connections to the remote consensus service.
     ///
-    /// Both the acceptor and learner services are expected at the same endpoint
-    /// (they're served by the same process today). Channels are created with
-    /// `connect_lazy` so tonic will automatically reconnect after a dead
-    /// connection is detected.
+    /// Channels are created with `connect_lazy` so tonic will automatically
+    /// reconnect after a dead connection is detected.
     pub async fn open(config: RpcConsensusConfig) -> Result<Self, ExternalError> {
         let pool_size = config.pool_size.max(1);
-        let mut acceptors = Vec::with_capacity(pool_size);
-        let mut learners = Vec::with_capacity(pool_size);
+        let mut clients = Vec::with_capacity(pool_size);
         for _ in 0..pool_size {
             let channel = Channel::from_shared(config.endpoint.clone())
                 .map_err(|e| ExternalError::from(anyhow!("invalid rpc endpoint: {}", e)))?
@@ -107,35 +100,26 @@ impl RpcConsensus {
                 .keep_alive_timeout(config.http2_keep_alive_timeout)
                 .keep_alive_while_idle(true)
                 .connect_lazy();
-            acceptors.push(ConsensusAcceptorClient::new(channel.clone()));
-            learners.push(ConsensusLearnerClient::new(channel));
+            clients.push(PersistSharedLogClient::new(channel));
         }
         let consensus = RpcConsensus {
-            acceptors,
-            learners,
+            clients,
             next: AtomicUsize::new(0),
         };
 
         // Health check: verify the endpoint is reachable.
-        let mut learner = consensus.get_learner();
-        learner
-            .head(ProtoHeadRequest {
-                key: String::new(),
-            })
+        let mut client = consensus.get_client();
+        client
+            .head(ProtoHeadRequest { key: String::new() })
             .await
             .map_err(|e| ExternalError::from(anyhow!("rpc health check failed: {}", e)))?;
 
         Ok(consensus)
     }
 
-    fn get_acceptor(&self) -> ConsensusAcceptorClient<Channel> {
-        let idx = self.next.fetch_add(1, Ordering::Relaxed) % self.acceptors.len();
-        self.acceptors[idx].clone()
-    }
-
-    fn get_learner(&self) -> ConsensusLearnerClient<Channel> {
-        let idx = self.next.fetch_add(1, Ordering::Relaxed) % self.learners.len();
-        self.learners[idx].clone()
+    fn get_client(&self) -> PersistSharedLogClient<Channel> {
+        let idx = self.next.fetch_add(1, Ordering::Relaxed) % self.clients.len();
+        self.clients[idx].clone()
     }
 }
 
@@ -149,7 +133,7 @@ fn from_proto_versioned_data(p: ProtoVersionedData) -> VersionedData {
 #[async_trait]
 impl Consensus for RpcConsensus {
     fn list_keys(&self) -> ResultStream<'_, String> {
-        let mut client = self.get_learner();
+        let mut client = self.get_client();
         Box::pin(try_stream! {
             let response = client
                 .list_keys(ProtoListKeysRequest {})
@@ -167,7 +151,7 @@ impl Consensus for RpcConsensus {
     }
 
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
-        let mut client = self.get_learner();
+        let mut client = self.get_client();
         let response = client
             .head(ProtoHeadRequest {
                 key: key.to_string(),
@@ -184,32 +168,18 @@ impl Consensus for RpcConsensus {
         expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
-        // 1. Append proposal to acceptor (blocks until group commit flush).
-        let mut acceptor = self.get_acceptor();
-        let receipt = acceptor
-            .append(ProtoAppendRequest {
-                proposal: Some(ProtoWalProposal {
-                    op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
-                        key: key.to_string(),
-                        expected: expected.map(|s| s.0),
-                        new_seqno: new.seqno.0,
-                        data: new.data.to_vec(),
-                    })),
+        let mut client = self.get_client();
+        let result = client
+            .compare_and_set(ProtoCompareAndSetRequest {
+                key: key.to_string(),
+                expected: expected.map(|s| s.0),
+                new: Some(ProtoVersionedData {
+                    seqno: new.seqno.0,
+                    data: new.data.to_vec(),
                 }),
             })
             .await
-            .map_err(|e| ExternalError::from(anyhow!("rpc append failed: {}", e)))?
-            .into_inner();
-
-        // 2. Wait for learner to materialize and return CAS result.
-        let mut learner = self.get_learner();
-        let result = learner
-            .await_cas_result(ProtoAwaitResultRequest {
-                batch_number: receipt.batch_number,
-                position: receipt.position,
-            })
-            .await
-            .map_err(|e| ExternalError::from(anyhow!("rpc await_cas_result failed: {}", e)))?
+            .map_err(|e| ExternalError::from(anyhow!("rpc compare_and_set failed: {}", e)))?
             .into_inner();
 
         if result.committed {
@@ -225,7 +195,7 @@ impl Consensus for RpcConsensus {
         from: SeqNo,
         limit: usize,
     ) -> Result<Vec<VersionedData>, ExternalError> {
-        let mut client = self.get_learner();
+        let mut client = self.get_client();
         let response = client
             .scan(ProtoScanRequest {
                 key: key.to_string(),
@@ -235,34 +205,22 @@ impl Consensus for RpcConsensus {
             .await
             .map_err(|e| ExternalError::from(anyhow!("rpc scan failed: {}", e)))?;
         let inner = response.into_inner();
-        Ok(inner.data.into_iter().map(from_proto_versioned_data).collect())
+        Ok(inner
+            .data
+            .into_iter()
+            .map(from_proto_versioned_data)
+            .collect())
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
-        // 1. Append truncate proposal to acceptor.
-        let mut acceptor = self.get_acceptor();
-        let receipt = acceptor
-            .append(ProtoAppendRequest {
-                proposal: Some(ProtoWalProposal {
-                    op: Some(proto_wal_proposal::Op::Truncate(ProtoTruncateProposal {
-                        key: key.to_string(),
-                        seqno: seqno.0,
-                    })),
-                }),
+        let mut client = self.get_client();
+        let result = client
+            .truncate(ProtoTruncateRequest {
+                key: key.to_string(),
+                seqno: seqno.0,
             })
             .await
-            .map_err(|e| ExternalError::from(anyhow!("rpc append failed: {}", e)))?
-            .into_inner();
-
-        // 2. Wait for learner to materialize and return truncate result.
-        let mut learner = self.get_learner();
-        let result = learner
-            .await_truncate_result(ProtoAwaitResultRequest {
-                batch_number: receipt.batch_number,
-                position: receipt.position,
-            })
-            .await
-            .map_err(|e| ExternalError::from(anyhow!("rpc await_truncate_result failed: {}", e)))?
+            .map_err(|e| ExternalError::from(anyhow!("rpc truncate failed: {}", e)))?
             .into_inner();
 
         Ok(result

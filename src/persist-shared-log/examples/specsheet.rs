@@ -43,12 +43,13 @@ use mz_persist::generated::consensus_service::{
     ProtoAppendRequest, ProtoAwaitResultRequest, ProtoCasProposal, ProtoHeadRequest,
     ProtoScanRequest, ProtoTruncateProposal, ProtoWalProposal, proto_wal_proposal,
 };
-use mz_persist_shared_log::acceptor::{Acceptor, AcceptorConfig};
+use mz_persist_shared_log::acceptor::{AcceptorConfig, ActorAcceptor};
 use mz_persist_shared_log::ctp;
-use mz_persist_shared_log::learner::{Learner, LearnerConfig};
+use mz_persist_shared_log::learner::{ActorLearner, LearnerConfig};
 use mz_persist_shared_log::metrics::{AcceptorMetrics, LearnerMetrics};
 use mz_persist_shared_log::service::{AcceptorGrpcService, LearnerGrpcService};
 use mz_persist_shared_log::storage::{LatencyProfile, LatencyStorage};
+use mz_persist_shared_log::traits::Acceptor as _;
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -1351,7 +1352,7 @@ async fn main() {
                     .build()
                     .expect("failed to build acceptor runtime");
                 rt.block_on(async {
-                    let (handle, _task) = Acceptor::spawn(
+                    let (handle, _task) = ActorAcceptor::spawn(
                         acceptor_config,
                         acceptor_wal,
                         Some(batch_tx),
@@ -1370,7 +1371,7 @@ async fn main() {
         snapshot_interval: cfg.snapshot_interval,
         ..Default::default()
     };
-    let (learner_handle, learner_thread) = Learner::spawn_threaded(
+    let (learner_handle, learner_thread) = ActorLearner::spawn_threaded(
         learner_config,
         wal,
         batch_rx,
@@ -1399,6 +1400,7 @@ async fn main() {
     let grpc_server_handle = if cfg.transport == TransportMode::Grpc {
         let acceptor_svc = AcceptorGrpcService {
             handle: acceptor_handle.clone(),
+            actor_handle: acceptor_handle.clone(),
         };
         let learner_svc = LearnerGrpcService {
             learner_handle: learner_handle.clone(),

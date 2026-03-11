@@ -7,21 +7,25 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! gRPC service implementations for the acceptor and learner.
+//! gRPC service implementations for the acceptor, learner, and combined
+//! PersistSharedLog service.
 
 use tracing::debug;
 
 use mz_persist::generated::consensus_service::consensus_acceptor_server::ConsensusAcceptor;
 use mz_persist::generated::consensus_service::consensus_learner_server::ConsensusLearner;
+use mz_persist::generated::consensus_service::persist_shared_log_server::PersistSharedLog;
 use mz_persist::generated::consensus_service::{
-    ProtoAppendRequest, ProtoAppendResponse, ProtoAwaitResultRequest, ProtoCompareAndSetResponse,
-    ProtoHeadRequest, ProtoHeadResponse, ProtoLatestCommittedBatchRequest,
-    ProtoLatestCommittedBatchResponse, ProtoListKeysRequest, ProtoListKeysResponse,
-    ProtoScanRequest, ProtoScanResponse, ProtoTruncateResponse,
+    ProtoAppendRequest, ProtoAppendResponse, ProtoAwaitResultRequest, ProtoCompareAndSetRequest,
+    ProtoCompareAndSetResponse, ProtoHeadRequest, ProtoHeadResponse,
+    ProtoLatestCommittedBatchRequest, ProtoLatestCommittedBatchResponse, ProtoListKeysRequest,
+    ProtoListKeysResponse, ProtoScanRequest, ProtoScanResponse, ProtoTruncateRequest,
+    ProtoTruncateResponse, ProtoWalProposal, proto_wal_proposal,
 };
 
 use crate::acceptor::{AcceptorError, AcceptorHandle};
-use crate::learner::{LearnerError, LearnerHandle};
+use crate::learner::LearnerError;
+use crate::traits;
 
 // ---------------------------------------------------------------------------
 // Error conversions
@@ -52,13 +56,18 @@ impl From<LearnerError> for tonic::Status {
 // ---------------------------------------------------------------------------
 
 /// gRPC service for the acceptor (blind group commit).
+///
+/// Uses the concrete `AcceptorHandle` because `latest_committed_batch` is
+/// an actor-specific method not on the trait.
 #[derive(Debug)]
-pub struct AcceptorGrpcService {
-    pub handle: AcceptorHandle,
+pub struct AcceptorGrpcService<A: traits::Acceptor> {
+    pub handle: A,
+    /// The underlying `AcceptorHandle` for `latest_committed_batch`.
+    pub actor_handle: AcceptorHandle,
 }
 
 #[tonic::async_trait]
-impl ConsensusAcceptor for AcceptorGrpcService {
+impl<A: traits::Acceptor> ConsensusAcceptor for AcceptorGrpcService<A> {
     async fn append(
         &self,
         request: tonic::Request<ProtoAppendRequest>,
@@ -75,7 +84,7 @@ impl ConsensusAcceptor for AcceptorGrpcService {
         &self,
         _request: tonic::Request<ProtoLatestCommittedBatchRequest>,
     ) -> Result<tonic::Response<ProtoLatestCommittedBatchResponse>, tonic::Status> {
-        let batch = self.handle.latest_committed_batch();
+        let batch = self.actor_handle.latest_committed_batch();
         Ok(tonic::Response::new(ProtoLatestCommittedBatchResponse {
             batch_number: batch,
         }))
@@ -88,15 +97,15 @@ impl ConsensusAcceptor for AcceptorGrpcService {
 
 /// gRPC service for the learner (reads + result queries).
 ///
-/// Read linearization is handled by the [`LearnerHandle`] — it queries the
-/// acceptor's latest committed batch internally before each read.
+/// Read linearization is handled by the learner implementation — it queries
+/// the acceptor's latest committed batch internally before each read.
 #[derive(Debug)]
-pub struct LearnerGrpcService {
-    pub learner_handle: LearnerHandle,
+pub struct LearnerGrpcService<L: traits::Learner> {
+    pub learner_handle: L,
 }
 
 #[tonic::async_trait]
-impl ConsensusLearner for LearnerGrpcService {
+impl<L: traits::Learner> ConsensusLearner for LearnerGrpcService<L> {
     async fn await_cas_result(
         &self,
         request: tonic::Request<ProtoAwaitResultRequest>,
@@ -178,5 +187,135 @@ impl ConsensusLearner for LearnerGrpcService {
         Ok(tonic::Response::new(
             tokio_stream::wrappers::ReceiverStream::new(stream_rx),
         ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Combined PersistSharedLog gRPC service
+// ---------------------------------------------------------------------------
+
+/// Combined gRPC service that maps 1:1 to the persist `Consensus` trait.
+///
+/// `CompareAndSet` and `Truncate` handle the full acceptor-append → learner-
+/// await pipeline server-side, so each client `Consensus` method is a single
+/// RPC round-trip.
+#[derive(Debug)]
+pub struct PersistSharedLogGrpcService<A: traits::Acceptor, L: traits::Learner> {
+    pub acceptor: A,
+    pub learner: L,
+}
+
+#[tonic::async_trait]
+impl<A: traits::Acceptor, L: traits::Learner> PersistSharedLog
+    for PersistSharedLogGrpcService<A, L>
+{
+    async fn head(
+        &self,
+        request: tonic::Request<ProtoHeadRequest>,
+    ) -> Result<tonic::Response<ProtoHeadResponse>, tonic::Status> {
+        let req = request.into_inner();
+        debug!(key = %req.key, "persist_shared_log::head");
+        let resp = self.learner.head(req.key).await?;
+        Ok(tonic::Response::new(resp))
+    }
+
+    async fn scan(
+        &self,
+        request: tonic::Request<ProtoScanRequest>,
+    ) -> Result<tonic::Response<ProtoScanResponse>, tonic::Status> {
+        let req = request.into_inner();
+        debug!(key = %req.key, from = req.from, limit = req.limit, "persist_shared_log::scan");
+        let resp = self.learner.scan(req.key, req.from, req.limit).await?;
+        Ok(tonic::Response::new(resp))
+    }
+
+    type ListKeysStream =
+        tokio_stream::wrappers::ReceiverStream<Result<ProtoListKeysResponse, tonic::Status>>;
+
+    async fn list_keys(
+        &self,
+        _request: tonic::Request<ProtoListKeysRequest>,
+    ) -> Result<tonic::Response<Self::ListKeysStream>, tonic::Status> {
+        debug!("persist_shared_log::list_keys");
+        let keys = self.learner.list_keys().await?;
+        let (stream_tx, stream_rx) = tokio::sync::mpsc::channel(64);
+        mz_ore::task::spawn(|| "psl-list-keys-stream", async move {
+            for key in keys {
+                if stream_tx
+                    .send(Ok(ProtoListKeysResponse { key }))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        Ok(tonic::Response::new(
+            tokio_stream::wrappers::ReceiverStream::new(stream_rx),
+        ))
+    }
+
+    async fn compare_and_set(
+        &self,
+        request: tonic::Request<ProtoCompareAndSetRequest>,
+    ) -> Result<tonic::Response<ProtoCompareAndSetResponse>, tonic::Status> {
+        let req = request.into_inner();
+        debug!(key = %req.key, "persist_shared_log::compare_and_set");
+
+        let new = req
+            .new
+            .ok_or_else(|| tonic::Status::invalid_argument("missing new"))?;
+
+        // Build WAL proposal from the CAS request.
+        let proposal = ProtoWalProposal {
+            op: Some(proto_wal_proposal::Op::Cas(
+                mz_persist::generated::consensus_service::ProtoCasProposal {
+                    key: req.key,
+                    expected: req.expected,
+                    new_seqno: new.seqno,
+                    data: new.data,
+                },
+            )),
+        };
+
+        // Append to acceptor (blocks until group commit flush).
+        let receipt = self.acceptor.append(proposal).await?;
+
+        // Await learner materialization.
+        let result = self
+            .learner
+            .await_cas_result(receipt.batch_number, receipt.position)
+            .await?;
+
+        Ok(tonic::Response::new(result))
+    }
+
+    async fn truncate(
+        &self,
+        request: tonic::Request<ProtoTruncateRequest>,
+    ) -> Result<tonic::Response<ProtoTruncateResponse>, tonic::Status> {
+        let req = request.into_inner();
+        debug!(key = %req.key, seqno = req.seqno, "persist_shared_log::truncate");
+
+        // Build WAL proposal from the truncate request.
+        let proposal = ProtoWalProposal {
+            op: Some(proto_wal_proposal::Op::Truncate(
+                mz_persist::generated::consensus_service::ProtoTruncateProposal {
+                    key: req.key,
+                    seqno: req.seqno,
+                },
+            )),
+        };
+
+        // Append to acceptor (blocks until group commit flush).
+        let receipt = self.acceptor.append(proposal).await?;
+
+        // Await learner materialization.
+        let result = self
+            .learner
+            .await_truncate_result(receipt.batch_number, receipt.position)
+            .await?;
+
+        Ok(tonic::Response::new(result))
     }
 }

@@ -32,9 +32,10 @@ use mz_persist::generated::consensus_service::{
     ProtoCasProposal, ProtoTruncateProposal, ProtoWalProposal, proto_wal_proposal,
 };
 
-use crate::acceptor::{Acceptor, AcceptorHandle};
-use crate::learner::{Learner, LearnerHandle};
+use crate::acceptor::{AcceptorHandle, ActorAcceptor};
+use crate::learner::{ActorLearner, LearnerHandle};
 use crate::storage::sim::{SimStorage, SimWriteFault};
+use crate::traits::Acceptor as _;
 
 use super::{
     test_acceptor_config, test_acceptor_metrics, test_learner_config, test_learner_metrics,
@@ -255,7 +256,7 @@ impl Simulator {
         let wal = Arc::new(SimStorage::new());
         let (batch_tx, batch_rx) = tokio::sync::mpsc::channel(256);
 
-        let (acceptor, acceptor_handle) = Acceptor::new(
+        let (acceptor, acceptor_handle) = ActorAcceptor::new(
             test_acceptor_config(),
             Arc::clone(&wal),
             Some(batch_tx),
@@ -263,7 +264,7 @@ impl Simulator {
         );
         let acceptor_task = mz_ore::task::spawn(|| "sim-acceptor", acceptor.run()).abort_on_drop();
 
-        let (learner, learner_handle) = Learner::new(
+        let (learner, learner_handle) = ActorLearner::new(
             test_learner_config(),
             Arc::clone(&wal),
             batch_rx,
@@ -361,7 +362,7 @@ impl Simulator {
         // Spin up new acceptor + learner.
         let (batch_tx, batch_rx) = tokio::sync::mpsc::channel(256);
 
-        let (acceptor, acceptor_handle) = Acceptor::new(
+        let (acceptor, acceptor_handle) = ActorAcceptor::new(
             test_acceptor_config(),
             Arc::clone(&self.wal),
             Some(batch_tx),
@@ -371,7 +372,7 @@ impl Simulator {
             mz_ore::task::spawn(|| "sim-acceptor", acceptor.run()).abort_on_drop();
         self.acceptor_handle = acceptor_handle;
 
-        let (learner, learner_handle) = Learner::new(
+        let (learner, learner_handle) = ActorLearner::new(
             test_learner_config(),
             Arc::clone(&self.wal),
             batch_rx,
@@ -427,7 +428,7 @@ impl MultiAcceptorHarness {
         let mut acceptor_tasks = Vec::new();
 
         for _ in 0..num_acceptors {
-            let (acceptor, handle) = Acceptor::new(
+            let (acceptor, handle) = ActorAcceptor::new(
                 test_acceptor_config(),
                 Arc::clone(&wal),
                 Some(batch_tx.clone()),
@@ -440,7 +441,7 @@ impl MultiAcceptorHarness {
         drop(batch_tx);
 
         // Use the first acceptor's handle for read linearization.
-        let (learner, learner_handle) = Learner::new(
+        let (learner, learner_handle) = ActorLearner::new(
             test_learner_config(),
             Arc::clone(&wal),
             batch_rx,

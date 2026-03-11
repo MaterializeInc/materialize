@@ -14,7 +14,7 @@
 //! shard state, and serves reads and result queries.
 //!
 //! Recovery uses the same code path as live materialization — both call
-//! [`Learner::materialize_batch`].
+//! [`ActorLearner::materialize_batch`].
 
 use std::collections::BTreeMap;
 
@@ -34,7 +34,7 @@ use crate::metrics::LearnerMetrics;
 use crate::storage::{Storage, deserialize_snapshot};
 use crate::{ShardState, VersionedEntry};
 
-/// Configuration for the [`Learner`].
+/// Configuration for the [`ActorLearner`].
 #[derive(Debug, Clone)]
 pub struct LearnerConfig {
     /// Depth of the command channel (mpsc queue).
@@ -238,6 +238,42 @@ impl LearnerHandle {
     }
 }
 
+#[async_trait::async_trait]
+impl crate::traits::Learner for LearnerHandle {
+    async fn head(&self, key: String) -> Result<ProtoHeadResponse, LearnerError> {
+        self.head(key).await
+    }
+
+    async fn scan(
+        &self,
+        key: String,
+        from: u64,
+        limit: u64,
+    ) -> Result<ProtoScanResponse, LearnerError> {
+        self.scan(key, from, limit).await
+    }
+
+    async fn list_keys(&self) -> Result<Vec<String>, LearnerError> {
+        self.list_keys().await
+    }
+
+    async fn await_cas_result(
+        &self,
+        batch_number: u64,
+        position: u32,
+    ) -> Result<ProtoCompareAndSetResponse, LearnerError> {
+        self.await_cas_result(batch_number, position).await
+    }
+
+    async fn await_truncate_result(
+        &self,
+        batch_number: u64,
+        position: u32,
+    ) -> Result<ProtoTruncateResponse, LearnerError> {
+        self.await_truncate_result(batch_number, position).await
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Result storage
 // ---------------------------------------------------------------------------
@@ -305,7 +341,7 @@ impl ReadWaiter {
 ///
 /// Receives WAL batches, evaluates CAS during playback, maintains materialized
 /// state, and serves reads and result queries.
-pub struct Learner<W: Storage> {
+pub struct ActorLearner<W: Storage> {
     // --- Shard state ---
     shards: BTreeMap<String, ShardState>,
     /// The batch number of the last materialized batch, or `None` if nothing
@@ -347,7 +383,7 @@ pub struct Learner<W: Storage> {
     running_byte_count: i64,
 }
 
-impl<W: Storage> Learner<W> {
+impl<W: Storage> ActorLearner<W> {
     /// Creates a new learner and returns a handle for sending commands.
     pub fn new(
         config: LearnerConfig,
@@ -358,7 +394,7 @@ impl<W: Storage> Learner<W> {
     ) -> (Self, LearnerHandle) {
         let (cmd_tx, cmd_rx) = mpsc::channel(config.queue_depth);
 
-        let learner = Learner {
+        let learner = ActorLearner {
             shards: BTreeMap::new(),
             materialized_through: None,
             results: BTreeMap::new(),
@@ -997,7 +1033,7 @@ impl<W: Storage> Learner<W> {
     }
 }
 
-impl<W: Storage + Send + Sync + 'static> Learner<W> {
+impl<W: Storage + Send + Sync + 'static> ActorLearner<W> {
     /// Spawns the learner as a tokio task on the current runtime.
     pub fn spawn(
         config: LearnerConfig,
