@@ -2672,8 +2672,7 @@ fn test_schema_with_secrets_and_views_fails() {
 #[test]
 fn test_profile_type_mismatch_secret_vs_view() {
     let secret_stmts = parse_statements(vec!["CREATE SECRET my_secret AS 'test';"]).unwrap();
-    let view_stmts =
-        parse_statements(vec!["CREATE VIEW my_secret AS SELECT 1;"]).unwrap();
+    let view_stmts = parse_statements(vec!["CREATE VIEW my_secret AS SELECT 1;"]).unwrap();
 
     let raw = raw::DatabaseObject {
         name: "my_secret".to_string(),
@@ -2694,7 +2693,10 @@ fn test_profile_type_mismatch_secret_vs_view() {
     };
 
     let result = DatabaseObject::validate(raw, "default");
-    assert!(result.is_err(), "should error on type mismatch between variants");
+    assert!(
+        result.is_err(),
+        "should error on type mismatch between variants"
+    );
     let err_str = result.unwrap_err().to_string();
     assert!(
         err_str.contains("profile variant type mismatch"),
@@ -2766,7 +2768,10 @@ fn test_profile_override_not_allowed_for_materialized_view() {
     };
 
     let result = DatabaseObject::validate(raw, "default");
-    assert!(result.is_err(), "materialized views cannot have profile overrides");
+    assert!(
+        result.is_err(),
+        "materialized views cannot have profile overrides"
+    );
     let err_str = result.unwrap_err().to_string();
     assert!(
         err_str.contains("cannot have profile-specific overrides"),
@@ -2777,8 +2782,10 @@ fn test_profile_override_not_allowed_for_materialized_view() {
 
 #[test]
 fn test_valid_cross_profile_consistency_secret() {
-    let secret_stmts1 = parse_statements(vec!["CREATE SECRET my_secret AS 'default_val';"]).unwrap();
-    let secret_stmts2 = parse_statements(vec!["CREATE SECRET my_secret AS 'staging_val';"]).unwrap();
+    let secret_stmts1 =
+        parse_statements(vec!["CREATE SECRET my_secret AS 'default_val';"]).unwrap();
+    let secret_stmts2 =
+        parse_statements(vec!["CREATE SECRET my_secret AS 'staging_val';"]).unwrap();
 
     let raw = raw::DatabaseObject {
         name: "my_secret".to_string(),
@@ -2808,8 +2815,10 @@ fn test_valid_cross_profile_consistency_secret() {
 
 #[test]
 fn test_active_variant_resolution_picks_profile() {
-    let secret_stmts1 = parse_statements(vec!["CREATE SECRET my_secret AS 'default_val';"]).unwrap();
-    let secret_stmts2 = parse_statements(vec!["CREATE SECRET my_secret AS 'staging_val';"]).unwrap();
+    let secret_stmts1 =
+        parse_statements(vec!["CREATE SECRET my_secret AS 'default_val';"]).unwrap();
+    let secret_stmts2 =
+        parse_statements(vec!["CREATE SECRET my_secret AS 'staging_val';"]).unwrap();
 
     let raw = raw::DatabaseObject {
         name: "my_secret".to_string(),
@@ -2831,7 +2840,11 @@ fn test_active_variant_resolution_picks_profile() {
 
     // When profile is "staging", the staging variant should be resolved
     let result = DatabaseObject::validate(raw, "staging");
-    assert!(result.is_ok(), "should resolve staging variant: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "should resolve staging variant: {:?}",
+        result.err()
+    );
     let obj = result.unwrap();
     // The staging variant has 'staging_val'
     let stmt_str = format!("{}", obj.stmt);
@@ -2844,8 +2857,10 @@ fn test_active_variant_resolution_picks_profile() {
 
 #[test]
 fn test_active_variant_resolution_falls_back_to_default() {
-    let secret_stmts1 = parse_statements(vec!["CREATE SECRET my_secret AS 'default_val';"]).unwrap();
-    let secret_stmts2 = parse_statements(vec!["CREATE SECRET my_secret AS 'staging_val';"]).unwrap();
+    let secret_stmts1 =
+        parse_statements(vec!["CREATE SECRET my_secret AS 'default_val';"]).unwrap();
+    let secret_stmts2 =
+        parse_statements(vec!["CREATE SECRET my_secret AS 'staging_val';"]).unwrap();
 
     let raw = raw::DatabaseObject {
         name: "my_secret".to_string(),
@@ -2867,7 +2882,11 @@ fn test_active_variant_resolution_falls_back_to_default() {
 
     // When profile is "prod" (no match), falls back to default
     let result = DatabaseObject::validate(raw, "prod");
-    assert!(result.is_ok(), "should fall back to default variant: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "should fall back to default variant: {:?}",
+        result.err()
+    );
     let obj = result.unwrap();
     let stmt_str = format!("{}", obj.stmt);
     assert!(

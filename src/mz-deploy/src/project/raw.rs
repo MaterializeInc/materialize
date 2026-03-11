@@ -357,13 +357,12 @@ pub fn load_project<P: AsRef<Path>>(
 
                 // Parse the default file if it exists
                 if let Some(ref default_path) = object_files.default {
-                    let sql_content =
-                        fs::read_to_string(default_path).map_err(|source| {
-                            LoadError::FileReadFailed {
-                                path: default_path.clone(),
-                                source,
-                            }
-                        })?;
+                    let sql_content = fs::read_to_string(default_path).map_err(|source| {
+                        LoadError::FileReadFailed {
+                            path: default_path.clone(),
+                            source,
+                        }
+                    })?;
                     let statements = parse_statements_with_context(
                         &sql_content,
                         default_path.clone(),
@@ -378,13 +377,12 @@ pub fn load_project<P: AsRef<Path>>(
 
                 // Parse all profile override files
                 for (prof, override_path) in &object_files.overrides {
-                    let sql_content =
-                        fs::read_to_string(override_path).map_err(|source| {
-                            LoadError::FileReadFailed {
-                                path: override_path.clone(),
-                                source,
-                            }
-                        })?;
+                    let sql_content = fs::read_to_string(override_path).map_err(|source| {
+                        LoadError::FileReadFailed {
+                            path: override_path.clone(),
+                            source,
+                        }
+                    })?;
                     let statements = parse_statements_with_context(
                         &sql_content,
                         override_path.clone(),
@@ -1047,11 +1045,7 @@ mod tests {
         fs::create_dir_all(&schema_path).unwrap();
 
         // Default is a secret, staging override is a view → type mismatch
-        fs::write(
-            schema_path.join("foo.sql"),
-            "CREATE SECRET foo AS 'val';",
-        )
-        .unwrap();
+        fs::write(schema_path.join("foo.sql"), "CREATE SECRET foo AS 'val';").unwrap();
         fs::write(
             schema_path.join("foo__staging.sql"),
             "CREATE VIEW foo AS SELECT 1;",
@@ -1061,7 +1055,10 @@ mod tests {
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
         let result = project::plan(root, "default", None, None, &BTreeMap::new());
-        assert!(result.is_err(), "type mismatch between profiles should error");
+        assert!(
+            result.is_err(),
+            "type mismatch between profiles should error"
+        );
         let err_str = result.unwrap_err().to_string();
         assert!(
             err_str.contains("profile variant type mismatch"),
@@ -1080,11 +1077,7 @@ mod tests {
         let schema_path = root.join("models").join("mydb").join("public");
         fs::create_dir_all(&schema_path).unwrap();
 
-        fs::write(
-            schema_path.join("bar.sql"),
-            "CREATE VIEW bar AS SELECT 1;",
-        )
-        .unwrap();
+        fs::write(schema_path.join("bar.sql"), "CREATE VIEW bar AS SELECT 1;").unwrap();
         fs::write(
             schema_path.join("bar__staging.sql"),
             "CREATE VIEW bar AS SELECT 2;",

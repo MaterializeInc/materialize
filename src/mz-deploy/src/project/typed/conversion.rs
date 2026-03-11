@@ -462,7 +462,10 @@ impl DatabaseObject {
 
 impl Schema {
     /// Validate a raw schema, converting each object using the given profile.
-    pub fn validate(value: super::super::raw::Schema, profile: &str) -> Result<Self, ValidationErrors> {
+    pub fn validate(
+        value: super::super::raw::Schema,
+        profile: &str,
+    ) -> Result<Self, ValidationErrors> {
         let mut all_errors = Vec::new();
         let mut objects = Vec::new();
 
@@ -491,7 +494,10 @@ impl Schema {
 
 impl Database {
     /// Validate a raw database, converting each schema using the given profile.
-    pub fn validate(value: super::super::raw::Database, profile: &str) -> Result<Self, ValidationErrors> {
+    pub fn validate(
+        value: super::super::raw::Database,
+        profile: &str,
+    ) -> Result<Self, ValidationErrors> {
         let mut all_errors = Vec::new();
         let mut schemas = Vec::new();
 

@@ -533,7 +533,10 @@ mod tests {
         let result = load_clusters(dir.path(), "staging", None, &BTreeMap::new()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "analytics");
-        assert_eq!(extract_size(&result[0].create_stmt), Some("25cc".to_string()));
+        assert_eq!(
+            extract_size(&result[0].create_stmt),
+            Some("25cc".to_string())
+        );
     }
 
     #[test]
@@ -557,7 +560,10 @@ mod tests {
         let result = load_clusters(dir.path(), "prod", None, &BTreeMap::new()).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "analytics");
-        assert_eq!(extract_size(&result[0].create_stmt), Some("100cc".to_string()));
+        assert_eq!(
+            extract_size(&result[0].create_stmt),
+            Some("100cc".to_string())
+        );
     }
 
     #[test]
@@ -579,6 +585,9 @@ mod tests {
         .unwrap();
 
         let result = load_clusters(dir.path(), "default", None, &BTreeMap::new());
-        assert!(result.is_err(), "invalid variant should error even when not active profile");
+        assert!(
+            result.is_err(),
+            "invalid variant should error even when not active profile"
+        );
     }
 }
