@@ -1344,7 +1344,7 @@ impl SchemaParser {
         if let Some("decimal") = logical_type {
             match Self::parse_decimal(complex) {
                 Ok((precision, scale)) => {
-                    let max = ((2_usize.pow((8 * size - 1) as u32) - 1) as f64).log10() as usize;
+                    let max = ((8 * size - 1) as f64 * 2_f64.log10()).floor() as usize;
                     if precision > max {
                         warn!(
                             "Decimal precision {} requires more than {} bytes of space, parsing as fixed",
