@@ -339,6 +339,7 @@ def workflow_http(c: Composition) -> None:
         assert result.returncode == 0
         assert "unsupported via this API" in result.stdout
 
+
 def workflow_test_column_dedup(c: Composition):
     """
     Regression test: column name deduplication can produce duplicate names.
@@ -373,6 +374,7 @@ def workflow_test_column_dedup(c: Composition):
                 """
             )
         )
+
 
 def workflow_test_github_9627(c: Composition):
     """
