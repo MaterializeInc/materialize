@@ -751,17 +751,32 @@ pub struct RowPacker<'a> {
 /// Infallible conversion from a [`Datum`] to a typed value.
 ///
 /// Used by [`DatumList::iter_typed`] to yield elements as `T` rather than
-/// raw `Datum`s. Since generic type parameters in `#[sqlfunc]` are erased
-/// to `Datum<'a>` before code generation, this trait is only ever
-/// monomorphized with `T = Datum<'a>` at runtime.
-pub trait FromDatum<'a>: Sized {
+/// raw `Datum`s. At runtime, `T` is always `Datum<'a>`, so the conversion
+/// is identity.
+pub trait FromDatum<'a>: Sized + PartialEq + IntoDatum<'a> {
     fn from_datum(datum: Datum<'a>) -> Self;
+}
+
+/// Infallible conversion from a typed value back into a [`Datum`].
+///
+/// Used by [`RowPacker::push_datum`] and [`RowPacker::push_list_elems`] to
+/// accept typed values. At runtime, `T` is always `Datum<'a>`, so the
+/// conversion is identity.
+pub trait IntoDatum<'a> {
+    fn into_datum(self) -> Datum<'a>;
 }
 
 impl<'a> FromDatum<'a> for Datum<'a> {
     #[inline]
     fn from_datum(datum: Datum<'a>) -> Self {
         datum
+    }
+}
+
+impl<'a> IntoDatum<'a> for Datum<'a> {
+    #[inline]
+    fn into_datum(self) -> Datum<'a> {
+        self
     }
 }
 
@@ -2135,6 +2150,26 @@ impl RowPacker<'_> {
         D: Borrow<Datum<'a>>,
     {
         push_datum(&mut self.row.data, *datum.borrow());
+    }
+
+    /// Push a typed element that implements [`IntoDatum`].
+    ///
+    /// This is the generic counterpart of [`RowPacker::push`], accepting any
+    /// `T: IntoDatum<'a>` rather than only `Datum<'a>`.
+    #[inline]
+    pub fn push_datum<'a, T: IntoDatum<'a>>(&mut self, val: T) {
+        self.push(val.into_datum());
+    }
+
+    /// Push a list of typed elements that implement [`IntoDatum`].
+    ///
+    /// Generic counterpart of [`RowPacker::push_list`].
+    pub fn push_list_elems<'a, T: IntoDatum<'a>>(&mut self, iter: impl IntoIterator<Item = T>) {
+        self.push_list_with(|packer| {
+            for elem in iter {
+                packer.push(elem.into_datum());
+            }
+        });
     }
 
     /// Extend an existing `Row` with additional `Datum`s.
