@@ -6,7 +6,7 @@ use crate::cli::progress;
 use crate::client::Client;
 use crate::client::quote_identifier;
 use crate::config::Settings;
-use crate::humanln;
+use crate::info;
 use crate::project::roles::{self, RoleDefinition};
 use mz_sql_parser::ast::AlterRoleOption;
 use mz_sql_parser::ast::SetRoleVar;
@@ -34,7 +34,7 @@ pub async fn run(
     let definitions = roles::load_roles(directory, &profile.name, settings.variables())?;
 
     if definitions.is_empty() {
-        humanln!(
+        info!(
             "  {} No roles/ directory or no .sql files found — nothing to do.",
             "info:".blue().bold()
         );
@@ -86,12 +86,12 @@ async fn apply_role(
 
     if exists {
         if !executor.is_dry_run() {
-            humanln!("  {} Role '{}' exists", "=".dimmed(), role_name);
+            info!("  {} Role '{}' exists", "=".dimmed(), role_name);
         }
     } else {
         // Create role from the parsed CREATE ROLE statement
         if !executor.is_dry_run() {
-            humanln!("  {} Creating role '{}'", "+".green().bold(), role_name);
+            info!("  {} Creating role '{}'", "+".green().bold(), role_name);
         }
         executor.execute_sql(&def.create_stmt).await?;
     }
@@ -127,7 +127,7 @@ async fn apply_role(
     for member in &current_members {
         if !desired_members.contains(&member.to_lowercase()) {
             if !executor.is_dry_run() {
-                humanln!(
+                info!(
                     "  {} Revoking role '{}' from '{}'",
                     "-".red().bold(),
                     role_name,
@@ -164,7 +164,7 @@ async fn apply_role(
     for param in &current_params {
         if !desired_params.contains(&param.to_lowercase()) {
             if !executor.is_dry_run() {
-                humanln!(
+                info!(
                     "  {} Resetting '{}' on role '{}'",
                     "-".red().bold(),
                     param,

@@ -1,12 +1,87 @@
 //! Describe command - show detailed information about a specific deployment.
 
 use crate::cli::CliError;
-use crate::client::{Client, DeploymentKind};
+use crate::client::{Client, DeploymentDetails, DeploymentKind};
 use crate::config::Settings;
-use crate::humanln;
-use crate::output;
+use crate::log;
+use crate::project::object_id::ObjectId;
 use chrono::{DateTime, Local};
 use owo_colors::OwoColorize;
+use std::collections::BTreeMap;
+use std::fmt;
+
+#[derive(serde::Serialize)]
+struct DescribeOutput {
+    deploy_id: String,
+    details: DeploymentDetails,
+    objects: BTreeMap<ObjectId, String>,
+}
+
+impl fmt::Display for DescribeOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Display deployment header
+        writeln!(
+            f,
+            "{} {} [{}]",
+            "deployment".yellow().bold(),
+            self.deploy_id.cyan(),
+            self.details.kind.to_string().dimmed()
+        )?;
+
+        if let Some(commit_sha) = &self.details.git_commit {
+            writeln!(f, "{}: {}", "Commit".dimmed(), commit_sha)?;
+        }
+
+        writeln!(
+            f,
+            "{}: {}",
+            "Deployed by".dimmed(),
+            self.details.deployed_by.yellow()
+        )?;
+
+        let deployed_datetime: DateTime<Local> = self.details.deployed_at.with_timezone(&Local);
+        let deployed_str = deployed_datetime
+            .format("%a %b %d %H:%M:%S %Y %z")
+            .to_string();
+        writeln!(f, "{}: {}", "Deployed at".dimmed(), deployed_str)?;
+
+        if let Some(promoted) = self.details.promoted_at {
+            if self.details.kind == DeploymentKind::Objects {
+                let promoted_datetime: DateTime<Local> = promoted.with_timezone(&Local);
+                let promoted_str = promoted_datetime
+                    .format("%a %b %d %H:%M:%S %Y %z")
+                    .to_string();
+                writeln!(f, "{}: {}", "Promoted at".dimmed(), promoted_str)?;
+            }
+        } else {
+            writeln!(f, "{}: {}", "Status".dimmed(), "staging".yellow())?;
+        }
+
+        writeln!(f)?;
+
+        // Display schemas
+        writeln!(f, "{} ({}):", "Schemas".bold(), self.details.schemas.len())?;
+        for sq in &self.details.schemas {
+            writeln!(f, "    {}.{}", sq.database.dimmed(), sq.schema)?;
+        }
+        writeln!(f)?;
+
+        // Display objects
+        writeln!(f, "{} ({}):", "Objects".bold(), self.objects.len())?;
+        for (object_id, hash) in &self.objects {
+            writeln!(
+                f,
+                "    {}.{}.{}  {}",
+                object_id.database.dimmed(),
+                object_id.schema.dimmed(),
+                object_id.object,
+                hash.chars().take(12).collect::<String>().dimmed()
+            )?;
+        }
+
+        Ok(())
+    }
+}
 
 /// Show detailed information about a specific deployment.
 ///
@@ -27,7 +102,7 @@ use owo_colors::OwoColorize;
 /// # Errors
 /// Returns `CliError::Connection` for database errors
 /// Returns `CliError::Message` if deployment is not found
-pub async fn run(settings: &Settings, deploy_id: &str, json_output: bool) -> Result<(), CliError> {
+pub async fn run(settings: &Settings, deploy_id: &str) -> Result<(), CliError> {
     let profile = settings.connection();
     let client = Client::connect_with_profile(profile.clone())
         .await
@@ -53,72 +128,12 @@ pub async fn run(settings: &Settings, deploy_id: &str, json_output: bool) -> Res
         .get_deployment_objects(Some(deploy_id))
         .await?;
 
-    if json_output {
-        let json = serde_json::json!({
-            "deploy_id": deploy_id,
-            "details": details,
-            "objects": snapshot.objects,
-        });
-        output::machine(&json);
-        return Ok(());
-    }
-
-    // Display deployment header
-    humanln!(
-        "{} {} [{}]",
-        "deployment".yellow().bold(),
-        deploy_id.cyan(),
-        details.kind.to_string().dimmed()
-    );
-
-    if let Some(commit_sha) = &details.git_commit {
-        humanln!("{}: {}", "Commit".dimmed(), commit_sha);
-    }
-
-    humanln!(
-        "{}: {}",
-        "Deployed by".dimmed(),
-        details.deployed_by.yellow()
-    );
-
-    let deployed_datetime: DateTime<Local> = details.deployed_at.with_timezone(&Local);
-    let deployed_str = deployed_datetime
-        .format("%a %b %d %H:%M:%S %Y %z")
-        .to_string();
-    humanln!("{}: {}", "Deployed at".dimmed(), deployed_str);
-
-    if let Some(promoted) = details.promoted_at {
-        if details.kind == DeploymentKind::Objects {
-            let promoted_datetime: DateTime<Local> = promoted.with_timezone(&Local);
-            let promoted_str = promoted_datetime
-                .format("%a %b %d %H:%M:%S %Y %z")
-                .to_string();
-            humanln!("{}: {}", "Promoted at".dimmed(), promoted_str);
-        }
-    } else {
-        humanln!("{}: {}", "Status".dimmed(), "staging".yellow());
-    }
-
-    humanln!();
-
-    // Display schemas
-    humanln!("{} ({}):", "Schemas".bold(), details.schemas.len());
-    for sq in &details.schemas {
-        humanln!("    {}.{}", sq.database.dimmed(), sq.schema);
-    }
-    humanln!();
-
-    // Display objects
-    humanln!("{} ({}):", "Objects".bold(), snapshot.objects.len());
-    for (object_id, hash) in &snapshot.objects {
-        humanln!(
-            "    {}.{}.{}  {}",
-            object_id.database.dimmed(),
-            object_id.schema.dimmed(),
-            object_id.object,
-            hash.chars().take(12).collect::<String>().dimmed()
-        );
-    }
+    let output = DescribeOutput {
+        deploy_id: deploy_id.to_string(),
+        details,
+        objects: snapshot.objects,
+    };
+    log::output(&output);
 
     Ok(())
 }

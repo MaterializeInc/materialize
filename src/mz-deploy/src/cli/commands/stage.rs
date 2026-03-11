@@ -6,7 +6,8 @@ use crate::cli::{git, progress};
 use crate::client::quote_identifier;
 use crate::client::{Client, ClusterConfig, DeploymentKind, PendingStatement, ReplacementMvRecord};
 use crate::config::Settings;
-use crate::output;
+use crate::log;
+use std::fmt;
 use crate::project::SchemaQualifier;
 use crate::project::ast::Statement;
 use crate::project::changeset::ChangeSet;
@@ -73,13 +74,23 @@ struct PartitionedObjects<'a> {
 /// Returns `CliError::GitDirty` if repository has uncommitted changes and allow_dirty is false
 /// Returns `CliError::Connection` for database errors
 /// Returns `CliError::Project` for project compilation errors
+#[derive(serde::Serialize)]
+struct StageResult {
+    deploy_id: String,
+}
+
+impl fmt::Display for StageResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "  \u{2713} Successfully staged deployment '{}'", self.deploy_id)
+    }
+}
+
 pub async fn run(
     settings: &Settings,
     stage_name: Option<&str>,
     allow_dirty: bool,
     no_rollback: bool,
     dry_run: bool,
-    json_output: bool,
 ) -> Result<(), CliError> {
     let profile = settings.connection();
     let directory = &settings.directory;
@@ -123,7 +134,7 @@ pub async fn run(
         .await?;
     }
 
-    if dry_run && json_output {
+    if dry_run && log::json_output_enabled() {
         let objects_json: Vec<serde_json::Value> = analysis
             .objects
             .iter()
@@ -186,7 +197,7 @@ pub async fn run(
             "sinks": sinks_json,
             "replacement_mvs": replacement_mvs_json,
         });
-        output::machine(&plan);
+        log::output_json(&plan);
         return Ok(());
     }
 
@@ -205,10 +216,10 @@ pub async fn run(
     .await?;
 
     let total_duration = start_time.elapsed();
-    if json_output {
-        output::machine(&serde_json::json!({
-            "deploy_id": stage_name,
-        }));
+    if log::json_output_enabled() {
+        log::output_json(&StageResult {
+            deploy_id: stage_name.to_string(),
+        });
     } else {
         progress::summary(
             &format!(

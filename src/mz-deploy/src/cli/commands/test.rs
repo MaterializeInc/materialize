@@ -8,7 +8,7 @@ use crate::project::{self, typed};
 use crate::types::docker_runtime::DockerRuntime;
 use crate::types::{self, TypeCheckError, Types};
 use crate::unit_test;
-use crate::{human, humanln};
+use crate::{info, info_nonl};
 use mz_sql_parser::ast::Ident;
 use owo_colors::OwoColorize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -246,7 +246,7 @@ pub async fn run(
         load_or_generate_types_cache(directory, &planned_project, &runtime).await?;
     combined_types.merge(&internal_types);
 
-    humanln!(
+    info!(
         "{}\n",
         format!("Running tests from {}:", directory.display()).bold()
     );
@@ -401,25 +401,25 @@ async fn run_single_test(
 /// Prints the test summary line showing pass/fail counts.
 fn print_summary(passed: usize, failed: usize, validation_failed: usize) {
     let total_failed = failed + validation_failed;
-    human!("\n{}: ", "test result".bold());
+    info_nonl!("\n{}: ", "test result".bold());
     if total_failed == 0 {
-        human!("{}. ", "ok".green().bold());
+        info_nonl!("{}. ", "ok".green().bold());
     } else {
-        human!("{}. ", "FAILED".red().bold());
+        info_nonl!("{}. ", "FAILED".red().bold());
     }
-    human!("{}; ", format!("{} passed", passed).green());
+    info_nonl!("{}; ", format!("{} passed", passed).green());
     if failed > 0 {
-        human!("{}; ", format!("{} failed", failed).red());
+        info_nonl!("{}; ", format!("{} failed", failed).red());
     } else {
-        human!("{} failed; ", failed);
+        info_nonl!("{} failed; ", failed);
     }
     if validation_failed > 0 {
-        humanln!(
+        info!(
             "{}",
             format!("{} validation errors", validation_failed).red()
         );
     } else {
-        humanln!("{} validation errors", validation_failed);
+        info!("{} validation errors", validation_failed);
     }
 }
 
@@ -427,7 +427,7 @@ fn print_summary(passed: usize, failed: usize, validation_failed: usize) {
 fn print_test_outcome(name: &str, outcome: &TestOutcome) {
     match outcome {
         TestOutcome::Passed => {
-            humanln!(
+            info!(
                 "{} {} ... {}",
                 "test".cyan(),
                 name.cyan(),
@@ -435,7 +435,7 @@ fn print_test_outcome(name: &str, outcome: &TestOutcome) {
             );
         }
         TestOutcome::ValidationFailed(failure) => {
-            humanln!(
+            info!(
                 "{} {} ... {}",
                 "test".cyan(),
                 name.cyan(),
@@ -447,7 +447,7 @@ fn print_test_outcome(name: &str, outcome: &TestOutcome) {
             }
         }
         TestOutcome::Failed(failure) => {
-            humanln!(
+            info!(
                 "{} {} ... {}",
                 "test".cyan(),
                 name.cyan(),
@@ -578,7 +578,7 @@ async fn load_or_generate_types_cache(
     // Check if types.cache exists and is up-to-date
     if !types::is_types_cache_stale(directory) {
         if let Ok(cached) = types::load_types_cache(directory) {
-            humanln!(
+            info!(
                 "{}",
                 "Using cached types from .mz-deploy/types.cache".dimmed()
             );
@@ -587,7 +587,7 @@ async fn load_or_generate_types_cache(
     }
 
     // Types cache is stale or missing - regenerate by type checking
-    humanln!(
+    info!(
         "{}",
         "Types cache stale or missing, running type check...".yellow()
     );

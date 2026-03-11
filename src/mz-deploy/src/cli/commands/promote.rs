@@ -6,8 +6,7 @@ use crate::client::{
     ApplyState, Client, DependentSink, DeploymentKind, PendingStatement, ReplacementMvRecord,
 };
 use crate::config::Settings;
-use crate::humanln;
-use crate::output;
+use crate::log;
 use crate::project::SchemaQualifier;
 use crate::project::object_id::ObjectId;
 use crate::{project, verbose};
@@ -420,7 +419,6 @@ pub async fn run(
     deploy_id: &str,
     force: bool,
     dry_run: bool,
-    json_output: bool,
 ) -> Result<(), CliError> {
     let profile = settings.connection();
 
@@ -451,21 +449,23 @@ pub async fn run(
 
     let plan = generate_deployment_plan(&client, deploy_id, apply_state, force).await?;
 
-    if json_output {
-        output::machine(&plan);
-    }
-
     if dry_run {
-        humanln!("{}", plan);
-        if plan.has_work() {
-            progress::info(&format!(
-                "To execute this plan, run: mz-deploy promote {}",
-                deploy_id
-            ));
-        } else {
-            progress::info("Nothing to do.");
+        log::output(&plan);
+        if !log::json_output_enabled() {
+            if plan.has_work() {
+                progress::info(&format!(
+                    "To execute this plan, run: mz-deploy promote {}",
+                    deploy_id
+                ));
+            } else {
+                progress::info("Nothing to do.");
+            }
         }
         return Ok(());
+    }
+
+    if log::json_output_enabled() {
+        log::output_json(&plan);
     }
 
     execute_swap_phase(&client, &plan).await?;

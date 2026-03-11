@@ -5,6 +5,7 @@
 //! the originating source file.
 
 use super::error::ParseError;
+use super::variables::VariableError;
 use mz_sql_parser::ast::{Raw, Statement};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -49,12 +50,31 @@ pub fn parse_statements_with_context(
     path: PathBuf,
     variables: &BTreeMap<String, String>,
 ) -> Result<Vec<Statement<Raw>>, ParseError> {
-    let resolved = super::variables::resolve_variables(sql, variables, &path);
-    let sql = resolved.as_ref();
+    let resolved = super::variables::resolve_variables(sql, variables);
+
+    if !resolved.unresolved.is_empty() {
+        if resolved.has_warn_pragma {
+            let formatted: Vec<String> =
+                resolved.unresolved.iter().map(|v| format!(":{}", v)).collect();
+            eprintln!(
+                "{}: unresolved variables in {}: {}",
+                "\x1b[33mwarning\x1b[0m",
+                path.display(),
+                formatted.join(", ")
+            );
+        } else {
+            return Err(ParseError::UnresolvedVariables(VariableError {
+                unresolved: resolved.unresolved,
+                path,
+            }));
+        }
+    }
+
+    let sql = resolved.sql;
 
     let mut statements = vec![];
 
-    let parsed_results = mz_sql_parser::parser::parse_statements_with_limit(sql)
+    let parsed_results = mz_sql_parser::parser::parse_statements_with_limit(&sql)
         .map_err(|e| ParseError::StatementsParseFailed {
             message: format!("Parser limit error in file {}: {}", path.display(), e),
         })?

@@ -3,7 +3,7 @@
 use crate::cli::CliError;
 use crate::client::{Client, Profile};
 use crate::config::Settings;
-use crate::humanln;
+use crate::info;
 use crate::types::docker_runtime::{DockerRuntime, DockerStatus};
 use crossterm::style::Stylize;
 use owo_colors::OwoColorize;
@@ -21,7 +21,7 @@ use owo_colors::OwoColorize;
 pub async fn run(settings: &Settings) -> Result<(), CliError> {
     let profile = settings.connection();
     let profile_display = profile.name.as_str();
-    humanln!("{}: {}", "Profile".green(), profile_display.cyan());
+    info!("{}: {}", "Profile".green(), profile_display.cyan());
 
     // Run database connection and Docker check in parallel since they're independent.
     let (db_result, docker_status) = tokio::join!(
@@ -31,34 +31,34 @@ pub async fn run(settings: &Settings) -> Result<(), CliError> {
 
     let (version, environment_id, role, cluster) = db_result?;
 
-    humanln!(
+    info!(
         "{} {}:{}",
         "Connected to".green(),
         profile.host.to_string().cyan(),
         profile.port.to_string().cyan()
     );
-    humanln!("  {}: {}", "Environment".dimmed(), environment_id);
-    humanln!("  {}: {}", "Cluster".dimmed(), cluster);
-    humanln!("  {}: {}", "Version".dimmed(), version);
-    humanln!("  {}: {}", "Role".dimmed(), role.yellow());
+    info!("  {}: {}", "Environment".dimmed(), environment_id);
+    info!("  {}: {}", "Cluster".dimmed(), cluster);
+    info!("  {}: {}", "Version".dimmed(), version);
+    info!("  {}: {}", "Role".dimmed(), role.yellow());
 
     match docker_status {
         DockerStatus::Running => {
-            humanln!(
+            info!(
                 "{}: {}",
                 "Docker".green(),
                 "installed, daemon running".green()
             );
         }
         DockerStatus::NotRunning => {
-            humanln!(
+            info!(
                 "{}: {}",
                 "Docker".green(),
                 "installed, daemon not running".yellow()
             );
         }
         DockerStatus::NotInstalled => {
-            humanln!("{}: {}", "Docker".green(), "not installed".yellow());
+            info!("{}: {}", "Docker".green(), "not installed".yellow());
         }
     }
 

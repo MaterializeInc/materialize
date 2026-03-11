@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn test_load_network_policies_basic() {
         let dir = create_test_dir();
-        let policies_dir = dir.path().join("network_policies");
+        let policies_dir = dir.path().join("network-policies");
         fs::create_dir(&policies_dir).unwrap();
 
         fs::write(
@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn test_load_network_policies_create_only() {
         let dir = create_test_dir();
-        let policies_dir = dir.path().join("network_policies");
+        let policies_dir = dir.path().join("network-policies");
         fs::create_dir(&policies_dir).unwrap();
 
         fs::write(
@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn test_load_network_policies_name_mismatch() {
         let dir = create_test_dir();
-        let policies_dir = dir.path().join("network_policies");
+        let policies_dir = dir.path().join("network-policies");
         fs::create_dir(&policies_dir).unwrap();
 
         fs::write(
@@ -300,7 +300,7 @@ mod tests {
     #[test]
     fn test_load_network_policies_missing_create() {
         let dir = create_test_dir();
-        let policies_dir = dir.path().join("network_policies");
+        let policies_dir = dir.path().join("network-policies");
         fs::create_dir(&policies_dir).unwrap();
 
         fs::write(
@@ -319,7 +319,7 @@ mod tests {
     #[test]
     fn test_load_network_policies_unsupported_statement() {
         let dir = create_test_dir();
-        let policies_dir = dir.path().join("network_policies");
+        let policies_dir = dir.path().join("network-policies");
         fs::create_dir(&policies_dir).unwrap();
 
         fs::write(
@@ -339,7 +339,7 @@ mod tests {
     #[test]
     fn test_load_network_policies_comment_target_mismatch() {
         let dir = create_test_dir();
-        let policies_dir = dir.path().join("network_policies");
+        let policies_dir = dir.path().join("network-policies");
         fs::create_dir(&policies_dir).unwrap();
 
         fs::write(
@@ -359,7 +359,7 @@ mod tests {
     #[test]
     fn test_load_network_policies_multiple_files() {
         let dir = create_test_dir();
-        let policies_dir = dir.path().join("network_policies");
+        let policies_dir = dir.path().join("network-policies");
         fs::create_dir(&policies_dir).unwrap();
 
         fs::write(

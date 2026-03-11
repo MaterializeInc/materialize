@@ -2,7 +2,7 @@
 
 use crate::cli::CliError;
 use crate::config::{ProfilesConfig, ProjectSettings};
-use crate::humanln;
+use crate::info;
 use owo_colors::OwoColorize;
 use std::path::Path;
 
@@ -26,7 +26,7 @@ pub fn run(
     let names = profiles_config.profile_names();
 
     if names.is_empty() {
-        humanln!(
+        info!(
             "No profiles found in {}",
             profiles_config.source_path().display()
         );
@@ -35,9 +35,9 @@ pub fn run(
 
     for name in &names {
         if active.as_deref() == Some(*name) {
-            humanln!("  {}  {}", name.green(), "(active)".dimmed());
+            info!("  {}  {}", name.green(), "(active)".dimmed());
         } else {
-            humanln!("  {name}");
+            info!("  {name}");
         }
     }
 

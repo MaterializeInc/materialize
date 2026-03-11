@@ -25,12 +25,13 @@
 //! - **[`log`]** — Verbose logging and the [`verbose!`] macro.
 //! - **[`unit_test`]** — In-process test runner that validates SQL unit tests
 //!   against cached type information.
+#![deny(clippy::print_stdout)]
+#![deny(clippy::print_stderr)]
 
 pub mod cli;
 pub mod client;
 pub mod config;
 pub mod log;
-pub mod output;
 pub mod project;
 pub mod secret_resolver;
 pub mod types;

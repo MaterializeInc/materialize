@@ -11,7 +11,6 @@ use mz_deploy::cli::CliError;
 use mz_deploy::cli::commands::delete;
 use mz_deploy::config::Settings;
 use mz_deploy::log;
-use mz_deploy::output;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
@@ -621,15 +620,14 @@ enum DeleteCommand {
 async fn main() {
     let args = Args::parse();
     log::set_verbose(args.verbose);
-
-    let json_output = matches!(args.output, OutputFormat::Json);
+    log::set_json_output(matches!(args.output, OutputFormat::Json));
 
     if let Err(e) = run(args).await {
-        if json_output {
+        if log::json_output_enabled() {
             let error_json = serde_json::json!({
                 "error": e.to_string(),
             });
-            output::machine(&error_json);
+            log::output_json(&error_json);
             std::process::exit(1);
         } else {
             cli::display_error(&e);
@@ -686,11 +684,9 @@ async fn run(args: Args) -> Result<(), CliError> {
     )
     .map_err(CliError::Config)?;
 
-    let json = matches!(args.output, OutputFormat::Json);
-
     match args.command {
         Some(Command::Compile { skip_typecheck }) => {
-            if json {
+            if log::json_output_enabled() {
                 return Err(CliError::Message(
                     "--output json is not supported for the 'compile' command".to_string(),
                 ));
@@ -704,12 +700,12 @@ async fn run(args: Args) -> Result<(), CliError> {
             dry_run,
             subcommand,
         }) => {
-            if json && !dry_run {
+            if log::json_output_enabled() && !dry_run {
                 return Err(CliError::Message(
                     "--output json requires --dry-run for the 'apply' command".to_string(),
                 ));
             }
-            let collector = if json {
+            let collector = if log::json_output_enabled() {
                 Some(cli::executor::SqlCollector::new())
             } else {
                 None
@@ -769,7 +765,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             if let Some(c) = collector {
                 let statements = c.into_statements();
                 let json_output = serde_json::json!({ "statements": statements });
-                output::machine(&json_output);
+                log::output_json(&json_output);
             }
             result
         }
@@ -781,10 +777,10 @@ async fn run(args: Args) -> Result<(), CliError> {
             dry_run,
         }) => {
             if !no_ready_check && !dry_run {
-                cli::commands::wait::run(&settings, &deploy_id, true, None, allowed_lag, false)
+                cli::commands::wait::run(&settings, &deploy_id, true, None, allowed_lag)
                     .await?;
             }
-            cli::commands::promote::run(&settings, &deploy_id, force, dry_run, json).await
+            cli::commands::promote::run(&settings, &deploy_id, force, dry_run).await
         }
         Some(Command::Stage {
             deploy_id,
@@ -798,12 +794,11 @@ async fn run(args: Args) -> Result<(), CliError> {
                 allow_dirty,
                 no_rollback,
                 dry_run,
-                json,
             )
             .await
         }
         Some(Command::Debug) => {
-            if json {
+            if log::json_output_enabled() {
                 return Err(CliError::Message(
                     "--output json is not supported for the 'debug' command".to_string(),
                 ));
@@ -811,10 +806,10 @@ async fn run(args: Args) -> Result<(), CliError> {
             cli::commands::debug::run(&settings).await
         }
         Some(Command::Describe { deploy_id }) => {
-            cli::commands::describe::run(&settings, &deploy_id, json).await
+            cli::commands::describe::run(&settings, &deploy_id).await
         }
         Some(Command::Lock) => {
-            if json {
+            if log::json_output_enabled() {
                 return Err(CliError::Message(
                     "--output json is not supported for the 'lock' command".to_string(),
                 ));
@@ -822,7 +817,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             cli::commands::lock::run(&settings).await
         }
         Some(Command::Test { filter, junit_xml }) => {
-            if json {
+            if log::json_output_enabled() {
                 return Err(CliError::Message(
                     "--output json is not supported for the 'test' command".to_string(),
                 ));
@@ -830,20 +825,20 @@ async fn run(args: Args) -> Result<(), CliError> {
             cli::commands::test::run(&settings, filter.as_deref(), junit_xml.as_deref()).await
         }
         Some(Command::Abort { deploy_id }) => {
-            cli::commands::abort::run(&settings, &deploy_id, json).await
+            cli::commands::abort::run(&settings, &deploy_id).await
         }
         Some(Command::List { allowed_lag }) => {
-            cli::commands::list::run(&settings, allowed_lag, json).await
+            cli::commands::list::run(&settings, allowed_lag).await
         }
-        Some(Command::Log { limit }) => cli::commands::log::run(&settings, limit, json).await,
+        Some(Command::Log { limit }) => cli::commands::log::run(&settings, limit).await,
         Some(Command::Wait {
             name,
             once,
             timeout,
             allowed_lag,
-        }) => cli::commands::wait::run(&settings, &name, once, timeout, allowed_lag, json).await,
+        }) => cli::commands::wait::run(&settings, &name, once, timeout, allowed_lag).await,
         Some(Command::Delete { yes, subcommand }) => {
-            if json {
+            if log::json_output_enabled() {
                 return Err(CliError::Message(
                     "--output json is not supported for the 'delete' command".to_string(),
                 ));

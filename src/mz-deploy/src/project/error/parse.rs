@@ -6,6 +6,7 @@
 use owo_colors::OwoColorize;
 use std::fmt;
 use std::path::PathBuf;
+use crate::project::variables::VariableError;
 
 /// Errors that occur during SQL parsing.
 #[derive(Debug)]
@@ -25,6 +26,9 @@ pub enum ParseError {
         /// Error message
         message: String,
     },
+
+    /// SQL file contains variable references with no definition
+    UnresolvedVariables(VariableError),
 }
 
 impl fmt::Display for ParseError {
@@ -64,6 +68,31 @@ impl fmt::Display for ParseError {
             ParseError::StatementsParseFailed { message } => {
                 write!(f, "{}: {}", "error".bright_red().bold(), message)
             }
+            ParseError::UnresolvedVariables(inner) => {
+                writeln!(
+                    f,
+                    "{}: unresolved variables in {}",
+                    "error".bright_red().bold(),
+                    inner.path.display()
+                )?;
+                let formatted: Vec<String> = inner.unresolved.iter().map(|v| format!(":{}", v)).collect();
+                writeln!(
+                    f,
+                    "  {}: {}",
+                    "undefined".bright_red(),
+                    formatted.join(", ")
+                )?;
+                writeln!(
+                    f,
+                    "  {}: define these in [profiles.<name>.variables] in project.toml",
+                    "hint".bright_blue()
+                )?;
+                write!(
+                    f,
+                    "  {}: if these are not variables, add -- PRAGMA WARN_ON_MISSING_VARIABLES; as the first line",
+                    "hint".bright_blue()
+                )
+            }
         }
     }
 }
@@ -73,6 +102,7 @@ impl std::error::Error for ParseError {
         match self {
             ParseError::SqlParseFailed { source, .. } => Some(source),
             ParseError::StatementsParseFailed { .. } => None,
+            ParseError::UnresolvedVariables(_) => None,
         }
     }
 }

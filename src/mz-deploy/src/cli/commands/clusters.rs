@@ -6,7 +6,7 @@ use crate::cli::executor::{DeploymentExecutor, SqlCollector};
 use crate::cli::progress;
 use crate::client::{Client, ClusterOptions, quote_identifier};
 use crate::config::Settings;
-use crate::humanln;
+use crate::info;
 use crate::project::clusters::{self, ClusterDefinition, extract_replication_factor, extract_size};
 use owo_colors::OwoColorize;
 use std::time::Instant;
@@ -36,7 +36,7 @@ pub async fn run(
     )?;
 
     if definitions.is_empty() {
-        humanln!(
+        info!(
             "  {} No clusters/ directory or no .sql files found — nothing to do.",
             "info:".blue().bold()
         );
@@ -90,7 +90,7 @@ async fn apply_cluster(
         None => {
             // Create cluster from the parsed CREATE CLUSTER statement
             if !executor.is_dry_run() {
-                humanln!(
+                info!(
                     "  {} Creating cluster '{}'",
                     "+".green().bold(),
                     cluster_name
@@ -125,7 +125,7 @@ async fn apply_cluster(
                 });
 
                 if !executor.is_dry_run() {
-                    humanln!(
+                    info!(
                         "  {} Altering cluster '{}'",
                         "~".yellow().bold(),
                         cluster_name
@@ -143,7 +143,7 @@ async fn apply_cluster(
                 );
                 executor.execute_sql(&alter_sql).await?;
             } else if !executor.is_dry_run() {
-                humanln!(
+                info!(
                     "  {} Cluster '{}' is up to date",
                     "=".dimmed(),
                     cluster_name

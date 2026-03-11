@@ -3,8 +3,7 @@
 use crate::cli::CliError;
 use crate::client::Client;
 use crate::config::Settings;
-use crate::output;
-use crate::{human, humanln};
+use crate::{info, info_nonl, log};
 use chrono::{DateTime, Local};
 use owo_colors::OwoColorize;
 use std::io::{IsTerminal, Write};
@@ -32,7 +31,6 @@ use std::process::{Command, Stdio};
 pub async fn run(
     settings: &Settings,
     limit: Option<usize>,
-    json_output: bool,
 ) -> Result<(), CliError> {
     let profile = settings.connection();
     // Connect to database
@@ -43,17 +41,17 @@ pub async fn run(
     client.deployments().create_deployments().await?;
     let history = client.deployments().list_deployment_history(limit).await?;
 
-    if json_output {
-        output::machine(&history);
+    if log::json_output_enabled() {
+        log::output_json(&history);
         return Ok(());
     }
 
     if history.is_empty() {
-        humanln!("No deployment history found.");
-        humanln!();
-        humanln!("To create and promote a deployment, run:");
-        humanln!("  {} {} {}", "mz-deploy".cyan(), "stage".cyan(), ".".cyan());
-        humanln!(
+        info!("No deployment history found.");
+        info!();
+        info!("To create and promote a deployment, run:");
+        info!("  {} {} {}", "mz-deploy".cyan(), "stage".cyan(), ".".cyan());
+        info!(
             "  {} {} {}",
             "mz-deploy".cyan(),
             "apply".cyan(),
@@ -100,7 +98,7 @@ pub async fn run(
     if std::io::stderr().is_terminal() {
         display_with_pager(&output);
     } else {
-        human!("{}", output);
+        info_nonl!("{}", output);
     }
 
     Ok(())
@@ -125,6 +123,6 @@ fn display_with_pager(content: &str) {
         let _ = child.wait();
     } else {
         // Fallback: print directly if less isn't available
-        human!("{}", content);
+        info_nonl!("{}", content);
     }
 }
