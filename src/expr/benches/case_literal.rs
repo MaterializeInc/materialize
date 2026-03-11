@@ -45,7 +45,8 @@ fn col(i: usize) -> MirScalarExpr {
 fn build_if_chain(n: usize) -> MirScalarExpr {
     let mut expr = lit_i64(-1);
     for i in (0..n).rev() {
-        expr = if_then_else(eq(col(0), lit_i64(i as i64)), lit_i64(100 * i as i64), expr);
+        let i = i64::try_from(i).expect("arm index fits in i64");
+        expr = if_then_else(eq(col(0), lit_i64(i)), lit_i64(100 * i), expr);
     }
     expr
 }
@@ -88,8 +89,8 @@ fn bench_case_literal(c: &mut Criterion) {
 
         let scenarios: &[(&str, i64)] = &[
             ("first", 0),
-            ("middle", (n / 2) as i64),
-            ("last", (n - 1) as i64),
+            ("middle", i64::try_from(n / 2).expect("n fits")),
+            ("last", i64::try_from(n - 1).expect("n fits")),
             ("miss", -999),
         ];
 
