@@ -8,8 +8,9 @@
 # by the Apache License, Version 2.0.
 
 """
-Functional tests for the COPY TO S3 command against a local minio service
-instead of a real AWS S3.
+Functional tests for COPY commands:
+- COPY TO S3 against a local minio service instead of real AWS S3
+- COPY FROM STDIN
 """
 
 import csv
@@ -182,7 +183,7 @@ def workflow_ci(c: Composition, _parser: WorkflowArgumentParser) -> None:
     """
     Workflows to run during CI
     """
-    for name in ["auth", "http"]:
+    for name in ["auth", "http", "copy-from-csv-header"]:
         with c.test_case(name):
             c.workflow(name)
 
@@ -395,3 +396,49 @@ def workflow_test_github_9627(c: Composition):
         after = int(result[0][0])
 
         assert before < after, f"read frontier is stuck, {before} >= {after}"
+
+
+def workflow_copy_from_csv_header(c: Composition) -> None:
+    """Regression test: CSV COPY FROM STDIN with HEADER must not drop rows
+    at chunk boundaries when input exceeds 32MB.
+
+    The pgwire handler splits data into ~32MB chunks distributed round-robin
+    to parallel workers. Previously each worker's CSV reader was configured
+    with has_headers(true), causing the first data row of every chunk (after
+    the first) to be silently dropped.
+    """
+    c.up("materialized")
+
+    num_rows = 1_000_000
+    chunk_size = 50_000
+    # Pad value so each row is ~100 bytes total.
+    pad = "a" * 80
+
+    conn = c.sql_connection()
+    with conn.cursor() as cur:
+        cur.execute("CREATE TABLE csv_header_test (id INT, val TEXT)")
+
+        with cur.copy(
+            "COPY csv_header_test FROM STDIN WITH (FORMAT CSV, HEADER true)"
+        ) as copy:
+            copy.write("id,val\n")
+            for start in range(0, num_rows, chunk_size):
+                end = min(start + chunk_size, num_rows)
+                batch = "".join(f"{i},{pad}_{i:010d}\n" for i in range(start, end))
+                copy.write(batch)
+
+        cur.execute("SELECT count(*) FROM csv_header_test")
+        row = cur.fetchone()
+        assert row is not None
+        count = row[0]
+        assert count == num_rows, (
+            f"Expected {num_rows} rows but got {count} — "
+            f"lost {num_rows - count} rows (likely at 32MB chunk boundaries)"
+        )
+
+        cur.execute("SELECT val FROM csv_header_test WHERE id = 0")
+        row = cur.fetchone()
+        assert row is not None and row[0] == f"{pad}_0000000000"
+        cur.execute("SELECT val FROM csv_header_test WHERE id = 999999")
+        row = cur.fetchone()
+        assert row is not None and row[0] == f"{pad}_0000999999"

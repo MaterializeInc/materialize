@@ -386,6 +386,17 @@ impl Coordinator {
         let mut batch_txs = Vec::with_capacity(num_workers);
         let mut worker_handles = Vec::with_capacity(num_workers);
 
+        // When COPY FROM uses CSV with HEADER, only the very first chunk in
+        // the stream contains the real header line. The pgwire handler splits
+        // data into ~32MB chunks distributed round-robin across workers, so
+        // subsequent chunks' first rows are data, not headers. We must only
+        // skip the header on the first chunk of worker 0.
+        let first_chunk_has_header = params.requires_header();
+        let mut worker_params = params;
+        if let CopyFormatParams::Csv(ref mut csv) = worker_params {
+            csv.header = false;
+        }
+
         for worker_id in 0..num_workers {
             // Keep in-flight buffering tight: at most one chunk queued per
             // worker in addition to the currently-processed chunk.
@@ -397,7 +408,10 @@ impl Coordinator {
             let column_transform = Arc::clone(&column_transform);
             let target_desc = Arc::clone(&target_desc);
             let collection_desc = Arc::clone(&collection_desc);
-            let params = params.clone();
+            let params = worker_params.clone();
+            // Only worker 0 receives the first chunk (round-robin), so only
+            // it needs to skip the CSV header on its first chunk.
+            let skip_header_on_first_chunk = worker_id == 0 && first_chunk_has_header;
             let rt = rt_handle.clone();
 
             let handle = mz_ore::task::spawn_blocking(
@@ -412,6 +426,7 @@ impl Coordinator {
                         column_transform,
                         column_types,
                         params,
+                        skip_header_on_first_chunk,
                         batch_rx,
                     ))
                 },
@@ -461,6 +476,7 @@ impl Coordinator {
         column_transform: Arc<Option<ColumnTransform>>,
         column_types: Arc<[mz_pgrepr::Type]>,
         params: CopyFormatParams<'static>,
+        skip_header_on_first_chunk: bool,
         mut batch_rx: mpsc::Receiver<Vec<u8>>,
     ) -> Result<(Vec<ProtoBatch>, u64), AdapterError> {
         let persist_diagnostics = Diagnostics {
@@ -487,9 +503,21 @@ impl Coordinator {
         let mut batch_bytes: usize = 0;
         let mut proto_batches = Vec::new();
 
+        let mut is_first_chunk = true;
         while let Some(raw_bytes) = batch_rx.recv().await {
-            // Decode raw bytes into rows.
-            let rows = mz_pgcopy::decode_copy_format(&raw_bytes, &column_types, params.clone())
+            // Decode raw bytes into rows. For the first chunk of worker 0,
+            // re-enable header skipping so the real CSV header line is skipped.
+            let chunk_params = if is_first_chunk && skip_header_on_first_chunk {
+                let mut p = params.clone();
+                if let CopyFormatParams::Csv(ref mut csv) = p {
+                    csv.header = true;
+                }
+                p
+            } else {
+                params.clone()
+            };
+            is_first_chunk = false;
+            let rows = mz_pgcopy::decode_copy_format(&raw_bytes, &column_types, chunk_params)
                 .map_err(|e| AdapterError::CopyFormatError(e.to_string()))?;
 
             for row in rows {
