@@ -1417,7 +1417,7 @@ impl PeekClient {
                         timeline_context,
                         oracle_read_ts,
                         real_time_recency_ts,
-                        isolation_level,
+                        &IsolationLevel::Serializable,
                         read_holds.clone(),
                         upper,
                     )?;
