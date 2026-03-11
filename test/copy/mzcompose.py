@@ -365,12 +365,12 @@ def workflow_test_column_dedup(c: Composition):
                     REGION = 'us-east-1'
                   )
 
-                > COPY (SELECT 1::int4 AS a, 2::int4 AS a2, 3::int4 AS a)
+                > COPY (SELECT 1::int4 AS a, 2::int4 AS a, 3::int4 AS a2, 4::int4 AS a)
                   TO 's3://copytos3/test/column_dedup/'
                   WITH (AWS CONNECTION = aws_conn, FORMAT = 'parquet');
 
                 $ s3-verify-data bucket=copytos3 key=test/column_dedup
-                1 2 3
+                1 2 3 4
                 """
             )
         )
