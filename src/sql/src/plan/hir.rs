@@ -2391,7 +2391,7 @@ impl HirRelationExpr {
             use HirRelationExpr::*;
             use HirScalarExpr::*;
 
-            self.visit_children(|scalar: &HirScalarExpr| {
+            e.visit_children(|scalar: &HirScalarExpr| {
                 if let Err(_) = scalar.visit_pre(&mut |scalar: &HirScalarExpr| {
                     result |= match scalar {
                         Column(..)
