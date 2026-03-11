@@ -538,8 +538,20 @@ fn derive_output_type_for_generic(
                     .unwrap_range_element_type().clone().nullable(#nullable)
             }
         }
-        // Output container, source is bare T — we can't construct a container type
-        // from just T. User must provide explicit output_type_expr.
+        // Cross-container: output is DatumList, source is Array → re-wrap element type.
+        (GenericUsage::InDatumList, GenericUsage::InArray) => {
+            quote! {
+                SqlScalarType::List {
+                    element_type: Box::new(
+                        #input_access.scalar_type
+                            .unwrap_array_element_type().clone()
+                    ),
+                    custom_id: None,
+                }.nullable(#nullable)
+            }
+        }
+        // Other cross-container or container-from-bare cases — user must provide
+        // explicit output_type_expr.
         _ => {
             return Err(darling::Error::custom(format!(
                 "cannot auto-derive output_type_expr: output uses T as {:?} but \

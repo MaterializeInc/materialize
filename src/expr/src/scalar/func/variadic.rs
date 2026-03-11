@@ -34,8 +34,8 @@ use mz_repr::adt::system::Oid;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    ColumnName, Datum, DatumList, InputDatumType, OptionalArg, OutputDatumType, Row, RowArena,
-    SqlColumnType, SqlScalarType, Variadic,
+    ColumnName, Datum, DatumList, FromDatum, InputDatumType, OptionalArg, OutputDatumType, Row,
+    RowArena, SqlColumnType, SqlScalarType, Variadic,
 };
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
@@ -354,13 +354,12 @@ fn array_fill<'a>(
 pub struct ArrayIndex {
     pub offset: i64,
 }
-#[sqlfunc(
-    ArrayIndex,
-    sqlname = "array_index",
-    output_type_expr = "input_types[0].scalar_type.unwrap_array_element_type().clone().nullable(true)",
-    introduces_nulls = true
-)]
-fn array_index<'a>(&self, array: Array<'a>, indices: Variadic<i64>) -> Option<Datum<'a>> {
+#[sqlfunc(ArrayIndex, sqlname = "array_index", introduces_nulls = true)]
+fn array_index<'a, T: FromDatum<'a>>(
+    &self,
+    array: Array<'a, T>,
+    indices: Variadic<i64>,
+) -> Option<T> {
     mz_ore::soft_assert_no_log!(
         self.offset == 0 || self.offset == 1,
         "offset must be either 0 or 1"
@@ -396,7 +395,7 @@ fn array_index<'a>(&self, array: Array<'a>, indices: Variadic<i64>) -> Option<Da
             .expect("previous bounds check ensures physical index is at least 0");
     }
 
-    array.elements().iter().nth(final_idx)
+    array.elements().iter_typed().nth(final_idx)
 }
 
 #[sqlfunc]
