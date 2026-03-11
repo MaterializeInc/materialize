@@ -15,7 +15,9 @@ import {
   Input,
   InputGroup,
   InputRightElement,
+  Link,
   Spinner,
+  useTheme,
   VStack,
 } from "@chakra-ui/react";
 import { useMutation } from "@tanstack/react-query";
@@ -32,6 +34,7 @@ import { useAuth } from "~/external-library-wrappers/oidc";
 import { AuthContentContainer, AuthLayout } from "~/layouts/AuthLayout";
 import EyeClosedIcon from "~/svg/EyeClosedIcon";
 import EyeOpenIcon from "~/svg/EyeOpenIcon";
+import { MaterializeTheme } from "~/theme";
 
 type LoginFormState = {
   username: string;
@@ -147,7 +150,8 @@ const PasswordLoginForm = () => {
   );
 };
 
-const OidcLoginForm = () => {
+const SsoLoginLink = () => {
+  const { colors } = useTheme<MaterializeTheme>();
   const auth = useAuth();
   const [error, setError] = useState<string | null>(null);
 
@@ -161,18 +165,18 @@ const OidcLoginForm = () => {
   };
 
   return (
-    <VStack spacing="6" alignItems="start">
+    <VStack spacing="2" alignItems="center">
       {error && <Alert variant="error" minWidth="100%" message={error} />}
-      <Button
-        variant="primary"
-        size="lg"
+      <Link
+        color={colors.accent.brightPurple}
+        fontSize="sm"
         onClick={handleSsoLogin}
-        isLoading={auth.isLoading}
-        spinner={<Spinner />}
-        width="100%"
+        cursor="pointer"
+        textDecoration="none"
+        _hover={{ textDecoration: "underline" }}
       >
-        Sign in with SSO
-      </Button>
+        Use single sign-on
+      </Link>
     </VStack>
   );
 };
@@ -189,7 +193,8 @@ export const Login = () => {
           <HStack my={{ base: "8", lg: "0" }} paddingBottom="8">
             <MaterializeLogo height="12" />
           </HStack>
-          {isOidc ? <OidcLoginForm /> : <PasswordLoginForm />}
+          <PasswordLoginForm />
+          {isOidc && <SsoLoginLink />}
         </VStack>
       </AuthContentContainer>
     </AuthLayout>

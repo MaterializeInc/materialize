@@ -203,7 +203,14 @@ export class SelfManagedApiClient
     this.authMode = this.#appConfig.authMode;
 
     if (this.authMode === "Oidc") {
-      this.mzApiFetch = withMiddleware(globalFetch, this.#oidcAuthMiddleware);
+      // When OIDC is configured, users can authenticate via either OIDC or
+      // password. The OIDC middleware adds a Bearer token if one exists;
+      // otherwise no auth header is sent and the session cookie is used
+      // implicitly. The 401 redirect handles expired/missing sessions.
+      this.mzApiFetch = withMiddleware(
+        this.#mzApiWithAuthRedirect,
+        this.#oidcAuthMiddleware,
+      );
     } else if (this.authMode === "None") {
       this.mzApiFetch = globalFetch;
     } else {
@@ -212,7 +219,13 @@ export class SelfManagedApiClient
 
     this.getWsAuthConfig = () => {
       if (this.authMode === "Oidc") {
-        return buildTokenAuthConfig(getOidcIdToken() ?? "");
+        const idToken = getOidcIdToken();
+        if (idToken) {
+          return buildTokenAuthConfig(idToken);
+        }
+        // No OIDC token — user authenticated via password, session cookie
+        // is sent implicitly so no explicit auth config is needed.
+        return null;
       }
       // Unintuitively, we return an auth config when authMode is "None". This is because
       // the authenticated websocket API gets the necessary information via the http-only cookie

@@ -12,6 +12,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CloudAppConfig, SelfManagedAppConfig } from "~/config/AppConfig";
 import { MOCK_ACCESS_TOKEN } from "~/external-library-wrappers/__mocks__/frontegg";
+import {
+  getOidcIdToken,
+  MOCK_OIDC_ID_TOKEN,
+} from "~/external-library-wrappers/__mocks__/oidc";
 
 import {
   CloudApiClient,
@@ -294,5 +298,60 @@ describe("SelfManagedApiClient", () => {
     });
 
     server.resetHandlers();
+  });
+});
+
+const MOCK_OIDC_CONFIG = {
+  ...MOCK_SELF_MANAGED_CONFIG,
+  authMode: "Oidc" as const,
+} as SelfManagedAppConfig;
+
+describe("SelfManagedApiClient (Oidc)", () => {
+  it("should send Bearer header and return token ws config when OIDC token exists", async () => {
+    const client = new SelfManagedApiClient({ appConfig: MOCK_OIDC_CONFIG });
+
+    const TEST_URL = "https://oidc.example.com";
+    let headers: Headers | null = null;
+    server.use(
+      http.get(TEST_URL, ({ request }) => {
+        headers = request.headers;
+        return HttpResponse.json({});
+      }),
+    );
+
+    await client.mzApiFetch(TEST_URL);
+    expect(headers!.get("Authorization")).toBe(`Bearer ${MOCK_OIDC_ID_TOKEN}`);
+    expect(client.getWsAuthConfig()).toEqual({ token: MOCK_OIDC_ID_TOKEN });
+    server.resetHandlers();
+  });
+
+  it("should skip Bearer header, return null ws config, and redirect on 401 when no OIDC token", async () => {
+    vi.mocked(getOidcIdToken).mockReturnValue(undefined as unknown as string);
+    const client = new SelfManagedApiClient({ appConfig: MOCK_OIDC_CONFIG });
+
+    expect(client.getWsAuthConfig()).toBeNull();
+
+    const TEST_URL = "https://oidc-no-token.example.com";
+    let headers: Headers | null = null;
+    const logoutSpy = vi.fn();
+    server.use(
+      http.get(TEST_URL, ({ request }) => {
+        headers = request.headers;
+        return new HttpResponse(null, { status: 401 });
+      }),
+      http.post(`${client.authApiBasePath}/api/logout`, () => {
+        logoutSpy();
+        return new HttpResponse(null, { status: 200 });
+      }),
+    );
+
+    await client.mzApiFetch(TEST_URL);
+    expect(headers!.get("Authorization")).toBeNull();
+    await vi.waitFor(() => {
+      expect(logoutSpy).toHaveBeenCalled();
+    });
+
+    server.resetHandlers();
+    vi.mocked(getOidcIdToken).mockReturnValue(MOCK_OIDC_ID_TOKEN);
   });
 });

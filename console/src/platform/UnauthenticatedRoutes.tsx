@@ -30,10 +30,8 @@ const OidcAuthGuard = ({ children }: React.PropsWithChildren) => {
     return <LoadingScreen />;
   }
 
-  if (!auth.isAuthenticated) {
-    return <Navigate to={LOGIN_PATH} replace />;
-  }
-
+  // Don't redirect — the user may have a valid password session cookie.
+  // The 401 redirect middleware handles expired sessions.
   return children;
 };
 

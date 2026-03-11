@@ -19,7 +19,9 @@ interface LoginRequest {
 const getApiClient = () => {
   if (
     apiClient.type !== "self-managed" ||
-    (apiClient.authMode !== "Password" && apiClient.authMode !== "Sasl")
+    (apiClient.authMode !== "Password" &&
+      apiClient.authMode !== "Sasl" &&
+      apiClient.authMode !== "Oidc")
   ) {
     throw new Error(NOT_SUPPORTED_MESSAGE);
   }

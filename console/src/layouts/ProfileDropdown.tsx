@@ -27,8 +27,9 @@ import React from "react";
 import { Link as RouterLink } from "react-router-dom";
 
 import { useSegment } from "~/analytics/segment";
+import { apiClient } from "~/api/apiClient";
 import { getCurrentTenant, useCurrentOrganization } from "~/api/auth";
-import { logoutAndRedirectOrThrow } from "~/api/materialize/auth";
+import { logout, logoutAndRedirectOrThrow } from "~/api/materialize/auth";
 import ThemeSwitcher from "~/components/ThemeSwitcher";
 import { AppConfigSwitch } from "~/config/AppConfigSwitch";
 import {
@@ -115,7 +116,16 @@ const SignOutMenuItem = () => {
         }
         const handleLogout =
           appConfig.authMode === "Oidc"
-            ? () => {
+            ? async () => {
+                // Clear both the session cookie and OIDC state so that
+                // logout works regardless of which method the user used.
+                if (apiClient.type === "self-managed") {
+                  try {
+                    await logout({ apiClient });
+                  } catch {
+                    // Cookie may not exist if user logged in via OIDC only.
+                  }
+                }
                 getOidcUserManager()?.signoutRedirect();
               }
             : logoutAndRedirectOrThrow;
