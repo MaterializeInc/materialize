@@ -753,30 +753,14 @@ pub struct RowPacker<'a> {
 /// Used by [`DatumList::iter_typed`] to yield elements as `T` rather than
 /// raw `Datum`s. At runtime, `T` is always `Datum<'a>`, so the conversion
 /// is identity.
-pub trait FromDatum<'a>: Sized + PartialEq + IntoDatum<'a> {
+pub trait FromDatum<'a>: Sized + PartialEq + std::borrow::Borrow<Datum<'a>> {
     fn from_datum(datum: Datum<'a>) -> Self;
-}
-
-/// Infallible conversion from a typed value back into a [`Datum`].
-///
-/// Used by [`RowPacker::push_datum`] and [`RowPacker::push_list_elems`] to
-/// accept typed values. At runtime, `T` is always `Datum<'a>`, so the
-/// conversion is identity.
-pub trait IntoDatum<'a> {
-    fn into_datum(self) -> Datum<'a>;
 }
 
 impl<'a> FromDatum<'a> for Datum<'a> {
     #[inline]
     fn from_datum(datum: Datum<'a>) -> Self {
         datum
-    }
-}
-
-impl<'a> IntoDatum<'a> for Datum<'a> {
-    #[inline]
-    fn into_datum(self) -> Datum<'a> {
-        self
     }
 }
 
@@ -787,7 +771,7 @@ pub struct DatumListIter<'a> {
 
 #[derive(Debug, Clone)]
 pub struct DatumListTypedIter<'a, T> {
-    data: &'a [u8],
+    inner: DatumListIter<'a>,
     _phantom: PhantomData<fn() -> T>,
 }
 
@@ -2152,26 +2136,6 @@ impl RowPacker<'_> {
         push_datum(&mut self.row.data, *datum.borrow());
     }
 
-    /// Push a typed element that implements [`IntoDatum`].
-    ///
-    /// This is the generic counterpart of [`RowPacker::push`], accepting any
-    /// `T: IntoDatum<'a>` rather than only `Datum<'a>`.
-    #[inline]
-    pub fn push_datum<'a, T: IntoDatum<'a>>(&mut self, val: T) {
-        self.push(val.into_datum());
-    }
-
-    /// Push a list of typed elements that implement [`IntoDatum`].
-    ///
-    /// Generic counterpart of [`RowPacker::push_list`].
-    pub fn push_list_elems<'a, T: IntoDatum<'a>>(&mut self, iter: impl IntoIterator<Item = T>) {
-        self.push_list_with(|packer| {
-            for elem in iter {
-                packer.push(elem.into_datum());
-            }
-        });
-    }
-
     /// Extend an existing `Row` with additional `Datum`s.
     #[inline]
     pub fn extend<'a, I, D>(&mut self, iter: I)
@@ -2859,7 +2823,7 @@ impl<'a, T> DatumList<'a, T> {
         T: FromDatum<'a>,
     {
         DatumListTypedIter {
-            data: self.data,
+            inner: self.iter(),
             _phantom: PhantomData,
         }
     }
@@ -2901,11 +2865,7 @@ impl<'a> Iterator for DatumListIter<'a> {
 impl<'a, T: FromDatum<'a>> Iterator for DatumListTypedIter<'a, T> {
     type Item = T;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.data.is_empty() {
-            None
-        } else {
-            Some(T::from_datum(unsafe { read_datum(&mut self.data) }))
-        }
+        self.inner.next().map(T::from_datum)
     }
 }
 
@@ -3120,16 +3080,17 @@ impl RowArena {
     /// Convenience function to build a list datum from an iterator of typed
     /// elements and return it as a `DatumList<'a, T>`.
     ///
-    /// By accepting an iterator of `T: IntoDatum` instead of a raw `RowPacker`
-    /// closure, this guarantees that only elements of type `T` are pushed.
-    pub fn make_datum_list<'a, T: IntoDatum<'a>>(
+    /// By accepting an iterator of `T: Borrow<Datum>` instead of a raw
+    /// `RowPacker` closure, this guarantees that only elements of type `T`
+    /// are pushed.
+    pub fn make_datum_list<'a, T: std::borrow::Borrow<Datum<'a>>>(
         &'a self,
         iter: impl IntoIterator<Item = T>,
     ) -> DatumList<'a, T> {
         let datum = self.make_datum(|packer| {
             packer.push_list_with(|packer| {
                 for elem in iter {
-                    packer.push(elem.into_datum());
+                    packer.push(*elem.borrow());
                 }
             });
         });
