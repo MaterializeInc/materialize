@@ -512,7 +512,7 @@ def run_create_objects_part_1(
 
                 if source["type"] == "kafka":
                     topic = get_kafka_topic(source)
-                    kafka_conf = {
+                    kafka_conf: dict[str, str | int | float | bool] = {
                         "bootstrap.servers": f"127.0.0.1:{c.default_port('kafka')}"
                     }
                     admin_client = AdminClient(kafka_conf)

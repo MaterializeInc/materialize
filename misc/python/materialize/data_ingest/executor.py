@@ -17,6 +17,7 @@ import confluent_kafka  # type: ignore
 import psycopg
 import pymysql
 import pymysql.cursors
+from confluent_kafka import KafkaError  # type: ignore
 from confluent_kafka.admin import AdminClient  # type: ignore
 from confluent_kafka.schema_registry import Schema, SchemaRegistryClient  # type: ignore
 from confluent_kafka.schema_registry.avro import AvroSerializer  # type: ignore
@@ -143,7 +144,7 @@ class PrintExecutor(Executor):
         print("  ", transaction.row_lists)
 
 
-def delivery_report(err: str, msg: Any) -> None:
+def delivery_report(err: "KafkaError | None", msg: Any) -> None:
     assert err is None, f"Delivery failed for User record {msg.key()}: {err}"
 
 
@@ -202,7 +203,9 @@ class KafkaExecutor(Executor):
             ],
         }
 
-        kafka_conf = {"bootstrap.servers": f"127.0.0.1:{self.ports['kafka']}"}
+        kafka_conf: dict[str, str | int | float | bool] = {
+            "bootstrap.servers": f"127.0.0.1:{self.ports['kafka']}"
+        }
 
         a = AdminClient(kafka_conf)
         fs = a.create_topics(
@@ -225,11 +228,15 @@ class KafkaExecutor(Executor):
         registry = SchemaRegistryClient(schema_registry_conf)
 
         self.avro_serializer = AvroSerializer(
-            registry, json.dumps(schema), lambda d, ctx: d
+            registry,
+            schema_str=json.dumps(schema),
+            to_dict=lambda d, ctx: d,
         )
 
         self.key_avro_serializer = AvroSerializer(
-            registry, json.dumps(key_schema), lambda d, ctx: d
+            registry,
+            schema_str=json.dumps(key_schema),
+            to_dict=lambda d, ctx: d,
         )
 
         if logging_exe is not None:
