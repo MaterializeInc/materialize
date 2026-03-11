@@ -425,6 +425,8 @@ where
             for (gets, results_out) in gets.into_iter().zip_eq(results_out.into_iter()) {
                 let ret = self.multi_get_inner(gets, results_out, &placement).await?;
                 stats.processed_gets += ret.processed_gets;
+                stats.processed_gets_size += ret.processed_gets_size;
+                stats.returned_gets += ret.returned_gets;
             }
         }
 
