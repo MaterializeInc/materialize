@@ -742,6 +742,8 @@ mod mint {
 /// Implementation of the `write` operator.
 mod write {
     use super::*;
+    use mz_persist_client::Schemas;
+    use mz_persist_types::ShardId;
 
     /// Render the `write` operator.
     ///
@@ -807,12 +809,20 @@ mod write {
             // need to hold onto the initial capabilities.
             drop(capabilities);
 
-            let writer = persist_api.open_writer().await;
+            let shard_id = persist_api.collection.data_shard;
+            let persist_client = persist_api.open_client().await;
+            let schemas = Schemas {
+                id: None,
+                key: Arc::new(persist_api.collection.relation_desc.clone()),
+                val: Arc::new(UnitSchema),
+            };
             let sink_metrics = persist_api.open_metrics().await;
             let mut state = State::new(
                 sink_id,
                 worker_id,
-                writer,
+                shard_id,
+                schemas,
+                persist_client,
                 sink_metrics,
                 logging,
                 as_of,
@@ -901,7 +911,9 @@ mod write {
     struct State {
         sink_id: GlobalId,
         worker_id: usize,
-        persist_writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+        shard_id: ShardId,
+        schemas: Schemas<SourceData, ()>,
+        persist_client: PersistClient,
         /// Contains `desired - persist`, reflecting the updates we would like to commit to
         /// `persist` in order to "correct" it to track `desired`. This collection is only modified
         /// by updates received from either the `desired` or `persist` inputs.
@@ -933,7 +945,9 @@ mod write {
         fn new(
             sink_id: GlobalId,
             worker_id: usize,
-            persist_writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+            shard_id: ShardId,
+            schemas: Schemas<SourceData, ()>,
+            persist_client: PersistClient,
             metrics: SinkMetrics,
             logging: Option<Logging>,
             as_of: Antichain<Timestamp>,
@@ -948,7 +962,9 @@ mod write {
             Self {
                 sink_id,
                 worker_id,
-                persist_writer,
+                persist_client,
+                shard_id,
+                schemas,
                 corrections: OkErr::new(
                     Correction::new(
                         metrics.clone(),
@@ -1092,12 +1108,23 @@ mod write {
                 return None;
             }
 
-            let batch = self
-                .persist_writer
-                .batch(updates, desc.lower.clone(), desc.upper.clone())
+            let mut builder = self
+                .persist_client
+                .batch_builder(
+                    self.shard_id,
+                    self.schemas.clone(),
+                    desc.lower.clone(),
+                    None,
+                )
+                .await;
+            for ((k, v), t, d) in updates {
+                builder.add(&k, &v, &t, &d).await.expect("valid timestamp");
+            }
+            let batch = builder
+                .finish(desc.upper.clone())
                 .await
-                .expect("valid usage")
-                .into_transmittable_batch();
+                .expect("valid timestamp");
+            let batch = batch.into_transmittable_batch();
 
             self.trace("wrote a batch");
             Some((desc, batch, cap))
