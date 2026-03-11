@@ -66,7 +66,12 @@ pub type UpsertValue = Result<Row, Box<UpsertError>>;
     Serialize,
     Deserialize
 )]
-pub struct UpsertKey([u8; 32]);
+pub struct UpsertKey([u8; UpsertKey::SIZE]);
+
+impl UpsertKey {
+    /// The fixed size in bytes of an `UpsertKey` (SHA-256 hash).
+    pub const SIZE: usize = 32;
+}
 
 impl Debug for UpsertKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -290,6 +295,8 @@ where
     let stash_tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
     let stash_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
     let stash_instance_metrics = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
+    let stash_spill_threshold =
+        dyncfgs::STORAGE_UPSERT_STASH_MEMORY_LIMIT.get(storage_configuration.config_set());
 
     let env = instance_context.rocksdb_env.clone();
 
@@ -349,7 +356,7 @@ where
         )
         .unwrap();
 
-        UpsertStash::new(rocksdb_instance)
+        UpsertStash::new(rocksdb_instance, stash_spill_threshold)
     };
 
     upsert_operator(
