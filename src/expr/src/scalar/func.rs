@@ -1768,7 +1768,7 @@ fn map_contains_map<'a>(map_a: DatumMap<'a>, b: DatumMap<'a>) -> bool {
 
 #[sqlfunc(is_infix_op = true, sqlname = "->", propagates_nulls = true)]
 fn map_get_value<'a, T: FromDatum<'a>>(a: DatumMap<'a, T>, target_key: &str) -> Option<T> {
-    a.iter_typed()
+    a.typed_iter()
         .find(|(key, _v)| target_key == *key)
         .map(|(_k, v)| v)
 }
@@ -2928,7 +2928,7 @@ fn list_list_concat<'a, T: FromDatum<'a>>(
         return Some(a);
     };
 
-    Some(temp_storage.make_datum_list(a.iter_typed().chain(b.iter_typed())))
+    Some(temp_storage.make_datum_list(a.typed_iter().chain(b.typed_iter())))
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "||", propagates_nulls = false)]
@@ -2937,7 +2937,7 @@ fn list_element_concat<'a, T: FromDatum<'a>>(
     b: T,
     temp_storage: &'a RowArena,
 ) -> DatumList<'a, T> {
-    let a_elems = a.into_iter().flat_map(|a| a.iter_typed());
+    let a_elems = a.into_iter().flat_map(|a| a.typed_iter());
     temp_storage.make_datum_list(a_elems.chain(std::iter::once(b)))
 }
 
@@ -2948,7 +2948,7 @@ fn element_list_concat<'a, T: FromDatum<'a>>(
     b: Option<DatumList<'a, T>>,
     temp_storage: &'a RowArena,
 ) -> DatumList<'a, T> {
-    let b_elems = b.into_iter().flat_map(|b| b.iter_typed());
+    let b_elems = b.into_iter().flat_map(|b| b.typed_iter());
     temp_storage.make_datum_list(std::iter::once(a).chain(b_elems))
 }
 
@@ -2958,7 +2958,7 @@ fn list_remove<'a, T: FromDatum<'a>>(
     b: T,
     temp_storage: &'a RowArena,
 ) -> DatumList<'a, T> {
-    temp_storage.make_datum_list(a.iter_typed().filter(|elem| *elem != b))
+    temp_storage.make_datum_list(a.typed_iter().filter(|elem| *elem != b))
 }
 
 #[sqlfunc(sqlname = "digest")]
@@ -3002,6 +3002,45 @@ mod test {
 
     use super::*;
     use crate::MirScalarExpr;
+
+    /// Verify that the container type names used by the `#[sqlfunc]` proc macro
+    /// match the actual type names in `mz_repr`. If a type is renamed, this test
+    /// will fail at compile time.
+    #[mz_ore::test]
+    fn container_type_names_match() {
+        use mz_expr_derive_impl::{
+            CONTAINER_TYPE_ARRAY, CONTAINER_TYPE_DATUM_LIST, CONTAINER_TYPE_DATUM_MAP,
+            CONTAINER_TYPE_RANGE,
+        };
+        fn type_name_of<T>(_: &T) -> &'static str {
+            std::any::type_name::<T>()
+        }
+        let list = mz_repr::DatumList::<mz_repr::Datum<'_>>::empty();
+        let map = mz_repr::DatumMap::<mz_repr::Datum<'_>>::empty();
+        let array = mz_repr::Datum::empty_array().unwrap_array();
+        let range = mz_repr::adt::range::Range::<mz_repr::Datum<'_>> { inner: None };
+        // Check that the short type name appears in the fully-qualified name.
+        assert!(
+            type_name_of(&list).contains(CONTAINER_TYPE_DATUM_LIST),
+            "DatumList type name mismatch: {}",
+            type_name_of(&list)
+        );
+        assert!(
+            type_name_of(&map).contains(CONTAINER_TYPE_DATUM_MAP),
+            "DatumMap type name mismatch: {}",
+            type_name_of(&map)
+        );
+        assert!(
+            type_name_of(&array).contains(CONTAINER_TYPE_ARRAY),
+            "Array type name mismatch: {}",
+            type_name_of(&array)
+        );
+        assert!(
+            type_name_of(&range).contains(CONTAINER_TYPE_RANGE),
+            "Range type name mismatch: {}",
+            type_name_of(&range)
+        );
+    }
 
     #[mz_ore::test]
     fn add_interval_months() {

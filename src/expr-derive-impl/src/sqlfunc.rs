@@ -337,6 +337,14 @@ fn find_generic_type_params(func: &syn::ItemFn) -> Vec<Ident> {
         .collect()
 }
 
+/// Type names used by [`classify_generic_usage`] to recognize container types
+/// in function signatures. These must match the actual type names in `mz_repr`.
+/// A compile-time assertion in `mz_expr::scalar::func` verifies this.
+pub const CONTAINER_TYPE_DATUM_LIST: &str = "DatumList";
+pub const CONTAINER_TYPE_ARRAY: &str = "Array";
+pub const CONTAINER_TYPE_DATUM_MAP: &str = "DatumMap";
+pub const CONTAINER_TYPE_RANGE: &str = "Range";
+
 /// How a generic type parameter `T` appears in a type.
 #[derive(Debug, Clone, PartialEq)]
 enum GenericUsage {
@@ -382,10 +390,10 @@ fn classify_generic_usage(ty: &syn::Type, generic_name: &Ident) -> GenericUsage 
                             if let syn::Type::Path(p) = inner {
                                 if p.path.is_ident(generic_name) {
                                     return match ident_str.as_str() {
-                                        "DatumList" => GenericUsage::InDatumList,
-                                        "Array" => GenericUsage::InArray,
-                                        "DatumMap" => GenericUsage::InDatumMap,
-                                        "Range" => GenericUsage::InRange,
+                                        CONTAINER_TYPE_DATUM_LIST => GenericUsage::InDatumList,
+                                        CONTAINER_TYPE_ARRAY => GenericUsage::InArray,
+                                        CONTAINER_TYPE_DATUM_MAP => GenericUsage::InDatumMap,
+                                        CONTAINER_TYPE_RANGE => GenericUsage::InRange,
                                         _ => GenericUsage::Bare,
                                     };
                                 }
@@ -403,13 +411,23 @@ fn classify_generic_usage(ty: &syn::Type, generic_name: &Ident) -> GenericUsage 
         }
         syn::Type::Reference(r) => classify_generic_usage(&r.elem, generic_name),
         syn::Type::Tuple(t) => {
+            // Prefer container usages over bare. For example, `(T, DatumList<'_, T>)`
+            // should classify as `InDatumList`, not `Bare`.
+            let mut best = GenericUsage::Absent;
             for elem in &t.elems {
                 let usage = classify_generic_usage(elem, generic_name);
-                if usage != GenericUsage::Absent {
-                    return usage;
+                match (&best, &usage) {
+                    (GenericUsage::Absent, _) => best = usage,
+                    (GenericUsage::Bare, u) if *u != GenericUsage::Absent => best = usage.clone(),
+                    _ => {
+                        if usage != GenericUsage::Absent && usage != best {
+                            // Conflicting container usages — cannot resolve.
+                            return GenericUsage::Bare;
+                        }
+                    }
                 }
             }
-            GenericUsage::Absent
+            best
         }
         _ => GenericUsage::Absent,
     }
@@ -537,6 +555,10 @@ fn derive_output_type_for_generic(
                 #input_access.scalar_type
                     .unwrap_range_element_type().clone().nullable(#nullable)
             }
+        }
+        // Output is bare T, source is bare T → forward input type directly.
+        (GenericUsage::Bare, GenericUsage::Bare) => {
+            quote! { #input_access.scalar_type.clone().nullable(#nullable) }
         }
         // Cross-container: output is DatumList, source is Array → re-wrap element type.
         (GenericUsage::InDatumList, GenericUsage::InArray) => {
@@ -825,13 +847,6 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         }
     });
 
-    // Erase generic parameter from the emitted function, if present.
-    let emitted_func = if generic_params.is_empty() {
-        func.clone()
-    } else {
-        func.clone()
-    };
-
     let result = quote! {
         #[derive(
             proptest_derive::Arbitrary, Ord, PartialOrd, Clone,
@@ -874,7 +889,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
             }
         }
 
-        #emitted_func
+        #func
     };
     Ok(result)
 }
@@ -1036,13 +1051,6 @@ fn binary_func(
     let binary_non_nullable_checks =
         non_nullable_position_checks(&[input1_ty.clone(), input2_ty.clone()]);
 
-    // Erase generic parameter from the emitted function, if present.
-    let emitted_func = if generic_params.is_empty() {
-        func.clone()
-    } else {
-        func.clone()
-    };
-
     let result = quote! {
         #[derive(
             proptest_derive::Arbitrary, Ord, PartialOrd, Clone,
@@ -1101,7 +1109,7 @@ fn binary_func(
             }
         }
 
-        #emitted_func
+        #func
 
     };
     Ok(result)
@@ -1392,18 +1400,11 @@ fn variadic_func(
         }
     };
 
-    // Erase generic parameter from the emitted function, if present.
-    let emitted_func = if generic_params.is_empty() {
-        func.clone()
-    } else {
-        func.clone()
-    };
-
     let result = if has_self {
         // External struct: generate method impl + trait impl + Display.
         quote! {
             impl #struct_name {
-                #emitted_func
+                #func
             }
             #trait_impl
             #display_impl
@@ -1421,7 +1422,7 @@ fn variadic_func(
             #trait_impl
             #display_impl
 
-            #emitted_func
+            #func
         }
     };
 
