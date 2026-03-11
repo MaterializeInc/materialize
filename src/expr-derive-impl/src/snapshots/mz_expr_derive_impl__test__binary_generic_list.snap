@@ -1,0 +1,69 @@
+---
+source: src/expr-derive-impl/src/lib.rs
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \"||\", propagates_nulls = false)]\nfn list_list_concat<'a, T>(\n    a: Option<DatumList<'a, T>>,\n    b: Option<DatumList<'a, T>>,\n    temp_storage: &'a RowArena,\n) -> Option<DatumList<'a, T>> {\n    unimplemented!()\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect,
+)]
+pub struct ListListConcat;
+impl crate::func::binary::EagerBinaryFunc for ListListConcat {
+    type Input<'a> = (
+        Option<DatumList<'a, Datum<'a>>>,
+        Option<DatumList<'a, Datum<'a>>>,
+    );
+    type Output<'a> = Option<DatumList<'a, Datum<'a>>>;
+    fn call<'a>(
+        &self,
+        (a, b): Self::Input<'a>,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
+        list_list_concat(a, b, temp_storage)
+    }
+    fn output_sql_type(
+        &self,
+        input_types: &[mz_repr::SqlColumnType],
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = input_types[0].scalar_type.without_modifiers().nullable(true);
+        let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        let non_nullable_input_is_nullable = false;
+        let inputs_nullable = input_types.iter().any(|it| it.nullable);
+        let is_null = nullable || non_nullable_input_is_nullable
+            || (propagates_nulls && inputs_nullable);
+        output.nullable(is_null)
+    }
+    fn introduces_nulls(&self) -> bool {
+        true
+    }
+    fn is_infix_op(&self) -> bool {
+        true
+    }
+    fn propagates_nulls(&self) -> bool {
+        false
+    }
+}
+impl std::fmt::Display for ListListConcat {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("||")
+    }
+}
+fn list_list_concat<'a>(
+    a: Option<DatumList<'a, Datum<'a>>>,
+    b: Option<DatumList<'a, Datum<'a>>>,
+    temp_storage: &'a RowArena,
+) -> Option<DatumList<'a, Datum<'a>>> {
+    unimplemented!()
+}
