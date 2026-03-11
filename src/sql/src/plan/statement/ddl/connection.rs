@@ -319,7 +319,12 @@ impl ConnectionOptionExtracted {
 
                 ConnectionDetails::Kafka(KafkaConnection {
                     brokers: self.get_brokers(scx)?,
-                    default_tunnel: build_tunnel_definition(scx, self.ssh_tunnel, self.aws_privatelink, self.aws_privatelinks)?,
+                    default_tunnel: build_tunnel_definition(
+                            scx,
+                            self.ssh_tunnel,
+                            self.aws_privatelink,
+                            self.aws_privatelinks
+                        )?,
                     progress_topic: self.progress_topic,
                     progress_topic_options: KafkaTopicOptions {
                         // We only allow configuring the progress topic replication factor for now.

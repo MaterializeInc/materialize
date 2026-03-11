@@ -1106,6 +1106,8 @@ impl KafkaConnection {
             }
         }
 
+        // Here, we preemptively rewrite broker addresses.
+        // In concept, this overlaps with 'TunnelingClientContext::resolve_broker_addr'.
         for broker in &self.brokers {
             let mut addr_parts = broker.address.splitn(2, ':');
             let addr = BrokerAddr {
@@ -1137,7 +1139,9 @@ impl KafkaConnection {
                         KafkaConnection::from_aws_privatelink(aws_privatelink),
                     );
                 }
-                Tunnel::AwsPrivatelinks(x) => todo!(),
+                Tunnel::AwsPrivatelinks(_) => unreachable!(
+                    "Individually predefined brokers do not use rule-based PrivateLinks routing."
+                ),
                 Tunnel::Ssh(ssh_tunnel) => {
                     // Ensure any SSH bastion address we connect to is resolved to an external address.
                     let ssh_host_resolved = resolve_address(
@@ -1277,7 +1281,7 @@ impl KafkaConnection {
                 .iter()
                 .map(KafkaConnection::from_aws_privatelink_rule)
                 .collect_vec(),
-            default_host: KafkaConnection::from_default_aws_privatelink(&pl.default),
+            default: KafkaConnection::from_default_aws_privatelink(&pl.default),
         }
     }
 }

@@ -288,6 +288,13 @@ pub struct BrokerAddr {
     pub port: u16,
 }
 
+impl BrokerAddr {
+    /// Attempt to resolve this broker address into a list of socket addresses.
+    pub fn to_socket_addrs(&self) -> Result<Vec<SocketAddr>, io::Error> {
+        Ok((self.host.as_str(), self.port).to_socket_addrs()?.collect())
+    }
+}
+
 /// Rewrites a broker address.
 ///
 /// For use with [`TunnelingClientContext`].
@@ -299,6 +306,16 @@ pub struct BrokerRewrite {
     ///
     /// If unspecified, the broker's original port is left unchanged.
     pub port: Option<u16>,
+}
+
+impl BrokerRewrite {
+    /// Apply the rewrite to this broker address.
+    pub fn rewrite(&self, address: &BrokerAddr) -> BrokerAddr {
+        BrokerAddr {
+            host: self.host.clone(),
+            port: self.port.unwrap_or(address.port),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -324,13 +341,44 @@ pub struct ConnectionRulePattern {
     pub suffix_wildcard: bool,
 }
 
+impl ConnectionRulePattern {
+    /// Does this "{host}:{port}" address fit the pattern?
+    pub fn matches(&self, address: &str) -> bool {
+        if self.prefix_wildcard {
+            if self.suffix_wildcard {
+                address.contains(&self.literal_match)
+            } else {
+                address.ends_with(&self.literal_match)
+            }
+        } else if self.suffix_wildcard {
+            address.starts_with(&self.literal_match)
+        } else {
+            address == self.literal_match
+        }
+    }
+}
+
 #[derive(Clone)]
 /// Given a host address, map it to a different host.
 pub struct HostMappingRules {
     /// Map matching hosts to a different host. First applicable rule wins.
     pub rules: Vec<(ConnectionRulePattern, BrokerRewrite)>,
     /// If no rules match, use this host.
-    pub default_host: BrokerRewrite,
+    pub default: BrokerRewrite,
+}
+
+impl HostMappingRules {
+    /// Rewrite this broker address according to the rules.
+    pub fn rewrite(&self, src: &BrokerAddr) -> BrokerAddr {
+        let address = format!("{}:{}", src.host, src.port);
+        for (pattern, dst) in &self.rules {
+            if pattern.matches(&address) {
+                return dst.rewrite(src);
+            }
+        }
+
+        self.default.rewrite(src)
+    }
 }
 
 /// Tunneling clients
@@ -623,9 +671,8 @@ where
                     TunnelConfig::StaticHost(host) => (host.as_str(), port)
                         .to_socket_addrs()
                         .map(|addrs| addrs.collect()),
-                    TunnelConfig::Rules(rules) => {
-                        todo!()
-                    }
+                    // Rewrite according to the routing rules.
+                    TunnelConfig::Rules(rules) => rules.rewrite(&addr).to_socket_addrs(),
                     // We leave the broker's address as it is.
                     TunnelConfig::None => {
                         (host, port).to_socket_addrs().map(|addrs| addrs.collect())
@@ -995,4 +1042,44 @@ pub fn create_new_client_config(
     );
 
     config
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_connection_rule_pattern_matches() {
+        let p = ConnectionRulePattern {
+            prefix_wildcard: false,
+            literal_match: "broker:9092".to_string(),
+            suffix_wildcard: false,
+        };
+        assert!(p.matches("broker:9092"));
+        assert!(!p.matches("other:9092"));
+
+        let p = ConnectionRulePattern {
+            prefix_wildcard: true,
+            literal_match: ":9092".to_string(),
+            suffix_wildcard: false,
+        };
+        assert!(p.matches("any-host:9092"));
+        assert!(!p.matches("broker:9093"));
+
+        let p = ConnectionRulePattern {
+            prefix_wildcard: false,
+            literal_match: "broker:".to_string(),
+            suffix_wildcard: true,
+        };
+        assert!(p.matches("broker:9092"));
+        assert!(!p.matches("other:9092"));
+
+        let p = ConnectionRulePattern {
+            prefix_wildcard: true,
+            literal_match: "broker".to_string(),
+            suffix_wildcard: true,
+        };
+        assert!(p.matches("my-broker-host:1234"));
+        assert!(!p.matches("other:9092"));
+    }
 }
