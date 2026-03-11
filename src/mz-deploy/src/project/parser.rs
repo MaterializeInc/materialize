@@ -54,8 +54,11 @@ pub fn parse_statements_with_context(
 
     if !resolved.unresolved.is_empty() {
         if resolved.has_warn_pragma {
-            let formatted: Vec<String> =
-                resolved.unresolved.iter().map(|v| format!(":{}", v)).collect();
+            let formatted: Vec<String> = resolved
+                .unresolved
+                .iter()
+                .map(|v| format!(":{}", v))
+                .collect();
             eprintln!(
                 "{}: unresolved variables in {}: {}",
                 "\x1b[33mwarning\x1b[0m",

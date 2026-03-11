@@ -17,7 +17,11 @@ struct AbortResult {
 
 impl fmt::Display for AbortResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "  \u{2713} Successfully aborted deployment '{}'", self.deploy_id)
+        write!(
+            f,
+            "  \u{2713} Successfully aborted deployment '{}'",
+            self.deploy_id
+        )
     }
 }
 

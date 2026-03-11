@@ -19,6 +19,8 @@ removed after a successful drop.
 ## Flags
 
 - `-y`, `--yes` — Skip confirmation prompt.
+- `--output json` — Print result as JSON to stdout. Requires `--yes`
+  (interactive prompts are not available in JSON mode).
 
 ## Name Format
 
@@ -49,6 +51,7 @@ Connections, secrets, and tables use fully-qualified `database.schema.object` na
     mz-deploy delete cluster analytics --yes        # Skips prompt
     mz-deploy delete network-policy my_policy       # Drop a network policy
     mz-deploy delete table mydb.public.users        # Drop a table
+    mz-deploy delete cluster analytics --output json --yes
     mz-deploy delete connection mydb.public.pg_conn --yes
 
 ## Error Recovery

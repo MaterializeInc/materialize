@@ -48,7 +48,36 @@ macro_rules! verbose {
     };
 }
 
-/// A value that can be rendered as human-readable text or JSON.
+/// A value that can be rendered as both human-readable text and JSON.
+///
+/// Render is the core pattern for command output in mz-deploy. Instead of
+/// branching on `json_output_enabled()` at every call site, commands define a
+/// single struct that implements both `Display` (for humans) and `Serialize`
+/// (for machines), then hand it to [`output()`]:
+///
+/// ```ignore
+/// #[derive(serde::Serialize)]
+/// struct MyResult { name: String, count: usize }
+///
+/// impl fmt::Display for MyResult {
+///     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+///         write!(f, "  ✓ Processed {} items for '{}'", self.count, self.name)
+///     }
+/// }
+///
+/// // One call — no if/else on output format:
+/// log::output(&MyResult { name, count });
+/// ```
+///
+/// Guidelines:
+/// - **Use `output()` with a Render struct** when a command has a single result
+///   that should be available in both text and JSON form. This is the default.
+/// - **Use `output_json()`** for paths with no human representation, like NDJSON
+///   streaming or machine-only pre-execution plan dumps.
+/// - **Use `info!()`** for supplementary stderr messages (hints, progress) that
+///   shouldn't appear in JSON output.
+/// - **Use `#[serde(skip)]`** on fields that are only meaningful in human output
+///   (e.g., durations) to keep JSON backward-compatible.
 pub trait Render: std::fmt::Display + serde::Serialize {}
 impl<T: std::fmt::Display + serde::Serialize> Render for T {}
 

@@ -240,10 +240,7 @@ fn consume_dollar_quoted(bytes: &[u8], mut i: usize, len: usize, tag: &[u8]) -> 
 /// Always returns `ResolvedSql` with the SQL text (unresolved variables left as-is),
 /// a list of unresolved variable names, and whether the pragma was detected.
 /// The caller decides whether unresolved variables are errors or warnings.
-pub fn resolve_variables<'a>(
-    sql: &'a str,
-    vars: &BTreeMap<String, String>,
-) -> ResolvedSql<'a> {
+pub fn resolve_variables<'a>(sql: &'a str, vars: &BTreeMap<String, String>) -> ResolvedSql<'a> {
     let bytes = sql.as_bytes();
     let len = bytes.len();
 
@@ -378,10 +375,7 @@ mod tests {
     #[test]
     fn single_quoted_variable_with_escaping() {
         let v = vars(&[("pg_host", "it's-a-host")]);
-        let result = resolve_variables(
-            "CREATE CONNECTION pg TO POSTGRES (HOST :'pg_host')",
-            &v,
-        );
+        let result = resolve_variables("CREATE CONNECTION pg TO POSTGRES (HOST :'pg_host')", &v);
         assert_eq!(
             result.sql.as_ref(),
             "CREATE CONNECTION pg TO POSTGRES (HOST 'it''s-a-host')"
@@ -577,10 +571,7 @@ mod tests {
 
     #[test]
     fn pragma_partial_match() {
-        let result = resolve_variables(
-            "-- PRAGMA WARN_ON_MISSING\nSELECT :foo",
-            &BTreeMap::new(),
-        );
+        let result = resolve_variables("-- PRAGMA WARN_ON_MISSING\nSELECT :foo", &BTreeMap::new());
         assert!(!result.has_warn_pragma);
     }
 }

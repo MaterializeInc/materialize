@@ -69,13 +69,14 @@ impl fmt::Display for DescribeOutput {
         // Display objects
         writeln!(f, "{} ({}):", "Objects".bold(), self.objects.len())?;
         for (object_id, hash) in &self.objects {
+            let short_hash = &hash[..hash.len().min(12)];
             writeln!(
                 f,
                 "    {}.{}.{}  {}",
                 object_id.database.dimmed(),
                 object_id.schema.dimmed(),
                 object_id.object,
-                hash.chars().take(12).collect::<String>().dimmed()
+                short_hash.dimmed()
             )?;
         }
 

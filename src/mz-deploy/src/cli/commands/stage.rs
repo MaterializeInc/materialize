@@ -7,7 +7,6 @@ use crate::client::quote_identifier;
 use crate::client::{Client, ClusterConfig, DeploymentKind, PendingStatement, ReplacementMvRecord};
 use crate::config::Settings;
 use crate::log;
-use std::fmt;
 use crate::project::SchemaQualifier;
 use crate::project::ast::Statement;
 use crate::project::changeset::ChangeSet;
@@ -18,6 +17,7 @@ use crate::project::{self, normalize::NormalizingVisitor};
 use crate::verbose;
 use mz_ore::option::OptionExt;
 use std::collections::BTreeSet;
+use std::fmt;
 use std::path::Path;
 use std::time::Instant;
 
@@ -77,11 +77,101 @@ struct PartitionedObjects<'a> {
 #[derive(serde::Serialize)]
 struct StageResult {
     deploy_id: String,
+    objects_deployed: usize,
+    #[serde(skip)]
+    duration: std::time::Duration,
 }
 
 impl fmt::Display for StageResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "  \u{2713} Successfully staged deployment '{}'", self.deploy_id)
+        write!(
+            f,
+            "  \u{2713} Successfully deployed {} objects to '{}' staging environment ({:.1}s)",
+            self.objects_deployed,
+            self.deploy_id,
+            self.duration.as_secs_f64()
+        )
+    }
+}
+
+#[derive(serde::Serialize)]
+struct StagePlan {
+    deploy_id: String,
+    schemas: Vec<StagePlanSchema>,
+    clusters: Vec<StagePlanCluster>,
+    objects: Vec<StagePlanObject>,
+    sinks: Vec<StagePlanObject>,
+    replacement_mvs: Vec<StagePlanObject>,
+}
+
+#[derive(serde::Serialize)]
+struct StagePlanSchema {
+    database: String,
+    schema: String,
+    staging_schema: String,
+}
+
+#[derive(serde::Serialize)]
+struct StagePlanCluster {
+    production_cluster: String,
+    staging_cluster: String,
+}
+
+#[derive(serde::Serialize)]
+struct StagePlanObject {
+    database: String,
+    schema: String,
+    object: String,
+}
+
+impl fmt::Display for StagePlan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Stage plan for '{}':", self.deploy_id)?;
+
+        if !self.schemas.is_empty() {
+            writeln!(f, "\nSchemas ({}):", self.schemas.len())?;
+            for s in &self.schemas {
+                writeln!(
+                    f,
+                    "    {}.{} \u{2192} {}",
+                    s.database, s.schema, s.staging_schema
+                )?;
+            }
+        }
+
+        if !self.clusters.is_empty() {
+            writeln!(f, "\nClusters ({}):", self.clusters.len())?;
+            for c in &self.clusters {
+                writeln!(
+                    f,
+                    "    {} \u{2192} {}",
+                    c.production_cluster, c.staging_cluster
+                )?;
+            }
+        }
+
+        if !self.objects.is_empty() {
+            writeln!(f, "\nObjects ({}):", self.objects.len())?;
+            for o in &self.objects {
+                writeln!(f, "    {}.{}.{}", o.database, o.schema, o.object)?;
+            }
+        }
+
+        if !self.sinks.is_empty() {
+            writeln!(f, "\nSinks ({}):", self.sinks.len())?;
+            for s in &self.sinks {
+                writeln!(f, "    {}.{}.{}", s.database, s.schema, s.object)?;
+            }
+        }
+
+        if !self.replacement_mvs.is_empty() {
+            writeln!(f, "\nReplacement MVs ({}):", self.replacement_mvs.len())?;
+            for m in &self.replacement_mvs {
+                writeln!(f, "    {}.{}.{}", m.database, m.schema, m.object)?;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -134,70 +224,55 @@ pub async fn run(
         .await?;
     }
 
-    if dry_run && log::json_output_enabled() {
-        let objects_json: Vec<serde_json::Value> = analysis
-            .objects
-            .iter()
-            .map(|(id, _)| {
-                serde_json::json!({
-                    "database": id.database,
-                    "schema": id.schema,
-                    "object": id.object,
+    if dry_run {
+        let plan = StagePlan {
+            deploy_id: stage_name.to_string(),
+            schemas: analysis
+                .schema_set
+                .iter()
+                .map(|sq| StagePlanSchema {
+                    database: sq.database.clone(),
+                    schema: sq.schema.clone(),
+                    staging_schema: format!("{}{}", sq.schema, staging_suffix),
                 })
-            })
-            .collect();
-        let sinks_json: Vec<serde_json::Value> = analysis
-            .sinks
-            .iter()
-            .map(|(id, _)| {
-                serde_json::json!({
-                    "database": id.database,
-                    "schema": id.schema,
-                    "object": id.object,
+                .collect(),
+            clusters: analysis
+                .cluster_set
+                .iter()
+                .map(|c| StagePlanCluster {
+                    production_cluster: c.clone(),
+                    staging_cluster: format!("{}{}", c, staging_suffix),
                 })
-            })
-            .collect();
-        let replacement_mvs_json: Vec<serde_json::Value> = analysis
-            .replacement_mvs
-            .iter()
-            .map(|(id, _)| {
-                serde_json::json!({
-                    "database": id.database,
-                    "schema": id.schema,
-                    "object": id.object,
+                .collect(),
+            objects: analysis
+                .objects
+                .iter()
+                .map(|(id, _)| StagePlanObject {
+                    database: id.database.clone(),
+                    schema: id.schema.clone(),
+                    object: id.object.clone(),
                 })
-            })
-            .collect();
-        let schemas_json: Vec<serde_json::Value> = analysis
-            .schema_set
-            .iter()
-            .map(|sq| {
-                serde_json::json!({
-                    "database": sq.database,
-                    "schema": sq.schema,
-                    "staging_schema": format!("{}{}", sq.schema, staging_suffix),
+                .collect(),
+            sinks: analysis
+                .sinks
+                .iter()
+                .map(|(id, _)| StagePlanObject {
+                    database: id.database.clone(),
+                    schema: id.schema.clone(),
+                    object: id.object.clone(),
                 })
-            })
-            .collect();
-        let clusters_json: Vec<serde_json::Value> = analysis
-            .cluster_set
-            .iter()
-            .map(|c| {
-                serde_json::json!({
-                    "production_cluster": c,
-                    "staging_cluster": format!("{}{}", c, staging_suffix),
+                .collect(),
+            replacement_mvs: analysis
+                .replacement_mvs
+                .iter()
+                .map(|(id, _)| StagePlanObject {
+                    database: id.database.clone(),
+                    schema: id.schema.clone(),
+                    object: id.object.clone(),
                 })
-            })
-            .collect();
-        let plan = serde_json::json!({
-            "deploy_id": stage_name,
-            "schemas": schemas_json,
-            "clusters": clusters_json,
-            "objects": objects_json,
-            "sinks": sinks_json,
-            "replacement_mvs": replacement_mvs_json,
-        });
-        log::output_json(&plan);
+                .collect(),
+        };
+        log::output(&plan);
         return Ok(());
     }
 
@@ -215,20 +290,12 @@ pub async fn run(
     )
     .await?;
 
-    let total_duration = start_time.elapsed();
-    if log::json_output_enabled() {
-        log::output_json(&StageResult {
-            deploy_id: stage_name.to_string(),
-        });
-    } else {
-        progress::summary(
-            &format!(
-                "Successfully deployed to {} objects to '{}' staging environment",
-                success_count, stage_name
-            ),
-            total_duration,
-        );
-    }
+    let result = StageResult {
+        deploy_id: stage_name.to_string(),
+        objects_deployed: success_count,
+        duration: start_time.elapsed(),
+    };
+    log::output(&result);
     Ok(())
 }
 

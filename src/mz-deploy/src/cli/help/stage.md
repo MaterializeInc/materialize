@@ -89,9 +89,8 @@ during a deployment.
 - `--no-rollback` — On failure, leave staging resources in place for
   debugging instead of cleaning them up automatically.
 - `--dry-run` — Preview what would be deployed without executing any
-  changes. Combine with `--output json` for machine-readable output
-  including staging schemas, clusters, objects, deferred sinks, and
-  replacement MVs.
+  changes. Shows staging schemas, clusters, objects, deferred sinks,
+  and replacement MVs. Add `--output json` for machine-readable output.
 
 ## Concurrent Deployments
 

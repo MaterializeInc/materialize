@@ -127,10 +127,7 @@ impl fmt::Display for ListOutput {
 ///
 /// # Errors
 /// Returns `CliError::Connection` for database errors
-pub async fn run(
-    settings: &Settings,
-    allowed_lag_secs: i64,
-) -> Result<(), CliError> {
+pub async fn run(settings: &Settings, allowed_lag_secs: i64) -> Result<(), CliError> {
     let profile = settings.connection();
     let client = Client::connect_with_profile(profile.clone())
         .await

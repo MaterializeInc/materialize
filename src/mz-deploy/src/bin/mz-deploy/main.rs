@@ -248,7 +248,7 @@ enum Command {
 
         /// Preview what would be deployed without executing any changes.
         /// Shows the staging resources that would be created.
-        /// Combine with --output json for machine-readable output.
+        /// Add --output json for machine-readable output.
         #[arg(long)]
         dry_run: bool,
     },
@@ -478,7 +478,7 @@ enum Command {
         after_help = "Run 'mz-deploy help delete' for a detailed usage guide."
     )]
     Delete {
-        /// Skip confirmation prompt
+        /// Skip confirmation prompt. Required when using --output json
         #[arg(short = 'y', long)]
         yes: bool,
 
@@ -777,8 +777,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             dry_run,
         }) => {
             if !no_ready_check && !dry_run {
-                cli::commands::wait::run(&settings, &deploy_id, true, None, allowed_lag)
-                    .await?;
+                cli::commands::wait::run(&settings, &deploy_id, true, None, allowed_lag).await?;
             }
             cli::commands::promote::run(&settings, &deploy_id, force, dry_run).await
         }
@@ -797,14 +796,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             )
             .await
         }
-        Some(Command::Debug) => {
-            if log::json_output_enabled() {
-                return Err(CliError::Message(
-                    "--output json is not supported for the 'debug' command".to_string(),
-                ));
-            }
-            cli::commands::debug::run(&settings).await
-        }
+        Some(Command::Debug) => cli::commands::debug::run(&settings).await,
         Some(Command::Describe { deploy_id }) => {
             cli::commands::describe::run(&settings, &deploy_id).await
         }
@@ -838,11 +830,6 @@ async fn run(args: Args) -> Result<(), CliError> {
             allowed_lag,
         }) => cli::commands::wait::run(&settings, &name, once, timeout, allowed_lag).await,
         Some(Command::Delete { yes, subcommand }) => {
-            if log::json_output_enabled() {
-                return Err(CliError::Message(
-                    "--output json is not supported for the 'delete' command".to_string(),
-                ));
-            }
             let (kind, name) = match subcommand {
                 DeleteCommand::Cluster { name } => (delete::ObjectKind::Cluster, name),
                 DeleteCommand::Connection { name } => (delete::ObjectKind::Connection, name),

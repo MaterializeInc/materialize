@@ -4,11 +4,12 @@ use crate::cli::CliError;
 use crate::cli::progress;
 use crate::client::{Client, ConnectionError, quote_identifier};
 use crate::config::Settings;
+use crate::log;
 use crate::project::object_id::ObjectId;
 use crate::{info, info_nonl};
+use std::fmt;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 /// The kind of object to delete.
 #[derive(Debug, Clone, Copy)]
@@ -42,6 +43,23 @@ impl ObjectKind {
             ObjectKind::Secret => "SECRET",
             ObjectKind::Table => "TABLE",
         }
+    }
+}
+
+#[derive(serde::Serialize)]
+struct DeleteResult {
+    kind: String,
+    name: String,
+    file_removed: String,
+}
+
+impl fmt::Display for DeleteResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "  \u{2713} Dropped {} '{}' and removed {}",
+            self.kind, self.name, self.file_removed
+        )
     }
 }
 
@@ -106,7 +124,6 @@ pub async fn run(
 ) -> Result<(), CliError> {
     let profile = settings.connection();
     let directory = &settings.directory;
-    let start_time = Instant::now();
     let label = kind.label();
 
     let target = DeleteTarget::resolve(directory, kind, name)?;
@@ -115,6 +132,12 @@ pub async fn run(
             "'{name}' is not managed by this project (no file at {})",
             target.file_path.display()
         )));
+    }
+
+    if log::json_output_enabled() && !yes {
+        return Err(CliError::Message(
+            "--output json requires --yes to skip interactive confirmation".to_string(),
+        ));
     }
 
     if !yes {
@@ -164,15 +187,12 @@ pub async fn run(
         return Err(e.into());
     }
 
-    progress::stage_success(
-        &format!(
-            "Dropped {} '{}' and removed {}",
-            label,
-            name,
-            target.file_path.display()
-        ),
-        start_time.elapsed(),
-    );
+    let result = DeleteResult {
+        kind: label.to_string(),
+        name: name.to_string(),
+        file_removed: target.file_path.display().to_string(),
+    };
+    log::output(&result);
 
     Ok(())
 }

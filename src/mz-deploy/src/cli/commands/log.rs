@@ -1,13 +1,58 @@
 //! History command - show deployment history in chronological order.
 
 use crate::cli::CliError;
-use crate::client::Client;
+use crate::client::{Client, DeploymentHistoryEntry};
 use crate::config::Settings;
 use crate::{info, info_nonl, log};
 use chrono::{DateTime, Local};
 use owo_colors::OwoColorize;
+use std::fmt;
 use std::io::{IsTerminal, Write};
 use std::process::{Command, Stdio};
+
+/// Render struct for deployment history — single source of truth for formatting.
+#[derive(serde::Serialize)]
+#[serde(transparent)]
+struct HistoryOutput {
+    entries: Vec<DeploymentHistoryEntry>,
+}
+
+impl fmt::Display for HistoryOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Deployment history (promoted):\n")?;
+
+        for entry in &self.entries {
+            let datetime: DateTime<Local> = entry.promoted_at.with_timezone(&Local);
+            let date_str = datetime.format("%a %b %d %H:%M:%S %Y %z").to_string();
+
+            writeln!(
+                f,
+                "{} {} [{}]",
+                "deployment".yellow().bold(),
+                entry.deploy_id.cyan(),
+                entry.kind.to_string().dimmed()
+            )?;
+            if let Some(commit_sha) = &entry.git_commit {
+                writeln!(f, "{}: {}", "Commit".dimmed(), commit_sha)?;
+            }
+            writeln!(
+                f,
+                "{}: {}",
+                "Promoted by".dimmed(),
+                entry.deployed_by.yellow()
+            )?;
+            writeln!(f, "{}:   {}", "Date".dimmed(), date_str)?;
+            writeln!(f)?;
+
+            for sq in &entry.schemas {
+                writeln!(f, "    {}.{}", sq.database.dimmed(), sq.schema)?;
+            }
+            writeln!(f)?;
+        }
+
+        Ok(())
+    }
+}
 
 /// Show deployment history in chronological order (promoted deployments only).
 ///
@@ -28,12 +73,8 @@ use std::process::{Command, Stdio};
 ///
 /// # Errors
 /// Returns `CliError::Connection` for database errors
-pub async fn run(
-    settings: &Settings,
-    limit: Option<usize>,
-) -> Result<(), CliError> {
+pub async fn run(settings: &Settings, limit: Option<usize>) -> Result<(), CliError> {
     let profile = settings.connection();
-    // Connect to database
     let client = Client::connect_with_profile(profile.clone())
         .await
         .map_err(CliError::Connection)?;
@@ -41,12 +82,11 @@ pub async fn run(
     client.deployments().create_deployments().await?;
     let history = client.deployments().list_deployment_history(limit).await?;
 
-    if log::json_output_enabled() {
-        log::output_json(&history);
-        return Ok(());
-    }
+    let output = HistoryOutput { entries: history };
 
-    if history.is_empty() {
+    if log::json_output_enabled() {
+        log::output(&output);
+    } else if output.entries.is_empty() {
         info!("No deployment history found.");
         info!();
         info!("To create and promote a deployment, run:");
@@ -57,48 +97,13 @@ pub async fn run(
             "apply".cyan(),
             "--staging-env <name>".cyan()
         );
-        return Ok(());
-    }
-
-    // Build output string first (while we still have async context)
-    let mut output = String::new();
-    output.push_str("Deployment history (promoted):\n\n");
-
-    for entry in history {
-        // Convert UTC to local time for display
-        let datetime: DateTime<Local> = entry.promoted_at.with_timezone(&Local);
-        let date_str = datetime.format("%a %b %d %H:%M:%S %Y %z").to_string();
-
-        // Display deployment header (like a git commit)
-        output.push_str(&format!(
-            "{} {} [{}]\n",
-            "deployment".yellow().bold(),
-            entry.deploy_id.cyan(),
-            entry.kind.to_string().dimmed()
-        ));
-        if let Some(commit_sha) = &entry.git_commit {
-            output.push_str(&format!("{}: {}\n", "Commit".dimmed(), commit_sha));
-        }
-        output.push_str(&format!(
-            "{}: {}\n",
-            "Promoted by".dimmed(),
-            entry.deployed_by.yellow()
-        ));
-        output.push_str(&format!("{}:   {}\n", "Date".dimmed(), date_str));
-        output.push('\n');
-
-        // List all schemas in this deployment (like files in a git commit)
-        for sq in &entry.schemas {
-            output.push_str(&format!("    {}.{}\n", sq.database.dimmed(), sq.schema));
-        }
-        output.push('\n');
-    }
-
-    // Display with pager when interactive; print directly in CI/pipes.
-    if std::io::stderr().is_terminal() {
-        display_with_pager(&output);
     } else {
-        info_nonl!("{}", output);
+        let formatted = format!("{output}");
+        if std::io::stderr().is_terminal() {
+            display_with_pager(&formatted);
+        } else {
+            info_nonl!("{}", formatted);
+        }
     }
 
     Ok(())

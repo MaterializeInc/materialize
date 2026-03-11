@@ -3,10 +3,10 @@
 //! This module defines errors that occur when parsing SQL statements
 //! from project files.
 
+use crate::project::variables::VariableError;
 use owo_colors::OwoColorize;
 use std::fmt;
 use std::path::PathBuf;
-use crate::project::variables::VariableError;
 
 /// Errors that occur during SQL parsing.
 #[derive(Debug)]
@@ -75,7 +75,8 @@ impl fmt::Display for ParseError {
                     "error".bright_red().bold(),
                     inner.path.display()
                 )?;
-                let formatted: Vec<String> = inner.unresolved.iter().map(|v| format!(":{}", v)).collect();
+                let formatted: Vec<String> =
+                    inner.unresolved.iter().map(|v| format!(":{}", v)).collect();
                 writeln!(
                     f,
                     "  {}: {}",

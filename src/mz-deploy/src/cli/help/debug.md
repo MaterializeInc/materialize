@@ -8,6 +8,11 @@ connectivity and configuration before running deployments.
 
     mz-deploy debug
 
+## Flags
+
+- `--output json` — Print connection and environment information as JSON
+  to stdout.
+
 ## Behavior
 
 1. Loads the connection profile from `profiles.toml`.
@@ -25,8 +30,9 @@ connectivity and configuration before running deployments.
 
 ## Examples
 
-    mz-deploy debug                     # Use default profile
-    mz-deploy debug --profile staging   # Use a specific profile
+    mz-deploy debug                             # Use default profile
+    mz-deploy debug --profile staging            # Use a specific profile
+    mz-deploy debug --output json                # Machine-readable output
 
 ## Error Recovery
 
