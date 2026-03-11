@@ -21,7 +21,7 @@
         The following `<options>` are supported for the `COPY FROM` operation:
         Name | Value type | Default value | Description
         -----|-----------------|---------------|------------
-        `FORMAT` | `CSV` | None, must be provided | Sets the input formatting method. For more information see [formatting details below](#details).
+        `FORMAT` | `CSV`, `PARQUET` | None, must be provided | Sets the input formatting method. For more information see [formatting details below](#details).
         `DELIMITER` | Single-quoted one-byte character | Format-dependent | Overrides the format's default column delimiter. _`FORMAT CSV` only_
         `NULL` | Single-quoted strings | Format-dependent | Specifies the string that represents a _NULL_ value. _`FORMAT CSV` only_
         `QUOTE` | Single-quoted one-byte character | `"` | Specifies the character to signal a quoted string, which may contain the `DELIMITER` value (without beginning new columns). To include the `QUOTE` character itself in column, wrap the column's value in the `QUOTE` character and prefix all instance of the value you want to literally interpret with the `ESCAPE` value. _`FORMAT CSV` only_
