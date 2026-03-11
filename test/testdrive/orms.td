@@ -28,8 +28,10 @@ t_primary_idx false <null> t 2 <null> "1 2" "0 0" <null> <null> <null> <null>
 # Check how expressions are serialized with `{}`
 > CREATE INDEX complex_index ON t (t::varchar, i::string);
 
-> SELECT ix.indexprs
+# with enable_cast_elimination on, we can expect to see only the cast on i (from bigint to string)
+# looking at ix.indkey let's us confirm that we're using both columns though
+> SELECT ix.indkey, ix.indexprs
   FROM pg_class t
   JOIN pg_index ix ON t.oid = ix.indrelid
   WHERE t.oid = 't'::regclass AND ix.indexrelid = 'complex_index'::regclass;
-"{t::[<SID> AS pg_catalog.varchar]}, {i::[<SID> AS pg_catalog.text]}"
+"2 0" "{i::[<SID> AS pg_catalog.text]}"
