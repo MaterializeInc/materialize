@@ -99,6 +99,37 @@ impl Transform for CaseLiteralTransform {
                         Self::rewrite_scalar(e, input_type)?;
                     }
                 }
+                MirRelationExpr::Join { equivalences, .. } => {
+                    let mut children: Vec<_> = view.children_rev().collect::<Vec<_>>();
+                    children.reverse();
+                    let input_types: Vec<ReprColumnType> = children
+                        .iter()
+                        .flat_map(|c| {
+                            c.value::<ReprRelationType>()
+                                .expect("ReprRelationType required")
+                                .as_ref()
+                                .unwrap()
+                                .iter()
+                                .cloned()
+                        })
+                        .collect();
+                    for class in equivalences.iter_mut() {
+                        for expr in class.iter_mut() {
+                            Self::rewrite_scalar(expr, &input_types)?;
+                        }
+                    }
+                }
+                MirRelationExpr::TopK { limit, .. } => {
+                    let input_type: &Vec<ReprColumnType> = view
+                        .last_child()
+                        .value::<ReprRelationType>()
+                        .expect("ReprRelationType required")
+                        .as_ref()
+                        .unwrap();
+                    if let Some(limit) = limit {
+                        Self::rewrite_scalar(limit, input_type)?;
+                    }
+                }
                 _ => {}
             }
             todo.extend(expr.children_mut().rev().zip_eq(view.children_rev()));
