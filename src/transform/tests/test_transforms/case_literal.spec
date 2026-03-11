@@ -99,5 +99,5 @@ apply pipeline=case_literal
 Map (case when (#0 = 1) then 10 else case when (#0 = 1) then 99 else case when (#0 = 2) then 20 else 0 end end end)
   Get t0
 ----
-Map (case when (#0 = 1) then 10 else case_lookup #0 when 1 then 99 when 2 then 20 else 0 end end)
+Map (case_lookup #0 when 1 then 10 when 2 then 20 else 0 end)
   Get t0

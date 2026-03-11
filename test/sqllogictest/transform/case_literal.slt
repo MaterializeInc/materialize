@@ -161,8 +161,46 @@ Target cluster: quickstart
 
 EOF
 
+# Duplicate literal: first WHEN wins per SQL CASE semantics.
+# The entire chain should fold into a single case_lookup, with
+# the first arm's result (10) winning over the duplicate (99).
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT
+  CASE
+    WHEN x = 1 THEN 10
+    WHEN x = 1 THEN 99
+    WHEN x = 2 THEN 20
+    ELSE 0
+  END
+FROM t
+----
+Explained Query:
+  Project (#3)
+    Map (case_lookup #0{x} when 1 then 10 when 2 then 20 else 0 end)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
 statement ok
-INSERT INTO t VALUES (2, 'two', 0), (99, 'miss', 0), (NULL, 'null', 0)
+INSERT INTO t VALUES (1, 'dup', 0), (2, 'two', 0), (99, 'miss', 0), (NULL, 'null', 0)
+
+# Verify correctness: duplicate literal, first WHEN wins.
+query I
+SELECT
+  CASE
+    WHEN x = 1 THEN 10
+    WHEN x = 1 THEN 99
+    WHEN x = 2 THEN 20
+    ELSE 0
+  END
+FROM t WHERE y = 'dup'
+----
+10
 
 # Verify correctness: CASE with matching input.
 query I
