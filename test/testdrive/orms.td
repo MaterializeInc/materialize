@@ -30,7 +30,8 @@ t_primary_idx false <null> t 2 <null> "1 2" "0 0" <null> <null> <null> <null>
 
 # with enable_cast_elimination on, we can expect to see only the cast on i (from bigint to string)
 # looking at ix.indkey let's us confirm that we're using both columns though
-> SELECT ix.indkey, ix.indexprs
+# we cast ix.indexkey to string to avoid trying to send an int2vector over the wire
+> SELECT ix.indkey::text, ix.indexprs
   FROM pg_class t
   JOIN pg_index ix ON t.oid = ix.indrelid
   WHERE t.oid = 't'::regclass AND ix.indexrelid = 'complex_index'::regclass;
