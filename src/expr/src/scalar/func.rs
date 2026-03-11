@@ -41,8 +41,8 @@ use mz_repr::adt::range::Range;
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::{
-    ArrayRustType, Datum, DatumList, DatumMap, ExcludeNull, InputDatumType, Row, RowArena,
-    SqlScalarType, strconv,
+    ArrayRustType, Datum, DatumList, DatumMap, ExcludeNull, FromDatum, InputDatumType, Row,
+    RowArena, SqlScalarType, strconv,
 };
 use mz_sql_parser::ast::display::FormatMode;
 use mz_sql_pretty::{PrettyConfig, pretty_str};
@@ -1770,7 +1770,7 @@ fn map_contains_map<'a>(map_a: DatumMap<'a>, b: DatumMap<'a>) -> bool {
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "->", propagates_nulls = true)]
-fn map_get_value<'a, T>(a: DatumMap<'a, T>, target_key: &str) -> Option<T> {
+fn map_get_value<'a, T: FromDatum<'a>>(a: DatumMap<'a, T>, target_key: &str) -> Option<T> {
     a.iter_typed()
         .find(|(key, _v)| target_key == *key)
         .map(|(_k, v)| v)
@@ -2919,7 +2919,7 @@ fn array_array_concat<'a>(
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "||", propagates_nulls = false)]
-fn list_list_concat<'a, T>(
+fn list_list_concat<'a, T: FromDatum<'a>>(
     a: Option<DatumList<'a, T>>,
     b: Option<DatumList<'a, T>>,
     temp_storage: &'a RowArena,
@@ -2933,12 +2933,12 @@ fn list_list_concat<'a, T>(
 
     Some(
         temp_storage
-            .make_datum_list(|packer| packer.push_list(a.iter_typed().chain(b.iter_typed()))),
+            .make_datum_list(|packer| packer.push_list_elems(a.iter_typed().chain(b.iter_typed()))),
     )
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "||", propagates_nulls = false)]
-fn list_element_concat<'a, T>(
+fn list_element_concat<'a, T: FromDatum<'a>>(
     a: Option<DatumList<'a, T>>,
     b: T,
     temp_storage: &'a RowArena,
@@ -2946,36 +2946,40 @@ fn list_element_concat<'a, T>(
     temp_storage.make_datum_list(|packer| {
         if let Some(a) = a {
             for elem in a.iter_typed() {
-                packer.push(elem);
+                packer.push_datum(elem);
             }
         }
-        packer.push(b);
+        packer.push_datum(b);
     })
 }
 
 // Note that the output type corresponds to the _second_ parameter's input type.
 #[sqlfunc(is_infix_op = true, sqlname = "||", propagates_nulls = false)]
-fn element_list_concat<'a, T>(
+fn element_list_concat<'a, T: FromDatum<'a>>(
     a: T,
     b: Option<DatumList<'a, T>>,
     temp_storage: &'a RowArena,
 ) -> DatumList<'a, T> {
     temp_storage.make_datum_list(|packer| {
-        packer.push(a);
+        packer.push_datum(a);
         if let Some(b) = b {
             for elem in b.iter_typed() {
-                packer.push(elem);
+                packer.push_datum(elem);
             }
         }
     })
 }
 
 #[sqlfunc(sqlname = "list_remove", propagates_nulls = false)]
-fn list_remove<'a, T>(a: DatumList<'a, T>, b: T, temp_storage: &'a RowArena) -> DatumList<'a, T> {
+fn list_remove<'a, T: FromDatum<'a>>(
+    a: DatumList<'a, T>,
+    b: T,
+    temp_storage: &'a RowArena,
+) -> DatumList<'a, T> {
     temp_storage.make_datum_list(|packer| {
         for elem in a.iter_typed() {
             if elem != b {
-                packer.push(elem);
+                packer.push_datum(elem);
             }
         }
     })

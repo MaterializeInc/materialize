@@ -599,34 +599,6 @@ fn erase_all_generic_params(ty: &syn::Type, generic_names: &[Ident]) -> syn::Typ
     ty
 }
 
-/// Erases all generic type parameters from an entire function definition.
-///
-/// Replaces each generic type param with `Datum<'a>` in parameter types and return type,
-/// and removes them from the generic parameter list. The function body is left unchanged
-/// because types inside the body are inferred.
-fn erase_generics_from_fn(func: &syn::ItemFn, generic_names: &[Ident]) -> syn::ItemFn {
-    let mut func = func.clone();
-    // Remove type params from generic params.
-    func.sig.generics.params = func
-        .sig
-        .generics
-        .params
-        .into_iter()
-        .filter(|p| !matches!(p, syn::GenericParam::Type(tp) if generic_names.contains(&tp.ident)))
-        .collect();
-    // Erase params from parameter types.
-    for arg in &mut func.sig.inputs {
-        if let syn::FnArg::Typed(pat) = arg {
-            *pat.ty = erase_all_generic_params(&pat.ty, generic_names);
-        }
-    }
-    // Erase params from return type.
-    if let syn::ReturnType::Type(_, ty) = &mut func.sig.output {
-        **ty = erase_all_generic_params(ty, generic_names);
-    }
-    func
-}
-
 /// Determines the argument type of the nth argument of the function.
 ///
 /// Adds a lifetime `'a` to the argument type if it is a reference type.
@@ -845,7 +817,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
     let emitted_func = if generic_params.is_empty() {
         func.clone()
     } else {
-        erase_generics_from_fn(func, &generic_params)
+        func.clone()
     };
 
     let result = quote! {
@@ -1056,7 +1028,7 @@ fn binary_func(
     let emitted_func = if generic_params.is_empty() {
         func.clone()
     } else {
-        erase_generics_from_fn(func, &generic_params)
+        func.clone()
     };
 
     let result = quote! {
@@ -1412,7 +1384,7 @@ fn variadic_func(
     let emitted_func = if generic_params.is_empty() {
         func.clone()
     } else {
-        erase_generics_from_fn(func, &generic_params)
+        func.clone()
     };
 
     let result = if has_self {

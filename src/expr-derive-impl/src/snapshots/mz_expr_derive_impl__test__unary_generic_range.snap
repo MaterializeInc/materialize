@@ -48,6 +48,6 @@ impl std::fmt::Display for RangeLower {
         f.write_str("rangelower")
     }
 }
-fn range_lower<'a>(a: Range<Datum<'a>>) -> Option<Datum<'a>> {
+fn range_lower<'a, T>(a: Range<T>) -> Option<T> {
     a.inner.map(|inner| inner.lower.bound).flatten()
 }

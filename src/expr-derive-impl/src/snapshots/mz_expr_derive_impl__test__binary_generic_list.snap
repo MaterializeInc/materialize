@@ -60,10 +60,10 @@ impl std::fmt::Display for ListListConcat {
         f.write_str("||")
     }
 }
-fn list_list_concat<'a>(
-    a: Option<DatumList<'a, Datum<'a>>>,
-    b: Option<DatumList<'a, Datum<'a>>>,
+fn list_list_concat<'a, T>(
+    a: Option<DatumList<'a, T>>,
+    b: Option<DatumList<'a, T>>,
     temp_storage: &'a RowArena,
-) -> Option<DatumList<'a, Datum<'a>>> {
+) -> Option<DatumList<'a, T>> {
     unimplemented!()
 }
