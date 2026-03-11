@@ -337,7 +337,7 @@ fn find_generic_type_params(func: &syn::ItemFn) -> Vec<Ident> {
         .collect()
 }
 
-/// Type names used by [`classify_generic_usage`] to recognize container types
+/// Type names used by `classify_generic_usage` to recognize container types
 /// in function signatures. These must match the actual type names in `mz_repr`.
 /// A compile-time assertion in `mz_expr::scalar::func` verifies this.
 pub const CONTAINER_TYPE_DATUM_LIST: &str = "DatumList";
