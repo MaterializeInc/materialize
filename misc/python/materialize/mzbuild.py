@@ -290,6 +290,7 @@ def is_docker_image_pushed(name: str) -> bool:
                     "Accept": "application/vnd.docker.distribution.manifest.v2+json",
                 },
                 auth=HTTPBasicAuth(dockerhub_username, dockerhub_token),
+                timeout=10,
             )
         else:
             token = requests.get(
@@ -298,6 +299,7 @@ def is_docker_image_pushed(name: str) -> bool:
                     "service": "registry.docker.io",
                     "scope": f"repository:{image}:pull",
                 },
+                timeout=10,
             ).json()["token"]
             response = requests.head(
                 f"https://registry-1.docker.io/v2/{image}/manifests/{tag}",
@@ -305,6 +307,7 @@ def is_docker_image_pushed(name: str) -> bool:
                     "Accept": "application/vnd.docker.distribution.manifest.v2+json",
                     "Authorization": f"Bearer {token}",
                 },
+                timeout=10,
             )
 
         if response.status_code in (401, 429, 500, 502, 503, 504):
@@ -360,10 +363,12 @@ def is_ghcr_image_pushed(name: str) -> bool:
             params={
                 "scope": f"repository:{image}:pull",
             },
+            timeout=10,
         ).json()["token"]
         response = requests.head(
             f"https://ghcr.io/v2/{image}/manifests/{tag}",
             headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
         )
 
         if response.status_code in (401, 429, 500, 502, 503, 504):
@@ -1615,31 +1620,41 @@ def publish_multiarch_images(
         assert len(names) == 1, "dependency sets did not contain identical images"
         name = images[0].image.docker_name(tag)
         if tag in always_push_tags or not is_docker_image_pushed(name):
-            spawn.runv(
-                [
-                    "docker",
-                    "manifest",
-                    "create",
-                    name,
-                    *(image.spec() for image in images),
-                ]
+            spawn.run_with_retries(
+                lambda: (
+                    spawn.runv(
+                        [
+                            "docker",
+                            "manifest",
+                            "create",
+                            "--amend",
+                            name,
+                            *(image.spec() for image in images),
+                        ]
+                    ),
+                    spawn.runv(["docker", "manifest", "push", name]),
+                )
             )
-            spawn.runv(["docker", "manifest", "push", name])
 
         ghcr_name = f"{GHCR_PREFIX}{name}"
         if ghcr_token and (
             tag in always_push_tags or not is_ghcr_image_pushed(ghcr_name)
         ):
-            spawn.runv(
-                [
-                    "docker",
-                    "manifest",
-                    "create",
-                    ghcr_name,
-                    *(f"{GHCR_PREFIX}{image.spec()}" for image in images),
-                ]
+            spawn.run_with_retries(
+                lambda: (
+                    spawn.runv(
+                        [
+                            "docker",
+                            "manifest",
+                            "create",
+                            "--amend",
+                            ghcr_name,
+                            *(f"{GHCR_PREFIX}{image.spec()}" for image in images),
+                        ]
+                    ),
+                    spawn.runv(["docker", "manifest", "push", ghcr_name]),
+                )
             )
-            spawn.runv(["docker", "manifest", "push", ghcr_name])
     print(f"--- Nofifying for tag {tag}")
     markdown = f"""Pushed images with Docker tag `{tag}`"""
     spawn.runv(
