@@ -100,6 +100,7 @@ impl BatchColumnarFormat {
             BatchColumnarFormat::Row => "row",
             BatchColumnarFormat::Both(0 | 1) => "both",
             BatchColumnarFormat::Both(2) => "both_v2",
+            BatchColumnarFormat::Structured => "structured",
             _ => panic!("unknown batch columnar format"),
         }
     }
