@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+mod arb_int;
 mod array;
 mod boolean;
 mod byte;
@@ -40,6 +41,7 @@ mod uint64;
 mod uuid;
 mod varchar;
 
+pub use crate::scalar::func::impls::arb_int::*;
 pub use crate::scalar::func::impls::array::*;
 pub use crate::scalar::func::impls::boolean::*;
 pub use crate::scalar::func::impls::byte::*;
