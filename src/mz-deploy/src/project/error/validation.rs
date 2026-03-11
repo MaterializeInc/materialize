@@ -305,6 +305,22 @@ pub enum ValidationErrorKind {
     NetworkPolicyGrantTargetMismatch { target: String, policy_name: String },
     /// COMMENT in network policy file targets a different policy
     NetworkPolicyCommentTargetMismatch { target: String, policy_name: String },
+    /// Profile variants of an object have different primary statement types
+    ProfileObjectTypeMismatch {
+        object_name: String,
+        default_type: String,
+        override_profile: String,
+        override_type: String,
+        default_path: PathBuf,
+        override_path: PathBuf,
+    },
+    /// Views and materialized views cannot have profile-specific overrides
+    ProfileOverrideNotAllowed {
+        object_name: String,
+        object_type: String,
+        override_profile: String,
+        override_path: PathBuf,
+    },
 }
 
 impl ValidationErrorKind {
@@ -698,6 +714,29 @@ impl ValidationErrorKind {
                     policy_name, target
                 )
             }
+            Self::ProfileObjectTypeMismatch {
+                object_name,
+                default_type,
+                override_profile,
+                override_type,
+                ..
+            } => {
+                format!(
+                    "profile variant type mismatch for object '{}': default is '{}' but '{}' override is '{}'",
+                    object_name, default_type, override_profile, override_type
+                )
+            }
+            Self::ProfileOverrideNotAllowed {
+                object_name,
+                object_type,
+                override_profile,
+                ..
+            } => {
+                format!(
+                    "{} '{}' cannot have profile-specific overrides (found '{}' override)",
+                    object_type, object_name, override_profile
+                )
+            }
         }
     }
 
@@ -871,6 +910,12 @@ impl ValidationErrorKind {
             }
             Self::NetworkPolicyCommentTargetMismatch { .. } => {
                 Some("COMMENT statements in a network policy file must target the policy defined in that file".to_string())
+            }
+            Self::ProfileObjectTypeMismatch { .. } => {
+                Some("all profile variants of an object must have the same primary statement type (e.g., all CREATE SECRET or all CREATE TABLE)".to_string())
+            }
+            Self::ProfileOverrideNotAllowed { .. } => {
+                Some("views and materialized views cannot have profile-specific overrides because their definitions should be consistent across environments".to_string())
             }
         }
     }

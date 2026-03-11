@@ -186,10 +186,19 @@ and profile `staging`.
 
 ### Resolution rules
 
+- **All variants are validated:** Every profile variant of an object is
+  loaded and validated at compile time, not just the active one. Invalid
+  SQL in a non-active variant is still a compile error.
 - **Profile match wins:** If both `name.sql` and `name__<profile>.sql`
-  exist and that profile is active, the profile variant is loaded.
-- **Other profiles are skipped:** Files targeting a different profile
-  (e.g., `name__prod.sql` when `--profile staging`) are ignored entirely.
+  exist and that profile is active, the profile variant is used. Other
+  variants are validated but not included in the compiled output.
+- **Type consistency enforced:** All variants of an object must share the
+  same primary statement type. For example, if `conn.sql` is a
+  `CREATE CONNECTION`, then `conn__staging.sql` must also be a
+  `CREATE CONNECTION`. A type mismatch is a compile error.
+- **No overrides for views or materialized views:** Views and materialized
+  views cannot have profile-specific overrides. Use per-profile SQL
+  variables instead (see above).
 - **Profile-only files are valid:** A file like `secret__staging.sql` with
   no corresponding `secret.sql` default is loaded when `staging` is active
   and skipped for all other profiles.
@@ -200,7 +209,8 @@ and profile `staging`.
 
 Profile file overrides apply to all SQL object directories:
 
-- `models/` — views, materialized views, sources, sinks, tables
+- `models/` — sources, sinks, tables, connections (not views or materialized
+  views — see restriction above)
 - `clusters/` — cluster definitions
 - `roles/` — role definitions
 - `network_policies/` — network policy definitions

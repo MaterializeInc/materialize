@@ -18,51 +18,48 @@ use mz_sql_parser::ast::*;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-impl TryFrom<super::super::raw::DatabaseObject> for DatabaseObject {
-    type Error = ValidationErrors;
+/// Classify statements in a single variant and determine its object type.
+/// Returns `(ObjectType, path)` on success, or errors.
+fn classify_variant_object_type(
+    name: &str,
+    path: &std::path::Path,
+    statements: &[mz_sql_parser::ast::Statement<Raw>],
+) -> Result<ObjectType, Vec<ValidationError>> {
+    let mut errors = Vec::new();
+    let mut object_type: Option<ObjectType> = None;
+    let mut main_count = 0usize;
 
-    /// Converts a raw database object into a validated HIR database object.
-    ///
-    /// # Validation
-    ///
-    /// This conversion performs the following validations:
-    /// - Ensures exactly one primary CREATE statement exists
-    /// - Validates that the object name in the statement matches the file name
-    /// - Validates that the qualified name matches the directory structure
-    /// - Validates that all indexes reference this object
-    /// - Validates that all grants reference this object and use the correct type
-    /// - Validates that all comments reference this object and use the correct type
-    ///
-    /// # Errors
-    ///
-    /// Returns all validation errors found (may contain multiple errors):
-    /// - No primary CREATE statement is found
-    /// - Multiple primary CREATE statements are found
-    /// - The object name doesn't match the file name
-    /// - Qualified names don't match the directory structure
-    /// - Supporting statements reference different objects
-    /// - Object types are inconsistent
-    /// - Unsupported statement types are encountered
-    fn try_from(value: super::super::raw::DatabaseObject) -> Result<Self, Self::Error> {
-        let mut errors = Vec::new();
-        let mut main_stmt: Option<Statement> = None;
-        let mut object_type: Option<ObjectType> = None;
-        let mut indexes = Vec::new();
-        let mut grants = Vec::new();
-        let mut comments = Vec::new();
-        let mut tests = Vec::new();
+    for stmt in statements {
+        let stmt_type = match stmt {
+            mz_sql_parser::ast::Statement::CreateSink(_) => Some(ObjectType::Sink),
+            mz_sql_parser::ast::Statement::CreateView(_) => Some(ObjectType::View),
+            mz_sql_parser::ast::Statement::CreateMaterializedView(_) => {
+                Some(ObjectType::MaterializedView)
+            }
+            mz_sql_parser::ast::Statement::CreateTable(_) => Some(ObjectType::Table),
+            mz_sql_parser::ast::Statement::CreateTableFromSource(_) => Some(ObjectType::Table),
+            mz_sql_parser::ast::Statement::CreateSource(_) => Some(ObjectType::Source),
+            mz_sql_parser::ast::Statement::CreateSecret(_) => Some(ObjectType::Secret),
+            mz_sql_parser::ast::Statement::CreateConnection(_) => Some(ObjectType::Connection),
+            mz_sql_parser::ast::Statement::CreateIndex(_)
+            | mz_sql_parser::ast::Statement::GrantPrivileges(_)
+            | mz_sql_parser::ast::Statement::Comment(_)
+            | mz_sql_parser::ast::Statement::ExecuteUnitTest(_) => None,
+            other => {
+                errors.push(ValidationError::with_file(
+                    ValidationErrorKind::UnsupportedStatement {
+                        object_name: name.to_string(),
+                        statement_type: format!("{:?}", other),
+                    },
+                    path.to_path_buf(),
+                ));
+                None
+            }
+        };
 
-        /// Try to set the main statement, recording an error if one is already set.
-        fn set_main_statement(
-            main_stmt: &mut Option<Statement>,
-            object_type: &mut Option<ObjectType>,
-            new_stmt: Statement,
-            new_type: ObjectType,
-            name: &str,
-            path: &std::path::Path,
-            errors: &mut Vec<ValidationError>,
-        ) {
-            if main_stmt.is_some() {
+        if let Some(t) = stmt_type {
+            main_count += 1;
+            if main_count > 1 {
                 errors.push(ValidationError::with_file(
                     ValidationErrorKind::MultipleMainStatements {
                         object_name: name.to_string(),
@@ -70,231 +67,409 @@ impl TryFrom<super::super::raw::DatabaseObject> for DatabaseObject {
                     path.to_path_buf(),
                 ));
             } else {
-                *main_stmt = Some(new_stmt);
-                *object_type = Some(new_type);
+                object_type = Some(t);
             }
         }
+    }
 
-        for stmt in value.statements {
-            match stmt {
-                mz_sql_parser::ast::Statement::CreateSink(s) => {
-                    set_main_statement(
-                        &mut main_stmt,
-                        &mut object_type,
-                        Statement::CreateSink(s),
-                        ObjectType::Sink,
-                        &value.name,
-                        &value.path,
-                        &mut errors,
-                    );
-                }
-                mz_sql_parser::ast::Statement::CreateView(s) => {
-                    set_main_statement(
-                        &mut main_stmt,
-                        &mut object_type,
-                        Statement::CreateView(s),
-                        ObjectType::View,
-                        &value.name,
-                        &value.path,
-                        &mut errors,
-                    );
-                }
-                mz_sql_parser::ast::Statement::CreateMaterializedView(s) => {
-                    set_main_statement(
-                        &mut main_stmt,
-                        &mut object_type,
-                        Statement::CreateMaterializedView(s),
-                        ObjectType::MaterializedView,
-                        &value.name,
-                        &value.path,
-                        &mut errors,
-                    );
-                }
-                mz_sql_parser::ast::Statement::CreateTable(s) => {
-                    set_main_statement(
-                        &mut main_stmt,
-                        &mut object_type,
-                        Statement::CreateTable(s),
-                        ObjectType::Table,
-                        &value.name,
-                        &value.path,
-                        &mut errors,
-                    );
-                }
-                mz_sql_parser::ast::Statement::CreateTableFromSource(s) => {
-                    set_main_statement(
-                        &mut main_stmt,
-                        &mut object_type,
-                        Statement::CreateTableFromSource(s),
-                        ObjectType::Table,
-                        &value.name,
-                        &value.path,
-                        &mut errors,
-                    );
-                }
-                mz_sql_parser::ast::Statement::CreateSource(s) => {
-                    set_main_statement(
-                        &mut main_stmt,
-                        &mut object_type,
-                        Statement::CreateSource(s),
-                        ObjectType::Source,
-                        &value.name,
-                        &value.path,
-                        &mut errors,
-                    );
-                }
-                mz_sql_parser::ast::Statement::CreateSecret(s) => {
-                    set_main_statement(
-                        &mut main_stmt,
-                        &mut object_type,
-                        Statement::CreateSecret(s),
-                        ObjectType::Secret,
-                        &value.name,
-                        &value.path,
-                        &mut errors,
-                    );
-                }
-                mz_sql_parser::ast::Statement::CreateConnection(s) => {
-                    set_main_statement(
-                        &mut main_stmt,
-                        &mut object_type,
-                        Statement::CreateConnection(s),
-                        ObjectType::Connection,
-                        &value.name,
-                        &value.path,
-                        &mut errors,
-                    );
-                }
+    if object_type.is_none() {
+        errors.push(ValidationError::with_file(
+            ValidationErrorKind::NoMainStatement {
+                object_name: name.to_string(),
+            },
+            path.to_path_buf(),
+        ));
+        errors.push(ValidationError::with_file(
+            ValidationErrorKind::NoObjectType,
+            path.to_path_buf(),
+        ));
+    }
 
-                // Supporting statements
-                mz_sql_parser::ast::Statement::CreateIndex(s) => {
-                    indexes.push(s);
-                }
-                mz_sql_parser::ast::Statement::GrantPrivileges(s) => {
-                    grants.push(s);
-                }
-                mz_sql_parser::ast::Statement::Comment(s) => {
-                    comments.push(s);
-                }
+    if !errors.is_empty() {
+        Err(errors)
+    } else {
+        Ok(object_type.unwrap())
+    }
+}
 
-                // Test statements are collected for later execution
-                mz_sql_parser::ast::Statement::ExecuteUnitTest(s) => {
-                    tests.push(s);
-                }
+/// A human-readable name for an ObjectType.
+fn object_type_name(t: ObjectType) -> &'static str {
+    match t {
+        ObjectType::View => "view",
+        ObjectType::MaterializedView => "materialized view",
+        ObjectType::Table => "table",
+        ObjectType::Source => "source",
+        ObjectType::Sink => "sink",
+        ObjectType::Secret => "secret",
+        ObjectType::Connection => "connection",
+        _ => "unknown",
+    }
+}
 
-                // Unsupported statements
-                other => {
-                    errors.push(ValidationError::with_file(
-                        ValidationErrorKind::UnsupportedStatement {
-                            object_name: value.name.clone(),
-                            statement_type: format!("{:?}", other),
-                        },
-                        value.path.clone(),
-                    ));
-                }
-            }
-        }
+/// Validate a single variant's statements fully and produce a typed `DatabaseObject`.
+///
+/// This runs all existing validation (classify statements, check name/fqn, indexes,
+/// grants, comments, clusters, etc.)
+fn validate_single_variant(
+    name: &str,
+    database: &str,
+    schema: &str,
+    path: &std::path::Path,
+    statements: Vec<mz_sql_parser::ast::Statement<Raw>>,
+) -> Result<DatabaseObject, ValidationErrors> {
+    let mut errors = Vec::new();
+    let mut main_stmt: Option<Statement> = None;
+    let mut object_type: Option<ObjectType> = None;
+    let mut indexes = Vec::new();
+    let mut grants = Vec::new();
+    let mut comments = Vec::new();
+    let mut tests = Vec::new();
 
-        // Check for main statement
-        if main_stmt.is_none() {
+    /// Try to set the main statement, recording an error if one is already set.
+    fn set_main_statement(
+        main_stmt: &mut Option<Statement>,
+        object_type: &mut Option<ObjectType>,
+        new_stmt: Statement,
+        new_type: ObjectType,
+        name: &str,
+        path: &std::path::Path,
+        errors: &mut Vec<ValidationError>,
+    ) {
+        if main_stmt.is_some() {
             errors.push(ValidationError::with_file(
-                ValidationErrorKind::NoMainStatement {
-                    object_name: value.name.clone(),
+                ValidationErrorKind::MultipleMainStatements {
+                    object_name: name.to_string(),
                 },
-                value.path.clone(),
+                path.to_path_buf(),
             ));
+        } else {
+            *main_stmt = Some(new_stmt);
+            *object_type = Some(new_type);
+        }
+    }
+
+    for stmt in statements {
+        match stmt {
+            mz_sql_parser::ast::Statement::CreateSink(s) => {
+                set_main_statement(
+                    &mut main_stmt,
+                    &mut object_type,
+                    Statement::CreateSink(s),
+                    ObjectType::Sink,
+                    name,
+                    path,
+                    &mut errors,
+                );
+            }
+            mz_sql_parser::ast::Statement::CreateView(s) => {
+                set_main_statement(
+                    &mut main_stmt,
+                    &mut object_type,
+                    Statement::CreateView(s),
+                    ObjectType::View,
+                    name,
+                    path,
+                    &mut errors,
+                );
+            }
+            mz_sql_parser::ast::Statement::CreateMaterializedView(s) => {
+                set_main_statement(
+                    &mut main_stmt,
+                    &mut object_type,
+                    Statement::CreateMaterializedView(s),
+                    ObjectType::MaterializedView,
+                    name,
+                    path,
+                    &mut errors,
+                );
+            }
+            mz_sql_parser::ast::Statement::CreateTable(s) => {
+                set_main_statement(
+                    &mut main_stmt,
+                    &mut object_type,
+                    Statement::CreateTable(s),
+                    ObjectType::Table,
+                    name,
+                    path,
+                    &mut errors,
+                );
+            }
+            mz_sql_parser::ast::Statement::CreateTableFromSource(s) => {
+                set_main_statement(
+                    &mut main_stmt,
+                    &mut object_type,
+                    Statement::CreateTableFromSource(s),
+                    ObjectType::Table,
+                    name,
+                    path,
+                    &mut errors,
+                );
+            }
+            mz_sql_parser::ast::Statement::CreateSource(s) => {
+                set_main_statement(
+                    &mut main_stmt,
+                    &mut object_type,
+                    Statement::CreateSource(s),
+                    ObjectType::Source,
+                    name,
+                    path,
+                    &mut errors,
+                );
+            }
+            mz_sql_parser::ast::Statement::CreateSecret(s) => {
+                set_main_statement(
+                    &mut main_stmt,
+                    &mut object_type,
+                    Statement::CreateSecret(s),
+                    ObjectType::Secret,
+                    name,
+                    path,
+                    &mut errors,
+                );
+            }
+            mz_sql_parser::ast::Statement::CreateConnection(s) => {
+                set_main_statement(
+                    &mut main_stmt,
+                    &mut object_type,
+                    Statement::CreateConnection(s),
+                    ObjectType::Connection,
+                    name,
+                    path,
+                    &mut errors,
+                );
+            }
+
+            // Supporting statements
+            mz_sql_parser::ast::Statement::CreateIndex(s) => {
+                indexes.push(s);
+            }
+            mz_sql_parser::ast::Statement::GrantPrivileges(s) => {
+                grants.push(s);
+            }
+            mz_sql_parser::ast::Statement::Comment(s) => {
+                comments.push(s);
+            }
+
+            // Test statements are collected for later execution
+            mz_sql_parser::ast::Statement::ExecuteUnitTest(s) => {
+                tests.push(s);
+            }
+
+            // Unsupported statements
+            other => {
+                errors.push(ValidationError::with_file(
+                    ValidationErrorKind::UnsupportedStatement {
+                        object_name: name.to_string(),
+                        statement_type: format!("{:?}", other),
+                    },
+                    path.to_path_buf(),
+                ));
+            }
+        }
+    }
+
+    // Check for main statement
+    if main_stmt.is_none() {
+        errors.push(ValidationError::with_file(
+            ValidationErrorKind::NoMainStatement {
+                object_name: name.to_string(),
+            },
+            path.to_path_buf(),
+        ));
+    }
+
+    // Check for object type
+    if object_type.is_none() {
+        errors.push(ValidationError::with_file(
+            ValidationErrorKind::NoObjectType,
+            path.to_path_buf(),
+        ));
+    }
+
+    // If we have fatal errors (no main statement or object type), return early
+    if !errors.is_empty() && (main_stmt.is_none() || object_type.is_none()) {
+        return Err(ValidationErrors::new(errors));
+    }
+
+    // Unwrap is safe here because we checked above
+    let stmt = main_stmt.unwrap();
+    let obj_type = object_type.unwrap();
+
+    let fqn = match FullyQualifiedName::with_names(path, name, database, schema) {
+        Ok(fqn) => fqn,
+        Err(e) => {
+            errors.push(e);
+            return Err(ValidationErrors::new(errors));
+        }
+    };
+
+    // Get identifier from original statement before normalization
+    let main_ident = stmt.ident();
+
+    // Validate the original statement identifier against FQN
+    validate_ident(&stmt, &fqn, &mut errors);
+
+    // Validate identifier format (lowercase, valid characters)
+    validate_fqn_identifiers(&fqn, &mut errors);
+
+    // Normalize statement name and dependencies
+    let stmt = stmt.normalize_stmt(&fqn);
+
+    // Normalize index, grant, and comment references to be fully qualified
+    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    visitor.normalize_index_references(&mut indexes);
+    visitor.normalize_grant_references(&mut grants);
+    visitor.normalize_comment_references(&mut comments);
+
+    // Validate cluster requirements
+    validate_index_clusters(&fqn, &indexes, &mut errors);
+    validate_mv_cluster(&fqn, &stmt, &mut errors);
+    validate_sink_cluster(&fqn, &stmt, &mut errors);
+    validate_source_cluster(&fqn, &stmt, &mut errors);
+
+    validate_index_references(&fqn, &indexes, &main_ident, &mut errors);
+    validate_grant_references(&fqn, &grants, &main_ident, obj_type, &mut errors);
+    validate_comment_references(&fqn, &comments, &main_ident, &obj_type, &mut errors);
+
+    if !errors.is_empty() {
+        return Err(ValidationErrors::new(errors));
+    }
+
+    Ok(DatabaseObject {
+        stmt,
+        indexes,
+        grants,
+        comments,
+        tests,
+    })
+}
+
+impl DatabaseObject {
+    /// Validate all variants of a raw database object, check cross-variant consistency,
+    /// and resolve the active variant for the given profile.
+    pub fn validate(
+        value: super::super::raw::DatabaseObject,
+        profile: &str,
+    ) -> Result<Self, ValidationErrors> {
+        let mut errors = Vec::new();
+
+        // Step 1: Classify all variants to determine their object types
+        let mut variant_types: Vec<(ObjectType, &super::super::raw::ObjectVariant)> = Vec::new();
+        for variant in &value.variants {
+            match classify_variant_object_type(&value.name, &variant.path, &variant.statements) {
+                Ok(obj_type) => variant_types.push((obj_type, variant)),
+                Err(errs) => errors.extend(errs),
+            }
         }
 
-        // Check for object type
-        if object_type.is_none() {
-            errors.push(ValidationError::with_file(
-                ValidationErrorKind::NoObjectType,
-                value.path.clone(),
-            ));
-        }
-
-        // If we have fatal errors (no main statement or object type), return early
-        // since we can't continue validation without them
-        if !errors.is_empty() && (main_stmt.is_none() || object_type.is_none()) {
+        // If we couldn't classify any variant, return errors early
+        if variant_types.is_empty() && !errors.is_empty() {
             return Err(ValidationErrors::new(errors));
         }
 
-        // Unwrap is safe here because we checked above
-        let stmt = main_stmt.unwrap();
-        let obj_type = object_type.unwrap();
+        // Step 2: Check type consistency across variants
+        // Find the default variant's type as the reference type
+        let reference_type = variant_types
+            .iter()
+            .find(|(_, v)| v.profile.is_none())
+            .or_else(|| variant_types.first())
+            .map(|(t, _)| *t);
 
-        let fqn = match FullyQualifiedName::with_names(
-            value.path.as_path(),
-            value.name.as_str(),
-            &value.database,
-            &value.schema,
-        ) {
-            Ok(fqn) => fqn,
-            Err(e) => {
-                errors.push(e);
-                // Return early if we can't extract FQN
-                return Err(ValidationErrors::new(errors));
+        if let Some(ref_type) = reference_type {
+            let ref_variant = variant_types
+                .iter()
+                .find(|(_, v)| v.profile.is_none())
+                .or_else(|| variant_types.first())
+                .map(|(_, v)| *v)
+                .unwrap();
+
+            for (obj_type, variant) in &variant_types {
+                if *obj_type != ref_type {
+                    errors.push(ValidationError::with_file(
+                        ValidationErrorKind::ProfileObjectTypeMismatch {
+                            object_name: value.name.clone(),
+                            default_type: object_type_name(ref_type).to_string(),
+                            override_profile: variant
+                                .profile
+                                .clone()
+                                .unwrap_or_else(|| "default".to_string()),
+                            override_type: object_type_name(*obj_type).to_string(),
+                            default_path: ref_variant.path.clone(),
+                            override_path: variant.path.clone(),
+                        },
+                        variant.path.clone(),
+                    ));
+                }
             }
-        };
 
-        // Get identifier from original statement before normalization
-        let main_ident = stmt.ident();
-
-        // Validate the original statement identifier against FQN
-        validate_ident(&stmt, &fqn, &mut errors);
-
-        // Validate identifier format (lowercase, valid characters)
-        validate_fqn_identifiers(&fqn, &mut errors);
-
-        // Normalize statement name and dependencies
-        let stmt = stmt.normalize_stmt(&fqn);
-
-        // Normalize index, grant, and comment references to be fully qualified
-        let visitor = NormalizingVisitor::fully_qualifying(&fqn);
-        visitor.normalize_index_references(&mut indexes);
-        visitor.normalize_grant_references(&mut grants);
-        visitor.normalize_comment_references(&mut comments);
-
-        // Validate cluster requirements
-        validate_index_clusters(&fqn, &indexes, &mut errors);
-        validate_mv_cluster(&fqn, &stmt, &mut errors);
-        validate_sink_cluster(&fqn, &stmt, &mut errors);
-        validate_source_cluster(&fqn, &stmt, &mut errors);
-
-        validate_index_references(&fqn, &indexes, &main_ident, &mut errors);
-        validate_grant_references(&fqn, &grants, &main_ident, obj_type, &mut errors);
-        validate_comment_references(&fqn, &comments, &main_ident, &obj_type, &mut errors);
+            // Step 3: Check view/MV restriction
+            let has_overrides = value.variants.iter().any(|v| v.profile.is_some());
+            if has_overrides
+                && (ref_type == ObjectType::View || ref_type == ObjectType::MaterializedView)
+            {
+                for variant in &value.variants {
+                    if let Some(ref prof) = variant.profile {
+                        errors.push(ValidationError::with_file(
+                            ValidationErrorKind::ProfileOverrideNotAllowed {
+                                object_name: value.name.clone(),
+                                object_type: object_type_name(ref_type).to_string(),
+                                override_profile: prof.clone(),
+                                override_path: variant.path.clone(),
+                            },
+                            variant.path.clone(),
+                        ));
+                    }
+                }
+            }
+        }
 
         if !errors.is_empty() {
             return Err(ValidationErrors::new(errors));
         }
 
-        Ok(DatabaseObject {
-            stmt,
-            indexes,
-            grants,
-            comments,
-            tests,
-        })
+        // Step 4: Resolve active variant — pick profile match or fall back to default
+        let active_variant = value
+            .variants
+            .iter()
+            .find(|v| v.profile.as_deref() == Some(profile))
+            .or_else(|| value.variants.iter().find(|v| v.profile.is_none()))
+            .or_else(|| value.variants.first());
+
+        let active_variant = match active_variant {
+            Some(v) => v,
+            None => {
+                // Should not happen since we require at least one variant
+                errors.push(ValidationError::with_file(
+                    ValidationErrorKind::NoMainStatement {
+                        object_name: value.name.clone(),
+                    },
+                    PathBuf::from(&value.name),
+                ));
+                return Err(ValidationErrors::new(errors));
+            }
+        };
+
+        // Step 5: Fully validate the active variant
+        validate_single_variant(
+            &value.name,
+            &value.database,
+            &value.schema,
+            &active_variant.path,
+            active_variant.statements.clone(),
+        )
     }
 }
 
-impl TryFrom<super::super::raw::Schema> for Schema {
-    type Error = ValidationErrors;
-
-    /// Converts a raw schema into a validated HIR schema.
-    ///
-    /// Validates each database object in the schema. Collects all validation errors
-    /// from all objects and returns them together.
-    fn try_from(value: super::super::raw::Schema) -> Result<Self, Self::Error> {
+impl Schema {
+    /// Validate a raw schema, converting each object using the given profile.
+    pub fn validate(value: super::super::raw::Schema, profile: &str) -> Result<Self, ValidationErrors> {
         let mut all_errors = Vec::new();
         let mut objects = Vec::new();
 
         for obj in value.objects {
-            match DatabaseObject::try_from(obj) {
+            match DatabaseObject::validate(obj, profile) {
                 Ok(db_obj) => objects.push(db_obj),
                 Err(errs) => {
-                    // Collect errors from this object
                     all_errors.extend(errs.errors);
                 }
             }
@@ -314,14 +489,9 @@ impl TryFrom<super::super::raw::Schema> for Schema {
     }
 }
 
-impl TryFrom<super::super::raw::Database> for Database {
-    type Error = ValidationErrors;
-
-    /// Converts a raw database into a validated HIR database.
-    ///
-    /// Validates each schema in the database. Collects all validation errors
-    /// from all schemas and objects and returns them together.
-    fn try_from(value: super::super::raw::Database) -> Result<Self, Self::Error> {
+impl Database {
+    /// Validate a raw database, converting each schema using the given profile.
+    pub fn validate(value: super::super::raw::Database, profile: &str) -> Result<Self, ValidationErrors> {
         let mut all_errors = Vec::new();
         let mut schemas = Vec::new();
 
@@ -344,10 +514,9 @@ impl TryFrom<super::super::raw::Database> for Database {
                 );
             }
 
-            match Schema::try_from(schema) {
+            match Schema::validate(schema, profile) {
                 Ok(s) => schemas.push(s),
                 Err(errs) => {
-                    // Collect errors from this schema
                     all_errors.extend(errs.errors);
                 }
             }
@@ -378,14 +547,14 @@ impl TryFrom<super::super::raw::Project> for Project {
     ///
     /// Returns all validation errors found across the entire project hierarchy.
     fn try_from(value: super::super::raw::Project) -> Result<Self, Self::Error> {
+        let profile = value.profile.clone();
         let mut all_errors = Vec::new();
         let mut databases = Vec::new();
 
         for (_, database) in value.databases {
-            match Database::try_from(database) {
+            match Database::validate(database, &profile) {
                 Ok(db) => databases.push(db),
                 Err(errs) => {
-                    // Collect errors from this database
                     all_errors.extend(errs.errors);
                 }
             }

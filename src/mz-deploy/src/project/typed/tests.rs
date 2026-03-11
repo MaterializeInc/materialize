@@ -22,10 +22,13 @@ fn create_raw_object(name: &str, path: PathBuf, sql: &str) -> raw::DatabaseObjec
         .unwrap_or_default();
     raw::DatabaseObject {
         name: name.to_string(),
-        path,
         database,
         schema,
-        statements,
+        variants: vec![raw::ObjectVariant {
+            path,
+            profile: None,
+            statements,
+        }],
     }
 }
 
@@ -35,7 +38,7 @@ fn test_valid_simple_object_name() {
     let path = temp_dir.path().join("materialize/public/foo.sql");
 
     let raw = create_raw_object("foo", path, "CREATE TABLE foo (id INT);");
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
 }
@@ -46,7 +49,7 @@ fn test_valid_qualified_schema() {
     let path = temp_dir.path().join("materialize/public/foo.sql");
 
     let raw = create_raw_object("foo", path, "CREATE TABLE public.foo (id INT);");
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
 }
@@ -57,7 +60,7 @@ fn test_valid_fully_qualified() {
     let path = temp_dir.path().join("materialize/public/foo.sql");
 
     let raw = create_raw_object("foo", path, "CREATE TABLE materialize.public.foo (id INT);");
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
 }
@@ -68,7 +71,7 @@ fn test_invalid_object_name_mismatch() {
     let path = temp_dir.path().join("materialize/public/foo.sql");
 
     let raw = create_raw_object("foo", path, "CREATE TABLE bar (id INT);");
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -83,7 +86,7 @@ fn test_invalid_schema_mismatch() {
     let path = temp_dir.path().join("materialize/public/foo.sql");
 
     let raw = create_raw_object("foo", path, "CREATE TABLE private.foo (id INT);");
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -100,7 +103,7 @@ fn test_invalid_database_mismatch() {
     let path = temp_dir.path().join("materialize/public/foo.sql");
 
     let raw = create_raw_object("foo", path, "CREATE TABLE other_db.public.foo (id INT);");
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -124,7 +127,7 @@ fn test_valid_with_indexes_and_grants() {
     "#;
 
     let raw = create_raw_object("foo", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
     let obj = result.unwrap();
@@ -144,7 +147,7 @@ fn test_invalid_index_on_different_object() {
     "#;
 
     let raw = create_raw_object("foo", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -164,7 +167,7 @@ fn test_invalid_grant_on_different_object() {
     "#;
 
     let raw = create_raw_object("foo", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -184,7 +187,7 @@ fn test_invalid_comment_on_different_object() {
     "#;
 
     let raw = create_raw_object("foo", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -205,7 +208,7 @@ fn test_valid_column_comment() {
     "#;
 
     let raw = create_raw_object("foo", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
     let obj = result.unwrap();
@@ -223,7 +226,7 @@ fn test_invalid_column_comment_on_different_table() {
     "#;
 
     let raw = create_raw_object("foo", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -243,7 +246,7 @@ fn test_invalid_comment_type_mismatch() {
     "#;
 
     let raw = create_raw_object("foo", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -267,7 +270,7 @@ fn test_view_dependency_normalization() {
     "#;
 
     let raw = create_raw_object("active_users", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
     let obj = result.unwrap();
@@ -315,7 +318,7 @@ fn test_materialized_view_dependency_normalization() {
     "#;
 
     let raw = create_raw_object("active_users_mv", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
     let obj = result.unwrap();
@@ -355,7 +358,7 @@ fn test_view_with_join_normalization() {
     "#;
 
     let raw = create_raw_object("user_orders", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
     let obj = result.unwrap();
@@ -405,7 +408,7 @@ fn test_view_with_subquery_normalization() {
     "#;
 
     let raw = create_raw_object("recent_orders", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
     let obj = result.unwrap();
@@ -449,7 +452,7 @@ fn test_view_with_cte_normalization() {
     "#;
 
     let raw = create_raw_object("user_summary", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
     let obj = result.unwrap();
@@ -491,7 +494,7 @@ fn test_table_from_source_normalization() {
     "#;
 
     let raw = create_raw_object("kafka_table", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
     let obj = result.unwrap();
@@ -523,7 +526,7 @@ fn test_sink_normalization() {
     "#;
 
     let raw = create_raw_object("kafka_sink", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
     let obj = result.unwrap();
@@ -557,7 +560,7 @@ fn test_index_normalization() {
     "#;
 
     let raw = create_raw_object("users", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
     let obj = result.unwrap();
@@ -581,7 +584,7 @@ fn test_comment_normalization() {
     "#;
 
     let raw = create_raw_object("users", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
     let obj = result.unwrap();
@@ -619,7 +622,7 @@ fn test_schema_qualified_dependency_normalization() {
     "#;
 
     let raw = create_raw_object("active_users", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
     let obj = result.unwrap();
@@ -656,7 +659,7 @@ fn test_already_fully_qualified_unchanged() {
     "#;
 
     let raw = create_raw_object("cross_db_view", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
     let obj = result.unwrap();
@@ -695,7 +698,7 @@ fn test_valid_database_mod_comment() {
         schemas: BTreeMap::new(),
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(result.is_ok(), "Valid database comment should be accepted");
 }
 
@@ -713,7 +716,7 @@ fn test_valid_database_mod_grant() {
         schemas: BTreeMap::new(),
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(result.is_ok(), "Valid database grant should be accepted");
 }
 
@@ -731,7 +734,7 @@ fn test_invalid_database_mod_wrong_statement_type() {
         schemas: BTreeMap::new(),
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_err(),
         "CREATE TABLE in database mod file should be rejected"
@@ -759,7 +762,7 @@ fn test_invalid_database_mod_comment_wrong_target() {
         schemas: BTreeMap::new(),
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_err(),
         "COMMENT ON SCHEMA in database mod file should be rejected"
@@ -787,7 +790,7 @@ fn test_invalid_database_mod_comment_wrong_database() {
         schemas: BTreeMap::new(),
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_err(),
         "COMMENT ON wrong database should be rejected"
@@ -824,7 +827,7 @@ fn test_valid_schema_mod_comment() {
         schemas,
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_ok(),
         "Valid schema comment should be accepted: {:?}",
@@ -855,7 +858,7 @@ fn test_valid_schema_mod_grant() {
         schemas,
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_ok(),
         "Valid schema grant should be accepted: {:?}",
@@ -886,7 +889,7 @@ fn test_invalid_schema_mod_wrong_statement_type() {
         schemas,
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_err(),
         "CREATE VIEW in schema mod file should be rejected"
@@ -923,7 +926,7 @@ fn test_invalid_schema_mod_comment_wrong_target() {
         schemas,
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_err(),
         "COMMENT ON TABLE in schema mod file should be rejected"
@@ -960,7 +963,7 @@ fn test_invalid_schema_mod_comment_wrong_schema() {
         schemas,
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_err(),
         "COMMENT ON wrong schema should be rejected"
@@ -988,7 +991,7 @@ fn test_valid_database_mod_alter_default_privileges() {
         schemas: BTreeMap::new(),
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_ok(),
         "Valid ALTER DEFAULT PRIVILEGES IN DATABASE should be accepted: {:?}",
@@ -1010,7 +1013,7 @@ fn test_invalid_database_mod_alter_default_privileges_no_scope() {
         schemas: BTreeMap::new(),
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_err(),
         "ALTER DEFAULT PRIVILEGES without scope should be rejected"
@@ -1038,7 +1041,7 @@ fn test_invalid_database_mod_alter_default_privileges_wrong_database() {
         schemas: BTreeMap::new(),
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_err(),
         "ALTER DEFAULT PRIVILEGES with wrong database should be rejected"
@@ -1067,7 +1070,7 @@ fn test_invalid_database_mod_alter_default_privileges_with_schema() {
         schemas: BTreeMap::new(),
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_err(),
         "ALTER DEFAULT PRIVILEGES with IN SCHEMA should be rejected in database mod"
@@ -1105,7 +1108,7 @@ fn test_valid_schema_mod_alter_default_privileges_unqualified() {
         schemas,
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_ok(),
         "Valid ALTER DEFAULT PRIVILEGES with unqualified schema should be accepted: {:?}",
@@ -1136,7 +1139,7 @@ fn test_valid_schema_mod_alter_default_privileges_qualified() {
         schemas,
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_ok(),
         "Valid ALTER DEFAULT PRIVILEGES with qualified schema should be accepted: {:?}",
@@ -1167,7 +1170,7 @@ fn test_invalid_schema_mod_alter_default_privileges_no_scope() {
         schemas,
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_err(),
         "ALTER DEFAULT PRIVILEGES without scope should be rejected in schema mod"
@@ -1204,7 +1207,7 @@ fn test_invalid_schema_mod_alter_default_privileges_with_database() {
         schemas,
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_err(),
         "ALTER DEFAULT PRIVILEGES with IN DATABASE should be rejected in schema mod"
@@ -1241,7 +1244,7 @@ fn test_invalid_schema_mod_alter_default_privileges_wrong_schema() {
         schemas,
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_err(),
         "ALTER DEFAULT PRIVILEGES with wrong schema should be rejected"
@@ -1278,7 +1281,7 @@ fn test_schema_mod_comment_normalization() {
         schemas,
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_ok(),
         "Valid schema comment should be accepted: {:?}",
@@ -1325,7 +1328,7 @@ fn test_schema_mod_grant_normalization() {
         schemas,
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_ok(),
         "Valid schema grant should be accepted: {:?}",
@@ -1373,7 +1376,7 @@ fn test_schema_mod_alter_default_privileges_normalization() {
         schemas,
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_ok(),
         "Valid ALTER DEFAULT PRIVILEGES should be accepted: {:?}",
@@ -1420,7 +1423,7 @@ fn test_schema_mod_already_qualified_names() {
         schemas,
     };
 
-    let result = Database::try_from(raw_db);
+    let result = Database::validate(raw_db, "default");
     assert!(
         result.is_ok(),
         "Qualified schema comment should be accepted: {:?}",
@@ -1456,18 +1459,24 @@ fn test_schema_with_tables_and_views_fails() {
 
     let raw_table = raw::DatabaseObject {
         name: "users".to_string(),
-        path: PathBuf::from("materialize/mixed/users.sql"),
         database: "materialize".to_string(),
         schema: "mixed".to_string(),
-        statements: table_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/mixed/users.sql"),
+            profile: None,
+            statements: table_stmts,
+        }],
     };
 
     let raw_view = raw::DatabaseObject {
         name: "active_users".to_string(),
-        path: PathBuf::from("materialize/mixed/active_users.sql"),
         database: "materialize".to_string(),
         schema: "mixed".to_string(),
-        statements: view_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/mixed/active_users.sql"),
+            profile: None,
+            statements: view_stmts,
+        }],
     };
 
     let raw_schema = raw::Schema {
@@ -1476,7 +1485,7 @@ fn test_schema_with_tables_and_views_fails() {
         mod_statements: None,
     };
 
-    let result = Schema::try_from(raw_schema);
+    let result = Schema::validate(raw_schema, "default");
     assert!(
         result.is_err(),
         "Schema with both tables and views should fail validation"
@@ -1501,18 +1510,24 @@ fn test_schema_with_tables_and_materialized_views_fails() {
 
     let raw_table = raw::DatabaseObject {
         name: "orders".to_string(),
-        path: PathBuf::from("materialize/mixed/orders.sql"),
         database: "materialize".to_string(),
         schema: "mixed".to_string(),
-        statements: table_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/mixed/orders.sql"),
+            profile: None,
+            statements: table_stmts,
+        }],
     };
 
     let raw_mv = raw::DatabaseObject {
         name: "order_summary".to_string(),
-        path: PathBuf::from("materialize/mixed/order_summary.sql"),
         database: "materialize".to_string(),
         schema: "mixed".to_string(),
-        statements: mv_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/mixed/order_summary.sql"),
+            profile: None,
+            statements: mv_stmts,
+        }],
     };
 
     let raw_schema = raw::Schema {
@@ -1521,7 +1536,7 @@ fn test_schema_with_tables_and_materialized_views_fails() {
         mod_statements: None,
     };
 
-    let result = Schema::try_from(raw_schema);
+    let result = Schema::validate(raw_schema, "default");
     assert!(
         result.is_err(),
         "Schema with both tables and materialized views should fail validation"
@@ -1538,18 +1553,24 @@ fn test_schema_with_sinks_and_views_fails() {
 
     let raw_sink = raw::DatabaseObject {
         name: "user_sink".to_string(),
-        path: PathBuf::from("materialize/mixed/user_sink.sql"),
         database: "materialize".to_string(),
         schema: "mixed".to_string(),
-        statements: sink_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/mixed/user_sink.sql"),
+            profile: None,
+            statements: sink_stmts,
+        }],
     };
 
     let raw_view = raw::DatabaseObject {
         name: "user_view".to_string(),
-        path: PathBuf::from("materialize/mixed/user_view.sql"),
         database: "materialize".to_string(),
         schema: "mixed".to_string(),
-        statements: view_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/mixed/user_view.sql"),
+            profile: None,
+            statements: view_stmts,
+        }],
     };
 
     let raw_schema = raw::Schema {
@@ -1558,7 +1579,7 @@ fn test_schema_with_sinks_and_views_fails() {
         mod_statements: None,
     };
 
-    let result = Schema::try_from(raw_schema);
+    let result = Schema::validate(raw_schema, "default");
     assert!(
         result.is_err(),
         "Schema with both sinks and views should fail validation"
@@ -1576,18 +1597,24 @@ fn test_schema_with_sinks_and_materialized_views_fails() {
 
     let raw_sink = raw::DatabaseObject {
         name: "order_sink".to_string(),
-        path: PathBuf::from("materialize/mixed/order_sink.sql"),
         database: "materialize".to_string(),
         schema: "mixed".to_string(),
-        statements: sink_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/mixed/order_sink.sql"),
+            profile: None,
+            statements: sink_stmts,
+        }],
     };
 
     let raw_mv = raw::DatabaseObject {
         name: "order_mv".to_string(),
-        path: PathBuf::from("materialize/mixed/order_mv.sql"),
         database: "materialize".to_string(),
         schema: "mixed".to_string(),
-        statements: mv_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/mixed/order_mv.sql"),
+            profile: None,
+            statements: mv_stmts,
+        }],
     };
 
     let raw_schema = raw::Schema {
@@ -1596,7 +1623,7 @@ fn test_schema_with_sinks_and_materialized_views_fails() {
         mod_statements: None,
     };
 
-    let result = Schema::try_from(raw_schema);
+    let result = Schema::validate(raw_schema, "default");
     assert!(
         result.is_err(),
         "Schema with both sinks and materialized views should fail validation"
@@ -1615,26 +1642,35 @@ fn test_schema_with_tables_sinks_and_views_fails() {
 
     let raw_table = raw::DatabaseObject {
         name: "users".to_string(),
-        path: PathBuf::from("materialize/mixed/users.sql"),
         database: "materialize".to_string(),
         schema: "mixed".to_string(),
-        statements: table_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/mixed/users.sql"),
+            profile: None,
+            statements: table_stmts,
+        }],
     };
 
     let raw_sink = raw::DatabaseObject {
         name: "user_sink".to_string(),
-        path: PathBuf::from("materialize/mixed/user_sink.sql"),
         database: "materialize".to_string(),
         schema: "mixed".to_string(),
-        statements: sink_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/mixed/user_sink.sql"),
+            profile: None,
+            statements: sink_stmts,
+        }],
     };
 
     let raw_view = raw::DatabaseObject {
         name: "user_view".to_string(),
-        path: PathBuf::from("materialize/mixed/user_view.sql"),
         database: "materialize".to_string(),
         schema: "mixed".to_string(),
-        statements: view_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/mixed/user_view.sql"),
+            profile: None,
+            statements: view_stmts,
+        }],
     };
 
     let raw_schema = raw::Schema {
@@ -1643,7 +1679,7 @@ fn test_schema_with_tables_sinks_and_views_fails() {
         mod_statements: None,
     };
 
-    let result = Schema::try_from(raw_schema);
+    let result = Schema::validate(raw_schema, "default");
     assert!(
         result.is_err(),
         "Schema with tables, sinks, and views should fail validation"
@@ -1660,18 +1696,24 @@ fn test_schema_with_only_tables_succeeds() {
 
     let raw_table1 = raw::DatabaseObject {
         name: "users".to_string(),
-        path: PathBuf::from("materialize/tables/users.sql"),
         database: "materialize".to_string(),
         schema: "tables".to_string(),
-        statements: table1_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/tables/users.sql"),
+            profile: None,
+            statements: table1_stmts,
+        }],
     };
 
     let raw_table2 = raw::DatabaseObject {
         name: "orders".to_string(),
-        path: PathBuf::from("materialize/tables/orders.sql"),
         database: "materialize".to_string(),
         schema: "tables".to_string(),
-        statements: table2_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/tables/orders.sql"),
+            profile: None,
+            statements: table2_stmts,
+        }],
     };
 
     let raw_schema = raw::Schema {
@@ -1680,7 +1722,7 @@ fn test_schema_with_only_tables_succeeds() {
         mod_statements: None,
     };
 
-    let result = Schema::try_from(raw_schema);
+    let result = Schema::validate(raw_schema, "default");
     assert!(
         result.is_ok(),
         "Schema with only tables should pass validation"
@@ -1697,18 +1739,24 @@ fn test_schema_with_tables_and_sinks_succeeds() {
 
     let raw_table = raw::DatabaseObject {
         name: "users".to_string(),
-        path: PathBuf::from("materialize/storage/users.sql"),
         database: "materialize".to_string(),
         schema: "storage".to_string(),
-        statements: table_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/storage/users.sql"),
+            profile: None,
+            statements: table_stmts,
+        }],
     };
 
     let raw_sink = raw::DatabaseObject {
         name: "user_sink".to_string(),
-        path: PathBuf::from("materialize/storage/user_sink.sql"),
         database: "materialize".to_string(),
         schema: "storage".to_string(),
-        statements: sink_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/storage/user_sink.sql"),
+            profile: None,
+            statements: sink_stmts,
+        }],
     };
 
     let raw_schema = raw::Schema {
@@ -1717,7 +1765,7 @@ fn test_schema_with_tables_and_sinks_succeeds() {
         mod_statements: None,
     };
 
-    let result = Schema::try_from(raw_schema);
+    let result = Schema::validate(raw_schema, "default");
     assert!(
         result.is_ok(),
         "Schema with tables and sinks should pass validation (both storage objects)"
@@ -1734,18 +1782,24 @@ fn test_schema_with_only_views_succeeds() {
 
     let raw_view1 = raw::DatabaseObject {
         name: "user_view".to_string(),
-        path: PathBuf::from("materialize/views/user_view.sql"),
         database: "materialize".to_string(),
         schema: "views".to_string(),
-        statements: view1_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/views/user_view.sql"),
+            profile: None,
+            statements: view1_stmts,
+        }],
     };
 
     let raw_view2 = raw::DatabaseObject {
         name: "order_view".to_string(),
-        path: PathBuf::from("materialize/views/order_view.sql"),
         database: "materialize".to_string(),
         schema: "views".to_string(),
-        statements: view2_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/views/order_view.sql"),
+            profile: None,
+            statements: view2_stmts,
+        }],
     };
 
     let raw_schema = raw::Schema {
@@ -1754,7 +1808,7 @@ fn test_schema_with_only_views_succeeds() {
         mod_statements: None,
     };
 
-    let result = Schema::try_from(raw_schema);
+    let result = Schema::validate(raw_schema, "default");
     assert!(
         result.is_ok(),
         "Schema with only views should pass validation"
@@ -1771,18 +1825,24 @@ fn test_schema_with_views_and_materialized_views_succeeds() {
 
     let raw_view = raw::DatabaseObject {
         name: "user_view".to_string(),
-        path: PathBuf::from("materialize/computation/user_view.sql"),
         database: "materialize".to_string(),
         schema: "computation".to_string(),
-        statements: view_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/computation/user_view.sql"),
+            profile: None,
+            statements: view_stmts,
+        }],
     };
 
     let raw_mv = raw::DatabaseObject {
         name: "user_summary".to_string(),
-        path: PathBuf::from("materialize/computation/user_summary.sql"),
         database: "materialize".to_string(),
         schema: "computation".to_string(),
-        statements: mv_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/computation/user_summary.sql"),
+            profile: None,
+            statements: mv_stmts,
+        }],
     };
 
     let raw_schema = raw::Schema {
@@ -1791,7 +1851,7 @@ fn test_schema_with_views_and_materialized_views_succeeds() {
         mod_statements: None,
     };
 
-    let result = Schema::try_from(raw_schema);
+    let result = Schema::validate(raw_schema, "default");
     assert!(
         result.is_ok(),
         "Schema with views and materialized views should pass validation (both computation objects)"
@@ -1808,18 +1868,24 @@ fn test_schema_with_table_from_source_and_view_fails() {
 
     let raw_table = raw::DatabaseObject {
         name: "users".to_string(),
-        path: PathBuf::from("materialize/mixed/users.sql"),
         database: "materialize".to_string(),
         schema: "mixed".to_string(),
-        statements: table_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/mixed/users.sql"),
+            profile: None,
+            statements: table_stmts,
+        }],
     };
 
     let raw_view = raw::DatabaseObject {
         name: "user_view".to_string(),
-        path: PathBuf::from("materialize/mixed/user_view.sql"),
         database: "materialize".to_string(),
         schema: "mixed".to_string(),
-        statements: view_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/mixed/user_view.sql"),
+            profile: None,
+            statements: view_stmts,
+        }],
     };
 
     let raw_schema = raw::Schema {
@@ -1828,7 +1894,7 @@ fn test_schema_with_table_from_source_and_view_fails() {
         mod_statements: None,
     };
 
-    let result = Schema::try_from(raw_schema);
+    let result = Schema::validate(raw_schema, "default");
     assert!(
         result.is_err(),
         "Schema with CREATE TABLE FROM SOURCE and view should fail validation (table from source is a storage object)"
@@ -1843,10 +1909,13 @@ fn test_sink_missing_cluster_fails() {
 
     let raw_sink = raw::DatabaseObject {
         name: "user_sink".to_string(),
-        path: PathBuf::from("materialize/sinks/user_sink.sql"),
         database: "materialize".to_string(),
         schema: "sinks".to_string(),
-        statements: sink_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/sinks/user_sink.sql"),
+            profile: None,
+            statements: sink_stmts,
+        }],
     };
 
     let raw_schema = raw::Schema {
@@ -1855,7 +1924,7 @@ fn test_sink_missing_cluster_fails() {
         mod_statements: None,
     };
 
-    let result = Schema::try_from(raw_schema);
+    let result = Schema::validate(raw_schema, "default");
     assert!(
         result.is_err(),
         "Sink without IN CLUSTER clause should fail validation"
@@ -1886,10 +1955,13 @@ fn test_sink_with_cluster_succeeds() {
 
     let raw_sink = raw::DatabaseObject {
         name: "user_sink".to_string(),
-        path: PathBuf::from("materialize/sinks/user_sink.sql"),
         database: "materialize".to_string(),
         schema: "sinks".to_string(),
-        statements: sink_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/sinks/user_sink.sql"),
+            profile: None,
+            statements: sink_stmts,
+        }],
     };
 
     let raw_schema = raw::Schema {
@@ -1898,7 +1970,7 @@ fn test_sink_with_cluster_succeeds() {
         mod_statements: None,
     };
 
-    let result = Schema::try_from(raw_schema);
+    let result = Schema::validate(raw_schema, "default");
     assert!(
         result.is_ok(),
         "Sink with IN CLUSTER clause should pass validation"
@@ -1912,10 +1984,13 @@ fn test_materialized_view_missing_cluster_fails() {
 
     let raw_mv = raw::DatabaseObject {
         name: "user_summary".to_string(),
-        path: PathBuf::from("materialize/views/user_summary.sql"),
         database: "materialize".to_string(),
         schema: "views".to_string(),
-        statements: mv_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/views/user_summary.sql"),
+            profile: None,
+            statements: mv_stmts,
+        }],
     };
 
     let raw_schema = raw::Schema {
@@ -1924,7 +1999,7 @@ fn test_materialized_view_missing_cluster_fails() {
         mod_statements: None,
     };
 
-    let result = Schema::try_from(raw_schema);
+    let result = Schema::validate(raw_schema, "default");
     assert!(
         result.is_err(),
         "Materialized view without IN CLUSTER clause should fail validation"
@@ -1959,10 +2034,13 @@ fn test_index_missing_cluster_fails() {
 
     let raw_table = raw::DatabaseObject {
         name: "users".to_string(),
-        path: PathBuf::from("materialize/tables/users.sql"),
         database: "materialize".to_string(),
         schema: "tables".to_string(),
-        statements: stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/tables/users.sql"),
+            profile: None,
+            statements: stmts,
+        }],
     };
 
     let raw_schema = raw::Schema {
@@ -1971,7 +2049,7 @@ fn test_index_missing_cluster_fails() {
         mod_statements: None,
     };
 
-    let result = Schema::try_from(raw_schema);
+    let result = Schema::validate(raw_schema, "default");
     assert!(
         result.is_err(),
         "Index without IN CLUSTER clause should fail validation"
@@ -2196,7 +2274,7 @@ fn test_source_normalization() {
     "#;
 
     let raw = create_raw_object("kafka_source", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
     let obj = result.unwrap();
@@ -2227,10 +2305,13 @@ fn test_source_missing_cluster_fails() {
 
     let raw_source = raw::DatabaseObject {
         name: "kafka_source".to_string(),
-        path: PathBuf::from("materialize/ingestion/kafka_source.sql"),
         database: "materialize".to_string(),
         schema: "ingestion".to_string(),
-        statements: source_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/ingestion/kafka_source.sql"),
+            profile: None,
+            statements: source_stmts,
+        }],
     };
 
     let raw_schema = raw::Schema {
@@ -2239,7 +2320,7 @@ fn test_source_missing_cluster_fails() {
         mod_statements: None,
     };
 
-    let result = Schema::try_from(raw_schema);
+    let result = Schema::validate(raw_schema, "default");
     assert!(
         result.is_err(),
         "Source without IN CLUSTER clause should fail validation"
@@ -2274,10 +2355,13 @@ fn test_source_with_cluster_succeeds() {
 
     let raw_source = raw::DatabaseObject {
         name: "kafka_source".to_string(),
-        path: PathBuf::from("materialize/ingestion/kafka_source.sql"),
         database: "materialize".to_string(),
         schema: "ingestion".to_string(),
-        statements: source_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/ingestion/kafka_source.sql"),
+            profile: None,
+            statements: source_stmts,
+        }],
     };
 
     let raw_schema = raw::Schema {
@@ -2286,7 +2370,7 @@ fn test_source_with_cluster_succeeds() {
         mod_statements: None,
     };
 
-    let result = Schema::try_from(raw_schema);
+    let result = Schema::validate(raw_schema, "default");
     assert!(
         result.is_ok(),
         "Source with IN CLUSTER clause should pass validation"
@@ -2308,18 +2392,24 @@ fn test_schema_with_source_and_view_fails() {
 
     let raw_source = raw::DatabaseObject {
         name: "kafka_source".to_string(),
-        path: PathBuf::from("materialize/mixed/kafka_source.sql"),
         database: "materialize".to_string(),
         schema: "mixed".to_string(),
-        statements: source_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/mixed/kafka_source.sql"),
+            profile: None,
+            statements: source_stmts,
+        }],
     };
 
     let raw_view = raw::DatabaseObject {
         name: "event_view".to_string(),
-        path: PathBuf::from("materialize/mixed/event_view.sql"),
         database: "materialize".to_string(),
         schema: "mixed".to_string(),
-        statements: view_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/mixed/event_view.sql"),
+            profile: None,
+            statements: view_stmts,
+        }],
     };
 
     let raw_schema = raw::Schema {
@@ -2328,7 +2418,7 @@ fn test_schema_with_source_and_view_fails() {
         mod_statements: None,
     };
 
-    let result = Schema::try_from(raw_schema);
+    let result = Schema::validate(raw_schema, "default");
     assert!(
         result.is_err(),
         "Schema with source and view should fail validation (storage + computation in same schema)"
@@ -2350,18 +2440,24 @@ fn test_schema_with_source_and_table_succeeds() {
 
     let raw_source = raw::DatabaseObject {
         name: "kafka_source".to_string(),
-        path: PathBuf::from("materialize/ingestion/kafka_source.sql"),
         database: "materialize".to_string(),
         schema: "ingestion".to_string(),
-        statements: source_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/ingestion/kafka_source.sql"),
+            profile: None,
+            statements: source_stmts,
+        }],
     };
 
     let raw_table = raw::DatabaseObject {
         name: "events".to_string(),
-        path: PathBuf::from("materialize/ingestion/events.sql"),
         database: "materialize".to_string(),
         schema: "ingestion".to_string(),
-        statements: table_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/ingestion/events.sql"),
+            profile: None,
+            statements: table_stmts,
+        }],
     };
 
     let raw_schema = raw::Schema {
@@ -2370,7 +2466,7 @@ fn test_schema_with_source_and_table_succeeds() {
         mod_statements: None,
     };
 
-    let result = Schema::try_from(raw_schema);
+    let result = Schema::validate(raw_schema, "default");
     assert!(
         result.is_ok(),
         "Schema with source and table should pass validation (both are storage objects)"
@@ -2394,7 +2490,7 @@ fn test_source_with_comments_and_grants() {
     "#;
 
     let raw = create_raw_object("kafka_source", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
     let obj = result.unwrap();
@@ -2420,7 +2516,7 @@ fn test_valid_secret_simple() {
     let path = temp_dir.path().join("materialize/public/my_secret.sql");
 
     let raw = create_raw_object("my_secret", path, "CREATE SECRET my_secret AS 'test';");
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
     let obj = result.unwrap();
@@ -2440,7 +2536,7 @@ fn test_valid_secret_fully_qualified() {
         path,
         "CREATE SECRET materialize.public.my_secret AS 'test';",
     );
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
 }
@@ -2451,7 +2547,7 @@ fn test_secret_name_mismatch_fails() {
     let path = temp_dir.path().join("materialize/public/my_secret.sql");
 
     let raw = create_raw_object("my_secret", path, "CREATE SECRET wrong_name AS 'test';");
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_err());
 }
@@ -2468,7 +2564,7 @@ fn test_secret_with_grants_and_comments() {
     "#;
 
     let raw = create_raw_object("my_secret", path, sql);
-    let result = DatabaseObject::try_from(raw);
+    let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
     let obj = result.unwrap();
@@ -2495,18 +2591,24 @@ fn test_schema_with_secrets_and_tables_succeeds() {
 
     let raw_secret = raw::DatabaseObject {
         name: "my_secret".to_string(),
-        path: PathBuf::from("materialize/storage/my_secret.sql"),
         database: "materialize".to_string(),
         schema: "storage".to_string(),
-        statements: secret_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/storage/my_secret.sql"),
+            profile: None,
+            statements: secret_stmts,
+        }],
     };
 
     let raw_table = raw::DatabaseObject {
         name: "users".to_string(),
-        path: PathBuf::from("materialize/storage/users.sql"),
         database: "materialize".to_string(),
         schema: "storage".to_string(),
-        statements: table_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/storage/users.sql"),
+            profile: None,
+            statements: table_stmts,
+        }],
     };
 
     let raw_schema = raw::Schema {
@@ -2515,7 +2617,7 @@ fn test_schema_with_secrets_and_tables_succeeds() {
         mod_statements: None,
     };
 
-    let result = Schema::try_from(raw_schema);
+    let result = Schema::validate(raw_schema, "default");
     assert!(
         result.is_ok(),
         "Schema with secrets and tables should pass validation (both storage objects)"
@@ -2532,18 +2634,24 @@ fn test_schema_with_secrets_and_views_fails() {
 
     let raw_secret = raw::DatabaseObject {
         name: "my_secret".to_string(),
-        path: PathBuf::from("materialize/mixed/my_secret.sql"),
         database: "materialize".to_string(),
         schema: "mixed".to_string(),
-        statements: secret_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/mixed/my_secret.sql"),
+            profile: None,
+            statements: secret_stmts,
+        }],
     };
 
     let raw_view = raw::DatabaseObject {
         name: "user_view".to_string(),
-        path: PathBuf::from("materialize/mixed/user_view.sql"),
         database: "materialize".to_string(),
         schema: "mixed".to_string(),
-        statements: view_stmts,
+        variants: vec![raw::ObjectVariant {
+            path: PathBuf::from("materialize/mixed/user_view.sql"),
+            profile: None,
+            statements: view_stmts,
+        }],
     };
 
     let raw_schema = raw::Schema {
@@ -2552,9 +2660,219 @@ fn test_schema_with_secrets_and_views_fails() {
         mod_statements: None,
     };
 
-    let result = Schema::try_from(raw_schema);
+    let result = Schema::validate(raw_schema, "default");
     assert!(
         result.is_err(),
         "Schema with secrets and views should fail validation (storage + computation)"
+    );
+}
+
+// --- Profile variant validation tests ---
+
+#[test]
+fn test_profile_type_mismatch_secret_vs_view() {
+    let secret_stmts = parse_statements(vec!["CREATE SECRET my_secret AS 'test';"]).unwrap();
+    let view_stmts =
+        parse_statements(vec!["CREATE VIEW my_secret AS SELECT 1;"]).unwrap();
+
+    let raw = raw::DatabaseObject {
+        name: "my_secret".to_string(),
+        database: "materialize".to_string(),
+        schema: "public".to_string(),
+        variants: vec![
+            raw::ObjectVariant {
+                path: PathBuf::from("materialize/public/my_secret.sql"),
+                profile: None,
+                statements: secret_stmts,
+            },
+            raw::ObjectVariant {
+                path: PathBuf::from("materialize/public/my_secret__staging.sql"),
+                profile: Some("staging".to_string()),
+                statements: view_stmts,
+            },
+        ],
+    };
+
+    let result = DatabaseObject::validate(raw, "default");
+    assert!(result.is_err(), "should error on type mismatch between variants");
+    let err_str = result.unwrap_err().to_string();
+    assert!(
+        err_str.contains("profile variant type mismatch"),
+        "error should mention type mismatch: {}",
+        err_str
+    );
+}
+
+#[test]
+fn test_profile_override_not_allowed_for_view() {
+    let view_stmts = parse_statements(vec!["CREATE VIEW my_view AS SELECT 1;"]).unwrap();
+    let view_stmts2 = parse_statements(vec!["CREATE VIEW my_view AS SELECT 2;"]).unwrap();
+
+    let raw = raw::DatabaseObject {
+        name: "my_view".to_string(),
+        database: "materialize".to_string(),
+        schema: "public".to_string(),
+        variants: vec![
+            raw::ObjectVariant {
+                path: PathBuf::from("materialize/public/my_view.sql"),
+                profile: None,
+                statements: view_stmts,
+            },
+            raw::ObjectVariant {
+                path: PathBuf::from("materialize/public/my_view__staging.sql"),
+                profile: Some("staging".to_string()),
+                statements: view_stmts2,
+            },
+        ],
+    };
+
+    let result = DatabaseObject::validate(raw, "default");
+    assert!(result.is_err(), "views cannot have profile overrides");
+    let err_str = result.unwrap_err().to_string();
+    assert!(
+        err_str.contains("cannot have profile-specific overrides"),
+        "error should mention overrides not allowed: {}",
+        err_str
+    );
+}
+
+#[test]
+fn test_profile_override_not_allowed_for_materialized_view() {
+    let mv_stmts = parse_statements(vec![
+        "CREATE MATERIALIZED VIEW my_mv IN CLUSTER quickstart AS SELECT 1;",
+    ])
+    .unwrap();
+    let mv_stmts2 = parse_statements(vec![
+        "CREATE MATERIALIZED VIEW my_mv IN CLUSTER quickstart AS SELECT 2;",
+    ])
+    .unwrap();
+
+    let raw = raw::DatabaseObject {
+        name: "my_mv".to_string(),
+        database: "materialize".to_string(),
+        schema: "public".to_string(),
+        variants: vec![
+            raw::ObjectVariant {
+                path: PathBuf::from("materialize/public/my_mv.sql"),
+                profile: None,
+                statements: mv_stmts,
+            },
+            raw::ObjectVariant {
+                path: PathBuf::from("materialize/public/my_mv__staging.sql"),
+                profile: Some("staging".to_string()),
+                statements: mv_stmts2,
+            },
+        ],
+    };
+
+    let result = DatabaseObject::validate(raw, "default");
+    assert!(result.is_err(), "materialized views cannot have profile overrides");
+    let err_str = result.unwrap_err().to_string();
+    assert!(
+        err_str.contains("cannot have profile-specific overrides"),
+        "error should mention overrides not allowed: {}",
+        err_str
+    );
+}
+
+#[test]
+fn test_valid_cross_profile_consistency_secret() {
+    let secret_stmts1 = parse_statements(vec!["CREATE SECRET my_secret AS 'default_val';"]).unwrap();
+    let secret_stmts2 = parse_statements(vec!["CREATE SECRET my_secret AS 'staging_val';"]).unwrap();
+
+    let raw = raw::DatabaseObject {
+        name: "my_secret".to_string(),
+        database: "materialize".to_string(),
+        schema: "public".to_string(),
+        variants: vec![
+            raw::ObjectVariant {
+                path: PathBuf::from("materialize/public/my_secret.sql"),
+                profile: None,
+                statements: secret_stmts1,
+            },
+            raw::ObjectVariant {
+                path: PathBuf::from("materialize/public/my_secret__staging.sql"),
+                profile: Some("staging".to_string()),
+                statements: secret_stmts2,
+            },
+        ],
+    };
+
+    let result = DatabaseObject::validate(raw, "default");
+    assert!(
+        result.is_ok(),
+        "consistent secret variants should pass: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_active_variant_resolution_picks_profile() {
+    let secret_stmts1 = parse_statements(vec!["CREATE SECRET my_secret AS 'default_val';"]).unwrap();
+    let secret_stmts2 = parse_statements(vec!["CREATE SECRET my_secret AS 'staging_val';"]).unwrap();
+
+    let raw = raw::DatabaseObject {
+        name: "my_secret".to_string(),
+        database: "materialize".to_string(),
+        schema: "public".to_string(),
+        variants: vec![
+            raw::ObjectVariant {
+                path: PathBuf::from("materialize/public/my_secret.sql"),
+                profile: None,
+                statements: secret_stmts1,
+            },
+            raw::ObjectVariant {
+                path: PathBuf::from("materialize/public/my_secret__staging.sql"),
+                profile: Some("staging".to_string()),
+                statements: secret_stmts2,
+            },
+        ],
+    };
+
+    // When profile is "staging", the staging variant should be resolved
+    let result = DatabaseObject::validate(raw, "staging");
+    assert!(result.is_ok(), "should resolve staging variant: {:?}", result.err());
+    let obj = result.unwrap();
+    // The staging variant has 'staging_val'
+    let stmt_str = format!("{}", obj.stmt);
+    assert!(
+        stmt_str.contains("staging_val"),
+        "should use staging variant: {}",
+        stmt_str
+    );
+}
+
+#[test]
+fn test_active_variant_resolution_falls_back_to_default() {
+    let secret_stmts1 = parse_statements(vec!["CREATE SECRET my_secret AS 'default_val';"]).unwrap();
+    let secret_stmts2 = parse_statements(vec!["CREATE SECRET my_secret AS 'staging_val';"]).unwrap();
+
+    let raw = raw::DatabaseObject {
+        name: "my_secret".to_string(),
+        database: "materialize".to_string(),
+        schema: "public".to_string(),
+        variants: vec![
+            raw::ObjectVariant {
+                path: PathBuf::from("materialize/public/my_secret.sql"),
+                profile: None,
+                statements: secret_stmts1,
+            },
+            raw::ObjectVariant {
+                path: PathBuf::from("materialize/public/my_secret__staging.sql"),
+                profile: Some("staging".to_string()),
+                statements: secret_stmts2,
+            },
+        ],
+    };
+
+    // When profile is "prod" (no match), falls back to default
+    let result = DatabaseObject::validate(raw, "prod");
+    assert!(result.is_ok(), "should fall back to default variant: {:?}", result.err());
+    let obj = result.unwrap();
+    let stmt_str = format!("{}", obj.stmt);
+    assert!(
+        stmt_str.contains("default_val"),
+        "should use default variant: {}",
+        stmt_str
     );
 }

@@ -11,9 +11,10 @@ step suitable for local development and CI pipelines.
 
 ## Behavior
 
-1. Loads all `.sql` files from the `models/` directory tree. If a profile
-   is active, per-profile file overrides (`name__<profile>.sql`) are resolved
-   first — see `mz-deploy help profiles` for details.
+1. Loads all `.sql` files from the `models/` directory tree, including every
+   profile variant (`name__<profile>.sql`). All variants are validated, then
+   the active profile determines which variant is used — see
+   `mz-deploy help profiles` for details.
 2. Resolves inter-object dependencies and performs a topological sort
    (circular dependencies are rejected).
 3. Reports a summary of objects, schemas, and dependencies found.

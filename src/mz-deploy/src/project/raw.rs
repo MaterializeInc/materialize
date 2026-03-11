@@ -54,16 +54,29 @@
 
 use super::error::{LoadError, ProjectError};
 use super::parser::parse_statements_with_context;
-use super::profile_files::collect_and_resolve_sql_files;
+use super::profile_files::collect_all_sql_files;
 use mz_sql_parser::ast::{Raw, Statement};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// A database object loaded from a single `.sql` file, containing parsed but unvalidated SQL.
+/// A single file variant of a database object (default or profile-specific).
+#[derive(Debug, Clone)]
+pub struct ObjectVariant {
+    /// The full path to the file
+    pub path: PathBuf,
+    /// The profile name, or `None` for the default variant
+    pub profile: Option<String>,
+    /// The parsed SQL statements from the file
+    pub statements: Vec<Statement<Raw>>,
+}
+
+/// A database object that may have multiple profile variants.
 ///
-/// Represents a single file in a schema directory. The file is parsed into SQL AST nodes
-/// but no semantic validation is performed at this stage.
+/// Represents one logical object name in a schema directory. The object may have
+/// a default file and/or one or more profile-specific override files. All variants
+/// are loaded and parsed; cross-variant validation and active-variant resolution
+/// happen during typed conversion.
 ///
 /// # Contents
 ///
@@ -87,19 +100,14 @@ use std::path::{Path, PathBuf};
 /// relationships or correctness.
 #[derive(Debug, Clone)]
 pub struct DatabaseObject {
-    /// The name of the file (without extension)
+    /// The name of the object (without extension or profile suffix)
     pub name: String,
-    /// The full path to the file
-    pub path: PathBuf,
     /// The suffixed database name (same as directory name when no suffix is active)
     pub database: String,
     /// The schema name (directory name)
     pub schema: String,
-    /// The parsed SQL statements from the file
-    ///
-    /// All statements in the file are parsed in order. At this stage, no validation
-    /// is performed on statement types, relationships, or consistency.
-    pub statements: Vec<Statement<Raw>>,
+    /// All profile variants for this object (at least one)
+    pub variants: Vec<ObjectVariant>,
 }
 
 /// A schema directory containing multiple database objects and optional setup statements.
@@ -207,6 +215,8 @@ pub struct Project {
     /// This is the absolute path to the directory that was passed to `load_project`.
     /// All other paths in the project are relative to or beneath this root.
     pub root: PathBuf,
+    /// The active profile name
+    pub profile: String,
     /// All databases in this project, keyed by (possibly suffixed) database name
     ///
     /// Each database corresponds to one subdirectory in the project root.
@@ -339,27 +349,59 @@ pub fn load_project<P: AsRef<Path>>(
                 None
             };
 
-            // Collect .sql files and resolve profile-specific overrides
-            let resolved = collect_and_resolve_sql_files(&schema_path, profile)?;
+            // Collect all SQL files grouped by object name (all profile variants)
+            let all_files = collect_all_sql_files(&schema_path)?;
 
-            for (object_path, object_name) in resolved {
-                // Read and parse the SQL file
-                let sql_content = fs::read_to_string(&object_path).map_err(|source| {
-                    LoadError::FileReadFailed {
-                        path: object_path.clone(),
-                        source,
-                    }
-                })?;
+            for object_files in all_files {
+                let mut variants = Vec::new();
 
-                let statements =
-                    parse_statements_with_context(&sql_content, object_path.clone(), variables)?;
+                // Parse the default file if it exists
+                if let Some(ref default_path) = object_files.default {
+                    let sql_content =
+                        fs::read_to_string(default_path).map_err(|source| {
+                            LoadError::FileReadFailed {
+                                path: default_path.clone(),
+                                source,
+                            }
+                        })?;
+                    let statements = parse_statements_with_context(
+                        &sql_content,
+                        default_path.clone(),
+                        variables,
+                    )?;
+                    variants.push(ObjectVariant {
+                        path: default_path.clone(),
+                        profile: None,
+                        statements,
+                    });
+                }
+
+                // Parse all profile override files
+                for (prof, override_path) in &object_files.overrides {
+                    let sql_content =
+                        fs::read_to_string(override_path).map_err(|source| {
+                            LoadError::FileReadFailed {
+                                path: override_path.clone(),
+                                source,
+                            }
+                        })?;
+                    let statements = parse_statements_with_context(
+                        &sql_content,
+                        override_path.clone(),
+                        variables,
+                    )?;
+                    variants.push(ObjectVariant {
+                        path: override_path.clone(),
+                        profile: Some(prof.clone()),
+                        statements,
+                    });
+                }
 
                 objects.push(DatabaseObject {
-                    name: object_name,
-                    path: object_path,
+                    name: object_files.name,
                     database: db_name.clone(),
                     schema: schema_name.clone(),
-                    statements,
+                    variants,
                 });
             }
 
@@ -391,6 +433,7 @@ pub fn load_project<P: AsRef<Path>>(
 
     Ok(Project {
         root: root.to_path_buf(),
+        profile: profile.to_string(),
         databases,
         database_name_map,
     })
@@ -431,7 +474,8 @@ mod tests {
         let schema = &database.schemas["my_schema"];
         assert_eq!(schema.objects.len(), 1);
         assert_eq!(schema.objects[0].name, "my_table");
-        assert_eq!(schema.objects[0].statements.len(), 1);
+        assert_eq!(schema.objects[0].variants.len(), 1);
+        assert_eq!(schema.objects[0].variants[0].statements.len(), 1);
     }
 
     #[test]
@@ -938,6 +982,155 @@ mod tests {
         assert_eq!(
             planned.databases[0].schemas[0].objects[0].id.database,
             "mydb"
+        );
+    }
+
+    #[test]
+    fn test_load_project_loads_all_variants() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let schema_path = root.join("models").join("mydb").join("public");
+        fs::create_dir_all(&schema_path).unwrap();
+
+        fs::write(
+            schema_path.join("my_secret.sql"),
+            "CREATE SECRET my_secret AS 'default_val';",
+        )
+        .unwrap();
+        fs::write(
+            schema_path.join("my_secret__staging.sql"),
+            "CREATE SECRET my_secret AS 'staging_val';",
+        )
+        .unwrap();
+        fs::write(
+            schema_path.join("my_secret__prod.sql"),
+            "CREATE SECRET my_secret AS 'prod_val';",
+        )
+        .unwrap();
+
+        let project = load_project(root, "default", None, &BTreeMap::new()).unwrap();
+
+        let schema = &project.databases["mydb"].schemas["public"];
+        assert_eq!(schema.objects.len(), 1);
+        assert_eq!(schema.objects[0].name, "my_secret");
+        // Should have 3 variants: default + staging + prod
+        assert_eq!(schema.objects[0].variants.len(), 3);
+
+        let default_variant = schema.objects[0]
+            .variants
+            .iter()
+            .find(|v| v.profile.is_none());
+        assert!(default_variant.is_some(), "should have default variant");
+
+        let staging_variant = schema.objects[0]
+            .variants
+            .iter()
+            .find(|v| v.profile.as_deref() == Some("staging"));
+        assert!(staging_variant.is_some(), "should have staging variant");
+
+        let prod_variant = schema.objects[0]
+            .variants
+            .iter()
+            .find(|v| v.profile.as_deref() == Some("prod"));
+        assert!(prod_variant.is_some(), "should have prod variant");
+    }
+
+    #[test]
+    fn test_plan_type_mismatch_across_profiles_errors() {
+        use crate::project;
+
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let schema_path = root.join("models").join("mydb").join("public");
+        fs::create_dir_all(&schema_path).unwrap();
+
+        // Default is a secret, staging override is a view → type mismatch
+        fs::write(
+            schema_path.join("foo.sql"),
+            "CREATE SECRET foo AS 'val';",
+        )
+        .unwrap();
+        fs::write(
+            schema_path.join("foo__staging.sql"),
+            "CREATE VIEW foo AS SELECT 1;",
+        )
+        .unwrap();
+
+        fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
+
+        let result = project::plan(root, "default", None, None, &BTreeMap::new());
+        assert!(result.is_err(), "type mismatch between profiles should error");
+        let err_str = result.unwrap_err().to_string();
+        assert!(
+            err_str.contains("profile variant type mismatch"),
+            "error should mention type mismatch: {}",
+            err_str
+        );
+    }
+
+    #[test]
+    fn test_plan_view_override_not_allowed() {
+        use crate::project;
+
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let schema_path = root.join("models").join("mydb").join("public");
+        fs::create_dir_all(&schema_path).unwrap();
+
+        fs::write(
+            schema_path.join("bar.sql"),
+            "CREATE VIEW bar AS SELECT 1;",
+        )
+        .unwrap();
+        fs::write(
+            schema_path.join("bar__staging.sql"),
+            "CREATE VIEW bar AS SELECT 2;",
+        )
+        .unwrap();
+
+        fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
+
+        let result = project::plan(root, "default", None, None, &BTreeMap::new());
+        assert!(result.is_err(), "views cannot have profile overrides");
+        let err_str = result.unwrap_err().to_string();
+        assert!(
+            err_str.contains("cannot have profile-specific overrides"),
+            "error should mention overrides not allowed: {}",
+            err_str
+        );
+    }
+
+    #[test]
+    fn test_plan_consistent_secret_profiles_succeeds() {
+        use crate::project;
+
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let schema_path = root.join("models").join("mydb").join("public");
+        fs::create_dir_all(&schema_path).unwrap();
+
+        fs::write(
+            schema_path.join("my_secret.sql"),
+            "CREATE SECRET my_secret AS 'default_val';",
+        )
+        .unwrap();
+        fs::write(
+            schema_path.join("my_secret__staging.sql"),
+            "CREATE SECRET my_secret AS 'staging_val';",
+        )
+        .unwrap();
+
+        fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
+
+        let result = project::plan(root, "default", None, None, &BTreeMap::new());
+        assert!(
+            result.is_ok(),
+            "consistent secret profiles should work: {:?}",
+            result.err()
         );
     }
 }

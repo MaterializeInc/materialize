@@ -8,7 +8,7 @@ use crate::project::error::{
     LoadError, ProjectError, ValidationError, ValidationErrorKind, ValidationErrors,
 };
 use crate::project::parser::{parse_statements_with_context, statement_type_name};
-use crate::project::profile_files::collect_and_resolve_sql_files;
+use crate::project::profile_files::collect_all_sql_files;
 use mz_sql_parser::ast::{
     AlterRoleStatement, CommentObjectType, CommentStatement, CreateRoleStatement,
     GrantRoleStatement, Raw, Statement,
@@ -50,23 +50,53 @@ pub fn load_roles(
         return Err(LoadError::RootNotDirectory { path: roles_dir }.into());
     }
 
-    let resolved = collect_and_resolve_sql_files(&roles_dir, profile)?;
+    let all_files = collect_all_sql_files(&roles_dir)?;
 
     let mut definitions = Vec::new();
     let mut errors = Vec::new();
 
-    for (path, expected_name) in resolved {
-        // Read file
-        let sql = std::fs::read_to_string(&path).map_err(|e| LoadError::FileReadFailed {
-            path: path.clone(),
+    for object_files in all_files {
+        let expected_name = &object_files.name;
+
+        // Validate all variants independently
+        let mut all_variant_paths = Vec::new();
+        if let Some(ref default_path) = object_files.default {
+            all_variant_paths.push(default_path.clone());
+        }
+        for (_, override_path) in &object_files.overrides {
+            all_variant_paths.push(override_path.clone());
+        }
+
+        for path in &all_variant_paths {
+            let sql = std::fs::read_to_string(path).map_err(|e| LoadError::FileReadFailed {
+                path: path.clone(),
+                source: e,
+            })?;
+            let statements = parse_statements_with_context(&sql, path.clone(), variables)?;
+
+            if let Err(mut errs) = classify_role_statements(expected_name, path, statements) {
+                errors.append(&mut errs);
+            }
+        }
+
+        // Resolve the active variant: prefer profile match, fall back to default
+        let active_path = object_files
+            .overrides
+            .get(profile)
+            .or(object_files.default.as_ref());
+
+        let active_path = match active_path {
+            Some(p) => p.clone(),
+            None => continue,
+        };
+
+        let sql = std::fs::read_to_string(&active_path).map_err(|e| LoadError::FileReadFailed {
+            path: active_path.clone(),
             source: e,
         })?;
+        let statements = parse_statements_with_context(&sql, active_path.clone(), variables)?;
 
-        // Parse SQL statements
-        let statements = parse_statements_with_context(&sql, path.clone(), variables)?;
-
-        // Classify statements
-        match classify_role_statements(&expected_name, &path, statements) {
+        match classify_role_statements(expected_name, &active_path, statements) {
             Ok(def) => definitions.push(def),
             Err(mut errs) => errors.append(&mut errs),
         }
