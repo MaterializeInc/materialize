@@ -10,7 +10,6 @@
 //! Implementation of feedback UPSERT operator and associated helpers. See
 //! [`upsert_inner`] for a description of how the operator works and why.
 
-use std::cmp::Reverse;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Instant;
@@ -461,7 +460,7 @@ where
                 // persist_sink would filter them out anyway.
                 let eligible_updates: Vec<_> = eligible_updates
                     .into_iter()
-                    .filter(|(ts, _, _, _)| persist_upper.less_equal(ts))
+                    .filter(|e| persist_upper.less_equal(&e.time))
                     .collect();
 
                 drain_staged_input::<_, G, _, _, _>(
@@ -522,10 +521,10 @@ where
 /// Helper method for [`upsert_inner`] used to process eligible updates drained
 /// from the stash and emit the corresponding output updates.
 ///
-/// The `eligible_updates` are already deduplicated by the stash's merge operator
+/// The `eligible_updates` are already deduplicated by the stash
 /// (one entry per `(time, key)` with the largest `from_time`).
 async fn drain_staged_input<S, G, T, FromTime, E>(
-    eligible_updates: Vec<(T, UpsertKey, Reverse<FromTime>, Option<UpsertValue>)>,
+    eligible_updates: Vec<crate::upsert::stash::StashEntry<T, FromTime>>,
     commands_state: &mut indexmap::IndexMap<UpsertKey, UpsertValueAndSize<T, FromTime>>,
     output_updates: &mut Vec<(UpsertValue, T, Diff)>,
     multi_get_scratch: &mut Vec<UpsertKey>,
@@ -548,8 +547,8 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     // Read the previous values _per key_ out of `state`, recording it
     // along with the value with the _latest timestamp for that key_.
     commands_state.clear();
-    for (_, key, _, _) in eligible_updates.iter() {
-        commands_state.entry(*key).or_default();
+    for entry in eligible_updates.iter() {
+        commands_state.entry(entry.key).or_default();
     }
 
     // These iterators iterate in the same order because `commands_state`
@@ -579,12 +578,13 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     //
     // No state writes are performed here -- state is only updated via the
     // persist feedback path.
-    for (ts, key, _from_time, value) in eligible_updates {
-        let mut command_state = if let Entry::Occupied(command_state) = commands_state.entry(key) {
-            command_state
-        } else {
-            panic!("key missing from commands_state");
-        };
+    for entry in eligible_updates {
+        let mut command_state =
+            if let Entry::Occupied(command_state) = commands_state.entry(entry.key) {
+                command_state
+            } else {
+                panic!("key missing from commands_state");
+            };
 
         let existing_state_cell = &mut command_state.get_mut().value;
 
@@ -592,19 +592,23 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
             cs.ensure_decoded(bincode_opts, source_config.id);
         }
 
-        match value {
+        match entry.value {
             Some(value) => {
                 if let Some(old_value) = existing_state_cell.as_ref() {
                     if let Some(old_value) = old_value.finalized_value_ref() {
-                        output_updates.push((old_value.clone(), ts.clone(), Diff::MINUS_ONE));
+                        output_updates.push((
+                            old_value.clone(),
+                            entry.time.clone(),
+                            Diff::MINUS_ONE,
+                        ));
                     }
                 }
-                output_updates.push((value, ts, Diff::ONE));
+                output_updates.push((value, entry.time, Diff::ONE));
             }
             None => {
                 if let Some(old_value) = existing_state_cell.as_ref() {
                     if let Some(old_value) = old_value.finalized_value_ref() {
-                        output_updates.push((old_value.clone(), ts, Diff::MINUS_ONE));
+                        output_updates.push((old_value.clone(), entry.time, Diff::MINUS_ONE));
                     }
                 }
             }
@@ -722,6 +726,7 @@ mod test {
                                     stash_instance,
                                 )
                                 .unwrap(),
+                                usize::MAX,
                             )
                         };
 
@@ -950,6 +955,7 @@ mod test {
                                     stash_instance,
                                 )
                                 .unwrap(),
+                                usize::MAX,
                             )
                         };
 
