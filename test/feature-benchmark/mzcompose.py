@@ -260,7 +260,7 @@ def run_one_scenario(
             testdrive_entrypoint_extra = [
                 f"--var=s3-access-user={user}",
                 f"--var=s3-access-key={key}",
-                "--var=aws-endpoint=minio:9000",
+                "--var=aws-iceberg-endpoint=minio:9000",
             ]
 
         with c.override(

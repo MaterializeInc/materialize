@@ -1554,7 +1554,7 @@ class IcebergSink(Sink):
 > CREATE CONNECTION aws_conn TO AWS (
     ACCESS KEY ID = 'tduser',
     SECRET ACCESS KEY = SECRET iceberg_secret,
-    ENDPOINT = '${{arg.aws-endpoint}}',
+    ENDPOINT = '${{arg.aws-iceberg-endpoint}}',
     REGION = 'us-east-1'
   );
 
@@ -1637,7 +1637,7 @@ true
 true
 
 $ duckdb-execute name=iceberg
-CREATE SECRET s3_secret (TYPE S3, KEY_ID '${{arg.s3-access-user}}', SECRET '${{arg.s3-access-key}}', ENDPOINT '${{arg.aws-endpoint}}', URL_STYLE 'path', USE_SSL false, REGION 'minio');
+CREATE SECRET s3_secret (TYPE S3, KEY_ID '${{arg.s3-access-user}}', SECRET '${{arg.s3-access-key}}', ENDPOINT '${{arg.aws-iceberg-endpoint}}', URL_STYLE 'path', USE_SSL false, REGION 'minio');
 SET unsafe_enable_version_guessing = true;
 
 $ duckdb-query name=iceberg
