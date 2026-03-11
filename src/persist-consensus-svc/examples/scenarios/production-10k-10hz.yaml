@@ -14,7 +14,7 @@ truncate_to: 500
 write_rate_per_second: 10.0
 flush_interval_ms: 5
 
-grpc_connections: 50
+grpc_connections: 25
 wal_latency: "s3-express"
 snapshot_interval: 100
 transport: grpc
