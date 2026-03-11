@@ -700,11 +700,6 @@ Snapshot {
             next_id: 9,
         },
         IdAllocKey {
-            name: "storage_usage",
-        }: IdAllocValue {
-            next_id: 1,
-        },
-        IdAllocKey {
             name: "system",
         }: IdAllocValue {
             next_id: 1,
