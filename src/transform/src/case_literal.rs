@@ -156,8 +156,12 @@ impl CaseLiteralTransform {
 }
 
 /// Fold rule: if node is `If(Eq(x, lit), res, CallVariadic(CaseLiteral{..}, [x, ...]))`
-/// where the CaseLiteral's input (`exprs[0]`) structurally equals `x` and `lit` is
-/// not already in `lookup`, insert `res` into the existing CaseLiteral.
+/// where the CaseLiteral's input (`exprs[0]`) structurally equals `x`, insert (or
+/// overwrite) `res` into the existing CaseLiteral.
+///
+/// Because we traverse bottom-up, the current If is an *earlier* arm than anything
+/// already in the CaseLiteral. For duplicates, the outer/earlier arm wins per SQL
+/// CASE semantics, so we overwrite the existing entry.
 fn try_fold_into_case_literal(expr: &mut MirScalarExpr) {
     let MirScalarExpr::If { cond, then, els } = expr else {
         return;
@@ -178,16 +182,15 @@ fn try_fold_into_case_literal(expr: &mut MirScalarExpr) {
         return;
     }
 
-    // Don't fold if the literal is already present (first occurrence wins per SQL CASE).
-    if cl.lookup.contains_key(literal_row) {
-        return;
+    if let Some(&existing_idx) = cl.lookup.get(literal_row) {
+        // Duplicate literal: overwrite with the earlier arm's result (this If).
+        exprs[existing_idx] = then.take();
+    } else {
+        // New literal: insert before the fallback (last position).
+        let new_idx = exprs.len() - 1;
+        exprs.insert(new_idx, then.take());
+        cl.lookup.insert(literal_row.clone(), new_idx);
     }
-
-    // Insert: push `then` before `els` (which is the last element), and update lookup.
-    let new_idx = exprs.len() - 1;
-    // Insert the new result before the fallback (last position), and update lookup.
-    exprs.insert(new_idx, then.take());
-    cl.lookup.insert(literal_row.clone(), new_idx);
 
     // Replace the If with the CaseLiteral.
     *expr = els.take();
