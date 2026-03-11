@@ -42,14 +42,14 @@ pub struct Array<'a, T = Datum<'a>> {
     pub(crate) dims: ArrayDimensions<'a>,
 }
 
-impl<'a> Array<'a> {
+impl<'a, T> Array<'a, T> {
     /// Returns the dimensions of the array.
     pub fn dims(&self) -> ArrayDimensions<'a> {
         self.dims
     }
 
     /// Returns the elements of the array.
-    pub fn elements(&self) -> DatumList<'a> {
+    pub fn elements(&self) -> DatumList<'a, T> {
         self.elements
     }
 
