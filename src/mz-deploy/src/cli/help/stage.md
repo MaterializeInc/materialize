@@ -3,9 +3,11 @@
 Compares your project against the current production snapshot and deploys
 only the objects that have changed to staging schemas and clusters with a
 suffixed name (e.g., `public_abc123`). Unchanged objects are skipped
-entirely. Tables and sources are not recreated — they must already exist (see `apply`). Staging deployments
-run in isolation alongside production and can be promoted with `promote`
-or cleaned up with `abort`.
+entirely.
+
+Tables and sources are not recreated — they must already exist (see
+`apply`). Staging deployments run in isolation alongside production and
+can be promoted with `promote` or cleaned up with `abort`.
 
 ## Usage
 
@@ -78,7 +80,9 @@ during a deployment.
 
 ## Flags
 
-- `--deploy-id <ID>` — Custom deployment ID (default: random 7-char hex).
+- `--deploy-id <ID>` — Custom deployment ID. In a git repository,
+  defaults to the first 7 characters of the current commit SHA;
+  otherwise, a random 7-char hex string is generated.
   Used as suffix for schemas and clusters. Must be alphanumeric, hyphens,
   and underscores only.
 - `--allow-dirty` — Deploy with uncommitted git changes.
@@ -96,15 +100,21 @@ its own suffixed schemas and clusters (e.g., `public_abc123`,
 `public_def456`), so independent deployments — ones that touch different
 schemas and clusters — do not interact at all.
 
-When two deployments overlap (modify the same schemas), conflict
-detection at `promote` time ensures safety: the first deployment to
-promote wins, and the second is rejected with a conflict error because
-production was modified after it was staged. Re-stage to pick up the
-latest production state and try again.
+Deployments operate at the schema and cluster level: if one object in a
+schema changes, the entire schema is redeployed; if one object on a
+cluster changes, the entire cluster is redeployed. Two deployments
+"overlap" when they touch any of the same schemas or clusters — even if
+they modify different objects within them.
+
+When two deployments overlap, conflict detection at `promote` time
+ensures safety: the first deployment to promote wins, and the second is
+rejected with a conflict error because production was modified after it
+was staged. Re-stage to pick up the latest production state and try
+again.
 
 ## Examples
 
-    mz-deploy stage                           # Random deploy ID
+    mz-deploy stage                           # Defaults to git SHA prefix
     mz-deploy stage --deploy-id dev           # Custom ID → public_dev
     mz-deploy stage --dry-run                 # Preview SQL
     mz-deploy stage --dry-run --output json  # Machine-readable plan

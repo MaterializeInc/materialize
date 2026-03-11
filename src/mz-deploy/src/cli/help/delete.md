@@ -16,9 +16,9 @@ removed after a successful drop.
     mz-deploy delete secret <NAME>
     mz-deploy delete table <NAME>
 
-## Options
+## Flags
 
-    -y, --yes    Skip confirmation prompt
+- `-y`, `--yes` — Skip confirmation prompt.
 
 ## Name Format
 

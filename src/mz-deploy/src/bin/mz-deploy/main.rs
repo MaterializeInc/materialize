@@ -232,7 +232,7 @@ enum Command {
         after_help = "Run 'mz-deploy help stage' for a detailed usage guide."
     )]
     Stage {
-        /// Deploy ID for this staging deployment (default: random 7-char hex)
+        /// Deploy ID for this staging deployment (default: git SHA prefix, or random 7-char hex)
         ///
         /// The deploy ID will be used as a suffix for schemas and clusters.
         /// Must contain only alphanumeric characters, hyphens, and underscores.

@@ -14,7 +14,9 @@ use crate::config::Profile;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use postgres_openssl::MakeTlsConnector;
 use tokio_postgres::types::ToSql;
-use tokio_postgres::{Client as PgClient, NoTls, Row, ToStatement, Transaction};
+use tokio_postgres::{
+    Client as PgClient, NoTls, Row, SimpleQueryMessage, ToStatement, Transaction,
+};
 
 /// Database client for interacting with Materialize.
 ///
@@ -259,6 +261,25 @@ impl Client {
     {
         self.client
             .query(statement, params)
+            .await
+            .map_err(ConnectionError::Query)
+    }
+
+    /// Execute a SQL statement using the simple query protocol (text-only, no binary encoding).
+    pub async fn simple_query(
+        &self,
+        query: &str,
+    ) -> Result<Vec<SimpleQueryMessage>, ConnectionError> {
+        self.client
+            .simple_query(query)
+            .await
+            .map_err(ConnectionError::Query)
+    }
+
+    /// Execute one or more SQL statements that don't return rows, using the simple query protocol.
+    pub async fn batch_execute(&self, query: &str) -> Result<(), ConnectionError> {
+        self.client
+            .batch_execute(query)
             .await
             .map_err(ConnectionError::Query)
     }

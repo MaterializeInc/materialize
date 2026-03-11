@@ -4,6 +4,8 @@
 //! via the `--verbose` CLI flag. When verbose mode is enabled, diagnostic
 //! messages are printed to stdout to help users understand what the tool
 //! is doing.
+
+use std::fmt::Display;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Global verbose mode flag.

@@ -104,7 +104,7 @@ impl ProjectSettings {
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error(
-        "profiles configuration file not found at {path}\n\nCreate a profiles.toml file at this location with connection details."
+        "profiles configuration file not found at {path}\n\nSee mz-deploy help profiles for more information"
     )]
     ProfilesNotFound { path: String },
     #[error("failed to read profiles configuration from {path}: {source}")]

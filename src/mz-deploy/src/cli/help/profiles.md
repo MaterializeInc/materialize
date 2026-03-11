@@ -61,7 +61,7 @@ password = "${PROD_PASSWORD}"
 The active profile (the one used by commands) is resolved in this order:
 
 1. **`--profile` CLI flag** — Highest priority. Overrides everything.
-2. **`MZ_DEPLOY_PROFILE` env variable** — Useful for CI
+2. **`MZ_DEPLOY_PROFILE` env variable** — Useful for CI environments.
 3. **`profile` field in `project.toml`** — The project default.
 
 For example, if `project.toml` contains `profile = "default"` but you run

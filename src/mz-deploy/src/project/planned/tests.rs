@@ -2423,3 +2423,236 @@ fn test_connection_in_compute_schema_fails_validation() {
         "Should fail with storage+compute mix error"
     );
 }
+
+// ============================================================================
+// Lock command guard condition tests (get_tables + external_dependencies)
+// ============================================================================
+
+#[test]
+fn test_lock_guard_no_tables_no_external_deps_skips() {
+    // A project with only views: no tables and no external dependencies.
+    // The lock command should skip generating types.lock.
+    let sql = "CREATE VIEW v AS SELECT 1 AS x";
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    let view_stmt = if let mz_sql_parser::ast::Statement::CreateView(s) = &parsed[0].ast {
+        Statement::CreateView(s.clone())
+    } else {
+        panic!("Expected CreateView");
+    };
+
+    let view_obj = DatabaseObject {
+        id: ObjectId::new("db".to_string(), "public".to_string(), "v".to_string()),
+        typed_object: typed::DatabaseObject {
+            stmt: view_stmt,
+            indexes: vec![],
+            grants: vec![],
+            comments: vec![],
+            tests: vec![],
+        },
+        dependencies: BTreeSet::new(),
+    };
+
+    let project = Project {
+        databases: vec![Database {
+            name: "db".to_string(),
+            schemas: vec![Schema {
+                name: "public".to_string(),
+                objects: vec![view_obj],
+                mod_statements: None,
+                schema_type: SchemaType::Compute,
+            }],
+            mod_statements: None,
+        }],
+        dependency_graph: BTreeMap::new(),
+        external_dependencies: BTreeSet::new(),
+        cluster_dependencies: BTreeSet::new(),
+        tests: vec![],
+        replacement_schemas: Default::default(),
+    };
+
+    let has_tables = project.get_tables().next().is_some();
+    assert!(!has_tables);
+    assert!(project.external_dependencies.is_empty());
+    // Lock command would early-return here
+    assert!(
+        project.external_dependencies.is_empty() && !has_tables,
+        "Should skip types.lock when no external deps and no tables"
+    );
+}
+
+#[test]
+fn test_lock_guard_tables_but_no_external_deps_proceeds() {
+    // A project with a table but no external dependencies.
+    // The lock command should NOT skip — tables need types.lock.
+    use crate::project::raw;
+    use crate::project::typed;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let src_dir = temp_dir.path();
+
+    let db_path = src_dir.join("models").join("test_db");
+    let schema_path = db_path.join("storage");
+    fs::create_dir_all(&schema_path).unwrap();
+
+    fs::write(
+        schema_path.join("users.sql"),
+        "CREATE TABLE users (id INT, name TEXT);",
+    )
+    .unwrap();
+
+    let raw_project = raw::load_project(src_dir, "default", None, &BTreeMap::new()).unwrap();
+    let typed_project = typed::Project::try_from(raw_project).unwrap();
+    let planned_project = Project::from(typed_project);
+
+    let has_tables = planned_project.get_tables().next().is_some();
+    assert!(has_tables, "Project should have tables");
+    assert!(
+        planned_project.external_dependencies.is_empty(),
+        "Project should have no external dependencies"
+    );
+    // Lock command should NOT early-return
+    assert!(
+        !(planned_project.external_dependencies.is_empty() && !has_tables),
+        "Should proceed to generate types.lock when tables exist"
+    );
+}
+
+#[test]
+fn test_lock_guard_external_deps_but_no_tables_proceeds() {
+    // A project with external dependencies but no tables.
+    // The lock command should NOT skip.
+    let sql = "CREATE VIEW v AS SELECT * FROM ext_db.ext_schema.ext_table";
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    let view_stmt = if let mz_sql_parser::ast::Statement::CreateView(s) = &parsed[0].ast {
+        Statement::CreateView(s.clone())
+    } else {
+        panic!("Expected CreateView");
+    };
+
+    let ext_dep = ObjectId::new(
+        "ext_db".to_string(),
+        "ext_schema".to_string(),
+        "ext_table".to_string(),
+    );
+
+    let view_obj = DatabaseObject {
+        id: ObjectId::new("db".to_string(), "public".to_string(), "v".to_string()),
+        typed_object: typed::DatabaseObject {
+            stmt: view_stmt,
+            indexes: vec![],
+            grants: vec![],
+            comments: vec![],
+            tests: vec![],
+        },
+        dependencies: BTreeSet::from([ext_dep.clone()]),
+    };
+
+    let project = Project {
+        databases: vec![Database {
+            name: "db".to_string(),
+            schemas: vec![Schema {
+                name: "public".to_string(),
+                objects: vec![view_obj],
+                mod_statements: None,
+                schema_type: SchemaType::Compute,
+            }],
+            mod_statements: None,
+        }],
+        dependency_graph: BTreeMap::new(),
+        external_dependencies: BTreeSet::from([ext_dep]),
+        cluster_dependencies: BTreeSet::new(),
+        tests: vec![],
+        replacement_schemas: Default::default(),
+    };
+
+    let has_tables = project.get_tables().next().is_some();
+    assert!(!has_tables, "Project should have no tables");
+    assert!(
+        !project.external_dependencies.is_empty(),
+        "Project should have external dependencies"
+    );
+    // Lock command should NOT early-return
+    assert!(
+        !(project.external_dependencies.is_empty() && !has_tables),
+        "Should proceed to generate types.lock when external deps exist"
+    );
+}
+
+#[test]
+fn test_lock_guard_table_count_matches_get_tables() {
+    // Verify that get_tables().count() returns the correct count for
+    // projects with multiple tables.
+    use crate::project::raw;
+    use crate::project::typed;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let src_dir = temp_dir.path();
+
+    let db_path = src_dir.join("models").join("test_db");
+    let schema_path = db_path.join("storage");
+    fs::create_dir_all(&schema_path).unwrap();
+
+    fs::write(
+        schema_path.join("users.sql"),
+        "CREATE TABLE users (id INT);",
+    )
+    .unwrap();
+
+    fs::write(
+        schema_path.join("orders.sql"),
+        "CREATE TABLE orders (id INT);",
+    )
+    .unwrap();
+
+    let raw_project = raw::load_project(src_dir, "default", None, &BTreeMap::new()).unwrap();
+    let typed_project = typed::Project::try_from(raw_project).unwrap();
+    let planned_project = Project::from(typed_project);
+
+    assert_eq!(
+        planned_project.get_tables().count(),
+        2,
+        "Should count both tables"
+    );
+}
+
+#[test]
+fn test_lock_guard_table_from_source_counts_as_table() {
+    // CREATE TABLE ... FROM SOURCE should be detected by get_tables()
+    use crate::project::raw;
+    use crate::project::typed;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let src_dir = temp_dir.path();
+
+    let db_path = src_dir.join("models").join("test_db");
+    let schema_path = db_path.join("ingestion");
+    fs::create_dir_all(&schema_path).unwrap();
+
+    fs::write(
+        schema_path.join("kafka_source.sql"),
+        "CREATE SOURCE kafka_source IN CLUSTER c FROM KAFKA CONNECTION conn (TOPIC 't') FORMAT JSON;",
+    )
+    .unwrap();
+
+    fs::write(
+        schema_path.join("events.sql"),
+        "CREATE TABLE events FROM SOURCE kafka_source (REFERENCE events);",
+    )
+    .unwrap();
+
+    let raw_project = raw::load_project(src_dir, "default", None, &BTreeMap::new()).unwrap();
+    let typed_project = typed::Project::try_from(raw_project).unwrap();
+    let planned_project = Project::from(typed_project);
+
+    let tables: Vec<_> = planned_project.get_tables().collect();
+    assert_eq!(tables.len(), 1, "Should detect table from source");
+    assert_eq!(tables[0].object, "events");
+}

@@ -49,14 +49,17 @@ pub async fn run(settings: &Settings) -> Result<(), CliError> {
         settings.variables(),
     )?;
 
-    if planned_project.external_dependencies.is_empty() {
-        progress::info("No external dependencies found - types.lock not needed");
+    let has_tables = planned_project.get_tables().next().is_some();
+    if planned_project.external_dependencies.is_empty() && !has_tables {
+        progress::info("No external dependencies or tables found - types.lock not needed");
         return Ok(());
     }
 
+    let table_count = planned_project.get_tables().count();
     progress::info(&format!(
-        "Found {} external dependencies",
-        planned_project.external_dependencies.len()
+        "Found {} external dependencies and {} tables",
+        planned_project.external_dependencies.len(),
+        table_count
     ));
 
     // Query external types and write types.lock

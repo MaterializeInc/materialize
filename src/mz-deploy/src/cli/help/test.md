@@ -9,10 +9,6 @@ any remote database.
 
     mz-deploy test [FILTER]
 
-## Flags
-
-- `--junit-xml <FILE>` — Write test results in JUnit XML format.
-
 ## Writing Tests
 
 Tests are written inline in the same `.sql` file as the view they test,
@@ -101,8 +97,8 @@ used during test execution:
 
 Column types in `MOCK` and `EXPECTED` are normalized before comparison,
 so common aliases are interchangeable: `int`/`int4`/`integer`,
-`bigint`/`int8`, `text`/`varchar`/`string`, `float`/`float8`/`double
-precision`, `numeric`/`decimal`, `json`/`jsonb`, etc.
+`bigint`/`int8`, `text`/`varchar`/`string`, `float`/`float8`/`double precision`,
+`numeric`/`decimal`, `json`/`jsonb`, etc.
 
 ## Filtering Tests
 
@@ -121,6 +117,12 @@ are run.
 
 If the filter matches no tests, a message is printed and the command
 exits successfully.
+
+## Flags
+
+- `--junit-xml <FILE>` — Write test results in JUnit XML format.
+- `--docker-image <IMAGE>` — Materialize Docker image to use for running
+  tests. Defaults to the image configured in `project.toml`.
 
 ## Examples
 

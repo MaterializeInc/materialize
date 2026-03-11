@@ -34,7 +34,7 @@ pub async fn run(
 
     if definitions.is_empty() {
         humanln!(
-            "  {} No network_policies/ directory or no .sql files found — nothing to do.",
+            "  {} No network-policies/ directory or no .sql files found — nothing to do.",
             "info:".blue().bold()
         );
         return Ok(());

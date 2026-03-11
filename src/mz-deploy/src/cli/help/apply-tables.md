@@ -24,6 +24,10 @@ grants, and comments are applied for newly created tables.
 The command is **idempotent** — running it multiple times produces the
 same result. Tables that already exist are never modified or recreated.
 
+After creating tables, `apply tables` automatically regenerates
+`types.lock` so that `compile` and `test` have up-to-date type
+information.
+
 ## Dependencies
 
 `apply tables` creates only tables. Dependency objects such as secrets,

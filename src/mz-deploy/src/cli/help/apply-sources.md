@@ -49,4 +49,4 @@ handles the full dependency chain automatically.
 ## Related Commands
 
 - `mz-deploy apply` — Apply all object types in dependency order.
-- `mz-deploy delete source <NAME>` — Drop a source and remove its project file.
+- `mz-deploy delete` — Drop an object and remove its project file.

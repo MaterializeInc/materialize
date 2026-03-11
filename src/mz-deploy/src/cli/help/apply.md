@@ -2,7 +2,7 @@
 
 Declarative, diff-based, idempotent management of infrastructure objects.
 Without a subcommand, applies all types in dependency order:
-clusters → roles → secrets → connections → sources → tables.
+clusters → roles → network policies → secrets → connections → sources → tables.
 
 ## Usage
 
@@ -17,11 +17,13 @@ When run without a subcommand (`mz-deploy apply`):
    alters drifted configuration.
 2. Applies role definitions from `roles/` — creates missing, applies
    ALTER, GRANT, COMMENT statements.
-3. Applies secrets — creates missing, updates values (skip with
+3. Applies network policy definitions from `network_policies/` — creates
+   missing, alters drifted rules.
+4. Applies secrets — creates missing, updates values (skip with
    `--skip-secrets`).
-4. Applies connections — creates missing, reconciles drifted options.
-5. Applies sources — creates missing sources (idempotent).
-6. Applies tables — creates missing tables (idempotent).
+5. Applies connections — creates missing, reconciles drifted options.
+6. Applies sources — creates missing sources (idempotent).
+7. Applies tables — creates missing tables (idempotent).
 
 Each step is idempotent — running `apply` multiple times converges
 to the same state.
@@ -33,6 +35,7 @@ type is applied.
 
 - `clusters` — Apply cluster definitions from `clusters/` directory.
 - `roles` — Apply role definitions from `roles/` directory.
+- `network-policies` — Apply network policy definitions from `network_policies/` directory.
 - `secrets` — Create missing secrets and update existing values.
 - `connections` — Create missing connections, reconcile drift.
 - `sources` — Create sources that don't exist.
@@ -67,5 +70,4 @@ type is applied.
 ## Related Commands
 
 - `mz-deploy stage` — Deploy views/MVs to staging.
-- `mz-deploy apply <type>` — Apply a specific type.
 - `mz-deploy delete <type>` — Drop an object and remove its project file.

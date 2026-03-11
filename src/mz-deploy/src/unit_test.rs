@@ -634,7 +634,13 @@ fn compare_columns(
                 let actual_normalized = normalize_type(&actual.r#type);
 
                 if test_normalized != actual_normalized {
-                    Some((name.clone(), test_type.clone(), actual.r#type.clone()))
+                    // SHOW COLUMNS returns bare container types (e.g. "list" instead of "int8 list").
+                    // Treat bare containers as matching any parameterized variant.
+                    if types_match_with_bare_containers(&test_normalized, &actual_normalized) {
+                        None
+                    } else {
+                        Some((name.clone(), test_type.clone(), actual.r#type.clone()))
+                    }
                 } else {
                     None
                 }
@@ -649,8 +655,55 @@ fn compare_columns(
 ///
 /// This handles Materialize type aliases so that equivalent types compare equal.
 /// Based on: https://materialize.com/docs/sql/types/
+/// Check if two normalized types match when accounting for bare container types.
+///
+/// SHOW COLUMNS returns bare container types (e.g. "list" instead of "int8 list"),
+/// stripping the element type. This function treats bare containers as matching
+/// any parameterized variant of the same container.
+fn types_match_with_bare_containers(a: &str, b: &str) -> bool {
+    // list variants: "list" matches "bigint list", "text list", etc.
+    if a == "list" && b.ends_with(" list") || b == "list" && a.ends_with(" list") {
+        return true;
+    }
+    // array variants: "[]" as bare type matches "bigint[]", etc.
+    if a == "[]" && b.ends_with("[]") || b == "[]" && a.ends_with("[]") {
+        return true;
+    }
+    // map variants: "map" matches "map[text=>bigint]", etc.
+    if a == "map" && b.starts_with("map[") || b == "map" && a.starts_with("map[") {
+        return true;
+    }
+    false
+}
+
 fn normalize_type(t: &str) -> String {
     let normalized = t.trim().to_lowercase();
+
+    // Handle container type suffixes before scalar matching.
+
+    // List types: "int8 list" -> normalize element, return "{element} list"
+    if let Some(element) = normalized.strip_suffix(" list") {
+        if !element.is_empty() {
+            return format!("{} list", normalize_type(element));
+        }
+    }
+
+    // Array types: "int8[]" -> normalize element, return "{element}[]"
+    if let Some(element) = normalized.strip_suffix("[]") {
+        if !element.is_empty() {
+            return format!("{}[]", normalize_type(element));
+        }
+    }
+
+    // Map types: "map[text=>int8]" -> normalize key and value
+    if let Some(inner) = normalized
+        .strip_prefix("map[")
+        .and_then(|s| s.strip_suffix(']'))
+    {
+        if let Some((key, value)) = inner.split_once("=>") {
+            return format!("map[{}=>{}]", normalize_type(key), normalize_type(value));
+        }
+    }
 
     // Map Materialize type aliases to canonical forms
     match normalized.as_str() {
@@ -1914,5 +1967,81 @@ mod tests {
         // Should pass because mock covers the dependency, even though type info is missing
         let result = validate_unit_test(&test, &target_id, &types, &dependencies);
         assert!(result.is_ok());
+    }
+
+    // =========================================================================
+    // Container Type Normalization Tests
+    // =========================================================================
+
+    #[test]
+    fn test_normalize_type_list() {
+        assert_eq!(normalize_type("int8 list"), "bigint list");
+        assert_eq!(normalize_type("INT LIST"), "integer list");
+        assert_eq!(normalize_type("text list"), "text list");
+        assert_eq!(normalize_type("INT8 LIST"), "bigint list");
+    }
+
+    #[test]
+    fn test_normalize_type_array() {
+        assert_eq!(normalize_type("int8[]"), "bigint[]");
+        assert_eq!(normalize_type("INT[]"), "integer[]");
+        assert_eq!(normalize_type("text[]"), "text[]");
+    }
+
+    #[test]
+    fn test_normalize_type_map() {
+        assert_eq!(normalize_type("map[text=>int8]"), "map[text=>bigint]");
+        assert_eq!(normalize_type("map[STRING=>BOOL]"), "map[text=>boolean]");
+    }
+
+    #[test]
+    fn test_normalize_type_bare_list() {
+        assert_eq!(normalize_type("list"), "list");
+        assert_eq!(normalize_type("LIST"), "list");
+    }
+
+    #[test]
+    fn test_compare_columns_list_matches_bare() {
+        // Core bug scenario: user writes "int8 list", SHOW COLUMNS returns "list"
+        let test_columns = vec![("ids".to_string(), "int8 list".to_string())];
+
+        let mut actual_columns = BTreeMap::new();
+        actual_columns.insert(
+            "ids".to_string(),
+            ColumnType {
+                r#type: "list".to_string(),
+                nullable: true,
+            },
+        );
+
+        let (extra, missing, type_mismatches) = compare_columns(&test_columns, &actual_columns);
+        assert!(extra.is_empty());
+        assert!(missing.is_empty());
+        assert!(
+            type_mismatches.is_empty(),
+            "Expected no type mismatches for 'int8 list' vs bare 'list', got: {:?}",
+            type_mismatches
+        );
+    }
+
+    #[test]
+    fn test_compare_columns_map_matches_bare() {
+        let test_columns = vec![("data".to_string(), "map[text=>int8]".to_string())];
+
+        let mut actual_columns = BTreeMap::new();
+        actual_columns.insert(
+            "data".to_string(),
+            ColumnType {
+                r#type: "map".to_string(),
+                nullable: true,
+            },
+        );
+
+        let (_, _, type_mismatches) = compare_columns(&test_columns, &actual_columns);
+        assert!(
+            type_mismatches.is_empty(),
+            "Expected no type mismatches for 'map[text=>int8]' vs bare 'map', got: {:?}",
+            type_mismatches
+        );
     }
 }

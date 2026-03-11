@@ -10,7 +10,7 @@ ones whose rules have changed. Grants and comments are applied idempotently.
 
 ## Behavior
 
-1. Loads all `.sql` files from the `network_policies/` directory.
+1. Loads all `.sql` files from the `network-policies/` directory.
 2. For each network policy definition:
    - If the policy does not exist, creates it.
    - If the policy exists, alters it to converge rules.

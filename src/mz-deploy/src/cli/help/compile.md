@@ -22,10 +22,8 @@ step suitable for local development and CI pipelines.
    statement against it. Skips automatically when Docker is unavailable.
 
 With `-v`, also prints the full dependency graph, deployment order, and
-generated SQL plan.
-
-A passing `compile` guarantees that `stage` and `apply` will not
-fail at the SQL-parsing stage.
+generated SQL plan. A passing `compile` guarantees that `stage` and
+`apply` will not fail at the SQL-parsing stage.
 
 ## Flags
 

@@ -1,5 +1,6 @@
 //! Stage command - deploy to staging environment with renamed schemas and clusters.
 
+use super::ObjectRef;
 use crate::cli::{CliError, executor};
 use crate::cli::{git, progress};
 use crate::client::quote_identifier;
@@ -14,11 +15,10 @@ use crate::project::planned::extract_external_indexes;
 use crate::project::typed::FullyQualifiedName;
 use crate::project::{self, normalize::NormalizingVisitor};
 use crate::verbose;
+use mz_ore::option::OptionExt;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Instant;
-
-use super::ObjectRef;
 
 /// Planning output produced once and consumed by all stage execution phases.
 ///
@@ -60,7 +60,7 @@ struct PartitionedObjects<'a> {
 ///
 /// # Arguments
 /// * `profile` - Database profile containing connection information
-/// * `stage_name` - Optional staging environment name (defaults to random 7-char hex)
+/// * `stage_name` - Optional staging environment name (defaults to git SHA prefix, or random 7-char hex)
 /// * `directory` - Project root directory
 /// * `allow_dirty` - Allow deploying with uncommitted changes
 /// * `no_rollback` - Skip automatic rollback on failure (for debugging)
@@ -90,7 +90,8 @@ pub async fn run(
     }
 
     let stage_name = stage_name
-        .map(ToString::to_string)
+        .owned()
+        .or_else(|| git::get_git_commit(directory).map(|sha| sha.chars().take(7).collect()))
         .unwrap_or_else(executor::generate_random_env_name);
 
     progress::info(&format!("Deploying to staging environment: {}", stage_name));

@@ -5,15 +5,8 @@
 //! `[profiles.<name>.variables]` in `project.toml`.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
-
-/// Error returned when SQL contains variable references that have no definition.
-#[derive(Debug)]
-pub struct VariableError {
-    pub unresolved: Vec<String>,
-    pub path: PathBuf,
-}
+use std::collections::BTreeMap;
+use std::path::Path;
 
 /// The kind of variable reference found in the SQL text.
 enum VarKind {
@@ -208,18 +201,17 @@ pub fn resolve_variables<'a>(
     sql: &'a str,
     vars: &BTreeMap<String, String>,
     path: &Path,
-) -> Result<Cow<'a, str>, VariableError> {
+) -> Cow<'a, str> {
     let bytes = sql.as_bytes();
     let len = bytes.len();
 
     if len == 0 {
-        return Ok(Cow::Borrowed(sql));
+        return Cow::Borrowed(sql);
     }
 
     let mut i = 0;
     let mut output: Option<String> = None;
     let mut copy_from: usize = 0;
-    let mut unresolved: BTreeSet<&str> = BTreeSet::new();
 
     while i < len {
         if bytes[i] == b'\'' {
@@ -271,7 +263,10 @@ pub fn resolve_variables<'a>(
                         }
                     }
                 } else {
-                    unresolved.insert(name);
+                    eprintln!(
+                        "warning: potential unresolved variable :{name} in {}",
+                        path.display()
+                    );
                     buf.push_str(&sql[var_start..end]);
                 }
 
@@ -285,19 +280,12 @@ pub fn resolve_variables<'a>(
         }
     }
 
-    if !unresolved.is_empty() {
-        return Err(VariableError {
-            unresolved: unresolved.into_iter().map(String::from).collect(),
-            path: path.to_path_buf(),
-        });
-    }
-
     match output {
         Some(mut buf) => {
             buf.push_str(&sql[copy_from..]);
-            Ok(Cow::Owned(buf))
+            Cow::Owned(buf)
         }
-        None => Ok(Cow::Borrowed(sql)),
+        None => Cow::Borrowed(sql),
     }
 }
 
@@ -320,7 +308,7 @@ mod tests {
     #[test]
     fn no_variables_returns_borrowed() {
         let sql = "SELECT 1 FROM t WHERE x = 'hello'";
-        let result = resolve_variables(sql, &BTreeMap::new(), &path()).unwrap();
+        let result = resolve_variables(sql, &BTreeMap::new(), &path());
         assert!(matches!(result, Cow::Borrowed(_)));
         assert_eq!(result.as_ref(), sql);
     }
@@ -332,8 +320,7 @@ mod tests {
             "CREATE MATERIALIZED VIEW mv IN CLUSTER :cluster AS SELECT 1",
             &v,
             &path(),
-        )
-        .unwrap();
+        );
         assert_eq!(
             result.as_ref(),
             "CREATE MATERIALIZED VIEW mv IN CLUSTER analytics AS SELECT 1"
@@ -347,8 +334,7 @@ mod tests {
             "CREATE CONNECTION pg TO POSTGRES (HOST :'pg_host')",
             &v,
             &path(),
-        )
-        .unwrap();
+        );
         assert_eq!(
             result.as_ref(),
             "CREATE CONNECTION pg TO POSTGRES (HOST 'it''s-a-host')"
@@ -358,13 +344,13 @@ mod tests {
     #[test]
     fn double_quoted_variable_with_escaping() {
         let v = vars(&[("col", "my\"col")]);
-        let result = resolve_variables("SELECT :\"col\" FROM t", &v, &path()).unwrap();
+        let result = resolve_variables("SELECT :\"col\" FROM t", &v, &path());
         assert_eq!(result.as_ref(), "SELECT \"my\"\"col\" FROM t");
     }
 
     #[test]
     fn type_cast_preserved() {
-        let result = resolve_variables("SELECT x::int FROM t", &BTreeMap::new(), &path()).unwrap();
+        let result = resolve_variables("SELECT x::int FROM t", &BTreeMap::new(), &path());
         assert!(matches!(result, Cow::Borrowed(_)));
         assert_eq!(result.as_ref(), "SELECT x::int FROM t");
     }
@@ -372,7 +358,7 @@ mod tests {
     #[test]
     fn variable_inside_string_literal_not_resolved() {
         let v = vars(&[("foo", "bar")]);
-        let result = resolve_variables("SELECT ':foo' FROM t", &v, &path()).unwrap();
+        let result = resolve_variables("SELECT ':foo' FROM t", &v, &path());
         assert!(matches!(result, Cow::Borrowed(_)));
         assert_eq!(result.as_ref(), "SELECT ':foo' FROM t");
     }
@@ -380,7 +366,7 @@ mod tests {
     #[test]
     fn variable_in_line_comment_not_resolved() {
         let v = vars(&[("foo", "bar")]);
-        let result = resolve_variables("-- :foo\nSELECT 1", &v, &path()).unwrap();
+        let result = resolve_variables("-- :foo\nSELECT 1", &v, &path());
         assert!(matches!(result, Cow::Borrowed(_)));
         assert_eq!(result.as_ref(), "-- :foo\nSELECT 1");
     }
@@ -388,7 +374,7 @@ mod tests {
     #[test]
     fn variable_in_block_comment_not_resolved() {
         let v = vars(&[("foo", "bar")]);
-        let result = resolve_variables("/* :foo */ SELECT 1", &v, &path()).unwrap();
+        let result = resolve_variables("/* :foo */ SELECT 1", &v, &path());
         assert!(matches!(result, Cow::Borrowed(_)));
         assert_eq!(result.as_ref(), "/* :foo */ SELECT 1");
     }
@@ -396,7 +382,7 @@ mod tests {
     #[test]
     fn nested_block_comment_not_resolved() {
         let v = vars(&[("foo", "bar")]);
-        let result = resolve_variables("/* /* :foo */ */ SELECT 1", &v, &path()).unwrap();
+        let result = resolve_variables("/* /* :foo */ */ SELECT 1", &v, &path());
         assert!(matches!(result, Cow::Borrowed(_)));
         assert_eq!(result.as_ref(), "/* /* :foo */ */ SELECT 1");
     }
@@ -404,68 +390,76 @@ mod tests {
     #[test]
     fn multiple_variables() {
         let v = vars(&[("a", "1"), ("b", "2")]);
-        let result = resolve_variables("SELECT :a, :b", &v, &path()).unwrap();
+        let result = resolve_variables("SELECT :a, :b", &v, &path());
         assert_eq!(result.as_ref(), "SELECT 1, 2");
     }
 
     #[test]
-    fn unresolved_variable_error() {
-        let result = resolve_variables("SELECT :missing", &BTreeMap::new(), &path());
-        let err = result.unwrap_err();
-        assert_eq!(err.unresolved, vec!["missing"]);
+    fn unresolved_variable_passes_through() {
+        let sql = "SELECT :missing";
+        let result = resolve_variables(sql, &BTreeMap::new(), &path());
+        assert_eq!(result.as_ref(), sql);
     }
 
     #[test]
-    fn multiple_unresolved_lists_all() {
-        let result = resolve_variables("SELECT :a, :b, :a", &BTreeMap::new(), &path());
-        let err = result.unwrap_err();
-        assert_eq!(err.unresolved, vec!["a", "b"]);
+    fn multiple_unresolved_pass_through() {
+        let sql = "SELECT :a, :b, :a";
+        let result = resolve_variables(sql, &BTreeMap::new(), &path());
+        assert_eq!(result.as_ref(), sql);
     }
 
     #[test]
     fn empty_vars_no_syntax_borrowed() {
-        let result = resolve_variables("SELECT 1", &BTreeMap::new(), &path()).unwrap();
+        let result = resolve_variables("SELECT 1", &BTreeMap::new(), &path());
         assert!(matches!(result, Cow::Borrowed(_)));
     }
 
     #[test]
-    fn empty_vars_with_syntax_errors() {
-        let result = resolve_variables("SELECT :foo", &BTreeMap::new(), &path());
-        assert!(result.is_err());
+    fn empty_vars_passes_through() {
+        let sql = "SELECT :foo";
+        let result = resolve_variables(sql, &BTreeMap::new(), &path());
+        assert_eq!(result.as_ref(), sql);
+    }
+
+    #[test]
+    fn array_slice_not_treated_as_variable() {
+        let sql = "SELECT arr[1:list_length(arr) - 1]";
+        let result = resolve_variables(sql, &BTreeMap::new(), &path());
+        assert_eq!(result.as_ref(), sql);
     }
 
     #[test]
     fn variable_at_end_of_input() {
         let v = vars(&[("foo", "bar")]);
-        let result = resolve_variables("SELECT :foo", &v, &path()).unwrap();
+        let result = resolve_variables("SELECT :foo", &v, &path());
         assert_eq!(result.as_ref(), "SELECT bar");
     }
 
     #[test]
     fn adjacent_syntax() {
         let v = vars(&[("foo", "1"), ("bar", "2")]);
-        let result = resolve_variables("(:foo, :bar)", &v, &path()).unwrap();
+        let result = resolve_variables("(:foo, :bar)", &v, &path());
         assert_eq!(result.as_ref(), "(1, 2)");
     }
 
     #[test]
     fn single_quoted_no_escaping_needed() {
         let v = vars(&[("host", "simple-host")]);
-        let result = resolve_variables("HOST :'host'", &v, &path()).unwrap();
+        let result = resolve_variables("HOST :'host'", &v, &path());
         assert_eq!(result.as_ref(), "HOST 'simple-host'");
     }
 
     #[test]
     fn double_quoted_no_escaping_needed() {
         let v = vars(&[("col", "simple_col")]);
-        let result = resolve_variables("SELECT :\"col\"", &v, &path()).unwrap();
+        let result = resolve_variables("SELECT :\"col\"", &v, &path());
         assert_eq!(result.as_ref(), "SELECT \"simple_col\"");
     }
 
     #[test]
     fn double_quoted_identifier_not_resolved() {
         let v = vars(&[("id", "bar")]);
-        let result = resolve_variables("SELECT \"user:id\" FROM t", &v, &path()).unwrap();
+        let result = resolve_variables("SELECT \"user:id\" FROM t", &v, &path());
         assert!(matches!(result, Cow::Borrowed(_)));
         assert_eq!(result.as_ref(), "SELECT \"user:id\" FROM t");
     }
@@ -473,7 +467,7 @@ mod tests {
     #[test]
     fn dollar_quoted_not_resolved() {
         let v = vars(&[("foo", "bar")]);
-        let result = resolve_variables("SELECT $$:foo$$ FROM t", &v, &path()).unwrap();
+        let result = resolve_variables("SELECT $$:foo$$ FROM t", &v, &path());
         assert!(matches!(result, Cow::Borrowed(_)));
         assert_eq!(result.as_ref(), "SELECT $$:foo$$ FROM t");
     }
@@ -481,14 +475,14 @@ mod tests {
     #[test]
     fn dollar_tagged_not_resolved() {
         let v = vars(&[("foo", "bar")]);
-        let result = resolve_variables("SELECT $tag$:foo$tag$ FROM t", &v, &path()).unwrap();
+        let result = resolve_variables("SELECT $tag$:foo$tag$ FROM t", &v, &path());
         assert!(matches!(result, Cow::Borrowed(_)));
         assert_eq!(result.as_ref(), "SELECT $tag$:foo$tag$ FROM t");
     }
 
     #[test]
     fn dollar_sign_alone_no_crash() {
-        let result = resolve_variables("SELECT $ FROM t", &BTreeMap::new(), &path()).unwrap();
+        let result = resolve_variables("SELECT $ FROM t", &BTreeMap::new(), &path());
         assert!(matches!(result, Cow::Borrowed(_)));
         assert_eq!(result.as_ref(), "SELECT $ FROM t");
     }

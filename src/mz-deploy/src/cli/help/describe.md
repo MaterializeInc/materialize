@@ -8,10 +8,6 @@ their content hashes.
 
     mz-deploy describe <DEPLOY_ID>
 
-## Flags
-
-- `--output json` — Print deployment details as JSON to stdout.
-
 ## Behavior
 
 1. Connects to the database.
@@ -23,6 +19,10 @@ their content hashes.
    - Promotion status and timestamp (if promoted)
    - Schemas included in the deployment
    - All objects with the first 12 characters of their content hash
+
+## Flags
+
+- `--output json` — Print deployment details as JSON to stdout.
 
 ## Examples
 

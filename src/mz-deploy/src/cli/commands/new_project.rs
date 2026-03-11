@@ -13,7 +13,7 @@ use std::process::Command;
 const GITIGNORE: &str = include_str!("../scaffold/gitignore");
 const PROJECT_TOML: &str = include_str!("../scaffold/project.toml");
 const README_MD: &str = include_str!("../scaffold/README.md");
-const SKILL_MD: &str = include_str!("../scaffold/skill/skill.md");
+const SKILL_MD: &str = include_str!("../scaffold/skill/SKILL.md");
 const AGENT_MD: &str = include_str!("../scaffold/AGENT.md");
 const UNIT_TEST_REFERENCE_MD: &str = include_str!("../scaffold/skill/references/unit-tests.md");
 const STABLE_API_REFERENCE_MD: &str = include_str!("../scaffold/skill/references/stable-api.md");
@@ -38,7 +38,7 @@ pub fn run(name: &str, init_git: bool) -> Result<(), CliError> {
     add_file(project_dir, "models/materialize/public/.gitkeep", "")?;
     add_file(project_dir, "clusters/.gitkeep", "")?;
     add_file(project_dir, "roles/.gitkeep", "")?;
-    add_file(project_dir, "network_policies/.gitkeep", "")?;
+    add_file(project_dir, "network-policies/.gitkeep", "")?;
     add_file(project_dir, ".gitignore", GITIGNORE)?;
     add_file(project_dir, "project.toml", PROJECT_TOML)?;
     add_file(

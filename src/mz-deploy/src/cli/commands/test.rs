@@ -360,7 +360,7 @@ async fn run_single_test(
         unit_test::desugar_unit_test(test, &target_obj.typed_object.stmt, &typed_fqn);
 
     for sql in &sql_statements[..sql_statements.len() - 1] {
-        if let Err(e) = client.execute(sql, &[]).await {
+        if let Err(e) = client.batch_execute(sql).await {
             return Ok(TestOutcome::Failed(ExecutionFailure::Error(format!(
                 "failed to execute SQL: {:?}\n  statement: {}",
                 e, sql
@@ -369,18 +369,30 @@ async fn run_single_test(
     }
 
     let test_query = &sql_statements[sql_statements.len() - 1];
-    let outcome = match client.query(test_query, &[]).await {
-        Ok(rows) if rows.is_empty() => TestOutcome::Passed,
-        Ok(rows) => TestOutcome::Failed(ExecutionFailure::AssertionFailed(format_assertion_rows(
-            &rows,
-        ))),
+    let outcome = match client.simple_query(test_query).await {
+        Ok(messages) => {
+            let rows: Vec<_> = messages
+                .into_iter()
+                .filter_map(|m| match m {
+                    tokio_postgres::SimpleQueryMessage::Row(row) => Some(row),
+                    _ => None,
+                })
+                .collect();
+            if rows.is_empty() {
+                TestOutcome::Passed
+            } else {
+                TestOutcome::Failed(ExecutionFailure::AssertionFailed(format_assertion_rows(
+                    &rows,
+                )))
+            }
+        }
         Err(e) => TestOutcome::Failed(ExecutionFailure::Error(format!(
             "failed to execute test query: {}",
             e
         ))),
     };
 
-    if let Err(e) = client.execute("DISCARD ALL", &[]).await {
+    if let Err(e) = client.batch_execute("DISCARD ALL").await {
         eprintln!("warning: failed to execute DISCARD ALL: {}", e);
     }
     Ok(outcome)
@@ -495,7 +507,7 @@ async fn validate_at_time(
 ) -> Result<Result<(), unit_test::InvalidAtTimeError>, CliError> {
     if let Some(at_time) = &test.at_time {
         let validation_query = format!("SELECT {}::mz_timestamp", at_time);
-        if let Err(e) = client.query(&validation_query, &[]).await {
+        if let Err(e) = client.simple_query(&validation_query).await {
             let error = unit_test::InvalidAtTimeError {
                 test_name: test.name.clone(),
                 at_time_value: at_time.clone(),
@@ -522,7 +534,7 @@ fn typed_fqn_from_object_id(object_id: &project::object_id::ObjectId) -> typed::
 /// Formats failing assertion rows into a readable table-like string.
 ///
 /// This is intentionally display-only and does not affect pass/fail decisions.
-fn format_assertion_rows(rows: &[tokio_postgres::Row]) -> String {
+fn format_assertion_rows(rows: &[tokio_postgres::SimpleQueryRow]) -> String {
     let mut out = String::new();
     writeln!(out, "  {}:", "Test assertion failed".yellow().bold()).unwrap();
     if let Some(first_row) = rows.first() {
@@ -538,20 +550,8 @@ fn format_assertion_rows(rows: &[tokio_postgres::Row]) -> String {
 
     for row in rows {
         let mut values = Vec::new();
-        for i in 0..row.len() {
-            let value_str = if let Ok(v) = row.try_get::<_, String>(i) {
-                v
-            } else if let Ok(v) = row.try_get::<_, i64>(i) {
-                v.to_string()
-            } else if let Ok(v) = row.try_get::<_, i32>(i) {
-                v.to_string()
-            } else if let Ok(v) = row.try_get::<_, f64>(i) {
-                v.to_string()
-            } else if let Ok(v) = row.try_get::<_, bool>(i) {
-                v.to_string()
-            } else {
-                "<unprintable>".to_string()
-            };
+        for i in 0..row.columns().len() {
+            let value_str = row.get(i).unwrap_or("<null>").to_string();
 
             if i == 0 {
                 let colored = match value_str.as_str() {

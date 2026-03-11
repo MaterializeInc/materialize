@@ -49,12 +49,7 @@ pub fn parse_statements_with_context(
     path: PathBuf,
     variables: &BTreeMap<String, String>,
 ) -> Result<Vec<Statement<Raw>>, ParseError> {
-    let resolved = super::variables::resolve_variables(sql, variables, &path).map_err(|e| {
-        ParseError::UnresolvedVariables {
-            path: e.path,
-            unresolved: e.unresolved,
-        }
-    })?;
+    let resolved = super::variables::resolve_variables(sql, variables, &path);
     let sql = resolved.as_ref();
 
     let mut statements = vec![];

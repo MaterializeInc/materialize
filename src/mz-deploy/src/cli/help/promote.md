@@ -69,12 +69,15 @@ sinks to repoint, and resources to drop.
 ## Concurrent Deployments
 
 Multiple staging deployments can be promoted independently as long as
-they touch different schemas and clusters. When two deployments overlap,
-conflict detection prevents the second from overwriting the first:
-`promote` checks whether any production schema was modified after the
-staging deployment was created. If a conflict is detected, the command
-fails and the deployment must be re-staged against the latest production
-state.
+they touch different schemas and clusters. Conflict detection operates
+at the schema and cluster level — if two deployments modify different
+objects within the same schema, that is still a conflict because the
+entire schema is swapped as a unit.
+
+When two deployments overlap, `promote` checks whether any production
+schema or cluster was modified after the staging deployment was created.
+If a conflict is detected, the command fails and the deployment must be
+re-staged against the latest production state.
 
 Use `--force` to bypass conflict detection when you are certain you want
 to force a promotion.
@@ -100,9 +103,9 @@ to force a promotion.
 There is no dedicated rollback command. To revert a promotion, reverse the
 changes in your project and promote the result:
 
-    git revert <commit>              # Create a new commit undoing the change
+    git revert <commit>              # Undo the change
     mz-deploy stage                  # Stage the reverted project
-    mz-deploy promote <NEW_DEPLOY_ID> # Promote to production
+    mz-deploy promote <DEPLOY_ID>    # Promote the rollback
 
 Because `promote` uses atomic `ALTER ... SWAP`, the rollback promotion is
 itself atomic — production traffic switches back in a single transaction.

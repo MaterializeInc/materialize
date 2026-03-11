@@ -39,7 +39,7 @@ pub fn load_network_policies(
     profile: &str,
     variables: &BTreeMap<String, String>,
 ) -> Result<Vec<NetworkPolicyDefinition>, ProjectError> {
-    let policies_dir = root.join("network_policies");
+    let policies_dir = root.join("network-policies");
 
     if !policies_dir.exists() {
         return Ok(vec![]);

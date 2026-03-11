@@ -14,8 +14,8 @@ description: >
 - `models/<database>/<schema>/` — SQL model files (one primary object per file)
 - `clusters/` — Cluster definitions
 - `roles/` — Role definitions
+- `network-policies` — Network policies
 - `project.toml` — Project settings (profile, Materialize version)
-- `.mz/profiles.toml` — Connection profiles (host, user, password)
 
 ## Model files — one object per file
 
@@ -109,20 +109,22 @@ Environment variable override: `MZ_PROFILE_<NAME>_PASSWORD` (e.g.,
 
 ## Deployment lifecycle
 
-To deploy changes: `compile` → `apply` → `stage` → `ready` → `deploy`.
+To deploy changes: `compile` → `test` → `apply` → `stage` → `ready` → `deploy`.
 
 1. `mz-deploy compile` — Parse and validate all SQL files locally.
-2. `mz-deploy apply` — Apply infrastructure objects (clusters, roles,
-   secrets, connections, sources, tables) in dependency order.
+2. `mz-deploy test` — Compile all SQL files and run unit tests locally.
 3. `mz-deploy stage` — Deploy views, materialized views, indexes, and sinks
    into a new "shadow" deployment that runs alongside the current one.
 4. `mz-deploy ready` — Wait for all materialized views and indexes in the
    staged deployment to be fully hydrated.
 5. `mz-deploy deploy` — Swap the staged deployment into the active slot.
 
-Tables and sources are **durable state** — they persist across deployments and
-are only created/modified via `apply`. Everything else (views, MVs,
-indexes, sinks) is deployed atomically via `stage` + `deploy`.
+Tables, sources, connections, secrets, roles, network policies, and clusters are **durable state** 
+they persist across deployments and  are only created/modified via `mz-deploy apply`. 
+Everything else (views, MVs, indexes, sinks) is deployed atomically via `stage` + `deploy`.
+
+Local compilation and unit tests require a types.lock file. types.lock is automatically generated
+whenenever `mz-deploy apply tables` is run and can be regenerated with `mz-deploy lock`. 
 
 ## Unit tests
 

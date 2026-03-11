@@ -27,7 +27,8 @@ A cluster is considered "ready" when all three conditions are met:
 3. Exits with success (code 0) only if all clusters are already ready;
    otherwise exits with an error.
 
-Status indicators:
+### Status Indicators
+
 - **ready** — Fully hydrated and caught up.
 - **hydrating** — Objects still being materialized.
 - **lagging** — Hydrated but lag exceeds the threshold.
