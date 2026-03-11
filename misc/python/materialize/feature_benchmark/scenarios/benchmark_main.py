@@ -124,6 +124,43 @@ true
         )
 
 
+class ProjectionPushdown(Scenario):
+    """Test projection pushdown -- selecting specific columns from a large materialized view without filtering or aggregations."""
+
+    def init(self) -> list[Action]:
+        return [
+            self.table_ten(),
+            TdAction(
+                f"""
+> CREATE MATERIALIZED VIEW v1 (f1, f2, f3, f4, f5) AS
+  SELECT generate_series AS f1, 1 AS f2, 2 AS f3, 3 AS f4, 4 AS f5
+  FROM generate_series(1, {self.n()});
+> SELECT COUNT(*) = {self.n()} FROM v1;
+true
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        sum_f1 = sum(range(1, self.n() + 1))
+        repeated_selects = "\n".join(
+            f"> SELECT sum(f1) FROM v1;\n{sum_f1}" for _ in range(10)
+        )
+        return Td(
+            f"""
+> SET auto_route_introspection_queries TO false
+> BEGIN
+> SELECT 1;
+  /* A */
+1
+{repeated_selects}
+> SELECT 1
+  /* B */
+1
+"""
+        )
+
+
 class FastPathFilterIndex(FastPath):
     """Measure the time it takes for the fast path to filter our all rows from a materialized view using an index and return"""
 
