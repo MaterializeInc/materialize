@@ -31,7 +31,7 @@ FROM t
 ----
 Explained Query:
   Project (#3)
-    Map (case #0{x} when 1 then 10 when 2 then 20 else 0 end)
+    Map (case_lookup #0{x} when 1 then 10 when 2 then 20 else 0 end)
       ReadStorage materialize.public.t
 
 Source materialize.public.t
@@ -56,7 +56,7 @@ FROM t
 ----
 Explained Query:
   Project (#3)
-    Map (case #0{x} when 1 then 10 when 2 then 20 when 3 then 30 when 4 then 40 when 5 then 50 else 0 end)
+    Map (case_lookup #0{x} when 1 then 10 when 2 then 20 when 3 then 30 when 4 then 40 when 5 then 50 else 0 end)
       ReadStorage materialize.public.t
 
 Source materialize.public.t
@@ -79,7 +79,7 @@ FROM t
 ----
 Explained Query:
   Project (#3)
-    Map (case #0{x} when 1 then "one" when 2 then "two" when 3 then "three" else "other" end)
+    Map (case_lookup #0{x} when 1 then "one" when 2 then "two" when 3 then "three" else "other" end)
       ReadStorage materialize.public.t
 
 Source materialize.public.t
@@ -152,7 +152,7 @@ FROM t
 ----
 Explained Query:
   Project (#3)
-    Map (case #0{x} when 1 then "a" when 2 then "b" when 3 then "c" else case when (#2{z} = 99) then "z" else case #0{x} when 4 then "d" when 5 then "e" when 6 then "f" else "other" end end end)
+    Map (case_lookup #0{x} when 1 then "a" when 2 then "b" when 3 then "c" else case when (#2{z} = 99) then "z" else case_lookup #0{x} when 4 then "d" when 5 then "e" when 6 then "f" else "other" end end end)
       ReadStorage materialize.public.t
 
 Source materialize.public.t
@@ -161,38 +161,44 @@ Target cluster: quickstart
 
 EOF
 
+statement ok
+INSERT INTO t VALUES (2, 'two', 0), (99, 'miss', 0), (NULL, 'null', 0)
+
 # Verify correctness: CASE with matching input.
 query I
 SELECT
-  CASE 2
+  CASE x
     WHEN 1 THEN 10
     WHEN 2 THEN 20
     WHEN 3 THEN 30
     ELSE 0
   END
+FROM t WHERE y = 'two'
 ----
 20
 
 # Verify correctness: CASE with no matching input.
 query I
 SELECT
-  CASE 99
+  CASE x
     WHEN 1 THEN 10
     WHEN 2 THEN 20
     WHEN 3 THEN 30
     ELSE 0
   END
+FROM t WHERE y = 'miss'
 ----
 0
 
 # Verify correctness: CASE with NULL input.
 query I
 SELECT
-  CASE NULL::int
+  CASE x
     WHEN 1 THEN 10
     WHEN 2 THEN 20
     WHEN 3 THEN 30
     ELSE 0
   END
+FROM t WHERE y = 'null'
 ----
 0
