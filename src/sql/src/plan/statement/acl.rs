@@ -252,7 +252,7 @@ fn plan_alter_network_policy_owner(
     match resolve_network_policy(scx, name.clone(), if_exists)? {
         Some(policy_id) => Ok(Plan::AlterOwner(AlterOwnerPlan {
             id: ObjectId::NetworkPolicy(policy_id.id),
-            object_type: ObjectType::Schema,
+            object_type: ObjectType::NetworkPolicy,
             new_owner,
         })),
         None => {
