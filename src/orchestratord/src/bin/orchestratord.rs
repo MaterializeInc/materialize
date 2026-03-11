@@ -30,14 +30,14 @@ use k8s_openapi::{
 use kube::{Api, runtime::watcher};
 use mz_cloud_provider::CloudProvider;
 use mz_cloud_resources::crd::generated::cert_manager::certificates::Certificate;
-use tracing::{info, warn};
+use tracing::info;
 
 use mz_build_info::{BuildInfo, build_info};
 use mz_orchestrator_kubernetes::{KubernetesImagePullPolicy, util::create_client};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_orchestratord::{
     controller,
-    k8s::{migrate_materialize_storage_version, register_crds},
+    k8s::register_crds,
     metrics::{self, Metrics},
     tls::DefaultCertificateSpecs,
     webhook,
@@ -318,13 +318,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         args.tls_ca,
     )
     .await?;
-
-    if let Err(e) = migrate_materialize_storage_version(client.clone()).await {
-        warn!(
-            "Failed to migrate Materialize storage versions: {}",
-            e.display_with_causes(),
-        );
-    }
 
     {
         let router = mz_prof_http::router(&BUILD_INFO);

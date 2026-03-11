@@ -2276,33 +2276,14 @@ def workflow_balancer(c: Composition, parser: WorkflowArgumentParser) -> None:
     run_balancer(definition, False)
 
 
-def get_materialize_status() -> dict[str, Any] | None:
-    """Get the status of the first Materialize resource."""
+def get_materialize_v1alpha1() -> dict[str, Any]:
+    """Get the first Materialize resource at v1alpha1."""
     data = json.loads(
         spawn.capture(
             [
                 "kubectl",
                 "get",
-                "materializes",
-                "-n",
-                "materialize-environment",
-                "-o",
-                "json",
-            ],
-            stderr=subprocess.DEVNULL,
-        )
-    )
-    return data["items"][0].get("status")
-
-
-def get_materialize_v1alpha2() -> dict[str, Any]:
-    """Get the first Materialize resource at v1alpha2 API version."""
-    data = json.loads(
-        spawn.capture(
-            [
-                "kubectl",
-                "get",
-                "materializes.v1alpha2.materialize.cloud",
+                "materializes.v1alpha1.materialize.cloud",
                 "-n",
                 "materialize-environment",
                 "-o",
@@ -2314,142 +2295,23 @@ def get_materialize_v1alpha2() -> dict[str, Any]:
     return data["items"][0]
 
 
-def get_materialize_condition_reason() -> str | None:
-    """Get the reason of the first UpToDate condition."""
-    status = get_materialize_status()
-    if not status:
-        return None
-    conditions = status.get("conditions", [])
-    if not conditions:
-        return None
-    for condition in conditions:
-        if condition.get("type") == "UpToDate":
-            return condition.get("reason")
-    return None
+def get_materialize_status_v1alpha1() -> dict[str, Any] | None:
+    """Get the status of the first Materialize resource at v1alpha1."""
+    return get_materialize_v1alpha1().get("status")
 
 
-def wait_for_condition_reason(reason: str, timeout: int = 900) -> None:
-    """Wait until the Materialize resource has the given condition reason."""
-    for _ in range(timeout):
-        try:
-            if get_materialize_condition_reason() == reason:
-                return
-        except (subprocess.CalledProcessError, KeyError, IndexError):
-            pass
-        time.sleep(1)
-    spawn.runv(
-        [
-            "kubectl",
-            "get",
-            "materializes",
-            "-n",
-            "materialize-environment",
-            "-o",
-            "yaml",
-        ],
-    )
-    raise RuntimeError(
-        f"Materialize resource never reached condition reason {reason!r}"
-    )
-
-
-def scale_orchestratord(replicas: int) -> None:
-    """Scale the orchestratord deployment."""
-    spawn.runv(
-        [
-            "kubectl",
-            "scale",
-            "deployment",
-            "-n",
-            "materialize",
-            "-l",
-            "app.kubernetes.io/instance=operator",
-            "--replicas",
-            str(replicas),
-        ]
-    )
-    # Wait for the scale to take effect
-    for _ in range(120):
-        data = get_orchestratord_data()
-        running = sum(
-            1
-            for item in data.get("items", [])
-            if item.get("status", {}).get("phase") == "Running"
-        )
-        if running == replicas:
-            return
-        time.sleep(1)
-    raise RuntimeError(f"Orchestratord never scaled to {replicas} replicas")
-
-
-def patch_materialize_status_promoting() -> None:
-    """Patch the Materialize resource status to have the Promoting condition."""
-    mz_data = json.loads(
-        spawn.capture(
-            [
-                "kubectl",
-                "get",
-                "materializes",
-                "-n",
-                "materialize-environment",
-                "-o",
-                "json",
-            ],
-            stderr=subprocess.DEVNULL,
-        )
-    )
-    mz_name = mz_data["items"][0]["metadata"]["name"]
-
-    patch = {
-        "status": {
-            "conditions": [
-                {
-                    "type": "UpToDate",
-                    "status": "Unknown",
-                    "lastTransitionTime": datetime.datetime.now(
-                        datetime.timezone.utc
-                    ).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "message": "Attempting to promote generation (test-injected)",
-                    "observedGeneration": mz_data["items"][0]["metadata"].get(
-                        "generation", 1
-                    ),
-                    "reason": "Promoting",
-                }
-            ]
-        }
-    }
-
-    spawn.runv(
-        [
-            "kubectl",
-            "patch",
-            "materializes",
-            mz_name,
-            "-n",
-            "materialize-environment",
-            "--type=merge",
-            "--subresource=status",
-            "-p",
-            json.dumps(patch),
-        ]
-    )
-
-
-def workflow_mid_rollout_migration(
+def workflow_v1alpha2_opt_in(
     c: Composition,
     parser: WorkflowArgumentParser,
 ) -> None:
-    """Test CRD migration from v1alpha1 to v1alpha2 while a rollout is in progress.
+    """Test that applying a v1alpha2 resource triggers reconciliation only
+    when the spec has changed, and not when it is unchanged.
 
-    This tests two scenarios described in the design doc:
-    1. Mid-rollout, NOT in "Promoting" status: uses ManuallyPromote strategy to
-       hold the rollout at ReadyToPromote, then upgrades orchestratord. Verifies
-       that the conversion webhook correctly sets lastCompletedRolloutHash=None,
-       and that the new orchestratord restarts and completes the rollout.
-    2. Mid-rollout, already in "Promoting" status: reaches ReadyToPromote, then
-       scales down orchestratord and patches the status to Promoting before
-       upgrading. Verifies that the new orchestratord unconditionally completes
-       the promotion.
+    The conversion webhook computes a rollout hash from the v1alpha2 spec.
+    When converting to v1alpha1 for storage, it derives a deterministic
+    requestRollout UUID from the hash. When the spec is unchanged, the
+    derived UUID matches lastCompletedRolloutRequest, so no rollout occurs.
+    When the spec changes, the derived UUID differs, triggering a rollout.
     """
     parser.add_argument(
         "--recreate-cluster",
@@ -2471,132 +2333,44 @@ def workflow_mid_rollout_migration(
 
     definition = setup(c, args)
 
-    versions = get_all_self_managed_versions()
-    current_version = get_version(args.tag)
-    versions.append(current_version)
-
-    # Find the last version that does NOT support v1alpha2.
-    # We need to start with this version so the CRD is stored as v1alpha1.
-    old_version = None
-    for v in reversed(versions):
-        test_def = copy.deepcopy(definition)
-        test_def["operator"]["operator"]["image"]["tag"] = str(v)
-        if not operator_supports_v1alpha2(test_def):
-            old_version = v
-            break
-    if old_version is None:
-        print("No pre-v1alpha2 version found, skipping mid-rollout migration test")
-        return
-
-    print(f"Old version (v1alpha1 only): {old_version}")
-    print(f"New version (v1alpha2 support): {current_version}")
-
-    # ===================================================================
-    # Scenario 1: Mid-rollout, NOT in Promoting status
-    # ===================================================================
-    print("--- Scenario 1: Mid-rollout migration, not promoting")
-
-    # Deploy with the old orchestratord version using v1alpha1.
-    # Use the default WaitUntilReady strategy for the initial deployment.
-    definition["operator"]["operator"]["image"]["tag"] = str(old_version)
-    definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha1"
-    definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
-        c.compose["services"]["environmentd"]["image"], str(old_version)
-    )
+    # Step 1: Deploy with v1alpha2, complete initial rollout.
+    definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha2"
     init(definition)
-    definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
     run(definition, False)
+    print("Initial v1alpha2 deployment completed")
 
-    # Now switch to ManuallyPromote and trigger a second rollout with a new
-    # image. ManuallyPromote will hold the rollout at ReadyToPromote.
-    definition["materialize"]["spec"]["rolloutStrategy"] = "ManuallyPromote"
-    definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
-        c.compose["services"]["environmentd"]["image"], str(current_version)
-    )
-    definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+    # Record the initial v1alpha1 status.
+    mz_v1 = get_materialize_v1alpha1()
+    initial_request_rollout = mz_v1["spec"]["requestRollout"]
+    initial_last_completed_rollout_request = mz_v1["status"][
+        "lastCompletedRolloutRequest"
+    ]
+    assert (
+        initial_request_rollout == initial_last_completed_rollout_request
+    ), f"Expected completed rollout: requestRollout={initial_request_rollout} != lastCompletedRolloutRequest={initial_last_completed_rollout_request}"
+    print(f"Initial requestRollout: {initial_request_rollout}")
 
-    # Apply without waiting for completion (don't call run() which waits
-    # for Applied status and also handles ManuallyPromote promotion).
+    # Step 2: Re-apply the same spec at v1alpha2 (no changes).
+    # The conversion webhook should compute the same hash, deriving the
+    # same requestRollout UUID, so no new rollout should occur.
+    print("Re-applying same spec at v1alpha2 (expecting no rollout)...")
     defs = [
         definition["namespace"],
         definition["secret"],
         definition["materialize"],
     ]
     yaml_str = yaml.dump_all(defs)
-    print("Applying mid-rollout change...")
-    spawn.runv(
-        ["kubectl", "apply", "-f", "-"],
-        stdin=yaml_str.encode(),
-    )
-
-    # Wait for ReadyToPromote — the new generation is ready but not promoted
-    print("Waiting for ReadyToPromote...")
-    wait_for_condition_reason("ReadyToPromote")
-    print("Reached ReadyToPromote — rollout is mid-flight, not promoting")
-
-    # Upgrade orchestratord to the new version (which reconciles v1alpha2).
-    # The API server will call the conversion webhook when the new
-    # orchestratord reads the stored v1alpha1 resource as v1alpha2.
-    print(f"Upgrading orchestratord to {current_version}...")
-    definition["operator"]["operator"]["image"]["tag"] = str(current_version)
-    helm_install_operator(definition["operator"], upgrade=True)
-
-    # Verify the conversion: read the resource at v1alpha2 and check that
-    # lastCompletedRolloutHash is None (null), because we were mid-rollout.
-    print("Verifying v1alpha2 conversion result...")
-    for attempt in range(60):
-        try:
-            mz_v2 = get_materialize_v1alpha2()
-            status = mz_v2.get("status", {})
-            last_hash = status.get("lastCompletedRolloutHash")
-            if last_hash is None:
-                print("Confirmed: lastCompletedRolloutHash is null after conversion")
-                break
-        except subprocess.CalledProcessError:
-            pass
-        time.sleep(2)
-    else:
-        raise RuntimeError(
-            "lastCompletedRolloutHash was never null after conversion; "
-            f"got: {status.get('lastCompletedRolloutHash')!r}"
-        )
-
-    # The new orchestratord should detect a spec change (since
-    # lastCompletedRolloutHash=None != requestedRolloutHash) and restart
-    # the rollout. Since we're still ManuallyPromote, wait for
-    # ReadyToPromote again, then promote.
-    print("Waiting for ReadyToPromote under v1alpha2...")
-    wait_for_condition_reason("ReadyToPromote")
-
-    mz_data = json.loads(
-        spawn.capture(
-            [
-                "kubectl",
-                "get",
-                "materializes.v1alpha2.materialize.cloud",
-                "-n",
-                "materialize-environment",
-                "-o",
-                "json",
-            ],
-            stderr=subprocess.DEVNULL,
-        )
-    )
-    rollout_hash = mz_data["items"][0]["status"]["requestedRolloutHash"]
-    assert rollout_hash is not None, "requestedRolloutHash should be set"
-    definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha2"
-    definition["materialize"]["spec"].pop("requestRollout", None)
-    definition["materialize"]["spec"]["forcePromote"] = rollout_hash
-    for attempt in range(30):
+    max_attempts = 120
+    for attempt in range(max_attempts):
         result = subprocess.run(
             ["kubectl", "apply", "-f", "-"],
-            input=yaml.dump(definition["materialize"]).encode(),
+            input=yaml_str.encode(),
             capture_output=True,
         )
         if result.returncode == 0:
             break
         stderr_str = result.stderr.decode(errors="replace")
-        if attempt < 29 and "connection refused" in stderr_str:
+        if attempt < max_attempts - 1 and "connection refused" in stderr_str:
             print(f"Webhook not yet reachable (attempt {attempt + 1}), retrying...")
             time.sleep(2)
             continue
@@ -2607,134 +2381,44 @@ def workflow_mid_rollout_migration(
             stderr=result.stderr,
         )
 
-    post_run_check(definition, False)
-    print("Scenario 1 PASSED: Mid-rollout migration (not promoting) succeeded")
+    # Wait a bit and verify that no new rollout was triggered.
+    time.sleep(30)
+    mz_v1 = get_materialize_v1alpha1()
+    noop_request_rollout = mz_v1["spec"]["requestRollout"]
+    assert (
+        noop_request_rollout == initial_request_rollout
+    ), f"Expected requestRollout unchanged, but changed from {initial_request_rollout} to {noop_request_rollout}"
+    noop_last_completed_rollout_request = mz_v1["status"]["lastCompletedRolloutRequest"]
+    assert (
+        noop_last_completed_rollout_request == initial_last_completed_rollout_request
+    ), f"Expected lastCompletedRolloutRequest unchanged, but changed from {initial_last_completed_rollout_request} to {noop_last_completed_rollout_request}"
+    print("Confirmed: no rollout triggered by v1alpha2 apply with no changes")
 
-    # ===================================================================
-    # Scenario 2: Mid-rollout, already in Promoting status
-    # ===================================================================
-    # We need a clean cluster since we cannot easily downgrade orchestratord.
-    print("--- Scenario 2: Mid-rollout migration, already promoting")
-    spawn.runv(["kind", "delete", "cluster", "--name", "kind"])
-    definition = setup(c, args)
-
-    # Deploy with the old orchestratord version using v1alpha1.
-    # Default WaitUntilReady strategy for the initial deployment.
-    definition["operator"]["operator"]["image"]["tag"] = str(old_version)
-    definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha1"
-    definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
-        c.compose["services"]["environmentd"]["image"], str(old_version)
-    )
-    init(definition)
-    definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
-    run(definition, False)
-
-    # Switch to ManuallyPromote and trigger a second rollout.
-    definition["materialize"]["spec"]["rolloutStrategy"] = "ManuallyPromote"
-    definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
-        c.compose["services"]["environmentd"]["image"], str(current_version)
-    )
-    definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
-    defs = [
-        definition["namespace"],
-        definition["secret"],
-        definition["materialize"],
+    # Step 3: Apply at v1alpha2 with a spec change (extra env var).
+    # The conversion webhook should compute a different hash, deriving a
+    # different requestRollout UUID, triggering a rollout.
+    print("Applying v1alpha2 with changed environmentdExtraEnv (expecting rollout)...")
+    definition["materialize"]["spec"]["environmentdExtraEnv"] = [
+        {"name": "V1ALPHA2_OPT_IN_TEST", "value": "true"},
     ]
-    spawn.runv(
-        ["kubectl", "apply", "-f", "-"],
-        stdin=yaml.dump_all(defs).encode(),
-    )
-
-    # Wait for ReadyToPromote
-    print("Waiting for ReadyToPromote...")
-    wait_for_condition_reason("ReadyToPromote")
-    print("Reached ReadyToPromote")
-
-    # Scale down orchestratord so it doesn't interfere while we patch status
-    print("Scaling down orchestratord...")
-    scale_orchestratord(0)
-
-    # Patch the status to simulate being in "Promoting" state.
-    # This is what would happen if orchestratord had started promoting
-    # but crashed/was upgraded before completing the promotion.
-    print("Patching status to Promoting...")
-    patch_materialize_status_promoting()
-
-    # Verify the patch took effect
-    assert (
-        get_materialize_condition_reason() == "Promoting"
-    ), "Status should be Promoting after patch"
-    print("Status is now Promoting")
-
-    # Upgrade orchestratord to the new version.
-    # When it starts, it will read the resource as v1alpha2 via the
-    # conversion webhook. The conversion sees is_promoting()=true, so it
-    # sets requestedRolloutHash=None. The reconciler sees is_promoting()
-    # and unconditionally completes the promotion.
-    print(f"Upgrading orchestratord to {current_version}...")
-    definition["operator"]["operator"]["image"]["tag"] = str(current_version)
-    helm_install_operator(definition["operator"], upgrade=True)
-
-    # The rollout should complete — orchestratord should promote
-    # unconditionally since it was in "Promoting" state.
-    post_run_check(definition, False)
-    print("Scenario 2 PASSED: Mid-rollout migration (promoting) succeeded")
-
-
-def workflow_force_rollout_annotation(
-    c: Composition, parser: WorkflowArgumentParser
-) -> None:
-    """Test that setting the materialize.cloud/force-rollout annotation
-    triggers a new rollout."""
-    parser.add_argument(
-        "--recreate-cluster",
-        action=argparse.BooleanOptionalAction,
-        help="Recreate cluster if it exists already",
-    )
-    parser.add_argument(
-        "--tag",
-        type=str,
-        help="Custom version tag to use",
-    )
-    parser.add_argument(
-        "--orchestratord-override",
-        default=True,
-        action=argparse.BooleanOptionalAction,
-        help="Override orchestratord tag",
-    )
-    args = parser.parse_args()
-
-    definition = setup(c, args)
-    definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha2"
-    init(definition)
     run(definition, False)
 
-    # Record the initial rollout hash from the Materialize resource status.
-    status = get_materialize_status()
-    assert status is not None, "Expected Materialize status to be set"
-    initial_hash = status.get("lastCompletedRolloutHash")
-    assert initial_hash is not None, "Expected an initial completed rollout hash"
-    print(f"Initial rollout hash: {initial_hash}")
-
-    # Set the force-rollout annotation to trigger a new rollout.
-    annotation_value = str(uuid.uuid4())
-    print(f"Setting force-rollout annotation to {annotation_value}")
-    definition["materialize"]["metadata"].setdefault("annotations", {})[
-        "materialize.cloud/force-rollout"
-    ] = annotation_value
-    run(definition, False)
-
-    # Verify the rollout completed with a new hash.
-    status = get_materialize_status()
-    assert status is not None, "Expected Materialize status to be set after rollout"
-    new_hash = status.get("lastCompletedRolloutHash")
-    assert new_hash is not None, "Expected a completed rollout hash after annotation"
+    mz_v1 = get_materialize_v1alpha1()
+    changed_request_rollout = mz_v1["spec"]["requestRollout"]
     assert (
-        new_hash != initial_hash
-    ), f"Expected rollout hash to change after setting force-rollout annotation, but got {new_hash} both times"
+        changed_request_rollout != initial_request_rollout
+    ), f"Expected requestRollout to change after spec change, but still {changed_request_rollout}"
+    changed_last_completed_rollout_request = mz_v1["status"][
+        "lastCompletedRolloutRequest"
+    ]
+    assert (
+        changed_last_completed_rollout_request == changed_request_rollout
+    ), f"Expected rollout to complete: requestRollout={changed_request_rollout} != lastCompletedRolloutRequest={changed_last_completed_rollout_request}"
     print(
-        f"Rollout triggered successfully: hash changed from {initial_hash} to {new_hash}"
+        f"Confirmed: rollout triggered by v1alpha2 spec change. "
+        f"requestRollout changed from {initial_request_rollout} to {changed_request_rollout}"
     )
+    print("v1alpha2 opt-in test PASSED")
 
 
 def workflow_orchestratord_upgrade(
@@ -3549,28 +3233,27 @@ def run(definition: dict[str, Any], expect_fail: bool) -> None:
                 "Stopped being ready for manual promotion before promoting"
             )
 
-        # Manually promote it
-        mz = json.loads(
-            spawn.capture(
-                [
-                    "kubectl",
-                    "get",
-                    "materializes",
-                    "-n",
-                    "materialize-environment",
-                    "-o",
-                    "json",
-                ],
-                stderr=subprocess.DEVNULL,
-            )
-        )["items"][0]
-        rollout_spec_hash = mz["status"]["requestedRolloutHash"]
-        assert rollout_spec_hash is not None
-        definition["materialize"]["spec"]["forcePromote"] = rollout_spec_hash
+        # Manually promote it by reading the v1alpha1 resource to get the
+        # requestRollout UUID, then patching forcePromote to match it.
+        # We must use v1alpha1 because the controller reconciles v1alpha1
+        # and compares forcePromote against requestRollout as UUIDs.
+        mz = get_materialize_v1alpha1()
+        request_rollout = mz["spec"]["requestRollout"]
+        assert request_rollout is not None
+        mz_name = mz["metadata"]["name"]
         try:
             spawn.runv(
-                ["kubectl", "apply", "-f", "-"],
-                stdin=yaml.dump(definition["materialize"]).encode(),
+                [
+                    "kubectl",
+                    "patch",
+                    "materializes.v1alpha1.materialize.cloud",
+                    mz_name,
+                    "-n",
+                    "materialize-environment",
+                    "--type=merge",
+                    "-p",
+                    json.dumps({"spec": {"forcePromote": request_rollout}}),
+                ],
             )
         except subprocess.CalledProcessError as e:
             print(f"Failed to apply: {e.stdout}\nSTDERR:{e.stderr}")
@@ -3580,21 +3263,8 @@ def run(definition: dict[str, Any], expect_fail: bool) -> None:
 
 
 def is_ready_to_manually_promote():
-    data = json.loads(
-        spawn.capture(
-            [
-                "kubectl",
-                "get",
-                "materializes",
-                "-n",
-                "materialize-environment",
-                "-o",
-                "json",
-            ],
-            stderr=subprocess.DEVNULL,
-        )
-    )
-    conditions = data["items"][0].get("status", {}).get("conditions")
+    mz = get_materialize_v1alpha1()
+    conditions = mz.get("status", {}).get("conditions")
     return (
         conditions is not None
         and len(conditions)
@@ -3605,24 +3275,12 @@ def is_ready_to_manually_promote():
 
 
 def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
+    # Read at v1alpha1 explicitly to avoid going through the conversion
+    # webhook, which may not be ready yet during initial deployment.
     for i in range(900):
         time.sleep(1)
         try:
-            data = json.loads(
-                spawn.capture(
-                    [
-                        "kubectl",
-                        "get",
-                        "materializes",
-                        "-n",
-                        "materialize-environment",
-                        "-o",
-                        "json",
-                    ],
-                    stderr=subprocess.DEVNULL,
-                )
-            )
-            status = data["items"][0].get("status")
+            status = get_materialize_status_v1alpha1()
             if not status:
                 continue
             if expect_fail:
@@ -3645,7 +3303,7 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
             [
                 "kubectl",
                 "get",
-                "materializes",
+                "materializes.v1alpha1.materialize.cloud",
                 "-n",
                 "materialize-environment",
                 "-o",
@@ -3688,7 +3346,7 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
                         stderr=subprocess.DEVNULL,
                     )
                     if (
-                        f"ERROR k8s_controller::controller: Materialize reconciliation error. err=reconciler for object Materialize.v1alpha2.materialize.cloud/{definition['materialize']['metadata']['name']}.materialize-environment failed"
+                        f"ERROR k8s_controller::controller: Materialize reconciliation error. err=reconciler for object Materialize.v1alpha1.materialize.cloud/{definition['materialize']['metadata']['name']}.materialize-environment failed"
                         in logs
                     ):
                         break
