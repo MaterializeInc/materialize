@@ -274,6 +274,32 @@ where
                         ?persist_upper,
                         "ingesting persist snapshot chunk");
 
+                    // Log any keys in this batch that have a suspicious net diff,
+                    // to help diagnose how diff_sum corruption enters the system.
+                    // We project to (key, diff) and consolidate to get the net
+                    // diff per key.
+                    {
+                        let mut key_diffs: Vec<(UpsertKey, mz_repr::Diff)> = persist_stash
+                            .iter()
+                            .map(|(key, _val, _ts, diff)| (*key, *diff))
+                            .collect();
+                        differential_dataflow::consolidation::consolidate(&mut key_diffs);
+                        for (key, net_diff) in &key_diffs {
+                            if net_diff.into_inner() > 1 || net_diff.into_inner() < -1 {
+                                tracing::warn!(
+                                    worker_id = %source_config.worker_id,
+                                    source_id = %source_config.id,
+                                    ?key,
+                                    net_diff = net_diff.into_inner(),
+                                    %hydrating,
+                                    ?persist_upper,
+                                    "persist feedback batch has key with suspicious net diff \
+                                    (expected -1, 0, or 1)"
+                                );
+                            }
+                        }
+                    }
+
                     let persist_stash_iter = persist_stash
                         .drain(..)
                         .map(|(key, val, _ts, diff)| (key, val, diff));
@@ -769,7 +795,7 @@ where
         let existing_state_cell = &mut command_state.get_mut().value;
 
         if let Some(cs) = existing_state_cell.as_mut() {
-            cs.ensure_decoded(bincode_opts, source_config.id);
+            cs.ensure_decoded(bincode_opts, source_config.id, Some(&key));
         }
 
         // Skip this command if its order key is below the one in the upsert state.

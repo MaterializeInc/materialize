@@ -594,7 +594,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
         let existing_value = &mut command_state.get_mut().value;
 
         if let Some(cs) = existing_value.as_mut() {
-            cs.ensure_decoded(bincode_opts, source_config.id);
+            cs.ensure_decoded(bincode_opts, source_config.id, Some(&key));
         }
 
         // Skip this command if its order key is below the one in the upsert state.
