@@ -26,7 +26,10 @@
       | UPSERT [ ( VALUE DECODING ERRORS = INLINE [AS <name>] ) ]
     ]
     [EXPOSE PROGRESS AS <progress_subsource_name>]
-    [WITH (RETAIN HISTORY FOR <retention_period>)]
+    [WITH (
+      RETAIN HISTORY FOR <retention_period>
+      [, TIMESTAMP INTERVAL <interval>]
+    )]
   syntax_elements:
     - name: "`<src_name>`"
       description: |
@@ -107,6 +110,7 @@
         | Option | Description |
         |--------|-------------|
         | `RETAIN HISTORY FOR <retention_period>` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
+        | `TIMESTAMP INTERVAL <interval>` | The interval at which timestamps are assigned to data from this source. Accepts positive [interval](/sql/types/interval/) values (e.g. `'500ms'`, `'1s'`). Default: the `default_timestamp_interval` [system parameter](/sql/alter-system-set/). See [Sources: Timestamp interval](/concepts/sources/#timestamp-interval) for details. |
 
 - name: "syntax-protobuf"
   code: |
@@ -134,7 +138,10 @@
       | UPSERT [ ( VALUE DECODING ERRORS = INLINE [AS <name>] ) ]
     ]
     [EXPOSE PROGRESS AS <progress_subsource_name>]
-    [WITH (RETAIN HISTORY FOR <retention_period>)]
+    [WITH (
+      RETAIN HISTORY FOR <retention_period>
+      [, TIMESTAMP INTERVAL <interval>]
+    )]
   syntax_elements:
     - name: "`<src_name>`"
       description: |
@@ -198,6 +205,7 @@
         | Option | Description |
         |--------|-------------|
         | `RETAIN HISTORY FOR <retention_period>` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
+        | `TIMESTAMP INTERVAL <interval>` | The interval at which timestamps are assigned to data from this source. Accepts positive [interval](/sql/types/interval/) values (e.g. `'500ms'`, `'1s'`). Default: the `default_timestamp_interval` [system parameter](/sql/alter-system-set/). See [Sources: Timestamp interval](/concepts/sources/#timestamp-interval) for details. |
 
 - name: "syntax-json"
   code: |
@@ -220,7 +228,10 @@
     ]
     [ENVELOPE NONE]
     [EXPOSE PROGRESS AS <progress_subsource_name>]
-    [WITH (RETAIN HISTORY FOR <retention_period>)]
+    [WITH (
+      RETAIN HISTORY FOR <retention_period>
+      [, TIMESTAMP INTERVAL <interval>]
+    )]
   syntax_elements:
     - name: "`<src_name>`"
       description: |
@@ -278,6 +289,7 @@
         | Option | Description |
         |--------|-------------|
         | `RETAIN HISTORY FOR <retention_period>` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
+        | `TIMESTAMP INTERVAL <interval>` | The interval at which timestamps are assigned to data from this source. Accepts positive [interval](/sql/types/interval/) values (e.g. `'500ms'`, `'1s'`). Default: the `default_timestamp_interval` [system parameter](/sql/alter-system-set/). See [Sources: Timestamp interval](/concepts/sources/#timestamp-interval) for details. |
 
 - name: "syntax-text-bytes"
   code: |
@@ -300,7 +312,10 @@
     ]
     [ENVELOPE NONE]
     [EXPOSE PROGRESS AS <progress_subsource_name>]
-    [WITH (RETAIN HISTORY FOR <retention_period>)]
+    [WITH (
+      RETAIN HISTORY FOR <retention_period>
+      [, TIMESTAMP INTERVAL <interval>]
+    )]
   syntax_elements:
     - name: "`<src_name>`"
       description: |
@@ -362,6 +377,7 @@
         | Option | Description |
         |--------|-------------|
         | `RETAIN HISTORY FOR <retention_period>` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
+        | `TIMESTAMP INTERVAL <interval>` | The interval at which timestamps are assigned to data from this source. Accepts positive [interval](/sql/types/interval/) values (e.g. `'500ms'`, `'1s'`). Default: the `default_timestamp_interval` [system parameter](/sql/alter-system-set/). See [Sources: Timestamp interval](/concepts/sources/#timestamp-interval) for details. |
 
 - name: "syntax-csv"
   code: |
@@ -384,7 +400,10 @@
     ]
     [ENVELOPE NONE]
     [EXPOSE PROGRESS AS <progress_subsource_name>]
-    [WITH (RETAIN HISTORY FOR <retention_period>)]
+    [WITH (
+      RETAIN HISTORY FOR <retention_period>
+      [, TIMESTAMP INTERVAL <interval>]
+    )]
   syntax_elements:
     - name: "`<src_name> ( <col_name> [, ...] )`"
       description: |
@@ -452,6 +471,7 @@
         | Option | Description |
         |--------|-------------|
         | `RETAIN HISTORY FOR <retention_period>` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
+        | `TIMESTAMP INTERVAL <interval>` | The interval at which timestamps are assigned to data from this source. Accepts positive [interval](/sql/types/interval/) values (e.g. `'500ms'`, `'1s'`). Default: the `default_timestamp_interval` [system parameter](/sql/alter-system-set/). See [Sources: Timestamp interval](/concepts/sources/#timestamp-interval) for details. |
 
 - name: "syntax-key-value-format"
   code: |
@@ -487,7 +507,10 @@
       | UPSERT [(VALUE DECODING ERRORS = INLINE [AS name])]
     ]
     [EXPOSE PROGRESS AS <progress_subsource_name>]
-    [WITH (RETAIN HISTORY FOR <retention_period>)]
+    [WITH (
+      RETAIN HISTORY FOR <retention_period>
+      [, TIMESTAMP INTERVAL <interval>]
+    )]
   syntax_elements:
     - name: "`<src_name>`"
       description: |
@@ -550,3 +573,4 @@
         | Option | Description |
         |--------|-------------|
         | `RETAIN HISTORY FOR <retention_period>` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
+        | `TIMESTAMP INTERVAL <interval>` | The interval at which timestamps are assigned to data from this source. Accepts positive [interval](/sql/types/interval/) values (e.g. `'500ms'`, `'1s'`). Default: the `default_timestamp_interval` [system parameter](/sql/alter-system-set/). See [Sources: Timestamp interval](/concepts/sources/#timestamp-interval) for details. |
