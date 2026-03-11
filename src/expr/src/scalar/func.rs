@@ -1769,14 +1769,8 @@ fn map_contains_map<'a>(map_a: DatumMap<'a>, b: DatumMap<'a>) -> bool {
     })
 }
 
-#[sqlfunc(
-    output_type_expr = "input_types[0].scalar_type.unwrap_map_value_type().clone().nullable(true)",
-    is_infix_op = true,
-    sqlname = "->",
-    propagates_nulls = true,
-    introduces_nulls = true
-)]
-fn map_get_value<'a>(a: DatumMap<'a>, target_key: &str) -> Datum<'a> {
+#[sqlfunc(is_infix_op = true, sqlname = "->", propagates_nulls = true)]
+fn map_get_value<'a, T>(a: DatumMap<'a, T>, target_key: &str) -> T {
     match a.iter().find(|(key, _v)| target_key == *key) {
         Some((_k, v)) => v,
         None => Datum::Null,
@@ -2925,18 +2919,12 @@ fn array_array_concat<'a>(
     Ok(Some(datum.unwrap_array()))
 }
 
-#[sqlfunc(
-    output_type_expr = "input_types[0].scalar_type.without_modifiers().nullable(true)",
-    is_infix_op = true,
-    sqlname = "||",
-    propagates_nulls = false,
-    introduces_nulls = false
-)]
-fn list_list_concat<'a>(
-    a: Option<DatumList<'a>>,
-    b: Option<DatumList<'a>>,
+#[sqlfunc(is_infix_op = true, sqlname = "||", propagates_nulls = false)]
+fn list_list_concat<'a, T>(
+    a: Option<DatumList<'a, T>>,
+    b: Option<DatumList<'a, T>>,
     temp_storage: &'a RowArena,
-) -> Option<DatumList<'a>> {
+) -> Option<DatumList<'a, T>> {
     let Some(a) = a else {
         return b;
     };
@@ -2948,18 +2936,12 @@ fn list_list_concat<'a>(
     Some(datum.unwrap_list())
 }
 
-#[sqlfunc(
-    output_type_expr = "input_types[0].scalar_type.without_modifiers().nullable(true)",
-    is_infix_op = true,
-    sqlname = "||",
-    propagates_nulls = false,
-    introduces_nulls = false
-)]
-fn list_element_concat<'a>(
-    a: Option<DatumList<'a>>,
-    b: Datum<'a>,
+#[sqlfunc(is_infix_op = true, sqlname = "||", propagates_nulls = false)]
+fn list_element_concat<'a, T>(
+    a: Option<DatumList<'a, T>>,
+    b: T,
     temp_storage: &'a RowArena,
-) -> DatumList<'a> {
+) -> DatumList<'a, T> {
     let datum = temp_storage.make_datum(|packer| {
         packer.push_list_with(|packer| {
             if let Some(a) = a {
@@ -2974,18 +2956,12 @@ fn list_element_concat<'a>(
 }
 
 // Note that the output type corresponds to the _second_ parameter's input type.
-#[sqlfunc(
-    output_type_expr = "input_types[1].scalar_type.without_modifiers().nullable(true)",
-    is_infix_op = true,
-    sqlname = "||",
-    propagates_nulls = false,
-    introduces_nulls = false
-)]
-fn element_list_concat<'a>(
-    a: Datum<'a>,
-    b: Option<DatumList<'a>>,
+#[sqlfunc(is_infix_op = true, sqlname = "||", propagates_nulls = false)]
+fn element_list_concat<'a, T>(
+    a: T,
+    b: Option<DatumList<'a, T>>,
     temp_storage: &'a RowArena,
-) -> DatumList<'a> {
+) -> DatumList<'a, T> {
     let datum = temp_storage.make_datum(|packer| {
         packer.push_list_with(|packer| {
             packer.push(a);
@@ -2999,22 +2975,19 @@ fn element_list_concat<'a>(
     datum.unwrap_list()
 }
 
-#[sqlfunc(
-    output_type_expr = "input_types[0].scalar_type.without_modifiers().nullable(true)",
-    sqlname = "list_remove",
-    propagates_nulls = false,
-    introduces_nulls = false
-)]
-fn list_remove<'a>(a: DatumList<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    temp_storage.make_datum(|packer| {
-        packer.push_list_with(|packer| {
-            for elem in a.iter() {
-                if elem != b {
-                    packer.push(elem);
+#[sqlfunc(sqlname = "list_remove", propagates_nulls = false)]
+fn list_remove<'a, T>(a: DatumList<'a, T>, b: T, temp_storage: &'a RowArena) -> DatumList<'a, T> {
+    temp_storage
+        .make_datum(|packer| {
+            packer.push_list_with(|packer| {
+                for elem in a.iter() {
+                    if elem != b {
+                        packer.push(elem);
+                    }
                 }
-            }
+            })
         })
-    })
+        .unwrap_list()
 }
 
 #[sqlfunc(sqlname = "digest")]

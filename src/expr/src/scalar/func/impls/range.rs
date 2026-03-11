@@ -82,22 +82,13 @@ impl fmt::Display for CastRangeToString {
     }
 }
 
-#[sqlfunc(
-    sqlname = "rangelower",
-    is_monotone = true,
-    introduces_nulls = true,
-    output_type_expr = input_type.scalar_type.unwrap_range_element_type().clone().nullable(true)
-)]
-fn range_lower<'a>(a: Range<Datum<'a>>) -> Option<Datum<'a>> {
+#[sqlfunc(sqlname = "rangelower", is_monotone = true)]
+fn range_lower<'a, T>(a: Range<T>) -> Option<T> {
     a.inner.map(|inner| inner.lower.bound).flatten()
 }
 
-#[sqlfunc(
-    sqlname = "rangeupper",
-    introduces_nulls = true,
-    output_type_expr = input_type.scalar_type.unwrap_range_element_type().clone().nullable(true)
-)]
-fn range_upper<'a>(a: Range<Datum<'a>>) -> Option<Datum<'a>> {
+#[sqlfunc(sqlname = "rangeupper")]
+fn range_upper<'a, T>(a: Range<T>) -> Option<T> {
     a.inner.map(|inner| inner.upper.bound).flatten()
 }
 
