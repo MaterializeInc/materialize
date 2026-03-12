@@ -14418,6 +14418,13 @@ pub mod BUILTINS {
         })
     }
 
+    pub fn materialized_views() -> impl Iterator<Item = &'static BuiltinMaterializedView> {
+        BUILTINS_STATIC.iter().filter_map(|b| match b {
+            Builtin::MaterializedView(mv) => Some(*mv),
+            _ => None,
+        })
+    }
+
     pub fn funcs() -> impl Iterator<Item = &'static BuiltinFunc> {
         BUILTINS_STATIC.iter().filter_map(|b| match b {
             Builtin::Func(func) => Some(func),
