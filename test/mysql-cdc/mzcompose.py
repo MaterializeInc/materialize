@@ -41,6 +41,7 @@ def create_mysql_replica(mysql_version: str) -> MySql:
     return MySql(
         name="mysql-replica",
         version=mysql_version,
+        use_seeded_image=False,
         additional_args=[
             "--gtid_mode=ON",
             "--enforce_gtid_consistency=ON",

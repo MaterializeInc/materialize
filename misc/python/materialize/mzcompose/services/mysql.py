@@ -10,6 +10,7 @@
 
 from materialize.mzcompose.service import (
     Service,
+    ServiceConfig,
 )
 
 
@@ -45,34 +46,44 @@ class MySql(Service):
         port: int = 3306,
         volumes: list[str] = ["mydata:/var/lib/mysql-files"],
         additional_args: list[str] = DEFAULT_ADDITIONAL_ARGS,
+        use_seeded_image: bool = True,
     ) -> None:
         image = f"mysql:{version}"
+        config: ServiceConfig = {
+            "init": True,
+            "ports": [port],
+            "environment": [
+                f"MYSQL_ROOT_PASSWORD={root_password}",
+            ],
+            "command": [
+                "--secure-file-priv=/var/lib/mysql-files",
+                *additional_args,
+            ],
+            "healthcheck": {
+                "test": [
+                    "CMD",
+                    "mysqladmin",
+                    "ping",
+                    f"--password={root_password}",
+                    "--protocol=TCP",
+                ],
+                "interval": "1s",
+                # MySQL can be slow to start up
+                "start_period": "180s",
+            },
+            "volumes": volumes,
+        }
+
+        if (
+            use_seeded_image
+            and version == self.DEFAULT_VERSION
+            and root_password == self.DEFAULT_ROOT_PASSWORD
+        ):
+            config["mzbuild"] = "mysql"
+        else:
+            config["image"] = image
 
         super().__init__(
             name=name,
-            config={
-                "image": image,
-                "init": True,
-                "ports": [port],
-                "environment": [
-                    f"MYSQL_ROOT_PASSWORD={root_password}",
-                ],
-                "command": [
-                    "--secure-file-priv=/var/lib/mysql-files",
-                    *additional_args,
-                ],
-                "healthcheck": {
-                    "test": [
-                        "CMD",
-                        "mysqladmin",
-                        "ping",
-                        f"--password={root_password}",
-                        "--protocol=TCP",
-                    ],
-                    "interval": "1s",
-                    # MySQL can be slow to start up
-                    "start_period": "180s",
-                },
-                "volumes": volumes,
-            },
+            config=config,
         )

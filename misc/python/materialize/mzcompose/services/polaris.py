@@ -40,7 +40,7 @@ class PolarisBootstrap(Service):
                 "--credential",
                 "POLARIS,root,root",
             ],
-            "depends_on": {"postgres": {"condition": "service_healthy"}},
+            "depends_on": {"postgres": {"condition": "service_started"}},
         }
         super().__init__(name, config)
 
@@ -76,14 +76,19 @@ class Polaris(Service):
             "environment": environment + extra_environment,
             "depends_on": {
                 "polaris-bootstrap": {"condition": "service_completed_successfully"},
-                "postgres": {"condition": "service_healthy"},
+                "postgres": {"condition": "service_started"},
             },
             "healthcheck": {
-                "test": ["CMD", "curl", "http://localhost:8182/q/health"],
-                "interval": "2s",
-                "timeout": "10s",
+                "test": [
+                    "CMD",
+                    "curl",
+                    "--fail",
+                    "http://localhost:8182/q/health/live",
+                ],
+                "interval": "1s",
+                "timeout": "5s",
                 "retries": 10,
-                "start_period": "10s",
+                "start_period": "2s",
             },
         }
         super().__init__(name, config)

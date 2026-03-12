@@ -33,6 +33,7 @@ class Kafka(Service):
             "KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181",
             "KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE=false",
             "KAFKA_MIN_INSYNC_REPLICAS=1",
+            "KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS=1",
             "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1",
             "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
             "KAFKA_MESSAGE_MAX_BYTES=15728640",
@@ -64,7 +65,7 @@ class Kafka(Service):
                 f"KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR={offsets_topic_replication_factor}",
             ],
             "depends_on": {
-                "zookeeper": {"condition": "service_healthy"},
+                "zookeeper": {"condition": "service_started"},
                 **{s: {"condition": "service_started"} for s in depends_on_extra},
             },
             "healthcheck": {

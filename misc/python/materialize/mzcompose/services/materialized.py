@@ -206,7 +206,7 @@ class Materialized(Service):
 
         if external_blob_store:
             blob_store = "azurite" if blob_store_is_azure else "minio"
-            depends_graph[blob_store] = {"condition": "service_healthy"}
+            depends_graph[blob_store] = {"condition": "service_started"}
             address = blob_store if external_blob_store == True else external_blob_store
             persist_blob_url = (
                 azure_blob_uri(address)
