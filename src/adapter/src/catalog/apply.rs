@@ -2098,9 +2098,15 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     let mut builtin_index_additions = Vec::new();
     for (builtin_item_update, ts, diff) in builtin_item_updates {
         match &builtin_item_update.description.object_type {
+            // Views, MVs, indexes, and continual tasks go after clusters.
+            // MVs need clusters to exist. Views must come after MVs because
+            // views may depend on MVs (e.g. mz_databases). The ApplyState
+            // batching ensures MVs (Items) are applied before views
+            // (BuiltinViewAdditions) as long as MVs precede views in this vec.
             CatalogItemType::Index
             | CatalogItemType::ContinualTask
-            | CatalogItemType::MaterializedView => push_update(
+            | CatalogItemType::MaterializedView
+            | CatalogItemType::View => push_update(
                 StateUpdate {
                     kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
                     ts,
@@ -2113,7 +2119,6 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             CatalogItemType::Table
             | CatalogItemType::Source
             | CatalogItemType::Sink
-            | CatalogItemType::View
             | CatalogItemType::Type
             | CatalogItemType::Func
             | CatalogItemType::Secret
@@ -2348,6 +2353,22 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     }
     let item_retractions = merge_item_updates(item_retractions, temp_item_retractions);
     let item_additions = merge_item_updates(item_additions, temp_item_additions);
+
+    // Sort builtin_index_additions so that MVs come before views. The
+    // ApplyState batching treats MVs as Items and views as
+    // BuiltinViewAdditions. By placing MVs first, they are applied to the
+    // catalog state before parse_builtin_views runs, allowing views to
+    // depend on MVs (e.g. mz_databases).
+    builtin_index_additions.sort_by_key(|update| match &update.kind {
+        StateUpdateKind::SystemObjectMapping(som) => match som.description.object_type {
+            CatalogItemType::MaterializedView => 0,
+            CatalogItemType::ContinualTask => 1,
+            CatalogItemType::View => 2,
+            CatalogItemType::Index => 3,
+            _ => 4,
+        },
+        _ => 4,
+    });
 
     // Put everything back together.
     iter::empty()
