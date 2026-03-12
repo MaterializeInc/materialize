@@ -851,7 +851,7 @@ mod tests {
         vec![0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE]
     }
 
-    #[test]
+    #[mz_ore::test]
     fn roundtrip() {
         let key = test_key();
         let wrapped = test_wrapped_dek();
@@ -868,7 +868,7 @@ mod tests {
         assert_eq!(&decrypted[..], plaintext);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn roundtrip_empty_plaintext() {
         let key = test_key();
         let wrapped = test_wrapped_dek();
@@ -879,7 +879,7 @@ mod tests {
         assert!(decrypted.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn tamper_detection() {
         let key = test_key();
         let wrapped = test_wrapped_dek();
@@ -901,7 +901,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn wrong_key_fails() {
         let key = test_key();
         let wrong_key = [0x99u8; 32];
@@ -913,7 +913,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn version_byte_validation() {
         let mut data = vec![0x03]; // unsupported version (neither V1 nor V2)
         data.extend_from_slice(&[6, 0]); // wrapped_dek_len
@@ -929,7 +929,7 @@ mod tests {
             .contains("unsupported envelope version"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn envelope_format_parsing() {
         let key = test_key();
         let wrapped = vec![1, 2, 3, 4, 5];
@@ -939,13 +939,13 @@ mod tests {
         // Version byte
         assert_eq!(encrypted[0], ENVELOPE_VERSION_V1);
         // Wrapped DEK length (LE u16)
-        let len = u16::from_le_bytes([encrypted[1], encrypted[2]]) as usize;
+        let len = usize::from(u16::from_le_bytes([encrypted[1], encrypted[2]]));
         assert_eq!(len, wrapped.len());
         // Wrapped DEK content
         assert_eq!(&encrypted[3..3 + len], &wrapped[..]);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn truncated_data_rejected() {
         // Empty
         assert!(parse_envelope(&[]).is_err());
@@ -1103,6 +1103,7 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     async fn encrypted_consensus_data_is_actually_encrypted() -> Result<(), ExternalError> {
         let mem: Arc<MemConsensus> = Arc::new(MemConsensus::default());
+        #[allow(clippy::as_conversions)]
         let inner: Arc<dyn Consensus> = Arc::clone(&mem) as Arc<dyn Consensus>;
         let consensus = EncryptedConsensus::new_test(inner);
 
@@ -1153,7 +1154,7 @@ mod tests {
 
     // --- Two-party encryption tests ---
 
-    #[test]
+    #[mz_ore::test]
     fn two_party_roundtrip() {
         let key = test_key();
         let wrapped = test_wrapped_dek();
@@ -1172,7 +1173,7 @@ mod tests {
         assert_eq!(&decrypted[..], plaintext);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn two_party_v1_backward_compat() {
         // Create V1 data (single-key mode).
         let key = test_key();
@@ -1189,7 +1190,7 @@ mod tests {
         assert_eq!(&decrypted[..], plaintext);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn two_party_v2_requires_customer_key() {
         // Create V2 data.
         let key = test_key();
@@ -1212,7 +1213,7 @@ mod tests {
         // single-key instance has no customer_kms_client.
     }
 
-    #[test]
+    #[mz_ore::test]
     fn two_party_envelope_format() {
         let key = test_key();
         let wrapped = vec![1, 2, 3, 4, 5, 6, 7, 8];
@@ -1224,7 +1225,7 @@ mod tests {
         assert_eq!(encrypted[0], ENVELOPE_VERSION_V2);
 
         // Wrapped DEK length (LE u16).
-        let len = u16::from_le_bytes([encrypted[1], encrypted[2]]) as usize;
+        let len = usize::from(u16::from_le_bytes([encrypted[1], encrypted[2]]));
         assert_eq!(len, wrapped.len());
 
         // Wrapped DEK content.
@@ -1236,7 +1237,7 @@ mod tests {
         assert_eq!(parsed_wrapped, &wrapped[..]);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn two_party_customer_key_revocation() {
         // If customer KMS Decrypt fails, the whole decrypt should fail.
         // We simulate this by verifying that V2 data cannot be decrypted
@@ -1305,6 +1306,7 @@ mod tests {
         let mem: Arc<MemConsensus> = Arc::new(MemConsensus::default());
 
         // Phase 1: Write V1 data (single-key).
+        #[allow(clippy::as_conversions)]
         let inner_v1: Arc<dyn Consensus> = Arc::clone(&mem) as Arc<dyn Consensus>;
         let consensus_v1 = EncryptedConsensus::new_test(inner_v1);
         let data1 = VersionedData {
@@ -1321,6 +1323,7 @@ mod tests {
         assert_eq!(raw.data[0], ENVELOPE_VERSION_V1);
 
         // Phase 2: Two-party instance writes V2 data.
+        #[allow(clippy::as_conversions)]
         let inner_two_party: Arc<dyn Consensus> = Arc::clone(&mem) as Arc<dyn Consensus>;
         let consensus_two_party = EncryptedConsensus::new_test_two_party(inner_two_party);
         let data2 = VersionedData {
@@ -1356,7 +1359,7 @@ mod tests {
     use proptest::prelude::*;
 
     proptest! {
-        #[test]
+        #[test] // allow(test-attribute)
         fn proptest_encrypt_decrypt_roundtrip(
             key in prop::array::uniform32(any::<u8>()),
             wrapped_dek in prop::collection::vec(any::<u8>(), 0..256),
@@ -1371,7 +1374,7 @@ mod tests {
             prop_assert_eq!(decrypted, plaintext);
         }
 
-        #[test]
+        #[test] // allow(test-attribute)
         fn proptest_parse_envelope_never_panics(
             data in prop::collection::vec(any::<u8>(), 0..512),
         ) {
@@ -1379,7 +1382,7 @@ mod tests {
             let _ = parse_envelope(&data);
         }
 
-        #[test]
+        #[test] // allow(test-attribute)
         fn proptest_decrypt_with_key_never_panics(
             key in prop::array::uniform32(any::<u8>()),
             data in prop::collection::vec(any::<u8>(), 0..512),
@@ -1388,7 +1391,7 @@ mod tests {
             let _ = decrypt_with_key(&key, &data);
         }
 
-        #[test]
+        #[test] // allow(test-attribute)
         fn proptest_tampered_ciphertext_detected(
             key in prop::array::uniform32(any::<u8>()),
             wrapped_dek in prop::collection::vec(any::<u8>(), 1..64),
@@ -1407,6 +1410,267 @@ mod tests {
             // can't happen since we XOR with 0xFF).
             let result = decrypt_with_key(&key, &tampered);
             prop_assert!(result.is_err(), "tampered ciphertext should fail AEAD authentication");
+        }
+    }
+
+    // --- Operational tests addressing QA review gaps ---
+
+    /// QA §4.4: Nonce uniqueness — encrypting the same plaintext twice must
+    /// produce different ciphertexts with different nonces.
+    #[mz_ore::test]
+    fn nonce_uniqueness() {
+        let key = test_key();
+        let wrapped = test_wrapped_dek();
+        let plaintext = b"duplicate plaintext for nonce test";
+
+        let enc1 = encrypt_with_dek(&key, &wrapped, plaintext).unwrap();
+        let enc2 = encrypt_with_dek(&key, &wrapped, plaintext).unwrap();
+
+        // Ciphertexts must differ (different random nonces).
+        assert_ne!(enc1, enc2, "two encryptions of same plaintext must differ");
+
+        // Extract nonces (after version(1) + len(2) + wrapped_dek).
+        let nonce_offset = 1 + WRAPPED_DEK_LEN_SIZE + wrapped.len();
+        let nonce1 = &enc1[nonce_offset..nonce_offset + NONCE_LEN];
+        let nonce2 = &enc2[nonce_offset..nonce_offset + NONCE_LEN];
+        assert_ne!(nonce1, nonce2, "nonces must differ between encryptions");
+
+        // Both must still decrypt correctly.
+        let (_, _, nc1) = parse_envelope(&enc1).unwrap();
+        let (_, _, nc2) = parse_envelope(&enc2).unwrap();
+        assert_eq!(decrypt_with_key(&key, nc1).unwrap(), plaintext);
+        assert_eq!(decrypt_with_key(&key, nc2).unwrap(), plaintext);
+    }
+
+    /// QA Gap 5: Large payload roundtrip (10 MB cyclic byte pattern).
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn large_payload_roundtrip() -> Result<(), ExternalError> {
+        let mem = MemBlob::open(MemBlobConfig::new(false));
+        let blob = EncryptedBlob::new_test(Arc::new(mem));
+
+        // 10 MB cyclic byte pattern (not zeros).
+        let size = 10 * 1024 * 1024;
+        let payload: Vec<u8> = (0u8..=255).cycle().take(size).collect();
+        assert_eq!(payload.len(), size);
+
+        blob.set("large", Bytes::from(payload.clone())).await?;
+        let got = blob.get("large").await?.unwrap().into_contiguous();
+        assert_eq!(got.len(), size);
+        assert_eq!(got, payload);
+
+        Ok(())
+    }
+
+    /// QA §4.2: Encrypted blob restore passthrough — set, delete, restore, read back.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn encrypted_blob_restore_passthrough() -> Result<(), ExternalError> {
+        let mem = MemBlob::open(MemBlobConfig::new(true)); // tombstone mode
+        let blob = EncryptedBlob::new_test(Arc::new(mem));
+
+        let data = b"restore me";
+        blob.set("r0", Bytes::from(&data[..])).await?;
+        assert_eq!(
+            blob.get("r0").await?.map(|s| s.into_contiguous()),
+            Some(data.to_vec())
+        );
+
+        // Delete — get returns None.
+        blob.delete("r0").await?;
+        assert_eq!(blob.get("r0").await?, None);
+
+        // Restore — data is back and decrypts correctly.
+        blob.restore("r0").await?;
+        assert_eq!(
+            blob.get("r0").await?.map(|s| s.into_contiguous()),
+            Some(data.to_vec())
+        );
+
+        Ok(())
+    }
+
+    /// QA Gap 1: Simulated DEK rotation at the EnvelopeEncryption level.
+    /// Verifies that data encrypted with an old DEK can still be manually
+    /// decrypted, and that new data uses the new wrapped DEK.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn simulated_dek_rotation() {
+        let original_key = [0x42u8; 32];
+        let original_wrapped = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let enc = EnvelopeEncryption::new_test(original_key, original_wrapped.clone());
+
+        // Encrypt data with the original DEK.
+        let ct_old = enc.encrypt(b"before rotation").await.unwrap();
+        let (_, wrapped_old, _) = parse_envelope(&ct_old).unwrap();
+        assert_eq!(wrapped_old, &original_wrapped[..]);
+
+        // Simulate rotation: swap in a new key.
+        let new_key = [0x99u8; 32];
+        let new_wrapped = vec![0xCA, 0xFE, 0xBA, 0xBE];
+        {
+            let mut dek = enc.current_dek.write().await;
+            dek.plaintext = new_key;
+            dek.wrapped = new_wrapped.clone();
+        }
+
+        // New encryption uses the new wrapped DEK.
+        let ct_new = enc.encrypt(b"after rotation").await.unwrap();
+        let (_, wrapped_new, nonce_ct_new) = parse_envelope(&ct_new).unwrap();
+        assert_eq!(wrapped_new, &new_wrapped[..]);
+        assert_ne!(wrapped_old, wrapped_new, "wrapped DEK must change after rotation");
+
+        // New ciphertext decrypts via fast path (current DEK matches).
+        let decrypted_new = decrypt_with_key(&new_key, nonce_ct_new).unwrap();
+        assert_eq!(&decrypted_new[..], b"after rotation");
+
+        // Old ciphertext: wrapped DEK doesn't match the current DEK (slow path would trigger).
+        let (_, old_wrapped_from_ct, nonce_ct_old) = parse_envelope(&ct_old).unwrap();
+        let current_dek = enc.current_dek.read().await;
+        assert_ne!(
+            old_wrapped_from_ct,
+            &current_dek.wrapped[..],
+            "old ciphertext's wrapped DEK should not match current (proves slow path would trigger)"
+        );
+        drop(current_dek);
+
+        // Manually decrypt old ciphertext with the original key.
+        let decrypted_old = decrypt_with_key(&original_key, nonce_ct_old).unwrap();
+        assert_eq!(&decrypted_old[..], b"before rotation");
+    }
+
+    /// QA Gap 1 (wrapper level): Rotation changes the wrapped DEK in stored data.
+    /// Verifies that the raw bytes in the inner blob differ after a key swap,
+    /// and that reading old data fails at the KMS layer (not parsing/AEAD).
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn rotation_changes_wrapped_dek_in_stored_data() -> Result<(), ExternalError> {
+        let mem = MemBlob::open(MemBlobConfig::new(false));
+        let inner: Arc<dyn Blob> = Arc::new(mem);
+        let blob = EncryptedBlob::new_test(Arc::clone(&inner));
+
+        // Write "before" data and extract its wrapped DEK from raw storage.
+        blob.set("k", Bytes::from("before")).await?;
+        let raw_before = inner.get("k").await?.unwrap().into_contiguous();
+        let (_, wrapped_before, _) = parse_envelope(&raw_before).unwrap();
+        let wrapped_before = wrapped_before.to_vec();
+
+        // Swap the DEK (simulating rotation).
+        let new_key = [0x99u8; 32];
+        let new_wrapped = vec![0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+        {
+            let mut dek = blob.encryption.current_dek.write().await;
+            dek.plaintext = new_key;
+            dek.wrapped = new_wrapped.clone();
+        }
+
+        // Write "after" data and extract its wrapped DEK.
+        blob.set("k2", Bytes::from("after")).await?;
+        let raw_after = inner.get("k2").await?.unwrap().into_contiguous();
+        let (_, wrapped_after, _) = parse_envelope(&raw_after).unwrap();
+        assert_ne!(
+            wrapped_before,
+            wrapped_after,
+            "wrapped DEK in raw storage must differ after rotation"
+        );
+
+        // Read "after" via blob succeeds (fast path: current DEK matches).
+        assert_eq!(
+            blob.get("k2").await?.map(|s| s.into_contiguous()),
+            Some(b"after".to_vec())
+        );
+
+        // Read "before" via blob fails at the KMS layer (wrapped DEK mismatch
+        // triggers KMS decrypt which fails with our dummy client), not at
+        // parsing or AEAD level.
+        let err = blob.get("k").await.unwrap_err();
+        let msg = err.to_string();
+        // The error should come from the KMS Decrypt call, not from parsing or AEAD.
+        assert!(
+            !msg.contains("unsupported envelope version")
+                && !msg.contains("too short")
+                && !msg.contains("data is empty"),
+            "old-DEK read should fail at KMS layer, not envelope parsing. Got: {msg}"
+        );
+
+        Ok(())
+    }
+
+    /// QA Gap 4: Concurrent encrypt/decrypt — 50 tasks doing set+get in parallel.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn concurrent_encrypt_decrypt() -> Result<(), ExternalError> {
+        let mem = MemBlob::open(MemBlobConfig::new(false));
+        let blob = Arc::new(EncryptedBlob::new_test(Arc::new(mem)));
+
+        let mut handles = Vec::new();
+        for i in 0..50 {
+            let blob = Arc::clone(&blob);
+            handles.push(mz_ore::task::spawn(
+                || format!("concurrent_encrypt_decrypt_{i}"),
+                async move {
+                    let key = format!("concurrent-{i}");
+                    let value = format!("value-{i}");
+                    blob.set(&key, Bytes::from(value.clone())).await.unwrap();
+                    let got = blob.get(&key).await.unwrap().unwrap().into_contiguous();
+                    assert_eq!(got, value.as_bytes(), "task {i} roundtrip mismatch");
+                },
+            ));
+        }
+
+        for h in handles {
+            h.await;
+        }
+
+        Ok(())
+    }
+
+    /// QA Gap 1 + Gap 4: Concurrent rotation contention — 30 encrypt tasks
+    /// (read lock) and 5 rotation tasks (write lock) running concurrently.
+    /// Asserts no deadlock, no panic, and all ciphertext is structurally valid.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn concurrent_rotation_contention() {
+        let enc = Arc::new(EnvelopeEncryption::new_test(
+            test_key(),
+            test_wrapped_dek(),
+        ));
+
+        let mut handles = Vec::new();
+
+        // 30 encrypt tasks (acquire read lock on current_dek).
+        for i in 0..30 {
+            let enc = Arc::clone(&enc);
+            handles.push(mz_ore::task::spawn(
+                || format!("encrypt_task_{i}"),
+                async move {
+                    let ct = enc.encrypt(format!("data-{i}").as_bytes()).await.unwrap();
+                    // Verify structural validity.
+                    let (version, _, nonce_ct) = parse_envelope(&ct).unwrap();
+                    assert_eq!(version, ENVELOPE_VERSION_V1);
+                    assert!(nonce_ct.len() >= NONCE_LEN + GCM_TAG_LEN);
+                },
+            ));
+        }
+
+        // 5 rotation tasks (acquire write lock on current_dek).
+        for i in 0..5 {
+            let enc = Arc::clone(&enc);
+            handles.push(mz_ore::task::spawn(
+                || format!("rotation_task_{i}"),
+                async move {
+                    let byte = u8::try_from(i).expect("i < 5 fits in u8");
+                    let new_key = [byte; 32];
+                    let new_wrapped = vec![byte; 6];
+                    let mut dek = enc.current_dek.write().await;
+                    dek.plaintext = new_key;
+                    dek.wrapped = new_wrapped;
+                },
+            ));
+        }
+
+        for h in handles {
+            h.await;
         }
     }
 }
