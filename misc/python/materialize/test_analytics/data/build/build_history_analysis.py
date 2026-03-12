@@ -7,17 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from textwrap import dedent
 
 from materialize import buildkite
-from materialize.buildkite import BuildkiteEnvVar
 from materialize.buildkite_insights.data.build_history import (
     BuildHistory,
     BuildHistoryEntry,
-)
-from materialize.mz_version import MzVersion
-from materialize.test_analytics.connector.test_analytics_connector import (
-    DatabaseConnector,
 )
 from materialize.test_analytics.data.base_data_storage import BaseDataStorage
 from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal

@@ -203,7 +203,7 @@ class BuildDataStorage(BaseDataStorage):
         build_step_key = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_KEY)
         with self.database_connector.create_cursor() as cur:
             cur.execute('SET cluster = "test_analytics"')
-            cur.execute(f"SET statement_timeout = '{timeout}s'".encode("utf-8"))
+            cur.execute(f"SET statement_timeout = '{timeout}s'".encode())
             # 2 for failures in this PR
             # 1 for failed recently in CI
             cur.execute(
@@ -220,9 +220,7 @@ class BuildDataStorage(BaseDataStorage):
                 WHERE build_step_key = {as_sanitized_literal(build_step_key)}
             )
             GROUP BY part;
-            """.encode(
-                    "utf-8"
-                )
+            """.encode()
             )
             results = cur.fetchall()
             return {part: prio for part, prio in results}
