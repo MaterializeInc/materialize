@@ -313,8 +313,14 @@ async fn check_ddl_changes(
     )
 }
 
-/// Gets and returns the next user item ID and user replica ID that would be
-/// allocated as of the current catalog state.
+/// Gets and returns the next user item ID and user replica ID based on the
+/// maximum existing IDs in the catalog.
+///
+/// We compute these from the actual catalog items rather than the allocator
+/// counter (e.g. `get_next_user_item_id()`), because batch ID allocation
+/// (`IdPool`) can advance the counter far ahead of actually-created items.
+/// Using the counter would cause `check_ddl_changes` to miss items created
+/// from the pool, since their IDs would be below the counter value.
 async fn get_next_ids(
     boot_ts: Timestamp,
     persist_client: PersistClient,
@@ -338,14 +344,29 @@ async fn get_next_ids(
         .await
         .unwrap_or_terminate("can open in savepoint mode");
 
-    let next_user_item_id = catalog
-        .get_next_user_item_id()
+    let tx = catalog
+        .transaction()
         .await
-        .expect("can access catalog");
-    let next_replica_item_id = catalog
-        .get_next_user_replica_id()
-        .await
-        .expect("can access catalog");
+        .unwrap_or_terminate("unexpected error while getting transaction");
 
-    (next_user_item_id, next_replica_item_id)
+    // Use the max existing user ID + 1 instead of the allocator counter.
+    // The allocator counter can be far ahead of actual items when batch ID
+    // allocation (IdPool) is in use.
+    fn next_user_id(iter: impl Iterator<Item = u64>) -> u64 {
+        iter.max().map(|id| id + 1).unwrap_or(0)
+    }
+
+    let next_user_item_id = next_user_id(tx.get_items().filter_map(|item| match item.id {
+        CatalogItemId::User(id) => Some(id),
+        _ => None,
+    }));
+
+    let next_replica_id = next_user_id(tx.get_cluster_replicas().filter_map(
+        |r| match r.replica_id {
+            ReplicaId::User(id) => Some(id),
+            _ => None,
+        },
+    ));
+
+    (next_user_item_id, next_replica_id)
 }
