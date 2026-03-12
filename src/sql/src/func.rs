@@ -4832,6 +4832,15 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
             params!(String, String, String) => VariadicFunc::from(variadic::MakeMzAclItem)
                 => MzAclItem, oid::FUNC_MAKE_MZ_ACL_ITEM_OID;
         },
+        "parse_catalog_id" => Scalar {
+            params!(Jsonb) => UnaryFunc::ParseCatalogId(func::ParseCatalogId)
+                => String, oid::FUNC_PARSE_CATALOG_ID_OID;
+        },
+        "parse_catalog_privileges" => Scalar {
+            params!(Jsonb) => UnaryFunc::ParseCatalogPrivileges(func::ParseCatalogPrivileges)
+                => SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)),
+                oid::FUNC_PARSE_CATALOG_PRIVILEGES_OID;
+        },
         "mz_acl_item_contains_privilege" => Scalar {
             params!(MzAclItem, String)
                 => BinaryFunc::from(func::MzAclItemContainsPrivilege)

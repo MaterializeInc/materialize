@@ -835,6 +835,9 @@ mod columnation {
                         EvalError::InvalidPrivileges(x) => {
                             EvalError::InvalidPrivileges(self.string_region.copy(x))
                         }
+                        EvalError::InvalidCatalogJson(x) => {
+                            EvalError::InvalidCatalogJson(self.string_region.copy(x))
+                        }
                         EvalError::LetRecLimitExceeded(x) => {
                             EvalError::LetRecLimitExceeded(self.string_region.copy(x))
                         }
