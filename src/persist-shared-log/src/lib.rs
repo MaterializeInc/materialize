@@ -23,7 +23,7 @@ use bytes::Bytes;
 
 pub mod actor;
 pub mod ctp;
-pub mod persist_backed;
+pub mod persist_log;
 pub mod service;
 pub mod traits;
 

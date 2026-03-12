@@ -23,8 +23,8 @@ use mz_persist_shared_log::actor::acceptor::ActorAcceptor;
 use mz_persist_shared_log::actor::learner::{ActorLearner, LearnerConfig};
 use mz_persist_shared_log::actor::metrics::{AcceptorMetrics, LearnerMetrics};
 use mz_persist_shared_log::actor::storage::s3::S3Storage;
-use mz_persist_shared_log::persist_backed::acceptor::PersistAcceptor;
-use mz_persist_shared_log::persist_backed::learner::{PersistLearner, PersistLearnerConfig};
+use mz_persist_shared_log::persist_log::acceptor::PersistAcceptor;
+use mz_persist_shared_log::persist_log::learner::{PersistLearner, PersistLearnerConfig};
 use mz_persist_shared_log::service::{
     AcceptorGrpcService, LearnerGrpcService, PersistSharedLogGrpcService,
 };

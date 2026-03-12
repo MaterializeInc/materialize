@@ -50,8 +50,8 @@ use mz_persist_shared_log::actor::learner::{ActorLearner, LearnerConfig};
 use mz_persist_shared_log::actor::metrics::{AcceptorMetrics, LearnerMetrics};
 use mz_persist_shared_log::actor::storage::{LatencyProfile, LatencyStorage};
 use mz_persist_shared_log::ctp;
-use mz_persist_shared_log::persist_backed::acceptor::PersistAcceptor;
-use mz_persist_shared_log::persist_backed::learner::{PersistLearner, PersistLearnerConfig};
+use mz_persist_shared_log::persist_log::acceptor::PersistAcceptor;
+use mz_persist_shared_log::persist_log::learner::{PersistLearner, PersistLearnerConfig};
 use mz_persist_shared_log::service::{AcceptorGrpcService, LearnerGrpcService};
 use mz_persist_shared_log::traits::AcceptorConfig;
 use mz_persist_shared_log::traits::Acceptor as _;
@@ -397,8 +397,8 @@ enum Transport {
     },
     /// Direct handles to the persist-backed acceptor and learner.
     PersistDirect {
-        acceptor: mz_persist_shared_log::persist_backed::acceptor::PersistAcceptorHandle,
-        learner: mz_persist_shared_log::persist_backed::learner::PersistLearnerHandle,
+        acceptor: mz_persist_shared_log::persist_log::acceptor::PersistAcceptorHandle,
+        learner: mz_persist_shared_log::persist_log::learner::PersistLearnerHandle,
     },
     /// gRPC clients connected to a loopback tonic server.
     Grpc {

@@ -21,9 +21,9 @@ use mz_persist_types::codec_impls::UnitSchema;
 
 use crate::traits::AcceptorConfig;
 use crate::traits::Acceptor as _;
-use crate::persist_backed::{ConsensusProposal, ConsensusProposalSchema};
-use crate::persist_backed::acceptor::{PersistAcceptor, PersistAcceptorHandle};
-use crate::persist_backed::learner::{
+use crate::persist_log::{ConsensusProposal, ConsensusProposalSchema};
+use crate::persist_log::acceptor::{PersistAcceptor, PersistAcceptorHandle};
+use crate::persist_log::learner::{
     PersistLearner, PersistLearnerConfig, PersistLearnerHandle,
 };
 
