@@ -12,7 +12,7 @@
 
 use mz_persist::generated::consensus_service::{
     ProtoAppendResponse, ProtoCompareAndSetResponse, ProtoHeadResponse, ProtoScanResponse,
-    ProtoTruncateResponse, ProtoWalProposal,
+    ProtoTruncateResponse, ProtoLogProposal,
 };
 
 use crate::acceptor::AcceptorError;
@@ -22,12 +22,15 @@ use crate::learner::LearnerError;
 pub trait Acceptor: Clone + std::fmt::Debug + Send + Sync + 'static {
     async fn append(
         &self,
-        proposal: ProtoWalProposal,
+        proposal: ProtoLogProposal,
     ) -> Result<ProtoAppendResponse, AcceptorError>;
 
-    /// Read the latest committed batch number. Lock-free atomic read —
-    /// never blocks behind WAL writes or flushes.
-    fn latest_committed_batch(&self) -> Option<u64>;
+    /// Read the latest committed batch number. Log-backed acceptors track
+    /// this via a shared atomic; persist-backed acceptors don't need it (the
+    /// learner queries the shard upper directly). Returns `None` by default.
+    fn latest_committed_batch(&self) -> Option<u64> {
+        None
+    }
 }
 
 #[async_trait::async_trait]

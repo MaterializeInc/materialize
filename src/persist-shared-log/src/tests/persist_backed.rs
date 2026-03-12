@@ -11,21 +11,19 @@
 
 use std::sync::Arc;
 
-use timely::progress::Antichain;
-
 use mz_persist::generated::consensus_service::{
-    ProtoCasProposal, ProtoTruncateProposal, ProtoWalProposal, proto_wal_proposal,
+    ProtoCasProposal, ProtoTruncateProposal, ProtoLogProposal, proto_log_proposal,
 };
 use mz_persist_client::Diagnostics;
 use mz_persist_client::PersistClient;
 use mz_persist_types::ShardId;
+use mz_persist_types::codec_impls::UnitSchema;
 
-use crate::acceptor::{AcceptorConfig, LastCommitted};
-use crate::persist_backed::ConsensusProposal;
-use crate::persist_backed::ConsensusProposalSchema;
-use crate::persist_backed::acceptor::{PersistAcceptorActor, PersistAcceptorHandle};
+use crate::acceptor::AcceptorConfig;
+use crate::persist_backed::{ConsensusProposal, ConsensusProposalSchema};
+use crate::persist_backed::acceptor::{PersistAcceptor, PersistAcceptorHandle};
 use crate::persist_backed::learner::{
-    PersistLearnerActor, PersistLearnerConfig, PersistLearnerHandle,
+    PersistLearner, PersistLearnerConfig, PersistLearnerHandle,
 };
 use crate::traits::Acceptor as _;
 
@@ -40,26 +38,6 @@ struct PersistTestHarness {
     _learner_task: mz_ore::task::AbortOnDropHandle<()>,
 }
 
-async fn open_shard(
-    client: &PersistClient,
-    shard_id: ShardId,
-    purpose: &str,
-) -> (
-    mz_persist_client::write::WriteHandle<ConsensusProposal, (), u64, i64>,
-    mz_persist_client::read::ReadHandle<ConsensusProposal, (), u64, i64>,
-) {
-    client
-        .open(
-            shard_id,
-            Arc::new(ConsensusProposalSchema),
-            Arc::new(mz_persist_types::codec_impls::UnitSchema),
-            Diagnostics::from_purpose(purpose),
-            false,
-        )
-        .await
-        .expect("open shard")
-}
-
 impl PersistTestHarness {
     async fn new() -> Self {
         let client = PersistClient::new_for_tests().await;
@@ -68,55 +46,53 @@ impl PersistTestHarness {
     }
 
     async fn new_with_client(client: &PersistClient, shard_id: ShardId) -> Self {
-        let (mut write, read) = open_shard(client, shard_id, "persist-backed-test").await;
+        let key_schema = Arc::new(ConsensusProposalSchema);
+        let val_schema = Arc::new(UnitSchema);
 
-        // Write an empty batch at timestamp 0 to advance the upper to 1.
-        // This ensures the shard is "initialized" and listen(as_of=0) can
-        // take a snapshot at the sealed timestamp 0.
-        let empty: &[((ConsensusProposal, ()), u64, i64)] = &[];
-        write
-            .compare_and_append(empty, Antichain::from_elem(0), Antichain::from_elem(1))
+        // Open all handles before spawning tasks. Persist handle creation
+        // involves consensus RPCs that can deadlock with a running acceptor
+        // task on a current_thread tokio runtime.
+        let write = client
+            .open_writer::<ConsensusProposal, (), u64, i64>(
+                shard_id,
+                Arc::clone(&key_schema),
+                Arc::clone(&val_schema),
+                Diagnostics::from_purpose("test-acceptor"),
+            )
             .await
-            .expect("valid usage")
-            .expect("upper should be 0 for fresh shard");
+            .expect("open acceptor writer");
 
-        let last_committed = LastCommitted::new();
+        let (upper_handle, read) = client
+            .open::<ConsensusProposal, (), u64, i64>(
+                shard_id,
+                key_schema,
+                val_schema,
+                Diagnostics::from_purpose("test-learner"),
+                false,
+            )
+            .await
+            .expect("open learner handles");
 
+        let since = read.since().clone();
+        let listen = read
+            .listen(since)
+            .await
+            .expect("listen");
+
+        // Now spawn tasks.
         let acceptor_config = AcceptorConfig {
             flush_interval_ms: 1,
             ..Default::default()
         };
-
-        let (acceptor, acceptor_handle) =
-            PersistAcceptorActor::new(acceptor_config, write, last_committed);
+        let (acceptor, acceptor_handle) = PersistAcceptor::new(acceptor_config, write);
         let acceptor_task =
             mz_ore::task::spawn(|| "test-persist-acceptor", acceptor.run()).abort_on_drop();
-
-        // Listen starting from timestamp 0 (the beginning of the shard).
-        // This is safe because we wrote an empty batch at t=0 above.
-        let listen = read
-            .listen(Antichain::from_elem(0))
-            .await
-            .expect("listen should succeed since t=0 is sealed");
-
-        // Open a second writer for the learner to query the shard upper.
-        let learner_upper_handle = client
-            .open_writer::<ConsensusProposal, (), u64, i64>(
-                shard_id,
-                Arc::new(ConsensusProposalSchema),
-                Arc::new(mz_persist_types::codec_impls::UnitSchema),
-                Diagnostics::from_purpose("test-learner-upper"),
-            )
-            .await
-            .expect("open learner upper writer");
 
         let learner_config = PersistLearnerConfig {
             result_retention_batches: 1_000_000,
             ..Default::default()
         };
-
-        let (learner, learner_handle) =
-            PersistLearnerActor::new(learner_config, listen, learner_upper_handle);
+        let (learner, learner_handle) = PersistLearner::new(learner_config, listen, upper_handle);
         let learner_task =
             mz_ore::task::spawn(|| "test-persist-learner", learner.run()).abort_on_drop();
 
@@ -132,8 +108,8 @@ impl PersistTestHarness {
     async fn cas(&self, key: &str, expected: Option<u64>, new_seqno: u64, data: &[u8]) -> bool {
         let receipt = self
             .acceptor_handle
-            .append(ProtoWalProposal {
-                op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+            .append(ProtoLogProposal {
+                op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                     key: key.to_string(),
                     expected,
                     new_seqno,
@@ -154,7 +130,7 @@ impl PersistTestHarness {
 }
 
 // ---------------------------------------------------------------------------
-// Tests (mirror the WAL test suite)
+// Tests (mirror the log-backed test suite)
 // ---------------------------------------------------------------------------
 
 #[mz_ore::test(tokio::test)]
@@ -217,8 +193,8 @@ async fn test_persist_truncate() {
     // Truncate entries < 2 (removes entry 1).
     let receipt = h
         .acceptor_handle
-        .append(ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Truncate(ProtoTruncateProposal {
+        .append(ProtoLogProposal {
+            op: Some(proto_log_proposal::Op::Truncate(ProtoTruncateProposal {
                 key: "s0".to_string(),
                 seqno: 2,
             })),
@@ -245,8 +221,8 @@ async fn test_persist_truncate_errors() {
     // Truncate on nonexistent key -> error.
     let receipt = h
         .acceptor_handle
-        .append(ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Truncate(ProtoTruncateProposal {
+        .append(ProtoLogProposal {
+            op: Some(proto_log_proposal::Op::Truncate(ProtoTruncateProposal {
                 key: "s0".to_string(),
                 seqno: 1,
             })),
@@ -265,8 +241,8 @@ async fn test_persist_truncate_errors() {
     // Truncate with seqno > head -> error.
     let receipt = h
         .acceptor_handle
-        .append(ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Truncate(ProtoTruncateProposal {
+        .append(ProtoLogProposal {
+            op: Some(proto_log_proposal::Op::Truncate(ProtoTruncateProposal {
                 key: "s0".to_string(),
                 seqno: 99,
             })),
@@ -286,24 +262,24 @@ async fn test_persist_batch_grouping() {
 
     // Submit 3 proposals concurrently — they should all land in the same batch.
     let (r0, r1, r2) = tokio::join!(
-        h.acceptor_handle.append(ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+        h.acceptor_handle.append(ProtoLogProposal {
+            op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                 key: "s0".to_string(),
                 expected: None,
                 new_seqno: 1,
                 data: b"a".to_vec(),
             })),
         }),
-        h.acceptor_handle.append(ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+        h.acceptor_handle.append(ProtoLogProposal {
+            op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                 key: "s1".to_string(),
                 expected: None,
                 new_seqno: 1,
                 data: b"b".to_vec(),
             })),
         }),
-        h.acceptor_handle.append(ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+        h.acceptor_handle.append(ProtoLogProposal {
+            op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                 key: "s0".to_string(),
                 expected: Some(1),
                 new_seqno: 2,
@@ -349,16 +325,16 @@ async fn test_persist_intra_batch_cas_chaining() {
 
     // Two CAS proposals in the same batch for the same shard.
     let (r0, r1) = tokio::join!(
-        h.acceptor_handle.append(ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+        h.acceptor_handle.append(ProtoLogProposal {
+            op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                 key: "s0".to_string(),
                 expected: None,
                 new_seqno: 1,
                 data: b"first".to_vec(),
             })),
         }),
-        h.acceptor_handle.append(ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+        h.acceptor_handle.append(ProtoLogProposal {
+            op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                 key: "s0".to_string(),
                 expected: Some(1),
                 new_seqno: 2,
@@ -417,49 +393,14 @@ async fn test_persist_recovery() {
 
     // Phase 2: re-open and verify recovery.
     {
-        let (write, read) = open_shard(&client, shard_id, "persist-recovery-test-read").await;
-
-        let last_committed = LastCommitted::new();
-        let acceptor_config = AcceptorConfig {
-            flush_interval_ms: 1,
-            ..Default::default()
-        };
-
-        let (acceptor, acceptor_handle) =
-            PersistAcceptorActor::new(acceptor_config, write, last_committed);
-        let _acceptor_task =
-            mz_ore::task::spawn(|| "test-persist-acceptor-2", acceptor.run()).abort_on_drop();
-
-        // The upper is already past 0 (from phase 1), so listen(as_of=0) works.
-        let listen = read
-            .listen(Antichain::from_elem(0))
-            .await
-            .expect("listen");
-
-        let learner_upper_handle = client
-            .open_writer::<ConsensusProposal, (), u64, i64>(
-                shard_id,
-                Arc::new(ConsensusProposalSchema),
-                Arc::new(mz_persist_types::codec_impls::UnitSchema),
-                Diagnostics::from_purpose("test-learner-upper-2"),
-            )
-            .await
-            .expect("open learner upper writer");
-
-        let learner_config = PersistLearnerConfig {
-            result_retention_batches: 1_000_000,
-            ..Default::default()
-        };
-        let (learner, learner_handle) =
-            PersistLearnerActor::new(learner_config, listen, learner_upper_handle);
-        let _learner_task =
-            mz_ore::task::spawn(|| "test-persist-learner-2", learner.run()).abort_on_drop();
+        let h = PersistTestHarness::new_with_client(&client, shard_id).await;
 
         // Write a new entry that depends on recovered state. If the learner
         // replayed history correctly, the CAS expected=Some(2) should succeed.
-        let receipt = acceptor_handle
-            .append(ProtoWalProposal {
-                op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+        let receipt = h
+            .acceptor_handle
+            .append(ProtoLogProposal {
+                op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                     key: "s0".to_string(),
                     expected: Some(2),
                     new_seqno: 3,
@@ -468,18 +409,19 @@ async fn test_persist_recovery() {
             })
             .await
             .unwrap();
-        let result = learner_handle
+        let result = h
+            .learner_handle
             .await_cas_result(receipt.batch_number, receipt.position)
             .await
             .unwrap();
         assert!(result.committed, "CAS should succeed after recovery replay");
 
         // Verify s0 head is seqno 3.
-        let head = learner_handle.head("s0".into()).await.unwrap();
+        let head = h.learner_handle.head("s0".into()).await.unwrap();
         assert_eq!(head.data.unwrap().seqno, 3);
 
         // Verify s1 survived recovery.
-        let head = learner_handle.head("s1".into()).await.unwrap();
+        let head = h.learner_handle.head("s1".into()).await.unwrap();
         assert_eq!(head.data.unwrap().seqno, 1);
     }
 }

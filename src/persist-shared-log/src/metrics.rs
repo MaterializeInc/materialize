@@ -29,10 +29,10 @@ pub struct AcceptorMetrics {
     /// containing it begins. Measures queuing delay in the pending buffer.
     pub proposal_queue_seconds: Histogram,
 
-    // --- Object store WAL write metrics ---
-    pub object_store_wal_writes: IntCounter,
-    pub object_store_wal_write_bytes: IntCounter,
-    pub object_store_wal_write_latency_seconds: Histogram,
+    // --- Object store log write metrics ---
+    pub object_store_log_writes: IntCounter,
+    pub object_store_log_write_bytes: IntCounter,
+    pub object_store_log_write_latency_seconds: Histogram,
     pub object_store_write_retries: IntCounter,
     pub object_store_write_retry_already_exists: IntCounter,
 }
@@ -75,17 +75,17 @@ impl AcceptorMetrics {
                     0.006, 0.008, 0.01, 0.015, 0.02, 0.03, 0.05, 0.1, 0.25, 0.5, 1.0,
                 ],
             )),
-            object_store_wal_writes: registry.register(metric!(
-                name: "mz_consensus_svc_object_store_wal_writes_total",
-                help: "Total WAL batches written to object storage.",
+            object_store_log_writes: registry.register(metric!(
+                name: "mz_consensus_svc_object_store_log_writes_total",
+                help: "Total log batches written to object storage.",
             )),
-            object_store_wal_write_bytes: registry.register(metric!(
-                name: "mz_consensus_svc_object_store_wal_write_bytes_total",
-                help: "Total bytes written to object storage for WAL batches.",
+            object_store_log_write_bytes: registry.register(metric!(
+                name: "mz_consensus_svc_object_store_log_write_bytes_total",
+                help: "Total bytes written to object storage for log batches.",
             )),
-            object_store_wal_write_latency_seconds: registry.register(metric!(
-                name: "mz_consensus_svc_object_store_wal_write_latency_seconds",
-                help: "Histogram of object store WAL PUT latency in seconds.",
+            object_store_log_write_latency_seconds: registry.register(metric!(
+                name: "mz_consensus_svc_object_store_log_write_latency_seconds",
+                help: "Histogram of object store log PUT latency in seconds.",
                 buckets: vec![
                     0.001, 0.002, 0.004, 0.008, 0.016, 0.032, 0.064,
                     0.128, 0.256, 0.512, 1.0, 2.0, 5.0,
@@ -171,7 +171,7 @@ impl LearnerMetrics {
             )),
             batches_materialized: registry.register(metric!(
                 name: "mz_consensus_svc_learner_batches_materialized_total",
-                help: "Total WAL batches materialized (CAS evaluated).",
+                help: "Total log batches materialized (CAS evaluated).",
             )),
             batch_materialize_latency_seconds: registry.register(metric!(
                 name: "mz_consensus_svc_learner_batch_materialize_latency_seconds",

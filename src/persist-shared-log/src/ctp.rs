@@ -24,7 +24,7 @@
 //! a channel and flushes once per batch, naturally batching concurrent frames
 //! into fewer syscalls.
 //!
-//! Protobuf is used only for WAL persistence. All network RPCs use bincode
+//! Protobuf is used only for log persistence. All network RPCs use bincode
 //! for fast zero-copy serde without schema overhead.
 
 use mz_ore::cast::CastFrom;
@@ -273,23 +273,23 @@ async fn dispatch<A: Acceptor, L: Learner>(
     learner: &L,
 ) -> Result<Vec<u8>, String> {
     use mz_persist::generated::consensus_service::{
-        ProtoCasProposal, ProtoTruncateProposal, ProtoWalProposal, proto_wal_proposal,
+        ProtoCasProposal, ProtoTruncateProposal, ProtoLogProposal, proto_log_proposal,
     };
 
     match opcode {
         OP_APPEND => {
             let req: AppendRequest = bincode::deserialize(payload).map_err(|e| e.to_string())?;
             let proposal = match req {
-                AppendRequest::Cas(cas) => ProtoWalProposal {
-                    op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+                AppendRequest::Cas(cas) => ProtoLogProposal {
+                    op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                         key: cas.key,
                         expected: cas.expected,
                         new_seqno: cas.new_seqno,
                         data: cas.data,
                     })),
                 },
-                AppendRequest::Truncate(trunc) => ProtoWalProposal {
-                    op: Some(proto_wal_proposal::Op::Truncate(ProtoTruncateProposal {
+                AppendRequest::Truncate(trunc) => ProtoLogProposal {
+                    op: Some(proto_log_proposal::Op::Truncate(ProtoTruncateProposal {
                         key: trunc.key,
                         seqno: trunc.seqno,
                     })),
@@ -351,8 +351,8 @@ async fn dispatch<A: Acceptor, L: Learner>(
         }
         OP_CAS => {
             let req: CasProposal = bincode::deserialize(payload).map_err(|e| e.to_string())?;
-            let proposal = ProtoWalProposal {
-                op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+            let proposal = ProtoLogProposal {
+                op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                     key: req.key,
                     expected: req.expected,
                     new_seqno: req.new_seqno,
@@ -374,8 +374,8 @@ async fn dispatch<A: Acceptor, L: Learner>(
         }
         OP_TRUNCATE => {
             let req: TruncateProposal = bincode::deserialize(payload).map_err(|e| e.to_string())?;
-            let proposal = ProtoWalProposal {
-                op: Some(proto_wal_proposal::Op::Truncate(ProtoTruncateProposal {
+            let proposal = ProtoLogProposal {
+                op: Some(proto_log_proposal::Op::Truncate(ProtoTruncateProposal {
                     key: req.key,
                     seqno: req.seqno,
                 })),

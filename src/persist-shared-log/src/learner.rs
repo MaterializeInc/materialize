@@ -9,7 +9,7 @@
 
 //! The learner: state machine that tails the shared log.
 //!
-//! Receives WAL batches (pushed from the acceptor or read from object storage),
+//! Receives log batches (pushed from the acceptor or read from object storage),
 //! evaluates CAS during playback to determine winners, maintains materialized
 //! shard state, and serves reads and result queries.
 //!
@@ -26,7 +26,7 @@ use tracing::{debug, info, warn};
 use mz_ore::cast::CastFrom;
 use mz_persist::generated::consensus_service::{
     ProtoCompareAndSetResponse, ProtoHeadResponse, ProtoScanResponse, ProtoTruncateResponse,
-    ProtoVersionedData, ProtoWalBatch, proto_wal_proposal,
+    ProtoVersionedData, ProtoLogBatch, proto_log_proposal,
 };
 
 use crate::acceptor::AcceptorHandle;
@@ -39,16 +39,16 @@ use crate::{ShardState, VersionedEntry};
 pub struct LearnerConfig {
     /// Depth of the command channel (mpsc queue).
     pub queue_depth: usize,
-    /// Write a snapshot every this many WAL batches.
+    /// Write a snapshot every this many log batches.
     pub snapshot_interval: u64,
     /// Number of batch results to retain for `AwaitResult` queries.
     /// Old results are pruned after this many batches.
     pub result_retention_batches: u64,
-    /// If set, the learner polls the WAL at this interval for new batches,
+    /// If set, the learner polls the log at this interval for new batches,
     /// in addition to receiving them from the acceptor push channel. This
     /// prepares for a multi-process future where the push channel may not
     /// be available.
-    pub wal_poll_interval_ms: Option<u64>,
+    pub log_poll_interval_ms: Option<u64>,
 }
 
 impl Default for LearnerConfig {
@@ -57,7 +57,7 @@ impl Default for LearnerConfig {
             queue_depth: 4096,
             snapshot_interval: 100,
             result_retention_batches: 10_000,
-            wal_poll_interval_ms: None,
+            log_poll_interval_ms: None,
         }
     }
 }
@@ -122,7 +122,7 @@ pub enum LearnerCommand {
         reply: oneshot::Sender<Result<ProtoTruncateResponse, String>>,
         received_at: std::time::Instant,
     },
-    /// Recover state from snapshot + WAL replay. Returns the next expected
+    /// Recover state from snapshot + log replay. Returns the next expected
     /// batch number (for configuring the acceptor).
     Recover {
         reply: oneshot::Sender<Result<u64, String>>,
@@ -339,7 +339,7 @@ impl ReadWaiter {
 
 /// The learner actor: state machine that tails the shared log.
 ///
-/// Receives WAL batches, evaluates CAS during playback, maintains materialized
+/// Receives log batches, evaluates CAS during playback, maintains materialized
 /// state, and serves reads and result queries.
 pub struct ActorLearner<W: Storage> {
     // --- Shard state ---
@@ -363,9 +363,9 @@ pub struct ActorLearner<W: Storage> {
     // --- Channels ---
     cmd_rx: mpsc::Receiver<LearnerCommand>,
     /// Batch push channel from the acceptor.
-    batch_rx: mpsc::Receiver<ProtoWalBatch>,
+    batch_rx: mpsc::Receiver<ProtoLogBatch>,
 
-    // --- WAL reader/writer ---
+    // --- Log reader/writer ---
     storage: W,
 
     // --- Linearization ---
@@ -388,7 +388,7 @@ impl<W: Storage> ActorLearner<W> {
     pub fn new(
         config: LearnerConfig,
         storage: W,
-        batch_rx: mpsc::Receiver<ProtoWalBatch>,
+        batch_rx: mpsc::Receiver<ProtoLogBatch>,
         acceptor_handle: AcceptorHandle,
         metrics: LearnerMetrics,
     ) -> (Self, LearnerHandle) {
@@ -414,8 +414,8 @@ impl<W: Storage> ActorLearner<W> {
         (learner, handle)
     }
 
-    fn wal_poll_interval(&self) -> Option<Interval> {
-        self.config.wal_poll_interval_ms.map(|ms| {
+    fn log_poll_interval(&self) -> Option<Interval> {
+        self.config.log_poll_interval_ms.map(|ms| {
             let mut interval = tokio::time::interval(std::time::Duration::from_millis(ms));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             interval
@@ -424,12 +424,12 @@ impl<W: Storage> ActorLearner<W> {
 
     /// Runs the learner loop until both channels are closed.
     pub async fn run(mut self) {
-        let mut wal_poll = self.wal_poll_interval();
+        let mut log_poll = self.log_poll_interval();
 
         loop {
-            // The WAL poll branch is conditionally enabled.
-            let wal_tick = async {
-                match wal_poll.as_mut() {
+            // The log poll branch is conditionally enabled.
+            let log_tick = async {
+                match log_poll.as_mut() {
                     Some(interval) => interval.tick().await,
                     None => std::future::pending().await,
                 }
@@ -455,9 +455,9 @@ impl<W: Storage> ActorLearner<W> {
                         None => return,
                     }
                 }
-                // cancel-safety: consumed tick only delays next WAL poll
-                _ = wal_tick => {
-                    self.catch_up_from_wal().await;
+                // cancel-safety: consumed tick only delays next log poll
+                _ = log_tick => {
+                    self.catch_up_from_log().await;
                 }
             }
         }
@@ -608,7 +608,7 @@ impl<W: Storage> ActorLearner<W> {
     }
 
     /// Read the acceptor's latest committed batch for read linearization.
-    /// This is a lock-free atomic read — it never blocks behind WAL writes.
+    /// This is a lock-free atomic read — it never blocks behind log writes.
     fn linearization_target(&self) -> Option<u64> {
         self.acceptor.latest_committed_batch()
     }
@@ -664,7 +664,7 @@ impl<W: Storage> ActorLearner<W> {
     // Materialization (CAS evaluation during playback)
     // -----------------------------------------------------------------------
 
-    async fn materialize_batch(&mut self, batch: ProtoWalBatch) {
+    async fn materialize_batch(&mut self, batch: ProtoLogBatch) {
         let start = std::time::Instant::now();
         let batch_number = batch.batch_number;
         let num_proposals = batch.proposals.len();
@@ -679,11 +679,11 @@ impl<W: Storage> ActorLearner<W> {
 
         for proposal in batch.proposals {
             match proposal.op {
-                Some(proto_wal_proposal::Op::Cas(cas)) => {
+                Some(proto_log_proposal::Op::Cas(cas)) => {
                     let result = self.evaluate_cas(cas);
                     batch_results.push(ProposalResult::Cas(result));
                 }
-                Some(proto_wal_proposal::Op::Truncate(trunc)) => {
+                Some(proto_log_proposal::Op::Truncate(trunc)) => {
                     let result = self.evaluate_truncate(&trunc);
                     batch_results.push(ProposalResult::Truncate(result));
                 }
@@ -907,13 +907,13 @@ impl<W: Storage> ActorLearner<W> {
     }
 
     // -----------------------------------------------------------------------
-    // WAL tailing
+    // Log tailing
     // -----------------------------------------------------------------------
 
-    /// Read sequential batches from the WAL starting after the last
+    /// Read sequential batches from the log starting after the last
     /// materialized batch. Used for recovery and as a fallback when the
     /// push channel is unavailable (multi-process deployment).
-    async fn catch_up_from_wal(&mut self) {
+    async fn catch_up_from_log(&mut self) {
         let mut next = self.materialized_through.map_or(0, |n| n + 1);
         loop {
             match self.storage.read_batch(next).await {
@@ -921,14 +921,14 @@ impl<W: Storage> ActorLearner<W> {
                     debug!(
                         batch_number = batch.batch_number,
                         proposals = batch.proposals.len(),
-                        "materializing WAL batch"
+                        "materializing log batch"
                     );
                     self.materialize_batch(batch).await;
                     next += 1;
                 }
                 Ok(None) => break,
                 Err(e) => {
-                    warn!("error reading WAL batch {}: {}", next, e);
+                    warn!("error reading log batch {}: {}", next, e);
                     break;
                 }
             }
@@ -939,8 +939,8 @@ impl<W: Storage> ActorLearner<W> {
     // Recovery
     // -----------------------------------------------------------------------
 
-    /// Recover state from snapshot + WAL replay. Returns the next expected
-    /// batch number for the acceptor.
+    /// Recover state from snapshot + log replay. Returns the next expected batch
+    /// number for the acceptor.
     async fn recover(&mut self) -> Result<u64, String> {
         // 1. Load snapshot.
         let (shards, through_batch) = match self.storage.read_snapshot().await {
@@ -961,13 +961,13 @@ impl<W: Storage> ActorLearner<W> {
 
         self.shards = shards;
 
-        // 2. Set materialized_through from snapshot, then replay WAL.
+        // 2. Set materialized_through from snapshot, then replay log.
         if !(self.shards.is_empty() && through_batch == 0) {
             self.materialized_through = Some(through_batch);
         }
 
-        // 3. Replay WAL entries after the snapshot using catch_up_from_wal.
-        self.catch_up_from_wal().await;
+        // 3. Replay log entries after the snapshot using catch_up_from_log.
+        self.catch_up_from_log().await;
 
         // 4. Recompute running counts from materialized state.
         self.running_entry_count = 0;
@@ -1038,7 +1038,7 @@ impl<W: Storage + Send + Sync + 'static> ActorLearner<W> {
     pub fn spawn(
         config: LearnerConfig,
         storage: W,
-        batch_rx: mpsc::Receiver<ProtoWalBatch>,
+        batch_rx: mpsc::Receiver<ProtoLogBatch>,
         acceptor_handle: AcceptorHandle,
         metrics: LearnerMetrics,
     ) -> (LearnerHandle, mz_ore::task::JoinHandle<()>) {
@@ -1053,7 +1053,7 @@ impl<W: Storage + Send + Sync + 'static> ActorLearner<W> {
     pub fn spawn_threaded(
         config: LearnerConfig,
         storage: W,
-        batch_rx: mpsc::Receiver<ProtoWalBatch>,
+        batch_rx: mpsc::Receiver<ProtoLogBatch>,
         acceptor_handle: AcceptorHandle,
         metrics: LearnerMetrics,
     ) -> (LearnerHandle, std::thread::JoinHandle<()>) {

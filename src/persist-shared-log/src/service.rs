@@ -20,7 +20,7 @@ use mz_persist::generated::consensus_service::{
     ProtoCompareAndSetResponse, ProtoHeadRequest, ProtoHeadResponse,
     ProtoLatestCommittedBatchRequest, ProtoLatestCommittedBatchResponse, ProtoListKeysRequest,
     ProtoListKeysResponse, ProtoScanRequest, ProtoScanResponse, ProtoTruncateRequest,
-    ProtoTruncateResponse, ProtoWalProposal, proto_wal_proposal,
+    ProtoTruncateResponse, ProtoLogProposal, proto_log_proposal,
 };
 
 use crate::acceptor::AcceptorError;
@@ -261,9 +261,9 @@ impl<A: traits::Acceptor, L: traits::Learner> PersistSharedLog
             .new
             .ok_or_else(|| tonic::Status::invalid_argument("missing new"))?;
 
-        // Build WAL proposal from the CAS request.
-        let proposal = ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Cas(
+        // Build log proposal from the CAS request.
+        let proposal = ProtoLogProposal {
+            op: Some(proto_log_proposal::Op::Cas(
                 mz_persist::generated::consensus_service::ProtoCasProposal {
                     key: req.key,
                     expected: req.expected,
@@ -292,9 +292,9 @@ impl<A: traits::Acceptor, L: traits::Learner> PersistSharedLog
         let req = request.into_inner();
         debug!(key = %req.key, seqno = req.seqno, "persist_shared_log::truncate");
 
-        // Build WAL proposal from the truncate request.
-        let proposal = ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Truncate(
+        // Build log proposal from the truncate request.
+        let proposal = ProtoLogProposal {
+            op: Some(proto_log_proposal::Op::Truncate(
                 mz_persist::generated::consensus_service::ProtoTruncateProposal {
                     key: req.key,
                     seqno: req.seqno,

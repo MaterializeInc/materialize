@@ -12,8 +12,8 @@
 //! Architecture follows Balakrishnan's shared log decomposition:
 //!
 //! - **Acceptor**: blind group commit. Receives proposals, batches them, flushes
-//!   to the WAL. Returns receipts. Stateless w.r.t. shard data.
-//! - **Learner**: state machine. Tails the WAL, evaluates CAS during playback,
+//!   to the log. Returns receipts. Stateless w.r.t. shard data.
+//! - **Learner**: state machine. Tails the log, evaluates CAS during playback,
 //!   maintains materialized state, serves reads and result queries.
 //!
 //! Batches independent cross-shard proposals into a single durable object store
@@ -34,7 +34,7 @@ pub mod traits;
 mod tests;
 
 /// Per-shard committed state. Shared between the learner (which owns it) and
-/// the WAL snapshot serialization layer.
+/// the snapshot serialization layer.
 #[derive(Debug, Clone, Default)]
 pub struct ShardState {
     /// Committed entries, ordered by seqno.

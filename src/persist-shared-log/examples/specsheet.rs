@@ -37,23 +37,20 @@ use tonic::transport::Server;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::PersistClient;
 use mz_persist_client::ShardId;
-use mz_persist_types::codec_impls::UnitSchema;
-use timely::progress::Antichain;
 use mz_persist::generated::consensus_service::consensus_acceptor_client::ConsensusAcceptorClient;
 use mz_persist::generated::consensus_service::consensus_acceptor_server::ConsensusAcceptorServer;
 use mz_persist::generated::consensus_service::consensus_learner_client::ConsensusLearnerClient;
 use mz_persist::generated::consensus_service::consensus_learner_server::ConsensusLearnerServer;
 use mz_persist::generated::consensus_service::{
     ProtoAppendRequest, ProtoAwaitResultRequest, ProtoCasProposal, ProtoHeadRequest,
-    ProtoScanRequest, ProtoTruncateProposal, ProtoWalProposal, proto_wal_proposal,
+    ProtoScanRequest, ProtoTruncateProposal, ProtoLogProposal, proto_log_proposal,
 };
-use mz_persist_shared_log::acceptor::{AcceptorConfig, ActorAcceptor, LastCommitted};
+use mz_persist_shared_log::acceptor::{AcceptorConfig, ActorAcceptor};
 use mz_persist_shared_log::ctp;
 use mz_persist_shared_log::learner::{ActorLearner, LearnerConfig};
 use mz_persist_shared_log::metrics::{AcceptorMetrics, LearnerMetrics};
-use mz_persist_shared_log::persist_backed::ConsensusProposal;
-use mz_persist_shared_log::persist_backed::acceptor::PersistAcceptorActor;
-use mz_persist_shared_log::persist_backed::learner::{PersistLearnerActor, PersistLearnerConfig};
+use mz_persist_shared_log::persist_backed::acceptor::PersistAcceptor;
+use mz_persist_shared_log::persist_backed::learner::{PersistLearner, PersistLearnerConfig};
 use mz_persist_shared_log::service::{AcceptorGrpcService, LearnerGrpcService};
 use mz_persist_shared_log::storage::{LatencyProfile, LatencyStorage};
 use mz_persist_shared_log::traits::Acceptor as _;
@@ -62,11 +59,11 @@ use mz_persist_shared_log::traits::Acceptor as _;
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// Simulated WAL latency profile. Each variant is a named preset with baked-in
+/// Simulated log latency profile. Each variant is a named preset with baked-in
 /// latency parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
-enum WalLatency {
+enum LogLatency {
     /// Instant flushes. Isolates actor CPU cost.
     Zero,
     /// Every flush takes exactly 5ms.
@@ -87,17 +84,17 @@ enum WalLatency {
     S3Standard,
 }
 
-impl WalLatency {
+impl LogLatency {
     fn to_latency_profile(self) -> LatencyProfile {
         match self {
-            WalLatency::Zero => LatencyProfile::Zero,
-            WalLatency::Fixed5ms => LatencyProfile::Fixed(Duration::from_millis(5)),
-            WalLatency::Fixed10ms => LatencyProfile::Fixed(Duration::from_millis(10)),
-            WalLatency::S3Express => LatencyProfile::P50P99 {
+            LogLatency::Zero => LatencyProfile::Zero,
+            LogLatency::Fixed5ms => LatencyProfile::Fixed(Duration::from_millis(5)),
+            LogLatency::Fixed10ms => LatencyProfile::Fixed(Duration::from_millis(10)),
+            LogLatency::S3Express => LatencyProfile::P50P99 {
                 p50: Duration::from_millis(5),
                 p99: Duration::from_millis(50),
             },
-            WalLatency::S3Standard => LatencyProfile::P50P99 {
+            LogLatency::S3Standard => LatencyProfile::P50P99 {
                 p50: Duration::from_millis(20),
                 p99: Duration::from_millis(500),
             },
@@ -105,14 +102,14 @@ impl WalLatency {
     }
 }
 
-impl std::fmt::Display for WalLatency {
+impl std::fmt::Display for LogLatency {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            WalLatency::Zero => write!(f, "zero"),
-            WalLatency::Fixed5ms => write!(f, "fixed-5ms"),
-            WalLatency::Fixed10ms => write!(f, "fixed-10ms"),
-            WalLatency::S3Express => write!(f, "s3-express"),
-            WalLatency::S3Standard => write!(f, "s3-standard"),
+            LogLatency::Zero => write!(f, "zero"),
+            LogLatency::Fixed5ms => write!(f, "fixed-5ms"),
+            LogLatency::Fixed10ms => write!(f, "fixed-10ms"),
+            LogLatency::S3Express => write!(f, "s3-express"),
+            LogLatency::S3Standard => write!(f, "s3-standard"),
         }
     }
 }
@@ -143,22 +140,22 @@ impl std::fmt::Display for TransportMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 enum BackendMode {
-    /// WAL + object storage (the original implementation).
-    Wal,
+    /// Log + object storage (the original implementation).
+    Log,
     /// Persist shard (WriteHandle for acceptor, Listen for learner).
     Persist,
 }
 
 impl Default for BackendMode {
     fn default() -> Self {
-        BackendMode::Wal
+        BackendMode::Log
     }
 }
 
 impl std::fmt::Display for BackendMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BackendMode::Wal => write!(f, "wal"),
+            BackendMode::Log => write!(f, "log"),
             BackendMode::Persist => write!(f, "persist"),
         }
     }
@@ -205,15 +202,15 @@ struct Cli {
     #[arg(long)]
     snapshot_interval: Option<u64>,
 
-    /// WAL latency profile.
+    /// Log latency profile.
     #[arg(long, value_enum)]
-    wal_latency: Option<WalLatency>,
+    log_latency: Option<LogLatency>,
 
     /// Transport mode: direct (handles) or grpc (loopback server).
     #[arg(long, value_enum)]
     transport: Option<TransportMode>,
 
-    /// Backend storage mode: wal (WAL+S3) or persist (persist shard).
+    /// Backend storage mode: log (log+S3) or persist (persist shard).
     /// Persist backend currently only works with direct transport.
     #[arg(long, value_enum)]
     backend: Option<BackendMode>,
@@ -254,7 +251,7 @@ struct WorkloadConfig {
     queue_depth: usize,
     snapshot_interval: u64,
     grpc_connections: u64,
-    wal_latency: WalLatency,
+    log_latency: LogLatency,
     transport: TransportMode,
     backend: BackendMode,
     duration: u64,
@@ -283,9 +280,9 @@ impl Default for WorkloadConfig {
             queue_depth: 4096,
             snapshot_interval: u64::MAX,
             grpc_connections: 1,
-            wal_latency: WalLatency::Zero,
+            log_latency: LogLatency::Zero,
             transport: TransportMode::Direct,
-            backend: BackendMode::Wal,
+            backend: BackendMode::Log,
             duration: 60,
             warmup: 10,
             json: false,
@@ -338,7 +335,7 @@ impl WorkloadConfig {
             flush_interval_ms,
             queue_depth,
             snapshot_interval,
-            wal_latency,
+            log_latency,
             transport,
             backend,
             duration,
@@ -376,7 +373,7 @@ impl WorkloadConfig {
     }
 
     fn latency_profile(&self) -> LatencyProfile {
-        self.wal_latency.to_latency_profile()
+        self.log_latency.to_latency_profile()
     }
 }
 
@@ -427,8 +424,8 @@ impl Transport {
     ) -> CasResult {
         match self {
             Transport::Direct { acceptor, learner } => {
-                let proposal = ProtoWalProposal {
-                    op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+                let proposal = ProtoLogProposal {
+                    op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                         key: key.to_string(),
                         expected,
                         new_seqno: seqno,
@@ -449,8 +446,8 @@ impl Transport {
                 }
             }
             Transport::PersistDirect { acceptor, learner } => {
-                let proposal = ProtoWalProposal {
-                    op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+                let proposal = ProtoLogProposal {
+                    op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                         key: key.to_string(),
                         expected,
                         new_seqno: seqno,
@@ -471,8 +468,8 @@ impl Transport {
                 }
             }
             Transport::Grpc { acceptor, learner } => {
-                let proposal = ProtoWalProposal {
-                    op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+                let proposal = ProtoLogProposal {
+                    op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                         key: key.to_string(),
                         expected,
                         new_seqno: seqno,
@@ -584,8 +581,8 @@ impl Transport {
     async fn truncate(&mut self, key: &str, seqno: u64) -> bool {
         match self {
             Transport::Direct { acceptor, learner } => {
-                let proposal = ProtoWalProposal {
-                    op: Some(proto_wal_proposal::Op::Truncate(ProtoTruncateProposal {
+                let proposal = ProtoLogProposal {
+                    op: Some(proto_log_proposal::Op::Truncate(ProtoTruncateProposal {
                         key: key.to_string(),
                         seqno,
                     })),
@@ -600,8 +597,8 @@ impl Transport {
                     .is_ok()
             }
             Transport::PersistDirect { acceptor, learner } => {
-                let proposal = ProtoWalProposal {
-                    op: Some(proto_wal_proposal::Op::Truncate(ProtoTruncateProposal {
+                let proposal = ProtoLogProposal {
+                    op: Some(proto_log_proposal::Op::Truncate(ProtoTruncateProposal {
                         key: key.to_string(),
                         seqno,
                     })),
@@ -616,8 +613,8 @@ impl Transport {
                     .is_ok()
             }
             Transport::Grpc { acceptor, learner } => {
-                let proposal = ProtoWalProposal {
-                    op: Some(proto_wal_proposal::Op::Truncate(ProtoTruncateProposal {
+                let proposal = ProtoLogProposal {
+                    op: Some(proto_log_proposal::Op::Truncate(ProtoTruncateProposal {
                         key: key.to_string(),
                         seqno,
                     })),
@@ -950,7 +947,7 @@ fn print_report(
     let secs = elapsed.as_secs_f64().max(0.001);
     let flush_count = acceptor_metrics.flush_count.get();
     let total_ops: u64 = ops.iter().map(|o| o.stats.count).sum();
-    let wal_bytes = acceptor_metrics.object_store_wal_write_bytes.get();
+    let log_bytes = acceptor_metrics.object_store_log_write_bytes.get();
 
     // --- Overview ---
     println!();
@@ -967,8 +964,8 @@ fn print_report(
         format_count(u64::cast_lossy(target_writes_per_sec)),
     );
     println!(
-        "Transport: {}, WAL latency: {}",
-        cfg.transport, cfg.wal_latency
+        "Transport: {}, log latency: {}",
+        cfg.transport, cfg.log_latency
     );
     println!(
         "Duration: {}s ({}s warmup), flush interval: {}ms",
@@ -1028,7 +1025,7 @@ fn print_report(
         0.0
     };
     let bytes_per_flush = if flush_count > 0 {
-        f64::cast_lossy(wal_bytes) / f64::cast_lossy(flush_count)
+        f64::cast_lossy(log_bytes) / f64::cast_lossy(flush_count)
     } else {
         0.0
     };
@@ -1129,8 +1126,8 @@ fn print_report(
             histogram_stats(&acceptor_metrics.proposal_queue_seconds),
         ),
         (
-            "WAL write",
-            histogram_stats(&acceptor_metrics.object_store_wal_write_latency_seconds),
+            "Log write",
+            histogram_stats(&acceptor_metrics.object_store_log_write_latency_seconds),
         ),
         (
             "Flush (total)",
@@ -1247,7 +1244,7 @@ fn print_json(
     let secs = elapsed.as_secs_f64().max(0.001);
     let total_ops: u64 = ops.iter().map(|o| o.stats.count).sum();
     let flush_count = acceptor_metrics.flush_count.get();
-    let wal_bytes = acceptor_metrics.object_store_wal_write_bytes.get();
+    let log_bytes = acceptor_metrics.object_store_log_write_bytes.get();
 
     // Only include operations that actually occurred.
     let mut latency_map: serde_json::Map<String, serde_json::Value> = ops
@@ -1288,7 +1285,7 @@ fn print_json(
         0.0
     };
     let bytes_per_flush = if flush_count > 0 {
-        u64::cast_lossy((f64::cast_lossy(wal_bytes) / f64::cast_lossy(flush_count)).round())
+        u64::cast_lossy((f64::cast_lossy(log_bytes) / f64::cast_lossy(flush_count)).round())
     } else {
         0
     };
@@ -1340,13 +1337,13 @@ fn print_json(
             "duration": cfg.duration,
             "warmup": cfg.warmup,
             "flush_interval_ms": cfg.flush_interval_ms,
-            "wal_latency": cfg.wal_latency.to_string(),
+            "log_latency": cfg.log_latency.to_string(),
             "transport": cfg.transport.to_string(),
         },
         "latencies": latencies,
         "acceptor_latencies": {
             "queue_delay": server_hist(&acceptor_metrics.proposal_queue_seconds),
-            "wal_write": server_hist(&acceptor_metrics.object_store_wal_write_latency_seconds),
+            "log_write": server_hist(&acceptor_metrics.object_store_log_write_latency_seconds),
             "flush_total": server_hist(&acceptor_metrics.flush_latency_seconds),
         },
         "learner_latencies": {
@@ -1435,15 +1432,15 @@ async fn main() {
         std::net::SocketAddr,
         mz_ore::task::AbortOnDropHandle<()>,
     )> = None;
-    let mut wal_learner_thread: Option<std::thread::JoinHandle<()>> = None;
+    let mut log_learner_thread: Option<std::thread::JoinHandle<()>> = None;
     let mut persist_acceptor_task: Option<mz_ore::task::JoinHandle<()>> = None;
     let mut persist_learner_task: Option<mz_ore::task::JoinHandle<()>> = None;
 
     // --- Backend + transport setup ---
     let transports: Vec<Transport> = match cfg.backend {
-        BackendMode::Wal => {
+        BackendMode::Log => {
             let latency_profile = cfg.latency_profile();
-            let wal = Arc::new(LatencyStorage::new(latency_profile));
+            let log_storage = Arc::new(LatencyStorage::new(latency_profile));
 
             // Batch push channel: acceptor pushes batches to the learner.
             let (batch_tx, batch_rx) = mpsc::channel(256);
@@ -1455,7 +1452,7 @@ async fn main() {
             // Spawn acceptor on a dedicated OS thread with its own single-threaded
             // tokio runtime, matching the production layout in main.rs. Isolates
             // flush timer precision from learner CPU work.
-            let acceptor_wal = Arc::clone(&wal);
+            let acceptor_storage = Arc::clone(&log_storage);
             let acceptor_handle = {
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 let _thread = std::thread::Builder::new()
@@ -1468,7 +1465,7 @@ async fn main() {
                         rt.block_on(async {
                             let (handle, _task) = ActorAcceptor::spawn(
                                 acceptor_config,
-                                acceptor_wal,
+                                acceptor_storage,
                                 Some(batch_tx),
                                 acceptor_metrics,
                             );
@@ -1487,12 +1484,12 @@ async fn main() {
             };
             let (learner_handle, thread) = ActorLearner::spawn_threaded(
                 learner_config,
-                wal,
+                log_storage,
                 batch_rx,
                 acceptor_handle.clone(),
                 learner_metrics,
             );
-            wal_learner_thread = Some(thread);
+            log_learner_thread = Some(thread);
 
             // Create transport based on transport mode.
             let transports = if cfg.transport == TransportMode::Ctp {
@@ -1579,66 +1576,23 @@ async fn main() {
             transports
         }
         BackendMode::Persist => {
-            // Create in-memory persist client, open a shard, write the
-            // empty init batch (to advance upper from 0 to 1), then
-            // create acceptor + learner actors.
             let persist_client = PersistClient::new_for_tests().await;
             let shard_id = ShardId::new();
-            let last_committed = LastCommitted::new();
-
-            use mz_persist_shared_log::persist_backed::ConsensusProposalSchema;
-            let (mut write, read) = persist_client
-                .open::<ConsensusProposal, (), u64, i64>(
-                    shard_id,
-                    Arc::new(ConsensusProposalSchema),
-                    Arc::new(UnitSchema),
-                    mz_persist_client::Diagnostics::from_purpose("specsheet-persist"),
-                    false,
-                )
-                .await
-                .expect("failed to open persist shard");
-
-            // Write empty init batch to advance upper from 0 to 1.
-            let empty: &[((ConsensusProposal, ()), u64, i64)] = &[];
-            write
-                .compare_and_append(empty, Antichain::from_elem(0u64), Antichain::from_elem(1u64))
-                .await
-                .expect("persist init batch failed")
-                .expect("persist init batch upper mismatch");
-
-            // Create listener starting at as_of=0 (snapshot + live).
-            let listen = read
-                .listen(Antichain::from_elem(0u64))
-                .await
-                .expect("failed to create persist listener");
-
-            // Open a second writer for the learner to query the shard upper.
-            let learner_upper_handle = persist_client
-                .open_writer::<ConsensusProposal, (), u64, i64>(
-                    shard_id,
-                    Arc::new(ConsensusProposalSchema),
-                    Arc::new(UnitSchema),
-                    mz_persist_client::Diagnostics::from_purpose("specsheet-learner-upper"),
-                )
-                .await
-                .expect("failed to open learner upper writer");
 
             let acceptor_config = AcceptorConfig {
                 queue_depth,
                 flush_interval_ms: cfg.flush_interval_ms,
             };
             let (acceptor_handle, acc_task) =
-                PersistAcceptorActor::spawn(acceptor_config, write, last_committed);
+                PersistAcceptor::spawn(acceptor_config, &persist_client, shard_id).await;
             persist_acceptor_task = Some(acc_task);
 
             let learner_config = PersistLearnerConfig {
                 queue_depth,
                 ..Default::default()
             };
-            let (learner_actor, learner_handle) =
-                PersistLearnerActor::new(learner_config, listen, learner_upper_handle);
-            let lrn_task =
-                mz_ore::task::spawn(|| "persist-learner", learner_actor.run());
+            let (learner_handle, lrn_task) =
+                PersistLearner::spawn(learner_config, &persist_client, shard_id).await;
             persist_learner_task = Some(lrn_task);
 
             let transports = vec![Transport::PersistDirect {
@@ -1728,7 +1682,7 @@ async fn main() {
     drop(ctp_server_handle);
 
     // Wait for backend actors to finish.
-    if let Some(thread) = wal_learner_thread {
+    if let Some(thread) = log_learner_thread {
         let _ = thread.join();
     }
     if let Some(task) = persist_learner_task {

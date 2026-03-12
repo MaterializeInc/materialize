@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Storage interface for the shared log service (WAL batches and snapshots).
+//! Storage interface for the shared log service (log batches and snapshots).
 
 pub mod s3;
 #[cfg(test)]
@@ -16,7 +16,7 @@ pub mod sim;
 use std::collections::BTreeMap;
 
 use mz_persist::generated::consensus_service::{
-    ProtoShardState, ProtoSnapshot, ProtoVersionedData, ProtoWalBatch,
+    ProtoShardState, ProtoSnapshot, ProtoVersionedData, ProtoLogBatch,
 };
 
 use crate::{ShardState, VersionedEntry};
@@ -40,12 +40,12 @@ impl std::fmt::Display for StorageError {
     }
 }
 
-/// Trait for durable storage of WAL batches and snapshots.
+/// Trait for durable storage of log batches and snapshots.
 #[async_trait::async_trait]
 pub trait Storage: Send {
     /// Write a batch to durable storage. Returns `StorageError::AlreadyExists`
     /// if the batch already exists (e.g., from a prior write that appeared to fail).
-    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), StorageError>;
+    async fn write_batch(&self, batch: &ProtoLogBatch) -> Result<(), StorageError>;
     /// Write a full snapshot to durable storage.
     async fn write_snapshot(
         &self,
@@ -54,13 +54,13 @@ pub trait Storage: Send {
     ) -> Result<(), anyhow::Error>;
     /// Read a snapshot from durable storage.
     async fn read_snapshot(&self) -> Result<Option<ProtoSnapshot>, anyhow::Error>;
-    /// Read a WAL batch by number.
-    async fn read_batch(&self, batch_number: u64) -> Result<Option<ProtoWalBatch>, anyhow::Error>;
+    /// Read a log batch by number.
+    async fn read_batch(&self, batch_number: u64) -> Result<Option<ProtoLogBatch>, anyhow::Error>;
 }
 
 #[async_trait::async_trait]
 impl<W: Storage + Sync> Storage for std::sync::Arc<W> {
-    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), StorageError> {
+    async fn write_batch(&self, batch: &ProtoLogBatch) -> Result<(), StorageError> {
         (**self).write_batch(batch).await
     }
     async fn write_snapshot(
@@ -73,7 +73,7 @@ impl<W: Storage + Sync> Storage for std::sync::Arc<W> {
     async fn read_snapshot(&self) -> Result<Option<ProtoSnapshot>, anyhow::Error> {
         (**self).read_snapshot().await
     }
-    async fn read_batch(&self, batch_number: u64) -> Result<Option<ProtoWalBatch>, anyhow::Error> {
+    async fn read_batch(&self, batch_number: u64) -> Result<Option<ProtoLogBatch>, anyhow::Error> {
         (**self).read_batch(batch_number).await
     }
 }
@@ -128,7 +128,7 @@ pub struct NoopStorage;
 
 #[async_trait::async_trait]
 impl Storage for NoopStorage {
-    async fn write_batch(&self, _batch: &ProtoWalBatch) -> Result<(), StorageError> {
+    async fn write_batch(&self, _batch: &ProtoLogBatch) -> Result<(), StorageError> {
         Ok(())
     }
     async fn write_snapshot(
@@ -141,7 +141,7 @@ impl Storage for NoopStorage {
     async fn read_snapshot(&self) -> Result<Option<ProtoSnapshot>, anyhow::Error> {
         Ok(None)
     }
-    async fn read_batch(&self, _batch_number: u64) -> Result<Option<ProtoWalBatch>, anyhow::Error> {
+    async fn read_batch(&self, _batch_number: u64) -> Result<Option<ProtoLogBatch>, anyhow::Error> {
         Ok(None)
     }
 }
@@ -184,7 +184,7 @@ impl LatencyStorage {
 
 #[async_trait::async_trait]
 impl Storage for LatencyStorage {
-    async fn write_batch(&self, _batch: &ProtoWalBatch) -> Result<(), StorageError> {
+    async fn write_batch(&self, _batch: &ProtoLogBatch) -> Result<(), StorageError> {
         match &self.profile {
             LatencyProfile::Zero => {}
             LatencyProfile::Fixed(d) => {
@@ -211,7 +211,7 @@ impl Storage for LatencyStorage {
     async fn read_snapshot(&self) -> Result<Option<ProtoSnapshot>, anyhow::Error> {
         Ok(None)
     }
-    async fn read_batch(&self, _batch_number: u64) -> Result<Option<ProtoWalBatch>, anyhow::Error> {
+    async fn read_batch(&self, _batch_number: u64) -> Result<Option<ProtoLogBatch>, anyhow::Error> {
         Ok(None)
     }
 }

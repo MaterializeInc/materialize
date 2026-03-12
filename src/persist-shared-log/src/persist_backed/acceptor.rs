@@ -9,9 +9,11 @@
 
 //! Persist-shard-backed acceptor: blind group commit via `WriteHandle`.
 //!
-//! Identical semantics to the WAL acceptor — proposals are appended
+//! Identical semantics to the log-backed acceptor — proposals are appended
 //! unconditionally. The persist shard's `compare_and_append` replaces the
 //! conditional PUT to object storage.
+
+use std::sync::Arc;
 
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot};
@@ -19,19 +21,21 @@ use tokio::time::Interval;
 use tracing::{debug, error, info};
 
 use mz_persist::generated::consensus_service::{
-    ProtoAppendResponse, ProtoWalProposal,
+    ProtoAppendResponse, ProtoLogProposal,
 };
 use mz_persist_client::write::WriteHandle;
+use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+use mz_persist_types::codec_impls::UnitSchema;
 use prost::Message;
 
-use crate::acceptor::{AcceptorConfig, AcceptorError, LastCommitted};
-use super::ConsensusProposal;
+use crate::acceptor::{AcceptorConfig, AcceptorError};
+use super::{ConsensusProposal, ConsensusProposalSchema};
 
 /// Commands dispatched to the persist-backed acceptor.
 pub enum PersistAcceptorCommand {
     /// Append a proposal. Reply after the next flush.
     Append {
-        proposal: ProtoWalProposal,
+        proposal: ProtoLogProposal,
         reply: oneshot::Sender<Result<ProtoAppendResponse, String>>,
     },
     /// Explicitly trigger a flush. Used in tests.
@@ -45,17 +49,11 @@ pub enum PersistAcceptorCommand {
 #[derive(Debug, Clone)]
 pub struct PersistAcceptorHandle {
     tx: mpsc::Sender<PersistAcceptorCommand>,
-    last_committed: LastCommitted,
 }
 
 impl PersistAcceptorHandle {
-    pub fn new(tx: mpsc::Sender<PersistAcceptorCommand>, last_committed: LastCommitted) -> Self {
-        PersistAcceptorHandle { tx, last_committed }
-    }
-
-    /// Read the latest committed batch number (lock-free atomic read).
-    pub fn latest_committed_batch(&self) -> Option<u64> {
-        self.last_committed.get()
+    pub fn new(tx: mpsc::Sender<PersistAcceptorCommand>) -> Self {
+        PersistAcceptorHandle { tx }
     }
 
     pub async fn flush(&self) -> Result<(), AcceptorError> {
@@ -72,7 +70,7 @@ impl PersistAcceptorHandle {
 impl crate::traits::Acceptor for PersistAcceptorHandle {
     async fn append(
         &self,
-        proposal: ProtoWalProposal,
+        proposal: ProtoLogProposal,
     ) -> Result<ProtoAppendResponse, AcceptorError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
@@ -87,33 +85,29 @@ impl crate::traits::Acceptor for PersistAcceptorHandle {
             .map_err(|_| AcceptorError::DroppedReply)?
             .map_err(AcceptorError::Command)
     }
-
-    fn latest_committed_batch(&self) -> Option<u64> {
-        self.last_committed.get()
-    }
 }
 
 /// A pending proposal waiting for the next flush.
 #[allow(dead_code)]
 struct PendingAppend {
-    proposal: ProtoWalProposal,
+    proposal: ProtoLogProposal,
     reply: oneshot::Sender<Result<ProtoAppendResponse, String>>,
     received_at: std::time::Instant,
 }
 
-/// The persist-shard-backed acceptor actor.
+/// The persist-shard-backed acceptor.
 ///
 /// Owns a `WriteHandle` and performs blind group commits via
-/// `compare_and_append`. The persist timestamp T serves as the batch number.
-pub struct PersistAcceptorActor {
+/// `compare_and_append`. The persist shard upper frontier serves as the batch
+/// number — batch number derives from upper, not the other way around.
+pub struct PersistAcceptor {
     write: WriteHandle<ConsensusProposal, (), u64, i64>,
     pending: Vec<PendingAppend>,
     flush_interval: Interval,
     rx: mpsc::Receiver<PersistAcceptorCommand>,
-    last_committed: LastCommitted,
 }
 
-impl PersistAcceptorActor {
+impl PersistAcceptor {
     /// Creates a new persist-backed acceptor and returns a handle.
     ///
     /// The `WriteHandle`'s current `upper()` determines the starting batch
@@ -121,7 +115,6 @@ impl PersistAcceptorActor {
     pub fn new(
         config: AcceptorConfig,
         write: WriteHandle<ConsensusProposal, (), u64, i64>,
-        last_committed: LastCommitted,
     ) -> (Self, PersistAcceptorHandle) {
         let mut flush_interval =
             tokio::time::interval(std::time::Duration::from_millis(config.flush_interval_ms));
@@ -129,24 +122,14 @@ impl PersistAcceptorActor {
 
         let (tx, rx) = mpsc::channel(config.queue_depth);
 
-        let acceptor = PersistAcceptorActor {
+        let acceptor = PersistAcceptor {
             write,
             pending: Vec::new(),
             flush_interval,
             rx,
-            last_committed: last_committed.clone(),
         };
-        let handle = PersistAcceptorHandle::new(tx, last_committed);
+        let handle = PersistAcceptorHandle::new(tx);
         (acceptor, handle)
-    }
-
-    /// Extract the current batch number from the write handle's upper frontier.
-    fn current_upper(&self) -> u64 {
-        *self
-            .write
-            .upper()
-            .as_option()
-            .expect("upper should not be empty")
     }
 
     fn has_pending(&self) -> bool {
@@ -155,16 +138,7 @@ impl PersistAcceptorActor {
 
     /// Runs the acceptor loop until the channel closes or the actor is fenced.
     pub async fn run(mut self) {
-        let upper = self.current_upper();
-        if upper > 0 {
-            // Recovery: everything before upper was committed by a prior incarnation.
-            self.last_committed.set_from_recovery(upper);
-            info!(upper, "persist acceptor starting (recovered)");
-        } else {
-            info!("persist acceptor starting (fresh shard)");
-        }
-
-        self.flush_interval.tick().await; // consume immediate first tick
+        info!("persist acceptor starting");
         loop {
             tokio::select! {
                 biased;
@@ -214,7 +188,12 @@ impl PersistAcceptorActor {
             return true;
         }
 
-        let batch_number = self.current_upper();
+        let upper = self.write.upper().clone();
+        let raw_upper = *upper.as_option().expect("upper should not be empty");
+        // Skip T=0: listen(as_of=since) where since=[0] treats T=0 as an empty
+        // snapshot, so writing at T=0 would be invisible to the learner. After
+        // the first batch, raw_upper is already >= 2 so .max(1) is a no-op.
+        let batch_number = raw_upper.max(1);
         let num_proposals = pending.len();
         debug!(
             batch = batch_number,
@@ -226,7 +205,7 @@ impl PersistAcceptorActor {
         let (proposals, replies): (Vec<_>, Vec<_>) =
             pending.into_iter().map(|p| (p.proposal, p.reply)).unzip();
 
-        // Build updates: one row per proposal at timestamp `batch_number` with D=+1.
+        // Build updates: one row per proposal at the given timestamp with D=+1.
         let updates: Vec<_> = proposals
             .iter()
             .map(|p| {
@@ -237,12 +216,11 @@ impl PersistAcceptorActor {
             })
             .collect();
 
-        let expected_upper = Antichain::from_elem(batch_number);
         let new_upper = Antichain::from_elem(batch_number + 1);
 
         match self
             .write
-            .compare_and_append(&updates, expected_upper, new_upper)
+            .compare_and_append(&updates, upper, new_upper)
             .await
         {
             Ok(Ok(())) => {
@@ -253,7 +231,6 @@ impl PersistAcceptorActor {
                         position: u32::try_from(position).expect("batch position fits u32"),
                     }));
                 }
-                self.last_committed.set(batch_number);
                 debug!(
                     batch = batch_number,
                     proposals = num_proposals,
@@ -295,14 +272,27 @@ impl PersistAcceptorActor {
     }
 }
 
-impl PersistAcceptorActor {
-    /// Spawns the acceptor as a tokio task on the current runtime.
-    pub fn spawn(
+impl PersistAcceptor {
+    /// Opens a persist shard and spawns the acceptor as a tokio task.
+    ///
+    /// Handles shard initialization internally — callers only need to provide
+    /// a `PersistClient` and `ShardId`.
+    pub async fn spawn(
         config: AcceptorConfig,
-        write: WriteHandle<ConsensusProposal, (), u64, i64>,
-        last_committed: LastCommitted,
+        client: &PersistClient,
+        shard_id: ShardId,
     ) -> (PersistAcceptorHandle, mz_ore::task::JoinHandle<()>) {
-        let (acceptor, handle) = Self::new(config, write, last_committed);
+        let write = client
+            .open_writer::<ConsensusProposal, (), u64, i64>(
+                shard_id,
+                Arc::new(ConsensusProposalSchema),
+                Arc::new(UnitSchema),
+                Diagnostics::from_purpose("persist-shared-log-acceptor"),
+            )
+            .await
+            .expect("failed to open persist shard for acceptor");
+
+        let (acceptor, handle) = Self::new(config, write);
         let task = mz_ore::task::spawn(|| "persist-acceptor", acceptor.run());
         (handle, task)
     }

@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::generated::consensus_service::{
-    ProtoCasProposal, ProtoTruncateProposal, ProtoWalProposal, proto_wal_proposal,
+    ProtoCasProposal, ProtoTruncateProposal, ProtoLogProposal, proto_log_proposal,
 };
 
 use crate::acceptor::{AcceptorConfig, AcceptorHandle, ActorAcceptor};
@@ -57,16 +57,16 @@ struct TestHarness {
     learner_handle: LearnerHandle,
     _acceptor_task: mz_ore::task::AbortOnDropHandle<()>,
     _learner_task: mz_ore::task::AbortOnDropHandle<()>,
-    _wal: Arc<SimStorage>,
+    _log: Arc<SimStorage>,
 }
 
 impl TestHarness {
-    fn new(wal: Arc<SimStorage>) -> Self {
+    fn new(log: Arc<SimStorage>) -> Self {
         let (batch_tx, batch_rx) = tokio::sync::mpsc::channel(256);
 
         let (acceptor, acceptor_handle) = ActorAcceptor::new(
             test_acceptor_config(),
-            Arc::clone(&wal),
+            Arc::clone(&log),
             Some(batch_tx),
             test_acceptor_metrics(),
         );
@@ -74,7 +74,7 @@ impl TestHarness {
 
         let (learner, learner_handle) = ActorLearner::new(
             test_learner_config(),
-            Arc::clone(&wal),
+            Arc::clone(&log),
             batch_rx,
             acceptor_handle.clone(),
             test_learner_metrics(),
@@ -86,7 +86,7 @@ impl TestHarness {
             learner_handle,
             _acceptor_task: acceptor_task,
             _learner_task: learner_task,
-            _wal: wal,
+            _log: log,
         }
     }
 
@@ -94,8 +94,8 @@ impl TestHarness {
     async fn cas(&self, key: &str, expected: Option<u64>, new_seqno: u64, data: &[u8]) -> bool {
         let receipt = self
             .acceptor_handle
-            .append(ProtoWalProposal {
-                op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+            .append(ProtoLogProposal {
+                op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                     key: key.to_string(),
                     expected,
                     new_seqno,
@@ -121,8 +121,8 @@ impl TestHarness {
 
 #[tokio::test(start_paused = true)]
 async fn test_cas_commit_and_reject() {
-    let wal = Arc::new(SimStorage::new());
-    let h = TestHarness::new(wal);
+    let log = Arc::new(SimStorage::new());
+    let h = TestHarness::new(log);
 
     // First CAS on empty key → committed.
     assert!(h.cas("s0", None, 1, b"hello").await);
@@ -136,8 +136,8 @@ async fn test_cas_commit_and_reject() {
 
 #[tokio::test(start_paused = true)]
 async fn test_head_read() {
-    let wal = Arc::new(SimStorage::new());
-    let h = TestHarness::new(wal);
+    let log = Arc::new(SimStorage::new());
+    let h = TestHarness::new(log);
 
     // Head on empty key → None.
     let resp = h.learner_handle.head("s0".into()).await.unwrap();
@@ -153,8 +153,8 @@ async fn test_head_read() {
 
 #[tokio::test(start_paused = true)]
 async fn test_scan() {
-    let wal = Arc::new(SimStorage::new());
-    let h = TestHarness::new(wal);
+    let log = Arc::new(SimStorage::new());
+    let h = TestHarness::new(log);
 
     assert!(h.cas("s0", None, 1, b"a").await);
     assert!(h.cas("s0", Some(1), 2, b"b").await);
@@ -173,8 +173,8 @@ async fn test_scan() {
 
 #[tokio::test(start_paused = true)]
 async fn test_truncate() {
-    let wal = Arc::new(SimStorage::new());
-    let h = TestHarness::new(wal);
+    let log = Arc::new(SimStorage::new());
+    let h = TestHarness::new(log);
 
     assert!(h.cas("s0", None, 1, b"a").await);
     assert!(h.cas("s0", Some(1), 2, b"b").await);
@@ -183,8 +183,8 @@ async fn test_truncate() {
     // Truncate entries < 2 (removes entry 1).
     let receipt = h
         .acceptor_handle
-        .append(ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Truncate(ProtoTruncateProposal {
+        .append(ProtoLogProposal {
+            op: Some(proto_log_proposal::Op::Truncate(ProtoTruncateProposal {
                 key: "s0".to_string(),
                 seqno: 2,
             })),
@@ -206,14 +206,14 @@ async fn test_truncate() {
 
 #[tokio::test(start_paused = true)]
 async fn test_truncate_errors() {
-    let wal = Arc::new(SimStorage::new());
-    let h = TestHarness::new(wal);
+    let log = Arc::new(SimStorage::new());
+    let h = TestHarness::new(log);
 
     // Truncate on nonexistent key → error.
     let receipt = h
         .acceptor_handle
-        .append(ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Truncate(ProtoTruncateProposal {
+        .append(ProtoLogProposal {
+            op: Some(proto_log_proposal::Op::Truncate(ProtoTruncateProposal {
                 key: "s0".to_string(),
                 seqno: 1,
             })),
@@ -232,8 +232,8 @@ async fn test_truncate_errors() {
     // Truncate with seqno > head → error.
     let receipt = h
         .acceptor_handle
-        .append(ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Truncate(ProtoTruncateProposal {
+        .append(ProtoLogProposal {
+            op: Some(proto_log_proposal::Op::Truncate(ProtoTruncateProposal {
                 key: "s0".to_string(),
                 seqno: 99,
             })),
@@ -249,30 +249,30 @@ async fn test_truncate_errors() {
 
 #[tokio::test(start_paused = true)]
 async fn test_batch_grouping() {
-    let wal = Arc::new(SimStorage::new());
-    let h = TestHarness::new(wal);
+    let log = Arc::new(SimStorage::new());
+    let h = TestHarness::new(log);
 
     // Submit 3 proposals concurrently — they all land in the same batch
     // because they enter the pending buffer before the flush timer fires.
     let (r0, r1, r2) = tokio::join!(
-        h.acceptor_handle.append(ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+        h.acceptor_handle.append(ProtoLogProposal {
+            op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                 key: "s0".to_string(),
                 expected: None,
                 new_seqno: 1,
                 data: b"a".to_vec(),
             })),
         }),
-        h.acceptor_handle.append(ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+        h.acceptor_handle.append(ProtoLogProposal {
+            op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                 key: "s1".to_string(),
                 expected: None,
                 new_seqno: 1,
                 data: b"b".to_vec(),
             })),
         }),
-        h.acceptor_handle.append(ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+        h.acceptor_handle.append(ProtoLogProposal {
+            op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                 key: "s0".to_string(),
                 expected: Some(1),
                 new_seqno: 2,
@@ -314,8 +314,8 @@ async fn test_batch_grouping() {
 
 #[tokio::test(start_paused = true)]
 async fn test_intra_batch_cas_chaining() {
-    let wal = Arc::new(SimStorage::new());
-    let h = TestHarness::new(wal);
+    let log = Arc::new(SimStorage::new());
+    let h = TestHarness::new(log);
 
     // Two CAS proposals in the same batch for the same shard.
     // The second one's expected matches the first's new_seqno.
@@ -323,16 +323,16 @@ async fn test_intra_batch_cas_chaining() {
     // second one should see the first one's result.
     // Submit concurrently so they land in the same batch.
     let (r0, r1) = tokio::join!(
-        h.acceptor_handle.append(ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+        h.acceptor_handle.append(ProtoLogProposal {
+            op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                 key: "s0".to_string(),
                 expected: None,
                 new_seqno: 1,
                 data: b"first".to_vec(),
             })),
         }),
-        h.acceptor_handle.append(ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+        h.acceptor_handle.append(ProtoLogProposal {
+            op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                 key: "s0".to_string(),
                 expected: Some(1),
                 new_seqno: 2,
@@ -363,8 +363,8 @@ async fn test_intra_batch_cas_chaining() {
 
 #[tokio::test(start_paused = true)]
 async fn test_list_keys() {
-    let wal = Arc::new(SimStorage::new());
-    let h = TestHarness::new(wal);
+    let log = Arc::new(SimStorage::new());
+    let h = TestHarness::new(log);
 
     assert!(h.cas("s0", None, 1, b"a").await);
     assert!(h.cas("s1", None, 1, b"b").await);
@@ -376,23 +376,23 @@ async fn test_list_keys() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn test_recovery_from_wal() {
-    let wal = Arc::new(SimStorage::new());
+async fn test_recovery_from_log() {
+    let log = Arc::new(SimStorage::new());
 
     // Write some data with the first harness.
     {
-        let h = TestHarness::new(Arc::clone(&wal));
+        let h = TestHarness::new(Arc::clone(&log));
         assert!(h.cas("s0", None, 1, b"a").await);
         assert!(h.cas("s0", Some(1), 2, b"b").await);
         assert!(h.cas("s1", None, 1, b"x").await);
     }
     // Harness dropped — acceptor + learner shut down.
 
-    // New harness recovers from the same WAL.
+    // New harness recovers from the same log.
     let (batch_tx, batch_rx) = tokio::sync::mpsc::channel(256);
     let (acceptor, acceptor_handle) = ActorAcceptor::new(
         test_acceptor_config(),
-        Arc::clone(&wal),
+        Arc::clone(&log),
         Some(batch_tx),
         test_acceptor_metrics(),
     );
@@ -400,7 +400,7 @@ async fn test_recovery_from_wal() {
 
     let (learner, learner_handle) = ActorLearner::new(
         test_learner_config(),
-        Arc::clone(&wal),
+        Arc::clone(&log),
         batch_rx,
         acceptor_handle.clone(),
         test_learner_metrics(),
@@ -420,8 +420,8 @@ async fn test_recovery_from_wal() {
 
     // New writes should work.
     let receipt = acceptor_handle
-        .append(ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+        .append(ProtoLogProposal {
+            op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                 key: "s0".to_string(),
                 expected: Some(2),
                 new_seqno: 3,

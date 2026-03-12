@@ -7,19 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! S3-backed storage for WAL batches and snapshots.
+//! S3-backed storage for log batches and snapshots.
 
 use std::collections::BTreeMap;
 
 use aws_sdk_s3::primitives::ByteStream;
 use prost::Message;
 
-use mz_persist::generated::consensus_service::{ProtoSnapshot, ProtoWalBatch};
+use mz_persist::generated::consensus_service::{ProtoSnapshot, ProtoLogBatch};
 
 use crate::ShardState;
 use crate::storage::{Storage, StorageError, serialize_snapshot};
 
-/// S3-backed storage for WAL batches and snapshots.
+/// S3-backed storage for log batches and snapshots.
 pub struct S3Storage {
     client: mz_aws_util::s3::Client,
     bucket: String,
@@ -43,8 +43,8 @@ impl S3Storage {
         }
     }
 
-    fn wal_key(&self, batch_number: u64) -> String {
-        format!("{}wal/{:020}", self.prefix, batch_number)
+    fn log_key(&self, batch_number: u64) -> String {
+        format!("{}log/{:020}", self.prefix, batch_number)
     }
 
     fn snapshot_key(&self) -> String {
@@ -54,8 +54,8 @@ impl S3Storage {
 
 #[async_trait::async_trait]
 impl Storage for S3Storage {
-    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), StorageError> {
-        let key = self.wal_key(batch.batch_number);
+    async fn write_batch(&self, batch: &ProtoLogBatch) -> Result<(), StorageError> {
+        let key = self.log_key(batch.batch_number);
         let body = batch.encode_to_vec();
         match self
             .client
@@ -77,7 +77,7 @@ impl Storage for S3Storage {
                     Err(StorageError::AlreadyExists)
                 } else {
                     Err(StorageError::Failed(anyhow::anyhow!(
-                        "S3 PUT wal/{}: {}",
+                        "S3 PUT log/{}: {}",
                         batch.batch_number,
                         service_err
                     )))
@@ -131,8 +131,8 @@ impl Storage for S3Storage {
         }
     }
 
-    async fn read_batch(&self, batch_number: u64) -> Result<Option<ProtoWalBatch>, anyhow::Error> {
-        let key = self.wal_key(batch_number);
+    async fn read_batch(&self, batch_number: u64) -> Result<Option<ProtoLogBatch>, anyhow::Error> {
+        let key = self.log_key(batch_number);
         match self
             .client
             .get_object()
@@ -143,7 +143,7 @@ impl Storage for S3Storage {
         {
             Ok(output) => {
                 let body = output.body.collect().await?.into_bytes();
-                let batch = ProtoWalBatch::decode(body)?;
+                let batch = ProtoLogBatch::decode(body)?;
                 Ok(Some(batch))
             }
             Err(e) => {
@@ -152,7 +152,7 @@ impl Storage for S3Storage {
                     Ok(None)
                 } else {
                     Err(anyhow::anyhow!(
-                        "S3 GET wal/{}: {}",
+                        "S3 GET log/{}: {}",
                         batch_number,
                         service_err
                     ))

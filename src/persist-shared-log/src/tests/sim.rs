@@ -11,9 +11,9 @@
 //!
 //! Two test harnesses:
 //!
-//! - **`sim_single`**: one acceptor + one learner, WAL as ground truth. Mixes
-//!   CAS, reads, truncates, faults, and crash/recovery. Checks WAL consistency
-//!   (every observed value exists in the WAL).
+//! - **`sim_single`**: one acceptor + one learner, log as ground truth. Mixes
+//!   CAS, reads, truncates, faults, and crash/recovery. Checks log consistency
+//!   (every observed value exists in the log).
 //! - **`sim_fuzz`**: fuzz-forever variant for overnight runs.
 //!
 //! Failures are reproduced by replaying the seed:
@@ -29,7 +29,7 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
 use mz_persist::generated::consensus_service::{
-    ProtoCasProposal, ProtoTruncateProposal, ProtoWalProposal, proto_wal_proposal,
+    ProtoCasProposal, ProtoTruncateProposal, ProtoLogProposal, proto_log_proposal,
 };
 
 use crate::acceptor::{AcceptorHandle, ActorAcceptor};
@@ -152,12 +152,12 @@ impl OpGenerator {
         }
     }
 
-    fn sync_from_wal(&mut self, wal: &SimStorage) {
+    fn sync_from_log(&mut self, wal: &SimStorage) {
         let batches = wal.batches_snapshot();
         self.shard_seqno.clear();
         for (_batch_num, batch) in &batches {
             for proposal in &batch.proposals {
-                if let Some(proto_wal_proposal::Op::Cas(cas)) = &proposal.op {
+                if let Some(proto_log_proposal::Op::Cas(cas)) = &proposal.op {
                     let entry = self.shard_seqno.entry(cas.key.clone()).or_insert(0);
                     if cas.new_seqno > *entry {
                         *entry = cas.new_seqno;
@@ -178,12 +178,12 @@ impl OpGenerator {
 // ---------------------------------------------------------------------------
 
 /// Assert that a value observed via Head or Scan exists as a CAS proposal in
-/// some WAL batch.
-fn assert_value_in_wal(wal: &SimStorage, shard: &str, seqno: u64, data: &[u8], seed: u64) {
+/// some log batch.
+fn assert_value_in_log(wal: &SimStorage, shard: &str, seqno: u64, data: &[u8], seed: u64) {
     let batches = wal.batches_snapshot();
     for (_batch_num, batch) in &batches {
         for proposal in &batch.proposals {
-            if let Some(proto_wal_proposal::Op::Cas(cas)) = &proposal.op {
+            if let Some(proto_log_proposal::Op::Cas(cas)) = &proposal.op {
                 if cas.key == shard && cas.new_seqno == seqno && cas.data == data {
                     return;
                 }
@@ -191,8 +191,8 @@ fn assert_value_in_wal(wal: &SimStorage, shard: &str, seqno: u64, data: &[u8], s
         }
     }
     panic!(
-        "seed={}: WAL consistency violation: Head/Scan({}) returned seqno={} \
-         but this value does not exist in the WAL",
+        "seed={}: log consistency violation: Head/Scan({}) returned seqno={} \
+         but this value does not exist in the log",
         seed, shard, seqno,
     );
 }
@@ -246,19 +246,19 @@ struct Simulator {
     learner_handle: LearnerHandle,
     _acceptor_task: mz_ore::task::AbortOnDropHandle<()>,
     _learner_task: mz_ore::task::AbortOnDropHandle<()>,
-    wal: Arc<SimStorage>,
+    log: Arc<SimStorage>,
     linearizability: LinearizabilityChecker,
     seed: u64,
 }
 
 impl Simulator {
     fn new(seed: u64) -> Self {
-        let wal = Arc::new(SimStorage::new());
+        let log = Arc::new(SimStorage::new());
         let (batch_tx, batch_rx) = tokio::sync::mpsc::channel(256);
 
         let (acceptor, acceptor_handle) = ActorAcceptor::new(
             test_acceptor_config(),
-            Arc::clone(&wal),
+            Arc::clone(&log),
             Some(batch_tx),
             test_acceptor_metrics(),
         );
@@ -266,7 +266,7 @@ impl Simulator {
 
         let (learner, learner_handle) = ActorLearner::new(
             test_learner_config(),
-            Arc::clone(&wal),
+            Arc::clone(&log),
             batch_rx,
             acceptor_handle.clone(),
             test_learner_metrics(),
@@ -278,7 +278,7 @@ impl Simulator {
             learner_handle,
             _acceptor_task: acceptor_task,
             _learner_task: learner_task,
-            wal,
+            log,
             linearizability: LinearizabilityChecker::new(seed),
             seed,
         }
@@ -295,8 +295,8 @@ impl Simulator {
                 // Blind append — don't await result (batched with next flush).
                 let _receipt = self
                     .acceptor_handle
-                    .append(ProtoWalProposal {
-                        op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+                    .append(ProtoLogProposal {
+                        op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                             key: shard,
                             expected,
                             new_seqno: seqno,
@@ -309,7 +309,7 @@ impl Simulator {
             SimOp::Head { shard } => {
                 let resp = self.learner_handle.head(shard.clone()).await.unwrap();
                 if let Some(data) = &resp.data {
-                    assert_value_in_wal(&self.wal, &shard, data.seqno, &data.data, self.seed);
+                    assert_value_in_log(&self.log, &shard, data.seqno, &data.data, self.seed);
                     self.linearizability.observe_head(&shard, data.seqno);
                 }
             }
@@ -320,15 +320,15 @@ impl Simulator {
                     .await
                     .unwrap();
                 for entry in &resp.data {
-                    assert_value_in_wal(&self.wal, &shard, entry.seqno, &entry.data, self.seed);
+                    assert_value_in_log(&self.log, &shard, entry.seqno, &entry.data, self.seed);
                 }
             }
             SimOp::Truncate { shard, seqno } => {
                 // Blind append — truncate errors are expected and ignored in sim.
                 let _receipt = self
                     .acceptor_handle
-                    .append(ProtoWalProposal {
-                        op: Some(proto_wal_proposal::Op::Truncate(ProtoTruncateProposal {
+                    .append(ProtoLogProposal {
+                        op: Some(proto_log_proposal::Op::Truncate(ProtoTruncateProposal {
                             key: shard,
                             seqno,
                         })),
@@ -340,7 +340,7 @@ impl Simulator {
                 self.acceptor_handle.flush().await.unwrap();
             }
             SimOp::InjectFault(fault) => {
-                self.wal.inject_fault(fault);
+                self.log.inject_fault(fault);
             }
             SimOp::CrashAndRecover => {
                 self.crash_and_recover(op_gen).await;
@@ -364,7 +364,7 @@ impl Simulator {
 
         let (acceptor, acceptor_handle) = ActorAcceptor::new(
             test_acceptor_config(),
-            Arc::clone(&self.wal),
+            Arc::clone(&self.log),
             Some(batch_tx),
             test_acceptor_metrics(),
         );
@@ -374,7 +374,7 @@ impl Simulator {
 
         let (learner, learner_handle) = ActorLearner::new(
             test_learner_config(),
-            Arc::clone(&self.wal),
+            Arc::clone(&self.log),
             batch_rx,
             self.acceptor_handle.clone(),
             test_learner_metrics(),
@@ -389,19 +389,19 @@ impl Simulator {
             .await
             .unwrap();
 
-        // Verify recovered state against WAL and seed the linearizability
+        // Verify recovered state against log and seed the linearizability
         // checker with the recovered high-water marks.
         self.linearizability.reset();
         let keys = self.learner_handle.list_keys().await.unwrap();
         for shard in &keys {
             let resp = self.learner_handle.head(shard.clone()).await.unwrap();
             if let Some(data) = &resp.data {
-                assert_value_in_wal(&self.wal, shard, data.seqno, &data.data, self.seed);
+                assert_value_in_log(&self.log, shard, data.seqno, &data.data, self.seed);
                 self.linearizability.observe_head(shard, data.seqno);
             }
         }
 
-        op_gen.sync_from_wal(&self.wal);
+        op_gen.sync_from_log(&self.log);
     }
 }
 
@@ -409,19 +409,19 @@ impl Simulator {
 // Multi-acceptor fencing helpers
 // ---------------------------------------------------------------------------
 
-/// Create N acceptors sharing a WAL and a single learner. All acceptors start
+/// Create N acceptors sharing a log and a single learner. All acceptors start
 /// at batch_number=0, modeling a split-brain / failover overlap scenario.
 struct MultiAcceptorHarness {
     acceptor_handles: Vec<AcceptorHandle>,
     learner_handle: LearnerHandle,
     _acceptor_tasks: Vec<mz_ore::task::AbortOnDropHandle<()>>,
     _learner_task: mz_ore::task::AbortOnDropHandle<()>,
-    wal: Arc<SimStorage>,
+    log: Arc<SimStorage>,
 }
 
 impl MultiAcceptorHarness {
     fn new(num_acceptors: usize) -> Self {
-        let wal = Arc::new(SimStorage::new());
+        let log = Arc::new(SimStorage::new());
         let (batch_tx, batch_rx) = tokio::sync::mpsc::channel(256);
 
         let mut acceptor_handles = Vec::new();
@@ -430,7 +430,7 @@ impl MultiAcceptorHarness {
         for _ in 0..num_acceptors {
             let (acceptor, handle) = ActorAcceptor::new(
                 test_acceptor_config(),
-                Arc::clone(&wal),
+                Arc::clone(&log),
                 Some(batch_tx.clone()),
                 test_acceptor_metrics(),
             );
@@ -443,7 +443,7 @@ impl MultiAcceptorHarness {
         // Use the first acceptor's handle for read linearization.
         let (learner, learner_handle) = ActorLearner::new(
             test_learner_config(),
-            Arc::clone(&wal),
+            Arc::clone(&log),
             batch_rx,
             acceptor_handles[0].clone(),
             test_learner_metrics(),
@@ -455,7 +455,7 @@ impl MultiAcceptorHarness {
             learner_handle,
             _acceptor_tasks: acceptor_tasks,
             _learner_task: learner_task,
-            wal,
+            log,
         }
     }
 }
@@ -483,9 +483,9 @@ fn seed_range() -> std::ops::Range<u64> {
     }
 }
 
-/// Single acceptor + learner simulation. Mixes CAS, reads, truncates, WAL
-/// faults (transient + ambiguous), and crash/recovery. Checks WAL consistency
-/// (every observed value exists in the WAL).
+/// Single acceptor + learner simulation. Mixes CAS, reads, truncates, log
+/// faults (transient + ambiguous), and crash/recovery. Checks log consistency
+/// (every observed value exists in the log).
 #[tokio::test(start_paused = true)]
 async fn sim_single() {
     for seed in seed_range() {
@@ -499,10 +499,10 @@ async fn sim_single() {
     }
 }
 
-/// Tests the fencing invariant: when multiple acceptors race on the same WAL,
+/// Tests the fencing invariant: when multiple acceptors race on the same log,
 /// the first to flush wins and all others are fenced. Fenced acceptors return
 /// errors to their callers and shut down. The surviving acceptor continues
-/// writing, and the WAL remains consistent.
+/// writing, and the log remains consistent.
 #[tokio::test(start_paused = true)]
 async fn sim_multi_acceptor_fencing() {
     for seed in seed_range() {
@@ -513,8 +513,8 @@ async fn sim_multi_acceptor_fencing() {
         // batch slot 0 (with start_paused, the flush timer auto-fires while
         // we await the receipt).
         let receipt = h.acceptor_handles[0]
-            .append(ProtoWalProposal {
-                op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+            .append(ProtoLogProposal {
+                op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                     key: "s0".to_string(),
                     expected: None,
                     new_seqno: 1,
@@ -540,8 +540,8 @@ async fn sim_multi_acceptor_fencing() {
         // matching batch → fenced.
         for i in 1..num_acceptors {
             let res = h.acceptor_handles[i]
-                .append(ProtoWalProposal {
-                    op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+                .append(ProtoLogProposal {
+                    op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                         key: format!("s{}", i),
                         expected: None,
                         new_seqno: 1,
@@ -560,8 +560,8 @@ async fn sim_multi_acceptor_fencing() {
 
         // The surviving acceptor can continue writing.
         let receipt = h.acceptor_handles[0]
-            .append(ProtoWalProposal {
-                op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+            .append(ProtoLogProposal {
+                op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                     key: "s0".to_string(),
                     expected: Some(1),
                     new_seqno: 2,
@@ -582,23 +582,23 @@ async fn sim_multi_acceptor_fencing() {
             seed
         );
 
-        // Verify WAL consistency: every learner-visible value exists in WAL.
+        // Verify log consistency: every learner-visible value exists in log.
         let keys = h.learner_handle.list_keys().await.unwrap();
         for shard in &keys {
             let resp = h.learner_handle.head(shard.clone()).await.unwrap();
             if let Some(data) = &resp.data {
-                assert_value_in_wal(&h.wal, shard, data.seqno, &data.data, seed);
+                assert_value_in_log(&h.log, shard, data.seqno, &data.data, seed);
             }
         }
 
-        // Fenced acceptors' proposals should NOT be in the WAL.
-        let batches = h.wal.batches_snapshot();
+        // Fenced acceptors' proposals should NOT be in the log.
+        let batches = h.log.batches_snapshot();
         for (_batch_num, batch) in &batches {
             for proposal in &batch.proposals {
-                if let Some(proto_wal_proposal::Op::Cas(cas)) = &proposal.op {
+                if let Some(proto_log_proposal::Op::Cas(cas)) = &proposal.op {
                     assert!(
                         !cas.data.starts_with(b"from-fenced-"),
-                        "seed={}: fenced acceptor's proposal should not be in WAL",
+                        "seed={}: fenced acceptor's proposal should not be in log",
                         seed,
                     );
                 }

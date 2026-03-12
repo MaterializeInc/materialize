@@ -9,7 +9,7 @@
 
 //! The acceptor: blind group commit.
 //!
-//! Receives proposals (CAS and truncate), batches them, and flushes to the WAL
+//! Receives proposals (CAS and truncate), batches them, and flushes to the log
 //! on a timer. Returns receipts identifying each proposal's position in the
 //! log. Does not evaluate CAS — proposals are appended unconditionally.
 //!
@@ -27,7 +27,7 @@ use mz_ore::cast::{CastFrom, CastLossy};
 use prost::Message;
 
 use mz_persist::generated::consensus_service::{
-    ProtoAppendResponse, ProtoWalBatch, ProtoWalProposal,
+    ProtoAppendResponse, ProtoLogBatch, ProtoLogProposal,
 };
 
 use crate::metrics::AcceptorMetrics;
@@ -38,7 +38,7 @@ use crate::storage::{Storage, StorageError};
 pub struct AcceptorConfig {
     /// Depth of the command channel (mpsc queue).
     pub queue_depth: usize,
-    /// How often to flush pending proposals to the WAL, in milliseconds.
+    /// How often to flush pending proposals to the log, in milliseconds.
     pub flush_interval_ms: u64,
 }
 
@@ -77,7 +77,7 @@ const NO_BATCH_COMMITTED: u64 = u64::MAX;
 
 /// Shared atomic for the latest committed batch number. Readable by the
 /// learner without going through the acceptor's command channel, so
-/// linearization queries don't block behind WAL writes.
+/// linearization queries don't block behind log writes.
 #[derive(Debug, Clone)]
 pub struct LastCommitted(Arc<AtomicU64>);
 
@@ -112,7 +112,7 @@ pub enum AcceptorCommand {
     /// Append a proposal to the next batch. Reply is sent after flush with a
     /// receipt containing (batch_number, position).
     Append {
-        proposal: ProtoWalProposal,
+        proposal: ProtoLogProposal,
         reply: oneshot::Sender<Result<ProtoAppendResponse, String>>,
     },
     /// Set the starting batch number (called after learner recovery).
@@ -143,7 +143,7 @@ impl AcceptorHandle {
     }
 
     /// Read the latest committed batch number. This is a lock-free atomic
-    /// read — it never blocks behind WAL writes or flushes.
+    /// read — it never blocks behind log writes or flushes.
     pub fn latest_committed_batch(&self) -> Option<u64> {
         self.last_committed.get()
     }
@@ -174,7 +174,7 @@ impl AcceptorHandle {
 impl crate::traits::Acceptor for AcceptorHandle {
     async fn append(
         &self,
-        proposal: ProtoWalProposal,
+        proposal: ProtoLogProposal,
     ) -> Result<ProtoAppendResponse, AcceptorError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
@@ -197,14 +197,14 @@ impl crate::traits::Acceptor for AcceptorHandle {
 
 /// A pending proposal waiting for the next flush.
 struct PendingAppend {
-    proposal: ProtoWalProposal,
+    proposal: ProtoLogProposal,
     reply: oneshot::Sender<Result<ProtoAppendResponse, String>>,
     received_at: std::time::Instant,
 }
 
 /// The acceptor actor: blind group commit.
 ///
-/// Receives proposals, batches them, flushes to the WAL, and returns receipts.
+/// Receives proposals, batches them, flushes to the log, and returns receipts.
 /// Does not evaluate CAS or maintain shard state.
 pub struct ActorAcceptor<W: Storage> {
     storage: W,
@@ -214,8 +214,8 @@ pub struct ActorAcceptor<W: Storage> {
     metrics: AcceptorMetrics,
     rx: mpsc::Receiver<AcceptorCommand>,
     /// Optional push channel to learner(s). Carries batch data only — no
-    /// client context. The learner can also read batches from the WAL.
-    learner_push_tx: Option<mpsc::Sender<ProtoWalBatch>>,
+    /// client context. The learner can also read batches from the log.
+    learner_push_tx: Option<mpsc::Sender<ProtoLogBatch>>,
     /// Shared atomic for the latest committed batch number. Updated after
     /// each successful flush; readable by learners via [`AcceptorHandle`].
     last_committed: LastCommitted,
@@ -226,7 +226,7 @@ impl<W: Storage> ActorAcceptor<W> {
     pub fn new(
         config: AcceptorConfig,
         storage: W,
-        learner_push_tx: Option<mpsc::Sender<ProtoWalBatch>>,
+        learner_push_tx: Option<mpsc::Sender<ProtoLogBatch>>,
         metrics: AcceptorMetrics,
     ) -> (Self, AcceptorHandle) {
         let mut flush_interval =
@@ -273,7 +273,7 @@ impl<W: Storage> ActorAcceptor<W> {
                     Some(AcceptorCommand::SetBatchNumber { batch_number, reply }) => {
                         self.batch_number = batch_number;
                         // Everything before batch_number was committed by a
-                        // prior incarnation (recovered from WAL).
+                        // prior incarnation (recovered from log).
                         self.last_committed.set_from_recovery(batch_number);
                         info!(batch_number, "acceptor batch number set");
                         let _ = reply.send(());
@@ -308,7 +308,7 @@ impl<W: Storage> ActorAcceptor<W> {
         }
     }
 
-    /// Flush pending proposals to the WAL.
+    /// Flush pending proposals to the log.
     ///
     /// Returns `true` on success, `false` if this acceptor was **fenced** by a
     /// competing writer (another acceptor wrote to the same batch slot). On
@@ -339,13 +339,13 @@ impl<W: Storage> ActorAcceptor<W> {
         // Split proposals from reply senders — avoids cloning proposal data.
         let (proposals, replies): (Vec<_>, Vec<_>) =
             pending.into_iter().map(|p| (p.proposal, p.reply)).unzip();
-        let batch = ProtoWalBatch {
+        let batch = ProtoLogBatch {
             batch_number: self.batch_number,
             proposals,
         };
         let batch_bytes = batch.encoded_len();
 
-        // Write WAL entry (the commit point). Retry indefinitely with
+        // Write log entry (the commit point). Retry indefinitely with
         // exponential backoff — only Ok and AlreadyExists are definite.
         let store_start = std::time::Instant::now();
         let mut attempt = 0u64;
@@ -374,7 +374,7 @@ impl<W: Storage> ActorAcceptor<W> {
                     } else {
                         // Fenced: a different acceptor owns this batch slot.
                         // This acceptor must not continue writing — it would
-                        // corrupt the WAL total order. Error all pending
+                        // corrupt the log total order. Error all pending
                         // callers and signal the run loop to shut down.
                         error!(
                             batch = self.batch_number,
@@ -393,7 +393,7 @@ impl<W: Storage> ActorAcceptor<W> {
                 Err(StorageError::Failed(e)) => {
                     warn!(
                         batch = self.batch_number,
-                        attempt, "WAL write failed: {}, retrying in {:?}", e, backoff
+                        attempt, "log write failed: {}, retrying in {:?}", e, backoff
                     );
                     self.metrics.object_store_write_retries.inc();
                     tokio::time::sleep(backoff).await;
@@ -405,11 +405,11 @@ impl<W: Storage> ActorAcceptor<W> {
 
         // Update metrics.
         self.metrics
-            .object_store_wal_write_latency_seconds
+            .object_store_log_write_latency_seconds
             .observe(store_start.elapsed().as_secs_f64());
-        self.metrics.object_store_wal_writes.inc();
+        self.metrics.object_store_log_writes.inc();
         self.metrics
-            .object_store_wal_write_bytes
+            .object_store_log_write_bytes
             .inc_by(u64::cast_from(batch_bytes));
         self.metrics.flush_count.inc();
         self.metrics
@@ -422,7 +422,7 @@ impl<W: Storage> ActorAcceptor<W> {
         // Push batch data to learner (performance optimization).
         if let Some(tx) = &self.learner_push_tx {
             // try_send: don't block the acceptor if the learner is slow.
-            // The learner can always read from the WAL as fallback.
+            // The learner can also read from the log as fallback.
             let _ = tx.try_send(batch);
         }
 
@@ -445,7 +445,7 @@ impl<W: Storage + Send + Sync + 'static> ActorAcceptor<W> {
     pub fn spawn(
         config: AcceptorConfig,
         storage: W,
-        learner_push_tx: Option<mpsc::Sender<ProtoWalBatch>>,
+        learner_push_tx: Option<mpsc::Sender<ProtoLogBatch>>,
         metrics: AcceptorMetrics,
     ) -> (AcceptorHandle, mz_ore::task::JoinHandle<()>) {
         let (acceptor, handle) = Self::new(config, storage, learner_push_tx, metrics);

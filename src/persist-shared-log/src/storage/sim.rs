@@ -11,14 +11,14 @@
 
 use std::collections::BTreeMap;
 
-use mz_persist::generated::consensus_service::{ProtoSnapshot, ProtoWalBatch};
+use mz_persist::generated::consensus_service::{ProtoSnapshot, ProtoLogBatch};
 
 use super::{Storage, StorageError, serialize_snapshot};
 use crate::ShardState;
 
 /// A recording storage backend for testing that records calls.
 pub struct RecordingStorage {
-    pub batches: std::sync::Mutex<Vec<ProtoWalBatch>>,
+    pub batches: std::sync::Mutex<Vec<ProtoLogBatch>>,
     pub snapshots: std::sync::Mutex<Vec<(BTreeMap<String, ShardState>, u64)>>,
 }
 
@@ -33,7 +33,7 @@ impl RecordingStorage {
 
 #[async_trait::async_trait]
 impl Storage for RecordingStorage {
-    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), StorageError> {
+    async fn write_batch(&self, batch: &ProtoLogBatch) -> Result<(), StorageError> {
         self.batches.lock().unwrap().push(batch.clone());
         Ok(())
     }
@@ -51,7 +51,7 @@ impl Storage for RecordingStorage {
     async fn read_snapshot(&self) -> Result<Option<ProtoSnapshot>, anyhow::Error> {
         Ok(None)
     }
-    async fn read_batch(&self, _batch_number: u64) -> Result<Option<ProtoWalBatch>, anyhow::Error> {
+    async fn read_batch(&self, _batch_number: u64) -> Result<Option<ProtoLogBatch>, anyhow::Error> {
         Ok(None)
     }
 }
@@ -72,7 +72,7 @@ pub enum SimWriteFault {
 /// `AlreadyExists` if the batch number already exists in the store.
 /// Faults are consumed FIFO from the `faults` queue.
 pub struct SimStorage {
-    batches: std::sync::Mutex<BTreeMap<u64, ProtoWalBatch>>,
+    batches: std::sync::Mutex<BTreeMap<u64, ProtoLogBatch>>,
     snapshot: std::sync::Mutex<Option<ProtoSnapshot>>,
     pub faults: std::sync::Mutex<std::collections::VecDeque<SimWriteFault>>,
 }
@@ -92,7 +92,7 @@ impl SimStorage {
     }
 
     /// Returns a clone of all stored batches (for recovery testing).
-    pub fn batches_snapshot(&self) -> BTreeMap<u64, ProtoWalBatch> {
+    pub fn batches_snapshot(&self) -> BTreeMap<u64, ProtoLogBatch> {
         self.batches.lock().unwrap().clone()
     }
 
@@ -102,7 +102,7 @@ impl SimStorage {
     }
 
     /// Directly insert a batch (bypasses fault injection). For recovery tests.
-    pub fn write_batch_direct(&self, batch_number: u64, batch: ProtoWalBatch) {
+    pub fn write_batch_direct(&self, batch_number: u64, batch: ProtoLogBatch) {
         self.batches.lock().unwrap().insert(batch_number, batch);
     }
 
@@ -114,7 +114,7 @@ impl SimStorage {
 
 #[async_trait::async_trait]
 impl Storage for SimStorage {
-    async fn write_batch(&self, batch: &ProtoWalBatch) -> Result<(), StorageError> {
+    async fn write_batch(&self, batch: &ProtoLogBatch) -> Result<(), StorageError> {
         // Simulate object store latency. With `start_paused = true`, this costs zero
         // wall-clock time but creates a yield point that exercises
         // `serve_reads_until` in the actor's flush path.
@@ -168,7 +168,7 @@ impl Storage for SimStorage {
         Ok(self.snapshot.lock().unwrap().clone())
     }
 
-    async fn read_batch(&self, batch_number: u64) -> Result<Option<ProtoWalBatch>, anyhow::Error> {
+    async fn read_batch(&self, batch_number: u64) -> Result<Option<ProtoLogBatch>, anyhow::Error> {
         Ok(self.batches.lock().unwrap().get(&batch_number).cloned())
     }
 }

@@ -14,7 +14,7 @@ package mz_persist.gen.consensus_service;
 // --- gRPC Services ---
 
 // Acceptor: blind group commit. Receives proposals, batches them, flushes to
-// the WAL. Returns receipts identifying each proposal's position in the log.
+// the log. Returns receipts identifying each proposal's position in the log.
 // Does not evaluate CAS — proposals are appended unconditionally.
 service ConsensusAcceptor {
   // Append a proposal to the shared log. Blocks until the group commit flush
@@ -54,7 +54,7 @@ service PersistSharedLog {
 // --- Acceptor request/response messages ---
 
 message ProtoAppendRequest {
-  ProtoWalProposal proposal = 1;
+  ProtoLogProposal proposal = 1;
 }
 
 message ProtoAppendResponse {
@@ -126,7 +126,7 @@ message ProtoListKeysResponse {
   string key = 1;
 }
 
-// --- WAL serialization (proposal-based, blind writes) ---
+// --- Log serialization (proposal-based, blind writes) ---
 
 // A CAS proposal as appended to the shared log. Contains the full CAS
 // precondition (expected seqno) so the learner can evaluate it during playback.
@@ -145,16 +145,16 @@ message ProtoTruncateProposal {
   uint64 seqno = 2;
 }
 
-message ProtoWalProposal {
+message ProtoLogProposal {
   oneof op {
     ProtoCasProposal cas = 1;
     ProtoTruncateProposal truncate = 2;
   }
 }
 
-message ProtoWalBatch {
+message ProtoLogBatch {
   uint64 batch_number = 1;
-  repeated ProtoWalProposal proposals = 2;
+  repeated ProtoLogProposal proposals = 2;
 }
 
 // --- Snapshot serialization ---

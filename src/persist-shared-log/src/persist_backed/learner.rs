@@ -31,6 +31,7 @@
 //! channel. The select loop only polls `event_rx.recv()`, which is cancel-safe.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use prost::Message;
@@ -41,12 +42,14 @@ use tracing::{debug, warn};
 use mz_ore::cast::CastFrom;
 use mz_persist::generated::consensus_service::{
     ProtoCompareAndSetResponse, ProtoHeadResponse, ProtoScanResponse, ProtoTruncateResponse,
-    ProtoVersionedData, ProtoWalProposal, proto_wal_proposal,
+    ProtoVersionedData, ProtoLogProposal, proto_log_proposal,
 };
 use mz_persist_client::read::{Listen, ListenEvent};
 use mz_persist_client::write::WriteHandle;
+use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+use mz_persist_types::codec_impls::UnitSchema;
 
-use super::ConsensusProposal;
+use super::{ConsensusProposal, ConsensusProposalSchema};
 use crate::learner::LearnerError;
 use crate::{ShardState, VersionedEntry};
 
@@ -419,7 +422,7 @@ fn spawn_listen_task(
 /// Reads are linearized via the "bus-stand" pattern: `fetch_recent_upper()` runs
 /// continuously, and all reads that arrive while it's in flight share the same
 /// linearization target.
-pub struct PersistLearnerActor {
+pub struct PersistLearner {
     state: StateMachine,
 
     // --- Result cache ---
@@ -453,7 +456,7 @@ pub struct PersistLearnerActor {
     linearizing_reads: Vec<LinearizingRead>,
 }
 
-impl PersistLearnerActor {
+impl PersistLearner {
     /// Creates a new persist-backed learner and returns a handle.
     ///
     /// Spawns a dedicated listen task that feeds events through a channel,
@@ -469,7 +472,7 @@ impl PersistLearnerActor {
 
         let listen_task = spawn_listen_task(listen, event_tx);
 
-        let learner = PersistLearnerActor {
+        let learner = PersistLearner {
             state: StateMachine::new(),
             results: BTreeMap::new(),
             result_waiters: BTreeMap::new(),
@@ -505,7 +508,9 @@ impl PersistLearnerActor {
                     }
                 }
                 // cancel-safety: stale upper on cancel just delays linearization
-                upper = self.upper_handle.fetch_recent_upper() => {
+                // Guard: only fetch when reads are waiting for a linearization target,
+                // otherwise this branch completes immediately and busy-spins.
+                upper = self.upper_handle.fetch_recent_upper(), if !self.pending_reads.is_empty() => {
                     let upper = upper.clone();
                     self.assign_linearization_target(upper);
                     self.wake_linearizing_reads();
@@ -560,13 +565,13 @@ impl PersistLearnerActor {
         let mut batch_results = Vec::with_capacity(num_proposals);
 
         for proposal_data in proposals {
-            match ProtoWalProposal::decode(proposal_data.encoded.as_slice()) {
+            match ProtoLogProposal::decode(proposal_data.encoded.as_slice()) {
                 Ok(proposal) => match proposal.op {
-                    Some(proto_wal_proposal::Op::Cas(cas)) => {
+                    Some(proto_log_proposal::Op::Cas(cas)) => {
                         let result = self.state.apply_cas(cas);
                         batch_results.push(ProposalResult::Cas(result));
                     }
-                    Some(proto_wal_proposal::Op::Truncate(trunc)) => {
+                    Some(proto_log_proposal::Op::Truncate(trunc)) => {
                         let result = self.state.apply_truncate(&trunc);
                         batch_results.push(ProposalResult::Truncate(result));
                     }
@@ -759,13 +764,36 @@ impl PersistLearnerActor {
     }
 }
 
-impl PersistLearnerActor {
-    /// Spawns the learner as a tokio task on the current runtime.
-    pub fn spawn(
+impl PersistLearner {
+    /// Opens a persist shard and spawns the learner as a tokio task.
+    ///
+    /// Handles shard subscription and upper-handle creation internally —
+    /// callers only need to provide a `PersistClient` and `ShardId`.
+    pub async fn spawn(
         config: PersistLearnerConfig,
-        listen: Listen<ConsensusProposal, (), u64, i64>,
-        upper_handle: WriteHandle<ConsensusProposal, (), u64, i64>,
+        client: &PersistClient,
+        shard_id: ShardId,
     ) -> (PersistLearnerHandle, mz_ore::task::JoinHandle<()>) {
+        let key_schema = Arc::new(ConsensusProposalSchema);
+        let val_schema = Arc::new(UnitSchema);
+
+        let (upper_handle, read) = client
+            .open::<ConsensusProposal, (), u64, i64>(
+                shard_id,
+                key_schema,
+                val_schema,
+                Diagnostics::from_purpose("persist-shared-log-learner"),
+                false,
+            )
+            .await
+            .expect("failed to open persist shard for learner");
+
+        let since = read.since().clone();
+        let listen = read
+            .listen(since)
+            .await
+            .expect("listen should succeed");
+
         let (learner, handle) = Self::new(config, listen, upper_handle);
         let task = mz_ore::task::spawn(|| "persist-learner", learner.run());
         (handle, task)

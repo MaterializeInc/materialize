@@ -9,7 +9,7 @@
 
 //! Persist-shard-backed acceptor and learner.
 //!
-//! Replaces the WAL+S3 storage layer with a persist shard. The `WriteHandle`
+//! Replaces the log+S3 storage layer with a persist shard. The `WriteHandle`
 //! drives the acceptor (blind writes); the `ReadHandle`/`Subscribe` drives the
 //! learner (CAS evaluation + reads). Data lives in differential format.
 //!
@@ -32,11 +32,11 @@ use mz_persist_types::stats::NoneStats;
 
 /// A consensus proposal stored as the key in a persist shard.
 ///
-/// Wraps serialized `ProtoWalProposal` protobuf bytes. Each proposal is stored
+/// Wraps serialized `ProtoLogProposal` protobuf bytes. Each proposal is stored
 /// as a single row in the persist shard at timestamp T (the batch number).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ConsensusProposal {
-    /// Serialized ProtoWalProposal (protobuf bytes).
+    /// Serialized ProtoLogProposal (protobuf bytes).
     pub encoded: Vec<u8>,
 }
 
