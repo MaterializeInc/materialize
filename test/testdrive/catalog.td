@@ -519,7 +519,6 @@ mz_cluster_replicas            ""
 mz_cluster_replica_sizes       ""
 mz_columns                     ""
 mz_connections                 ""
-mz_databases                   ""
 mz_default_privileges          ""
 mz_egress_ips                  ""
 mz_functions                   ""
@@ -557,6 +556,11 @@ mz_recent_storage_usage    ""
 mz_storage_usage           ""
 mz_timezone_abbreviations  ""
 mz_timezone_names          ""
+
+> SHOW MATERIALIZED VIEWS FROM mz_catalog
+name                cluster             comment
+------------------------------------------------
+mz_databases        mz_catalog_server   ""
 
 # Check default sources, tables, and views in mz_catalog_unstable.
 
@@ -807,7 +811,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-65
+64
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

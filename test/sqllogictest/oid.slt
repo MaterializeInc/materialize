@@ -1176,3 +1176,5 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17066  mz_mcp_data_products
 17067  mz_catalog_raw
 17068  mz_cluster_prometheus_metrics
+17069  parse_catalog_id
+17070  parse_catalog_privileges
