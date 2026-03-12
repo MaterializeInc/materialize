@@ -9,7 +9,7 @@
 
 """
 Run SQLancer++ against Materialize: Automated testing to find logic bugs in
-database systems: https://github.com/def-/sqlancerplusplus
+database systems: https://github.com/MaterializeInc/SQLancerPlusPlus
 """
 
 import argparse

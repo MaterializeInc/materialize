@@ -9,10 +9,6 @@
 
 """
 Shared code for running SQLancer and SQLancer++ against Materialize.
-
-SQLancer is an automated testing tool to find logic bugs in database systems:
-- SQLancer: https://github.com/sqlancer/sqlancer
-- SQLancer++: https://github.com/def-/sqlancerplusplus
 """
 
 import argparse
