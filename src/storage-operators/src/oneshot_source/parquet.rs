@@ -19,6 +19,7 @@ use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_repr::RelationDesc;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::async_reader::{AsyncFileReader, MetadataFetch};
@@ -251,21 +252,12 @@ impl<'de> Deserialize<'de> for ParquetRowGroup {
         D: serde::Deserializer<'de>,
     {
         let bytes = <Vec<u8>>::deserialize(deserializer)?;
-        let mut reader = arrow_ipc::reader::StreamReader::try_new(bytes.as_slice(), None)
+        let reader = arrow_ipc::reader::StreamReader::try_new(bytes.as_slice(), None)
             .map_err(serde::de::Error::custom)?;
+
         let record_batch = reader
-            .next()
-            .transpose()
-            .map_err(serde::de::Error::custom)?
-            .ok_or_else(|| serde::de::Error::custom("no record batch found in IPC stream"))?;
-        assert!(
-            reader
-                .next()
-                .transpose()
-                .map_err(serde::de::Error::custom)?
-                .is_none(),
-            "expected exactly one record batch in IPC stream"
-        );
+            .expect_element(|| "expected exactly one record batch in IPC stream")
+            .map_err(serde::de::Error::custom)?;
 
         Ok(ParquetRowGroup { record_batch })
     }
