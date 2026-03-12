@@ -199,8 +199,7 @@ fn try_fold_into_case_literal(expr: &mut MirScalarExpr) {
 /// Chain-walk rule: if node is an If-chain with >= 2 consecutive arms matching
 /// `Eq(same_expr, literal)`, create a new CaseLiteral.
 fn try_create_case_literal(expr: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
-    let arm_count = count_if_chain_arms(expr);
-    if arm_count < 2 {
+    if !has_at_least_two_arms(expr) {
         return;
     }
 
@@ -246,8 +245,9 @@ fn try_create_case_literal(expr: &mut MirScalarExpr, column_types: &[ReprColumnT
     };
 }
 
-/// Counts matching If-chain arms without modifying the expression.
-fn count_if_chain_arms(expr: &MirScalarExpr) -> usize {
+/// Returns `true` if the If-chain has at least 2 arms matching `Eq(same_expr, literal)`.
+/// Bails early once 2 are found to avoid unnecessary traversal.
+fn has_at_least_two_arms(expr: &MirScalarExpr) -> bool {
     let mut count = 0;
     let mut common_candidate: Option<&MirScalarExpr> = None;
     let mut current = expr;
@@ -267,6 +267,9 @@ fn count_if_chain_arms(expr: &MirScalarExpr) -> usize {
                         }
                     }
                     count += 1;
+                    if count >= 2 {
+                        return true;
+                    }
                     current = els;
                 } else {
                     break;
@@ -276,7 +279,7 @@ fn count_if_chain_arms(expr: &MirScalarExpr) -> usize {
         }
     }
 
-    count
+    false
 }
 
 /// Inspects an `Eq(expr, literal)` condition and returns references to the
@@ -292,24 +295,14 @@ fn peek_eq_literal(cond: &MirScalarExpr) -> Option<(&MirScalarExpr, &Row)> {
         return None;
     };
 
-    if let Some(row) = peek_non_null_literal(expr1) {
+    if let Some(row) = expr1.as_literal_non_null_row() {
         if !expr2.is_literal() {
             return Some((expr2.as_ref(), row));
         }
     }
-    if let Some(row) = peek_non_null_literal(expr2) {
+    if let Some(row) = expr2.as_literal_non_null_row() {
         if !expr1.is_literal() {
             return Some((expr1.as_ref(), row));
-        }
-    }
-    None
-}
-
-/// Returns a reference to the `Row` if the expression is a non-NULL `Ok` literal.
-fn peek_non_null_literal(expr: &MirScalarExpr) -> Option<&Row> {
-    if let MirScalarExpr::Literal(Ok(row), _) = expr {
-        if !row.unpack_first().is_null() {
-            return Some(row);
         }
     }
     None
@@ -368,36 +361,17 @@ fn collect_if_chain_arms(
 #[cfg(test)]
 mod tests {
     use mz_expr::func::Eq;
-    use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr, VariadicFunc};
+    use mz_expr::{MirRelationExpr, MirScalarExpr, VariadicFunc};
     use mz_repr::{Datum, ReprColumnType, ReprRelationType, ReprScalarType};
 
     use super::*;
-
-    /// Helper: build `Eq(lhs, rhs)` as a `MirScalarExpr`.
-    fn eq(lhs: MirScalarExpr, rhs: MirScalarExpr) -> MirScalarExpr {
-        MirScalarExpr::CallBinary {
-            func: BinaryFunc::Eq(Eq),
-            expr1: Box::new(lhs),
-            expr2: Box::new(rhs),
-        }
-    }
-
-    /// Helper: build `If(cond, then, els)`.
-    fn if_then_else(cond: MirScalarExpr, then: MirScalarExpr, els: MirScalarExpr) -> MirScalarExpr {
-        cond.if_then_else(then, els)
-    }
 
     /// Helper: build an i64 literal.
     fn lit_i64(v: i64) -> MirScalarExpr {
         MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int64)
     }
 
-    /// Column reference.
-    fn col(i: usize) -> MirScalarExpr {
-        MirScalarExpr::column(i)
-    }
-
-    /// Wrap a scalar expression in a `Map` over a `Get` to allow applying the transform.
+    /// Wrap a scalar expression in a `Map` over a constant to allow applying the transform.
     fn wrap_in_map(scalar: MirScalarExpr) -> MirRelationExpr {
         MirRelationExpr::Map {
             input: Box::new(MirRelationExpr::constant(
@@ -448,11 +422,14 @@ mod tests {
 
     // Build a CASE-like If-chain: CASE #0 WHEN 1 THEN 10 WHEN 2 THEN 20 ELSE 0 END
     fn build_2_arm_chain() -> MirScalarExpr {
-        if_then_else(
-            eq(col(0), lit_i64(1)),
-            lit_i64(10),
-            if_then_else(eq(col(0), lit_i64(2)), lit_i64(20), lit_i64(0)),
-        )
+        MirScalarExpr::column(0)
+            .call_binary(lit_i64(1), Eq)
+            .if_then_else(
+                lit_i64(10),
+                MirScalarExpr::column(0)
+                    .call_binary(lit_i64(2), Eq)
+                    .if_then_else(lit_i64(20), lit_i64(0)),
+            )
     }
 
     #[mz_ore::test]
@@ -463,15 +440,19 @@ mod tests {
         // Actually: extract_eq_literal skips NULL literals, so arm1 doesn't match,
         // and we get 0 arms → no conversion.
         let null_lit = MirScalarExpr::literal(Ok(Datum::Null), ReprScalarType::Int64);
-        let expr = if_then_else(
-            eq(col(0), null_lit),
-            lit_i64(10),
-            if_then_else(
-                eq(col(0), lit_i64(2)),
-                lit_i64(20),
-                if_then_else(eq(col(0), lit_i64(3)), lit_i64(30), lit_i64(0)),
-            ),
-        );
+        let expr = MirScalarExpr::column(0)
+            .call_binary(null_lit, Eq)
+            .if_then_else(
+                lit_i64(10),
+                MirScalarExpr::column(0)
+                    .call_binary(lit_i64(2), Eq)
+                    .if_then_else(
+                        lit_i64(20),
+                        MirScalarExpr::column(0)
+                            .call_binary(lit_i64(3), Eq)
+                            .if_then_else(lit_i64(30), lit_i64(0)),
+                    ),
+            );
         let result = apply_transform(expr);
         // The NULL arm breaks the chain at the top level. The inner 2 arms
         // (comparing #0 to 2 and 3) should still be converted.
@@ -486,6 +467,39 @@ mod tests {
             }
             other => panic!("expected If with CaseLiteral in els, got {other:?}"),
         }
+    }
+
+    #[mz_ore::test]
+    fn test_64_arm_chain() {
+        // Build a 64-arm If-chain and verify it converts to a single CaseLiteral.
+        let n = 64;
+        let mut expr = lit_i64(-1);
+        for i in (0..n).rev() {
+            expr = MirScalarExpr::column(0)
+                .call_binary(lit_i64(i), Eq)
+                .if_then_else(lit_i64(100 * i), expr);
+        }
+        let result = apply_transform(expr);
+        assert_case_literal(&result, n as usize);
+
+        // Spot-check evaluation.
+        let arena = mz_repr::RowArena::new();
+        assert_eq!(
+            result.eval(&[Datum::Int64(0)], &arena).unwrap(),
+            Datum::Int64(0)
+        );
+        assert_eq!(
+            result.eval(&[Datum::Int64(32)], &arena).unwrap(),
+            Datum::Int64(3200)
+        );
+        assert_eq!(
+            result.eval(&[Datum::Int64(63)], &arena).unwrap(),
+            Datum::Int64(6300)
+        );
+        assert_eq!(
+            result.eval(&[Datum::Int64(999)], &arena).unwrap(),
+            Datum::Int64(-1)
+        );
     }
 
     #[mz_ore::test]
