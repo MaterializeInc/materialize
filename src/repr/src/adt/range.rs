@@ -308,13 +308,11 @@ impl<D> Range<D> {
     }
 }
 
-/// Range implementations meant to work with `Range<Datum>` and `Range<DatumNested>`.
-impl<'a, B: Copy + Ord + PartialOrd + Display + Debug> Range<B>
-where
-    Datum<'a>: From<B>,
-{
+/// Range operations on `Range<Datum>` and `Range<DatumNested>`.
+impl<'a, B: Copy + Ord> Range<B> {
     pub fn contains_elem<T: RangeOps<'a>>(&self, elem: &T) -> bool
     where
+        Datum<'a>: From<B>,
         <T as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
     {
         match self.inner {
@@ -453,7 +451,10 @@ where
     // Function requires canonicalization so must be taken into `Range<Datum>`,
     // which can be taken back into `Range<DatumNested>` by the caller if need
     // be.
-    pub fn difference(&self, other: &Range<B>) -> Result<Range<Datum<'a>>, InvalidRangeError> {
+    pub fn difference(&self, other: &Range<B>) -> Result<Range<Datum<'a>>, InvalidRangeError>
+    where
+        Datum<'a>: From<B>,
+    {
         use std::cmp::Ordering::*;
 
         // Difference op does nothing if no overlap.
@@ -645,16 +646,14 @@ pub type RangeUpperBound<B> = RangeBound<B, true>;
 
 // Generic RangeBound implementations meant to work over `RangeBound<Datum,..>`
 // and `RangeBound<DatumNested,..>`.
-impl<'a, const UPPER: bool, B: Copy + Ord + PartialOrd + Display + Debug> RangeBound<B, UPPER>
-where
-    Datum<'a>: From<B>,
-{
+impl<'a, const UPPER: bool, B: Copy + Ord> RangeBound<B, UPPER> {
     /// Determines where `elem` lies in relation to the range bound.
     ///
     /// # Panics
     /// - If `self.bound.datum()` is not convertible to `T`.
     fn elem_cmp<T: RangeOps<'a>>(&self, elem: &T) -> Ordering
     where
+        Datum<'a>: From<B>,
         <T as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
     {
         match self.bound.map(|bound| <T>::unwrap_datum(bound.into())) {
@@ -667,6 +666,7 @@ where
     /// Does `elem` satisfy this bound?
     fn satisfied_by<T: RangeOps<'a>>(&self, elem: &T) -> bool
     where
+        Datum<'a>: From<B>,
         <T as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
     {
         match self.elem_cmp(elem) {
