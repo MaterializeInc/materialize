@@ -19,10 +19,11 @@ use mz_persist::generated::consensus_service::{
     ProtoCasProposal, ProtoTruncateProposal, ProtoLogProposal, proto_log_proposal,
 };
 
-use crate::acceptor::{AcceptorConfig, AcceptorHandle, ActorAcceptor};
-use crate::learner::{ActorLearner, LearnerConfig, LearnerHandle};
-use crate::metrics::{AcceptorMetrics, LearnerMetrics};
-use crate::storage::sim::SimStorage;
+use crate::actor::acceptor::{AcceptorHandle, ActorAcceptor};
+use crate::actor::learner::{ActorLearner, LearnerConfig, LearnerHandle};
+use crate::actor::metrics::{AcceptorMetrics, LearnerMetrics};
+use crate::actor::storage::sim::SimStorage;
+use crate::traits::AcceptorConfig;
 use crate::traits::Acceptor as _;
 
 fn test_acceptor_metrics() -> AcceptorMetrics {

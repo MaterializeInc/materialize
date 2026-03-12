@@ -19,13 +19,13 @@ use mz_persist_client::PersistClient;
 use mz_persist_types::ShardId;
 use mz_persist_types::codec_impls::UnitSchema;
 
-use crate::acceptor::AcceptorConfig;
+use crate::traits::AcceptorConfig;
+use crate::traits::Acceptor as _;
 use crate::persist_backed::{ConsensusProposal, ConsensusProposalSchema};
 use crate::persist_backed::acceptor::{PersistAcceptor, PersistAcceptorHandle};
 use crate::persist_backed::learner::{
     PersistLearner, PersistLearnerConfig, PersistLearnerHandle,
 };
-use crate::traits::Acceptor as _;
 
 // ---------------------------------------------------------------------------
 // Test harness

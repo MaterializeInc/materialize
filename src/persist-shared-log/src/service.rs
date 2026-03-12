@@ -17,15 +17,13 @@ use mz_persist::generated::consensus_service::consensus_learner_server::Consensu
 use mz_persist::generated::consensus_service::persist_shared_log_server::PersistSharedLog;
 use mz_persist::generated::consensus_service::{
     ProtoAppendRequest, ProtoAppendResponse, ProtoAwaitResultRequest, ProtoCompareAndSetRequest,
-    ProtoCompareAndSetResponse, ProtoHeadRequest, ProtoHeadResponse,
-    ProtoLatestCommittedBatchRequest, ProtoLatestCommittedBatchResponse, ProtoListKeysRequest,
+    ProtoCompareAndSetResponse, ProtoHeadRequest, ProtoHeadResponse, ProtoListKeysRequest,
     ProtoListKeysResponse, ProtoScanRequest, ProtoScanResponse, ProtoTruncateRequest,
     ProtoTruncateResponse, ProtoLogProposal, proto_log_proposal,
 };
 
-use crate::acceptor::AcceptorError;
-use crate::learner::LearnerError;
 use crate::traits;
+use crate::traits::{AcceptorError, LearnerError};
 
 // ---------------------------------------------------------------------------
 // Error conversions
@@ -75,15 +73,6 @@ impl<A: traits::Acceptor> ConsensusAcceptor for AcceptorGrpcService<A> {
         Ok(tonic::Response::new(resp))
     }
 
-    async fn latest_committed_batch(
-        &self,
-        _request: tonic::Request<ProtoLatestCommittedBatchRequest>,
-    ) -> Result<tonic::Response<ProtoLatestCommittedBatchResponse>, tonic::Status> {
-        let batch = self.handle.latest_committed_batch();
-        Ok(tonic::Response::new(ProtoLatestCommittedBatchResponse {
-            batch_number: batch,
-        }))
-    }
 }
 
 // ---------------------------------------------------------------------------

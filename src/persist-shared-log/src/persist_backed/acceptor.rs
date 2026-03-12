@@ -28,7 +28,7 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use prost::Message;
 
-use crate::acceptor::{AcceptorConfig, AcceptorError};
+use crate::traits::{AcceptorConfig, AcceptorError};
 use super::{ConsensusProposal, ConsensusProposalSchema};
 
 /// Commands dispatched to the persist-backed acceptor.

@@ -21,13 +21,10 @@
 
 use bytes::Bytes;
 
-pub mod acceptor;
+pub mod actor;
 pub mod ctp;
-pub mod learner;
-pub mod metrics;
 pub mod persist_backed;
 pub mod service;
-pub mod storage;
 pub mod traits;
 
 #[cfg(test)]

@@ -32,9 +32,9 @@ use mz_persist::generated::consensus_service::{
     ProtoCasProposal, ProtoTruncateProposal, ProtoLogProposal, proto_log_proposal,
 };
 
-use crate::acceptor::{AcceptorHandle, ActorAcceptor};
-use crate::learner::{ActorLearner, LearnerHandle};
-use crate::storage::sim::{SimStorage, SimWriteFault};
+use crate::actor::acceptor::{AcceptorHandle, ActorAcceptor};
+use crate::actor::learner::{ActorLearner, LearnerHandle};
+use crate::actor::storage::sim::{SimStorage, SimWriteFault};
 use crate::traits::Acceptor as _;
 
 use super::{

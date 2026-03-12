@@ -19,16 +19,17 @@ use tracing::info;
 use mz_persist::generated::consensus_service::consensus_acceptor_server::ConsensusAcceptorServer;
 use mz_persist::generated::consensus_service::consensus_learner_server::ConsensusLearnerServer;
 use mz_persist::generated::consensus_service::persist_shared_log_server::PersistSharedLogServer;
-use mz_persist_shared_log::acceptor::{AcceptorConfig, ActorAcceptor};
-use mz_persist_shared_log::learner::{ActorLearner, LearnerConfig};
-use mz_persist_shared_log::metrics::{AcceptorMetrics, LearnerMetrics};
+use mz_persist_shared_log::actor::acceptor::ActorAcceptor;
+use mz_persist_shared_log::actor::learner::{ActorLearner, LearnerConfig};
+use mz_persist_shared_log::actor::metrics::{AcceptorMetrics, LearnerMetrics};
+use mz_persist_shared_log::actor::storage::s3::S3Storage;
 use mz_persist_shared_log::persist_backed::acceptor::PersistAcceptor;
 use mz_persist_shared_log::persist_backed::learner::{PersistLearner, PersistLearnerConfig};
 use mz_persist_shared_log::service::{
     AcceptorGrpcService, LearnerGrpcService, PersistSharedLogGrpcService,
 };
-use mz_persist_shared_log::storage::s3::S3Storage;
 use mz_persist_shared_log::traits;
+use mz_persist_shared_log::traits::AcceptorConfig;
 
 /// Backend storage mode.
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]

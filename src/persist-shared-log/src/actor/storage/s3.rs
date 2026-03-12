@@ -17,7 +17,7 @@ use prost::Message;
 use mz_persist::generated::consensus_service::{ProtoSnapshot, ProtoLogBatch};
 
 use crate::ShardState;
-use crate::storage::{Storage, StorageError, serialize_snapshot};
+use super::{Storage, StorageError, serialize_snapshot};
 
 /// S3-backed storage for log batches and snapshots.
 pub struct S3Storage {

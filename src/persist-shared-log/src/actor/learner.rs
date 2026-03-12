@@ -29,9 +29,10 @@ use mz_persist::generated::consensus_service::{
     ProtoVersionedData, ProtoLogBatch, proto_log_proposal,
 };
 
-use crate::acceptor::AcceptorHandle;
-use crate::metrics::LearnerMetrics;
-use crate::storage::{Storage, deserialize_snapshot};
+use crate::actor::acceptor::AcceptorHandle;
+use crate::actor::metrics::LearnerMetrics;
+use crate::actor::storage::{Storage, deserialize_snapshot};
+use crate::traits::LearnerError;
 use crate::{ShardState, VersionedEntry};
 
 /// Configuration for the [`ActorLearner`].
@@ -58,27 +59,6 @@ impl Default for LearnerConfig {
             snapshot_interval: 100,
             result_retention_batches: 10_000,
             log_poll_interval_ms: None,
-        }
-    }
-}
-
-/// Error returned by [`LearnerHandle`] methods.
-#[derive(Debug)]
-pub enum LearnerError {
-    /// The learner's command channel was closed (learner shut down).
-    Shutdown,
-    /// The learner dropped the reply sender without responding.
-    DroppedReply,
-    /// The learner returned an application-level error.
-    Command(String),
-}
-
-impl std::fmt::Display for LearnerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            LearnerError::Shutdown => write!(f, "learner shut down"),
-            LearnerError::DroppedReply => write!(f, "learner dropped reply"),
-            LearnerError::Command(msg) => write!(f, "{}", msg),
         }
     }
 }

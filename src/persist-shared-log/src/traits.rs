@@ -15,8 +15,65 @@ use mz_persist::generated::consensus_service::{
     ProtoTruncateResponse, ProtoLogProposal,
 };
 
-use crate::acceptor::AcceptorError;
-use crate::learner::LearnerError;
+/// Configuration for the [`ActorAcceptor`](crate::actor::acceptor::ActorAcceptor).
+#[derive(Debug, Clone)]
+pub struct AcceptorConfig {
+    /// Depth of the command channel (mpsc queue).
+    pub queue_depth: usize,
+    /// How often to flush pending proposals to the log, in milliseconds.
+    pub flush_interval_ms: u64,
+}
+
+impl Default for AcceptorConfig {
+    fn default() -> Self {
+        AcceptorConfig {
+            queue_depth: 4096,
+            flush_interval_ms: 5,
+        }
+    }
+}
+
+/// Error returned by acceptor handle methods.
+#[derive(Debug)]
+pub enum AcceptorError {
+    /// The acceptor's command channel was closed (acceptor shut down).
+    Shutdown,
+    /// The acceptor dropped the reply sender without responding.
+    DroppedReply,
+    /// The acceptor returned an application-level error.
+    Command(String),
+}
+
+impl std::fmt::Display for AcceptorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AcceptorError::Shutdown => write!(f, "acceptor shut down"),
+            AcceptorError::DroppedReply => write!(f, "acceptor dropped reply"),
+            AcceptorError::Command(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+/// Error returned by learner handle methods.
+#[derive(Debug)]
+pub enum LearnerError {
+    /// The learner's command channel was closed (learner shut down).
+    Shutdown,
+    /// The learner dropped the reply sender without responding.
+    DroppedReply,
+    /// The learner returned an application-level error.
+    Command(String),
+}
+
+impl std::fmt::Display for LearnerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LearnerError::Shutdown => write!(f, "learner shut down"),
+            LearnerError::DroppedReply => write!(f, "learner dropped reply"),
+            LearnerError::Command(msg) => write!(f, "{}", msg),
+        }
+    }
+}
 
 #[async_trait::async_trait]
 pub trait Acceptor: Clone + std::fmt::Debug + Send + Sync + 'static {
@@ -24,13 +81,6 @@ pub trait Acceptor: Clone + std::fmt::Debug + Send + Sync + 'static {
         &self,
         proposal: ProtoLogProposal,
     ) -> Result<ProtoAppendResponse, AcceptorError>;
-
-    /// Read the latest committed batch number. Log-backed acceptors track
-    /// this via a shared atomic; persist-backed acceptors don't need it (the
-    /// learner queries the shard upper directly). Returns `None` by default.
-    fn latest_committed_batch(&self) -> Option<u64> {
-        None
-    }
 }
 
 #[async_trait::async_trait]

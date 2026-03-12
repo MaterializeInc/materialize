@@ -20,8 +20,6 @@ service ConsensusAcceptor {
   // Append a proposal to the shared log. Blocks until the group commit flush
   // durably lands. Returns a receipt with the batch number and position.
   rpc Append(ProtoAppendRequest) returns (ProtoAppendResponse);
-  // Returns the latest committed batch number.
-  rpc LatestCommittedBatch(ProtoLatestCommittedBatchRequest) returns (ProtoLatestCommittedBatchResponse);
 }
 
 // Learner: state machine that tails the shared log, evaluates CAS during
@@ -60,12 +58,6 @@ message ProtoAppendRequest {
 message ProtoAppendResponse {
   uint64 batch_number = 1;
   uint32 position = 2;
-}
-
-message ProtoLatestCommittedBatchRequest {}
-
-message ProtoLatestCommittedBatchResponse {
-  optional uint64 batch_number = 1;
 }
 
 message ProtoAwaitResultRequest {

@@ -50,7 +50,7 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 
 use super::{ConsensusProposal, ConsensusProposalSchema};
-use crate::learner::LearnerError;
+use crate::traits::LearnerError;
 use crate::{ShardState, VersionedEntry};
 
 /// Configuration for the persist-backed learner.

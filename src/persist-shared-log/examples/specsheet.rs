@@ -45,14 +45,15 @@ use mz_persist::generated::consensus_service::{
     ProtoAppendRequest, ProtoAwaitResultRequest, ProtoCasProposal, ProtoHeadRequest,
     ProtoScanRequest, ProtoTruncateProposal, ProtoLogProposal, proto_log_proposal,
 };
-use mz_persist_shared_log::acceptor::{AcceptorConfig, ActorAcceptor};
+use mz_persist_shared_log::actor::acceptor::ActorAcceptor;
+use mz_persist_shared_log::actor::learner::{ActorLearner, LearnerConfig};
+use mz_persist_shared_log::actor::metrics::{AcceptorMetrics, LearnerMetrics};
+use mz_persist_shared_log::actor::storage::{LatencyProfile, LatencyStorage};
 use mz_persist_shared_log::ctp;
-use mz_persist_shared_log::learner::{ActorLearner, LearnerConfig};
-use mz_persist_shared_log::metrics::{AcceptorMetrics, LearnerMetrics};
 use mz_persist_shared_log::persist_backed::acceptor::PersistAcceptor;
 use mz_persist_shared_log::persist_backed::learner::{PersistLearner, PersistLearnerConfig};
 use mz_persist_shared_log::service::{AcceptorGrpcService, LearnerGrpcService};
-use mz_persist_shared_log::storage::{LatencyProfile, LatencyStorage};
+use mz_persist_shared_log::traits::AcceptorConfig;
 use mz_persist_shared_log::traits::Acceptor as _;
 
 // ---------------------------------------------------------------------------
@@ -391,8 +392,8 @@ impl WorkloadConfig {
 enum Transport {
     /// Direct handles to the acceptor and learner (no serialization overhead).
     Direct {
-        acceptor: mz_persist_shared_log::acceptor::AcceptorHandle,
-        learner: mz_persist_shared_log::learner::LearnerHandle,
+        acceptor: mz_persist_shared_log::actor::acceptor::AcceptorHandle,
+        learner: mz_persist_shared_log::actor::learner::LearnerHandle,
     },
     /// Direct handles to the persist-backed acceptor and learner.
     PersistDirect {
