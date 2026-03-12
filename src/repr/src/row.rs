@@ -805,9 +805,10 @@ pub struct RowArena {
 ///
 /// The type parameter `T` represents the element type of the list. It is a
 /// phantom parameter that carries no runtime data — the actual elements are
-/// stored as serialized bytes and decoded as `Datum<'a>` on iteration.
-/// The default `T = Datum<'a>` means existing code that writes `DatumList<'a>`
-/// continues to work unchanged.
+/// stored as serialized bytes and `T` is not enforced at runtime. It is up
+/// to the caller to ensure `T` matches the actual element type. The default
+/// `T = Datum<'a>` means existing code that writes `DatumList<'a>` continues
+/// to work unchanged.
 pub struct DatumList<'a, T = Datum<'a>> {
     /// Points at the serialized datums
     data: &'a [u8],
@@ -875,8 +876,9 @@ impl<T> PartialOrd for DatumList<'_, T> {
 ///
 /// The type parameter `T` represents the value type of the map. It is a
 /// phantom parameter — the actual values are stored as serialized bytes and
-/// decoded as `Datum<'a>` on iteration. The default `T = Datum<'a>` means
-/// existing code that writes `DatumMap<'a>` continues to work unchanged.
+/// `T` is not enforced at runtime. It is up to the caller to ensure `T`
+/// matches the actual value type. The default `T = Datum<'a>` means existing
+/// code that writes `DatumMap<'a>` continues to work unchanged.
 pub struct DatumMap<'a, T = Datum<'a>> {
     /// Points at the serialized datums, which should be sorted in key order
     data: &'a [u8],

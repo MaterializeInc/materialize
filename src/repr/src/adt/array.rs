@@ -32,8 +32,10 @@ pub const MAX_ARRAY_DIMENSIONS: u8 = 6;
 ///
 /// The type parameter `T` represents the element type of the array. It is a
 /// phantom parameter propagated through the inner [`DatumList`] — the actual
-/// elements are stored as serialized bytes. The default `T = Datum<'a>` means
-/// existing code that writes `Array<'a>` continues to work unchanged.
+/// elements are stored as serialized bytes and `T` is not enforced at
+/// runtime. It is up to the caller to ensure `T` matches the actual element
+/// type. The default `T = Datum<'a>` means existing code that writes
+/// `Array<'a>` continues to work unchanged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct Array<'a, T = Datum<'a>> {
     /// The elements in the array.
