@@ -356,7 +356,7 @@ impl GenericOidcAuthenticatorInner {
 
         {
             let mut decoding_keys = self.decoding_keys.lock().expect("lock poisoned");
-            decoding_keys.extend(new_decoding_keys);
+            *decoding_keys = new_decoding_keys;
         }
 
         if let Some(key) = decoding_key {
