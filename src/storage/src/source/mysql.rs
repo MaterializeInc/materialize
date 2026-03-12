@@ -392,6 +392,7 @@ async fn return_definite_error(
     >,
     definite_error_cap_set: &CapabilitySet<GtidPartition>,
 ) {
+    tracing::warn!("Returning definite error: {err}");
     for output_index in outputs {
         let update = (
             (*output_index, Err(err.clone().into())),
