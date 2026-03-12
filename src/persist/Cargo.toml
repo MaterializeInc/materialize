@@ -72,6 +72,7 @@ turmoil = { workspace = true, optional = true }
 url.workspace = true
 urlencoding.workspace = true
 uuid = { workspace = true, features = ["v4"] }
+zeroize.workspace = true
 
 # While this crate doesn't directly depend on `sha2` we want to ensure that the
 # `asm` feature is enabled since computing SHA256 hashes is taking a

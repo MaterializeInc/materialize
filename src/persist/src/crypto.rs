@@ -32,6 +32,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandle;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn, Instrument, Span};
+use zeroize::Zeroize;
 
 use aws_lc_rs::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
 
@@ -50,6 +51,12 @@ const GCM_TAG_LEN: usize = 16;
 struct DataEncryptionKey {
     plaintext: [u8; 32],
     wrapped: Vec<u8>,
+}
+
+impl Drop for DataEncryptionKey {
+    fn drop(&mut self) {
+        self.plaintext.zeroize();
+    }
 }
 
 /// Manages KMS-derived data encryption keys with background rotation.
