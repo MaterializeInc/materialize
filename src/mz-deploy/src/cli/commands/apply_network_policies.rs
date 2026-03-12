@@ -2,79 +2,70 @@
 
 use crate::cli::CliError;
 use crate::cli::commands::grants;
-use crate::cli::executor::{DeploymentExecutor, SqlCollector};
-use crate::cli::progress;
+use crate::cli::executor::{ApplyResult, DeploymentExecutor, ObjectResult};
 use crate::client::{Client, quote_identifier};
 use crate::config::Settings;
-use crate::info;
 use crate::project::network_policies::{self, NetworkPolicyDefinition};
 use mz_sql_parser::ast::AlterNetworkPolicyStatement;
-use owo_colors::OwoColorize;
-use std::time::Instant;
+use std::collections::BTreeSet;
 
-/// Run the `network-policies apply` command.
-///
-/// Loads network policy definitions from `<directory>/network_policies/` and converges
-/// the live Materialize state to match: creating missing policies and
-/// altering ones whose rules have changed.
-pub async fn run(
-    settings: &Settings,
-    dry_run: bool,
-    collector: Option<SqlCollector>,
-) -> Result<(), CliError> {
+/// Plan network policy changes without executing or printing.
+pub async fn plan(settings: &Settings, client: &Client) -> Result<ApplyResult, CliError> {
     let profile = settings.connection();
     let directory = &settings.directory;
-    let start_time = Instant::now();
 
-    // Load network policy definitions
-    progress::stage_start("Loading network policy definitions");
-    let load_start = Instant::now();
     let definitions =
         network_policies::load_network_policies(directory, &profile.name, settings.variables())?;
 
     if definitions.is_empty() {
-        info!(
-            "  {} No network-policies/ directory or no .sql files found — nothing to do.",
-            "info:".blue().bold()
-        );
-        return Ok(());
+        return Ok(ApplyResult {
+            phase: "network_policies".to_string(),
+            setup_statements: vec![],
+            results: vec![],
+        });
     }
 
-    progress::stage_success(
-        &format!("Found {} network policy definition(s)", definitions.len()),
-        load_start.elapsed(),
-    );
+    let executor = DeploymentExecutor::new_dry_run(client);
 
-    // Connect to Materialize
-    let client = Client::connect_with_profile(profile.clone())
+    let mut object_results = Vec::new();
+    for def in &definitions {
+        let obj_result = plan_network_policy(client, &executor, def).await?;
+        object_results.push(obj_result);
+    }
+
+    Ok(ApplyResult {
+        phase: "network_policies".to_string(),
+        setup_statements: vec![],
+        results: object_results,
+    })
+}
+
+/// Run the `network-policies apply` command: plan, render, optionally execute.
+pub async fn run(settings: &Settings, dry_run: bool) -> Result<ApplyResult, CliError> {
+    let client = Client::connect_with_profile(settings.connection().clone())
         .await
         .map_err(CliError::Connection)?;
 
-    let executor = DeploymentExecutor::with_collector(&client, dry_run, collector);
+    let result = plan(settings, &client).await?;
 
-    // Apply each network policy definition
-    for def in &definitions {
-        apply_network_policy(&client, &executor, def).await?;
+    if !dry_run {
+        result.execute(&client).await?;
     }
 
-    let total_duration = start_time.elapsed();
-    if dry_run {
-        progress::summary("Network policies dry run complete", total_duration);
-    } else {
-        progress::summary("Network policies applied successfully", total_duration);
-    }
-
-    Ok(())
+    Ok(result)
 }
 
-/// Apply a single network policy definition: create if missing, alter if exists,
-/// then execute grants, revocations, and comments.
-async fn apply_network_policy(
+/// Plan a single network policy definition: create if missing, alter if exists,
+/// then plan grants, revocations, and comments.
+async fn plan_network_policy(
     client: &Client,
     executor: &DeploymentExecutor<'_>,
     def: &NetworkPolicyDefinition,
-) -> Result<(), CliError> {
+) -> Result<ObjectResult, CliError> {
     let policy_name = &def.name;
+
+    // Drain any prior statements
+    executor.take_statements();
 
     // Check if network policy already exists
     let exists = client
@@ -83,47 +74,44 @@ async fn apply_network_policy(
         .await
         .map_err(CliError::Connection)?;
 
-    if exists {
+    let action = if exists {
         // ALTER NETWORK POLICY to converge rules
-        if !executor.is_dry_run() {
-            info!(
-                "  {} Altering network policy '{}'",
-                "~".yellow().bold(),
-                policy_name
-            );
-        }
         let alter_stmt = AlterNetworkPolicyStatement {
             name: def.create_stmt.name.clone(),
             options: def.create_stmt.options.clone(),
         };
         executor.execute_sql(&alter_stmt).await?;
+        "altered"
     } else {
-        // Create network policy from the parsed CREATE NETWORK POLICY statement
-        if !executor.is_dry_run() {
-            info!(
-                "  {} Creating network policy '{}'",
-                "+".green().bold(),
-                policy_name
-            );
-        }
         executor.execute_sql(&def.create_stmt).await?;
-    }
+        "created"
+    };
 
     // Execute GRANT statements
     for grant in &def.grants {
         executor.execute_sql(grant).await?;
     }
 
-    // Revoke stale grants
+    // Revoke stale grants (protecting default privilege grants)
     let current_grants = client
         .introspection()
         .get_network_policy_grants(policy_name)
         .await
         .map_err(CliError::Connection)?;
+    let default_privs = client
+        .introspection()
+        .get_default_privilege_grants_for_network_policy(policy_name)
+        .await
+        .map_err(CliError::Connection)?;
+    let protected: BTreeSet<_> = default_privs
+        .iter()
+        .map(|g| (g.grantee.to_lowercase(), g.privilege_type.to_uppercase()))
+        .collect();
     let desired = grants::desired_grants(&def.grants, &["USAGE"]);
     let revocations = grants::stale_grant_revocations(
         &current_grants,
         &desired,
+        &protected,
         "NETWORK POLICY",
         &quote_identifier(policy_name),
     );
@@ -134,5 +122,10 @@ async fn apply_network_policy(
         executor.execute_sql(comment).await?;
     }
 
-    Ok(())
+    Ok(ObjectResult {
+        object: policy_name.clone(),
+        action: action.to_string(),
+        statements: executor.take_statements(),
+        redacted_statements: vec![],
+    })
 }

@@ -31,14 +31,11 @@ impl SecurityConfig {
 
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct ProfileConfig {
-    /// Optional suffix to append to database names for this profile.
-    /// For example, `suffix = "_staging"` would rename `materialize` to `materialize_staging`.
+    /// Optional suffix to append to database and cluster names for this profile.
+    /// For example, `profile_suffix = "_staging"` would rename `materialize` to
+    /// `materialize_staging` and `analytics` to `analytics_staging`.
     /// The suffix includes the delimiter (user provides `"_staging"`, not `"staging"`).
-    pub suffix: Option<String>,
-    /// Optional suffix to append to cluster names for this profile.
-    /// For example, `cluster_suffix = "_staging"` would rename `analytics` to `analytics_staging`.
-    /// The suffix includes the delimiter (user provides `"_staging"`, not `"staging"`).
-    pub cluster_suffix: Option<String>,
+    pub profile_suffix: Option<String>,
     /// Security-related configuration (e.g., AWS profile for secret resolution).
     #[serde(default)]
     pub security: SecurityConfig,
@@ -85,12 +82,12 @@ impl ProjectSettings {
             .unwrap_or_default()
     }
 
-    /// Returns the database suffix for the given profile name, if configured.
+    /// Returns the profile suffix for the given profile name, if configured.
     pub fn suffix_for_profile(&self, profile_name: &str) -> Option<&str> {
         self.profiles
             .as_ref()
             .and_then(|p| p.get(profile_name))
-            .and_then(|c| c.suffix.as_deref())
+            .and_then(|c| c.profile_suffix.as_deref())
     }
 
     pub fn docker_image(&self) -> String {
@@ -277,7 +274,7 @@ impl ProfilesConfig {
 ///
 /// Constructed once in `main.rs` from CLI args + `project.toml` + `profiles.toml`,
 /// then passed to every command. Commands extract what they need (`directory`,
-/// `profile_name`, `suffix`, `docker_image`, `connection()`, `profile_config`).
+/// `profile_name`, `profile_suffix`, `docker_image`, `connection()`, `profile_config`).
 #[derive(Debug, Clone)]
 pub struct Settings {
     /// Project root directory (from --directory, default ".").
@@ -286,7 +283,7 @@ pub struct Settings {
     pub profile_name: String,
     /// Resolved Docker image for type checking and tests.
     pub docker_image: String,
-    /// Per-profile config (security, suffix) — used for SecretResolver.
+    /// Per-profile config (security, profile_suffix) — used for SecretResolver.
     pub profile_config: ProfileConfig,
     /// Database connection profile. None for commands that don't connect (compile, test).
     connection: Option<Profile>,
@@ -333,14 +330,9 @@ impl Settings {
         })
     }
 
-    /// Database name suffix for this profile (e.g., `"_staging"`).
-    pub fn suffix(&self) -> Option<&str> {
-        self.profile_config.suffix.as_deref()
-    }
-
-    /// Cluster name suffix for this profile (e.g., `"_staging"`).
-    pub fn cluster_suffix(&self) -> Option<&str> {
-        self.profile_config.cluster_suffix.as_deref()
+    /// Profile suffix applied to both database and cluster names (e.g., `"_staging"`).
+    pub fn profile_suffix(&self) -> Option<&str> {
+        self.profile_config.profile_suffix.as_deref()
     }
 
     /// psql-style variables for this profile.
@@ -365,20 +357,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_profile_config_deserializes_suffix() {
+    fn test_profile_config_deserializes_profile_suffix() {
         let toml = r#"
             profile = "default"
 
             [profiles.staging]
-            suffix = "_staging"
+            profile_suffix = "_staging"
         "#;
         let settings: ProjectSettings = toml::from_str(toml).unwrap();
         let config = settings.config_for_profile("staging");
-        assert_eq!(config.suffix.as_deref(), Some("_staging"));
+        assert_eq!(config.profile_suffix.as_deref(), Some("_staging"));
     }
 
     #[test]
-    fn test_profile_config_suffix_optional() {
+    fn test_profile_config_profile_suffix_optional() {
         let toml = r#"
             profile = "default"
 
@@ -387,7 +379,7 @@ mod tests {
         "#;
         let settings: ProjectSettings = toml::from_str(toml).unwrap();
         let config = settings.config_for_profile("prod");
-        assert!(config.suffix.is_none());
+        assert!(config.profile_suffix.is_none());
         assert_eq!(config.security.aws_profile(), Some("prod-aws"));
     }
 
@@ -397,7 +389,7 @@ mod tests {
             profile = "default"
 
             [profiles.staging]
-            suffix = "_staging"
+            profile_suffix = "_staging"
         "#;
         let settings: ProjectSettings = toml::from_str(toml).unwrap();
         assert_eq!(settings.suffix_for_profile("staging"), Some("_staging"));
@@ -409,7 +401,7 @@ mod tests {
             profile = "default"
 
             [profiles.staging]
-            suffix = "_staging"
+            profile_suffix = "_staging"
         "#;
         let settings: ProjectSettings = toml::from_str(toml).unwrap();
         assert_eq!(settings.suffix_for_profile("nonexistent"), None);
@@ -425,57 +417,16 @@ mod tests {
     }
 
     #[test]
-    fn test_profile_config_deserializes_cluster_suffix() {
-        let toml = r#"
-            profile = "default"
-
-            [profiles.staging]
-            cluster_suffix = "_staging"
-        "#;
-        let settings: ProjectSettings = toml::from_str(toml).unwrap();
-        let config = settings.config_for_profile("staging");
-        assert_eq!(config.cluster_suffix.as_deref(), Some("_staging"));
-    }
-
-    #[test]
-    fn test_profile_config_cluster_suffix_optional() {
-        let toml = r#"
-            profile = "default"
-
-            [profiles.prod]
-            suffix = "_prod"
-        "#;
-        let settings: ProjectSettings = toml::from_str(toml).unwrap();
-        let config = settings.config_for_profile("prod");
-        assert!(config.cluster_suffix.is_none());
-    }
-
-    #[test]
-    fn test_profile_config_both_suffixes() {
-        let toml = r#"
-            profile = "default"
-
-            [profiles.staging]
-            suffix = "_staging"
-            cluster_suffix = "_staging"
-        "#;
-        let settings: ProjectSettings = toml::from_str(toml).unwrap();
-        let config = settings.config_for_profile("staging");
-        assert_eq!(config.suffix.as_deref(), Some("_staging"));
-        assert_eq!(config.cluster_suffix.as_deref(), Some("_staging"));
-    }
-
-    #[test]
     fn test_config_for_profile_without_security_section() {
         let toml = r#"
             profile = "default"
 
             [profiles.prod]
-            suffix = "_prod"
+            profile_suffix = "_prod"
         "#;
         let settings: ProjectSettings = toml::from_str(toml).unwrap();
         let config = settings.config_for_profile("prod");
-        assert_eq!(config.suffix.as_deref(), Some("_prod"));
+        assert_eq!(config.profile_suffix.as_deref(), Some("_prod"));
         assert_eq!(config.security.aws_profile(), None);
     }
 
@@ -506,7 +457,7 @@ mod tests {
             profile = "default"
 
             [profiles.prod]
-            suffix = "_prod"
+            profile_suffix = "_prod"
         "#;
         let settings: ProjectSettings = toml::from_str(toml).unwrap();
         let config = settings.config_for_profile("prod");

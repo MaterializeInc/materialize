@@ -95,7 +95,6 @@ GROUP BY u.id, u.name;
             project_path,
             "default",
             None,
-            None,
             &std::collections::BTreeMap::new(),
         )
         .unwrap();

@@ -34,12 +34,12 @@ pub struct ClusterDefinition {
 /// Load all cluster definitions from `<root>/clusters/`.
 ///
 /// Returns an empty vec if `clusters/` doesn't exist (the directory is optional).
-/// If `cluster_suffix` is provided, each cluster definition is rewritten with the
+/// If `profile_suffix` is provided, each cluster definition is rewritten with the
 /// suffix appended to all cluster name references (CREATE, GRANT, COMMENT).
 pub fn load_clusters(
     root: &Path,
     profile: &str,
-    cluster_suffix: Option<&str>,
+    profile_suffix: Option<&str>,
     variables: &BTreeMap<String, String>,
 ) -> Result<Vec<ClusterDefinition>, ProjectError> {
     let clusters_dir = root.join("clusters");
@@ -110,7 +110,7 @@ pub fn load_clusters(
     }
 
     // Apply cluster suffix after validation (filename-vs-declared-name check uses original names)
-    if let Some(suffix) = cluster_suffix {
+    if let Some(suffix) = profile_suffix {
         for def in &mut definitions {
             apply_cluster_suffix(def, suffix);
         }

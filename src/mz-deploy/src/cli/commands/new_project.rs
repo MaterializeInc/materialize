@@ -15,7 +15,6 @@ const PROJECT_TOML: &str = include_str!("../scaffold/project.toml");
 const README_MD: &str = include_str!("../scaffold/README.md");
 const SKILL_MD: &str = include_str!("../scaffold/skill/SKILL.md");
 const AGENT_MD: &str = include_str!("../scaffold/AGENT.md");
-const UNIT_TEST_REFERENCE_MD: &str = include_str!("../scaffold/skill/references/unit-tests.md");
 const STABLE_API_REFERENCE_MD: &str = include_str!("../scaffold/skill/references/stable-api.md");
 
 pub fn run(name: &str, init_git: bool) -> Result<(), CliError> {
@@ -49,11 +48,6 @@ pub fn run(name: &str, init_git: bool) -> Result<(), CliError> {
     add_file(project_dir, "AGENT.md", AGENT_MD)?;
     add_file(project_dir, "CLAUDE.md", AGENT_MD)?;
     add_file(project_dir, ".agents/skills/mz-deploy/SKILL.md", SKILL_MD)?;
-    add_file(
-        project_dir,
-        ".agents/skills/mz-deploy/references/unit-tests.md",
-        UNIT_TEST_REFERENCE_MD,
-    )?;
     add_file(
         project_dir,
         ".agents/skills/mz-deploy/references/stable-api.md",
@@ -127,6 +121,7 @@ fn create_dir(project_dir: &Path, path: &str) -> Result<(), CliError> {
 /// Runs `npx skills add` to install community agent skills.
 /// Warns and continues if `npx` is not available or the command fails.
 fn install_agent_skills(project_dir: &Path) -> Result<(), CliError> {
+    progress::info("Installing Materialize agent skill");
     let status = Command::new("npx")
         .args([
             "-y",
@@ -160,6 +155,5 @@ fn install_agent_skills(project_dir: &Path) -> Result<(), CliError> {
         }
     }
 
-    progress::info("Installed Materialize agent skill");
     Ok(())
 }

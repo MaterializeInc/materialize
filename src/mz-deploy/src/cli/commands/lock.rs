@@ -44,8 +44,7 @@ pub async fn run(settings: &Settings) -> Result<(), CliError> {
     let planned_project = project::plan(
         directory,
         &settings.profile_name,
-        settings.suffix(),
-        settings.cluster_suffix(),
+        settings.profile_suffix(),
         settings.variables(),
     )?;
 

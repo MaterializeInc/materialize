@@ -90,18 +90,17 @@ impl SchemaQualifier {
 pub fn plan<P: AsRef<Path>>(
     root: P,
     profile: &str,
-    suffix: Option<&str>,
-    cluster_suffix: Option<&str>,
+    profile_suffix: Option<&str>,
     variables: &BTreeMap<String, String>,
 ) -> Result<planned::Project, error::ProjectError> {
-    let raw_project = raw::load_project(root, profile, suffix, variables)?;
+    let raw_project = raw::load_project(root, profile, profile_suffix, variables)?;
     let db_name_map = raw_project.database_name_map.clone();
     let mut typed_project = typed::Project::try_from(raw_project)?;
     if !db_name_map.is_empty() {
         typed_project.rewrite_database_references(&db_name_map);
     }
-    if let Some(cs) = cluster_suffix {
-        let cluster_name_map = build_cluster_name_map(&typed_project, cs);
+    if let Some(ps) = profile_suffix {
+        let cluster_name_map = build_cluster_name_map(&typed_project, ps);
         if !cluster_name_map.is_empty() {
             typed_project.rewrite_cluster_references(&cluster_name_map);
         }

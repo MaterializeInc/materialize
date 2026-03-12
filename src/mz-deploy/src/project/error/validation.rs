@@ -195,6 +195,8 @@ pub enum ValidationErrorKind {
     SinkMissingCluster { sink_name: String },
     /// Source missing required IN CLUSTER clause
     SourceMissingCluster { source_name: String },
+    /// Source uses external references (FOR TABLES/FOR SCHEMAS/FOR ALL TABLES)
+    SourceExternalReferences { source_name: String },
     /// Invalid statement type in database mod file
     InvalidDatabaseModStatement {
         statement_type: String,
@@ -452,6 +454,12 @@ impl ValidationErrorKind {
             Self::SourceMissingCluster { source_name } => {
                 format!(
                     "source '{}' is missing required IN CLUSTER clause",
+                    source_name
+                )
+            }
+            Self::SourceExternalReferences { source_name } => {
+                format!(
+                    "source '{}' uses FOR TABLES, FOR SCHEMAS, or FOR ALL TABLES which is not supported",
                     source_name
                 )
             }
@@ -808,6 +816,9 @@ impl ValidationErrorKind {
             }
             Self::SourceMissingCluster { .. } => {
                 Some("add 'IN CLUSTER <cluster_name>' to your CREATE SOURCE statement (e.g., CREATE SOURCE src IN CLUSTER quickstart FROM ...)".to_string())
+            }
+            Self::SourceExternalReferences { .. } => {
+                Some("use CREATE TABLE FROM SOURCE to define tables individually so mz-deploy can manage their lifecycle, privileges, and comments".to_string())
             }
             Self::InvalidDatabaseModStatement { .. } => {
                 Some("database mod files (e.g., materialize.sql) can only contain COMMENT ON DATABASE, GRANT ON DATABASE, and ALTER DEFAULT PRIVILEGES statements".to_string())

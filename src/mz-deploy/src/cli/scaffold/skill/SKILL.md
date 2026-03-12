@@ -4,7 +4,7 @@ description: >
   Guide for working with mz-deploy projects that manage Materialize SQL objects
   via blue-green deployments. Use when editing .sql model files, project.toml,
   profiles.toml, clusters/, roles/, or running mz-deploy commands (compile,
-  stage, apply, deploy, ready, test).
+  stage, apply, promote, wait, test).
 ---
 
 # mz-deploy
@@ -14,7 +14,7 @@ description: >
 - `models/<database>/<schema>/` — SQL model files (one primary object per file)
 - `clusters/` — Cluster definitions
 - `roles/` — Role definitions
-- `network-policies` — Network policies
+- `network-policies/` — Network policies
 - `project.toml` — Project settings (profile, Materialize version)
 
 ## Model files — one object per file
@@ -65,6 +65,7 @@ computation objects (views, materialized views). Keep them in separate schemas.
   the MV's internal computation without dropping and recreating it. The MV's
   identity and name stay the same, so downstream objects — both in-project and
   external — are not disrupted or redeployed.
+  See `references/stable-api.md` for the recommended two-schema layout pattern.
 - `COMMENT ON SCHEMA`
 - `GRANT ... ON SCHEMA`
 - `ALTER DEFAULT PRIVILEGES IN SCHEMA`
@@ -87,8 +88,12 @@ mz_version = "cloud"   # Optional — "cloud"/omitted = latest, "v0.64.0" = that
 
 ## profiles.toml
 
-Searched in order: `.mz/profiles.toml` (project-local), then
-`~/.mz/profiles.toml` (global).
+Profiles are defined in a `profiles.toml` file. The directory containing
+`profiles.toml` is resolved in this order:
+
+1. **`--profiles-dir` CLI flag** — Highest priority.
+2. **`MZ_DEPLOY_PROFILES_DIR` environment variable** — Checked if the flag is not set.
+3. **`~/.mz`** — Default fallback.
 
 ```toml
 [default]
@@ -101,6 +106,10 @@ password = "${MZ_PASSWORD}" # Optional — literal or ${ENV_VAR}
 Environment variable override: `MZ_PROFILE_<NAME>_PASSWORD` (e.g.,
 `MZ_PROFILE_DEFAULT_PASSWORD`).
 
+Profiles also support per-profile SQL variables, file overrides
+(`name__<profile>.sql`), and database/cluster suffixes for development in staging environments.
+See `mz-deploy help profiles` for details.
+
 ## Clusters and roles
 
 - `clusters/<name>.sql` — `CREATE CLUSTER` + optional `GRANT`, `COMMENT`
@@ -109,22 +118,22 @@ Environment variable override: `MZ_PROFILE_<NAME>_PASSWORD` (e.g.,
 
 ## Deployment lifecycle
 
-To deploy changes: `compile` → `test` → `apply` → `stage` → `ready` → `deploy`.
+To deploy changes: `compile` → `test` → `apply` → `stage` → `wait` → `promote`.
 
 1. `mz-deploy compile` — Parse and validate all SQL files locally.
 2. `mz-deploy test` — Compile all SQL files and run unit tests locally.
-3. `mz-deploy stage` — Deploy views, materialized views, indexes, and sinks
+3. `mz-deploy apply` — Create or modify durable state: tables, sources,
+   connections, secrets, roles, network policies, and clusters. These persist
+   across deployments and are only changed via `apply`.
+4. `mz-deploy stage` — Deploy views, materialized views, indexes, and sinks
    into a new "shadow" deployment that runs alongside the current one.
-4. `mz-deploy ready` — Wait for all materialized views and indexes in the
+5. `mz-deploy wait` — Wait for all materialized views and indexes in the
    staged deployment to be fully hydrated.
-5. `mz-deploy deploy` — Swap the staged deployment into the active slot.
+6. `mz-deploy promote` — Swap the staged deployment into the active slot.
 
-Tables, sources, connections, secrets, roles, network policies, and clusters are **durable state** 
-they persist across deployments and  are only created/modified via `mz-deploy apply`. 
-Everything else (views, MVs, indexes, sinks) is deployed atomically via `stage` + `deploy`.
-
-Local compilation and unit tests require a types.lock file. types.lock is automatically generated
-whenenever `mz-deploy apply tables` is run and can be regenerated with `mz-deploy lock`. 
+Local compilation and unit tests require a types.lock file. types.lock is
+automatically generated whenever `mz-deploy apply tables` is run and can be
+regenerated with `mz-deploy lock`.
 
 ## Unit tests
 
@@ -133,7 +142,8 @@ view logic against mock data. Tests run during `mz-deploy test`. Each test
 declares mocks for every dependency and an expected result; mz-deploy
 validates schemas before execution.
 
-See `references/unit-tests.md` for the full syntax reference and examples.
+Run `mz-deploy help test` for the full syntax reference, mock resolution
+rules, AT TIME usage, and examples.
 
 ## Getting detailed command help
 

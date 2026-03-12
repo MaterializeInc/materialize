@@ -8,35 +8,190 @@ use crate::cli::CliError;
 use crate::cli::git::get_git_commit;
 use crate::client::{Client, quote_identifier};
 use crate::project::{self, typed};
-use crate::{info, verbose};
+use crate::verbose;
+use owo_colors::OwoColorize;
+use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::fmt;
 use std::path::Path;
-use std::rc::Rc;
 
-/// Collects SQL statements during dry-run for JSON output.
-///
-/// Wraps a shared, mutable vector of SQL strings. Cloning is cheap (Rc refcount bump).
-/// After all commands complete, call [`SqlCollector::into_statements`] to extract the collected SQL.
-#[derive(Clone)]
-pub struct SqlCollector(Rc<RefCell<Vec<String>>>);
+/// Result of applying a single object (cluster, role, connection, etc.).
+#[derive(Clone, Serialize)]
+pub struct ObjectResult {
+    /// Fully-qualified object name, e.g. "materialize.raw.pgconn".
+    pub object: String,
+    /// What happened: "created", "altered", "up_to_date", "skipped".
+    pub action: String,
+    /// SQL statements that were (or would be) executed.
+    pub statements: Vec<String>,
+    /// SQL statements that must be executed but contain sensitive values
+    /// (e.g. CREATE SECRET, ALTER SECRET). These are never serialized or displayed.
+    #[serde(skip)]
+    pub redacted_statements: Vec<String>,
+}
 
-impl SqlCollector {
-    /// Create a new empty collector.
-    pub fn new() -> Self {
-        Self(Rc::new(RefCell::new(Vec::new())))
+impl fmt::Display for ObjectResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.action.as_str() {
+            "created" | "altered" => write!(f, "  {} {}", "✓".green(), self.object),
+            "up_to_date" => write!(
+                f,
+                "  {} {} ({})",
+                "=".dimmed(),
+                self.object,
+                "up to date".dimmed()
+            ),
+            "skipped" => write!(
+                f,
+                "  {} {} ({})",
+                "-".dimmed(),
+                self.object,
+                "skipped".dimmed()
+            ),
+            _ => write!(f, "  {} {}", "?".dimmed(), self.object),
+        }
     }
+}
 
-    /// Push a SQL statement into the collector.
-    pub fn push(&self, sql: String) {
-        self.0.borrow_mut().push(sql);
+/// Result of applying one phase (e.g. clusters, connections, etc.).
+#[derive(Clone, Serialize)]
+pub struct ApplyResult {
+    /// Phase name: "clusters", "roles", "connections", etc.
+    pub phase: String,
+    /// Setup SQL (CREATE DATABASE/SCHEMA, mod_statements) captured during planning.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub setup_statements: Vec<String>,
+    /// Per-object results.
+    pub results: Vec<ObjectResult>,
+}
+
+impl ApplyResult {
+    /// Execute all captured SQL (setup + per-object) against the database.
+    pub async fn execute(&self, client: &Client) -> Result<(), CliError> {
+        for sql in &self.setup_statements {
+            client
+                .execute(sql, &[])
+                .await
+                .map_err(|source| CliError::SqlExecutionFailed {
+                    statement: sql.clone(),
+                    source,
+                })?;
+        }
+        for obj in &self.results {
+            for sql in &obj.redacted_statements {
+                client
+                    .execute(sql, &[])
+                    .await
+                    .map_err(|source| CliError::SqlExecutionFailed {
+                        statement: "[REDACTED — contains secret value]".to_string(),
+                        source,
+                    })?;
+            }
+            for sql in &obj.statements {
+                client
+                    .execute(sql, &[])
+                    .await
+                    .map_err(|source| CliError::SqlExecutionFailed {
+                        statement: sql.clone(),
+                        source,
+                    })?;
+            }
+        }
+        Ok(())
     }
+}
 
-    /// Consume the collector and return the collected statements.
-    pub fn into_statements(self) -> Vec<String> {
-        Rc::try_unwrap(self.0)
-            .map(|cell| cell.into_inner())
-            .unwrap_or_else(|rc| rc.borrow().clone())
+impl fmt::Display for ApplyResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.results.is_empty() {
+            return Ok(());
+        }
+
+        let created = self
+            .results
+            .iter()
+            .filter(|r| r.action == "created")
+            .count();
+        let altered = self
+            .results
+            .iter()
+            .filter(|r| r.action == "altered")
+            .count();
+        let up_to_date = self
+            .results
+            .iter()
+            .filter(|r| r.action == "up_to_date")
+            .count();
+
+        let label = &self.phase;
+        let mut lines = Vec::new();
+
+        if created > 0 {
+            lines.push(format!(
+                "  {} Creating {} new {}...",
+                "ℹ".blue(),
+                created,
+                label
+            ));
+        }
+        if altered > 0 {
+            lines.push(format!(
+                "  {} Altering {} {}...",
+                "ℹ".blue(),
+                altered,
+                label
+            ));
+        }
+        if up_to_date > 0 && created == 0 && altered == 0 {
+            lines.push(format!(
+                "  {} {} {} up to date",
+                "ℹ".blue(),
+                up_to_date,
+                label
+            ));
+        }
+
+        for r in &self.results {
+            if r.action != "up_to_date" {
+                lines.push(format!("{}", r));
+            }
+        }
+
+        write!(f, "{}", lines.join("\n"))
+    }
+}
+
+/// Result of running all apply phases together.
+#[derive(Serialize)]
+pub struct ApplyAllResult {
+    pub results: Vec<ApplyResult>,
+}
+
+impl ApplyAllResult {
+    /// Execute all phases in order against the database.
+    pub async fn execute(&self, client: &Client) -> Result<(), CliError> {
+        for phase in &self.results {
+            phase.execute(client).await?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for ApplyAllResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut first = true;
+        for phase in &self.results {
+            if phase.results.is_empty() {
+                continue;
+            }
+            if !first {
+                writeln!(f)?;
+            }
+            write!(f, "{}", phase)?;
+            first = false;
+        }
+        Ok(())
     }
 }
 
@@ -96,10 +251,13 @@ pub fn generate_random_env_name() -> String {
 /// SQL statements (main statement + indexes + grants + comments) with
 /// consistent error handling. Supports dry-run mode where SQL is printed
 /// instead of executed.
+///
+/// In dry-run mode, statements are always recorded in an internal log
+/// that can be drained per-object via [`take_statements()`].
 pub struct DeploymentExecutor<'a> {
     client: &'a Client,
     dry_run: bool,
-    collected_sql: Option<SqlCollector>,
+    statement_log: RefCell<Vec<String>>,
 }
 
 impl<'a> DeploymentExecutor<'a> {
@@ -108,7 +266,16 @@ impl<'a> DeploymentExecutor<'a> {
         Self {
             client,
             dry_run: false,
-            collected_sql: None,
+            statement_log: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// Create a deployment executor that always runs in dry-run mode (for planning).
+    pub fn new_dry_run(client: &'a Client) -> Self {
+        Self {
+            client,
+            dry_run: true,
+            statement_log: RefCell::new(Vec::new()),
         }
     }
 
@@ -117,26 +284,21 @@ impl<'a> DeploymentExecutor<'a> {
         Self {
             client,
             dry_run,
-            collected_sql: None,
-        }
-    }
-
-    /// Create a deployment executor with an optional SQL collector for JSON output.
-    pub fn with_collector(
-        client: &'a Client,
-        dry_run: bool,
-        collector: Option<SqlCollector>,
-    ) -> Self {
-        Self {
-            client,
-            dry_run,
-            collected_sql: collector,
+            statement_log: RefCell::new(Vec::new()),
         }
     }
 
     /// Returns true if this executor is in dry-run mode.
     pub fn is_dry_run(&self) -> bool {
         self.dry_run
+    }
+
+    /// Drain and return all statements recorded since the last call.
+    ///
+    /// Use this between objects to capture per-object statement lists
+    /// for `ObjectResult`.
+    pub fn take_statements(&self) -> Vec<String> {
+        self.statement_log.borrow_mut().drain(..).collect()
     }
 
     /// Execute all SQL statements for a database object.
@@ -249,18 +411,13 @@ impl<'a> DeploymentExecutor<'a> {
 
     /// Execute (or print in dry-run mode) a single SQL statement.
     ///
-    /// When a collector is present (JSON mode), statements are collected instead of printed.
+    /// In dry-run mode, statements are always logged to the internal
+    /// statement buffer (retrievable via `take_statements()`).
     pub async fn execute_sql(&self, stmt: &impl ToString) -> Result<(), CliError> {
         let sql = stmt.to_string();
 
         if self.dry_run {
-            let formatted = format!("{};", sql);
-            if let Some(ref collector) = self.collected_sql {
-                collector.push(formatted);
-            } else {
-                info!("{}", formatted);
-                info!();
-            }
+            self.statement_log.borrow_mut().push(sql.clone());
             return Ok(());
         }
 

@@ -33,7 +33,7 @@ impl GrantObjectKind {
     pub fn sql_keyword(&self) -> &'static str {
         match self {
             Self::Table => "TABLE",
-            Self::Source => "SOURCE",
+            Self::Source => "TABLE",
             Self::Secret => "SECRET",
             Self::Connection => "CONNECTION",
         }
@@ -51,6 +51,15 @@ impl GrantObjectKind {
         match self {
             Self::Table => "table",
             Self::Source => "source",
+            Self::Secret => "secret",
+            Self::Connection => "connection",
+        }
+    }
+
+    /// The `object_type` string used in `mz_default_privileges`.
+    pub fn object_type_str(&self) -> &'static str {
+        match self {
+            Self::Table | Self::Source => "table",
             Self::Secret => "secret",
             Self::Connection => "connection",
         }
@@ -79,8 +88,24 @@ pub async fn reconcile(
         )
         .await
         .map_err(CliError::Connection)?;
+    let default_privs = client
+        .introspection()
+        .get_default_privilege_grants_for_database_object(
+            kind.catalog_table(),
+            &obj_id.database,
+            &obj_id.schema,
+            &obj_id.object,
+            kind.object_type_str(),
+        )
+        .await
+        .map_err(CliError::Connection)?;
+    let protected: BTreeSet<_> = default_privs
+        .iter()
+        .map(|g| (g.grantee.to_lowercase(), g.privilege_type.to_uppercase()))
+        .collect();
     let desired = desired_grants(grants, kind.all_privileges());
-    let revocations = stale_grant_revocations(&current, &desired, kind.sql_keyword(), &fqn);
+    let revocations =
+        stale_grant_revocations(&current, &desired, &protected, kind.sql_keyword(), &fqn);
     execute_revocations(executor, &revocations, kind.label(), obj_id).await
 }
 
@@ -120,10 +145,15 @@ pub fn desired_grants(
     result
 }
 
-/// Compute REVOKE SQL strings for grants that exist in `current` but not in `desired`.
+/// Compute REVOKE SQL strings for grants that exist in `current` but not in
+/// `desired` and not in `protected`.
+///
+/// `protected` contains grants that should never be revoked (e.g., grants
+/// originating from `ALTER DEFAULT PRIVILEGES`).
 pub fn stale_grant_revocations(
     current: &[ObjectGrant],
     desired: &BTreeSet<(String, String)>,
+    protected: &BTreeSet<(String, String)>,
     object_type_keyword: &str,
     object_name_sql: &str,
 ) -> Vec<String> {
@@ -133,7 +163,7 @@ pub fn stale_grant_revocations(
             grant.grantee.to_lowercase(),
             grant.privilege_type.to_uppercase(),
         );
-        if !desired.contains(&key) {
+        if !desired.contains(&key) && !protected.contains(&key) {
             revocations.push(format!(
                 "REVOKE {} ON {} {} FROM \"{}\"",
                 grant.privilege_type, object_type_keyword, object_name_sql, grant.grantee
@@ -309,7 +339,13 @@ mod tests {
         let mut desired = BTreeSet::new();
         desired.insert(("reader".to_string(), "USAGE".to_string()));
 
-        let revocations = stale_grant_revocations(&current, &desired, "CLUSTER", "\"my_cluster\"");
+        let revocations = stale_grant_revocations(
+            &current,
+            &desired,
+            &BTreeSet::new(),
+            "CLUSTER",
+            "\"my_cluster\"",
+        );
         assert!(revocations.is_empty());
     }
 
@@ -322,7 +358,13 @@ mod tests {
         let mut desired = BTreeSet::new();
         desired.insert(("reader".to_string(), "USAGE".to_string()));
 
-        let revocations = stale_grant_revocations(&current, &desired, "CLUSTER", "\"my_cluster\"");
+        let revocations = stale_grant_revocations(
+            &current,
+            &desired,
+            &BTreeSet::new(),
+            "CLUSTER",
+            "\"my_cluster\"",
+        );
         assert_eq!(revocations.len(), 1);
         assert_eq!(
             revocations[0],
@@ -335,8 +377,13 @@ mod tests {
         let current = vec![make_object_grant("reader", "USAGE")];
         let desired = BTreeSet::new();
 
-        let revocations =
-            stale_grant_revocations(&current, &desired, "TABLE", "\"db\".\"public\".\"t\"");
+        let revocations = stale_grant_revocations(
+            &current,
+            &desired,
+            &BTreeSet::new(),
+            "TABLE",
+            "\"db\".\"public\".\"t\"",
+        );
         assert_eq!(revocations.len(), 1);
         assert_eq!(
             revocations[0],
@@ -349,13 +396,15 @@ mod tests {
         let mut desired = BTreeSet::new();
         desired.insert(("reader".to_string(), "USAGE".to_string()));
 
-        let revocations = stale_grant_revocations(&[], &desired, "CLUSTER", "\"my_cluster\"");
+        let revocations =
+            stale_grant_revocations(&[], &desired, &BTreeSet::new(), "CLUSTER", "\"my_cluster\"");
         assert!(revocations.is_empty());
     }
 
     #[test]
     fn test_stale_grant_revocations_both_empty() {
-        let revocations = stale_grant_revocations(&[], &BTreeSet::new(), "SECRET", "\"s\"");
+        let revocations =
+            stale_grant_revocations(&[], &BTreeSet::new(), &BTreeSet::new(), "SECRET", "\"s\"");
         assert!(revocations.is_empty());
     }
 
@@ -366,7 +415,13 @@ mod tests {
         let mut desired = BTreeSet::new();
         desired.insert(("reader".to_string(), "USAGE".to_string()));
 
-        let revocations = stale_grant_revocations(&current, &desired, "CLUSTER", "\"my_cluster\"");
+        let revocations = stale_grant_revocations(
+            &current,
+            &desired,
+            &BTreeSet::new(),
+            "CLUSTER",
+            "\"my_cluster\"",
+        );
         assert!(revocations.is_empty());
     }
 
@@ -379,7 +434,13 @@ mod tests {
         ];
         let desired = BTreeSet::new(); // All grants removed
 
-        let revocations = stale_grant_revocations(&current, &desired, "CLUSTER", "\"my_cluster\"");
+        let revocations = stale_grant_revocations(
+            &current,
+            &desired,
+            &BTreeSet::new(),
+            "CLUSTER",
+            "\"my_cluster\"",
+        );
         assert_eq!(revocations.len(), 3);
     }
 
@@ -388,8 +449,13 @@ mod tests {
         let current = vec![make_object_grant("reader", "USAGE")];
         let desired = BTreeSet::new();
 
-        let revocations =
-            stale_grant_revocations(&current, &desired, "NETWORK POLICY", "\"my_policy\"");
+        let revocations = stale_grant_revocations(
+            &current,
+            &desired,
+            &BTreeSet::new(),
+            "NETWORK POLICY",
+            "\"my_policy\"",
+        );
         assert_eq!(revocations.len(), 1);
         assert_eq!(
             revocations[0],
@@ -405,6 +471,7 @@ mod tests {
         let revocations = stale_grant_revocations(
             &current,
             &desired,
+            &BTreeSet::new(),
             "CONNECTION",
             "\"db\".\"public\".\"my_conn\"",
         );
@@ -423,6 +490,7 @@ mod tests {
         let revocations = stale_grant_revocations(
             &current,
             &desired,
+            &BTreeSet::new(),
             "SECRET",
             "\"db\".\"public\".\"my_secret\"",
         );
@@ -441,14 +509,39 @@ mod tests {
         let revocations = stale_grant_revocations(
             &current,
             &desired,
-            "SOURCE",
+            &BTreeSet::new(),
+            "TABLE",
             "\"db\".\"public\".\"my_source\"",
         );
         assert_eq!(revocations.len(), 1);
         assert_eq!(
             revocations[0],
-            "REVOKE SELECT ON SOURCE \"db\".\"public\".\"my_source\" FROM \"reader\""
+            "REVOKE SELECT ON TABLE \"db\".\"public\".\"my_source\" FROM \"reader\""
         );
+    }
+
+    #[test]
+    fn test_stale_grant_revocations_protected_grants_not_revoked() {
+        // Current has grants for reader (from default privileges) and writer (explicit).
+        // Neither is in desired, but reader's grant is protected.
+        let current = vec![
+            make_object_grant("reader", "SELECT"),
+            make_object_grant("writer", "SELECT"),
+        ];
+        let desired = BTreeSet::new();
+        let mut protected = BTreeSet::new();
+        protected.insert(("reader".to_string(), "SELECT".to_string()));
+
+        let revocations = stale_grant_revocations(
+            &current,
+            &desired,
+            &protected,
+            "TABLE",
+            "\"db\".\"public\".\"t\"",
+        );
+        assert_eq!(revocations.len(), 1);
+        assert!(revocations[0].contains("writer"));
+        assert!(!revocations[0].contains("reader"));
     }
 
     // =========================================================================
@@ -461,7 +554,13 @@ mod tests {
         let desired = desired_grants(&[grant], &["USAGE", "CREATE"]);
         let current = vec![make_object_grant("reader", "USAGE")];
 
-        let revocations = stale_grant_revocations(&current, &desired, "CLUSTER", "\"my_cluster\"");
+        let revocations = stale_grant_revocations(
+            &current,
+            &desired,
+            &BTreeSet::new(),
+            "CLUSTER",
+            "\"my_cluster\"",
+        );
         assert!(revocations.is_empty());
     }
 
@@ -475,7 +574,13 @@ mod tests {
             make_object_grant("writer", "CREATE"),
         ];
 
-        let revocations = stale_grant_revocations(&current, &desired, "CLUSTER", "\"my_cluster\"");
+        let revocations = stale_grant_revocations(
+            &current,
+            &desired,
+            &BTreeSet::new(),
+            "CLUSTER",
+            "\"my_cluster\"",
+        );
         assert_eq!(revocations.len(), 1);
         assert!(revocations[0].contains("writer"));
         assert!(revocations[0].contains("CREATE"));
@@ -490,7 +595,13 @@ mod tests {
             make_object_grant("writer", "CREATE"),
         ];
 
-        let revocations = stale_grant_revocations(&current, &desired, "CLUSTER", "\"my_cluster\"");
+        let revocations = stale_grant_revocations(
+            &current,
+            &desired,
+            &BTreeSet::new(),
+            "CLUSTER",
+            "\"my_cluster\"",
+        );
         assert_eq!(revocations.len(), 2);
     }
 
@@ -504,7 +615,13 @@ mod tests {
             make_object_grant("admin", "CREATE"),
         ];
 
-        let revocations = stale_grant_revocations(&current, &desired, "CLUSTER", "\"my_cluster\"");
+        let revocations = stale_grant_revocations(
+            &current,
+            &desired,
+            &BTreeSet::new(),
+            "CLUSTER",
+            "\"my_cluster\"",
+        );
         assert!(revocations.is_empty());
     }
 
@@ -519,7 +636,13 @@ mod tests {
             make_object_grant("reader", "USAGE"),
         ];
 
-        let revocations = stale_grant_revocations(&current, &desired, "CLUSTER", "\"my_cluster\"");
+        let revocations = stale_grant_revocations(
+            &current,
+            &desired,
+            &BTreeSet::new(),
+            "CLUSTER",
+            "\"my_cluster\"",
+        );
         assert_eq!(revocations.len(), 1);
         assert!(revocations[0].contains("reader"));
     }
@@ -538,7 +661,8 @@ mod tests {
             make_object_grant("admin", "USAGE"),
         ];
 
-        let revocations = stale_grant_revocations(&current, &desired, "CLUSTER", "\"c\"");
+        let revocations =
+            stale_grant_revocations(&current, &desired, &BTreeSet::new(), "CLUSTER", "\"c\"");
         assert_eq!(revocations.len(), 1);
         assert!(revocations[0].contains("admin"));
     }

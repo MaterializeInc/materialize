@@ -174,5 +174,16 @@ pub(in super::super) fn validate_source_cluster(
                 }
             }
         }
+
+        if source.external_references.is_some() {
+            let source_sql = format!("{};", source);
+            errors.push(ValidationError::with_file_and_sql(
+                ValidationErrorKind::SourceExternalReferences {
+                    source_name: source.name.to_string(),
+                },
+                fqn.path.clone(),
+                source_sql,
+            ));
+        }
     }
 }

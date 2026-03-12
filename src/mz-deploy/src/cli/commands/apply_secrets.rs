@@ -1,8 +1,7 @@
 //! Apply secrets command - create missing secrets and update existing ones.
 
 use crate::cli::commands::grants;
-use crate::cli::executor::SqlCollector;
-use crate::cli::progress;
+use crate::cli::executor::{ApplyResult, ObjectResult};
 use crate::cli::{CliError, executor};
 use crate::client::Client;
 use crate::config::Settings;
@@ -10,41 +9,27 @@ use crate::project;
 use crate::project::ast::Statement;
 use crate::secret_resolver::SecretResolver;
 use mz_sql_parser::ast::{AlterSecretStatement, Raw};
-use std::time::Instant;
 
-/// Run the `apply secrets` command.
-///
-/// Compiles the project, collects all secret objects, and for each secret:
-/// 1. Executes `CREATE SECRET IF NOT EXISTS` (idempotent create)
-/// 2. Executes `ALTER SECRET` (always update the value to match the file)
-/// 3. Applies any associated grants and comments
-pub async fn run(
+/// Plan secret changes without executing or printing.
+pub async fn plan(
     settings: &Settings,
-    dry_run: bool,
-    collector: Option<SqlCollector>,
-) -> Result<(), CliError> {
-    let profile = settings.connection();
-    let start_time = Instant::now();
-
-    let planned_project = super::compile::run(settings, true).await?;
-
+    client: &Client,
+    planned_project: &project::planned::Project,
+) -> Result<ApplyResult, CliError> {
     let secrets: Vec<_> = planned_project
         .iter_objects()
         .filter(|obj| matches!(obj.typed_object.stmt, Statement::CreateSecret(_)))
         .collect();
 
     if secrets.is_empty() {
-        progress::info("No secrets found in project — nothing to do.");
-        return Ok(());
+        return Ok(ApplyResult {
+            phase: "secrets".to_string(),
+            setup_statements: vec![],
+            results: vec![],
+        });
     }
 
-    progress::info(&format!("Found {} secret(s) in project", secrets.len()));
-
-    let client = Client::connect_with_profile(profile.clone())
-        .await
-        .map_err(CliError::Connection)?;
-
-    let executor = executor::DeploymentExecutor::with_collector(&client, dry_run, collector);
+    let executor = executor::DeploymentExecutor::new_dry_run(client);
 
     // Prepare schemas and mod statements for secret schemas
     let secret_schemas = project::SchemaQualifier::collect_from(&secrets);
@@ -52,28 +37,37 @@ pub async fn run(
         .prepare_databases_and_schemas(&planned_project, &secret_schemas, None)
         .await?;
 
+    let setup_statements = executor.take_statements();
     let resolver = SecretResolver::new(&settings.profile_config.security);
 
+    let mut object_results = Vec::new();
     for obj in &secrets {
         let typed_obj = &obj.typed_object;
         if let Statement::CreateSecret(ref create_stmt) = typed_obj.stmt {
             let name = &create_stmt.name;
 
+            // Drain prior statements
+            executor.take_statements();
+
             let resolved_stmt = resolver.resolve_secret_for_cli(create_stmt).await?;
 
+            // Build the secret-bearing SQL but do NOT log it through the executor
+            // to avoid leaking secret values into output or serialization.
             let mut create_if_not_exists = resolved_stmt.clone();
             create_if_not_exists.if_not_exists = true;
-            executor.execute_sql(&create_if_not_exists).await?;
+            let create_sql = create_if_not_exists.to_string();
 
             let alter_stmt = AlterSecretStatement::<Raw> {
                 name: name.clone(),
                 if_exists: false,
                 value: resolved_stmt.value.clone(),
             };
-            executor.execute_sql(&alter_stmt).await?;
+            let alter_sql = alter_stmt.to_string();
+
+            let redacted_statements = vec![create_sql, alter_sql];
 
             grants::reconcile(
-                &client,
+                client,
                 &executor,
                 &obj.id,
                 &typed_obj.grants,
@@ -85,16 +79,35 @@ pub async fn run(
                 executor.execute_sql(comment).await?;
             }
 
-            progress::success(&format!("{}", obj.id));
+            object_results.push(ObjectResult {
+                object: format!("{}", obj.id),
+                action: "created".to_string(),
+                statements: executor.take_statements(),
+                redacted_statements,
+            });
         }
     }
 
-    let duration = start_time.elapsed();
-    progress::success(&format!(
-        "Applied {} secret(s) in {:.1}s",
-        secrets.len(),
-        duration.as_secs_f64()
-    ));
+    Ok(ApplyResult {
+        phase: "secrets".to_string(),
+        setup_statements,
+        results: object_results,
+    })
+}
 
-    Ok(())
+/// Run the `apply secrets` command: plan, render, optionally execute.
+pub async fn run(settings: &Settings, dry_run: bool) -> Result<ApplyResult, CliError> {
+    let planned_project =
+        super::compile::run(settings, true, !crate::log::json_output_enabled()).await?;
+    let client = Client::connect_with_profile(settings.connection().clone())
+        .await
+        .map_err(CliError::Connection)?;
+
+    let result = plan(settings, &client, &planned_project).await?;
+
+    if !dry_run {
+        result.execute(&client).await?;
+    }
+
+    Ok(result)
 }

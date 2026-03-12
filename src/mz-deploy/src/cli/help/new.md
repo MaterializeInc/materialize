@@ -12,15 +12,15 @@ repository.
 
 1. Creates the project directory with the given name.
 2. Creates the standard directory structure:
-   - `models/materialize/public/` — SQL files for views, MVs, etc.
-   - `clusters/` — Cluster definitions
-   - `roles/` — Role definitions
+    - `models/materialize/public/` — SQL files for views, MVs, etc.
+    - `clusters/` — Cluster definitions
+    - `roles/` — Role definitions
 3. Writes boilerplate files:
-   - `project.toml` — Project configuration
-   - `.gitignore` — Ignores `.mz-deploy/` cache directory
-   - `README.md` — Getting-started documentation
-   - `.agent/skills/mz-deploy/SKILL.md` — LLM agent skill file
-   - `.claude/skills/mz-deploy/` — Symlink (auto-loaded by Claude Code)
+    - `project.toml` — Project configuration
+    - `.gitignore` — Ignores `.mz-deploy/` cache directory
+    - `README.md` — Getting-started documentation
+    - `.agents/skills/mz-deploy/SKILL.md` — LLM agent skill file
+    - `.claude/skills/mz-deploy/` — Symlink (auto-loaded by Claude Code)
 4. Initializes a git repository (unless `--no-git`).
 
 ## Flags

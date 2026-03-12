@@ -1,8 +1,7 @@
 //! Apply connections command - create missing connections and reconcile drifted ones.
 
 use crate::cli::commands::grants;
-use crate::cli::executor::SqlCollector;
-use crate::cli::progress;
+use crate::cli::executor::{ApplyResult, ObjectResult};
 use crate::cli::{CliError, executor};
 use crate::client::Client;
 use crate::config::Settings;
@@ -15,45 +14,27 @@ use mz_sql_parser::ast::{
 };
 use mz_sql_parser::parser::parse_statements;
 use std::collections::BTreeMap;
-use std::time::Instant;
 
-/// Run the `apply connections` command.
-///
-/// Compiles the project, collects all connection objects, and for each connection:
-/// 1. Fetches `SHOW CREATE CONNECTION` for the existing connection (if any)
-/// 2. If missing, executes `CREATE CONNECTION IF NOT EXISTS`
-/// 3. If exists, diffs options and emits `ALTER CONNECTION ... SET/DROP`
-/// 4. Applies any associated grants and comments
-pub async fn run(
+/// Plan connection changes without executing or printing.
+pub async fn plan(
     settings: &Settings,
-    dry_run: bool,
-    collector: Option<SqlCollector>,
-) -> Result<(), CliError> {
-    let profile = settings.connection();
-    let start_time = Instant::now();
-
-    let planned_project = super::compile::run(settings, true).await?;
-
+    client: &Client,
+    planned_project: &project::planned::Project,
+) -> Result<ApplyResult, CliError> {
     let connections: Vec<_> = planned_project
         .iter_objects()
         .filter(|obj| matches!(obj.typed_object.stmt, Statement::CreateConnection(_)))
         .collect();
 
     if connections.is_empty() {
-        progress::info("No connections found in project — nothing to do.");
-        return Ok(());
+        return Ok(ApplyResult {
+            phase: "connections".to_string(),
+            setup_statements: vec![],
+            results: vec![],
+        });
     }
 
-    progress::info(&format!(
-        "Found {} connection(s) in project",
-        connections.len()
-    ));
-
-    let client = Client::connect_with_profile(profile.clone())
-        .await
-        .map_err(CliError::Connection)?;
-
-    let executor = executor::DeploymentExecutor::with_collector(&client, dry_run, collector);
+    let executor = executor::DeploymentExecutor::new_dry_run(client);
 
     // Prepare schemas
     let connection_schemas = project::SchemaQualifier::collect_from(&connections);
@@ -61,17 +42,19 @@ pub async fn run(
         .prepare_databases_and_schemas(&planned_project, &connection_schemas, None)
         .await?;
 
+    let setup_statements = executor.take_statements();
     let resolver = SecretResolver::new(&settings.profile_config.security);
 
-    let mut created = 0u32;
-    let mut altered = 0u32;
-    let mut up_to_date = 0u32;
+    let mut object_results = Vec::new();
 
     for obj in &connections {
         let typed_obj = &obj.typed_object;
         let Statement::CreateConnection(ref create_stmt) = typed_obj.stmt else {
             unreachable!("filtered for CreateConnection above");
         };
+
+        // Drain prior statements
+        executor.take_statements();
 
         let resolved_stmt = match resolver.resolve_statement_for_cli(&typed_obj.stmt).await? {
             Statement::CreateConnection(s) => s,
@@ -82,21 +65,29 @@ pub async fn run(
         let schema = &obj.id.schema;
         let name = &obj.id.object;
 
-        // Fetch existing connection's CREATE SQL
-        let live_sql = client
+        let exists = client
             .introspection()
-            .get_connection_create_sql(database, schema, name)
+            .check_connection_exists(database, schema, name)
             .await
             .map_err(CliError::Connection)?;
 
-        match live_sql {
+        let live_sql = if exists {
+            client
+                .introspection()
+                .get_connection_create_sql(database, schema, name)
+                .await
+                .map_err(CliError::Connection)?
+        } else {
+            None
+        };
+
+        let action = match live_sql {
             None => {
                 // Connection doesn't exist — create it
                 let mut create_if_not_exists = resolved_stmt.clone();
                 create_if_not_exists.if_not_exists = true;
                 executor.execute_sql(&create_if_not_exists).await?;
-                created += 1;
-                progress::success(&format!("{} (created)", obj.id));
+                "created"
             }
             Some(sql) => {
                 // Parse the live CREATE CONNECTION SQL
@@ -105,8 +96,7 @@ pub async fn run(
                     diff_connection_options(&resolved_stmt.values, &live_create.values);
 
                 if to_set.is_empty() && to_drop.is_empty() {
-                    up_to_date += 1;
-                    progress::info(&format!("{} (up to date)", obj.id));
+                    "up_to_date"
                 } else {
                     let actions: Vec<AlterConnectionAction<Raw>> = to_set
                         .into_iter()
@@ -121,14 +111,13 @@ pub async fn run(
                         with_options: vec![],
                     };
                     executor.execute_sql(&alter_stmt).await?;
-                    altered += 1;
-                    progress::success(&format!("{} (altered)", obj.id));
+                    "altered"
                 }
             }
-        }
+        };
 
         grants::reconcile(
-            &client,
+            client,
             &executor,
             &obj.id,
             &typed_obj.grants,
@@ -140,19 +129,37 @@ pub async fn run(
         for comment in &typed_obj.comments {
             executor.execute_sql(comment).await?;
         }
+
+        object_results.push(ObjectResult {
+            object: format!("{}", obj.id),
+            action: action.to_string(),
+            statements: executor.take_statements(),
+            redacted_statements: vec![],
+        });
     }
 
-    let duration = start_time.elapsed();
-    progress::success(&format!(
-        "Applied {} connection(s) in {:.1}s ({} created, {} altered, {} up to date)",
-        connections.len(),
-        duration.as_secs_f64(),
-        created,
-        altered,
-        up_to_date,
-    ));
+    Ok(ApplyResult {
+        phase: "connections".to_string(),
+        setup_statements,
+        results: object_results,
+    })
+}
 
-    Ok(())
+/// Run the `apply connections` command: plan, render, optionally execute.
+pub async fn run(settings: &Settings, dry_run: bool) -> Result<ApplyResult, CliError> {
+    let planned_project =
+        super::compile::run(settings, true, !crate::log::json_output_enabled()).await?;
+    let client = Client::connect_with_profile(settings.connection().clone())
+        .await
+        .map_err(CliError::Connection)?;
+
+    let result = plan(settings, &client, &planned_project).await?;
+
+    if !dry_run {
+        result.execute(&client).await?;
+    }
+
+    Ok(result)
 }
 
 /// Parse a `CREATE CONNECTION` SQL string back into its AST statement.

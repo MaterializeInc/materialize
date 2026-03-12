@@ -71,7 +71,7 @@ pub async fn get_cluster(client: &Client, name: &str) -> Result<Option<Cluster>,
             id,
             name,
             size,
-            replication_factor
+            replication_factor::bigint AS replication_factor
         FROM mz_catalog.mz_clusters
         WHERE name = $1
     "#;
@@ -155,10 +155,10 @@ pub async fn get_cluster_config(
     let size: Option<String> = first_row.get("size");
     let replication_factor: Option<i64> = first_row.get("replication_factor");
 
-    // Query 2: Get grants
+    // Query 2: Get grants (excluding owner's implicit privileges)
     let grants_query = r#"
         WITH cluster_privilege AS (
-            SELECT mz_internal.mz_aclexplode(privileges).*
+            SELECT mz_internal.mz_aclexplode(privileges).*, owner_id
             FROM mz_clusters
             WHERE name = $1
         )
@@ -168,6 +168,7 @@ pub async fn get_cluster_config(
         FROM cluster_privilege AS c
         JOIN mz_roles AS grantee ON c.grantee = grantee.id
         WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+          AND c.grantee != c.owner_id
     "#;
 
     let grant_rows = client.query(grants_query, &[&name]).await?;
@@ -585,6 +586,28 @@ pub async fn find_sinks_depending_on_schemas(
         .collect())
 }
 
+/// Check if a connection exists in the specified database and schema.
+pub async fn check_connection_exists(
+    client: &Client,
+    database: &str,
+    schema: &str,
+    name: &str,
+) -> Result<bool, ConnectionError> {
+    let query = r#"
+        SELECT EXISTS(
+            SELECT 1
+            FROM mz_catalog.mz_connections c
+            JOIN mz_catalog.mz_schemas s ON c.schema_id = s.id
+            JOIN mz_catalog.mz_databases d ON s.database_id = d.id
+            WHERE d.name = $1 AND s.name = $2 AND c.name = $3
+        ) AS exists
+    "#;
+    let row = client
+        .query_one(query, &[&database, &schema, &name])
+        .await?;
+    Ok(row.get("exists"))
+}
+
 /// Check if an object (MV, table, source) exists in the specified schema.
 ///
 /// Used to verify that a replacement object exists before repointing a sink.
@@ -820,7 +843,7 @@ async fn get_named_object_grants(
     let query = format!(
         r#"
         WITH privilege AS (
-            SELECT mz_internal.mz_aclexplode(privileges).*
+            SELECT mz_internal.mz_aclexplode(privileges).*, owner_id
             FROM {}
             WHERE name = $1
         )
@@ -830,6 +853,7 @@ async fn get_named_object_grants(
         FROM privilege AS p
         JOIN mz_roles AS grantee ON p.grantee = grantee.id
         WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+          AND p.grantee != p.owner_id
         "#,
         catalog_table
     );
@@ -874,7 +898,7 @@ pub async fn get_database_object_grants(
     let query = format!(
         r#"
         WITH privilege AS (
-            SELECT mz_internal.mz_aclexplode(t.privileges).*
+            SELECT mz_internal.mz_aclexplode(t.privileges).*, t.owner_id
             FROM {} t
             JOIN mz_schemas s ON t.schema_id = s.id
             JOIN mz_databases d ON s.database_id = d.id
@@ -886,11 +910,119 @@ pub async fn get_database_object_grants(
         FROM privilege AS p
         JOIN mz_roles AS grantee ON p.grantee = grantee.id
         WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+          AND p.grantee != p.owner_id
         "#,
         catalog_table
     );
 
     let rows = client.query(&query, &[&database, &schema, &name]).await?;
+
+    Ok(rows
+        .iter()
+        .map(|row| ObjectGrant {
+            grantee: row.get("grantee"),
+            privilege_type: row.get("privilege_type"),
+        })
+        .collect())
+}
+
+/// Get default privilege grants for a named infrastructure object (cluster, network policy).
+///
+/// Queries `mz_default_privileges` to find grants that would be auto-applied
+/// to the given object based on its owner and any PUBLIC default privileges.
+/// These grants should be protected from revocation during reconciliation.
+async fn get_default_privilege_grants_for_named_object(
+    client: &Client,
+    catalog_table: &str,
+    name: &str,
+    object_type: &str,
+) -> Result<Vec<ObjectGrant>, ConnectionError> {
+    let query = format!(
+        r#"
+        SELECT
+            grantee_role.name AS grantee,
+            dp_priv.privilege_type
+        FROM mz_default_privileges dp
+        CROSS JOIN LATERAL unnest(
+            mz_internal.mz_format_privileges(dp.privileges)
+        ) AS dp_priv(privilege_type)
+        JOIN {} obj ON obj.name = $1
+        JOIN mz_roles AS grantee_role ON dp.grantee = grantee_role.id
+        WHERE dp.object_type = $2
+          AND (dp.role_id = obj.owner_id OR dp.role_id = 'p')
+          AND dp.database_id IS NULL
+          AND dp.schema_id IS NULL
+          AND grantee_role.name NOT IN ('none', 'mz_system', 'mz_support')
+        "#,
+        catalog_table
+    );
+
+    let rows = client.query(&query, &[&name, &object_type]).await?;
+
+    Ok(rows
+        .iter()
+        .map(|row| ObjectGrant {
+            grantee: row.get("grantee"),
+            privilege_type: row.get("privilege_type"),
+        })
+        .collect())
+}
+
+/// Get default privilege grants for a cluster by name.
+pub async fn get_default_privilege_grants_for_cluster(
+    client: &Client,
+    name: &str,
+) -> Result<Vec<ObjectGrant>, ConnectionError> {
+    get_default_privilege_grants_for_named_object(client, "mz_clusters", name, "cluster").await
+}
+
+/// Get default privilege grants for a network policy by name.
+pub async fn get_default_privilege_grants_for_network_policy(
+    client: &Client,
+    name: &str,
+) -> Result<Vec<ObjectGrant>, ConnectionError> {
+    get_default_privilege_grants_for_named_object(client, "mz_network_policies", name, "type").await
+}
+
+/// Get default privilege grants for a database object (table, source, secret, connection).
+///
+/// Queries `mz_default_privileges` to find grants that would be auto-applied
+/// to the given object based on its owner, database, schema, and any PUBLIC
+/// default privileges. These grants should be protected from revocation.
+pub async fn get_default_privilege_grants_for_database_object(
+    client: &Client,
+    catalog_table: &str,
+    database: &str,
+    schema: &str,
+    name: &str,
+    object_type: &str,
+) -> Result<Vec<ObjectGrant>, ConnectionError> {
+    let query = format!(
+        r#"
+        SELECT
+            grantee_role.name AS grantee,
+            dp_priv.privilege_type
+        FROM mz_default_privileges dp
+        CROSS JOIN LATERAL unnest(
+            mz_internal.mz_format_privileges(dp.privileges)
+        ) AS dp_priv(privilege_type)
+        JOIN {} obj ON obj.name = $3
+        JOIN mz_schemas s ON obj.schema_id = s.id
+        JOIN mz_databases d ON s.database_id = d.id
+        JOIN mz_roles AS grantee_role ON dp.grantee = grantee_role.id
+        WHERE d.name = $1 AND s.name = $2
+          AND dp.object_type = $4
+          AND (dp.role_id = obj.owner_id OR dp.role_id = 'p')
+          AND (dp.database_id IS NULL OR dp.database_id = d.id)
+          AND (dp.schema_id IS NULL OR dp.schema_id = s.id)
+          AND grantee_role.name NOT IN ('none', 'mz_system', 'mz_support')
+        "#,
+        catalog_table
+    );
+
+    let rows = client
+        .query(&query, &[&database, &schema, &name, &object_type])
+        .await?;
 
     Ok(rows
         .iter()
@@ -919,17 +1051,8 @@ pub async fn get_connection_create_sql(
         quote_identifier(name)
     );
     let query = format!("SHOW CREATE CONNECTION {}", fqn);
-    match client.query(&query, &[]).await {
-        Ok(rows) => Ok(rows.first().map(|row| row.get("create_sql"))),
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("unknown connection") {
-                Ok(None)
-            } else {
-                Err(e)
-            }
-        }
-    }
+    let rows = client.query(&query, &[]).await?;
+    Ok(rows.first().map(|row| row.get("create_sql")))
 }
 
 impl IntrospectionClient<'_> {
@@ -1008,6 +1131,16 @@ impl IntrospectionClient<'_> {
         schemas: &[SchemaQualifier],
     ) -> Result<Vec<DependentSink>, ConnectionError> {
         find_sinks_depending_on_schemas(self.client, schemas).await
+    }
+
+    /// Check if a connection exists in the specified database and schema.
+    pub async fn check_connection_exists(
+        &self,
+        database: &str,
+        schema: &str,
+        name: &str,
+    ) -> Result<bool, ConnectionError> {
+        check_connection_exists(self.client, database, schema, name).await
     }
 
     /// Check if an object (MV, table, source) exists in the specified schema.
@@ -1153,5 +1286,41 @@ impl IntrospectionClient<'_> {
         name: &str,
     ) -> Result<Option<String>, ConnectionError> {
         get_connection_create_sql(self.client, database, schema, name).await
+    }
+
+    /// Get default privilege grants for a cluster by name.
+    pub async fn get_default_privilege_grants_for_cluster(
+        &self,
+        name: &str,
+    ) -> Result<Vec<ObjectGrant>, ConnectionError> {
+        get_default_privilege_grants_for_cluster(self.client, name).await
+    }
+
+    /// Get default privilege grants for a network policy by name.
+    pub async fn get_default_privilege_grants_for_network_policy(
+        &self,
+        name: &str,
+    ) -> Result<Vec<ObjectGrant>, ConnectionError> {
+        get_default_privilege_grants_for_network_policy(self.client, name).await
+    }
+
+    /// Get default privilege grants for a database object.
+    pub async fn get_default_privilege_grants_for_database_object(
+        &self,
+        catalog_table: &str,
+        database: &str,
+        schema: &str,
+        name: &str,
+        object_type: &str,
+    ) -> Result<Vec<ObjectGrant>, ConnectionError> {
+        get_default_privilege_grants_for_database_object(
+            self.client,
+            catalog_table,
+            database,
+            schema,
+            name,
+            object_type,
+        )
+        .await
     }
 }

@@ -137,8 +137,8 @@ enum ValidationFailure {
 enum ExecutionFailure {
     /// Setup or query execution error.
     Error(String),
-    /// Test assertion mismatch with pre-formatted display output.
-    AssertionFailed(String),
+    /// Test assertion mismatch with pre-formatted display and structured JUnit output.
+    AssertionFailed { display: String, junit: String },
 }
 
 impl TestOutcome {
@@ -153,9 +153,9 @@ impl TestOutcome {
             TestOutcome::Failed(failure) => {
                 let msg = match failure {
                     ExecutionFailure::Error(msg) => msg.replace('\n', "&#10;"),
-                    ExecutionFailure::AssertionFailed(_) => "test assertion failed".to_string(),
+                    ExecutionFailure::AssertionFailed { junit, .. } => junit.clone(),
                 };
-                junit_report::TestCase::failure(name, elapsed, "failure", &msg)
+                junit_report::TestCase::failure(name, elapsed, "assertion", &msg)
             }
             TestOutcome::ValidationFailed(failure) => {
                 let msg = match failure {
@@ -228,8 +228,7 @@ pub async fn run(
     let planned_project = project::plan(
         directory,
         &settings.profile_name,
-        settings.suffix(),
-        settings.cluster_suffix(),
+        settings.profile_suffix(),
         settings.variables(),
     )?;
     let empty_types = Types::default();
@@ -381,9 +380,10 @@ async fn run_single_test(
             if rows.is_empty() {
                 TestOutcome::Passed
             } else {
-                TestOutcome::Failed(ExecutionFailure::AssertionFailed(format_assertion_rows(
-                    &rows,
-                )))
+                TestOutcome::Failed(ExecutionFailure::AssertionFailed {
+                    display: format_assertion_rows(&rows),
+                    junit: format_assertion_rows_for_junit(&rows),
+                })
             }
         }
         Err(e) => TestOutcome::Failed(ExecutionFailure::Error(format!(
@@ -454,7 +454,7 @@ fn print_test_outcome(name: &str, outcome: &TestOutcome) {
                 "FAILED".red().bold()
             );
             match failure {
-                ExecutionFailure::AssertionFailed(display) => eprint!("{}", display),
+                ExecutionFailure::AssertionFailed { display, .. } => eprint!("{}", display),
                 ExecutionFailure::Error(msg) => {
                     eprintln!("  {}: {}", "error".red().bold(), msg)
                 }
@@ -565,6 +565,61 @@ fn format_assertion_rows(rows: &[tokio_postgres::SimpleQueryRow]) -> String {
             }
         }
         writeln!(out, "  {}", values.join(" | ")).unwrap();
+    }
+    out
+}
+
+/// Formats failing assertion rows into structured plain-text for JUnit XML output.
+///
+/// Groups rows by status (MISSING / UNEXPECTED) and renders each row as
+/// `column_name=value` pairs, making failures easy to diagnose from CI reports.
+fn format_assertion_rows_for_junit(rows: &[tokio_postgres::SimpleQueryRow]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
+
+    // Column names from the first row, skipping column 0 (status).
+    let columns: Vec<String> = rows[0]
+        .columns()
+        .iter()
+        .skip(1)
+        .map(|col| col.name().to_string())
+        .collect();
+
+    // Group rows by their status value (column 0).
+    let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for row in rows {
+        let status = row.get(0).unwrap_or("UNKNOWN").to_string();
+        let pairs: Vec<String> = columns
+            .iter()
+            .enumerate()
+            .map(|(i, col_name)| {
+                let value = row.get(i + 1).unwrap_or("<null>");
+                format!("{}={}", col_name, value)
+            })
+            .collect();
+        groups
+            .entry(status)
+            .or_default()
+            .push(format!("  {}", pairs.join(", ")));
+    }
+
+    let mut out = String::new();
+    let mut first = true;
+    for (status, row_lines) in &groups {
+        if !first {
+            writeln!(out).unwrap();
+        }
+        first = false;
+        let description = match status.as_str() {
+            "MISSING" => "expected but not produced",
+            "UNEXPECTED" => "produced but not expected",
+            _ => "unknown status",
+        };
+        writeln!(out, "{} rows ({}):", status, description).unwrap();
+        for line in row_lines {
+            writeln!(out, "{}", line).unwrap();
+        }
     }
     out
 }

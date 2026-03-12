@@ -2,82 +2,73 @@
 
 use crate::cli::CliError;
 use crate::cli::commands::grants;
-use crate::cli::executor::{DeploymentExecutor, SqlCollector};
-use crate::cli::progress;
+use crate::cli::executor::{ApplyResult, DeploymentExecutor, ObjectResult};
 use crate::client::{Client, ClusterOptions, quote_identifier};
 use crate::config::Settings;
-use crate::info;
 use crate::project::clusters::{self, ClusterDefinition, extract_replication_factor, extract_size};
-use owo_colors::OwoColorize;
-use std::time::Instant;
+use std::collections::BTreeSet;
 
-/// Run the `clusters apply` command.
-///
-/// Loads cluster definitions from `<directory>/clusters/` and converges
-/// the live Materialize state to match: creating missing clusters and
-/// altering ones whose configuration has drifted.
-pub async fn run(
-    settings: &Settings,
-    dry_run: bool,
-    collector: Option<SqlCollector>,
-) -> Result<(), CliError> {
+/// Plan cluster changes without executing or printing.
+pub async fn plan(settings: &Settings, client: &Client) -> Result<ApplyResult, CliError> {
     let profile = settings.connection();
     let directory = &settings.directory;
-    let start_time = Instant::now();
 
-    // Load cluster definitions
-    progress::stage_start("Loading cluster definitions");
-    let load_start = Instant::now();
     let definitions = clusters::load_clusters(
         directory,
         &profile.name,
-        settings.cluster_suffix(),
+        settings.profile_suffix(),
         settings.variables(),
     )?;
 
     if definitions.is_empty() {
-        info!(
-            "  {} No clusters/ directory or no .sql files found — nothing to do.",
-            "info:".blue().bold()
-        );
-        return Ok(());
+        return Ok(ApplyResult {
+            phase: "clusters".to_string(),
+            setup_statements: vec![],
+            results: vec![],
+        });
     }
 
-    progress::stage_success(
-        &format!("Found {} cluster definition(s)", definitions.len()),
-        load_start.elapsed(),
-    );
+    let executor = DeploymentExecutor::new_dry_run(client);
 
-    // Connect to Materialize
-    let client = Client::connect_with_profile(profile.clone())
+    let mut object_results = Vec::new();
+    for def in &definitions {
+        let obj_result = plan_cluster(client, &executor, def).await?;
+        object_results.push(obj_result);
+    }
+
+    Ok(ApplyResult {
+        phase: "clusters".to_string(),
+        setup_statements: vec![],
+        results: object_results,
+    })
+}
+
+/// Run the `clusters apply` command: plan, render, optionally execute.
+pub async fn run(settings: &Settings, dry_run: bool) -> Result<ApplyResult, CliError> {
+    let client = Client::connect_with_profile(settings.connection().clone())
         .await
         .map_err(CliError::Connection)?;
 
-    let executor = DeploymentExecutor::with_collector(&client, dry_run, collector);
+    let result = plan(settings, &client).await?;
 
-    // Apply each cluster definition
-    for def in &definitions {
-        apply_cluster(&client, &executor, def).await?;
+    if !dry_run {
+        result.execute(&client).await?;
     }
 
-    let total_duration = start_time.elapsed();
-    if dry_run {
-        progress::summary("Clusters dry run complete", total_duration);
-    } else {
-        progress::summary("Clusters applied successfully", total_duration);
-    }
-
-    Ok(())
+    Ok(result)
 }
 
-/// Apply a single cluster definition: create if missing, alter if drifted,
-/// then execute grants, revocations, and comments.
-async fn apply_cluster(
+/// Plan a single cluster definition: create if missing, alter if drifted,
+/// then plan grants, revocations, and comments.
+async fn plan_cluster(
     client: &Client,
     executor: &DeploymentExecutor<'_>,
     def: &ClusterDefinition,
-) -> Result<(), CliError> {
+) -> Result<ObjectResult, CliError> {
     let cluster_name = &def.name;
+
+    // Drain any prior statements
+    executor.take_statements();
 
     // Check if cluster already exists
     let existing = client
@@ -86,20 +77,12 @@ async fn apply_cluster(
         .await
         .map_err(CliError::Connection)?;
 
-    match existing {
+    let action = match existing {
         None => {
-            // Create cluster from the parsed CREATE CLUSTER statement
-            if !executor.is_dry_run() {
-                info!(
-                    "  {} Creating cluster '{}'",
-                    "+".green().bold(),
-                    cluster_name
-                );
-            }
             executor.execute_sql(&def.create_stmt).await?;
+            "created"
         }
         Some(existing_cluster) => {
-            // Compare desired vs actual configuration
             let desired_size = extract_size(&def.create_stmt);
             let desired_rf = extract_replication_factor(&def.create_stmt);
 
@@ -124,13 +107,6 @@ async fn apply_cluster(
                         .unwrap_or(1)
                 });
 
-                if !executor.is_dry_run() {
-                    info!(
-                        "  {} Altering cluster '{}'",
-                        "~".yellow().bold(),
-                        cluster_name
-                    );
-                }
                 let options = ClusterOptions {
                     size,
                     replication_factor: rf,
@@ -142,31 +118,38 @@ async fn apply_cluster(
                     options.replication_factor
                 );
                 executor.execute_sql(&alter_sql).await?;
-            } else if !executor.is_dry_run() {
-                info!(
-                    "  {} Cluster '{}' is up to date",
-                    "=".dimmed(),
-                    cluster_name
-                );
+                "altered"
+            } else {
+                "up_to_date"
             }
         }
-    }
+    };
 
     // Execute GRANT statements
     for grant in &def.grants {
         executor.execute_sql(grant).await?;
     }
 
-    // Revoke stale grants
+    // Revoke stale grants (protecting default privilege grants)
     let current_grants = client
         .introspection()
         .get_cluster_grants(cluster_name)
         .await
         .map_err(CliError::Connection)?;
+    let default_privs = client
+        .introspection()
+        .get_default_privilege_grants_for_cluster(cluster_name)
+        .await
+        .map_err(CliError::Connection)?;
+    let protected: BTreeSet<_> = default_privs
+        .iter()
+        .map(|g| (g.grantee.to_lowercase(), g.privilege_type.to_uppercase()))
+        .collect();
     let desired = grants::desired_grants(&def.grants, &["USAGE", "CREATE"]);
     let revocations = grants::stale_grant_revocations(
         &current_grants,
         &desired,
+        &protected,
         "CLUSTER",
         &quote_identifier(cluster_name),
     );
@@ -177,5 +160,10 @@ async fn apply_cluster(
         executor.execute_sql(comment).await?;
     }
 
-    Ok(())
+    Ok(ObjectResult {
+        object: cluster_name.clone(),
+        action: action.to_string(),
+        statements: executor.take_statements(),
+        redacted_statements: vec![],
+    })
 }

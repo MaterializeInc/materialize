@@ -231,7 +231,7 @@ pub struct Project {
 pub fn load_project<P: AsRef<Path>>(
     root: P,
     profile: &str,
-    suffix: Option<&str>,
+    profile_suffix: Option<&str>,
     variables: &BTreeMap<String, String>,
 ) -> Result<Project, ProjectError> {
     let root = root.as_ref();
@@ -275,12 +275,12 @@ pub fn load_project<P: AsRef<Path>>(
         }
 
         let original_db_name = db_entry.file_name().to_string_lossy().to_string();
-        let db_name = match suffix {
+        let db_name = match profile_suffix {
             Some(s) => format!("{}{}", original_db_name, s),
             None => original_db_name.clone(),
         };
 
-        if suffix.is_some() {
+        if profile_suffix.is_some() {
             database_name_map.insert(original_db_name.clone(), db_name.clone());
         }
 
@@ -294,7 +294,7 @@ pub fn load_project<P: AsRef<Path>>(
                     path: db_mod_path.clone(),
                     source,
                 })?;
-            if suffix.is_some() {
+            if profile_suffix.is_some() {
                 sql_content = sql_content.replace(&original_db_name, &db_name);
             }
             Some(parse_statements_with_context(
@@ -337,7 +337,7 @@ pub fn load_project<P: AsRef<Path>>(
                         source,
                     }
                 })?;
-                if suffix.is_some() {
+                if profile_suffix.is_some() {
                     sql_content = sql_content.replace(&original_db_name, &db_name);
                 }
                 Some(parse_statements_with_context(
@@ -877,8 +877,7 @@ mod tests {
         // Need a project.toml for the project to load
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let planned =
-            project::plan(root, "default", Some("_staging"), None, &BTreeMap::new()).unwrap();
+        let planned = project::plan(root, "default", Some("_staging"), &BTreeMap::new()).unwrap();
 
         assert_eq!(planned.databases.len(), 1);
         assert_eq!(planned.databases[0].name, "testdb_staging");
@@ -910,7 +909,7 @@ mod tests {
 
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let planned = project::plan(root, "default", Some("_stg"), None, &BTreeMap::new()).unwrap();
+        let planned = project::plan(root, "default", Some("_stg"), &BTreeMap::new()).unwrap();
 
         // Find the view in db2_stg
         let db2 = planned
@@ -944,7 +943,7 @@ mod tests {
 
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let planned = project::plan(root, "default", Some("_stg"), None, &BTreeMap::new()).unwrap();
+        let planned = project::plan(root, "default", Some("_stg"), &BTreeMap::new()).unwrap();
 
         let view = &planned.databases[0].schemas[0].objects[0];
         let sql = format!("{}", view.typed_object.stmt);
@@ -974,7 +973,7 @@ mod tests {
 
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let planned = project::plan(root, "default", None, None, &BTreeMap::new()).unwrap();
+        let planned = project::plan(root, "default", None, &BTreeMap::new()).unwrap();
 
         assert_eq!(planned.databases[0].name, "mydb");
         assert_eq!(
@@ -1054,7 +1053,7 @@ mod tests {
 
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let result = project::plan(root, "default", None, None, &BTreeMap::new());
+        let result = project::plan(root, "default", None, &BTreeMap::new());
         assert!(
             result.is_err(),
             "type mismatch between profiles should error"
@@ -1086,7 +1085,7 @@ mod tests {
 
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let result = project::plan(root, "default", None, None, &BTreeMap::new());
+        let result = project::plan(root, "default", None, &BTreeMap::new());
         assert!(result.is_err(), "views cannot have profile overrides");
         let err_str = result.unwrap_err().to_string();
         assert!(
@@ -1119,7 +1118,7 @@ mod tests {
 
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let result = project::plan(root, "default", None, None, &BTreeMap::new());
+        let result = project::plan(root, "default", None, &BTreeMap::new());
         assert!(
             result.is_ok(),
             "consistent secret profiles should work: {:?}",

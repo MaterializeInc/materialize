@@ -1,81 +1,71 @@
 //! Roles apply command - converge live role state to match definitions.
 
 use crate::cli::CliError;
-use crate::cli::executor::{DeploymentExecutor, SqlCollector};
-use crate::cli::progress;
+use crate::cli::executor::{ApplyResult, DeploymentExecutor, ObjectResult};
 use crate::client::Client;
 use crate::client::quote_identifier;
 use crate::config::Settings;
-use crate::info;
 use crate::project::roles::{self, RoleDefinition};
 use mz_sql_parser::ast::AlterRoleOption;
 use mz_sql_parser::ast::SetRoleVar;
-use owo_colors::OwoColorize;
 use std::collections::BTreeSet;
-use std::time::Instant;
 
-/// Run the `roles apply` command.
-///
-/// Loads role definitions from `<directory>/roles/` and converges
-/// the live Materialize state to match: creating missing roles and
-/// applying ALTER, GRANT, and COMMENT statements idempotently.
-pub async fn run(
-    settings: &Settings,
-    dry_run: bool,
-    collector: Option<SqlCollector>,
-) -> Result<(), CliError> {
+/// Plan role changes without executing or printing.
+pub async fn plan(settings: &Settings, client: &Client) -> Result<ApplyResult, CliError> {
     let profile = settings.connection();
     let directory = &settings.directory;
-    let start_time = Instant::now();
 
-    // Load role definitions
-    progress::stage_start("Loading role definitions");
-    let load_start = Instant::now();
     let definitions = roles::load_roles(directory, &profile.name, settings.variables())?;
 
     if definitions.is_empty() {
-        info!(
-            "  {} No roles/ directory or no .sql files found — nothing to do.",
-            "info:".blue().bold()
-        );
-        return Ok(());
+        return Ok(ApplyResult {
+            phase: "roles".to_string(),
+            setup_statements: vec![],
+            results: vec![],
+        });
     }
 
-    progress::stage_success(
-        &format!("Found {} role definition(s)", definitions.len()),
-        load_start.elapsed(),
-    );
+    let executor = DeploymentExecutor::new_dry_run(client);
 
-    // Connect to Materialize
-    let client = Client::connect_with_profile(profile.clone())
+    let mut object_results = Vec::new();
+    for def in &definitions {
+        let obj_result = plan_role(client, &executor, def).await?;
+        object_results.push(obj_result);
+    }
+
+    Ok(ApplyResult {
+        phase: "roles".to_string(),
+        setup_statements: vec![],
+        results: object_results,
+    })
+}
+
+/// Run the `roles apply` command: plan, render, optionally execute.
+pub async fn run(settings: &Settings, dry_run: bool) -> Result<ApplyResult, CliError> {
+    let client = Client::connect_with_profile(settings.connection().clone())
         .await
         .map_err(CliError::Connection)?;
 
-    let executor = DeploymentExecutor::with_collector(&client, dry_run, collector);
+    let result = plan(settings, &client).await?;
 
-    // Apply each role definition
-    for def in &definitions {
-        apply_role(&client, &executor, def).await?;
+    if !dry_run {
+        result.execute(&client).await?;
     }
 
-    let total_duration = start_time.elapsed();
-    if dry_run {
-        progress::summary("Roles dry run complete", total_duration);
-    } else {
-        progress::summary("Roles applied successfully", total_duration);
-    }
-
-    Ok(())
+    Ok(result)
 }
 
-/// Apply a single role definition: create if missing, then execute
+/// Plan a single role definition: create if missing, then plan
 /// ALTER, GRANT, REVOKE, RESET, and COMMENT statements.
-async fn apply_role(
+async fn plan_role(
     client: &Client,
     executor: &DeploymentExecutor<'_>,
     def: &RoleDefinition,
-) -> Result<(), CliError> {
+) -> Result<ObjectResult, CliError> {
     let role_name = &def.name;
+
+    // Drain any prior statements
+    executor.take_statements();
 
     // Check if role already exists
     let exists = client
@@ -84,17 +74,12 @@ async fn apply_role(
         .await
         .map_err(CliError::Connection)?;
 
-    if exists {
-        if !executor.is_dry_run() {
-            info!("  {} Role '{}' exists", "=".dimmed(), role_name);
-        }
+    let action = if exists {
+        "up_to_date"
     } else {
-        // Create role from the parsed CREATE ROLE statement
-        if !executor.is_dry_run() {
-            info!("  {} Creating role '{}'", "+".green().bold(), role_name);
-        }
         executor.execute_sql(&def.create_stmt).await?;
-    }
+        "created"
+    };
 
     // Execute ALTER ROLE statements
     for alter in &def.alter_stmts {
@@ -126,14 +111,6 @@ async fn apply_role(
 
     for member in &current_members {
         if !desired_members.contains(&member.to_lowercase()) {
-            if !executor.is_dry_run() {
-                info!(
-                    "  {} Revoking role '{}' from '{}'",
-                    "-".red().bold(),
-                    role_name,
-                    member
-                );
-            }
             let sql = format!(
                 "REVOKE {} FROM {}",
                 quote_identifier(role_name),
@@ -163,14 +140,6 @@ async fn apply_role(
 
     for param in &current_params {
         if !desired_params.contains(&param.to_lowercase()) {
-            if !executor.is_dry_run() {
-                info!(
-                    "  {} Resetting '{}' on role '{}'",
-                    "-".red().bold(),
-                    param,
-                    role_name
-                );
-            }
             let sql = format!(
                 "ALTER ROLE {} RESET {}",
                 quote_identifier(role_name),
@@ -180,5 +149,10 @@ async fn apply_role(
         }
     }
 
-    Ok(())
+    Ok(ObjectResult {
+        object: role_name.clone(),
+        action: action.to_string(),
+        statements: executor.take_statements(),
+        redacted_statements: vec![],
+    })
 }

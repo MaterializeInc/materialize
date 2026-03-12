@@ -3,59 +3,52 @@
 //! Dependency order: clusters → roles → network policies → secrets → connections → sources → tables.
 
 use crate::cli::CliError;
-use crate::cli::executor::SqlCollector;
-use crate::cli::progress;
+use crate::cli::executor::{ApplyAllResult, ApplyResult};
+use crate::client::Client;
 use crate::config::Settings;
+use crate::log;
 
 /// Run all infrastructure apply steps in dependency order.
 ///
+/// Plans all phases first with a shared client, then executes if not dry-run.
 /// Applies: clusters → roles → network policies → secrets (unless skipped) → connections → sources → tables.
-/// Each step prints a header and delegates to the existing module's `run()` function.
 pub async fn run(
     settings: &Settings,
     skip_secrets: bool,
     dry_run: bool,
-    collector: Option<SqlCollector>,
-) -> Result<(), CliError> {
-    progress::info("Applying all infrastructure objects...");
+) -> Result<ApplyAllResult, CliError> {
+    let show_progress = !log::json_output_enabled();
+    let planned_project = super::compile::run(settings, true, show_progress).await?;
+    let client = Client::connect_with_profile(settings.connection().clone())
+        .await
+        .map_err(CliError::Connection)?;
 
-    // 1. Clusters
-    progress::info("--- Applying clusters ---");
-    super::clusters::run(settings, dry_run, collector.clone()).await?;
+    let mut results = Vec::new();
 
-    // 2. Roles
-    progress::info("--- Applying roles ---");
-    super::roles::run(settings, dry_run, collector.clone()).await?;
+    results.push(super::clusters::plan(settings, &client).await?);
+    results.push(super::roles::plan(settings, &client).await?);
+    results.push(super::apply_network_policies::plan(settings, &client).await?);
 
-    // 3. Network Policies
-    progress::info("--- Applying network policies ---");
-    super::apply_network_policies::run(settings, dry_run, collector.clone()).await?;
-
-    // 4. Secrets (unless skipped)
     if skip_secrets {
-        progress::info("--- Skipping secrets (--skip-secrets) ---");
+        results.push(ApplyResult {
+            phase: "secrets".to_string(),
+            setup_statements: vec![],
+            results: vec![],
+        });
     } else {
-        progress::info("--- Applying secrets ---");
-        super::apply_secrets::run(settings, dry_run, collector.clone()).await?;
+        results.push(super::apply_secrets::plan(settings, &client, &planned_project).await?);
     }
 
-    // 5. Connections
-    progress::info("--- Applying connections ---");
-    super::apply_connections::run(settings, dry_run, collector.clone()).await?;
+    results.push(super::apply_connections::plan(settings, &client, &planned_project).await?);
+    results.push(super::apply_tables::plan_sources(settings, &client, &planned_project).await?);
+    results.push(super::apply_tables::plan_tables(settings, &client, &planned_project).await?);
 
-    // 6. Sources
-    progress::info("--- Applying sources ---");
-    super::apply_tables::apply_sources(settings, dry_run, collector.clone()).await?;
+    let all = ApplyAllResult { results };
 
-    // 7. Tables
-    progress::info("--- Applying tables ---");
-    super::apply_tables::apply_tables(settings, dry_run, collector).await?;
-
-    // Regenerate data contracts after tables are applied
     if !dry_run {
+        all.execute(&client).await?;
         super::lock::run(settings).await?;
     }
 
-    progress::success("All infrastructure objects applied successfully!");
-    Ok(())
+    Ok(all)
 }

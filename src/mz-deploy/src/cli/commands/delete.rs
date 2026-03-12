@@ -90,7 +90,10 @@ impl DeleteTarget {
                 directory.join("roles").join(format!("{}.sql", name)),
                 format!("DROP {} {}", keyword, quote_identifier(name)),
             ),
-            ObjectKind::Connection | ObjectKind::Secret | ObjectKind::Source | ObjectKind::Table => {
+            ObjectKind::Connection
+            | ObjectKind::Secret
+            | ObjectKind::Source
+            | ObjectKind::Table => {
                 let oid = ObjectId::from_fqn(name).map_err(CliError::Message)?;
                 (
                     directory

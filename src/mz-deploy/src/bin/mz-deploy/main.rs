@@ -697,7 +697,7 @@ async fn run(args: Args) -> Result<(), CliError> {
                     "--output json is not supported for the 'compile' command".to_string(),
                 ));
             }
-            cli::commands::compile::run(&settings, skip_typecheck)
+            cli::commands::compile::run(&settings, skip_typecheck, true)
                 .await
                 .map(|_| ())
         }
@@ -705,76 +705,51 @@ async fn run(args: Args) -> Result<(), CliError> {
             skip_secrets,
             dry_run,
             subcommand,
-        }) => {
-            if log::json_output_enabled() && !dry_run {
-                return Err(CliError::Message(
-                    "--output json requires --dry-run for the 'apply' command".to_string(),
-                ));
+        }) => match subcommand {
+            Some(ApplyCommand::Clusters) => {
+                let r = cli::commands::clusters::run(&settings, dry_run).await?;
+                log::output(&r);
+                Ok(())
             }
-            let collector = if log::json_output_enabled() {
-                Some(cli::executor::SqlCollector::new())
-            } else {
-                None
-            };
-            let result = match subcommand {
-                Some(ApplyCommand::Clusters) => {
-                    cli::commands::clusters::run(&settings, dry_run, collector.clone()).await
-                }
-                Some(ApplyCommand::Roles) => {
-                    cli::commands::roles::run(&settings, dry_run, collector.clone()).await
-                }
-                Some(ApplyCommand::NetworkPolicies) => {
-                    cli::commands::apply_network_policies::run(
-                        &settings,
-                        dry_run,
-                        collector.clone(),
-                    )
-                    .await
-                }
-                Some(ApplyCommand::Secrets) => {
-                    cli::commands::apply_secrets::run(&settings, dry_run, collector.clone()).await
-                }
-                Some(ApplyCommand::Connections) => {
-                    cli::commands::apply_connections::run(&settings, dry_run, collector.clone())
-                        .await
-                }
-                Some(ApplyCommand::Sources) => {
-                    cli::commands::apply_tables::apply_sources(
-                        &settings,
-                        dry_run,
-                        collector.clone(),
-                    )
-                    .await
-                }
-                Some(ApplyCommand::Tables) => {
-                    let r = cli::commands::apply_tables::apply_tables(
-                        &settings,
-                        dry_run,
-                        collector.clone(),
-                    )
-                    .await;
-                    if r.is_ok() && !dry_run {
-                        cli::commands::lock::run(&settings).await?;
-                    }
-                    r
-                }
-                None => {
-                    cli::commands::apply_all::run(
-                        &settings,
-                        skip_secrets,
-                        dry_run,
-                        collector.clone(),
-                    )
-                    .await
-                }
-            };
-            if let Some(c) = collector {
-                let statements = c.into_statements();
-                let json_output = serde_json::json!({ "statements": statements });
-                log::output_json(&json_output);
+            Some(ApplyCommand::Roles) => {
+                let r = cli::commands::roles::run(&settings, dry_run).await?;
+                log::output(&r);
+                Ok(())
             }
-            result
-        }
+            Some(ApplyCommand::NetworkPolicies) => {
+                let r = cli::commands::apply_network_policies::run(&settings, dry_run).await?;
+                log::output(&r);
+                Ok(())
+            }
+            Some(ApplyCommand::Secrets) => {
+                let r = cli::commands::apply_secrets::run(&settings, dry_run).await?;
+                log::output(&r);
+                Ok(())
+            }
+            Some(ApplyCommand::Connections) => {
+                let r = cli::commands::apply_connections::run(&settings, dry_run).await?;
+                log::output(&r);
+                Ok(())
+            }
+            Some(ApplyCommand::Sources) => {
+                let r = cli::commands::apply_tables::apply_sources(&settings, dry_run).await?;
+                log::output(&r);
+                Ok(())
+            }
+            Some(ApplyCommand::Tables) => {
+                let r = cli::commands::apply_tables::apply_tables(&settings, dry_run).await?;
+                if !dry_run {
+                    cli::commands::lock::run(&settings).await?;
+                }
+                log::output(&r);
+                Ok(())
+            }
+            None => {
+                let r = cli::commands::apply_all::run(&settings, skip_secrets, dry_run).await?;
+                log::output(&r);
+                Ok(())
+            }
+        },
         Some(Command::Promote {
             deploy_id,
             force,

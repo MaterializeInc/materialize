@@ -1,7 +1,7 @@
 //! Apply tables command - create tables that don't exist in the database.
 
 use crate::cli::commands::grants;
-use crate::cli::executor::SqlCollector;
+use crate::cli::executor::{ApplyResult, ObjectResult};
 use crate::cli::git;
 use crate::cli::progress;
 use crate::cli::{CliError, executor};
@@ -61,7 +61,7 @@ pub async fn run(
 
     progress::info(&format!("Creating tables in deployment: {}", deploy_id));
 
-    let planned_project = super::compile::run(settings, true).await?;
+    let planned_project = super::compile::run(settings, true, true).await?;
     let client = Client::connect_with_profile(profile.clone())
         .await
         .map_err(CliError::Connection)?;
@@ -170,26 +170,72 @@ pub async fn run(
     Ok(())
 }
 
+/// Plan only table objects (no deployment tracking, no execution).
+pub async fn plan_tables(
+    settings: &Settings,
+    client: &Client,
+    planned_project: &project::planned::Project,
+) -> Result<ApplyResult, CliError> {
+    plan_by_kind(settings, client, planned_project, ObjectKindFilter::Tables).await
+}
+
+/// Plan only source objects (no deployment tracking, no execution).
+pub async fn plan_sources(
+    settings: &Settings,
+    client: &Client,
+    planned_project: &project::planned::Project,
+) -> Result<ApplyResult, CliError> {
+    plan_by_kind(settings, client, planned_project, ObjectKindFilter::Sources).await
+}
+
 /// Apply only table objects (no deployment tracking).
 ///
 /// Creates tables that don't exist in the database. Existing tables are skipped.
-pub async fn apply_tables(
-    settings: &Settings,
-    dry_run: bool,
-    collector: Option<SqlCollector>,
-) -> Result<(), CliError> {
-    apply_by_kind(settings, dry_run, ObjectKindFilter::Tables, collector).await
+pub async fn apply_tables(settings: &Settings, dry_run: bool) -> Result<ApplyResult, CliError> {
+    let planned_project =
+        super::compile::run(settings, true, !crate::log::json_output_enabled()).await?;
+    let client = Client::connect_with_profile(settings.connection().clone())
+        .await
+        .map_err(CliError::Connection)?;
+
+    let result = plan_by_kind(
+        settings,
+        &client,
+        &planned_project,
+        ObjectKindFilter::Tables,
+    )
+    .await?;
+
+    if !dry_run {
+        result.execute(&client).await?;
+    }
+
+    Ok(result)
 }
 
 /// Apply only source objects (no deployment tracking).
 ///
 /// Creates sources that don't exist in the database. Existing sources are skipped.
-pub async fn apply_sources(
-    settings: &Settings,
-    dry_run: bool,
-    collector: Option<SqlCollector>,
-) -> Result<(), CliError> {
-    apply_by_kind(settings, dry_run, ObjectKindFilter::Sources, collector).await
+pub async fn apply_sources(settings: &Settings, dry_run: bool) -> Result<ApplyResult, CliError> {
+    let planned_project =
+        super::compile::run(settings, true, !crate::log::json_output_enabled()).await?;
+    let client = Client::connect_with_profile(settings.connection().clone())
+        .await
+        .map_err(CliError::Connection)?;
+
+    let result = plan_by_kind(
+        settings,
+        &client,
+        &planned_project,
+        ObjectKindFilter::Sources,
+    )
+    .await?;
+
+    if !dry_run {
+        result.execute(&client).await?;
+    }
+
+    Ok(result)
 }
 
 /// Which object kinds to create.
@@ -198,34 +244,27 @@ enum ObjectKindFilter {
     Sources,
 }
 
-/// Shared implementation for `apply_tables` and `apply_sources`.
-async fn apply_by_kind(
-    settings: &Settings,
-    dry_run: bool,
+/// Shared planning implementation for `plan_tables` and `plan_sources`.
+async fn plan_by_kind(
+    _settings: &Settings,
+    client: &Client,
+    planned_project: &project::planned::Project,
     filter: ObjectKindFilter,
-    collector: Option<SqlCollector>,
-) -> Result<(), CliError> {
-    let profile = settings.connection();
-    let (label, matcher): (&str, Box<dyn Fn(&Statement) -> bool>) = match filter {
-        ObjectKindFilter::Tables => (
-            "table",
-            Box::new(|stmt| {
-                matches!(
-                    stmt,
-                    Statement::CreateTable(_) | Statement::CreateTableFromSource(_)
-                )
-            }),
-        ),
-        ObjectKindFilter::Sources => (
-            "source",
-            Box::new(|stmt| matches!(stmt, Statement::CreateSource(_))),
-        ),
+) -> Result<ApplyResult, CliError> {
+    let matcher: Box<dyn Fn(&Statement) -> bool> = match filter {
+        ObjectKindFilter::Tables => Box::new(|stmt| {
+            matches!(
+                stmt,
+                Statement::CreateTable(_) | Statement::CreateTableFromSource(_)
+            )
+        }),
+        ObjectKindFilter::Sources => Box::new(|stmt| matches!(stmt, Statement::CreateSource(_))),
     };
 
-    let planned_project = super::compile::run(settings, true).await?;
-    let client = Client::connect_with_profile(profile.clone())
-        .await
-        .map_err(CliError::Connection)?;
+    let phase = match filter {
+        ObjectKindFilter::Tables => "tables",
+        ObjectKindFilter::Sources => "sources",
+    };
 
     // Collect object IDs matching the filter
     let mut target_ids = BTreeSet::new();
@@ -236,8 +275,11 @@ async fn apply_by_kind(
     }
 
     if target_ids.is_empty() {
-        progress::info(&format!("No {}s found in project", label));
-        return Ok(());
+        return Ok(ApplyResult {
+            phase: phase.to_string(),
+            setup_statements: vec![],
+            results: vec![],
+        });
     }
 
     let target_objects = planned_project.get_sorted_objects_filtered(&target_ids)?;
@@ -263,6 +305,8 @@ async fn apply_by_kind(
         .filter(|(obj_id, _)| !existing.contains(obj_id))
         .collect();
 
+    let mut object_results = Vec::new();
+
     // Reconcile grants on existing target objects
     {
         let grant_kind = match filter {
@@ -273,34 +317,37 @@ async fn apply_by_kind(
             .iter_objects()
             .map(|obj| (obj.id.clone(), obj))
             .collect();
-        let executor =
-            executor::DeploymentExecutor::with_collector(&client, dry_run, collector.clone());
+        let executor = executor::DeploymentExecutor::new_dry_run(client);
         for obj_id in &existing {
             if let Some(obj) = obj_map.get(obj_id) {
+                executor.take_statements();
                 grants::reconcile(
-                    &client,
+                    client,
                     &executor,
                     obj_id,
                     &obj.typed_object.grants,
                     &grant_kind,
                 )
                 .await?;
+                object_results.push(ObjectResult {
+                    object: format!("{}", obj_id),
+                    action: "up_to_date".to_string(),
+                    statements: executor.take_statements(),
+                    redacted_statements: vec![],
+                });
             }
         }
     }
 
     if to_create.is_empty() {
-        progress::info(&format!(
-            "All {} {}(s) already exist. Nothing to create.",
-            target_ids.len(),
-            label,
-        ));
-        return Ok(());
+        return Ok(ApplyResult {
+            phase: phase.to_string(),
+            setup_statements: vec![],
+            results: object_results,
+        });
     }
 
-    progress::info(&format!("Creating {} new {}(s)...", to_create.len(), label));
-
-    let executor = executor::DeploymentExecutor::with_collector(&client, dry_run, collector);
+    let executor = executor::DeploymentExecutor::new_dry_run(client);
     let schemas: BTreeSet<_> = to_create
         .iter()
         .map(|(id, _)| project::SchemaQualifier::new(id.database.clone(), id.schema.clone()))
@@ -309,14 +356,38 @@ async fn apply_by_kind(
         .prepare_databases_and_schemas(&planned_project, &schemas, None)
         .await?;
 
-    let success_count = execute_table_creates(&executor, &to_create).await?;
+    let setup_statements = executor.take_statements();
 
-    progress::success(&format!(
-        "Successfully created {} new {}(s)",
-        success_count, label
-    ));
+    for (object_id, typed_obj) in &to_create {
+        executor.take_statements();
 
-    Ok(())
+        executor.execute_sql(&typed_obj.stmt).await?;
+        for index in &typed_obj.indexes {
+            executor.execute_sql(index).await?;
+        }
+        for grant in &typed_obj.grants {
+            executor.execute_sql(grant).await?;
+        }
+        for comment in &typed_obj.comments {
+            executor.execute_sql(comment).await?;
+        }
+
+        object_results.push(ObjectResult {
+            object: format!(
+                "{}.{}.{}",
+                object_id.database, object_id.schema, object_id.object
+            ),
+            action: "created".to_string(),
+            statements: executor.take_statements(),
+            redacted_statements: vec![],
+        });
+    }
+
+    Ok(ApplyResult {
+        phase: phase.to_string(),
+        setup_statements,
+        results: object_results,
+    })
 }
 
 /// Partitions planned objects into catalog categories used by existence checks.
