@@ -12,8 +12,10 @@ use std::fmt;
 use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_repr::adt::jsonb::{Jsonb, JsonbRef};
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::{Datum, Row, RowPacker, SqlColumnType, SqlScalarType, strconv};
+use mz_repr::role_id::RoleId;
+use mz_repr::{ArrayRustType, Datum, Row, RowPacker, SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
@@ -229,4 +231,150 @@ fn jsonb_pretty<'a>(a: JsonbRef<'a>) -> String {
     let mut buf = String::new();
     strconv::format_jsonb_pretty(&mut buf, a);
     buf
+}
+
+/// Converts a JSONB-serialized serde tagged enum ID to Materialize's string
+/// ID format. Handles both newtype variants like `{"User": 1}` → `"u1"` and
+/// unit variants like `"Public"` → `"p"`.
+#[sqlfunc(sqlname = "parse_catalog_id")]
+fn parse_catalog_id<'a>(a: JsonbRef<'a>) -> Result<String, EvalError> {
+    match a.into_datum() {
+        // Unit variant, e.g. "Public"
+        Datum::String(variant) => match variant {
+            "Public" => Ok("p".to_string()),
+            other => Err(EvalError::Internal(
+                format!("unexpected catalog ID variant: {other}").into(),
+            )),
+        },
+        // Newtype variant, e.g. {"User": 1}
+        Datum::Map(dict) => {
+            let (key, val) = dict
+                .iter()
+                .next()
+                .ok_or_else(|| EvalError::Internal("empty object for catalog ID".into()))?;
+            let prefix = match key {
+                "User" => "u",
+                "System" => "s",
+                "Predefined" => "g",
+                "Transient" => "t",
+                other => {
+                    return Err(EvalError::Internal(
+                        format!("unexpected catalog ID variant: {other}").into(),
+                    ));
+                }
+            };
+            match val {
+                Datum::Numeric(n) => Ok(format!("{prefix}{}", n.0.to_standard_notation_string())),
+                _ => Err(EvalError::Internal(
+                    "expected numeric value in catalog ID".into(),
+                )),
+            }
+        }
+        _ => Err(EvalError::Internal(
+            "expected string or object for catalog ID".into(),
+        )),
+    }
+}
+
+/// Extracts a u64 from a JSONB numeric datum.
+fn datum_to_u64(d: Datum) -> Result<u64, EvalError> {
+    match d {
+        Datum::Numeric(n) => {
+            let mut cx = numeric::cx_datum();
+            cx.try_into_u64(n.0)
+                .or_else(|_| Err(EvalError::Internal("catalog ID out of range".into())))
+        }
+        _ => Err(EvalError::Internal(
+            "expected numeric value in catalog ID".into(),
+        )),
+    }
+}
+
+/// Parses a JSONB-serialized tagged enum into a RoleId.
+fn datum_to_role_id(d: Datum) -> Result<RoleId, EvalError> {
+    match d {
+        Datum::String("Public") => Ok(RoleId::Public),
+        Datum::String(other) => Err(EvalError::Internal(
+            format!("unexpected role ID variant: {other}").into(),
+        )),
+        Datum::Map(dict) => {
+            let (key, val) = dict
+                .iter()
+                .next()
+                .ok_or_else(|| EvalError::Internal("empty object for role ID".into()))?;
+            let id = datum_to_u64(val)?;
+            match key {
+                "User" => Ok(RoleId::User(id)),
+                "System" => Ok(RoleId::System(id)),
+                "Predefined" => Ok(RoleId::Predefined(id)),
+                other => Err(EvalError::Internal(
+                    format!("unexpected role ID variant: {other}").into(),
+                )),
+            }
+        }
+        _ => Err(EvalError::Internal(
+            "expected string or object for role ID".into(),
+        )),
+    }
+}
+
+/// Converts a JSONB-serialized privilege array from the catalog shard into
+/// an `mz_aclitem[]`. Each element has the shape:
+/// `{"acl_mode": {"bitflags": N}, "grantee": <id>, "grantor": <id>}`
+#[sqlfunc(sqlname = "parse_catalog_privileges")]
+fn parse_catalog_privileges<'a>(a: JsonbRef<'a>) -> Result<ArrayRustType<MzAclItem>, EvalError> {
+    let mut result = Vec::new();
+    match a.into_datum() {
+        Datum::List(list) => {
+            for item in list.iter() {
+                match item {
+                    Datum::Map(dict) => {
+                        let mut grantee = None;
+                        let mut grantor = None;
+                        let mut acl_mode = None;
+                        for (key, val) in dict.iter() {
+                            match key {
+                                "grantee" => grantee = Some(datum_to_role_id(val)?),
+                                "grantor" => grantor = Some(datum_to_role_id(val)?),
+                                "acl_mode" => match val {
+                                    Datum::Map(mode_dict) => {
+                                        for (k, v) in mode_dict.iter() {
+                                            if k == "bitflags" {
+                                                let bits = datum_to_u64(v)?;
+                                                acl_mode = AclMode::from_bits(bits);
+                                            }
+                                        }
+                                    }
+                                    _ => {
+                                        return Err(EvalError::Internal(
+                                            "expected object for acl_mode".into(),
+                                        ));
+                                    }
+                                },
+                                _ => {}
+                            }
+                        }
+                        result.push(MzAclItem {
+                            grantee: grantee.ok_or_else(|| {
+                                EvalError::Internal("missing grantee in privilege".into())
+                            })?,
+                            grantor: grantor.ok_or_else(|| {
+                                EvalError::Internal("missing grantor in privilege".into())
+                            })?,
+                            acl_mode: acl_mode.ok_or_else(|| {
+                                EvalError::Internal("missing acl_mode in privilege".into())
+                            })?,
+                        });
+                    }
+                    _ => {
+                        return Err(EvalError::Internal(
+                            "expected object in privilege array".into(),
+                        ));
+                    }
+                }
+            }
+        }
+        _ => return Err(EvalError::Internal("expected array for privileges".into())),
+    }
+    Ok(ArrayRustType(result))
 }
