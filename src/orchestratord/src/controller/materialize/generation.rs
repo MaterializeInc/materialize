@@ -1423,7 +1423,7 @@ fn create_connection_info(
     };
 
     let (scheme, leader_api_port, mz_system_secret_name) = match authenticator_kind {
-        AuthenticatorKind::Password | AuthenticatorKind::Sasl => {
+        AuthenticatorKind::Password | AuthenticatorKind::Sasl | AuthenticatorKind::Oidc => {
             let scheme = if external_enable_tls { "https" } else { "http" };
             (
                 scheme,
