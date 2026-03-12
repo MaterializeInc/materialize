@@ -13,13 +13,13 @@ use futures::StreamExt;
 use k8s_openapi::{
     ByteString,
     apiextensions_apiserver::pkg::apis::apiextensions::v1::{
-        CustomResourceColumnDefinition, CustomResourceConversion, ServiceReference,
-        WebhookClientConfig, WebhookConversion,
+        CustomResourceColumnDefinition, CustomResourceConversion, CustomResourceDefinition,
+        ServiceReference, WebhookClientConfig, WebhookConversion,
     },
 };
 use kube::{
     Api, Client, CustomResourceExt, Resource, ResourceExt,
-    api::{DeleteParams, Patch, PatchParams, PostParams},
+    api::{DeleteParams, ListParams, Patch, PatchParams, PostParams},
     core::{Status, response::StatusSummary},
     runtime::{reflector, watcher},
 };
@@ -143,7 +143,7 @@ pub async fn register_crds(
             vec![
                 VersionedCrd {
                     crds: vec![mz_crd, crd::materialize::v1alpha1::Materialize::crd()],
-                    stored_version: String::from("v1alpha1"),
+                    stored_version: String::from("v1alpha2"),
                     conversion: Some(mz_conversion),
                 },
                 VersionedCrd {
@@ -168,6 +168,79 @@ pub async fn register_crds(
     .await??;
 
     info!("Done rewriting CRDs");
+
+    Ok(())
+}
+
+/// After updating the stored version to v1alpha2 in the CRD, any existing
+/// resources that were stored as v1alpha1 need to be re-saved so that they
+/// are stored in the new version. This function reads all Materialize
+/// resources (triggering conversion via the webhook) and writes them back.
+/// If all resources are successfully migrated, it also removes v1alpha1
+/// from the CRD's storedVersions.
+pub async fn migrate_materialize_storage_version(client: Client) -> Result<(), anyhow::Error> {
+    let crd_api = Api::<CustomResourceDefinition>::all(client.clone());
+    let mz_crd = crd_api.get("materializes.materialize.cloud").await?;
+
+    let stored_versions = mz_crd
+        .status
+        .as_ref()
+        .and_then(|s| s.stored_versions.as_ref())
+        .cloned()
+        .unwrap_or_default();
+
+    if !stored_versions.contains(&"v1alpha1".to_string()) {
+        info!("No v1alpha1 stored versions found, skipping storage migration");
+        return Ok(());
+    }
+
+    info!("Migrating stored Materialize resources from v1alpha1 to v1alpha2");
+
+    let mz_api = Api::<crd::materialize::v1alpha2::Materialize>::all(client.clone());
+    let mz_list = mz_api.list(&ListParams::default()).await?;
+
+    let mut all_succeeded = true;
+    for mz in mz_list.items {
+        let name = mz.name_unchecked();
+        let namespace = mz.namespace();
+        let namespaced_api =
+            Api::<crd::materialize::v1alpha2::Materialize>::namespaced(client.clone(), &namespace);
+        match replace_resource(&namespaced_api, &mz).await {
+            Ok(_) => {
+                info!(
+                    "Migrated Materialize resource {}/{} to v1alpha2 storage",
+                    namespace, name,
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to migrate Materialize resource {}/{}: {}",
+                    namespace, name, e,
+                );
+                all_succeeded = false;
+            }
+        }
+    }
+
+    if all_succeeded {
+        let new_stored_versions: Vec<String> = stored_versions
+            .into_iter()
+            .filter(|v| v != "v1alpha1")
+            .collect();
+        let patch = serde_json::json!({
+            "status": {
+                "storedVersions": new_stored_versions,
+            }
+        });
+        crd_api
+            .patch_status(
+                "materializes.materialize.cloud",
+                &PatchParams::default(),
+                &Patch::Merge(patch),
+            )
+            .await?;
+        info!("Removed v1alpha1 from CRD storedVersions");
+    }
 
     Ok(())
 }
