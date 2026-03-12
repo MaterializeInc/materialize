@@ -149,7 +149,7 @@ enum BackendMode {
 
 impl Default for BackendMode {
     fn default() -> Self {
-        BackendMode::Log
+        BackendMode::Persist
     }
 }
 

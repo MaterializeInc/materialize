@@ -53,7 +53,7 @@ struct Args {
     metrics_listen_addr: SocketAddr,
 
     /// Backend storage mode.
-    #[arg(long, value_enum, default_value = "log")]
+    #[arg(long, value_enum, default_value = "persist")]
     backend: Backend,
 
     /// S3 bucket for log and snapshot storage (required for log backend).
