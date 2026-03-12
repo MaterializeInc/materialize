@@ -614,6 +614,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "oidc_audience",
     "oidc_authentication_claim",
     "enable_mcp_agents",
+    "enable_mcp_agents_query_tool",
     "enable_mcp_observatory",
 ]
 
