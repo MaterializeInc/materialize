@@ -1529,24 +1529,12 @@ range_fn!(overright, overright, "&>");
 range_fn!(adjacent, adjacent, "-|-");
 
 #[sqlfunc(is_infix_op = true, sqlname = "+")]
-fn range_union<'a, T: Copy + Ord + std::fmt::Display + std::fmt::Debug>(
-    l: Range<T>,
-    r: Range<T>,
-) -> Result<Range<T>, EvalError>
-where
-    Datum<'a>: From<T>,
-{
+fn range_union<T: Copy + Ord>(l: Range<T>, r: Range<T>) -> Result<Range<T>, EvalError> {
     Ok(l.union(&r)?)
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "*")]
-fn range_intersection<'a, T: Copy + Ord + std::fmt::Display + std::fmt::Debug>(
-    l: Range<T>,
-    r: Range<T>,
-) -> Range<T>
-where
-    Datum<'a>: From<T>,
-{
+fn range_intersection<T: Copy + Ord>(l: Range<T>, r: Range<T>) -> Range<T> {
     l.intersection(&r)
 }
 
