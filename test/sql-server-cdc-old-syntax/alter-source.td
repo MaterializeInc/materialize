@@ -178,7 +178,7 @@ INSERT INTO table_e VALUES (3, 'three');
 3
 4
 
-> SELECT name FROM mz_materialized_views
+> SELECT name FROM mz_materialized_views WHERE id LIKE 'u%'
 mv_e
 mv_f
 
@@ -200,7 +200,7 @@ contains:cannot drop source "table_e": still depended upon by materialized view 
 mz_source_progress    progress
 table_g               subsource
 
-> SELECT name FROM mz_materialized_views
+> SELECT name FROM mz_materialized_views WHERE id LIKE 'u%'
 
 > DROP SOURCE table_g;
 

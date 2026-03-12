@@ -426,7 +426,7 @@ statement ok
 CREATE MATERIALIZED VIEW mv AS SELECT 1
 
 query TT colnames
-SELECT name, definition FROM mz_materialized_views
+SELECT name, definition FROM mz_materialized_views WHERE id LIKE 'u%'
 ----
 name definition
 mv   SELECT␠1;
@@ -435,7 +435,7 @@ statement ok
 DROP MATERIALIZED VIEW mv
 
 query I
-SELECT count(*) FROM mz_materialized_views
+SELECT count(*) FROM mz_materialized_views WHERE id LIKE 'u%'
 ----
 0
 
@@ -1509,7 +1509,7 @@ SELECT
   now() - aligned_to < INTERVAL '30 minutes',
   now() - at < INTERVAL '30 minutes'
 FROM mz_internal.mz_materialized_view_refresh_strategies mvrs, mz_catalog.mz_materialized_views mv
-WHERE mv.id = mvrs.materialized_view_id
+WHERE mv.id LIKE 'u%' AND mv.id = mvrs.materialized_view_id
 ORDER BY name;
 ----
 const_mv  every  24:00:00  true  NULL

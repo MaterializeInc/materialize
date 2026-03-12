@@ -134,7 +134,7 @@ BASE TABLE
 materialize
 mz_catalog
 mz_databases
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_default_privileges

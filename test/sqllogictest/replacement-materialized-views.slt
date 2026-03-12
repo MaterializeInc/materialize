@@ -81,7 +81,7 @@ COMMENT ON COLUMN rp.a IS 'comment:rp.a'
 query TT rowsort
 SELECT object_sub_id, comment
 FROM mz_internal.mz_comments
-WHERE object_type = 'materialized-view'
+WHERE id LIKE 'u%' AND object_type = 'materialized-view'
 ----
 NULL  comment:rp
 1     comment:rp.a
@@ -92,7 +92,7 @@ ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
 query TT rowsort
 SELECT object_sub_id, comment
 FROM mz_internal.mz_comments
-WHERE object_type = 'materialized-view'
+WHERE id LIKE 'u%' AND object_type = 'materialized-view'
 ----
 
 
@@ -193,6 +193,7 @@ CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM mv;
 
 query TT
 SELECT id, name FROM mz_materialized_views
+WHERE id LIKE 'u%'
 ----
 u15  mv
 u16  rp
@@ -202,6 +203,7 @@ query TT
 SELECT d.object_id, d.referenced_object_id
 FROM mz_internal.mz_object_dependencies d
 JOIN mz_materialized_views m ON m.id = d.referenced_object_id
+WHERE m.id LIKE 'u%'
 ----
 u16  u15
 u17  u15
@@ -211,6 +213,7 @@ ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
 
 query TT
 SELECT id, name FROM mz_materialized_views
+WHERE id LIKE 'u%'
 ----
 u16  mv
 u17  mv2
@@ -219,6 +222,7 @@ query TT
 SELECT d.object_id, d.referenced_object_id
 FROM mz_internal.mz_object_dependencies d
 JOIN mz_materialized_views m ON m.id = d.referenced_object_id
+WHERE m.id LIKE 'u%'
 ----
 u17  u16
 
