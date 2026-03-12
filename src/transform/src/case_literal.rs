@@ -526,4 +526,61 @@ mod tests {
         let out = result.eval(&[Datum::Null], &arena).unwrap();
         assert_eq!(out, Datum::Int64(0));
     }
+
+    #[mz_ore::test]
+    fn test_string_literals() {
+        // CASE #0 WHEN 'a' THEN 1 WHEN 'b' THEN 2 ELSE 0 END
+        // Verify that non-i64 literal types also work.
+        fn lit_str(s: &str) -> MirScalarExpr {
+            MirScalarExpr::literal_ok(Datum::String(s), ReprScalarType::String)
+        }
+        fn wrap_in_string_map(scalar: MirScalarExpr) -> MirRelationExpr {
+            MirRelationExpr::Map {
+                input: Box::new(MirRelationExpr::constant(
+                    vec![vec![Datum::String("x")]],
+                    ReprRelationType::new(vec![ReprColumnType {
+                        scalar_type: ReprScalarType::String,
+                        nullable: false,
+                    }]),
+                )),
+                scalars: vec![scalar],
+            }
+        }
+        let expr = MirScalarExpr::column(0)
+            .call_binary(lit_str("a"), Eq)
+            .if_then_else(
+                lit_i64(1),
+                MirScalarExpr::column(0)
+                    .call_binary(lit_str("b"), Eq)
+                    .if_then_else(lit_i64(2), lit_i64(0)),
+            );
+        let mut relation = wrap_in_string_map(expr);
+        let mut features = mz_repr::optimize::OptimizerFeatures::default();
+        features.enable_case_literal_transform = true;
+        let typecheck_ctx = crate::typecheck::empty_typechecking_context();
+        let mut df_meta = crate::dataflow::DataflowMetainfo::default();
+        let mut transform_ctx =
+            crate::TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None, None);
+        crate::Transform::transform(&CaseLiteralTransform, &mut relation, &mut transform_ctx)
+            .unwrap();
+        let result = match relation {
+            MirRelationExpr::Map { scalars, .. } => scalars.into_iter().next().unwrap(),
+            other => panic!("expected Map, got {other:?}"),
+        };
+        assert_case_literal(&result, 2);
+
+        let arena = mz_repr::RowArena::new();
+        assert_eq!(
+            result.eval(&[Datum::String("a")], &arena).unwrap(),
+            Datum::Int64(1)
+        );
+        assert_eq!(
+            result.eval(&[Datum::String("b")], &arena).unwrap(),
+            Datum::Int64(2)
+        );
+        assert_eq!(
+            result.eval(&[Datum::String("z")], &arena).unwrap(),
+            Datum::Int64(0)
+        );
+    }
 }
