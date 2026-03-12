@@ -1189,7 +1189,6 @@ steps:
         env:
           # New versions of Docker don't work with GHCR + local builds
           MZ_GHCR: 0
-        skip: "database-issues#11232"
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -2285,7 +2284,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: 0dt
-    skip: "database-issues#11232"
     agents:
       # More consistent results
       queue: hetzner-x86-64-dedi-16cpu-64gb
