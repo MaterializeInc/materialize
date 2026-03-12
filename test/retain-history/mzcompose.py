@@ -26,24 +26,25 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    setup(c)
-    run_test_with_mv_on_table(c)
-    run_test_with_mv_on_table_with_altered_retention(c)
-    run_test_with_mv_on_counter_source(c)
-    run_test_with_counter_source(c)
-    # TODO: database-issues#7310 needs to be fixed
-    # run_test_gh_24479(c)
-    run_test_with_index(c)
-    run_test_consistency(c)
+    for name in c.workflows:
+        if name in [
+            "default",
+            # TODO: database-issues#7310 needs to be fixed
+            "gh-24479",
+        ]:
+            continue
+        with c.test_case(name):
+            c.workflow(name)
 
 
 def setup(c: Composition) -> None:
     c.up("materialized", Service("testdrive", idle=True))
 
 
-# Test that the catalog is consistent for the three types of retain histories (disabled, default,
-# specified).
-def run_test_consistency(c: Composition) -> None:
+# Test that the catalog is consistent for the three types of retain histories
+# (disabled, default, specified).
+def workflow_consistency(c: Composition) -> None:
+    setup(c)
     c.testdrive(
         dedent(
             """
@@ -62,7 +63,9 @@ def run_test_consistency(c: Composition) -> None:
     )
 
 
-def run_test_with_mv_on_table(c: Composition) -> None:
+def workflow_mv_on_table(c: Composition) -> None:
+    setup(c)
+
     mv_on_mv1_retention_in_sec = 1
     mv_on_mv_on_mv1_retention_in_sec = 60
 
@@ -244,17 +247,16 @@ def run_test_with_mv_on_table(c: Composition) -> None:
     )
 
 
-def run_test_with_mv_on_table_with_altered_retention(c: Composition) -> None:
+def workflow_mv_on_table_with_altered_retention(c: Composition) -> None:
     """
-    Verify we can still read the most recent timestamp, then reduce the retain history and verify we can't read anymore.
+    Verify we can still read the most recent timestamp, then reduce the retain
+    history and verify we can't read anymore.
     """
+    setup(c)
 
     c.testdrive(
         dedent(
             """
-            > DROP MATERIALIZED VIEW IF EXISTS retain_history_mv;
-            > DROP TABLE IF EXISTS retain_history_table;
-
             > CREATE TABLE retain_history_table (key INT, value INT);
             > INSERT INTO retain_history_table VALUES (1, 100), (2, 200);
 
@@ -351,7 +353,9 @@ def run_test_with_mv_on_table_with_altered_retention(c: Composition) -> None:
     )
 
 
-def run_test_with_mv_on_counter_source(c: Composition) -> None:
+def workflow_mv_on_counter_source(c: Composition) -> None:
+    setup(c)
+
     c.testdrive(
         dedent(
             """
@@ -371,7 +375,9 @@ def run_test_with_mv_on_counter_source(c: Composition) -> None:
     _validate_count_of_counter_source(c, "retain_history_mv2")
 
 
-def run_test_with_counter_source(c: Composition) -> None:
+def workflow_counter_source(c: Composition) -> None:
+    setup(c)
+
     c.testdrive(
         dedent(
             """
@@ -410,52 +416,105 @@ def _validate_count_of_counter_source(c: Composition, object_name: str) -> None:
     ), f"value at time2 did not progress ({count_at_mz_time2} vs. {count_at_mz_time1}), consider increasing 'sleep_duration_between_mz_time1_and_mz_time2'"
 
 
-def run_test_with_index(c: Composition) -> None:
+def workflow_index(c: Composition) -> None:
+    setup(c)
+
     c.testdrive(
         dedent(
             """
-            > CREATE SOURCE retain_history_source3
+            > CREATE SOURCE retain_history_source
               FROM LOAD GENERATOR COUNTER
               (TICK INTERVAL '100ms');
             > CREATE DEFAULT INDEX retain_history_idx
-              ON retain_history_source2
+              ON retain_history_source
               WITH (RETAIN HISTORY FOR '10s');
             """
         )
     )
-    _validate_count_of_counter_source(c, "retain_history_source3")
+    _validate_count_of_counter_source(c, "retain_history_source")
 
 
-def run_test_with_table(c: Composition) -> None:
+def workflow_table(c: Composition) -> None:
+    setup(c)
+
     c.testdrive(
         dedent(
             """
             > CREATE TABLE time (time_index int, t timestamp);
-            > CREATE TABLE table_with_retain_history (x int) WITH (RETAIN HISTORY FOR = '10s');
+            > CREATE TABLE table_with_retain_history (x int) WITH (RETAIN HISTORY FOR '10s');
             > INSERT INTO time VALUES (0, now());
             # sleep justification: force time to advance
-            $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="2s";
+            $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="2s"
             > INSERT INTO table_with_retain_history VALUES (0);
             > INSERT INTO time VALUES (1, now());
             # sleep justification: force time to advance
-            $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="2s";
+            $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="2s"
             > INSERT INTO table_with_retain_history VALUES (1);
             > SELECT count(*) FROM table_with_retain_history;
             2
             $ set-from-sql var=time0
             SELECT t::string FROM time WHERE time_index = 0
-            > SELECT count(*) FROM table_with_retain_history AS OF '${{time0}}'::timestamp;
+            > SELECT count(*) FROM table_with_retain_history AS OF '${time0}'::timestamp;
             0
-            $ set-from-sql var=time0
+            $ set-from-sql var=time1
             SELECT t::string FROM time WHERE time_index = 1
-            > SELECT count(*) FROM table_with_retain_history AS OF '${{time1}}'::timestamp;
+            > SELECT count(*) FROM table_with_retain_history AS OF '${time1}'::timestamp;
             1
             """
         )
     )
 
 
-def run_test_gh_24479(c: Composition) -> None:
+def workflow_webhook_table(c: Composition) -> None:
+    setup(c)
+
+    c.testdrive(
+        dedent(
+            """
+            > CREATE TABLE webhook_retain_history FROM WEBHOOK BODY FORMAT TEXT;
+
+            $ webhook-append name=webhook_retain_history
+            hello_1
+
+            > SELECT count(*) FROM webhook_retain_history;
+            1
+            """
+        )
+    )
+
+    mz_time1 = fetch_now_from_mz(c)
+    time.sleep(5)
+
+    c.testdrive(
+        dedent(
+            """
+            $ webhook-append name=webhook_retain_history
+            hello_2
+
+            > SELECT count(*) FROM webhook_retain_history;
+            2
+            """
+        )
+    )
+
+    time.sleep(2)
+
+    c.testdrive(
+        dedent(
+            f"""
+            ! SELECT count(*) FROM webhook_retain_history AS OF '{mz_time1}'::TIMESTAMP;
+            contains: could not find a valid timestamp for the query
+
+            > SELECT count(*) FROM webhook_retain_history;
+            2
+            """
+        ),
+    )
+
+
+def workflow_gh_24479(c: Composition) -> None:
+    setup(c)
+
     for seed, sleep_enabled in [(0, False), (1, True)]:
         c.testdrive(
             dedent(

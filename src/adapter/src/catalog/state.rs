@@ -2604,12 +2604,31 @@ impl CatalogState {
                     let table_cw = table.custom_logical_compaction_window.unwrap_or_default();
                     match &table.data_source {
                         TableDataSource::DataSource {
-                            desc: DataSourceDesc::IngestionExport { .. },
+                            desc:
+                                DataSourceDesc::IngestionExport { .. }
+                                // Also match webhook tables (source-to-table migration).
+                                | DataSourceDesc::Webhook { .. },
                             timeline: _,
                         } => {
                             cws.entry(table_cw).or_default().insert(item_id);
                         }
-                        _ => {}
+                        // Regular tables handle compaction directly in
+                        // catalog_implications, not through this function.
+                        TableDataSource::TableWrites { .. } => {}
+                        TableDataSource::DataSource {
+                            desc:
+                                DataSourceDesc::Ingestion { .. }
+                                | DataSourceDesc::OldSyntaxIngestion { .. }
+                                | DataSourceDesc::Introspection(_)
+                                | DataSourceDesc::Progress
+                                | DataSourceDesc::Catalog,
+                            ..
+                        } => {
+                            unreachable!(
+                                "unexpected DataSourceDesc for table {item_id}: {:?}",
+                                table.data_source
+                            )
+                        }
                     }
                 }
                 _ => {
