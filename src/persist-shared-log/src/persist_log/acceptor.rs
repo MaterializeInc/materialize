@@ -14,12 +14,15 @@
 //! conditional PUT to object storage.
 
 use std::sync::Arc;
+use std::time::Duration;
 
+use tokio_stream::StreamExt;
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Interval;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
+use mz_ore::retry::Retry;
 use mz_persist::generated::consensus_service::{
     ProtoAppendResponse, ProtoLogProposal,
 };
@@ -180,95 +183,126 @@ impl PersistAcceptor {
 
     /// Flush pending proposals via `compare_and_append`.
     ///
-    /// Returns `true` on success, `false` if fenced (another writer advanced
-    /// the upper frontier).
+    /// Returns `true` on success, `false` on a fatal error (e.g. `InvalidUsage`
+    /// or retries exhausted after repeated `UpperMismatch`).
+    ///
+    /// `UpperMismatch` is retryable: it means another `WriteHandle` advanced the
+    /// shard upper, so we re-read the (automatically updated) upper, rebuild
+    /// updates at the new timestamp, and retry.
     async fn flush(&mut self) -> bool {
         let pending = std::mem::take(&mut self.pending);
         if pending.is_empty() {
             return true;
         }
 
-        let upper = self.write.upper().clone();
-        let raw_upper = *upper.as_option().expect("upper should not be empty");
-        // Skip T=0: listen(as_of=since) where since=[0] treats T=0 as an empty
-        // snapshot, so writing at T=0 would be invisible to the learner. After
-        // the first batch, raw_upper is already >= 2 so .max(1) is a no-op.
-        let batch_number = raw_upper.max(1);
         let num_proposals = pending.len();
-        debug!(
-            batch = batch_number,
-            proposals = num_proposals,
-            "persist acceptor flush"
-        );
 
         // Split proposals from reply senders.
         let (proposals, replies): (Vec<_>, Vec<_>) =
             pending.into_iter().map(|p| (p.proposal, p.reply)).unzip();
 
-        // Build updates: one row per proposal at the given timestamp with D=+1.
-        let updates: Vec<_> = proposals
-            .iter()
-            .map(|p| {
-                let key = ConsensusProposal {
-                    encoded: p.encode_to_vec(),
-                };
-                ((key, ()), batch_number, 1i64)
-            })
-            .collect();
+        let retry = Retry::default()
+            .initial_backoff(Duration::from_millis(1))
+            .factor(2.0)
+            .clamp_backoff(Duration::from_millis(100))
+            .max_tries(10)
+            .into_retry_stream();
+        tokio::pin!(retry);
 
-        let new_upper = Antichain::from_elem(batch_number + 1);
+        while let Some(state) = retry.next().await {
+            // Read the (possibly updated) upper and derive batch_number.
+            let upper = self.write.upper().clone();
+            let raw_upper = *upper.as_option().expect("upper should not be empty");
+            // Skip T=0: listen(as_of=since) where since=[0] treats T=0 as an
+            // empty snapshot, so writing at T=0 would be invisible to the
+            // learner. After the first batch, raw_upper >= 2 so .max(1) is a
+            // no-op.
+            let batch_number = raw_upper.max(1);
 
-        match self
-            .write
-            .compare_and_append(&updates, upper, new_upper)
-            .await
-        {
-            Ok(Ok(())) => {
-                // Success — resolve all pending replies.
-                for (position, reply) in replies.into_iter().enumerate() {
-                    let _ = reply.send(Ok(ProtoAppendResponse {
-                        batch_number,
-                        position: u32::try_from(position).expect("batch position fits u32"),
-                    }));
+            debug!(
+                batch = batch_number,
+                proposals = num_proposals,
+                attempt = state.i,
+                "persist acceptor flush"
+            );
+
+            // Build updates at the current batch_number.
+            let updates: Vec<_> = proposals
+                .iter()
+                .map(|p| {
+                    let key = ConsensusProposal {
+                        encoded: p.encode_to_vec(),
+                    };
+                    ((key, ()), batch_number, 1i64)
+                })
+                .collect();
+
+            let new_upper = Antichain::from_elem(batch_number + 1);
+
+            match self
+                .write
+                .compare_and_append(&updates, upper, new_upper)
+                .await
+            {
+                Ok(Ok(())) => {
+                    // Success — resolve all pending replies.
+                    for (position, reply) in replies.into_iter().enumerate() {
+                        let _ = reply.send(Ok(ProtoAppendResponse {
+                            batch_number,
+                            position: u32::try_from(position)
+                                .expect("batch position fits u32"),
+                        }));
+                    }
+                    debug!(
+                        batch = batch_number,
+                        proposals = num_proposals,
+                        "persist acceptor flush committed"
+                    );
+                    return true;
                 }
-                debug!(
-                    batch = batch_number,
-                    proposals = num_proposals,
-                    "persist acceptor flush committed"
-                );
-                true
-            }
-            Ok(Err(upper_mismatch)) => {
-                // Fenced: another writer advanced the upper past our expected.
-                let actual = upper_mismatch
-                    .current
-                    .as_option()
-                    .copied()
-                    .unwrap_or(u64::MAX);
-                error!(
-                    batch = batch_number,
-                    actual_upper = actual,
-                    "persist acceptor fenced: upper mismatch, shutting down"
-                );
-                let msg = format!(
-                    "persist acceptor fenced: expected upper {} but found {}",
-                    batch_number, actual,
-                );
-                for reply in replies {
-                    let _ = reply.send(Err(msg.clone()));
+                Ok(Err(upper_mismatch)) => {
+                    // Another writer advanced the upper — retryable.
+                    // WriteHandle auto-updates its cached upper on mismatch.
+                    let actual = upper_mismatch
+                        .current
+                        .as_option()
+                        .copied()
+                        .unwrap_or(u64::MAX);
+                    warn!(
+                        expected = batch_number,
+                        actual_upper = actual,
+                        attempt = state.i,
+                        "persist acceptor upper mismatch, retrying"
+                    );
+                    continue;
                 }
-                false
-            }
-            Err(invalid_usage) => {
-                // InvalidUsage is a programming error — should not happen.
-                error!("persist compare_and_append InvalidUsage: {}", invalid_usage);
-                let msg = format!("persist internal error: {}", invalid_usage);
-                for reply in replies {
-                    let _ = reply.send(Err(msg.clone()));
+                Err(invalid_usage) => {
+                    // InvalidUsage is a programming error — fatal.
+                    error!(
+                        "persist compare_and_append InvalidUsage: {}",
+                        invalid_usage
+                    );
+                    let msg = format!("persist internal error: {}", invalid_usage);
+                    for reply in replies {
+                        let _ = reply.send(Err(msg.clone()));
+                    }
+                    return false;
                 }
-                false
             }
         }
+
+        // Retries exhausted — error all pending replies.
+        error!(
+            proposals = num_proposals,
+            "persist acceptor flush failed: retries exhausted after repeated upper mismatch"
+        );
+        let msg =
+            "persist acceptor flush failed: retries exhausted after repeated upper mismatch"
+                .to_string();
+        for reply in replies {
+            let _ = reply.send(Err(msg.clone()));
+        }
+        false
     }
 }
 
