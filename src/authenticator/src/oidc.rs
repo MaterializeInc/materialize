@@ -247,8 +247,7 @@ impl GenericOidcAuthenticator {
 
 impl GenericOidcAuthenticatorInner {
     async fn fetch_jwks_uri(&self, issuer: &str) -> Result<String, OidcError> {
-        let openid_config_url = Url::parse(&format!("{issuer}/.well-known/openid-configuration"))
-            .map_err(|_| OidcError::InvalidIssuerUrl(issuer.to_string()))?;
+        let openid_config_url = build_openid_config_url(issuer)?;
 
         let openid_config_url_str = openid_config_url.to_string();
 
@@ -361,7 +360,7 @@ impl GenericOidcAuthenticatorInner {
 
         {
             let mut decoding_keys = self.decoding_keys.lock().expect("lock poisoned");
-            decoding_keys.extend(new_decoding_keys);
+            *decoding_keys = new_decoding_keys;
         }
 
         if let Some(key) = decoding_key {
@@ -480,6 +479,21 @@ impl GenericOidcAuthenticator {
         Ok((validated_claims, Authenticated))
     }
 }
+
+fn build_openid_config_url(issuer: &str) -> Result<Url, OidcError> {
+    let mut openid_config_url =
+        Url::parse(issuer).map_err(|_| OidcError::InvalidIssuerUrl(issuer.to_string()))?;
+    {
+        let mut segments = openid_config_url
+            .path_segments_mut()
+            .map_err(|_| OidcError::InvalidIssuerUrl(issuer.to_string()))?;
+        // Remove trailing slash if it exists
+        segments.pop_if_empty();
+        segments.push(".well-known");
+        segments.push("openid-configuration");
+    }
+    Ok(openid_config_url)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,5 +519,25 @@ mod tests {
         assert_eq!(claims.user("sub"), Some("user-123"));
         assert_eq!(claims.user("email"), Some("alice@example.com"));
         assert_eq!(claims.user("missing"), None);
+    }
+
+    #[mz_ore::test]
+    fn test_build_openid_config_url() {
+        let issuer = "https://dev-123456.okta.com/oauth2/default";
+        let url = build_openid_config_url(issuer).unwrap();
+        assert_eq!(
+            url.to_string(),
+            "https://dev-123456.okta.com/oauth2/default/.well-known/openid-configuration"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_build_openid_config_url_trailing_slash() {
+        let issuer = "https://dev-123456.okta.com/oauth2/default/";
+        let url = build_openid_config_url(issuer).unwrap();
+        assert_eq!(
+            url.to_string(),
+            "https://dev-123456.okta.com/oauth2/default/.well-known/openid-configuration"
+        );
     }
 }
