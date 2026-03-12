@@ -113,7 +113,9 @@ class BenchmarkExecutor:
             other_endpoint_result,
         )
 
-        # Targeted retries: re-run only the regressed concurrency levels
+        # Targeted retries: re-run both baseline and HEAD at regressed
+        # concurrency levels. Re-running only HEAD is not sufficient because
+        # the baseline may have had an anomalously good measurement.
         for retry in range(MAX_RETRIES_ON_REGRESSION):
             if not outcome.has_regressions():
                 break
@@ -125,15 +127,57 @@ class BenchmarkExecutor:
                 f"{MAX_RETRIES_ON_REGRESSION}"
             )
 
-            # Re-run only regressed concurrency levels
-            workload = self.create_workload_instance(
-                workload_cls, endpoint=other_endpoint
+            # Re-run baseline at regressed concurrency levels
+            baseline_workload = self.create_workload_instance(
+                workload_cls, endpoint=self.baseline_endpoint
             )
-            retry_result = self.run_workload_for_endpoint_with_concurrencies(
-                other_endpoint, workload, regressed_concurrencies
+            baseline_retry_result = self.run_workload_for_endpoint_with_concurrencies(
+                self.baseline_endpoint,
+                baseline_workload,
+                regressed_concurrencies,
             )
 
-            # Replace only the retried concurrency rows in the result
+            # Re-run HEAD at regressed concurrency levels
+            other_workload = self.create_workload_instance(
+                workload_cls, endpoint=other_endpoint
+            )
+            other_retry_result = self.run_workload_for_endpoint_with_concurrencies(
+                other_endpoint, other_workload, regressed_concurrencies
+            )
+
+            # Replace retried concurrency rows in the baseline result
+            baseline_keep_totals = baseline_result.df_totals.data[
+                ~baseline_result.df_totals.data[df_totals_cols.CONCURRENCY].isin(
+                    regressed_concurrencies
+                )
+            ]
+            baseline_keep_details = baseline_result.df_details.data[
+                ~baseline_result.df_details.data[df_details_cols.CONCURRENCY].isin(
+                    regressed_concurrencies
+                )
+            ]
+            baseline_result = WorkloadResult(
+                baseline_result.workload,
+                baseline_result.endpoint,
+                DfTotals(
+                    pd.concat(
+                        [
+                            baseline_keep_totals,
+                            baseline_retry_result.df_totals.data,
+                        ]
+                    )
+                ),
+                DfDetails(
+                    pd.concat(
+                        [
+                            baseline_keep_details,
+                            baseline_retry_result.df_details.data,
+                        ]
+                    )
+                ),
+            )
+
+            # Replace retried concurrency rows in the HEAD result
             keep_totals = other_endpoint_result.df_totals.data[
                 ~other_endpoint_result.df_totals.data[df_totals_cols.CONCURRENCY].isin(
                     regressed_concurrencies
@@ -147,11 +191,13 @@ class BenchmarkExecutor:
             other_endpoint_result = WorkloadResult(
                 other_endpoint_result.workload,
                 other_endpoint_result.endpoint,
-                DfTotals(pd.concat([keep_totals, retry_result.df_totals.data])),
-                DfDetails(pd.concat([keep_details, retry_result.df_details.data])),
+                DfTotals(pd.concat([keep_totals, other_retry_result.df_totals.data])),
+                DfDetails(
+                    pd.concat([keep_details, other_retry_result.df_details.data])
+                ),
             )
 
-            # Re-evaluate
+            # Re-evaluate with fresh measurements on both sides
             outcome = self.result_analyzer.perform_comparison_in_workload(
                 workload_name,
                 self.baseline_endpoint,
