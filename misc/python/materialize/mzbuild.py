@@ -606,10 +606,10 @@ class CargoBuild(CargoPreImage):
         return cargo_build
 
     @classmethod
-    def prepare_batch(cls, cargo_builds: list["PreImage"]) -> dict[str, Any]:
-        super().prepare_batch(cargo_builds)
+    def prepare_batch(cls, instances: list["PreImage"]) -> dict[str, Any]:
+        super().prepare_batch(instances)
 
-        if not cargo_builds:
+        if not instances:
             return {}
 
         # Building all binaries and examples in the same `cargo build` command
@@ -617,7 +617,7 @@ class CargoBuild(CargoPreImage):
         # meaningfully speed up builds.
 
         rd: RepositoryDetails | None = None
-        builds = cast(list[CargoBuild], cargo_builds)
+        builds = cast(list[CargoBuild], instances)
         bins = set()
         examples = set()
         features = set()

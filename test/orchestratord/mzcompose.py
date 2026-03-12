@@ -269,7 +269,7 @@ class Modification:
     def to_dict(self) -> dict[str, Any]:
         return {"modification": self.__class__.__name__, "value": self.value}
 
-    def __eq__(self, other: "Modification"):
+    def __eq__(self, other: object):
         if not isinstance(other, self.__class__):
             return NotImplemented
         return self.value == other.value

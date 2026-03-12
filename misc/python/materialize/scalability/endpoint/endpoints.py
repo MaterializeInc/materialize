@@ -14,7 +14,7 @@ from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
-from materialize.scalability.endpoint.endpoint import Endpoint
+from materialize.scalability.endpoint.endpoint import ConnectionKind, Endpoint
 
 POSTGRES_ENDPOINT_NAME = "postgres"
 
@@ -31,7 +31,7 @@ class MaterializeRemote(Endpoint):
         super().__init__(specified_target=TARGET_MATERIALIZE_REMOTE)
         self.materialize_url = materialize_url
 
-    def url(self) -> str:
+    def url(self, kind: ConnectionKind = ConnectionKind.Plain) -> str:
         return self.materialize_url
 
     def up(self) -> None:
