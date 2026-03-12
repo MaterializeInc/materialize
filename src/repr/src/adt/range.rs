@@ -65,6 +65,19 @@ pub struct Range<D> {
     pub inner: Option<RangeInner<D>>,
 }
 
+impl crate::scalar::SqlContainerType for Range<Datum<'_>> {
+    fn unwrap_element_type(
+        container: &crate::scalar::SqlScalarType,
+    ) -> &crate::scalar::SqlScalarType {
+        container.unwrap_range_element_type()
+    }
+    fn wrap_element_type(element: crate::scalar::SqlScalarType) -> crate::scalar::SqlScalarType {
+        crate::scalar::SqlScalarType::Range {
+            element_type: Box::new(element),
+        }
+    }
+}
+
 impl<D: Display> Display for Range<D> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.inner {

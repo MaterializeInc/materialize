@@ -61,6 +61,17 @@ impl<'a, T> Array<'a, T> {
     }
 }
 
+impl<'a> crate::scalar::SqlContainerType for Array<'a, Datum<'a>> {
+    fn unwrap_element_type(
+        container: &crate::scalar::SqlScalarType,
+    ) -> &crate::scalar::SqlScalarType {
+        container.unwrap_array_element_type()
+    }
+    fn wrap_element_type(element: crate::scalar::SqlScalarType) -> crate::scalar::SqlScalarType {
+        crate::scalar::SqlScalarType::Array(Box::new(element))
+    }
+}
+
 /// The dimensions of an [`Array`].
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]
 pub struct ArrayDimensions<'a> {

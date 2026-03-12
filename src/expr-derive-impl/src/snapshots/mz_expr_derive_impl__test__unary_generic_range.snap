@@ -27,9 +27,9 @@ impl crate::func::EagerUnaryFunc for RangeLower {
         input_type: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = input_type
-            .scalar_type
-            .unwrap_range_element_type()
+        let output = <Range<
+            Datum<'_>,
+        > as mz_repr::SqlContainerType>::unwrap_element_type(&input_type.scalar_type)
             .clone()
             .nullable(true);
         let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);

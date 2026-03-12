@@ -16,9 +16,6 @@
 mod sqlfunc;
 
 pub use sqlfunc::sqlfunc;
-pub use sqlfunc::{
-    CONTAINER_TYPE_ARRAY, CONTAINER_TYPE_DATUM_LIST, CONTAINER_TYPE_DATUM_MAP, CONTAINER_TYPE_RANGE,
-};
 
 /// Non-exported version of `sqlfunc` for testing purposes, accepting proc_macro2 token streams.
 #[cfg(any(feature = "test", test))]

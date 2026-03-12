@@ -3003,45 +3003,6 @@ mod test {
     use super::*;
     use crate::MirScalarExpr;
 
-    /// Verify that the container type names used by the `#[sqlfunc]` proc macro
-    /// match the actual type names in `mz_repr`. If a type is renamed, this test
-    /// will fail at compile time.
-    #[mz_ore::test]
-    fn container_type_names_match() {
-        use mz_expr_derive_impl::{
-            CONTAINER_TYPE_ARRAY, CONTAINER_TYPE_DATUM_LIST, CONTAINER_TYPE_DATUM_MAP,
-            CONTAINER_TYPE_RANGE,
-        };
-        fn type_name_of<T>(_: &T) -> &'static str {
-            std::any::type_name::<T>()
-        }
-        let list = mz_repr::DatumList::<mz_repr::Datum<'_>>::empty();
-        let map = mz_repr::DatumMap::<mz_repr::Datum<'_>>::empty();
-        let array = mz_repr::Datum::empty_array().unwrap_array();
-        let range = mz_repr::adt::range::Range::<mz_repr::Datum<'_>> { inner: None };
-        // Check that the short type name appears in the fully-qualified name.
-        assert!(
-            type_name_of(&list).contains(CONTAINER_TYPE_DATUM_LIST),
-            "DatumList type name mismatch: {}",
-            type_name_of(&list)
-        );
-        assert!(
-            type_name_of(&map).contains(CONTAINER_TYPE_DATUM_MAP),
-            "DatumMap type name mismatch: {}",
-            type_name_of(&map)
-        );
-        assert!(
-            type_name_of(&array).contains(CONTAINER_TYPE_ARRAY),
-            "Array type name mismatch: {}",
-            type_name_of(&array)
-        );
-        assert!(
-            type_name_of(&range).contains(CONTAINER_TYPE_RANGE),
-            "Range type name mismatch: {}",
-            type_name_of(&range)
-        );
-    }
-
     #[mz_ore::test]
     fn add_interval_months() {
         let dt = ym(2000, 1);
