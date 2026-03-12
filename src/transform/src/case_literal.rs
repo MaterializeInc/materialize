@@ -472,15 +472,16 @@ mod tests {
     #[mz_ore::test]
     fn test_64_arm_chain() {
         // Build a 64-arm If-chain and verify it converts to a single CaseLiteral.
-        let n = 64;
+        let n: usize = 64;
         let mut expr = lit_i64(-1);
         for i in (0..n).rev() {
+            let i = i64::try_from(i).expect("arm index fits in i64");
             expr = MirScalarExpr::column(0)
                 .call_binary(lit_i64(i), Eq)
                 .if_then_else(lit_i64(100 * i), expr);
         }
         let result = apply_transform(expr);
-        assert_case_literal(&result, n as usize);
+        assert_case_literal(&result, n);
 
         // Spot-check evaluation.
         let arena = mz_repr::RowArena::new();
