@@ -374,7 +374,7 @@ impl TestHarness {
         mut self,
         issuer: Option<String>,
         authentication_claim: Option<String>,
-        audience: Option<String>,
+        expected_audiences: Option<Vec<String>>,
     ) -> Self {
         let enable_tls = self.tls.is_some();
         self.listeners_config = ListenersConfig {
@@ -442,9 +442,11 @@ impl TestHarness {
             );
         }
 
-        if let Some(audience) = audience {
-            self.system_parameter_defaults
-                .insert("oidc_audience".to_string(), audience);
+        if let Some(expected_audiences) = expected_audiences {
+            self.system_parameter_defaults.insert(
+                "oidc_audience".to_string(),
+                serde_json::to_string(&expected_audiences).unwrap(),
+            );
         }
 
         self

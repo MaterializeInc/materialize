@@ -47,7 +47,7 @@ use mz_frontegg_auth::{
 use mz_frontegg_mock::{
     FronteggMockServer, models::ApiToken, models::TenantApiTokenConfig, models::UserConfig,
 };
-use mz_oidc_mock::{GenerateJwtOptions, OidcMockServer};
+use mz_oidc_mock::{AudClaim, GenerateJwtOptions, OidcMockServer};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
@@ -1539,30 +1539,31 @@ async fn test_auth_oidc_audience_validation() {
     .await
     .unwrap();
 
-    let expected_audience = "my-app-client-id";
+    let expected_audiences = vec!["app-client-1".to_string(), "app-client-2".to_string()];
 
     let oidc_user = "user@example.com";
-    // Token with correct audience
-    let valid_aud_token = oidc_server.generate_jwt(
+    // Token with all expected audiences
+    let valid_all_aud_token = oidc_server.generate_jwt(
         oidc_user,
         GenerateJwtOptions {
-            aud: Some(vec![expected_audience.to_string()]),
+            aud: Some(AudClaim::Multiple(expected_audiences.clone())),
             ..Default::default()
         },
     );
-    // Token with correct audience among multiple audiences
-    let valid_multi_aud_token = oidc_server.generate_jwt(
+
+    // Token with at least one of the expected audiences
+    let valid_one_aud_token = oidc_server.generate_jwt(
         oidc_user,
         GenerateJwtOptions {
-            aud: Some(vec!["other-app".to_string(), expected_audience.to_string()]),
+            aud: Some(AudClaim::Single(expected_audiences[0].clone())),
             ..Default::default()
         },
     );
-    // Token with wrong audience
+    // Token with the wrong audience
     let wrong_aud_token = oidc_server.generate_jwt(
         oidc_user,
         GenerateJwtOptions {
-            aud: Some(vec!["wrong-app".to_string()]),
+            aud: Some(AudClaim::Single("wrong-app".to_string())),
             ..Default::default()
         },
     );
@@ -1579,7 +1580,7 @@ async fn test_auth_oidc_audience_validation() {
         .with_oidc_auth(
             Some(oidc_server.issuer),
             Some("sub".to_string()),
-            Some(expected_audience.to_string()),
+            Some(expected_audiences.clone()),
         )
         .start()
         .await;
@@ -1588,27 +1589,27 @@ async fn test_auth_oidc_audience_validation() {
         "OIDC Audience Validation",
         &server,
         &[
-            // JWT with correct audience should succeed.
+            // JWT that contains all expected audiences should succeed.
             TestCase::Pgwire {
                 user_to_auth_as: oidc_user,
                 user_reported_by_system: oidc_user,
-                password: Some(Cow::Borrowed(&valid_aud_token)),
+                password: Some(Cow::Borrowed(&valid_all_aud_token)),
                 ssl_mode: SslMode::Require,
                 options: Some("--oidc_auth_enabled=true"),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
-            // JWT with correct audience among multiple audiences should succeed.
+            // JWT with at least one of the expected audiences should succeed.
             TestCase::Pgwire {
                 user_to_auth_as: oidc_user,
                 user_reported_by_system: oidc_user,
-                password: Some(Cow::Borrowed(&valid_multi_aud_token)),
+                password: Some(Cow::Borrowed(&valid_one_aud_token)),
                 ssl_mode: SslMode::Require,
                 options: Some("--oidc_auth_enabled=true"),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
-            // JWT with wrong audience should fail.
+            // JWT with no expected audiences should fail.
             TestCase::Pgwire {
                 user_to_auth_as: oidc_user,
                 user_reported_by_system: oidc_user,
@@ -1621,7 +1622,7 @@ async fn test_auth_oidc_audience_validation() {
                     assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
                     assert_contains!(
                         err.detail().unwrap(),
-                        format!("Expected audience \"{expected_audience}\" in the JWT.")
+                        format!("Expected one of audiences {:?}", &expected_audiences)
                     );
                 })),
             },
@@ -1678,7 +1679,7 @@ async fn test_auth_oidc_audience_optional() {
     let valid_aud_token = oidc_server.generate_jwt(
         oidc_user,
         GenerateJwtOptions {
-            aud: Some(vec!["my-app-client-id".to_string()]),
+            aud: Some(AudClaim::Multiple(vec!["my-app-client-id".to_string()])),
             ..Default::default()
         },
     );
@@ -1877,14 +1878,14 @@ async fn test_auth_oidc_issuer_and_audience_switch() {
     let token1 = oidc_server1.generate_jwt(
         oidc_user,
         GenerateJwtOptions {
-            aud: Some(vec![audience1.to_string()]),
+            aud: Some(AudClaim::Single(audience1.to_string())),
             ..Default::default()
         },
     );
     let token2 = oidc_server2.generate_jwt(
         oidc_user,
         GenerateJwtOptions {
-            aud: Some(vec![audience2.to_string()]),
+            aud: Some(AudClaim::Single(audience2.to_string())),
             ..Default::default()
         },
     );
@@ -1895,7 +1896,7 @@ async fn test_auth_oidc_issuer_and_audience_switch() {
         .with_oidc_auth(
             Some(oidc_server1.issuer.clone()),
             Some("sub".to_string()),
-            Some(audience1.to_string()),
+            Some(vec![audience1.to_string()]),
         )
         .start()
         .await;
@@ -1949,7 +1950,10 @@ async fn test_auth_oidc_issuer_and_audience_switch() {
         .await
         .unwrap();
     admin_client
-        .batch_execute(&format!("ALTER SYSTEM SET oidc_audience = '{}'", audience2))
+        .batch_execute(&format!(
+            "ALTER SYSTEM SET oidc_audience = '[\"{}\"]'",
+            audience2
+        ))
         .await
         .unwrap();
 

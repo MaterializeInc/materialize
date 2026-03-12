@@ -34,6 +34,7 @@ pub enum OidcError {
     MissingIssuer,
     /// Failed to parse OIDC configuration URL.
     InvalidIssuerUrl(String),
+    AudienceParseError,
     /// Failed to fetch from the identity provider.
     FetchFromProviderFailed {
         url: String,
@@ -54,7 +55,7 @@ pub enum OidcError {
     Jwt,
     WrongUser,
     InvalidAudience {
-        expected_audience: String,
+        expected_audiences: Vec<String>,
     },
     InvalidIssuer {
         expected_issuer: String,
@@ -67,6 +68,9 @@ impl std::fmt::Display for OidcError {
         match self {
             OidcError::MissingIssuer => write!(f, "OIDC issuer is not configured"),
             OidcError::InvalidIssuerUrl(_) => write!(f, "invalid OIDC issuer URL"),
+            OidcError::AudienceParseError => {
+                write!(f, "failed to parse OIDC_AUDIENCE system variable")
+            }
             OidcError::FetchFromProviderFailed { .. } => {
                 write!(f, "failed to fetch OIDC provider configuration")
             }
@@ -102,8 +106,9 @@ impl OidcError {
             OidcError::NoMatchingKey { key_id } => {
                 Some(format!("JWT key ID \"{key_id}\" was not found."))
             }
-            OidcError::InvalidAudience { expected_audience } => Some(format!(
-                "Expected audience \"{expected_audience}\" in the JWT.",
+            OidcError::InvalidAudience { expected_audiences } => Some(format!(
+                "Expected one of audiences {:?} in the JWT.",
+                expected_audiences,
             )),
             OidcError::InvalidIssuer { expected_issuer } => {
                 Some(format!("Expected issuer \"{expected_issuer}\" in the JWT.",))
@@ -387,16 +392,19 @@ impl GenericOidcAuthenticatorInner {
 
         let authentication_claim = OIDC_AUTHENTICATION_CLAIM.get(system_vars.dyncfgs());
 
-        let audience = {
-            let aud = OIDC_AUDIENCE.get(system_vars.dyncfgs());
-            if aud.is_none() {
+        let expected_audiences: Vec<String> = {
+            let audiences: Vec<String> =
+                serde_json::from_value(OIDC_AUDIENCE.get(system_vars.dyncfgs()))
+                    .map_err(|_| OidcError::AudienceParseError)?;
+
+            if audiences.is_empty() {
                 warn!(
                     "Audience validation skipped. It is discouraged \
                     to skip audience validation since it allows anyone \
                     with a JWT issued by the same issuer to authenticate."
                 );
             }
-            aud
+            audiences
         };
 
         // Decode header to get key ID (kid) and the
@@ -414,8 +422,8 @@ impl GenericOidcAuthenticatorInner {
         // Set up audience and issuer validation
         let mut validation = jsonwebtoken::Validation::new(header.alg);
         validation.set_issuer(&[&issuer]);
-        if let Some(audience) = &audience {
-            validation.set_audience(&[audience]);
+        if !expected_audiences.is_empty() {
+            validation.set_audience(&expected_audiences);
         } else {
             validation.validate_aud = false;
         }
@@ -424,9 +432,9 @@ impl GenericOidcAuthenticatorInner {
         let token_data = jsonwebtoken::decode::<OidcClaims>(token, &(decoding_key.0), &validation)
             .map_err(|e| match e.kind() {
                 jsonwebtoken::errors::ErrorKind::InvalidAudience => {
-                    if let Some(audience) = &audience {
+                    if !expected_audiences.is_empty() {
                         OidcError::InvalidAudience {
-                            expected_audience: audience.clone(),
+                            expected_audiences
                         }
                     } else {
                         soft_panic_or_log!(
