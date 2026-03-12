@@ -81,6 +81,7 @@ For a new setup you can run:
     parser_environment.add_argument(
         "--external-login-password-mz-system", required=False
     )
+    parser_environment.add_argument("--authenticator-kind", required=False)
     parser_environment.add_argument(
         "--enable-rbac",
         type=bool,
@@ -308,11 +309,13 @@ def environment(args: argparse.Namespace):
         },
     ]
 
+    if args.authenticator_kind is not None:
+        resources[-1]["spec"]["authenticatorKind"] = args.authenticator_kind
+
     if args.external_login_password_mz_system is not None:
         resources[0]["stringData"][
             "external_login_password_mz_system"
         ] = args.external_login_password_mz_system
-        resources[-1]["spec"]["authenticatorKind"] = "Password"
 
     env_kubectl("apply", "-f", "-", input=yaml.safe_dump_all(resources).encode())
 

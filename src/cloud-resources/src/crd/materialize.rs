@@ -188,7 +188,8 @@ pub mod v1alpha1 {
         pub rollout_strategy: MaterializeRolloutStrategy,
         /// The name of a secret containing `metadata_backend_url` and `persist_backend_url`.
         /// It may also contain `external_login_password_mz_system`, which will be used as
-        /// the password for the `mz_system` user if `authenticatorKind` is `Password`.
+        /// the password for the `mz_system` user if `authenticatorKind` is `Password`,
+        /// `Sasl`, or `Oidc`.
         pub backend_secret_name: String,
         /// How to authenticate with Materialize.
         #[serde(default)]
