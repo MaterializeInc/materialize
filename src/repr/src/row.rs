@@ -935,6 +935,34 @@ impl<'a, T> PartialOrd for DatumMap<'a, T> {
     }
 }
 
+impl<'a> crate::scalar::SqlContainerType for DatumList<'a, Datum<'a>> {
+    fn unwrap_element_type(
+        container: &crate::scalar::SqlScalarType,
+    ) -> &crate::scalar::SqlScalarType {
+        container.unwrap_list_element_type()
+    }
+    fn wrap_element_type(element: crate::scalar::SqlScalarType) -> crate::scalar::SqlScalarType {
+        crate::scalar::SqlScalarType::List {
+            element_type: Box::new(element),
+            custom_id: None,
+        }
+    }
+}
+
+impl<'a> crate::scalar::SqlContainerType for DatumMap<'a, Datum<'a>> {
+    fn unwrap_element_type(
+        container: &crate::scalar::SqlScalarType,
+    ) -> &crate::scalar::SqlScalarType {
+        container.unwrap_map_value_type()
+    }
+    fn wrap_element_type(element: crate::scalar::SqlScalarType) -> crate::scalar::SqlScalarType {
+        crate::scalar::SqlScalarType::Map {
+            value_type: Box::new(element),
+            custom_id: None,
+        }
+    }
+}
+
 /// Represents a single `Datum`, appropriate to be nested inside other
 /// `Datum`s.
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]

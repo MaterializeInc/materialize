@@ -182,15 +182,19 @@ The macro classifies each type as one of:
 
 * `Absent` — `T` does not appear
 * `Bare` — `T` appears directly (possibly inside `Option`/`Result`)
-* `InDatumList` — `T` appears as the element of `DatumList<'a, T>`
-* `InArray` — `T` appears as the element of `Array<'a, T>`
-* `InDatumMap` — `T` appears as the value of `DatumMap<'a, T>`
-* `InRange` — `T` appears inside `Range<T>`
+* `InContainer(TypePath)` — `T` appears inside a generic type that isn't `Option`, `Result`, or `ExcludeNull`
 
-Container type names (`DatumList`, `Array`, `DatumMap`, `Range`) are matched by string comparison against constants exported from `mz_expr_derive_impl`.
-A compile-time test in `mz_expr` verifies these constants match the actual type names.
+Any generic type wrapping `T` that isn't one of the known wrapper types is treated as a container.
+The macro stores the erased container type path (with `T` replaced by `Datum<'a>`) in the `InContainer` variant.
+If a type doesn't implement `SqlContainerType`, the generated code won't compile — giving a clear error at the use site rather than a silent wrong answer.
 
 For tuple types like `(T, DatumList<'_, T>)`, the classifier prefers container usages over bare.
+
+#### `SqlContainerType` trait
+
+Each container type implements `SqlContainerType` in `mz_repr`, providing `unwrap_element_type` and `wrap_element_type` associated functions.
+The macro emits calls like `<DatumList<'_, Datum<'_>> as SqlContainerType>::unwrap_element_type(&input.scalar_type)`, letting Rust's type system resolve the correct behavior at compile time.
+Lifetimes are elided to `'_` in the turbofish position; the compiler infers them from the `&self` lifetime on `output_sql_type`.
 
 #### Output type derivation
 
@@ -199,12 +203,9 @@ The macro finds the first input parameter whose type contains `T` in a container
 | Output usage | Source usage | Generated `output_type_expr` |
 |---|---|---|
 | Same container | Same container | `input.scalar_type.without_modifiers()` |
-| `Bare` | `InDatumList` | `input.scalar_type.unwrap_list_element_type().clone()` |
-| `Bare` | `InArray` | `input.scalar_type.unwrap_array_element_type().clone()` |
-| `Bare` | `InRange` | `input.scalar_type.unwrap_range_element_type().clone()` |
-| `Bare` | `InDatumMap` | `input.scalar_type.unwrap_map_value_type().clone()` |
+| `Bare` | `InContainer(C)` | `<C as SqlContainerType>::unwrap_element_type(&input.scalar_type).clone()` |
 | `Bare` | `Bare` | `input.scalar_type.clone()` |
-| `InDatumList` | `InArray` | `List { element_type: input...unwrap_array_element_type() }` |
+| `InContainer(Out)` | `InContainer(In)` | `<Out>::wrap_element_type(<In>::unwrap_element_type(&input.scalar_type).clone())` |
 
 Nullability is derived from the return type: `Option<...>` → `.nullable(true)`, otherwise `.nullable(false)`.
 `introduces_nulls` is also auto-derived from the `Option` wrapper on the output type.
