@@ -37,7 +37,7 @@ use crate::actor::learner::{ActorLearner, LearnerHandle};
 use crate::actor::storage::sim::{SimStorage, SimWriteFault};
 use crate::traits::Acceptor as _;
 
-use super::{
+use super::actor::{
     test_acceptor_config, test_acceptor_metrics, test_learner_config, test_learner_metrics,
 };
 
