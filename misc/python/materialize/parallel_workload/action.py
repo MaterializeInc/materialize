@@ -1451,9 +1451,6 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["enable_replica_targeted_materialized_views"] = (
-            BOOLEAN_FLAG_VALUES
-        )
         self.flags_with_values["persist_batch_structured_key_lower_len"] = [
             "0",
             "1",
@@ -1569,6 +1566,7 @@ class FlipFlagsAction(Action):
             "enable_compute_render_fueled_as_specific_collection",
             "compute_temporal_bucketing_summary",
             "enable_compute_logical_backpressure",
+            "enable_replica_targeted_materialized_views",
             "compute_logical_backpressure_max_retained_capabilities",
             "compute_logical_backpressure_inflight_slack",
             "persist_fetch_semaphore_cost_adjustment",
