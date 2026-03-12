@@ -12,7 +12,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.101"
+anyhow = "1.0.102"
 askama = { version = "0.12.1", default-features = false, features = ["config", "serde-json"] }
 async-trait = "0.1.89"
 axum = { version = "0.8.8", features = ["ws"] }
@@ -24,7 +24,7 @@ chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["wrap_help", "env", "derive"] }
 derivative = "2.2.0"
 fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.31"
+futures = "0.3.32"
 headers = "0.4.1"
 http = "1.4.0"
 humantime = "2.3.0"
@@ -36,7 +36,7 @@ include_dir = "0.7.4"
 ipnet = "2.11.0"
 itertools = "0.14.0"
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
-libc = "0.2.181"
+libc = "0.2.183"
 maplit = "1.0.2"
 mime = "0.3.16"
 mz-alloc = { path = "../alloc" }
@@ -166,8 +166,8 @@ timely = "0.27.0"
 tokio-postgres = { version = "0.7.15", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
-anyhow = "1.0.101"
-cc = "1.2.55"
+anyhow = "1.0.102"
+cc = "1.2.56"
 mz-npm = { path = "../npm" }
 
 [features]
