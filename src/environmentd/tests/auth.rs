@@ -1748,7 +1748,6 @@ async fn test_auth_oidc_password_fallback() {
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
         .with_oidc_auth(Some(oidc_server.issuer), Some("sub".to_string()), None)
-        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_password_auth(Password("mz_system_password".to_owned()))
         .start()
         .await;
@@ -2281,6 +2280,85 @@ async fn test_auth_oidc_fetch_error() {
                 })),
             },
         ],
+    )
+    .await;
+}
+
+/// Tests that an existing role without the LOGIN attribute is rejected during OIDC auth.
+/// If the role does not exist at all, OIDC auth succeeds and startup auto-creates it
+/// with login=true. If the role already exists but has login=false, the connection is rejected.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+async fn test_auth_oidc_non_login() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+    let jwt_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            ..Default::default()
+        },
+    );
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(Some(oidc_server.issuer), Some("sub".to_string()), None)
+        .start()
+        .await;
+
+    run_tests(
+        "Initial OIDC login succeeds",
+        &server,
+        &[TestCase::Pgwire {
+            user_to_auth_as: oidc_user,
+            user_reported_by_system: oidc_user,
+            password: Some(Cow::Borrowed(&jwt_token)),
+            ssl_mode: SslMode::Require,
+            options: Some("--oidc_auth_enabled=true"),
+            configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+            assert: Assert::Success,
+        }],
+    )
+    .await;
+
+    // Pre-create the role with NOLOGIN via the internal admin connection.
+    let admin = server.connect().internal().await.unwrap();
+    admin
+        .batch_execute(&format!("ALTER ROLE \"{}\" NOLOGIN", oidc_user))
+        .await
+        .unwrap();
+
+    run_tests(
+        "OIDC NonLogin - rejected when role exists without login",
+        &server,
+        &[TestCase::Pgwire {
+            user_to_auth_as: oidc_user,
+            user_reported_by_system: oidc_user,
+            password: Some(Cow::Borrowed(&jwt_token)),
+            ssl_mode: SslMode::Require,
+            options: Some("--oidc_auth_enabled=true"),
+            configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+            assert: Assert::DbErr(Box::new(|err| {
+                assert_eq!(err.message(), "role is not allowed to login");
+                assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
+            })),
+        }],
     )
     .await;
 }
@@ -4168,7 +4246,6 @@ async fn test_password_auth() {
             "log_filter".to_string(),
             "mz_frontegg_auth=debug,info".to_string(),
         )
-        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_password_auth(Password("mz_system_password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()
@@ -4258,7 +4335,6 @@ async fn test_sasl_auth() {
             "log_filter".to_string(),
             "mz_frontegg_auth=debug,info".to_string(),
         )
-        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_sasl_scram_auth(Password("mz_system_password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()
@@ -4313,7 +4389,6 @@ async fn test_sasl_auth_failure() {
             "log_filter".to_string(),
             "mz_frontegg_auth=debug,info".to_string(),
         )
-        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_sasl_scram_auth(Password("mz_system_password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()
@@ -4359,7 +4434,6 @@ async fn test_password_auth_superuser() {
             "log_filter".to_string(),
             "mz_frontegg_auth=debug,info".to_string(),
         )
-        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_password_auth(Password("password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()
@@ -4414,7 +4488,6 @@ async fn test_password_auth_alter_role() {
             "log_filter".to_string(),
             "mz_frontegg_auth=debug,info".to_string(),
         )
-        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_password_auth(Password("mz_system_password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()
@@ -4554,7 +4627,6 @@ async fn test_password_auth_http() {
             "log_filter".to_string(),
             "mz_frontegg_auth=debug,info".to_string(),
         )
-        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_password_auth(Password("mz_system_password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()
@@ -4699,7 +4771,6 @@ async fn test_password_auth_http_superuser() {
             "log_filter".to_string(),
             "mz_frontegg_auth=debug,info".to_string(),
         )
-        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_password_auth(Password("mz_system_password".to_owned()))
         .with_metrics_registry(metrics_registry)
         .start()

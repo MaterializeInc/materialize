@@ -188,6 +188,16 @@ impl Client {
         Ok(response)
     }
 
+    /// Validates that the named role exists and has the login attribute.
+    pub async fn validate_login_user(&self, role_name: &str) -> Result<(), AdapterError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::ValidateLoginUser {
+            role_name: role_name.to_string(),
+            tx,
+        });
+        rx.await.expect("sender dropped")
+    }
+
     pub async fn verify_sasl_proof(
         &self,
         user: &String,
@@ -1030,6 +1040,7 @@ impl SessionClient {
                 | Command::AuthenticatePassword { .. }
                 | Command::AuthenticateGetSASLChallenge { .. }
                 | Command::AuthenticateVerifySASLProof { .. }
+                | Command::ValidateLoginUser { .. }
                 | Command::CatalogSnapshot { .. }
                 | Command::Commit { .. }
                 | Command::CancelRequest { .. }

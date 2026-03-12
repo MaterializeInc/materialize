@@ -81,6 +81,14 @@ static V26_1_0: LazyLock<Version> = LazyLock::new(|| Version {
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
 });
 
+static V26_15_0: LazyLock<Version> = LazyLock::new(|| Version {
+    major: 26,
+    minor: 15,
+    patch: 0,
+    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+});
+
 /// Describes the status of a deployment.
 ///
 /// This is a simplified representation of `DeploymentState`, suitable for
@@ -1072,6 +1080,15 @@ fn create_environmentd_statefulset_object(
                 }),
                 ..Default::default()
             })
+        }
+        // Prior to v26.15.0, enabling the superuser and login attribute was done via
+        // setting enable_password_auth=true. Starting with v26.15.0, both the
+        // superuser and login attributes are controlled by their own feature flags.
+        if !matches!(mz.spec.authenticator_kind, AuthenticatorKind::Frontegg)
+            && mz.meets_minimum_version(&V26_15_0)
+        {
+            args.push("--system-parameter-default=enable_superuser_attribute=true".into());
+            args.push("--system-parameter-default=enable_login_attribute=true".into());
         }
     } else {
         args.extend([

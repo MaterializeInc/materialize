@@ -377,6 +377,10 @@ impl TestHarness {
         expected_audiences: Option<Vec<String>>,
     ) -> Self {
         let enable_tls = self.tls.is_some();
+        self.system_parameter_defaults
+            .insert("enable_superuser_attribute".to_string(), "true".to_string());
+        self.system_parameter_defaults
+            .insert("enable_login_attribute".to_string(), "true".to_string());
         self.listeners_config = ListenersConfig {
             sql: btreemap! {
                 "external".to_owned() => SqlListenerConfig {
@@ -454,6 +458,16 @@ impl TestHarness {
 
     pub fn with_password_auth(mut self, mz_system_password: Password) -> Self {
         self.external_login_password_mz_system = Some(mz_system_password);
+
+        self.system_parameter_defaults
+            .insert("enable_password_auth".to_string(), "true".to_string());
+
+        self.system_parameter_defaults
+            .insert("enable_superuser_attribute".to_string(), "true".to_string());
+
+        self.system_parameter_defaults
+            .insert("enable_login_attribute".to_string(), "true".to_string());
+
         let enable_tls = self.tls.is_some();
         self.listeners_config = ListenersConfig {
             sql: btreemap! {
@@ -506,6 +520,15 @@ impl TestHarness {
 
     pub fn with_sasl_scram_auth(mut self, mz_system_password: Password) -> Self {
         self.external_login_password_mz_system = Some(mz_system_password);
+        self.system_parameter_defaults
+            .insert("enable_password_auth".to_string(), "true".to_string());
+
+        self.system_parameter_defaults
+            .insert("enable_superuser_attribute".to_string(), "true".to_string());
+
+        self.system_parameter_defaults
+            .insert("enable_login_attribute".to_string(), "true".to_string());
+
         let enable_tls = self.tls.is_some();
         self.listeners_config = ListenersConfig {
             sql: btreemap! {
