@@ -9,10 +9,9 @@
 
 //! Persist-shard-backed learner: tails a persist shard subscription.
 //!
-//! Receives proposals via a channel from a dedicated listen task, evaluates CAS
-//! during playback, maintains materialized shard state, and serves reads and
-//! result queries. Recovery is implicit — `listen(as_of=since)` replays all
-//! history.
+//! Receives proposals via a channel from a dedicated listen task, applies them
+//! to a [`StateMachine`], and serves reads and result queries. Recovery is
+//! implicit — `listen(as_of=since)` replays all history.
 //!
 //! ## Read linearization
 //!
@@ -66,6 +65,115 @@ impl Default for PersistLearnerConfig {
             queue_depth: 4096,
             result_retention_batches: 10_000,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// StateMachine
+// ---------------------------------------------------------------------------
+
+/// The replicated state machine that applies proposals from the shared log.
+///
+/// Takes CAS and truncate proposals, evaluates them against current state, and
+/// maintains the resulting key→versions mapping. This is the SMR (state machine
+/// replication) core — it processes the log deterministically so all replicas
+/// converge to the same state.
+struct StateMachine {
+    shards: BTreeMap<String, ShardState>,
+}
+
+impl StateMachine {
+    fn new() -> Self {
+        StateMachine {
+            shards: BTreeMap::new(),
+        }
+    }
+
+    fn apply_cas(
+        &mut self,
+        cas: mz_persist::generated::consensus_service::ProtoCasProposal,
+    ) -> ProtoCompareAndSetResponse {
+        let current_seqno = self
+            .shards
+            .get(&cas.key)
+            .and_then(|s| s.entries.last())
+            .map(|e| e.seqno);
+
+        let committed = current_seqno == cas.expected;
+
+        if committed {
+            let entry = VersionedEntry {
+                seqno: cas.new_seqno,
+                data: Bytes::from(cas.data),
+            };
+            self.shards.entry(cas.key).or_default().entries.push(entry);
+        }
+
+        ProtoCompareAndSetResponse { committed }
+    }
+
+    fn apply_truncate(
+        &mut self,
+        trunc: &mz_persist::generated::consensus_service::ProtoTruncateProposal,
+    ) -> Result<ProtoTruncateResponse, String> {
+        let shard = match self.shards.get(&trunc.key) {
+            Some(s) if !s.entries.is_empty() => s,
+            _ => {
+                return Err(format!("no data at key: {}", trunc.key));
+            }
+        };
+
+        let head_seqno = shard.entries.last().unwrap().seqno;
+
+        if trunc.seqno > head_seqno {
+            return Err(format!(
+                "upper bound too high for truncate: {}",
+                trunc.seqno
+            ));
+        }
+
+        let shard = self.shards.get_mut(&trunc.key).unwrap();
+        let keep_from = shard.entries.partition_point(|e| e.seqno < trunc.seqno);
+        shard.entries.drain(..keep_from);
+
+        Ok(ProtoTruncateResponse {
+            deleted: Some(u64::cast_from(keep_from)),
+        })
+    }
+
+    fn head(&self, key: &str) -> ProtoHeadResponse {
+        let data = self
+            .shards
+            .get(key)
+            .and_then(|s| s.entries.last())
+            .map(|e| ProtoVersionedData {
+                seqno: e.seqno,
+                data: e.data.to_vec(),
+            });
+        ProtoHeadResponse { data }
+    }
+
+    fn scan(&self, key: &str, from: u64, limit: u64) -> ProtoScanResponse {
+        let data = if let Some(shard) = self.shards.get(key) {
+            let from_idx = shard.entries.partition_point(|e| e.seqno < from);
+            let lim = usize::try_from(limit).unwrap_or(usize::MAX);
+            let slice = &shard.entries[from_idx..];
+            let slice = &slice[..usize::min(lim, slice.len())];
+            slice
+                .iter()
+                .map(|e| ProtoVersionedData {
+                    seqno: e.seqno,
+                    data: e.data.to_vec(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        ProtoScanResponse { data }
+    }
+
+    fn keys(&self) -> Vec<String> {
+        self.shards.keys().cloned().collect()
     }
 }
 
@@ -254,7 +362,7 @@ impl crate::traits::Learner for PersistLearnerHandle {
 }
 
 // ---------------------------------------------------------------------------
-// Result storage (same types as WAL learner)
+// Result storage
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
@@ -305,14 +413,14 @@ fn spawn_listen_task(
 
 /// The persist-shard-backed learner actor.
 ///
-/// Tails a persist shard via a dedicated listen task, evaluates CAS during
-/// playback, maintains materialized state, and serves reads and result queries.
+/// Tails a persist shard via a dedicated listen task, applies proposals to a
+/// [`StateMachine`], and serves reads and result queries.
 ///
-/// Reads are linearized via the "bus-stand" pattern: a single in-flight
-/// `fetch_recent_upper()` call is shared by all concurrent read requests.
+/// Reads are linearized via the "bus-stand" pattern: `fetch_recent_upper()` runs
+/// continuously, and all reads that arrive while it's in flight share the same
+/// linearization target.
 pub struct PersistLearnerActor {
-    // --- Shard state ---
-    shards: BTreeMap<String, ShardState>,
+    state: StateMachine,
 
     // --- Result cache ---
     results: BTreeMap<u64, Vec<ProposalResult>>,
@@ -341,9 +449,6 @@ pub struct PersistLearnerActor {
     // --- Bus-stand linearization ---
     /// Reads waiting for the current upper fetch to complete.
     pending_reads: Vec<ReadCommand>,
-    /// Whether an upper fetch is needed (pending_reads is non-empty and no
-    /// fetch has been started yet for this batch of readers).
-    needs_upper_fetch: bool,
     /// Reads that have a linearization target, waiting for listen to catch up.
     linearizing_reads: Vec<LinearizingRead>,
 }
@@ -365,7 +470,7 @@ impl PersistLearnerActor {
         let listen_task = spawn_listen_task(listen, event_tx);
 
         let learner = PersistLearnerActor {
-            shards: BTreeMap::new(),
+            state: StateMachine::new(),
             results: BTreeMap::new(),
             result_waiters: BTreeMap::new(),
             config,
@@ -375,7 +480,6 @@ impl PersistLearnerActor {
             _listen_task: listen_task,
             listen_frontier: Antichain::from_elem(0),
             pending_reads: Vec::new(),
-            needs_upper_fetch: false,
             linearizing_reads: Vec::new(),
         };
         let handle = PersistLearnerHandle::new(cmd_tx);
@@ -395,19 +499,14 @@ impl PersistLearnerActor {
                             self.wake_linearizing_reads();
                         }
                         None => {
-                            // Listen task exited — should not happen in normal
-                            // operation.
                             warn!("listen task channel closed");
                             return;
                         }
                     }
                 }
                 // cancel-safety: stale upper on cancel just delays linearization
-                upper = self.upper_handle.fetch_recent_upper(),
-                    if self.needs_upper_fetch =>
-                {
+                upper = self.upper_handle.fetch_recent_upper() => {
                     let upper = upper.clone();
-                    self.needs_upper_fetch = false;
                     self.assign_linearization_target(upper);
                     self.wake_linearizing_reads();
                 }
@@ -443,19 +542,19 @@ impl PersistLearnerActor {
             }
         }
 
-        // Materialize each batch in timestamp order.
+        // Apply each batch in timestamp order.
         for (batch_number, proposals) in updates_by_ts {
-            self.materialize_batch(batch_number, proposals);
+            self.apply_batch(batch_number, proposals);
         }
     }
 
-    /// Materialize a single batch of proposals at the given timestamp.
-    fn materialize_batch(&mut self, batch_number: u64, proposals: Vec<ConsensusProposal>) {
+    /// Apply a single batch of proposals at the given timestamp.
+    fn apply_batch(&mut self, batch_number: u64, proposals: Vec<ConsensusProposal>) {
         let num_proposals = proposals.len();
         debug!(
             batch_number,
             proposals = num_proposals,
-            "materializing persist batch"
+            "applying persist batch"
         );
 
         let mut batch_results = Vec::with_capacity(num_proposals);
@@ -464,11 +563,11 @@ impl PersistLearnerActor {
             match ProtoWalProposal::decode(proposal_data.encoded.as_slice()) {
                 Ok(proposal) => match proposal.op {
                     Some(proto_wal_proposal::Op::Cas(cas)) => {
-                        let result = self.evaluate_cas(cas);
+                        let result = self.state.apply_cas(cas);
                         batch_results.push(ProposalResult::Cas(result));
                     }
                     Some(proto_wal_proposal::Op::Truncate(trunc)) => {
-                        let result = self.evaluate_truncate(&trunc);
+                        let result = self.state.apply_truncate(&trunc);
                         batch_results.push(ProposalResult::Truncate(result));
                     }
                     None => {
@@ -494,69 +593,14 @@ impl PersistLearnerActor {
     }
 
     // -----------------------------------------------------------------------
-    // CAS / Truncate evaluation (same logic as WAL learner)
-    // -----------------------------------------------------------------------
-
-    fn evaluate_cas(
-        &mut self,
-        cas: mz_persist::generated::consensus_service::ProtoCasProposal,
-    ) -> ProtoCompareAndSetResponse {
-        let current_seqno = self
-            .shards
-            .get(&cas.key)
-            .and_then(|s| s.entries.last())
-            .map(|e| e.seqno);
-
-        let committed = current_seqno == cas.expected;
-
-        if committed {
-            let entry = VersionedEntry {
-                seqno: cas.new_seqno,
-                data: Bytes::from(cas.data),
-            };
-            self.shards.entry(cas.key).or_default().entries.push(entry);
-        }
-
-        ProtoCompareAndSetResponse { committed }
-    }
-
-    fn evaluate_truncate(
-        &mut self,
-        trunc: &mz_persist::generated::consensus_service::ProtoTruncateProposal,
-    ) -> Result<ProtoTruncateResponse, String> {
-        let shard = match self.shards.get(&trunc.key) {
-            Some(s) if !s.entries.is_empty() => s,
-            _ => {
-                return Err(format!("no data at key: {}", trunc.key));
-            }
-        };
-
-        let head_seqno = shard.entries.last().unwrap().seqno;
-
-        if trunc.seqno > head_seqno {
-            return Err(format!(
-                "upper bound too high for truncate: {}",
-                trunc.seqno
-            ));
-        }
-
-        let shard = self.shards.get_mut(&trunc.key).unwrap();
-        let keep_from = shard.entries.partition_point(|e| e.seqno < trunc.seqno);
-        shard.entries.drain(..keep_from);
-
-        Ok(ProtoTruncateResponse {
-            deleted: Some(u64::cast_from(keep_from)),
-        })
-    }
-
-    // -----------------------------------------------------------------------
     // Command handling
     // -----------------------------------------------------------------------
 
     fn handle_command(&mut self, cmd: PersistLearnerCommand) {
         match cmd {
             PersistLearnerCommand::Head { key, reply } => {
-                self.enqueue_read(ReadCommand::Head { key, reply });
+                self.pending_reads
+                    .push(ReadCommand::Head { key, reply });
             }
             PersistLearnerCommand::Scan {
                 key,
@@ -564,7 +608,7 @@ impl PersistLearnerActor {
                 limit,
                 reply,
             } => {
-                self.enqueue_read(ReadCommand::Scan {
+                self.pending_reads.push(ReadCommand::Scan {
                     key,
                     from,
                     limit,
@@ -572,7 +616,7 @@ impl PersistLearnerActor {
                 });
             }
             PersistLearnerCommand::ListKeys { reply } => {
-                self.enqueue_read(ReadCommand::ListKeys { reply });
+                self.pending_reads.push(ReadCommand::ListKeys { reply });
             }
             PersistLearnerCommand::AwaitCasResult {
                 batch_number,
@@ -619,15 +663,6 @@ impl PersistLearnerActor {
     // Bus-stand read linearization
     // -----------------------------------------------------------------------
 
-    /// Enqueue a read command. Sets the flag so the select loop will
-    /// poll `fetch_recent_upper()` if not already in progress.
-    fn enqueue_read(&mut self, cmd: ReadCommand) {
-        self.pending_reads.push(cmd);
-        if !self.needs_upper_fetch {
-            self.needs_upper_fetch = true;
-        }
-    }
-
     /// Upper fetch completed: assign the target to all pending reads.
     fn assign_linearization_target(&mut self, upper: Antichain<u64>) {
         for cmd in self.pending_reads.drain(..) {
@@ -658,7 +693,7 @@ impl PersistLearnerActor {
     fn serve_read(&self, cmd: ReadCommand) {
         match cmd {
             ReadCommand::Head { key, reply } => {
-                let _ = reply.send(self.serve_head(&key));
+                let _ = reply.send(self.state.head(&key));
             }
             ReadCommand::Scan {
                 key,
@@ -666,43 +701,12 @@ impl PersistLearnerActor {
                 limit,
                 reply,
             } => {
-                let _ = reply.send(self.serve_scan(&key, from, limit));
+                let _ = reply.send(self.state.scan(&key, from, limit));
             }
             ReadCommand::ListKeys { reply } => {
-                let _ = reply.send(self.shards.keys().cloned().collect());
+                let _ = reply.send(self.state.keys());
             }
         }
-    }
-
-    fn serve_head(&self, key: &str) -> ProtoHeadResponse {
-        let data = self
-            .shards
-            .get(key)
-            .and_then(|s| s.entries.last())
-            .map(|e| ProtoVersionedData {
-                seqno: e.seqno,
-                data: e.data.to_vec(),
-            });
-        ProtoHeadResponse { data }
-    }
-
-    fn serve_scan(&self, key: &str, from: u64, limit: u64) -> ProtoScanResponse {
-        let data = if let Some(shard) = self.shards.get(key) {
-            let from_idx = shard.entries.partition_point(|e| e.seqno < from);
-            let lim = usize::try_from(limit).unwrap_or(usize::MAX);
-            let slice = &shard.entries[from_idx..];
-            let slice = &slice[..usize::min(lim, slice.len())];
-            slice
-                .iter()
-                .map(|e| ProtoVersionedData {
-                    seqno: e.seqno,
-                    data: e.data.to_vec(),
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-        ProtoScanResponse { data }
     }
 
     // -----------------------------------------------------------------------
