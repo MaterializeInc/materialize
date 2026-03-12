@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Datum;
 use crate::row::DatumList;
+use crate::scalar::SqlScalarType;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.array.rs"));
 
@@ -64,13 +65,11 @@ impl<'a, T> Array<'a, T> {
 }
 
 impl<'a> crate::scalar::SqlContainerType for Array<'a, Datum<'a>> {
-    fn unwrap_element_type(
-        container: &crate::scalar::SqlScalarType,
-    ) -> &crate::scalar::SqlScalarType {
+    fn unwrap_element_type(container: &SqlScalarType) -> &SqlScalarType {
         container.unwrap_array_element_type()
     }
-    fn wrap_element_type(element: crate::scalar::SqlScalarType) -> crate::scalar::SqlScalarType {
-        crate::scalar::SqlScalarType::Array(Box::new(element))
+    fn wrap_element_type(element: SqlScalarType) -> SqlScalarType {
+        SqlScalarType::Array(Box::new(element))
     }
 }
 
