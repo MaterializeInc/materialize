@@ -753,8 +753,19 @@ pub struct RowPacker<'a> {
 /// Used by [`DatumList::typed_iter`] to yield elements as `T` rather than
 /// raw `Datum`s. At runtime, `T` is always `Datum<'a>`, so the conversion
 /// is identity.
-pub trait FromDatum<'a>: Sized + PartialEq + std::borrow::Borrow<Datum<'a>> {
+///
+/// This trait is sealed and cannot be implemented outside of this crate.
+pub trait FromDatum<'a>:
+    Sized + PartialEq + std::borrow::Borrow<Datum<'a>> + sealed::Sealed
+{
     fn from_datum(datum: Datum<'a>) -> Self;
+}
+
+mod sealed {
+    use crate::Datum;
+
+    pub trait Sealed {}
+    impl<'a> Sealed for Datum<'a> {}
 }
 
 impl<'a> FromDatum<'a> for Datum<'a> {
