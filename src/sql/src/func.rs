@@ -4328,6 +4328,26 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 bail_unsupported!("concat_agg")
             }) => String, oid::FUNC_CONCAT_AGG_OID;
         },
+        "add_num" => Scalar {
+            params!(Bytes, Bytes) => BinaryFunc::from(func::AddNum)
+                => Bytes, oid::FUNC_ADD_NUM_OID;
+        },
+        "mul_num" => Scalar {
+            params!(Bytes, Bytes) => BinaryFunc::from(func::MulNum)
+                => Bytes, oid::FUNC_MUL_NUM_OID;
+        },
+        "add_int" => Scalar {
+            params!(Bytes, Bytes) => BinaryFunc::from(func::AddArbInt)
+                => Bytes, oid::FUNC_ADD_ARB_INT_OID;
+        },
+        "sub_int" => Scalar {
+            params!(Bytes, Bytes) => BinaryFunc::from(func::SubArbInt)
+                => Bytes, oid::FUNC_SUB_ARB_INT_OID;
+        },
+        "mul_int" => Scalar {
+            params!(Bytes, Bytes) => BinaryFunc::from(func::MulArbInt)
+                => Bytes, oid::FUNC_MUL_ARB_INT_OID;
+        },
         "crc32" => Scalar {
             params!(String) => UnaryFunc::Crc32String(func::Crc32String)
                 => UInt32, oid::FUNC_CRC32_STRING_OID;

@@ -406,6 +406,11 @@ mod derive {
         PrettySql(PrettySql),
         RegexpReplace(RegexpReplace),
         StartsWith(StartsWith),
+        AddNum(AddNum),
+        MulNum(MulNum),
+        AddArbInt(AddArbInt),
+        SubArbInt(SubArbInt),
+        MulArbInt(MulArbInt),
     }
 }
 
