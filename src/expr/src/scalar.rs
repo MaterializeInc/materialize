@@ -539,6 +539,16 @@ impl MirScalarExpr {
         }
     }
 
+    /// Returns a reference to the `Row` if the expression is a non-NULL `Ok` literal.
+    pub fn as_literal_non_null_row(&self) -> Option<&Row> {
+        if let MirScalarExpr::Literal(Ok(row), _) = self {
+            if !row.unpack_first().is_null() {
+                return Some(row);
+            }
+        }
+        None
+    }
+
     pub fn as_literal_str(&self) -> Option<&str> {
         match self.as_literal() {
             Some(Ok(Datum::String(s))) => Some(s),
