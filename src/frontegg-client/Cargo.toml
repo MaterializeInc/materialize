@@ -13,7 +13,7 @@ workspace = true
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-ore = { path = "../ore", features = ["network"] }
-reqwest = { version = "0.12.28", features = ["json"] }
+reqwest = { version = "0.13.2", features = ["json"] }
 serde = { version = "1.0.219", features = ["derive"] }
 thiserror = "2.0.18"
 tokio = { version = "1.49.0", features = ["macros"] }
