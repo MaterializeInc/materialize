@@ -81,7 +81,7 @@ tokio-util = { version = "0.7.18", features = ["compat"] }
 tonic = "0.14.2"
 tonic-prost = "0.14.2"
 url = "2.5.8"
-uuid = "1.19.0"
+uuid = "1.22.0"
 walkdir = "2.5.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 

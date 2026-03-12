@@ -51,7 +51,7 @@ tokio-metrics = "0.4.7"
 tower = "0.5.3"
 tracing = "0.1.44"
 tracing-subscriber = "0.3.22"
-uuid = "1.19.0"
+uuid = "1.22.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
