@@ -196,44 +196,42 @@ def workflow_secrets_manager(c: Composition) -> None:
     assert len(secrets) == 2
 
     c.sql("CREATE SECRET secret AS 's3cret'")
-    # Query actual ID; with batch allocation it may not be u3
-    (secret_id,) = c.sql_query("SELECT id FROM mz_secrets WHERE name = 'secret'")[0]
     secrets = list_secrets()
 
     # New secret should exist with specified contents
-    assert secret_name(secret_id) in secrets
-    assert b"s3cret" == get_secret_value(secret_id)
+    assert secret_name("u3") in secrets
+    assert b"s3cret" == get_secret_value("u3")
 
     # Secrets should have expected tags
-    secret_meta = secrets[secret_name(secret_id)]
+    secret_u3 = secrets[secret_name("u3")]
     for tag in expected_tags:
-        assert tag in secret_meta["Tags"]
+        assert tag in secret_u3["Tags"]
 
     # Skip until https://github.com/localstack/localstack/issues/13518
     # is resolved.
     # Check that alter secret gets reflected in Secrets Manager
     # c.sql("ALTER SECRET secret AS 'tops3cret'")
-    # assert b"tops3cret" == get_secret_value(secret_id)
+    # assert b"tops3cret" == get_secret_value("u3")
 
     # Skip until https://github.com/localstack/localstack/issues/13518
     # is resolved.
     # Rename should not change the contents in Secrets Manager
     # c.sql("ALTER SECRET secret RENAME TO renamed_secret")
-    # assert b"tops3cret" == get_secret_value(secret_id)
+    # assert b"tops3cret" == get_secret_value("u3")
 
     # Ensure secret still exists after a restart (i.e., test that orphaned
     # cleanup doesn't fire incorrectly).
     c.stop("materialized")
     c.up("materialized")
     secrets = list_secrets()
-    assert secret_name(secret_id) in secrets
+    assert secret_name("u3") in secrets
 
     # Skip until https://github.com/localstack/localstack/issues/13518
     # is resolved.
     # c.sql("DROP SECRET renamed_secret")
     # # Check that the file has been deleted from Secrets Manager
     # secrets = list_secrets()
-    # assert secret_name(secret_id) not in secrets
+    # assert secret_name("u3") not in secrets
 
 
 def workflow_aws_connection(c: Composition) -> None:

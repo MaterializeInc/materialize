@@ -167,14 +167,6 @@ pub const ENABLE_MCP_OBSERVATORY: Config<bool> = Config::new(
     "Whether the MCP observatory HTTP endpoint is enabled. When false, requests to /api/mcp/observatory return 503 Service Unavailable.",
 );
 
-/// Number of user IDs to pre-allocate in a batch. Pre-allocating IDs avoids
-/// a persist write + oracle call per DDL statement.
-pub const USER_ID_POOL_BATCH_SIZE: Config<u32> = Config::new(
-    "user_id_pool_batch_size",
-    512,
-    "Number of user IDs to pre-allocate in a batch for DDL operations.",
-);
-
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -200,5 +192,4 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_S3_TABLES_REGION_CHECK)
         .add(&ENABLE_MCP_AGENTS)
         .add(&ENABLE_MCP_OBSERVATORY)
-        .add(&USER_ID_POOL_BATCH_SIZE)
 }
