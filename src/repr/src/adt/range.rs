@@ -27,7 +27,7 @@ use crate::Datum;
 use crate::adt::date::Date;
 use crate::adt::numeric::Numeric;
 use crate::adt::timestamp::CheckedTimestamp;
-use crate::scalar::DatumKind;
+use crate::scalar::{DatumKind, SqlScalarType};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.range.rs"));
 
@@ -66,13 +66,11 @@ pub struct Range<D> {
 }
 
 impl crate::scalar::SqlContainerType for Range<Datum<'_>> {
-    fn unwrap_element_type(
-        container: &crate::scalar::SqlScalarType,
-    ) -> &crate::scalar::SqlScalarType {
+    fn unwrap_element_type(container: &SqlScalarType) -> &SqlScalarType {
         container.unwrap_range_element_type()
     }
-    fn wrap_element_type(element: crate::scalar::SqlScalarType) -> crate::scalar::SqlScalarType {
-        crate::scalar::SqlScalarType::Range {
+    fn wrap_element_type(element: SqlScalarType) -> SqlScalarType {
+        SqlScalarType::Range {
             element_type: Box::new(element),
         }
     }

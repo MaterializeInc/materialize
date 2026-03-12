@@ -43,7 +43,7 @@ use crate::adt::range::{
     self, InvalidRangeError, Range, RangeBound, RangeInner, RangeLowerBound, RangeUpperBound,
 };
 use crate::adt::timestamp::CheckedTimestamp;
-use crate::scalar::{DatumKind, arb_datum};
+use crate::scalar::{DatumKind, SqlScalarType, arb_datum};
 use crate::{Datum, RelationDesc, Timestamp};
 
 pub(crate) mod encode;
@@ -938,13 +938,11 @@ impl<'a, T> PartialOrd for DatumMap<'a, T> {
 }
 
 impl<'a> crate::scalar::SqlContainerType for DatumList<'a, Datum<'a>> {
-    fn unwrap_element_type(
-        container: &crate::scalar::SqlScalarType,
-    ) -> &crate::scalar::SqlScalarType {
+    fn unwrap_element_type(container: &SqlScalarType) -> &SqlScalarType {
         container.unwrap_list_element_type()
     }
-    fn wrap_element_type(element: crate::scalar::SqlScalarType) -> crate::scalar::SqlScalarType {
-        crate::scalar::SqlScalarType::List {
+    fn wrap_element_type(element: SqlScalarType) -> SqlScalarType {
+        SqlScalarType::List {
             element_type: Box::new(element),
             custom_id: None,
         }
@@ -952,13 +950,11 @@ impl<'a> crate::scalar::SqlContainerType for DatumList<'a, Datum<'a>> {
 }
 
 impl<'a> crate::scalar::SqlContainerType for DatumMap<'a, Datum<'a>> {
-    fn unwrap_element_type(
-        container: &crate::scalar::SqlScalarType,
-    ) -> &crate::scalar::SqlScalarType {
+    fn unwrap_element_type(container: &SqlScalarType) -> &SqlScalarType {
         container.unwrap_map_value_type()
     }
-    fn wrap_element_type(element: crate::scalar::SqlScalarType) -> crate::scalar::SqlScalarType {
-        crate::scalar::SqlScalarType::Map {
+    fn wrap_element_type(element: SqlScalarType) -> SqlScalarType {
+        SqlScalarType::Map {
             value_type: Box::new(element),
             custom_id: None,
         }
