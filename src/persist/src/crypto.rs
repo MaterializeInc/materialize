@@ -31,12 +31,15 @@ use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandle;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, warn, Instrument, Span};
 
 use aws_lc_rs::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
 
+use aws_config::sts::AssumeRoleProvider;
+
 use crate::location::{
-    Blob, BlobMetadata, CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData,
+    Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, ResultStream, SeqNo,
+    VersionedData,
 };
 
 const ENVELOPE_VERSION_V1: u8 = 0x01;
@@ -226,7 +229,7 @@ impl EnvelopeEncryption {
                     }
                 }
             }
-        })
+        }.instrument(Span::current()))
     }
 
     /// Encrypt plaintext. Reads cached DEK (RwLock read — uncontended).
@@ -505,6 +508,15 @@ impl EncryptionConfig {
         if let Some(endpoint) = &self.endpoint {
             loader = loader.endpoint_url(endpoint);
         }
+        if let Some(role_arn) = &self.role_arn {
+            let assume_role_sdk_config = mz_aws_util::defaults().load().await;
+            let role_provider = AssumeRoleProvider::builder(role_arn)
+                .configure(&assume_role_sdk_config)
+                .session_name("persist")
+                .build()
+                .await;
+            loader = loader.credentials_provider(role_provider);
+        }
 
         let sdk_config = loader.load().await;
         Ok(KmsClient::new(&sdk_config))
@@ -529,10 +541,36 @@ impl EncryptionConfig {
         if let Some(endpoint) = &self.customer_kms_endpoint {
             loader = loader.endpoint_url(endpoint);
         }
+        if let Some(role_arn) = &self.customer_kms_role_arn {
+            let assume_role_sdk_config = mz_aws_util::defaults().load().await;
+            let role_provider = AssumeRoleProvider::builder(role_arn)
+                .configure(&assume_role_sdk_config)
+                .session_name("persist")
+                .build()
+                .await;
+            loader = loader.credentials_provider(role_provider);
+        }
 
         let sdk_config = loader.load().await;
         info!(customer_kms_key_id = %key_id, "built customer KMS client for two-party encryption");
         Ok(Some(KmsClient::new(&sdk_config)))
+    }
+}
+
+/// Classify a decryption error as `Determinate` (corrupt/invalid data that will
+/// never succeed on retry) or `Indeterminate` (transient KMS errors).
+fn classify_decrypt_error(e: anyhow::Error) -> ExternalError {
+    let msg = e.to_string();
+    if msg.contains("unsupported envelope version")
+        || msg.contains("authentication failed")
+        || msg.contains("ciphertext too short")
+        || msg.contains("too short for header")
+        || msg.contains("too short for envelope")
+        || msg.contains("data is empty")
+    {
+        ExternalError::from(Determinate::new(e))
+    } else {
+        ExternalError::from(e)
     }
 }
 
@@ -617,12 +655,13 @@ impl Blob for EncryptedBlob {
         match maybe_segments {
             None => Ok(None),
             Some(segments) => {
+                // AES-256-GCM decryption requires contiguous input; materialize segments.
                 let encrypted = segments.into_contiguous();
                 let plaintext = self
                     .encryption
                     .decrypt(&encrypted)
                     .await
-                    .map_err(ExternalError::from)?;
+                    .map_err(classify_decrypt_error)?;
                 Ok(Some(SegmentedBytes::from(plaintext)))
             }
         }
@@ -735,7 +774,7 @@ impl EncryptedConsensus {
             .encryption
             .decrypt(&vd.data)
             .await
-            .map_err(ExternalError::from)?;
+            .map_err(classify_decrypt_error)?;
         Ok(VersionedData {
             seqno: vd.seqno,
             data: Bytes::from(plaintext),
@@ -1099,6 +1138,11 @@ mod tests {
         })
         .await
     }
+
+    // NOTE: `blob_impl_test` is not compatible with EncryptedBlob because the
+    // harness asserts exact byte sizes from `delete()` and `list_keys_and_metadata()`,
+    // but those return encrypted (larger) sizes from the inner blob. The existing
+    // `encrypted_blob_roundtrip` test covers encrypt/decrypt correctness for Blob.
 
     // --- Two-party encryption tests ---
 
