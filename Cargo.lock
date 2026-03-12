@@ -7335,6 +7335,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "workspace-hack",
+ "zeroize",
 ]
 
 [[package]]
