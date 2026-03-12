@@ -34,7 +34,19 @@ impl crate::func::binary::EagerBinaryFunc for ListListConcat {
         input_types: &[mz_repr::SqlColumnType],
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = input_types[0].scalar_type.without_modifiers().nullable(true);
+        let output = <DatumList<
+            '_,
+            Datum<'_>,
+        > as mz_repr::SqlContainerType>::wrap_element_type(
+                <DatumList<
+                    '_,
+                    Datum<'_>,
+                > as mz_repr::SqlContainerType>::unwrap_element_type(
+                        &input_types[0].scalar_type,
+                    )
+                    .clone(),
+            )
+            .nullable(true);
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );

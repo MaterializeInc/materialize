@@ -572,12 +572,6 @@ fn derive_output_type_for_generic(
     // Now generate the output_type_expr based on the combination of
     // source container and output usage.
     let expr = match (&output_usage, &source_usage) {
-        // Output and input are the same container → pass through the type.
-        (GenericUsage::InContainer(out_c), GenericUsage::InContainer(in_c))
-            if container_idents_match(out_c, in_c) =>
-        {
-            quote! { #input_access.scalar_type.without_modifiers().nullable(#nullable) }
-        }
         // Output is bare T, source is a container → unwrap element type via trait.
         (GenericUsage::Bare, GenericUsage::InContainer(in_container)) => {
             let in_c = elide_lifetimes(in_container);
@@ -591,7 +585,7 @@ fn derive_output_type_for_generic(
         (GenericUsage::Bare, GenericUsage::Bare) => {
             quote! { #input_access.scalar_type.clone().nullable(#nullable) }
         }
-        // Cross-container: output is a different container than input →
+        // Output is a container, source is a container (same or different) →
         // unwrap from input container, wrap into output container via traits.
         (GenericUsage::InContainer(out_container), GenericUsage::InContainer(in_container)) => {
             let out_c = elide_lifetimes(out_container);
