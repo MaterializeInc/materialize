@@ -277,7 +277,6 @@ class AncestorImageResolutionBase:
     def _resolve_image_tag_of_merge_base(
         self,
         context_when_image_of_commit_exists: str,
-        context_when_falling_back_to_latest: str,
     ) -> tuple[str, str] | None:
         # If the current PR has a known and accepted regression, don't compare
         # against merge base of it
@@ -294,16 +293,20 @@ class AncestorImageResolutionBase:
             # )
             return None
 
-        if image_of_commit_exists(common_ancestor_commit):
-            return (
-                commit_to_image_tag(common_ancestor_commit),
-                context_when_image_of_commit_exists,
-            )
-        else:
-            return (
-                release_version_to_image_tag(get_latest_published_version()),
-                context_when_falling_back_to_latest,
-            )
+        ancestors = git.get_first_parent_commits(common_ancestor_commit, limit=20)
+        for ancestor in ancestors:
+            if image_of_commit_exists(ancestor):
+                context = (
+                    context_when_image_of_commit_exists
+                    if ancestor == common_ancestor_commit
+                    else f"ancestor of {context_when_image_of_commit_exists} (walked back from {common_ancestor_commit[:12]})"
+                )
+                return (
+                    commit_to_image_tag(ancestor),
+                    context,
+                )
+
+        return None
 
 
 class AncestorImageResolutionLocal(AncestorImageResolutionBase):
@@ -320,7 +323,6 @@ class AncestorImageResolutionLocal(AncestorImageResolutionBase):
         else:
             return self._resolve_image_tag_of_merge_base(
                 "merge base of local non-main branch",
-                "latest release because image of merge base of local non-main branch not available",
             )
 
 
@@ -329,7 +331,6 @@ class AncestorImageResolutionInBuildkite(AncestorImageResolutionBase):
         if buildkite.is_in_pull_request():
             return self._resolve_image_tag_of_merge_base(
                 "merge base of pull request",
-                "latest release because image of merge base of pull request not available",
             )
         elif build_context.is_on_release_version():
             return self._resolve_image_tag_of_previous_release(
