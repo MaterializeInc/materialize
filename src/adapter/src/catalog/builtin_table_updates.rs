@@ -18,8 +18,8 @@ use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICAS,
     MZ_CLUSTER_SCHEDULES, MZ_CLUSTER_WORKLOAD_CLASSES, MZ_CLUSTERS, MZ_COLUMNS, MZ_COMMENTS,
-    MZ_CONNECTIONS, MZ_CONTINUAL_TASKS, MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS,
-    MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_INDEXES,
+    MZ_CONNECTIONS, MZ_CONTINUAL_TASKS, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS,
+    MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_INDEXES,
     MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES,
     MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
     MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MATERIALIZED_VIEWS, MZ_MYSQL_SOURCE_TABLES,
@@ -59,13 +59,10 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, Row, RowPacker, SqlScalarType, Timestamp};
 use mz_sql::ast::{ContinualTaskStmt, CreateIndexStatement, Statement, UnresolvedItemName};
 use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, DefaultPrivilegeObject,
-    TypeCategory,
+    CatalogCluster, CatalogSchema, CatalogType, DefaultPrivilegeObject, TypeCategory,
 };
 use mz_sql::func::FuncImplCatalogDetails;
-use mz_sql::names::{
-    CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
-};
+use mz_sql::names::{CommentObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql::plan::{ClusterSchedule, ConnectionDetails, SshKey};
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::SessionVars;
@@ -142,27 +139,6 @@ impl CatalogState {
             Datum::String(&dependee.to_string()),
         ]);
         BuiltinTableUpdate::row(&*MZ_OBJECT_DEPENDENCIES, row, diff)
-    }
-
-    pub(super) fn pack_database_update(
-        &self,
-        database_id: &DatabaseId,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let database = self.get_database(database_id);
-        let row = self.pack_privilege_array_row(database.privileges());
-        let privileges = row.unpack_first();
-        BuiltinTableUpdate::row(
-            &*MZ_DATABASES,
-            Row::pack_slice(&[
-                Datum::String(&database.id.to_string()),
-                Datum::UInt32(database.oid),
-                Datum::String(database.name()),
-                Datum::String(&database.owner_id.to_string()),
-                privileges,
-            ]),
-            diff,
-        )
     }
 
     pub(super) fn pack_schema_update(
