@@ -63,7 +63,7 @@ class Minio(K8sResource):
             condition="condition=Available=True",
         )
 
-        self.create_buckets(["persist", "copytos3"])
+        self.create_buckets(["persist", "copytos3", "copyfroms3"])
 
     def create_buckets(self, buckets: list[str]) -> None:
         cmds = [

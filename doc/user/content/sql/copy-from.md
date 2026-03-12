@@ -68,8 +68,6 @@ except that:
   PostgreSQL, all open unescaped quotation punctuation must have a matching
   piece of unescaped quotation punctuation or it generates an error.
 
-{{< comment >}}
-
 ### PARQUET formatting
 
 Supported PARQUET compression formats
@@ -112,11 +110,13 @@ TODO:
 |                                                                           |                                                                              | `map`                                                                                        | unsupported                                                                       |
 |                                                                           |                                                                              | `interval`                                                                                   | unsupported                                                                       |
 
-{{< /comment >}}
-
 ### Limits
 
 You can copy up to 10 GiB of data at a time. If you need to copy more than that, please [contact support](/support/).
+
+When importing parquet files, entire row groups are held in memory at once, so ensure that your
+Materialize instance has enough available memory to accomodate your parquet files. If you are
+encountering memory issues, and are unable to reduce the sizes of your row groups, please [contact support](/support/).
 
 ## Examples
 
@@ -152,13 +152,11 @@ Using the full s3 URI:
 COPY INTO csv_table FROM 's3://example_bucket/example_data.csv' (FORMAT CSV, AWS CONNECTION = example_aws_conn);
 ```
 
-{{< comment >}}
+Using `PATTERN` option:
 
 ```mzsql
 COPY INTO parquet_table FROM 's3://example_bucket' (FORMAT PARQUET, AWS CONNECTION = example_aws_conn, PATTERN = '*parquet*');
 ```
-
-{{< /comment >}}
 
 #### Using S3-compatible object storage
 

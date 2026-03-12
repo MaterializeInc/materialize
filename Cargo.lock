@@ -8314,6 +8314,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "arrow",
+ "arrow-ipc",
  "async-compression",
  "async-stream",
  "aws-sdk-s3",

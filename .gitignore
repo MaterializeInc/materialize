@@ -66,3 +66,4 @@ uv.lock
 /test/workload-replay/captured-workloads/
 /misc/kind/cache/
 /plots/
+/test/testdrive/types.parquet*

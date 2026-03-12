@@ -45,8 +45,11 @@ SERVICES = [
     MySql(),
     Azurite(),
     Mz(app_password=""),
-    Minio(setup_materialize=True, additional_directories=["copytos3"]),
-    Materialized(external_blob_store=True, sanity_restart=False),
+    Minio(setup_materialize=True, additional_directories=["copytos3", "copyfroms3"]),
+    Materialized(
+        external_blob_store=True,
+        sanity_restart=False,
+    ),
     FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
     Testdrive(external_blob_store=True),
     *metadata_store_services(),
