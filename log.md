@@ -1051,3 +1051,99 @@ This is misleading due to heavy overlap (Chunker feeds into the same arrangement
 **Implication:** The Vec→Column migration may not reduce peak memory usage.
 The win is in CPU (fewer copies, better cache locality) and in allocation pattern (fewer, larger allocations that hit lgalloc).
 Memory benchmarking during the migration should track peak RSS, not just allocation volume.
+
+## Notify=true operators and frontier-driven activation overhead
+
+Timely operators can opt into frontier notifications via `unary_frontier`, `binary_frontier`, `unary_notify`, or `FrontierNotificator`.
+These operators get scheduled on **every frontier advance**, even when no data arrives.
+This directly contributes to the 7% CPU cost of progress tracking (`ChangeBatch::compact` + `MutableAntichain::update_dirty`).
+
+### Inventory of notify=true operators in compute
+
+**Explicit frontier operators (`unary_frontier` / `binary_frontier`):**
+
+| Operator | File | Notify reason |
+|----------|------|---------------|
+| `consolidate_pact` | `timely-util/src/operator.rs:540` | Must flush batcher when frontier advances |
+| `expire_stream_at` | `timely-util/src/operator.rs:291` | Must release capability at expiration time |
+| `suppress_early_progress` | `compute/src/render.rs:1695` | Holds capability until `as_of`, then drops |
+| `limit_progress` | `compute/src/render.rs:1778` | Logical backpressure — tracks frontier to limit in-flight data |
+| `temporal_bucket` | `compute/src/extensions/temporal_bucket.rs:67` | Reveals staged data when frontier passes bucket boundary |
+| `ct_times_reduce` | `compute/src/render/continual_task.rs:886` | Per-timestamp processing via FrontierNotificator |
+| `copy_to_s3_error_filtering` | `compute/src/sink/copy_to_s3_oneshot.rs:90` | Error filtering at sink completion |
+| `mz_join_core` | `compute/src/render/join/mz_join_core.rs:79` | Physical compaction of acknowledged frontiers (binary_frontier) |
+
+**FrontierNotificator-based operators:**
+
+| Operator | File | Notify reason |
+|----------|------|---------------|
+| `monotonic_topk_intra_ts` | `compute/src/render/top_k.rs:701` | Accumulates per-timestamp, emits when frontier passes (`unary_notify`) |
+| `ct_times_reduce` | `compute/src/render/continual_task.rs:887` | Registers per-timestamp notifications |
+
+**Implicitly notified (inside differential_dataflow):**
+
+| Operator | Call sites in render/ | Notify reason |
+|----------|----------------------|---------------|
+| `arrange` (via `MzArrange`) | 16 | Must seal batches when frontier advances |
+| `reduce` (via `mz_reduce`) | 16 | Must emit outputs when input frontier passes |
+
+**Explicitly not notified (`set_notify(false)`):**
+
+| Operator | File |
+|----------|------|
+| `unary_fallible` | `timely-util/src/operator.rs:229` |
+| `ConcatenateFlatten` | `timely-util/src/operator.rs:703` |
+| Context operator builder | `compute/src/render/context.rs:886` |
+| Continual task operators | `compute/src/render/continual_task.rs:800,848` |
+
+### Operator count in a typical dataflow
+
+A dataflow for a query like `SELECT ... FROM a JOIN b JOIN c WHERE ... GROUP BY ... HAVING ...` might contain:
+
+* 3 source arrangements (one per input): 3 arrange operators
+* 2 delta joins: 2 `mz_join_core` (binary_frontier)
+* Join output arrangements: 2 arrange operators
+* 1 reduce with arrangement: 1 reduce + 1 arrange
+* 1 threshold with arrangement: 1 arrange
+* 1 `suppress_early_progress`
+* 1 MV sink (no frontier notification)
+
+Total notify operators: **~12 per dataflow**.
+With 100 dataflows on a replica, that's ~1,200 operators receiving frontier notifications.
+
+### The multiplication effect
+
+Each frontier advance triggers:
+1. Timely sends progress messages to all downstream operators
+2. Each notify operator gets scheduled, even if it has no work
+3. The operator checks its input, finds nothing, and returns
+4. `ChangeBatch::compact` and `MutableAntichain::update_dirty` run for each notification
+
+Cost per frontier advance ≈ O(notify operators) × (scheduling overhead + ChangeBatch compact).
+
+At the current 10ms maintenance interval, if frontiers advance once per tick:
+* 100 ticks/s × 1,200 notify operators = 120,000 empty activations/s
+
+At 1ms maintenance interval (design doc 3 target):
+* 1,000 ticks/s × 1,200 notify operators = 1,200,000 empty activations/s
+
+This 10x increase in empty activations would amplify the 7% progress tracking cost proportionally, **unless** we also reduce per-activation cost or operator count.
+
+### Implications for design doc 3 (faster ticks)
+
+Design doc 3 must address not just `report_frontiers()` but the broader notification amplification:
+
+1. **Dirty tracking for report_frontiers()** — already planned, avoids scanning all collections.
+2. **Reduce empty activations** — operators that are notified but have no work should fast-path.
+   `arrange` operators already do this (they check if the batcher has data).
+   Other operators (`suppress_early_progress`, `limit_progress`) may not be as efficient.
+3. **Operator fusion** — combining adjacent operators (e.g., arrange + reduce) would reduce the total operator count and thus the notification fan-out.
+   This is a larger effort but would compound with faster ticks.
+4. **Coarsen notification granularity** — instead of notifying on every frontier advance, batch notifications and deliver them at maintenance boundaries.
+   This trades notification latency for reduced overhead.
+
+### Potential quick wins
+
+* **Audit `limit_progress`** — this operator exists for logical backpressure (currently disabled by default). When backpressure is off, this operator still gets frontier notifications but does no useful work. Could be conditionally removed.
+* **Audit `suppress_early_progress`** — only needed during hydration. Once past `as_of`, this operator is a no-op but still receives notifications. Could self-remove after hydration.
+* **Profile empty activations** — use `mz_internal.mz_scheduling_elapsed` to identify operators with high activation count but low elapsed time (= empty activations).
