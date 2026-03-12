@@ -82,7 +82,7 @@ const NO_BATCH_COMMITTED: u64 = u64::MAX;
 pub struct LastCommitted(Arc<AtomicU64>);
 
 impl LastCommitted {
-    fn new() -> Self {
+    pub fn new() -> Self {
         LastCommitted(Arc::new(AtomicU64::new(NO_BATCH_COMMITTED)))
     }
 
@@ -95,11 +95,11 @@ impl LastCommitted {
         }
     }
 
-    fn set(&self, batch_number: u64) {
+    pub fn set(&self, batch_number: u64) {
         self.0.store(batch_number, Ordering::Release);
     }
 
-    fn set_from_recovery(&self, batch_number: u64) {
+    pub fn set_from_recovery(&self, batch_number: u64) {
         // After recovery, everything before batch_number was committed.
         if let Some(prev) = batch_number.checked_sub(1) {
             self.set(prev);
@@ -189,6 +189,10 @@ impl crate::traits::Acceptor for AcceptorHandle {
             .map_err(|_| AcceptorError::DroppedReply)?
             .map_err(AcceptorError::Command)
     }
+
+    fn latest_committed_batch(&self) -> Option<u64> {
+        self.last_committed.get()
+    }
 }
 
 /// A pending proposal waiting for the next flush.
@@ -257,6 +261,7 @@ impl<W: Storage> ActorAcceptor<W> {
         loop {
             tokio::select! {
                 biased;
+                // cancel-safety: per tokio docs
                 cmd = self.rx.recv() => match cmd {
                     Some(AcceptorCommand::Append { proposal, reply }) => {
                         self.pending.push(PendingAppend {
@@ -289,6 +294,7 @@ impl<W: Storage> ActorAcceptor<W> {
                         return;
                     }
                 },
+                // cancel-safety: consumed tick only delays next flush
                 _ = self.flush_interval.tick() => {
                     self.metrics.flush_timer_ticked.inc();
                     if self.has_pending() {

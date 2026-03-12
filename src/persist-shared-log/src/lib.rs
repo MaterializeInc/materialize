@@ -25,6 +25,7 @@ pub mod acceptor;
 pub mod ctp;
 pub mod learner;
 pub mod metrics;
+pub mod persist_backed;
 pub mod service;
 pub mod storage;
 pub mod traits;

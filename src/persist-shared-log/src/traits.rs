@@ -24,6 +24,10 @@ pub trait Acceptor: Clone + std::fmt::Debug + Send + Sync + 'static {
         &self,
         proposal: ProtoWalProposal,
     ) -> Result<ProtoAppendResponse, AcceptorError>;
+
+    /// Read the latest committed batch number. Lock-free atomic read —
+    /// never blocks behind WAL writes or flushes.
+    fn latest_committed_batch(&self) -> Option<u64>;
 }
 
 #[async_trait::async_trait]

@@ -437,7 +437,7 @@ impl<W: Storage> ActorLearner<W> {
 
             tokio::select! {
                 biased;
-                // Priority 1: materialize batches from the acceptor push channel.
+                // cancel-safety: per tokio docs
                 batch = self.batch_rx.recv() => {
                     match batch {
                         Some(batch) => self.materialize_batch(batch).await,
@@ -448,14 +448,14 @@ impl<W: Storage> ActorLearner<W> {
                         }
                     }
                 }
-                // Priority 2: handle commands (reads, result queries, recovery).
+                // cancel-safety: per tokio docs
                 cmd = self.cmd_rx.recv() => {
                     match cmd {
                         Some(cmd) => self.handle_command(cmd).await,
                         None => return,
                     }
                 }
-                // Priority 3: poll WAL for new batches (multi-process fallback).
+                // cancel-safety: consumed tick only delays next WAL poll
                 _ = wal_tick => {
                     self.catch_up_from_wal().await;
                 }

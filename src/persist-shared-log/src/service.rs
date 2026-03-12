@@ -23,7 +23,7 @@ use mz_persist::generated::consensus_service::{
     ProtoTruncateResponse, ProtoWalProposal, proto_wal_proposal,
 };
 
-use crate::acceptor::{AcceptorError, AcceptorHandle};
+use crate::acceptor::AcceptorError;
 use crate::learner::LearnerError;
 use crate::traits;
 
@@ -56,14 +56,9 @@ impl From<LearnerError> for tonic::Status {
 // ---------------------------------------------------------------------------
 
 /// gRPC service for the acceptor (blind group commit).
-///
-/// Uses the concrete `AcceptorHandle` because `latest_committed_batch` is
-/// an actor-specific method not on the trait.
 #[derive(Debug)]
 pub struct AcceptorGrpcService<A: traits::Acceptor> {
     pub handle: A,
-    /// The underlying `AcceptorHandle` for `latest_committed_batch`.
-    pub actor_handle: AcceptorHandle,
 }
 
 #[tonic::async_trait]
@@ -84,7 +79,7 @@ impl<A: traits::Acceptor> ConsensusAcceptor for AcceptorGrpcService<A> {
         &self,
         _request: tonic::Request<ProtoLatestCommittedBatchRequest>,
     ) -> Result<tonic::Response<ProtoLatestCommittedBatchResponse>, tonic::Status> {
-        let batch = self.actor_handle.latest_committed_batch();
+        let batch = self.handle.latest_committed_batch();
         Ok(tonic::Response::new(ProtoLatestCommittedBatchResponse {
             batch_number: batch,
         }))

@@ -35,6 +35,10 @@ use tokio::sync::mpsc;
 use tonic::transport::Server;
 
 use mz_ore::metrics::MetricsRegistry;
+use mz_persist_client::PersistClient;
+use mz_persist_client::ShardId;
+use mz_persist_types::codec_impls::UnitSchema;
+use timely::progress::Antichain;
 use mz_persist::generated::consensus_service::consensus_acceptor_client::ConsensusAcceptorClient;
 use mz_persist::generated::consensus_service::consensus_acceptor_server::ConsensusAcceptorServer;
 use mz_persist::generated::consensus_service::consensus_learner_client::ConsensusLearnerClient;
@@ -43,10 +47,13 @@ use mz_persist::generated::consensus_service::{
     ProtoAppendRequest, ProtoAwaitResultRequest, ProtoCasProposal, ProtoHeadRequest,
     ProtoScanRequest, ProtoTruncateProposal, ProtoWalProposal, proto_wal_proposal,
 };
-use mz_persist_shared_log::acceptor::{AcceptorConfig, ActorAcceptor};
+use mz_persist_shared_log::acceptor::{AcceptorConfig, ActorAcceptor, LastCommitted};
 use mz_persist_shared_log::ctp;
 use mz_persist_shared_log::learner::{ActorLearner, LearnerConfig};
 use mz_persist_shared_log::metrics::{AcceptorMetrics, LearnerMetrics};
+use mz_persist_shared_log::persist_backed::ConsensusProposal;
+use mz_persist_shared_log::persist_backed::acceptor::PersistAcceptorActor;
+use mz_persist_shared_log::persist_backed::learner::{PersistLearnerActor, PersistLearnerConfig};
 use mz_persist_shared_log::service::{AcceptorGrpcService, LearnerGrpcService};
 use mz_persist_shared_log::storage::{LatencyProfile, LatencyStorage};
 use mz_persist_shared_log::traits::Acceptor as _;
@@ -132,6 +139,31 @@ impl std::fmt::Display for TransportMode {
     }
 }
 
+/// Backend storage mode for the acceptor + learner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+enum BackendMode {
+    /// WAL + object storage (the original implementation).
+    Wal,
+    /// Persist shard (WriteHandle for acceptor, Listen for learner).
+    Persist,
+}
+
+impl Default for BackendMode {
+    fn default() -> Self {
+        BackendMode::Wal
+    }
+}
+
+impl std::fmt::Display for BackendMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BackendMode::Wal => write!(f, "wal"),
+            BackendMode::Persist => write!(f, "persist"),
+        }
+    }
+}
+
 /// CLI arguments. `Option<T>` fields overlay YAML/default values when set.
 #[derive(Parser)]
 #[command(name = "specsheet", about = "Consensus service workload simulator")]
@@ -181,6 +213,11 @@ struct Cli {
     #[arg(long, value_enum)]
     transport: Option<TransportMode>,
 
+    /// Backend storage mode: wal (WAL+S3) or persist (persist shard).
+    /// Persist backend currently only works with direct transport.
+    #[arg(long, value_enum)]
+    backend: Option<BackendMode>,
+
     #[arg(long)]
     duration: Option<u64>,
     #[arg(long)]
@@ -219,6 +256,7 @@ struct WorkloadConfig {
     grpc_connections: u64,
     wal_latency: WalLatency,
     transport: TransportMode,
+    backend: BackendMode,
     duration: u64,
     warmup: u64,
     // Not in YAML — CLI-only flag.
@@ -247,6 +285,7 @@ impl Default for WorkloadConfig {
             grpc_connections: 1,
             wal_latency: WalLatency::Zero,
             transport: TransportMode::Direct,
+            backend: BackendMode::Wal,
             duration: 60,
             warmup: 10,
             json: false,
@@ -301,6 +340,7 @@ impl WorkloadConfig {
             snapshot_interval,
             wal_latency,
             transport,
+            backend,
             duration,
             warmup,
             grpc_connections,
@@ -326,6 +366,13 @@ impl WorkloadConfig {
             self.truncate_to,
             self.max_entries,
         );
+        if self.backend == BackendMode::Persist {
+            assert_eq!(
+                self.transport,
+                TransportMode::Direct,
+                "persist backend currently only supports direct transport"
+            );
+        }
     }
 
     fn latency_profile(&self) -> LatencyProfile {
@@ -349,6 +396,11 @@ enum Transport {
     Direct {
         acceptor: mz_persist_shared_log::acceptor::AcceptorHandle,
         learner: mz_persist_shared_log::learner::LearnerHandle,
+    },
+    /// Direct handles to the persist-backed acceptor and learner.
+    PersistDirect {
+        acceptor: mz_persist_shared_log::persist_backed::acceptor::PersistAcceptorHandle,
+        learner: mz_persist_shared_log::persist_backed::learner::PersistLearnerHandle,
     },
     /// gRPC clients connected to a loopback tonic server.
     Grpc {
@@ -381,6 +433,28 @@ impl Transport {
                         expected,
                         new_seqno: seqno,
                         data,
+                    })),
+                };
+                let receipt = match acceptor.append(proposal).await {
+                    Ok(r) => r,
+                    Err(_) => return CasResult::Shutdown,
+                };
+                match learner
+                    .await_cas_result(receipt.batch_number, receipt.position)
+                    .await
+                {
+                    Ok(resp) if resp.committed => CasResult::Committed,
+                    Ok(_) => CasResult::Rejected,
+                    Err(_) => CasResult::Shutdown,
+                }
+            }
+            Transport::PersistDirect { acceptor, learner } => {
+                let proposal = ProtoWalProposal {
+                    op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+                        key: key.to_string(),
+                        expected,
+                        new_seqno: seqno,
+                        data: data.clone(),
                     })),
                 };
                 let receipt = match acceptor.append(proposal).await {
@@ -455,6 +529,10 @@ impl Transport {
                 let resp = learner.head(key.to_string()).await.ok()?;
                 resp.data.map(|d| (d.seqno, d.data.len()))
             }
+            Transport::PersistDirect { learner, .. } => {
+                let resp = learner.head(key.to_string()).await.ok()?;
+                resp.data.map(|d| (d.seqno, d.data.len()))
+            }
             Transport::Grpc { learner, .. } => {
                 let resp = learner
                     .head(ProtoHeadRequest {
@@ -481,6 +559,9 @@ impl Transport {
             Transport::Direct { learner, .. } => {
                 learner.scan(key.to_string(), from, limit).await.is_ok()
             }
+            Transport::PersistDirect { learner, .. } => {
+                learner.scan(key.to_string(), from, limit).await.is_ok()
+            }
             Transport::Grpc { learner, .. } => learner
                 .scan(ProtoScanRequest {
                     key: key.to_string(),
@@ -503,6 +584,22 @@ impl Transport {
     async fn truncate(&mut self, key: &str, seqno: u64) -> bool {
         match self {
             Transport::Direct { acceptor, learner } => {
+                let proposal = ProtoWalProposal {
+                    op: Some(proto_wal_proposal::Op::Truncate(ProtoTruncateProposal {
+                        key: key.to_string(),
+                        seqno,
+                    })),
+                };
+                let receipt = match acceptor.append(proposal).await {
+                    Ok(r) => r,
+                    Err(_) => return false,
+                };
+                learner
+                    .await_truncate_result(receipt.batch_number, receipt.position)
+                    .await
+                    .is_ok()
+            }
+            Transport::PersistDirect { acceptor, learner } => {
                 let proposal = ProtoWalProposal {
                     op: Some(proto_wal_proposal::Op::Truncate(ProtoTruncateProposal {
                         key: key.to_string(),
@@ -1305,168 +1402,254 @@ async fn main() {
         * cfg.write_rate_per_second;
     if !json {
         eprintln!(
-            "specsheet: {} shards, {} writers/shard, {} values, {} target writes/s, {}s run + {}s warmup, transport: {}",
+            "specsheet: {} shards, {} writers/shard, {} values, {} target writes/s, {}s run + {}s warmup, backend: {}, transport: {}",
             cfg.num_shards,
             cfg.writers_per_shard,
             format_bytes(i64::try_from(cfg.value_size).expect("value_size fits in i64")),
             format_count(u64::cast_lossy(target_writes_per_sec)),
             cfg.duration,
             cfg.warmup,
+            cfg.backend,
             cfg.transport,
         );
     }
 
-    // --- Create shared WAL writer ---
+    // --- Metrics (shared by both backends) ---
     let registry = MetricsRegistry::new();
     let acceptor_metrics = AcceptorMetrics::register(&registry);
     let learner_metrics = LearnerMetrics::register(&registry);
     let acceptor_metrics_for_report = acceptor_metrics.clone();
     let learner_metrics_for_report = learner_metrics.clone();
 
-    let latency_profile = cfg.latency_profile();
-    let wal = Arc::new(LatencyStorage::new(latency_profile));
-
     let queue_depth = cfg
         .queue_depth
         .max(usize::cast_from(cfg.num_shards * cfg.writers_per_shard) + 1024);
-
-    // --- Create acceptor + learner ---
-    // Batch push channel: acceptor pushes batches to the learner.
-    let (batch_tx, batch_rx) = mpsc::channel(256);
-
-    let acceptor_config = AcceptorConfig {
-        queue_depth,
-        flush_interval_ms: cfg.flush_interval_ms,
-    };
-    // Spawn acceptor on a dedicated OS thread with its own single-threaded
-    // tokio runtime, matching the production layout in main.rs. Isolates
-    // flush timer precision from learner CPU work.
-    let acceptor_wal = Arc::clone(&wal);
-    let acceptor_handle = {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let _thread = std::thread::Builder::new()
-            .name("acceptor".to_string())
-            .spawn(move || {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("failed to build acceptor runtime");
-                rt.block_on(async {
-                    let (handle, _task) = ActorAcceptor::spawn(
-                        acceptor_config,
-                        acceptor_wal,
-                        Some(batch_tx),
-                        acceptor_metrics,
-                    );
-                    let _ = tx.send(handle.clone());
-                    _task.await;
-                });
-            })
-            .expect("failed to spawn acceptor thread");
-        rx.await.expect("acceptor thread failed to send handle")
-    };
-
-    let learner_config = LearnerConfig {
-        queue_depth,
-        snapshot_interval: cfg.snapshot_interval,
-        ..Default::default()
-    };
-    let (learner_handle, learner_thread) = ActorLearner::spawn_threaded(
-        learner_config,
-        wal,
-        batch_rx,
-        acceptor_handle.clone(),
-        learner_metrics,
-    );
-
-    // --- Create transport ---
     let num_clients = cfg.num_shards * cfg.writers_per_shard;
 
-    let ctp_server_handle = if cfg.transport == TransportMode::Ctp {
-        let server = ctp::CtpServer::bind(
-            "127.0.0.1:0",
-            acceptor_handle.clone(),
-            learner_handle.clone(),
-        )
-        .await
-        .expect("failed to bind CTP server");
-        let addr = server.local_addr().unwrap();
-        let handle = mz_ore::task::spawn(|| "specsheet-ctp-server", server.serve()).abort_on_drop();
-        Some((addr, handle))
-    } else {
-        None
-    };
+    // Background task/thread handles for cleanup after the run.
+    let mut grpc_server_handle: Option<(
+        std::net::SocketAddr,
+        mz_ore::task::AbortOnDropHandle<()>,
+    )> = None;
+    let mut ctp_server_handle: Option<(
+        std::net::SocketAddr,
+        mz_ore::task::AbortOnDropHandle<()>,
+    )> = None;
+    let mut wal_learner_thread: Option<std::thread::JoinHandle<()>> = None;
+    let mut persist_acceptor_task: Option<mz_ore::task::JoinHandle<()>> = None;
+    let mut persist_learner_task: Option<mz_ore::task::JoinHandle<()>> = None;
 
-    let grpc_server_handle = if cfg.transport == TransportMode::Grpc {
-        let acceptor_svc = AcceptorGrpcService {
-            handle: acceptor_handle.clone(),
-            actor_handle: acceptor_handle.clone(),
-        };
-        let learner_svc = LearnerGrpcService {
-            learner_handle: learner_handle.clone(),
-        };
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("failed to bind loopback listener");
-        let addr = listener.local_addr().unwrap();
-        let handle = mz_ore::task::spawn(|| "specsheet-grpc-server", async move {
-            Server::builder()
-                .add_service(ConsensusAcceptorServer::new(acceptor_svc))
-                .add_service(ConsensusLearnerServer::new(learner_svc))
-                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
-                .await
-                .unwrap();
-        })
-        .abort_on_drop();
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        Some((addr, handle))
-    } else {
-        None
-    };
+    // --- Backend + transport setup ---
+    let transports: Vec<Transport> = match cfg.backend {
+        BackendMode::Wal => {
+            let latency_profile = cfg.latency_profile();
+            let wal = Arc::new(LatencyStorage::new(latency_profile));
 
-    let transports: Vec<Transport> = if let Some((addr, _)) = &ctp_server_handle {
-        // CTP supports multiplexing — many callers share one connection via
-        // request IDs. Open grpc_connections TCP connections and distribute
-        // clones round-robin.
-        let n = usize::try_from(cfg.grpc_connections.max(1)).unwrap();
-        if !json {
-            eprintln!("specsheet: opening {} CTP connections...", n);
-        }
-        let mut clients = Vec::with_capacity(n);
-        for _ in 0..n {
-            let client = ctp::CtpClient::connect(*addr)
+            // Batch push channel: acceptor pushes batches to the learner.
+            let (batch_tx, batch_rx) = mpsc::channel(256);
+
+            let acceptor_config = AcceptorConfig {
+                queue_depth,
+                flush_interval_ms: cfg.flush_interval_ms,
+            };
+            // Spawn acceptor on a dedicated OS thread with its own single-threaded
+            // tokio runtime, matching the production layout in main.rs. Isolates
+            // flush timer precision from learner CPU work.
+            let acceptor_wal = Arc::clone(&wal);
+            let acceptor_handle = {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let _thread = std::thread::Builder::new()
+                    .name("acceptor".to_string())
+                    .spawn(move || {
+                        let rt = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .expect("failed to build acceptor runtime");
+                        rt.block_on(async {
+                            let (handle, _task) = ActorAcceptor::spawn(
+                                acceptor_config,
+                                acceptor_wal,
+                                Some(batch_tx),
+                                acceptor_metrics,
+                            );
+                            let _ = tx.send(handle.clone());
+                            _task.await;
+                        });
+                    })
+                    .expect("failed to spawn acceptor thread");
+                rx.await.expect("acceptor thread failed to send handle")
+            };
+
+            let learner_config = LearnerConfig {
+                queue_depth,
+                snapshot_interval: cfg.snapshot_interval,
+                ..Default::default()
+            };
+            let (learner_handle, thread) = ActorLearner::spawn_threaded(
+                learner_config,
+                wal,
+                batch_rx,
+                acceptor_handle.clone(),
+                learner_metrics,
+            );
+            wal_learner_thread = Some(thread);
+
+            // Create transport based on transport mode.
+            let transports = if cfg.transport == TransportMode::Ctp {
+                let server = ctp::CtpServer::bind(
+                    "127.0.0.1:0",
+                    acceptor_handle.clone(),
+                    learner_handle.clone(),
+                )
                 .await
-                .expect("failed to connect CTP client");
-            clients.push(client);
+                .expect("failed to bind CTP server");
+                let addr = server.local_addr().unwrap();
+                let handle =
+                    mz_ore::task::spawn(|| "specsheet-ctp-server", server.serve()).abort_on_drop();
+                ctp_server_handle = Some((addr, handle));
+
+                let n = usize::try_from(cfg.grpc_connections.max(1)).unwrap();
+                if !json {
+                    eprintln!("specsheet: opening {} CTP connections...", n);
+                }
+                let mut clients = Vec::with_capacity(n);
+                for _ in 0..n {
+                    let client = ctp::CtpClient::connect(addr)
+                        .await
+                        .expect("failed to connect CTP client");
+                    clients.push(client);
+                }
+                let num = usize::try_from(num_clients).unwrap();
+                let mut pool = Vec::with_capacity(num);
+                for i in 0..num {
+                    pool.push(Transport::Ctp {
+                        client: clients[i % n].clone(),
+                    });
+                }
+                pool
+            } else if cfg.transport == TransportMode::Grpc {
+                let acceptor_svc = AcceptorGrpcService {
+                    handle: acceptor_handle.clone(),
+                };
+                let learner_svc = LearnerGrpcService {
+                    learner_handle: learner_handle.clone(),
+                };
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .expect("failed to bind loopback listener");
+                let addr = listener.local_addr().unwrap();
+                let handle = mz_ore::task::spawn(|| "specsheet-grpc-server", async move {
+                    Server::builder()
+                        .add_service(ConsensusAcceptorServer::new(acceptor_svc))
+                        .add_service(ConsensusLearnerServer::new(learner_svc))
+                        .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(
+                            listener,
+                        ))
+                        .await
+                        .unwrap();
+                })
+                .abort_on_drop();
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                grpc_server_handle = Some((addr, handle));
+
+                let addr_str = format!("http://{}", addr);
+                let n_conns = usize::try_from(cfg.grpc_connections.max(1)).unwrap();
+                let mut pool = Vec::with_capacity(n_conns);
+                for _ in 0..n_conns {
+                    let acceptor = ConsensusAcceptorClient::connect(addr_str.clone())
+                        .await
+                        .expect("failed to connect acceptor gRPC client");
+                    let learner = ConsensusLearnerClient::connect(addr_str.clone())
+                        .await
+                        .expect("failed to connect learner gRPC client");
+                    pool.push(Transport::Grpc { acceptor, learner });
+                }
+                pool
+            } else {
+                vec![Transport::Direct {
+                    acceptor: acceptor_handle.clone(),
+                    learner: learner_handle.clone(),
+                }]
+            };
+
+            // Drop our handle clones so the service shuts down when all
+            // transports (held by client tasks) are dropped.
+            drop(acceptor_handle);
+            drop(learner_handle);
+            transports
         }
-        // Each client task gets a clone (cheap Arc clone) of one connection.
-        let num = usize::try_from(num_clients).unwrap();
-        let mut pool = Vec::with_capacity(num);
-        for i in 0..num {
-            pool.push(Transport::Ctp {
-                client: clients[i % n].clone(),
-            });
-        }
-        pool
-    } else if let Some((addr, _)) = &grpc_server_handle {
-        let addr_str = format!("http://{}", addr);
-        let n_conns = usize::try_from(cfg.grpc_connections.max(1)).unwrap();
-        let mut pool = Vec::with_capacity(n_conns);
-        for _ in 0..n_conns {
-            let acceptor = ConsensusAcceptorClient::connect(addr_str.clone())
+        BackendMode::Persist => {
+            // Create in-memory persist client, open a shard, write the
+            // empty init batch (to advance upper from 0 to 1), then
+            // create acceptor + learner actors.
+            let persist_client = PersistClient::new_for_tests().await;
+            let shard_id = ShardId::new();
+            let last_committed = LastCommitted::new();
+
+            use mz_persist_shared_log::persist_backed::ConsensusProposalSchema;
+            let (mut write, read) = persist_client
+                .open::<ConsensusProposal, (), u64, i64>(
+                    shard_id,
+                    Arc::new(ConsensusProposalSchema),
+                    Arc::new(UnitSchema),
+                    mz_persist_client::Diagnostics::from_purpose("specsheet-persist"),
+                    false,
+                )
                 .await
-                .expect("failed to connect acceptor gRPC client");
-            let learner = ConsensusLearnerClient::connect(addr_str.clone())
+                .expect("failed to open persist shard");
+
+            // Write empty init batch to advance upper from 0 to 1.
+            let empty: &[((ConsensusProposal, ()), u64, i64)] = &[];
+            write
+                .compare_and_append(empty, Antichain::from_elem(0u64), Antichain::from_elem(1u64))
                 .await
-                .expect("failed to connect learner gRPC client");
-            pool.push(Transport::Grpc { acceptor, learner });
+                .expect("persist init batch failed")
+                .expect("persist init batch upper mismatch");
+
+            // Create listener starting at as_of=0 (snapshot + live).
+            let listen = read
+                .listen(Antichain::from_elem(0u64))
+                .await
+                .expect("failed to create persist listener");
+
+            // Open a second writer for the learner to query the shard upper.
+            let learner_upper_handle = persist_client
+                .open_writer::<ConsensusProposal, (), u64, i64>(
+                    shard_id,
+                    Arc::new(ConsensusProposalSchema),
+                    Arc::new(UnitSchema),
+                    mz_persist_client::Diagnostics::from_purpose("specsheet-learner-upper"),
+                )
+                .await
+                .expect("failed to open learner upper writer");
+
+            let acceptor_config = AcceptorConfig {
+                queue_depth,
+                flush_interval_ms: cfg.flush_interval_ms,
+            };
+            let (acceptor_handle, acc_task) =
+                PersistAcceptorActor::spawn(acceptor_config, write, last_committed);
+            persist_acceptor_task = Some(acc_task);
+
+            let learner_config = PersistLearnerConfig {
+                queue_depth,
+                ..Default::default()
+            };
+            let (learner_actor, learner_handle) =
+                PersistLearnerActor::new(learner_config, listen, learner_upper_handle);
+            let lrn_task =
+                mz_ore::task::spawn(|| "persist-learner", learner_actor.run());
+            persist_learner_task = Some(lrn_task);
+
+            let transports = vec![Transport::PersistDirect {
+                acceptor: acceptor_handle.clone(),
+                learner: learner_handle.clone(),
+            }];
+
+            drop(acceptor_handle);
+            drop(learner_handle);
+            transports
         }
-        pool
-    } else {
-        vec![Transport::Direct {
-            acceptor: acceptor_handle.clone(),
-            learner: learner_handle.clone(),
-        }]
     };
 
     // --- Timing ---
@@ -1509,10 +1692,9 @@ async fn main() {
         }));
     }
 
-    // Drop our handle clones and transports so the service shuts down when
-    // client tasks finish (they hold the remaining clones).
-    drop(acceptor_handle);
-    drop(learner_handle);
+    // Drop transports so the service shuts down when client tasks finish
+    // (they hold the remaining clones). Backend-specific handles were already
+    // dropped inside the match arms above.
     drop(transports);
 
     // --- Wait for duration ---
@@ -1540,16 +1722,21 @@ async fn main() {
         }
     }
 
-    // Shut down the network server (which holds handle clones) so the
-    // acceptor and learner can drain and exit.
-    if let Some((_, handle)) = grpc_server_handle {
-        drop(handle);
-    }
-    if let Some((_, handle)) = ctp_server_handle {
-        drop(handle);
-    }
+    // Shut down network servers (which hold handle clones) so the
+    // actors can drain and exit.
+    drop(grpc_server_handle);
+    drop(ctp_server_handle);
 
-    let _ = learner_thread.join();
+    // Wait for backend actors to finish.
+    if let Some(thread) = wal_learner_thread {
+        let _ = thread.join();
+    }
+    if let Some(task) = persist_learner_task {
+        let _ = task.await;
+    }
+    if let Some(task) = persist_acceptor_task {
+        let _ = task.await;
+    }
 
     let measurement_elapsed = Duration::from_secs(cfg.duration);
 

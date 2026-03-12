@@ -13,19 +13,34 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use clap::Parser;
+use timely::progress::Antichain;
 use tonic::transport::Server;
 use tracing::info;
 
 use mz_persist::generated::consensus_service::consensus_acceptor_server::ConsensusAcceptorServer;
 use mz_persist::generated::consensus_service::consensus_learner_server::ConsensusLearnerServer;
 use mz_persist::generated::consensus_service::persist_shared_log_server::PersistSharedLogServer;
-use mz_persist_shared_log::acceptor::{AcceptorConfig, ActorAcceptor};
+use mz_persist_shared_log::acceptor::{AcceptorConfig, ActorAcceptor, LastCommitted};
 use mz_persist_shared_log::learner::{ActorLearner, LearnerConfig};
 use mz_persist_shared_log::metrics::{AcceptorMetrics, LearnerMetrics};
+use mz_persist_shared_log::persist_backed::ConsensusProposal;
+use mz_persist_shared_log::persist_backed::ConsensusProposalSchema;
+use mz_persist_shared_log::persist_backed::acceptor::PersistAcceptorActor;
+use mz_persist_shared_log::persist_backed::learner::{PersistLearnerActor, PersistLearnerConfig};
 use mz_persist_shared_log::service::{
     AcceptorGrpcService, LearnerGrpcService, PersistSharedLogGrpcService,
 };
 use mz_persist_shared_log::storage::s3::S3Storage;
+use mz_persist_shared_log::traits;
+
+/// Backend storage mode.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum Backend {
+    /// WAL + S3 object storage (production).
+    Wal,
+    /// Persist shard (in-memory for now — for development/testing).
+    Persist,
+}
 
 /// CLI arguments for the consensus service.
 #[derive(Parser, Debug)]
@@ -39,9 +54,13 @@ struct Args {
     #[arg(long, default_value = "0.0.0.0:6891")]
     metrics_listen_addr: SocketAddr,
 
-    /// S3 bucket for WAL and snapshot storage.
+    /// Backend storage mode.
+    #[arg(long, value_enum, default_value = "wal")]
+    backend: Backend,
+
+    /// S3 bucket for WAL and snapshot storage (required for wal backend).
     #[arg(long, env = "CONSENSUS_S3_BUCKET")]
-    s3_bucket: String,
+    s3_bucket: Option<String>,
 
     /// S3 key prefix for WAL and snapshot objects.
     #[arg(long, env = "CONSENSUS_S3_PREFIX", default_value = "consensus/")]
@@ -84,14 +103,82 @@ fn main() {
     rt.block_on(run(args));
 }
 
+/// Start the gRPC server with the given acceptor and learner handles.
+///
+/// Registers all three gRPC services (Acceptor, Learner, PersistSharedLog)
+/// on a single tonic Server and serves until shutdown.
+async fn serve_grpc<A: traits::Acceptor, L: traits::Learner>(
+    acceptor: A,
+    learner: L,
+    listen_addr: SocketAddr,
+) {
+    let acceptor_service = AcceptorGrpcService {
+        handle: acceptor.clone(),
+    };
+    let learner_service = LearnerGrpcService {
+        learner_handle: learner.clone(),
+    };
+    let persist_shared_log_service = PersistSharedLogGrpcService {
+        acceptor: acceptor.clone(),
+        learner: learner.clone(),
+    };
+
+    info!(addr = %listen_addr, "starting gRPC server");
+
+    Server::builder()
+        .add_service(ConsensusAcceptorServer::new(acceptor_service))
+        .add_service(ConsensusLearnerServer::new(learner_service))
+        .add_service(PersistSharedLogServer::new(persist_shared_log_service))
+        .serve(listen_addr)
+        .await
+        .expect("gRPC server failed");
+}
+
+/// Spawn the HTTP metrics server on a background task.
+fn spawn_metrics_server(
+    metrics_addr: SocketAddr,
+    metrics_registry: mz_ore::metrics::MetricsRegistry,
+) {
+    mz_ore::task::spawn(|| "metrics-server", async move {
+        let app = axum::Router::new().route(
+            "/metrics",
+            axum::routing::get(move || {
+                let reg = metrics_registry.clone();
+                async move { mz_http_util::handle_prometheus(&reg).await }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind(metrics_addr)
+            .await
+            .expect("failed to bind metrics listener");
+        info!(addr = %metrics_addr, "starting metrics HTTP server");
+        axum::serve(listener, app)
+            .await
+            .expect("metrics server failed");
+    });
+}
+
 async fn run(args: Args) {
     let metrics_registry = mz_ore::metrics::MetricsRegistry::new();
+
+    spawn_metrics_server(args.metrics_listen_addr, metrics_registry.clone());
+
+    match args.backend {
+        Backend::Wal => run_wal(args, metrics_registry).await,
+        Backend::Persist => run_persist(args, metrics_registry).await,
+    }
+}
+
+async fn run_wal(args: Args, metrics_registry: mz_ore::metrics::MetricsRegistry) {
+    let s3_bucket = args
+        .s3_bucket
+        .expect("--s3-bucket is required for wal backend");
+
     let acceptor_metrics = AcceptorMetrics::register(&metrics_registry);
     let learner_metrics = LearnerMetrics::register(&metrics_registry);
 
     let store = Arc::new(
         S3Storage::new(
-            &args.s3_bucket,
+            &s3_bucket,
             &args.s3_prefix,
             args.s3_endpoint.as_deref(),
             &args.s3_region,
@@ -158,45 +245,76 @@ async fn run(args: Args) {
         .await
         .expect("failed to set acceptor batch number");
 
-    // Spawn HTTP metrics server.
-    let metrics_addr = args.metrics_listen_addr;
-    mz_ore::task::spawn(|| "metrics-server", async move {
-        let app = axum::Router::new().route(
-            "/metrics",
-            axum::routing::get(move || {
-                let reg = metrics_registry.clone();
-                async move { mz_http_util::handle_prometheus(&reg).await }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind(metrics_addr)
-            .await
-            .expect("failed to bind metrics listener");
-        info!(addr = %metrics_addr, "starting metrics HTTP server");
-        axum::serve(listener, app)
-            .await
-            .expect("metrics server failed");
-    });
+    serve_grpc(acceptor_handle, learner_handle, args.listen_addr).await;
+}
 
-    // Build gRPC services.
-    let acceptor_service = AcceptorGrpcService {
-        handle: acceptor_handle.clone(),
-        actor_handle: acceptor_handle.clone(),
-    };
-    let learner_service = LearnerGrpcService {
-        learner_handle: learner_handle.clone(),
-    };
-    let persist_shared_log_service = PersistSharedLogGrpcService {
-        acceptor: acceptor_handle.clone(),
-        learner: learner_handle.clone(),
-    };
+async fn run_persist(args: Args, metrics_registry: mz_ore::metrics::MetricsRegistry) {
+    // Register metrics (unused by persist backend today, but keeps the
+    // HTTP /metrics endpoint populated with the same gauge names).
+    let _acceptor_metrics = AcceptorMetrics::register(&metrics_registry);
+    let _learner_metrics = LearnerMetrics::register(&metrics_registry);
 
-    info!(addr = %args.listen_addr, "starting gRPC server");
+    info!("creating in-memory persist client...");
+    let persist_client = mz_persist_client::PersistClient::new_for_tests().await;
+    let shard_id = mz_persist_client::ShardId::new();
+    let last_committed = LastCommitted::new();
 
-    Server::builder()
-        .add_service(ConsensusAcceptorServer::new(acceptor_service))
-        .add_service(ConsensusLearnerServer::new(learner_service))
-        .add_service(PersistSharedLogServer::new(persist_shared_log_service))
-        .serve(args.listen_addr)
+    let key_schema = Arc::new(ConsensusProposalSchema);
+    let val_schema = Arc::new(mz_persist_types::codec_impls::UnitSchema);
+
+    let (mut write, read) = persist_client
+        .open::<ConsensusProposal, (), u64, i64>(
+            shard_id,
+            Arc::clone(&key_schema),
+            Arc::clone(&val_schema),
+            mz_persist_client::Diagnostics::from_purpose("persist-shared-log-acceptor"),
+            false,
+        )
         .await
-        .expect("gRPC server failed");
+        .expect("failed to open persist shard");
+
+    // Write empty init batch to advance upper from 0 to 1.
+    let empty: &[((ConsensusProposal, ()), u64, i64)] = &[];
+    write
+        .compare_and_append(empty, Antichain::from_elem(0u64), Antichain::from_elem(1u64))
+        .await
+        .expect("persist init batch failed")
+        .expect("persist init batch upper mismatch");
+
+    // Create listener starting at as_of=0 (snapshot + live).
+    let listen = read
+        .listen(Antichain::from_elem(0u64))
+        .await
+        .expect("failed to create persist listener");
+
+    // Open a second writer for the learner to query the shard upper
+    // (fetch_recent_upper). This handle never writes — it's read-only.
+    let learner_upper_handle = persist_client
+        .open_writer::<ConsensusProposal, (), u64, i64>(
+            shard_id,
+            key_schema,
+            val_schema,
+            mz_persist_client::Diagnostics::from_purpose("persist-shared-log-learner-upper"),
+        )
+        .await
+        .expect("failed to open learner upper writer");
+
+    let acceptor_config = AcceptorConfig {
+        flush_interval_ms: args.flush_interval_ms,
+        ..Default::default()
+    };
+    let (acceptor_handle, _acceptor_task) =
+        PersistAcceptorActor::spawn(acceptor_config, write, last_committed);
+
+    let learner_config = PersistLearnerConfig::default();
+    let (learner_actor, learner_handle) =
+        PersistLearnerActor::new(learner_config, listen, learner_upper_handle);
+    let _learner_task = mz_ore::task::spawn(|| "persist-learner", learner_actor.run());
+
+    info!(
+        %shard_id,
+        "persist backend ready (in-memory, non-durable)"
+    );
+
+    serve_grpc(acceptor_handle, learner_handle, args.listen_addr).await;
 }

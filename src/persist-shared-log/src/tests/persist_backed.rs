@@ -7,90 +7,128 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Tests for the acceptor + learner architecture.
-
-mod persist_backed;
-mod sim;
+//! Tests for the persist-shard-backed acceptor + learner.
 
 use std::sync::Arc;
 
-use mz_ore::metrics::MetricsRegistry;
+use timely::progress::Antichain;
+
 use mz_persist::generated::consensus_service::{
     ProtoCasProposal, ProtoTruncateProposal, ProtoWalProposal, proto_wal_proposal,
 };
+use mz_persist_client::Diagnostics;
+use mz_persist_client::PersistClient;
+use mz_persist_types::ShardId;
 
-use crate::acceptor::{AcceptorConfig, AcceptorHandle, ActorAcceptor};
-use crate::learner::{ActorLearner, LearnerConfig, LearnerHandle};
-use crate::metrics::{AcceptorMetrics, LearnerMetrics};
-use crate::storage::sim::SimStorage;
+use crate::acceptor::{AcceptorConfig, LastCommitted};
+use crate::persist_backed::ConsensusProposal;
+use crate::persist_backed::ConsensusProposalSchema;
+use crate::persist_backed::acceptor::{PersistAcceptorActor, PersistAcceptorHandle};
+use crate::persist_backed::learner::{
+    PersistLearnerActor, PersistLearnerConfig, PersistLearnerHandle,
+};
 use crate::traits::Acceptor as _;
-
-fn test_acceptor_metrics() -> AcceptorMetrics {
-    AcceptorMetrics::register(&MetricsRegistry::new())
-}
-
-fn test_learner_metrics() -> LearnerMetrics {
-    LearnerMetrics::register(&MetricsRegistry::new())
-}
-
-fn test_acceptor_config() -> AcceptorConfig {
-    AcceptorConfig {
-        // Very long flush interval — tests flush explicitly.
-        flush_interval_ms: 86_400_000,
-        ..Default::default()
-    }
-}
-
-fn test_learner_config() -> LearnerConfig {
-    LearnerConfig {
-        snapshot_interval: 1_000_000,
-        ..Default::default()
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Test harness
 // ---------------------------------------------------------------------------
 
-struct TestHarness {
-    acceptor_handle: AcceptorHandle,
-    learner_handle: LearnerHandle,
+struct PersistTestHarness {
+    acceptor_handle: PersistAcceptorHandle,
+    learner_handle: PersistLearnerHandle,
     _acceptor_task: mz_ore::task::AbortOnDropHandle<()>,
     _learner_task: mz_ore::task::AbortOnDropHandle<()>,
-    _wal: Arc<SimStorage>,
 }
 
-impl TestHarness {
-    fn new(wal: Arc<SimStorage>) -> Self {
-        let (batch_tx, batch_rx) = tokio::sync::mpsc::channel(256);
+async fn open_shard(
+    client: &PersistClient,
+    shard_id: ShardId,
+    purpose: &str,
+) -> (
+    mz_persist_client::write::WriteHandle<ConsensusProposal, (), u64, i64>,
+    mz_persist_client::read::ReadHandle<ConsensusProposal, (), u64, i64>,
+) {
+    client
+        .open(
+            shard_id,
+            Arc::new(ConsensusProposalSchema),
+            Arc::new(mz_persist_types::codec_impls::UnitSchema),
+            Diagnostics::from_purpose(purpose),
+            false,
+        )
+        .await
+        .expect("open shard")
+}
 
-        let (acceptor, acceptor_handle) = ActorAcceptor::new(
-            test_acceptor_config(),
-            Arc::clone(&wal),
-            Some(batch_tx),
-            test_acceptor_metrics(),
-        );
-        let acceptor_task = mz_ore::task::spawn(|| "test-acceptor", acceptor.run()).abort_on_drop();
+impl PersistTestHarness {
+    async fn new() -> Self {
+        let client = PersistClient::new_for_tests().await;
+        let shard_id = ShardId::new();
+        Self::new_with_client(&client, shard_id).await
+    }
 
-        let (learner, learner_handle) = ActorLearner::new(
-            test_learner_config(),
-            Arc::clone(&wal),
-            batch_rx,
-            acceptor_handle.clone(),
-            test_learner_metrics(),
-        );
-        let learner_task = mz_ore::task::spawn(|| "test-learner", learner.run()).abort_on_drop();
+    async fn new_with_client(client: &PersistClient, shard_id: ShardId) -> Self {
+        let (mut write, read) = open_shard(client, shard_id, "persist-backed-test").await;
 
-        TestHarness {
+        // Write an empty batch at timestamp 0 to advance the upper to 1.
+        // This ensures the shard is "initialized" and listen(as_of=0) can
+        // take a snapshot at the sealed timestamp 0.
+        let empty: &[((ConsensusProposal, ()), u64, i64)] = &[];
+        write
+            .compare_and_append(empty, Antichain::from_elem(0), Antichain::from_elem(1))
+            .await
+            .expect("valid usage")
+            .expect("upper should be 0 for fresh shard");
+
+        let last_committed = LastCommitted::new();
+
+        let acceptor_config = AcceptorConfig {
+            flush_interval_ms: 1,
+            ..Default::default()
+        };
+
+        let (acceptor, acceptor_handle) =
+            PersistAcceptorActor::new(acceptor_config, write, last_committed);
+        let acceptor_task =
+            mz_ore::task::spawn(|| "test-persist-acceptor", acceptor.run()).abort_on_drop();
+
+        // Listen starting from timestamp 0 (the beginning of the shard).
+        // This is safe because we wrote an empty batch at t=0 above.
+        let listen = read
+            .listen(Antichain::from_elem(0))
+            .await
+            .expect("listen should succeed since t=0 is sealed");
+
+        // Open a second writer for the learner to query the shard upper.
+        let learner_upper_handle = client
+            .open_writer::<ConsensusProposal, (), u64, i64>(
+                shard_id,
+                Arc::new(ConsensusProposalSchema),
+                Arc::new(mz_persist_types::codec_impls::UnitSchema),
+                Diagnostics::from_purpose("test-learner-upper"),
+            )
+            .await
+            .expect("open learner upper writer");
+
+        let learner_config = PersistLearnerConfig {
+            result_retention_batches: 1_000_000,
+            ..Default::default()
+        };
+
+        let (learner, learner_handle) =
+            PersistLearnerActor::new(learner_config, listen, learner_upper_handle);
+        let learner_task =
+            mz_ore::task::spawn(|| "test-persist-learner", learner.run()).abort_on_drop();
+
+        PersistTestHarness {
             acceptor_handle,
             learner_handle,
             _acceptor_task: acceptor_task,
             _learner_task: learner_task,
-            _wal: wal,
         }
     }
 
-    /// Submit a CAS proposal, flush, and return whether it was committed.
+    /// Submit a CAS proposal and return whether it was committed.
     async fn cas(&self, key: &str, expected: Option<u64>, new_seqno: u64, data: &[u8]) -> bool {
         let receipt = self
             .acceptor_handle
@@ -116,30 +154,28 @@ impl TestHarness {
 }
 
 // ---------------------------------------------------------------------------
-// Unit tests
+// Tests (mirror the WAL test suite)
 // ---------------------------------------------------------------------------
 
-#[tokio::test(start_paused = true)]
-async fn test_cas_commit_and_reject() {
-    let wal = Arc::new(SimStorage::new());
-    let h = TestHarness::new(wal);
+#[mz_ore::test(tokio::test)]
+async fn test_persist_cas_commit_and_reject() {
+    let h = PersistTestHarness::new().await;
 
-    // First CAS on empty key → committed.
+    // First CAS on empty key -> committed.
     assert!(h.cas("s0", None, 1, b"hello").await);
 
-    // Duplicate CAS with stale expected → rejected.
+    // Duplicate CAS with stale expected -> rejected.
     assert!(!h.cas("s0", None, 2, b"world").await);
 
-    // CAS with correct expected → committed.
+    // CAS with correct expected -> committed.
     assert!(h.cas("s0", Some(1), 2, b"world").await);
 }
 
-#[tokio::test(start_paused = true)]
-async fn test_head_read() {
-    let wal = Arc::new(SimStorage::new());
-    let h = TestHarness::new(wal);
+#[mz_ore::test(tokio::test)]
+async fn test_persist_head_read() {
+    let h = PersistTestHarness::new().await;
 
-    // Head on empty key → None.
+    // Head on empty key -> None.
     let resp = h.learner_handle.head("s0".into()).await.unwrap();
     assert!(resp.data.is_none());
 
@@ -151,10 +187,9 @@ async fn test_head_read() {
     assert_eq!(data.data, b"data");
 }
 
-#[tokio::test(start_paused = true)]
-async fn test_scan() {
-    let wal = Arc::new(SimStorage::new());
-    let h = TestHarness::new(wal);
+#[mz_ore::test(tokio::test)]
+async fn test_persist_scan() {
+    let h = PersistTestHarness::new().await;
 
     assert!(h.cas("s0", None, 1, b"a").await);
     assert!(h.cas("s0", Some(1), 2, b"b").await);
@@ -171,10 +206,9 @@ async fn test_scan() {
     assert_eq!(resp.data[0].seqno, 2);
 }
 
-#[tokio::test(start_paused = true)]
-async fn test_truncate() {
-    let wal = Arc::new(SimStorage::new());
-    let h = TestHarness::new(wal);
+#[mz_ore::test(tokio::test)]
+async fn test_persist_truncate() {
+    let h = PersistTestHarness::new().await;
 
     assert!(h.cas("s0", None, 1, b"a").await);
     assert!(h.cas("s0", Some(1), 2, b"b").await);
@@ -204,12 +238,11 @@ async fn test_truncate() {
     assert_eq!(resp.data[0].seqno, 2);
 }
 
-#[tokio::test(start_paused = true)]
-async fn test_truncate_errors() {
-    let wal = Arc::new(SimStorage::new());
-    let h = TestHarness::new(wal);
+#[mz_ore::test(tokio::test)]
+async fn test_persist_truncate_errors() {
+    let h = PersistTestHarness::new().await;
 
-    // Truncate on nonexistent key → error.
+    // Truncate on nonexistent key -> error.
     let receipt = h
         .acceptor_handle
         .append(ProtoWalProposal {
@@ -229,7 +262,7 @@ async fn test_truncate_errors() {
     // Write an entry.
     assert!(h.cas("s0", None, 1, b"a").await);
 
-    // Truncate with seqno > head → error.
+    // Truncate with seqno > head -> error.
     let receipt = h
         .acceptor_handle
         .append(ProtoWalProposal {
@@ -247,13 +280,11 @@ async fn test_truncate_errors() {
     assert!(result.is_err(), "expected error for seqno > head");
 }
 
-#[tokio::test(start_paused = true)]
-async fn test_batch_grouping() {
-    let wal = Arc::new(SimStorage::new());
-    let h = TestHarness::new(wal);
+#[mz_ore::test(tokio::test)]
+async fn test_persist_batch_grouping() {
+    let h = PersistTestHarness::new().await;
 
-    // Submit 3 proposals concurrently — they all land in the same batch
-    // because they enter the pending buffer before the flush timer fires.
+    // Submit 3 proposals concurrently — they should all land in the same batch.
     let (r0, r1, r2) = tokio::join!(
         h.acceptor_handle.append(ProtoWalProposal {
             op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
@@ -291,7 +322,7 @@ async fn test_batch_grouping() {
     assert_eq!(r1.position, 1);
     assert_eq!(r2.position, 2);
 
-    // Check results (replies come after flush, so the batch is already materialized).
+    // Check results.
     let c0 = h
         .learner_handle
         .await_cas_result(r0.batch_number, r0.position)
@@ -312,16 +343,11 @@ async fn test_batch_grouping() {
     assert!(c2.committed);
 }
 
-#[tokio::test(start_paused = true)]
-async fn test_intra_batch_cas_chaining() {
-    let wal = Arc::new(SimStorage::new());
-    let h = TestHarness::new(wal);
+#[mz_ore::test(tokio::test)]
+async fn test_persist_intra_batch_cas_chaining() {
+    let h = PersistTestHarness::new().await;
 
     // Two CAS proposals in the same batch for the same shard.
-    // The second one's expected matches the first's new_seqno.
-    // During materialization, the learner evaluates them in order, so the
-    // second one should see the first one's result.
-    // Submit concurrently so they land in the same batch.
     let (r0, r1) = tokio::join!(
         h.acceptor_handle.append(ProtoWalProposal {
             op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
@@ -361,10 +387,9 @@ async fn test_intra_batch_cas_chaining() {
     assert_eq!(head.data.unwrap().seqno, 2);
 }
 
-#[tokio::test(start_paused = true)]
-async fn test_list_keys() {
-    let wal = Arc::new(SimStorage::new());
-    let h = TestHarness::new(wal);
+#[mz_ore::test(tokio::test)]
+async fn test_persist_list_keys() {
+    let h = PersistTestHarness::new().await;
 
     assert!(h.cas("s0", None, 1, b"a").await);
     assert!(h.cas("s1", None, 1, b"b").await);
@@ -375,64 +400,86 @@ async fn test_list_keys() {
     assert_eq!(keys, vec!["s0", "s1", "s2"]);
 }
 
-#[tokio::test(start_paused = true)]
-async fn test_recovery_from_wal() {
-    let wal = Arc::new(SimStorage::new());
+#[mz_ore::test(tokio::test)]
+async fn test_persist_recovery() {
+    // Write data, drop everything, re-open and verify learner replays history.
+    let client = PersistClient::new_for_tests().await;
+    let shard_id = ShardId::new();
 
-    // Write some data with the first harness.
+    // Phase 1: write data.
     {
-        let h = TestHarness::new(Arc::clone(&wal));
+        let h = PersistTestHarness::new_with_client(&client, shard_id).await;
         assert!(h.cas("s0", None, 1, b"a").await);
         assert!(h.cas("s0", Some(1), 2, b"b").await);
         assert!(h.cas("s1", None, 1, b"x").await);
     }
-    // Harness dropped — acceptor + learner shut down.
+    // Everything dropped.
 
-    // New harness recovers from the same WAL.
-    let (batch_tx, batch_rx) = tokio::sync::mpsc::channel(256);
-    let (acceptor, acceptor_handle) = ActorAcceptor::new(
-        test_acceptor_config(),
-        Arc::clone(&wal),
-        Some(batch_tx),
-        test_acceptor_metrics(),
-    );
-    let _acceptor_task = mz_ore::task::spawn(|| "test-acceptor", acceptor.run()).abort_on_drop();
+    // Phase 2: re-open and verify recovery.
+    {
+        let (write, read) = open_shard(&client, shard_id, "persist-recovery-test-read").await;
 
-    let (learner, learner_handle) = ActorLearner::new(
-        test_learner_config(),
-        Arc::clone(&wal),
-        batch_rx,
-        acceptor_handle.clone(),
-        test_learner_metrics(),
-    );
-    let _learner_task = mz_ore::task::spawn(|| "test-learner", learner.run()).abort_on_drop();
+        let last_committed = LastCommitted::new();
+        let acceptor_config = AcceptorConfig {
+            flush_interval_ms: 1,
+            ..Default::default()
+        };
 
-    // Recover.
-    let next_batch = learner_handle.recover().await.unwrap();
-    acceptor_handle.set_batch_number(next_batch).await.unwrap();
+        let (acceptor, acceptor_handle) =
+            PersistAcceptorActor::new(acceptor_config, write, last_committed);
+        let _acceptor_task =
+            mz_ore::task::spawn(|| "test-persist-acceptor-2", acceptor.run()).abort_on_drop();
 
-    // Verify recovered state.
-    let head = learner_handle.head("s0".into()).await.unwrap();
-    assert_eq!(head.data.unwrap().seqno, 2);
+        // The upper is already past 0 (from phase 1), so listen(as_of=0) works.
+        let listen = read
+            .listen(Antichain::from_elem(0))
+            .await
+            .expect("listen");
 
-    let head = learner_handle.head("s1".into()).await.unwrap();
-    assert_eq!(head.data.unwrap().seqno, 1);
+        let learner_upper_handle = client
+            .open_writer::<ConsensusProposal, (), u64, i64>(
+                shard_id,
+                Arc::new(ConsensusProposalSchema),
+                Arc::new(mz_persist_types::codec_impls::UnitSchema),
+                Diagnostics::from_purpose("test-learner-upper-2"),
+            )
+            .await
+            .expect("open learner upper writer");
 
-    // New writes should work.
-    let receipt = acceptor_handle
-        .append(ProtoWalProposal {
-            op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
-                key: "s0".to_string(),
-                expected: Some(2),
-                new_seqno: 3,
-                data: b"c".to_vec(),
-            })),
-        })
-        .await
-        .unwrap();
-    let result = learner_handle
-        .await_cas_result(receipt.batch_number, receipt.position)
-        .await
-        .unwrap();
-    assert!(result.committed);
+        let learner_config = PersistLearnerConfig {
+            result_retention_batches: 1_000_000,
+            ..Default::default()
+        };
+        let (learner, learner_handle) =
+            PersistLearnerActor::new(learner_config, listen, learner_upper_handle);
+        let _learner_task =
+            mz_ore::task::spawn(|| "test-persist-learner-2", learner.run()).abort_on_drop();
+
+        // Write a new entry that depends on recovered state. If the learner
+        // replayed history correctly, the CAS expected=Some(2) should succeed.
+        let receipt = acceptor_handle
+            .append(ProtoWalProposal {
+                op: Some(proto_wal_proposal::Op::Cas(ProtoCasProposal {
+                    key: "s0".to_string(),
+                    expected: Some(2),
+                    new_seqno: 3,
+                    data: b"c".to_vec(),
+                })),
+            })
+            .await
+            .unwrap();
+        let result = learner_handle
+            .await_cas_result(receipt.batch_number, receipt.position)
+            .await
+            .unwrap();
+        assert!(result.committed, "CAS should succeed after recovery replay");
+
+        // Verify s0 head is seqno 3.
+        let head = learner_handle.head("s0".into()).await.unwrap();
+        assert_eq!(head.data.unwrap().seqno, 3);
+
+        // Verify s1 survived recovery.
+        let head = learner_handle.head("s1".into()).await.unwrap();
+        assert_eq!(head.data.unwrap().seqno, 1);
+    }
 }
