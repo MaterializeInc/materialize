@@ -27,7 +27,9 @@ use anyhow::anyhow;
 use axum::Json;
 use axum::response::IntoResponse;
 use http::StatusCode;
-use mz_adapter_types::dyncfgs::{ENABLE_MCP_AGENTS, ENABLE_MCP_OBSERVATORY};
+use mz_adapter_types::dyncfgs::{
+    ENABLE_MCP_AGENTS, ENABLE_MCP_AGENTS_QUERY_TOOL, ENABLE_MCP_OBSERVATORY,
+};
 use mz_sql::parse::parse;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast::display::escaped_string_literal;
@@ -159,6 +161,7 @@ enum ToolsCallParams {
     // Uses an ignored empty struct so MCP clients sending `"arguments": {}` can deserialize.
     GetDataProducts(#[serde(default)] ()),
     GetDataProductDetails(GetDataProductDetailsParams),
+    ReadDataProduct(ReadDataProductParams),
     Query(QueryParams),
     // Observatory endpoint tools
     QuerySystemCatalog(QuerySystemCatalogParams),
@@ -169,6 +172,7 @@ impl std::fmt::Display for ToolsCallParams {
         match self {
             ToolsCallParams::GetDataProducts(_) => write!(f, "get_data_products"),
             ToolsCallParams::GetDataProductDetails(_) => write!(f, "get_data_product_details"),
+            ToolsCallParams::ReadDataProduct(_) => write!(f, "read_data_product"),
             ToolsCallParams::Query(_) => write!(f, "query"),
             ToolsCallParams::QuerySystemCatalog(_) => write!(f, "query_system_catalog"),
         }
@@ -179,6 +183,21 @@ impl std::fmt::Display for ToolsCallParams {
 struct GetDataProductDetailsParams {
     name: String,
 }
+
+#[derive(Debug, Deserialize)]
+struct ReadDataProductParams {
+    name: String,
+    #[serde(default = "default_read_limit")]
+    limit: u32,
+    cluster: Option<String>,
+}
+
+fn default_read_limit() -> u32 {
+    500
+}
+
+/// Maximum number of rows that can be returned by read_data_product.
+const MAX_READ_LIMIT: u32 = 1000;
 
 #[derive(Debug, Deserialize)]
 struct QueryParams {
@@ -331,6 +350,8 @@ async fn handle_mcp_request(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
+    let query_tool_enabled = ENABLE_MCP_AGENTS_QUERY_TOOL.get(dyncfgs);
+
     let user = client.client.session().user().name.clone();
     let is_notification = request.id.is_none();
 
@@ -350,7 +371,7 @@ async fn handle_mcp_request(
 
     // Spawn task for fault isolation
     let response = mz_ore::task::spawn(|| "mcp_request", async move {
-        handle_mcp_request_inner(&mut client, request, endpoint_type).await
+        handle_mcp_request_inner(&mut client, request, endpoint_type, query_tool_enabled).await
     })
     .await;
 
@@ -361,11 +382,12 @@ async fn handle_mcp_request_inner(
     client: &mut AuthedClient,
     request: McpRequest,
     endpoint_type: McpEndpointType,
+    query_tool_enabled: bool,
 ) -> McpResponse {
     // Extract request ID (guaranteed to be Some since notifications are filtered earlier)
     let request_id = request.id.clone().unwrap_or(serde_json::Value::Null);
 
-    let result = handle_mcp_method(client, &request, endpoint_type).await;
+    let result = handle_mcp_method(client, &request, endpoint_type, query_tool_enabled).await;
 
     match result {
         Ok(result_value) => McpResponse {
@@ -396,6 +418,7 @@ async fn handle_mcp_method(
     client: &mut AuthedClient,
     request: &McpRequest,
     endpoint_type: McpEndpointType,
+    query_tool_enabled: bool,
 ) -> Result<McpResult, McpRequestError> {
     // Validate JSON-RPC version
     if request.jsonrpc != "2.0" {
@@ -410,11 +433,11 @@ async fn handle_mcp_method(
         }
         McpMethod::ToolsList => {
             debug!(endpoint = %endpoint_type, "Processing tools/list");
-            handle_tools_list(endpoint_type).await
+            handle_tools_list(endpoint_type, query_tool_enabled).await
         }
         McpMethod::ToolsCall(params) => {
             debug!(tool = %params, endpoint = %endpoint_type, "Processing tools/call");
-            handle_tools_call(client, params, endpoint_type).await
+            handle_tools_call(client, params, endpoint_type, query_tool_enabled).await
         }
         McpMethod::Unknown => Err(McpRequestError::MethodNotFound(
             "unknown method".to_string(),
@@ -433,10 +456,13 @@ async fn handle_initialize(endpoint_type: McpEndpointType) -> Result<McpResult, 
     }))
 }
 
-async fn handle_tools_list(endpoint_type: McpEndpointType) -> Result<McpResult, McpRequestError> {
+async fn handle_tools_list(
+    endpoint_type: McpEndpointType,
+    query_tool_enabled: bool,
+) -> Result<McpResult, McpRequestError> {
     let tools = match endpoint_type {
         McpEndpointType::Agents => {
-            vec![
+            let mut tools = vec![
                 ToolDefinition {
                     name: "get_data_products".to_string(),
                     description: "Discover all available real-time data views (data products) that represent business entities like customers, orders, products, etc. Each data product provides fresh, queryable data with defined schemas. Use this first to see what data is available before querying specific information.".to_string(),
@@ -461,6 +487,31 @@ async fn handle_tools_list(endpoint_type: McpEndpointType) -> Result<McpResult, 
                     }),
                 },
                 ToolDefinition {
+                    name: "read_data_product".to_string(),
+                    description: "Read rows from a specific data product. Returns up to `limit` rows (default 500, max 1000). The data product must exist in the catalog (use get_data_products() to discover available products). Use this to retrieve actual data from a known data product.".to_string(),
+                    input_schema: json!({
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": "Exact fully-qualified name of the data product (e.g. '\"materialize\".\"schema\".\"view_name\"')"
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of rows to return (default 500, max 1000)",
+                                "default": 500
+                            },
+                            "cluster": {
+                                "type": "string",
+                                "description": "Optional cluster override. If omitted, uses the cluster from the data product catalog."
+                            }
+                        },
+                        "required": ["name"]
+                    }),
+                },
+            ];
+            if query_tool_enabled {
+                tools.push(ToolDefinition {
                     name: "query".to_string(),
                     description: "Execute SQL queries against real-time data products to retrieve current business information. Use standard PostgreSQL syntax. You can JOIN multiple data products together, but ONLY if they are all hosted on the same cluster. Always specify the cluster parameter from the data product details. This provides fresh, up-to-date results from materialized views.".to_string(),
                     input_schema: json!({
@@ -477,8 +528,9 @@ async fn handle_tools_list(endpoint_type: McpEndpointType) -> Result<McpResult, 
                         },
                         "required": ["cluster", "sql_query"]
                     }),
-                },
-            ]
+                });
+            }
+            tools
         }
         McpEndpointType::Observatory => {
             vec![
@@ -507,6 +559,7 @@ async fn handle_tools_call(
     client: &mut AuthedClient,
     params: &ToolsCallParams,
     endpoint_type: McpEndpointType,
+    query_tool_enabled: bool,
 ) -> Result<McpResult, McpRequestError> {
     match (endpoint_type, params) {
         (McpEndpointType::Agents, ToolsCallParams::GetDataProducts(_)) => {
@@ -514,6 +567,14 @@ async fn handle_tools_call(
         }
         (McpEndpointType::Agents, ToolsCallParams::GetDataProductDetails(p)) => {
             get_data_product_details(client, &p.name).await
+        }
+        (McpEndpointType::Agents, ToolsCallParams::ReadDataProduct(p)) => {
+            read_data_product(client, &p.name, p.limit, p.cluster.as_deref()).await
+        }
+        (McpEndpointType::Agents, ToolsCallParams::Query(_)) if !query_tool_enabled => {
+            Err(McpRequestError::ToolNotFound(
+                "query tool is disabled by feature flag (enable_mcp_agents_query_tool). Use get_data_products and get_data_product_details instead.".to_string(),
+            ))
         }
         (McpEndpointType::Agents, ToolsCallParams::Query(p)) => {
             execute_query(client, &p.cluster, &p.sql_query).await
@@ -598,6 +659,60 @@ async fn get_data_product_details(
     if rows.is_empty() {
         return Err(McpRequestError::DataProductNotFound(name.to_string()));
     }
+
+    let text =
+        serde_json::to_string_pretty(&rows).map_err(|e| McpRequestError::Internal(anyhow!(e)))?;
+
+    Ok(McpResult::ToolContent(ToolContentResult {
+        content: vec![ContentBlock {
+            content_type: "text".to_string(),
+            text,
+        }],
+    }))
+}
+
+/// Read rows from a data product. Validates the name exists in `mz_mcp_data_products`
+/// and queries it on the correct cluster with a row limit.
+async fn read_data_product(
+    client: &mut AuthedClient,
+    name: &str,
+    limit: u32,
+    cluster_override: Option<&str>,
+) -> Result<McpResult, McpRequestError> {
+    debug!(name = %name, limit = limit, "Executing read_data_product");
+
+    let clamped_limit = limit.min(MAX_READ_LIMIT);
+
+    // Verify this is a registered data product and get its canonical name + cluster.
+    let lookup_query = format!(
+        "SELECT object_name, cluster FROM mz_internal.mz_mcp_data_products WHERE object_name = {}",
+        escaped_string_literal(name)
+    );
+    let lookup_rows = execute_sql(client, &lookup_query).await?;
+
+    if lookup_rows.is_empty() {
+        return Err(McpRequestError::DataProductNotFound(name.to_string()));
+    }
+
+    // Use the canonical name from the catalog, not the user-supplied value.
+    let canonical_name = lookup_rows[0][0]
+        .as_str()
+        .ok_or_else(|| McpRequestError::Internal(anyhow!("object_name is not a string")))?;
+
+    let catalog_cluster = lookup_rows[0][1]
+        .as_str()
+        .ok_or_else(|| McpRequestError::Internal(anyhow!("cluster name is not a string")))?;
+
+    let cluster = cluster_override.unwrap_or(catalog_cluster);
+
+    let read_query = format!(
+        "BEGIN READ ONLY; SET CLUSTER = {}; SELECT * FROM {} LIMIT {}; COMMIT;",
+        escaped_string_literal(cluster),
+        canonical_name,
+        clamped_limit,
+    );
+
+    let rows = execute_sql(client, &read_query).await?;
 
     let text =
         serde_json::to_string_pretty(&rows).map_err(|e| McpRequestError::Internal(anyhow!(e)))?;
@@ -1154,6 +1269,84 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    // ── Query tool feature flag tests ──────────────────────────────────────
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_tools_list_agents_query_tool_disabled() {
+        let result = handle_tools_list(McpEndpointType::Agents, false)
+            .await
+            .unwrap();
+        let McpResult::ToolsList(list) = result else {
+            panic!("Expected ToolsList result");
+        };
+        let tool_names: Vec<&str> = list.tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            tool_names.contains(&"get_data_products"),
+            "get_data_products should always be present"
+        );
+        assert!(
+            tool_names.contains(&"get_data_product_details"),
+            "get_data_product_details should always be present"
+        );
+        assert!(
+            tool_names.contains(&"read_data_product"),
+            "read_data_product should always be present"
+        );
+        assert!(
+            !tool_names.contains(&"query"),
+            "query tool should be hidden when disabled"
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_tools_list_agents_query_tool_enabled() {
+        let result = handle_tools_list(McpEndpointType::Agents, true)
+            .await
+            .unwrap();
+        let McpResult::ToolsList(list) = result else {
+            panic!("Expected ToolsList result");
+        };
+        let tool_names: Vec<&str> = list.tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            tool_names.contains(&"get_data_products"),
+            "get_data_products should always be present"
+        );
+        assert!(
+            tool_names.contains(&"get_data_product_details"),
+            "get_data_product_details should always be present"
+        );
+        assert!(
+            tool_names.contains(&"read_data_product"),
+            "read_data_product should always be present"
+        );
+        assert!(
+            tool_names.contains(&"query"),
+            "query tool should be present when enabled"
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_tools_list_observatory_unaffected_by_query_flag() {
+        // Observatory endpoint should not be affected by the query tool flag
+        for flag in [true, false] {
+            let result = handle_tools_list(McpEndpointType::Observatory, flag)
+                .await
+                .unwrap();
+            let McpResult::ToolsList(list) = result else {
+                panic!("Expected ToolsList result");
+            };
+            let tool_names: Vec<&str> = list.tools.iter().map(|t| t.name.as_str()).collect();
+            assert!(
+                tool_names.contains(&"query_system_catalog"),
+                "query_system_catalog should always be present on observatory"
+            );
+            assert!(
+                !tool_names.contains(&"query"),
+                "query tool should never appear on observatory"
+            );
+        }
     }
 
     #[mz_ore::test]
