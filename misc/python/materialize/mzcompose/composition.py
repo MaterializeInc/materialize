@@ -113,6 +113,7 @@ class Composition:
         preserve_ports: bool = False,
         silent: bool = False,
         munge_services: bool = True,
+        resolve_image_specs: bool = True,
         project_name: str | None = None,
         sanity_restart_mz: bool = False,
         host_network: bool = False,
@@ -131,6 +132,7 @@ class Composition:
         self.is_sanity_restart_mz = sanity_restart_mz
         self.current_test_case_name_override: str | None = None
         self.host_network = host_network
+        self.resolve_image_specs = resolve_image_specs
 
         if name in self.repo.compositions:
             self.path = self.repo.compositions[name]
@@ -240,6 +242,9 @@ class Composition:
                     config["user"] = f"{os.getuid()}:{os.getgid()}"
                 del config["propagate_uid_gid"]
 
+            # See https://bugs.launchpad.net/ubuntu/+source/containerd-app/+bug/2065423
+            config["security_opt"] = ["apparmor=unconfined"]
+
             ports = config.setdefault("ports", [])
             for i, port in enumerate(ports):
                 if self.preserve_ports and not ":" in str(port):
@@ -292,12 +297,19 @@ class Composition:
                 else:
                     config.setdefault("environment", []).append(llvm_profile_file)
 
-        # Determine mzbuild specs and inject them into services accordingly.
-        deps = self.repo.resolve_dependencies(images)
-        for _name, config in services:
-            if "mzbuild" in config:
-                config["image"] = deps[config["mzbuild"]].spec()
-                del config["mzbuild"]
+        if self.resolve_image_specs:
+            deps = self.repo.resolve_dependencies(images)
+            for _name, config in services:
+                if "mzbuild" in config:
+                    config["image"] = deps[config["mzbuild"]].spec()
+                    del config["mzbuild"]
+        else:
+            deps = mzbuild.DependencySet([])
+            for _name, config in services:
+                if "mzbuild" in config:
+                    image = self.repo.images[config["mzbuild"]]
+                    config["image"] = image.docker_name(tag="")
+                    del config["mzbuild"]
 
         return deps
 

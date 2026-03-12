@@ -167,7 +167,9 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
 
 
 def load_composition(
-    args: argparse.Namespace, munge_services: bool = True
+    args: argparse.Namespace,
+    munge_services: bool = True,
+    resolve_image_specs: bool = True,
 ) -> Composition:
     """Loads the composition specified by the command-line arguments."""
     if not args.ignore_docker_version:
@@ -208,6 +210,7 @@ def load_composition(
             sanity_restart_mz=args.sanity_restart_mz,
             host_network=args.host_network,
             munge_services=munge_services,
+            resolve_image_specs=resolve_image_specs,
         )
     except UnknownCompositionError as e:
         if args.find:
@@ -595,11 +598,13 @@ class DockerComposeCommand(Command):
         help: str,
         help_epilog: str | None = None,
         runs_containers: bool = False,
+        resolve_image_specs: bool = True,
     ):
         self.name = name
         self.help = help
         self.help_epilog = help_epilog
         self.runs_containers = runs_containers
+        self.resolve_image_specs = resolve_image_specs
 
     def configure(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("-h", "--help", action="store_true")
@@ -617,15 +622,19 @@ class DockerComposeCommand(Command):
             print(output, file=sys.stderr)
             return
 
-        composition = load_composition(args)
+        composition = load_composition(
+            args, resolve_image_specs=self.resolve_image_specs
+        )
         if (
             args.coverage
             or not ui.env_is_truthy("CI")
             or ui.env_is_truthy("CI_ALLOW_LOCAL_BUILD")
         ):
-            ui.section("Collecting mzbuild images")
-            for d in composition.dependencies:
-                ui.say(d.spec())
+            dependencies = list(composition.dependencies)
+            if dependencies:
+                ui.section("Collecting mzbuild images")
+                for d in dependencies:
+                    ui.say(d.spec())
 
             if self.runs_containers:
                 if args.coverage:
@@ -890,9 +899,14 @@ CreateCommand = DockerComposeCommand("create", "create services", runs_container
 
 class DownCommand(DockerComposeCommand):
     def __init__(self) -> None:
-        super().__init__("down", "Stop and remove containers, networks")
+        super().__init__(
+            "down",
+            "Stop and remove containers, networks",
+            resolve_image_specs=False,
+        )
 
     def run(self, args: argparse.Namespace) -> Any:
+        args.unknown_subargs[0:0] = ["--timeout", "0"]
         args.unknown_subargs.append("--volumes")
         # --remove-orphans needs to be in effect at all times otherwise
         # services added to a composition after the fact will not be cleaned up
