@@ -453,8 +453,10 @@ impl Coordinator {
         let ingestion_id = source.global_id();
         let subsource_stmts = generate_subsource_statements(&scx, source_name, subsources)?;
 
+        let id_ts = self.get_catalog_write_ts().await;
         let ids = self
-            .allocate_user_ids(u64::cast_from(subsource_stmts.len()))
+            .catalog()
+            .allocate_user_ids(u64::cast_from(subsource_stmts.len()), id_ts)
             .await?;
         for (subsource_stmt, (item_id, global_id)) in
             subsource_stmts.into_iter().zip_eq(ids.into_iter())
@@ -528,7 +530,8 @@ impl Coordinator {
             // guaranteeing that the shard ID is discoverable is to create this
             // collection first.
             assert_none!(progress_stmt.of_source);
-            let (item_id, global_id) = self.allocate_user_id().await?;
+            let id_ts = self.get_catalog_write_ts().await;
+            let (item_id, global_id) = self.catalog().allocate_user_id(id_ts).await?;
             let progress_plan =
                 self.plan_subsource(ctx.session(), &params, progress_stmt, item_id, global_id)?;
             let progress_full_name = self
@@ -573,7 +576,8 @@ impl Coordinator {
             p => unreachable!("s must be CreateSourcePlan but got {:?}", p),
         };
 
-        let (item_id, global_id) = self.allocate_user_id().await?;
+        let id_ts = self.get_catalog_write_ts().await;
+        let (item_id, global_id) = self.catalog().allocate_user_id(id_ts).await?;
 
         let source_full_name = self.catalog().resolve_full_name(&source_plan.name, None);
         let of_source = ResolvedItemName::Item {
@@ -606,8 +610,10 @@ impl Coordinator {
         });
 
         // 3. Finally, plan all the subsources
+        let id_ts = self.get_catalog_write_ts().await;
         let ids = self
-            .allocate_user_ids(u64::cast_from(subsource_stmts.len()))
+            .catalog()
+            .allocate_user_ids(u64::cast_from(subsource_stmts.len()), id_ts)
             .await?;
         for (stmt, (item_id, global_id)) in subsource_stmts.into_iter().zip_eq(ids.into_iter()) {
             let plan = self.plan_subsource(ctx.session(), &params, stmt, item_id, global_id)?;
@@ -669,9 +675,10 @@ impl Coordinator {
         plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) {
-        let (connection_id, connection_gid) = match self.allocate_user_id().await {
+        let id_ts = self.get_catalog_write_ts().await;
+        let (connection_id, connection_gid) = match self.catalog().allocate_user_id(id_ts).await {
             Ok(item_id) => item_id,
-            Err(err) => return ctx.retire(Err(err)),
+            Err(err) => return ctx.retire(Err(err.into())),
         };
 
         match &plan.connection.details {
@@ -941,7 +948,8 @@ impl Coordinator {
         } else {
             None
         };
-        let (table_id, global_id) = self.allocate_user_id().await?;
+        let id_ts = self.get_catalog_write_ts().await;
+        let (table_id, global_id) = self.catalog().allocate_user_id(id_ts).await?;
         let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
 
         let data_source = match table.data_source {
@@ -1058,7 +1066,9 @@ impl Coordinator {
         } = plan;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
-        let (item_id, global_id) = return_if_err!(self.allocate_user_id().await, ctx);
+        let id_ts = self.get_catalog_write_ts().await;
+        let (item_id, global_id) =
+            return_if_err!(self.catalog().allocate_user_id(id_ts).await, ctx);
 
         let catalog_sink = Sink {
             create_sql: sink.create_sql,
@@ -1156,7 +1166,8 @@ impl Coordinator {
         plan: plan::CreateTypePlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let (item_id, global_id) = self.allocate_user_id().await?;
+        let id_ts = self.get_catalog_write_ts().await;
+        let (item_id, global_id) = self.catalog().allocate_user_id(id_ts).await?;
         // Validate the type definition (e.g., composite columns) before storing.
         plan.typ
             .inner
@@ -4705,7 +4716,8 @@ impl Coordinator {
         } = plan;
 
         // TODO(alter_table): Support allocating GlobalIds without a CatalogItemId.
-        let (_, new_global_id) = self.allocate_user_id().await?;
+        let id_ts = self.get_catalog_write_ts().await;
+        let (_, new_global_id) = self.catalog.allocate_user_id(id_ts).await?;
         let ops = vec![catalog::Op::AlterAddColumn {
             id: relation_id,
             new_global_id,

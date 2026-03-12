@@ -91,9 +91,7 @@ use itertools::{Either, Itertools};
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::{
-    USER_ID_POOL_BATCH_SIZE, WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
-};
+use mz_adapter_types::dyncfgs::WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL;
 use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC, MZ_AUDIT_EVENTS, MZ_STORAGE_USAGE_BY_SHARD};
@@ -232,79 +230,6 @@ mod message_handler;
 mod privatelink_status;
 mod sql;
 mod validity;
-
-/// A pool of pre-allocated user IDs to avoid per-DDL persist writes.
-///
-/// IDs in the range `[next, upper)` are available for allocation.
-/// When exhausted, the pool must be refilled via the catalog.
-///
-/// # Correctness
-///
-/// The pool is owned by [`Coordinator`], which processes all requests
-/// on a single-threaded event loop. Because every access requires
-/// `&mut self` on the coordinator, there is no concurrent access to the
-/// pool — no additional synchronization is needed.
-///
-/// Global ID uniqueness is guaranteed because each refill calls
-/// [`Catalog::allocate_user_ids`], which performs a durable persist
-/// write that atomically reserves the entire batch before any IDs from
-/// it are handed out. If the process crashes after a refill but before
-/// all pre-allocated IDs are consumed, the unused IDs form harmless
-/// gaps in the sequence — user IDs are not required to be contiguous.
-///
-/// This guarantee holds even if multiple `environmentd` processes run
-/// concurrently. Each process has its own independent pool,
-/// but every refill goes through the shared persist-backed catalog,
-/// which serializes allocations across all callers. Two processes
-/// will therefore never receive overlapping ID ranges,
-/// for the same reason they could not before this pool existed.
-#[derive(Debug)]
-pub(crate) struct IdPool {
-    next: u64,
-    upper: u64,
-}
-
-impl IdPool {
-    /// Creates an empty pool.
-    pub fn empty() -> Self {
-        IdPool { next: 0, upper: 0 }
-    }
-
-    /// Allocates a single ID from the pool, returning `None` if exhausted.
-    pub fn allocate(&mut self) -> Option<u64> {
-        if self.next < self.upper {
-            let id = self.next;
-            self.next += 1;
-            Some(id)
-        } else {
-            None
-        }
-    }
-
-    /// Allocates `n` consecutive IDs from the pool, returning `None` if
-    /// insufficient IDs remain.
-    pub fn allocate_many(&mut self, n: u64) -> Option<Vec<u64>> {
-        if self.remaining() >= n {
-            let ids = (self.next..self.next + n).collect();
-            self.next += n;
-            Some(ids)
-        } else {
-            None
-        }
-    }
-
-    /// Returns the number of IDs remaining in the pool.
-    pub fn remaining(&self) -> u64 {
-        self.upper - self.next
-    }
-
-    /// Refills the pool with the given range `[next, upper)`.
-    pub fn refill(&mut self, next: u64, upper: u64) {
-        assert!(next <= upper, "invalid pool range: {next}..{upper}");
-        self.next = next;
-        self.upper = upper;
-    }
-}
 
 #[derive(Debug)]
 pub enum Message {
@@ -1984,9 +1909,6 @@ pub struct Coordinator {
     buffered_builtin_table_updates: Option<Vec<BuiltinTableUpdate>>,
 
     license_key: ValidatedLicenseKey,
-
-    /// Pre-allocated pool of user IDs to amortize persist writes across DDL operations.
-    user_id_pool: IdPool,
 }
 
 impl Coordinator {
@@ -3827,69 +3749,6 @@ impl Coordinator {
         Arc::make_mut(&mut self.catalog)
     }
 
-    /// Refills the user ID pool by allocating IDs from the catalog.
-    ///
-    /// Requests `max(min_count, batch_size)` IDs so the pool is never
-    /// under-filled relative to the configured batch size.
-    async fn refill_user_id_pool(&mut self, min_count: u64) -> Result<(), AdapterError> {
-        let batch_size = USER_ID_POOL_BATCH_SIZE.get(self.catalog().system_config().dyncfgs());
-        let to_allocate = min_count.max(u64::from(batch_size));
-        let id_ts = self.get_catalog_write_ts().await;
-        let ids = self.catalog().allocate_user_ids(to_allocate, id_ts).await?;
-        if let (Some((first_id, _)), Some((last_id, _))) = (ids.first(), ids.last()) {
-            let start = match first_id {
-                CatalogItemId::User(id) => *id,
-                other => {
-                    return Err(AdapterError::Internal(format!(
-                        "expected User CatalogItemId, got {other:?}"
-                    )));
-                }
-            };
-            let end = match last_id {
-                CatalogItemId::User(id) => *id + 1, // exclusive upper bound
-                other => {
-                    return Err(AdapterError::Internal(format!(
-                        "expected User CatalogItemId, got {other:?}"
-                    )));
-                }
-            };
-            self.user_id_pool.refill(start, end);
-        } else {
-            return Err(AdapterError::Internal(
-                "catalog returned no user IDs".into(),
-            ));
-        }
-        Ok(())
-    }
-
-    /// Allocates a single user ID, refilling the pool from the catalog if needed.
-    async fn allocate_user_id(&mut self) -> Result<(CatalogItemId, GlobalId), AdapterError> {
-        if let Some(id) = self.user_id_pool.allocate() {
-            return Ok((CatalogItemId::User(id), GlobalId::User(id)));
-        }
-        self.refill_user_id_pool(1).await?;
-        let id = self.user_id_pool.allocate().expect("ID pool just refilled");
-        Ok((CatalogItemId::User(id), GlobalId::User(id)))
-    }
-
-    /// Allocates `count` user IDs, refilling the pool from the catalog if needed.
-    async fn allocate_user_ids(
-        &mut self,
-        count: u64,
-    ) -> Result<Vec<(CatalogItemId, GlobalId)>, AdapterError> {
-        if self.user_id_pool.remaining() < count {
-            self.refill_user_id_pool(count).await?;
-        }
-        let raw_ids = self
-            .user_id_pool
-            .allocate_many(count)
-            .expect("pool has enough IDs after refill");
-        Ok(raw_ids
-            .into_iter()
-            .map(|id| (CatalogItemId::User(id), GlobalId::User(id)))
-            .collect())
-    }
-
     /// Obtain a reference to the coordinator's connection context.
     fn connection_context(&self) -> &ConnectionContext {
         self.controller.connection_context()
@@ -4660,7 +4519,6 @@ pub fn serve(
                     read_only_controllers,
                     buffered_builtin_table_updates: Some(Vec::new()),
                     license_key,
-                    user_id_pool: IdPool::empty(),
                     persist_client,
                 };
                 let bootstrap = handle.block_on(async {
@@ -5030,79 +4888,4 @@ pub(crate) fn infer_sql_type_for_catalog(
     let mut typ = hir_expr.top_level_typ();
     typ.backport_nullability_and_keys(&mir_expr.typ());
     typ
-}
-
-#[cfg(test)]
-mod id_pool_tests {
-    use super::IdPool;
-
-    #[mz_ore::test]
-    fn test_empty_pool() {
-        let mut pool = IdPool::empty();
-        assert_eq!(pool.remaining(), 0);
-        assert_eq!(pool.allocate(), None);
-        assert_eq!(pool.allocate_many(1), None);
-    }
-
-    #[mz_ore::test]
-    fn test_allocate_single() {
-        let mut pool = IdPool::empty();
-        pool.refill(10, 13);
-        assert_eq!(pool.remaining(), 3);
-        assert_eq!(pool.allocate(), Some(10));
-        assert_eq!(pool.allocate(), Some(11));
-        assert_eq!(pool.allocate(), Some(12));
-        assert_eq!(pool.remaining(), 0);
-        assert_eq!(pool.allocate(), None);
-    }
-
-    #[mz_ore::test]
-    fn test_allocate_many() {
-        let mut pool = IdPool::empty();
-        pool.refill(100, 105);
-        assert_eq!(pool.allocate_many(3), Some(vec![100, 101, 102]));
-        assert_eq!(pool.remaining(), 2);
-        // Not enough remaining for 3 more.
-        assert_eq!(pool.allocate_many(3), None);
-        // But 2 works.
-        assert_eq!(pool.allocate_many(2), Some(vec![103, 104]));
-        assert_eq!(pool.remaining(), 0);
-    }
-
-    #[mz_ore::test]
-    fn test_allocate_many_zero() {
-        let mut pool = IdPool::empty();
-        pool.refill(1, 5);
-        assert_eq!(pool.allocate_many(0), Some(vec![]));
-        assert_eq!(pool.remaining(), 4);
-    }
-
-    #[mz_ore::test]
-    fn test_refill_resets_pool() {
-        let mut pool = IdPool::empty();
-        pool.refill(0, 2);
-        assert_eq!(pool.allocate(), Some(0));
-        // Refill before exhaustion replaces the range.
-        pool.refill(50, 52);
-        assert_eq!(pool.allocate(), Some(50));
-        assert_eq!(pool.allocate(), Some(51));
-        assert_eq!(pool.allocate(), None);
-    }
-
-    #[mz_ore::test]
-    fn test_mixed_allocate_and_allocate_many() {
-        let mut pool = IdPool::empty();
-        pool.refill(0, 10);
-        assert_eq!(pool.allocate(), Some(0));
-        assert_eq!(pool.allocate_many(3), Some(vec![1, 2, 3]));
-        assert_eq!(pool.allocate(), Some(4));
-        assert_eq!(pool.remaining(), 5);
-    }
-
-    #[mz_ore::test]
-    #[should_panic(expected = "invalid pool range")]
-    fn test_refill_invalid_range_panics() {
-        let mut pool = IdPool::empty();
-        pool.refill(10, 5);
-    }
 }
