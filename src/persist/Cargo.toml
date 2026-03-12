@@ -68,6 +68,7 @@ turmoil = { workspace = true, optional = true }
 url.workspace = true
 urlencoding.workspace = true
 uuid = { workspace = true, features = ["v4"] }
+zeroize.workspace = true
 
 [dev-dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
