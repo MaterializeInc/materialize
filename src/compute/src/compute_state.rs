@@ -50,6 +50,7 @@ use mz_persist_types::PersistLocation;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
+use mz_storage_operators::persist::SharedBatches;
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
@@ -114,6 +115,9 @@ pub struct ComputeState {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers.
     pub persist_clients: Arc<PersistClientCache>,
+    // A process-global cache of shared persist batch writers. This allows
+    // coalescing writes across local workers without explicit exchanges.
+    pub persist_batches: SharedBatches,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// History of commands received by this workers and all its peers.
@@ -169,6 +173,7 @@ impl ComputeState {
     /// Construct a new `ComputeState`.
     pub fn new(
         persist_clients: Arc<PersistClientCache>,
+        persist_batches: SharedBatches,
         txns_ctx: TxnsContext,
         metrics: WorkerMetrics,
         tracing_handle: Arc<TracingHandle>,
@@ -186,6 +191,7 @@ impl ComputeState {
             peek_stash_persist_location: None,
             compute_logger: None,
             persist_clients,
+            persist_batches,
             txns_ctx,
             command_history,
             max_result_size: u64::MAX,
