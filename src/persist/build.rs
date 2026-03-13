@@ -27,7 +27,8 @@ fn main() {
         .unwrap_or_else(|e| panic!("{e}"));
 
     // Tonic + prost compilation for consensus_service.proto (gRPC service).
-    let config = prost_build::Config::new();
+    let mut config = prost_build::Config::new();
+    config.protoc_executable(mz_build_tools::protoc());
     tonic_prost_build::configure()
         .emit_rerun_if_changed(false)
         .compile_with_config(
