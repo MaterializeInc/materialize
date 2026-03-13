@@ -1713,16 +1713,6 @@ pub mod plan {
         /// - `Ok(Some(row))` if the row passes all predicates,
         /// - `Ok(None)` if a predicate filtered the row out,
         /// - `Err(e)` if evaluation produced an error.
-        /// Evaluate a batch of rows using vectorized (columnar) evaluation.
-        ///
-        /// `input_columns` provides the input columns in columnar form, one
-        /// `DatumColumn` per input column (there should be `self.mfp.input_arity`
-        /// of them). All columns must have the same length (`batch_len`).
-        ///
-        /// Returns a vector of results, one per input row. Each result is either:
-        /// - `Ok(Some(row))` if the row passes all predicates,
-        /// - `Ok(None)` if a predicate filtered the row out,
-        /// - `Err(e)` if evaluation produced an error.
         pub fn evaluate_batch(
             &self,
             input_columns: &[crate::vectorized::DatumColumn],
@@ -1733,7 +1723,8 @@ pub mod plan {
             // We store computed columns in a separate vec and build a
             // combined reference slice on demand. Input columns are borrowed
             // directly — no element-by-element copying.
-            let mut computed_columns: Vec<crate::vectorized::DatumColumn> = Vec::with_capacity(self.mfp.expressions.len());
+            let mut computed_columns: Vec<crate::vectorized::DatumColumn> =
+                Vec::with_capacity(self.mfp.expressions.len());
 
             // Track which rows are still "alive" (not yet filtered out).
             let mut alive: Vec<bool> = vec![true; batch_len];
@@ -1746,7 +1737,10 @@ pub mod plan {
                 while self.mfp.input_arity + expression < *support {
                     let expr = &self.mfp.expressions[expression];
                     let vec_expr = VectorScalarExpr::from_mir_or_scalar(expr);
-                    let col_refs: Vec<&crate::vectorized::DatumColumn> = input_columns.iter().chain(computed_columns.iter()).collect();
+                    let col_refs: Vec<&crate::vectorized::DatumColumn> = input_columns
+                        .iter()
+                        .chain(computed_columns.iter())
+                        .collect();
                     let col = vec_expr.eval(&col_refs, batch_len);
                     computed_columns.push(col);
                     expression += 1;
@@ -1754,7 +1748,10 @@ pub mod plan {
 
                 // Evaluate the predicate.
                 let pred_expr = VectorScalarExpr::from_mir_or_scalar(predicate);
-                let col_refs: Vec<&crate::vectorized::DatumColumn> = input_columns.iter().chain(computed_columns.iter()).collect();
+                let col_refs: Vec<&crate::vectorized::DatumColumn> = input_columns
+                    .iter()
+                    .chain(computed_columns.iter())
+                    .collect();
                 let pred_col = pred_expr.eval(&col_refs, batch_len);
 
                 // Update alive mask: only rows where predicate is True survive.
@@ -1762,9 +1759,9 @@ pub mod plan {
                 for i in 0..batch_len {
                     if alive[i] {
                         match vectorized::index_as_datum(&pred_col.data, i, &arena) {
-                            Ok(Datum::True) => {} // still alive
+                            Ok(Datum::True) => {}      // still alive
                             Ok(_) => alive[i] = false, // filtered out
-                            Err(_) => {} // errors propagate later
+                            Err(_) => {}               // errors propagate later
                         }
                     }
                 }
@@ -1774,14 +1771,20 @@ pub mod plan {
             while expression < self.mfp.expressions.len() {
                 let expr = &self.mfp.expressions[expression];
                 let vec_expr = VectorScalarExpr::from_mir_or_scalar(expr);
-                let col_refs: Vec<&crate::vectorized::DatumColumn> = input_columns.iter().chain(computed_columns.iter()).collect();
+                let col_refs: Vec<&crate::vectorized::DatumColumn> = input_columns
+                    .iter()
+                    .chain(computed_columns.iter())
+                    .collect();
                 let col = vec_expr.eval(&col_refs, batch_len);
                 computed_columns.push(col);
                 expression += 1;
             }
 
             // Build the final combined column list for projection.
-            let all_columns: Vec<&crate::vectorized::DatumColumn> = input_columns.iter().chain(computed_columns.iter()).collect();
+            let all_columns: Vec<&crate::vectorized::DatumColumn> = input_columns
+                .iter()
+                .chain(computed_columns.iter())
+                .collect();
 
             // Produce output: apply projection and pack into Rows.
             let pack_start = std::time::Instant::now();
@@ -1815,7 +1818,7 @@ pub mod plan {
                 }
             }
             let pack_elapsed = pack_start.elapsed();
-            tracing::info!(
+            tracing::trace!(
                 batch_len,
                 pack_us = pack_elapsed.as_micros() as u64,
                 "vectorized batch row packing"
@@ -2143,7 +2146,7 @@ pub mod plan {
             let mfp_results = self.mfp.evaluate_batch(&columns, batch_len);
             let eval_elapsed = eval_start.elapsed();
 
-            tracing::info!(
+            tracing::trace!(
                 batch_len,
                 transpose_us = transpose_elapsed.as_micros() as u64,
                 eval_us = eval_elapsed.as_micros() as u64,
