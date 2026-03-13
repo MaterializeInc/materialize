@@ -85,11 +85,7 @@ pub fn encode_ref(value: &Value, schema: SchemaNode, buffer: &mut Vec<u8>) {
             } else {
                 d.and_utc().timestamp_subsec_micros().into()
             };
-            let ts = if ts_seconds >= 0 {
-                ts_seconds + sub_part
-            } else {
-                ts_seconds - sub_part
-            };
+            let ts = ts_seconds + sub_part;
             encode_long(ts, buffer)
         }
         Value::Double(x) => buffer.extend_from_slice(&x.to_le_bytes()),
