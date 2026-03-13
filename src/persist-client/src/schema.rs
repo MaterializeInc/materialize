@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use differential_dataflow::difference::Monoid;
@@ -60,8 +60,8 @@ pub enum CaESchema<K: Codec, V: Codec> {
 pub(crate) struct SchemaCache<K: Codec, V: Codec, T, D> {
     maps: Arc<SchemaCacheMaps<K, V>>,
     applier: Applier<K, V, T, D>,
-    key_migration_by_ids: MigrationCacheMap,
-    val_migration_by_ids: MigrationCacheMap,
+    key_migration_by_ids: Arc<Mutex<MigrationCacheMap>>,
+    val_migration_by_ids: Arc<Mutex<MigrationCacheMap>>,
 }
 
 impl<K: Codec, V: Codec, T: Clone, D> Clone for SchemaCache<K, V, T, D> {
@@ -69,17 +69,27 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for SchemaCache<K, V, T, D> {
         Self {
             maps: Arc::clone(&self.maps),
             applier: self.applier.clone(),
-            key_migration_by_ids: self.key_migration_by_ids.clone(),
-            val_migration_by_ids: self.val_migration_by_ids.clone(),
+            key_migration_by_ids: Arc::clone(&self.key_migration_by_ids),
+            val_migration_by_ids: Arc::clone(&self.val_migration_by_ids),
         }
     }
 }
 
 impl<K: Codec, V: Codec, T, D> Drop for SchemaCache<K, V, T, D> {
     fn drop(&mut self) {
-        let dropped = u64::cast_from(
-            self.key_migration_by_ids.by_ids.len() + self.val_migration_by_ids.by_ids.len(),
-        );
+        let key_count = self
+            .key_migration_by_ids
+            .lock()
+            .expect("poisoned")
+            .by_ids
+            .len();
+        let val_count = self
+            .val_migration_by_ids
+            .lock()
+            .expect("poisoned")
+            .by_ids
+            .len();
+        let dropped = u64::cast_from(key_count + val_count);
         self.applier
             .metrics
             .schema
@@ -108,8 +118,8 @@ where
         SchemaCache {
             maps,
             applier,
-            key_migration_by_ids,
-            val_migration_by_ids,
+            key_migration_by_ids: Arc::new(Mutex::new(key_migration_by_ids)),
+            val_migration_by_ids: Arc::new(Mutex::new(val_migration_by_ids)),
         }
     }
 
@@ -133,38 +143,31 @@ where
         })
     }
 
-    fn key_migration(
-        &mut self,
-        write: &Schemas<K, V>,
-        read: &Schemas<K, V>,
-    ) -> Option<Arc<Migration>> {
+    fn key_migration(&self, write: &Schemas<K, V>, read: &Schemas<K, V>) -> Option<Arc<Migration>> {
         let migration_fn = || Self::migration::<K>(&write.key, &read.key);
+        let mut key_migration_by_ids = self.key_migration_by_ids.lock().expect("poisoned");
         let (Some(write_id), Some(read_id)) = (write.id, read.id) else {
             // TODO: Annoying to cache this because we're missing an id. This
             // will probably require some sort of refactor to fix so punting for
             // now.
-            self.key_migration_by_ids.metrics.computed_count.inc();
+            key_migration_by_ids.metrics.computed_count.inc();
             return migration_fn().map(Arc::new);
         };
-        self.key_migration_by_ids
-            .get_or_try_insert(write_id, read_id, migration_fn)
+
+        key_migration_by_ids.get_or_try_insert(write_id, read_id, migration_fn)
     }
 
-    fn val_migration(
-        &mut self,
-        write: &Schemas<K, V>,
-        read: &Schemas<K, V>,
-    ) -> Option<Arc<Migration>> {
+    fn val_migration(&self, write: &Schemas<K, V>, read: &Schemas<K, V>) -> Option<Arc<Migration>> {
         let migration_fn = || Self::migration::<V>(&write.val, &read.val);
+        let mut val_migration_by_ids = self.val_migration_by_ids.lock().expect("poisoned");
         let (Some(write_id), Some(read_id)) = (write.id, read.id) else {
             // TODO: Annoying to cache this because we're missing an id. This
             // will probably require some sort of refactor to fix so punting for
             // now.
-            self.val_migration_by_ids.metrics.computed_count.inc();
+            val_migration_by_ids.metrics.computed_count.inc();
             return migration_fn().map(Arc::new);
         };
-        self.val_migration_by_ids
-            .get_or_try_insert(write_id, read_id, migration_fn)
+        val_migration_by_ids.get_or_try_insert(write_id, read_id, migration_fn)
     }
 
     fn migration<C: Codec>(write: &C::Schema, read: &C::Schema) -> Option<Migration> {
@@ -338,7 +341,7 @@ where
     pub(crate) async fn new<T, D>(
         part: &BatchPart<T>,
         read: Schemas<K, V>,
-        schema_cache: &mut SchemaCache<K, V, T, D>,
+        schema_cache: &SchemaCache<K, V, T, D>,
     ) -> Result<Self, Schemas<K, V>>
     where
         T: Timestamp + Lattice + Codec64 + Sync,

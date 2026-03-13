@@ -610,7 +610,7 @@ where
     let (fetched_output, fetched_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (completed_fetches_output, completed_fetches_stream) =
         builder.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
-    let mut descs_input = builder.new_input_for_many(
+    let descs_input = builder.new_input_for_many(
         descs,
         Exchange::new(|&(i, _): &(usize, _)| u64::cast_from(i)),
         [&fetched_output, &completed_fetches_output],
@@ -618,7 +618,7 @@ where
     let name_owned = name.to_owned();
 
     let shutdown_button = builder.build(move |_capabilities| async move {
-        let mut fetcher = mz_ore::task::spawn(|| format!("shard_source_fetch({})", name_owned), {
+        let fetcher = mz_ore::task::spawn(|| format!("shard_source_fetch({})", name_owned), {
             let diagnostics = Diagnostics {
                 shard_name: name_owned.clone(),
                 handle_purpose: format!("shard_source_fetch batch fetcher {}", name_owned),
@@ -639,44 +639,56 @@ where
         .await
         .expect("shard codecs should not change");
 
-        while let Some(event) = descs_input.next().await {
-            if let Event::Data([fetched_cap, _completed_fetches_cap], data) = event {
-                // `LeasedBatchPart`es cannot be dropped at this point w/o
-                // panicking, so swap them to an owned version.
-                for (_idx, part) in data {
-                    let fetched = fetcher
-                        .fetch_leased_part(part)
-                        .await
-                        .expect("shard_id should match across all workers");
-                    let fetched = match fetched {
-                        Ok(fetched) => fetched,
-                        Err(blob_key) => {
-                            // Ideally, readers should never encounter a missing blob. They place a seqno
-                            // hold as they consume their snapshot/listen, preventing any blobs they need
-                            // from being deleted by garbage collection, and all blob implementations are
-                            // linearizable so there should be no possibility of stale reads.
-                            //
-                            // However, it is possible for a lease to expire given a sustained period of
-                            // downtime, which could allow parts we expect to exist to be deleted...
-                            // at which point our best option is to request a restart.
-                            error_handler
-                                .report_and_stop(anyhow!(
-                                    "batch fetcher could not fetch batch part {}; lost lease?",
-                                    blob_key
-                                ))
-                                .await
-                        }
-                    };
-                    {
-                        // Do very fine-grained output activation/session
-                        // creation to ensure that we don't hold activated
-                        // outputs or sessions across await points, which
-                        // would prevent messages from being flushed from
-                        // the shared timely output buffer.
-                        fetched_output.give(&fetched_cap, fetched);
-                    }
+        let fetched_parts = descs_input
+            .filter_map(async |event| match event {
+                Event::Data([fetched_cap, _completed_fetches_cap], data) => {
+                    Some((fetched_cap, data))
                 }
-            }
+                Event::Progress(_) => None,
+            })
+            .flat_map(|(cap, data)| {
+                futures::stream::iter(data).map(move |(_idx, part)| (cap.clone(), part))
+            })
+            .map(async |(cap, part)| {
+                let fetched = fetcher
+                    .fetch_leased_part(part)
+                    .await
+                    .expect("invalid usage");
+                let fetched = match fetched {
+                    Ok(fetched) => fetched,
+                    Err(blob_key) => {
+                        // Ideally, readers should never encounter a missing blob. They place a seqno
+                        // hold as they consume their snapshot/listen, preventing any blobs they need
+                        // from being deleted by garbage collection, and all blob implementations are
+                        // linearizable so there should be no possibility of stale reads.
+                        //
+                        // However, it is possible for a lease to expire given a sustained period of
+                        // downtime, which could allow parts we expect to exist to be deleted...
+                        // at which point our best option is to request a restart.
+                        error_handler
+                            .report_and_stop(anyhow!(
+                                "batch fetcher could not fetch batch part {}; lost lease?",
+                                blob_key
+                            ))
+                            .await
+                    }
+                };
+                (cap, fetched)
+            });
+
+        // Fetching a single part at a time could starve downstreams, if parts are small and the
+        // operator is only invoked rarely. Normally, the throughput to the blob store is limited
+        // by the concurrent fetch limit... so the limit here is only a stopgap, and should be
+        // high enough that we rarely have this many concurrent fetches in practice.
+        let mut fetched_parts = pin!(fetched_parts.buffered(128));
+
+        while let Some((fetched_cap, fetched)) = fetched_parts.next().await {
+            // Do very fine-grained output activation/session
+            // creation to ensure that we don't hold activated
+            // outputs or sessions across await points, which
+            // would prevent messages from being flushed from
+            // the shared timely output buffer.
+            fetched_output.give(&fetched_cap, fetched);
         }
     });
 
