@@ -41,6 +41,8 @@ impl DecodeMetricDefs {
             | DataDecoderInner::PreDelimited(format) => match format {
                 PreDelimitedFormat::Bytes => "raw",
                 PreDelimitedFormat::Json => "json",
+                PreDelimitedFormat::DebeziumJson { .. } => "json",
+                PreDelimitedFormat::TypedJson(_) => "json",
                 PreDelimitedFormat::Text => "text",
                 PreDelimitedFormat::Regex(..) => "regex",
                 PreDelimitedFormat::Protobuf(..) => "protobuf",

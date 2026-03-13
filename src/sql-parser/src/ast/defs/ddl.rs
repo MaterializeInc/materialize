@@ -560,6 +560,11 @@ pub enum SourceIncludeMetadata {
         alias: Ident,
         use_bytes: bool,
     },
+    /// Debezium envelope-level metadata (source, ts_ms, transaction, op)
+    /// packed as a single jsonb column.
+    DebeziumMetadata {
+        alias: Option<Ident>,
+    },
 }
 
 impl AstDisplay for SourceIncludeMetadata {
@@ -604,6 +609,10 @@ impl AstDisplay for SourceIncludeMetadata {
                 if *use_bytes {
                     f.write_str(" BYTES");
                 }
+            }
+            SourceIncludeMetadata::DebeziumMetadata { alias } => {
+                f.write_str("DEBEZIUM METADATA");
+                print_alias(f, alias);
             }
         }
     }

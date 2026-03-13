@@ -14,8 +14,10 @@ use itertools::Itertools;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
 use mz_repr::adt::jsonb::JsonbRef;
-use mz_repr::adt::numeric::{NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
-use mz_repr::{CatalogItemId, ColumnName, Datum, RelationDesc, SqlColumnType, SqlScalarType};
+use mz_repr::adt::numeric::{
+    self, NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION, Numeric,
+};
+use mz_repr::{CatalogItemId, ColumnName, Datum, RelationDesc, Row, SqlColumnType, SqlScalarType};
 use serde_json::{Map, json};
 
 use crate::avro::DocTarget;
@@ -569,5 +571,631 @@ impl Namer {
             self.seen_names.insert(name.into(), valid_name.clone());
             (valid_name, false)
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Debezium JSON Decoder
+// ---------------------------------------------------------------------------
+
+/// Errors from decoding Debezium JSON messages.
+#[derive(Debug)]
+pub enum DebeziumJsonError {
+    /// Invalid JSON bytes.
+    InvalidJson(serde_json::Error),
+    /// Missing required field in the Debezium envelope.
+    MissingField(&'static str),
+    /// Unsupported Debezium operation type.
+    UnsupportedOp(String),
+    /// Type mismatch when decoding a column value.
+    TypeMismatch {
+        column: String,
+        expected: String,
+        got: String,
+    },
+    /// Both `before` and `after` are null.
+    BothNull,
+}
+
+impl std::fmt::Display for DebeziumJsonError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidJson(e) => write!(f, "Failed to decode Debezium JSON: {e}"),
+            Self::MissingField(field) => {
+                write!(f, "Debezium JSON message missing required '{field}' field")
+            }
+            Self::UnsupportedOp(op) => {
+                write!(f, "Unsupported Debezium operation type: \"{op}\"")
+            }
+            Self::TypeMismatch {
+                column,
+                expected,
+                got,
+            } => write!(
+                f,
+                "Failed to decode Debezium JSON: expected {expected} for column \"{column}\", got {got}"
+            ),
+            Self::BothNull => write!(
+                f,
+                "Debezium JSON message has both 'before' and 'after' set to null"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DebeziumJsonError {}
+
+/// Decodes a Debezium JSON message into a Row with `[before, after]` structure,
+/// optionally followed by a jsonb column containing envelope-level metadata.
+///
+/// The output Row must match the layout that the Avro Debezium path produces:
+/// `[before: Datum::List|Null, after: Datum::List|Null]`. The `after_idx` in
+/// `UpsertStyle::Debezium { after_idx }` is hardcoded to 1 for JSON (the index
+/// of the `after` column).
+///
+/// When `include_metadata` is true, a third column is appended containing all
+/// envelope-level fields (op, ts_ms, source, transaction) as a jsonb value.
+/// This is triggered by `INCLUDE DEBEZIUM METADATA` in the SQL.
+///
+/// The `desc` parameter is the user-declared table schema (not the synthetic
+/// before/after desc). Each `before`/`after` JSON object is decoded against
+/// this schema to produce a typed Record (List of datums).
+///
+/// Auto-detects wrapped vs unwrapped Debezium format by checking for a
+/// top-level `"payload"` key.
+///
+/// Returns `Ok(None)` for tombstone messages (empty bytes).
+pub fn decode_debezium_json(
+    bytes: &[u8],
+    desc: &RelationDesc,
+    include_metadata: bool,
+) -> Result<Option<Row>, DebeziumJsonError> {
+    if bytes.is_empty() {
+        // Tombstone message: null value
+        return Ok(None);
+    }
+
+    let value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(DebeziumJsonError::InvalidJson)?;
+
+    // Auto-detect wrapped vs unwrapped form.
+    let envelope = if value.get("payload").is_some() {
+        // Wrapped form: {"schema": ..., "payload": {...}}
+        value.get("payload").expect("checked above")
+    } else {
+        // Unwrapped form: envelope fields at top level
+        &value
+    };
+
+    // Extract and validate the "op" field.
+    let op = envelope
+        .get("op")
+        .and_then(|v| v.as_str())
+        .ok_or(DebeziumJsonError::MissingField("op"))?;
+
+    match op {
+        "c" | "u" | "d" | "r" => {}
+        other => return Err(DebeziumJsonError::UnsupportedOp(other.to_string())),
+    }
+
+    // Extract "before" and "after" fields.
+    let before_val = envelope.get("before");
+    let after_val = envelope.get("after");
+
+    // Check for both-null case.
+    let before_is_null = before_val.is_none() || before_val == Some(&serde_json::Value::Null);
+    let after_is_null = after_val.is_none() || after_val == Some(&serde_json::Value::Null);
+    if before_is_null && after_is_null {
+        return Err(DebeziumJsonError::BothNull);
+    }
+
+    let columns: Vec<(ColumnName, SqlColumnType)> = desc
+        .iter()
+        .map(|(name, typ)| (name.clone(), typ.clone()))
+        .collect();
+
+    let mut row = Row::default();
+    let mut packer = row.packer();
+
+    // Pack "before" as a Record (List) or Null.
+    if before_is_null {
+        packer.push(Datum::Null);
+    } else {
+        let before_obj = before_val
+            .unwrap()
+            .as_object()
+            .ok_or(DebeziumJsonError::MissingField("before"))?;
+        packer.push_list_with(|inner| pack_json_object_as_record(inner, before_obj, &columns))?;
+    }
+
+    // Pack "after" as a Record (List) or Null.
+    if after_is_null {
+        packer.push(Datum::Null);
+    } else {
+        let after_obj = after_val
+            .unwrap()
+            .as_object()
+            .ok_or(DebeziumJsonError::MissingField("after"))?;
+        packer.push_list_with(|inner| pack_json_object_as_record(inner, after_obj, &columns))?;
+    }
+
+    // Pack envelope-level metadata as jsonb if requested.
+    if include_metadata {
+        let envelope_obj = envelope
+            .as_object()
+            .ok_or(DebeziumJsonError::MissingField("envelope object"))?;
+        let mut meta = serde_json::Map::new();
+        for (k, v) in envelope_obj {
+            if k != "before" && k != "after" {
+                meta.insert(k.clone(), v.clone());
+            }
+        }
+        mz_repr::adt::jsonb::JsonbPacker::new(&mut packer)
+            .pack_serde_json(serde_json::Value::Object(meta))
+            .map_err(DebeziumJsonError::InvalidJson)?;
+    }
+
+    Ok(Some(row))
+}
+
+/// Decodes a flat JSON object into a typed Row matching the given schema.
+///
+/// Used for key decoding in Debezium JSON sources where key columns must be
+/// decoded into typed columns (not raw jsonb) for upsert hash consistency.
+pub fn decode_json_typed_row(
+    bytes: &[u8],
+    desc: &RelationDesc,
+) -> Result<Option<Row>, DebeziumJsonError> {
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+
+    let value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(DebeziumJsonError::InvalidJson)?;
+
+    let obj = value
+        .as_object()
+        .ok_or(DebeziumJsonError::MissingField("key object"))?;
+
+    let columns: Vec<(ColumnName, SqlColumnType)> = desc
+        .iter()
+        .map(|(name, typ)| (name.clone(), typ.clone()))
+        .collect();
+
+    let mut row = Row::default();
+    let mut packer = row.packer();
+    pack_json_object_as_record(&mut packer, obj, &columns)?;
+    Ok(Some(row))
+}
+
+/// Packs a JSON object's fields into a Row packer according to the declared column schema.
+fn pack_json_object_as_record(
+    packer: &mut mz_repr::RowPacker,
+    obj: &Map<String, serde_json::Value>,
+    columns: &[(ColumnName, SqlColumnType)],
+) -> Result<(), DebeziumJsonError> {
+    for (col_name, col_type) in columns {
+        let json_val = obj.get(col_name.as_str());
+        match json_val {
+            None | Some(serde_json::Value::Null) => {
+                if col_type.nullable {
+                    packer.push(Datum::Null);
+                } else if json_val.is_none() {
+                    // Missing column: for now, treat as null if nullable (handled above),
+                    // otherwise error. A future iteration could use configurable behavior.
+                    return Err(DebeziumJsonError::TypeMismatch {
+                        column: col_name.to_string(),
+                        expected: format!("{:?}", col_type.scalar_type),
+                        got: "missing (column not present in JSON)".to_string(),
+                    });
+                } else {
+                    return Err(DebeziumJsonError::TypeMismatch {
+                        column: col_name.to_string(),
+                        expected: format!("{:?}", col_type.scalar_type),
+                        got: "null".to_string(),
+                    });
+                }
+            }
+            Some(val) => {
+                pack_json_value(packer, val, col_name, col_type)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Converts a single JSON value to the appropriate Datum and pushes it.
+fn pack_json_value(
+    packer: &mut mz_repr::RowPacker,
+    val: &serde_json::Value,
+    col_name: &ColumnName,
+    col_type: &SqlColumnType,
+) -> Result<(), DebeziumJsonError> {
+    let type_err = |expected: &str, val: &serde_json::Value| DebeziumJsonError::TypeMismatch {
+        column: col_name.to_string(),
+        expected: expected.to_string(),
+        got: format!("{}", val),
+    };
+
+    match &col_type.scalar_type {
+        SqlScalarType::Bool => {
+            let b = val.as_bool().ok_or_else(|| type_err("boolean", val))?;
+            packer.push(Datum::from(b));
+        }
+        SqlScalarType::Int16 => {
+            let n = val.as_i64().ok_or_else(|| type_err("int16", val))?;
+            let v = i16::try_from(n).map_err(|_| type_err("int16", val))?;
+            packer.push(Datum::Int16(v));
+        }
+        SqlScalarType::Int32 => {
+            let n = val.as_i64().ok_or_else(|| type_err("int32", val))?;
+            let v = i32::try_from(n).map_err(|_| type_err("int32", val))?;
+            packer.push(Datum::Int32(v));
+        }
+        SqlScalarType::Int64 => {
+            let n = val.as_i64().ok_or_else(|| type_err("int64", val))?;
+            packer.push(Datum::Int64(n));
+        }
+        SqlScalarType::Float32 => {
+            let n = val.as_f64().ok_or_else(|| type_err("float32", val))?;
+            #[allow(clippy::as_conversions)]
+            packer.push(Datum::Float32((n as f32).into()));
+        }
+        SqlScalarType::Float64 => {
+            let n = val.as_f64().ok_or_else(|| type_err("float64", val))?;
+            packer.push(Datum::Float64(n.into()));
+        }
+        SqlScalarType::Numeric { .. } => {
+            // Accept both numbers and strings for numeric.
+            let s = match val {
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::String(s) => s.clone(),
+                _ => return Err(type_err("numeric", val)),
+            };
+            let mut cx = numeric::cx_datum();
+            let mut n: Numeric = cx.parse(s.trim()).map_err(|_| type_err("numeric", val))?;
+            numeric::munge_numeric(&mut n).map_err(|_| type_err("numeric", val))?;
+            packer.push(Datum::from(n));
+        }
+        SqlScalarType::String | SqlScalarType::VarChar { .. } | SqlScalarType::PgLegacyName => {
+            let s = val.as_str().ok_or_else(|| type_err("text", val))?;
+            packer.push(Datum::String(s));
+        }
+        SqlScalarType::Char { length } => {
+            let s = val.as_str().ok_or_else(|| type_err("char", val))?;
+            let s = char::format_str_pad(s, *length);
+            packer.push(Datum::String(&s));
+        }
+        SqlScalarType::Jsonb => {
+            // Any JSON value is valid for jsonb — pack it directly.
+            mz_repr::adt::jsonb::JsonbPacker::new(packer)
+                .pack_serde_json(val.clone())
+                .map_err(|_| type_err("jsonb", val))?;
+        }
+        SqlScalarType::Timestamp { .. } => {
+            // Accept strings (ISO 8601) or numbers (milliseconds since epoch).
+            let ndt = match val {
+                serde_json::Value::String(s) => {
+                    // Parse ISO 8601 string.
+                    let ndt: chrono::NaiveDateTime = s
+                        .parse()
+                        .or_else(|_| {
+                            chrono::DateTime::parse_from_rfc3339(s).map(|dt| dt.naive_utc())
+                        })
+                        .map_err(|_| type_err("timestamp", val))?;
+                    ndt
+                }
+                serde_json::Value::Number(n) => {
+                    let millis = n.as_i64().ok_or_else(|| type_err("timestamp", val))?;
+                    chrono::DateTime::from_timestamp_millis(millis)
+                        .ok_or_else(|| type_err("timestamp", val))?
+                        .naive_utc()
+                }
+                _ => return Err(type_err("timestamp", val)),
+            };
+            let ts = mz_repr::adt::timestamp::CheckedTimestamp::from_timestamplike(ndt)
+                .map_err(|_| type_err("timestamp", val))?;
+            packer.push(Datum::Timestamp(ts));
+        }
+        SqlScalarType::TimestampTz { .. } => {
+            let dt = match val {
+                serde_json::Value::String(s) => chrono::DateTime::parse_from_rfc3339(s)
+                    .map(|dt| dt.to_utc())
+                    .or_else(|_| s.parse::<chrono::NaiveDateTime>().map(|ndt| ndt.and_utc()))
+                    .map_err(|_| type_err("timestamptz", val))?,
+                serde_json::Value::Number(n) => {
+                    let millis = n.as_i64().ok_or_else(|| type_err("timestamptz", val))?;
+                    chrono::DateTime::from_timestamp_millis(millis)
+                        .ok_or_else(|| type_err("timestamptz", val))?
+                }
+                _ => return Err(type_err("timestamptz", val)),
+            };
+            let ts = mz_repr::adt::timestamp::CheckedTimestamp::from_timestamplike(dt)
+                .map_err(|_| type_err("timestamptz", val))?;
+            packer.push(Datum::TimestampTz(ts));
+        }
+        SqlScalarType::Date => {
+            let s = val.as_str().ok_or_else(|| type_err("date", val))?;
+            let d: mz_repr::adt::date::Date = s.parse().map_err(|_| type_err("date", val))?;
+            packer.push(Datum::Date(d));
+        }
+        SqlScalarType::Bytes => {
+            // Bytes are not commonly used in Debezium JSON.
+            // Accept JSON strings, interpreting them as UTF-8 bytes.
+            let s = val.as_str().ok_or_else(|| type_err("bytes", val))?;
+            packer.push(Datum::Bytes(s.as_bytes()));
+        }
+        SqlScalarType::Uuid => {
+            let s = val.as_str().ok_or_else(|| type_err("uuid", val))?;
+            let u: uuid::Uuid = s.parse().map_err(|_| type_err("uuid", val))?;
+            packer.push(Datum::from(u));
+        }
+        // For any other type, try to coerce from a string representation.
+        other => {
+            let s = val
+                .as_str()
+                .ok_or_else(|| type_err(&format!("{other:?}"), val))?;
+            packer.push(Datum::String(s));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_repr::{Datum, RelationDesc, SqlScalarType};
+
+    fn test_desc() -> RelationDesc {
+        RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int32.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(true))
+            .finish()
+    }
+
+    #[mz_ore::test]
+    fn test_tombstone() {
+        let desc = test_desc();
+        let result = decode_debezium_json(b"", &desc, false).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[mz_ore::test]
+    fn test_insert_unwrapped() {
+        let desc = test_desc();
+        let msg = br#"{"before":null,"after":{"id":1,"name":"Alice"},"op":"c"}"#;
+        let row = decode_debezium_json(msg, &desc, false).unwrap().unwrap();
+        let mut iter = row.iter();
+        // before is null
+        assert_eq!(iter.next(), Some(Datum::Null));
+        // after is a list [1, "Alice"]
+        let after = iter.next().unwrap();
+        let after_list: Vec<_> = after.unwrap_list().iter().collect();
+        assert_eq!(after_list[0], Datum::Int32(1));
+        assert_eq!(after_list[1], Datum::String("Alice"));
+    }
+
+    #[mz_ore::test]
+    fn test_delete_unwrapped() {
+        let desc = test_desc();
+        let msg = br#"{"before":{"id":1,"name":"Alice"},"after":null,"op":"d"}"#;
+        let row = decode_debezium_json(msg, &desc, false).unwrap().unwrap();
+        let mut iter = row.iter();
+        // before is a list
+        let before = iter.next().unwrap();
+        let before_list: Vec<_> = before.unwrap_list().iter().collect();
+        assert_eq!(before_list[0], Datum::Int32(1));
+        assert_eq!(before_list[1], Datum::String("Alice"));
+        // after is null
+        assert_eq!(iter.next(), Some(Datum::Null));
+    }
+
+    #[mz_ore::test]
+    fn test_update_unwrapped() {
+        let desc = test_desc();
+        let msg = br#"{"before":{"id":1,"name":"Alice"},"after":{"id":1,"name":"Bob"},"op":"u"}"#;
+        let row = decode_debezium_json(msg, &desc, false).unwrap().unwrap();
+        let mut iter = row.iter();
+        let before_list: Vec<_> = iter.next().unwrap().unwrap_list().iter().collect();
+        assert_eq!(before_list[1], Datum::String("Alice"));
+        let after_list: Vec<_> = iter.next().unwrap().unwrap_list().iter().collect();
+        assert_eq!(after_list[1], Datum::String("Bob"));
+    }
+
+    #[mz_ore::test]
+    fn test_snapshot_op() {
+        let desc = test_desc();
+        let msg = br#"{"before":null,"after":{"id":1,"name":"snap"},"op":"r"}"#;
+        let row = decode_debezium_json(msg, &desc, false).unwrap().unwrap();
+        let mut iter = row.iter();
+        assert_eq!(iter.next(), Some(Datum::Null));
+        let after_list: Vec<_> = iter.next().unwrap().unwrap_list().iter().collect();
+        assert_eq!(after_list[1], Datum::String("snap"));
+    }
+
+    #[mz_ore::test]
+    fn test_wrapped_form() {
+        let desc = test_desc();
+        let msg = br#"{"schema":{},"payload":{"before":null,"after":{"id":1,"name":"wrapped"},"op":"c"}}"#;
+        let row = decode_debezium_json(msg, &desc, false).unwrap().unwrap();
+        let mut iter = row.iter();
+        assert_eq!(iter.next(), Some(Datum::Null));
+        let after_list: Vec<_> = iter.next().unwrap().unwrap_list().iter().collect();
+        assert_eq!(after_list[1], Datum::String("wrapped"));
+    }
+
+    #[mz_ore::test]
+    fn test_unsupported_op() {
+        let desc = test_desc();
+        let msg = br#"{"before":null,"after":{"id":1,"name":"x"},"op":"t"}"#;
+        let err = decode_debezium_json(msg, &desc, false).unwrap_err();
+        assert!(matches!(err, DebeziumJsonError::UnsupportedOp(_)));
+    }
+
+    #[mz_ore::test]
+    fn test_missing_op() {
+        let desc = test_desc();
+        let msg = br#"{"before":null,"after":{"id":1,"name":"x"}}"#;
+        let err = decode_debezium_json(msg, &desc, false).unwrap_err();
+        assert!(matches!(err, DebeziumJsonError::MissingField("op")));
+    }
+
+    #[mz_ore::test]
+    fn test_both_null() {
+        let desc = test_desc();
+        let msg = br#"{"before":null,"after":null,"op":"c"}"#;
+        let err = decode_debezium_json(msg, &desc, false).unwrap_err();
+        assert!(matches!(err, DebeziumJsonError::BothNull));
+    }
+
+    #[mz_ore::test]
+    fn test_invalid_json() {
+        let desc = test_desc();
+        let err = decode_debezium_json(b"not json", &desc, false).unwrap_err();
+        assert!(matches!(err, DebeziumJsonError::InvalidJson(_)));
+    }
+
+    #[mz_ore::test]
+    fn test_nullable_column_null() {
+        let desc = test_desc();
+        let msg = br#"{"before":null,"after":{"id":1,"name":null},"op":"c"}"#;
+        let row = decode_debezium_json(msg, &desc, false).unwrap().unwrap();
+        let after_list: Vec<_> = row.iter().nth(1).unwrap().unwrap_list().iter().collect();
+        assert_eq!(after_list[0], Datum::Int32(1));
+        assert_eq!(after_list[1], Datum::Null);
+    }
+
+    #[mz_ore::test]
+    fn test_type_mismatch() {
+        let desc = test_desc();
+        // "id" expects int32 but gets a string
+        let msg = br#"{"before":null,"after":{"id":"not_a_number","name":"x"},"op":"c"}"#;
+        let err = decode_debezium_json(msg, &desc, false).unwrap_err();
+        assert!(matches!(err, DebeziumJsonError::TypeMismatch { .. }));
+    }
+
+    #[mz_ore::test]
+    fn test_typed_json_key_decode() {
+        let desc = RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int32.nullable(false))
+            .finish();
+        let row = decode_json_typed_row(br#"{"id":42}"#, &desc)
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.iter().next(), Some(Datum::Int32(42)));
+    }
+
+    #[mz_ore::test]
+    fn test_typed_json_key_empty() {
+        let desc = RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int32.nullable(false))
+            .finish();
+        let result = decode_json_typed_row(b"", &desc).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[mz_ore::test]
+    fn test_missing_before_field() {
+        // When "before" key is entirely absent (not null), treat as null.
+        // This is common for insert-only sources like TiCDC.
+        let desc = test_desc();
+        let msg = br#"{"after":{"id":1,"name":"ok"},"op":"c"}"#;
+        let row = decode_debezium_json(msg, &desc, false).unwrap().unwrap();
+        let mut iter = row.iter();
+        assert_eq!(iter.next(), Some(Datum::Null));
+        let after_list: Vec<_> = iter.next().unwrap().unwrap_list().iter().collect();
+        assert_eq!(after_list[0], Datum::Int32(1));
+    }
+
+    #[mz_ore::test]
+    fn test_composite_key_decode() {
+        // Composite primary keys produce a multi-column typed JSON key.
+        let desc = RelationDesc::builder()
+            .with_column("org_id", SqlScalarType::Int32.nullable(false))
+            .with_column("user_id", SqlScalarType::Int64.nullable(false))
+            .finish();
+        let row = decode_json_typed_row(br#"{"org_id":10,"user_id":200}"#, &desc)
+            .unwrap()
+            .unwrap();
+        let datums: Vec<_> = row.iter().collect();
+        assert_eq!(datums[0], Datum::Int32(10));
+        assert_eq!(datums[1], Datum::Int64(200));
+    }
+
+    #[mz_ore::test]
+    fn test_boolean_types() {
+        let desc = RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int32.nullable(false))
+            .with_column("flag", SqlScalarType::Bool.nullable(false))
+            .finish();
+        let msg = br#"{"before":null,"after":{"id":1,"flag":true},"op":"c"}"#;
+        let row = decode_debezium_json(msg, &desc, false).unwrap().unwrap();
+        let after_list: Vec<_> = row.iter().nth(1).unwrap().unwrap_list().iter().collect();
+        assert_eq!(after_list[1], Datum::True);
+    }
+
+    #[mz_ore::test]
+    fn test_non_nullable_null_errors() {
+        // A NOT NULL column receiving null should error.
+        let desc = RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int32.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .finish();
+        let msg = br#"{"before":null,"after":{"id":1,"name":null},"op":"c"}"#;
+        let err = decode_debezium_json(msg, &desc, false).unwrap_err();
+        assert!(matches!(err, DebeziumJsonError::TypeMismatch { .. }));
+    }
+
+    #[mz_ore::test]
+    fn test_extra_fields_ignored() {
+        let desc = test_desc();
+        // Extra metadata fields (source, ts_ms) in the envelope should not cause errors
+        let msg = br#"{"before":null,"after":{"id":1,"name":"ok"},"op":"c","ts_ms":123,"source":{"db":"test"}}"#;
+        let row = decode_debezium_json(msg, &desc, false).unwrap().unwrap();
+        let after_list: Vec<_> = row.iter().nth(1).unwrap().unwrap_list().iter().collect();
+        assert_eq!(after_list[0], Datum::Int32(1));
+        assert_eq!(after_list[1], Datum::String("ok"));
+    }
+
+    #[mz_ore::test]
+    fn test_include_metadata() {
+        let desc = test_desc();
+        let msg = br#"{"before":null,"after":{"id":1,"name":"hello"},"op":"c","ts_ms":1234567890,"source":{"connector":"TiCDC","db":"mydb","commit_ts":445048562585600000},"transaction":{"id":"txn-001"}}"#;
+        let row = decode_debezium_json(msg, &desc, true).unwrap().unwrap();
+
+        // Row should have 3 columns: before, after, metadata
+        let datums: Vec<_> = row.iter().collect();
+        assert_eq!(datums.len(), 3);
+
+        // before is null
+        assert_eq!(datums[0], Datum::Null);
+
+        // after has the data
+        let after_list: Vec<_> = datums[1].unwrap_list().iter().collect();
+        assert_eq!(after_list[0], Datum::Int32(1));
+        assert_eq!(after_list[1], Datum::String("hello"));
+
+        // metadata is a jsonb object containing op, ts_ms, source, transaction (but not before/after)
+        let meta_jsonb = datums[2];
+        assert!(!meta_jsonb.is_null());
+        let meta_json = mz_repr::adt::jsonb::JsonbRef::from_datum(meta_jsonb).to_serde_json();
+        assert_eq!(meta_json["op"], "c");
+        assert_eq!(meta_json["ts_ms"], 1234567890);
+        assert_eq!(meta_json["source"]["connector"], "TiCDC");
+        assert_eq!(meta_json["source"]["commit_ts"], 445048562585600000u64);
+        assert_eq!(meta_json["transaction"]["id"], "txn-001");
+        // before and after should NOT be in the metadata
+        assert!(meta_json.get("before").is_none());
+        assert!(meta_json.get("after").is_none());
+    }
+
+    #[mz_ore::test]
+    fn test_include_metadata_without_flag_has_two_columns() {
+        let desc = test_desc();
+        let msg = br#"{"before":null,"after":{"id":1,"name":"ok"},"op":"c","ts_ms":123}"#;
+        let row = decode_debezium_json(msg, &desc, false).unwrap().unwrap();
+        // Without include_metadata, Row should have exactly 2 columns
+        let datums: Vec<_> = row.iter().collect();
+        assert_eq!(datums.len(), 2);
     }
 }

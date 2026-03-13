@@ -1271,8 +1271,9 @@ fn plan_kafka_source_connection(
                     use_bytes: *use_bytes,
                 },
             )),
-            SourceIncludeMetadata::Key { .. } => {
-                // handled below
+            SourceIncludeMetadata::Key { .. } | SourceIncludeMetadata::DebeziumMetadata { .. } => {
+                // Key is handled below.
+                // DebeziumMetadata is handled in the decoder, not as Kafka metadata.
                 None
             }
         })
@@ -1305,25 +1306,55 @@ fn apply_source_envelope_encoding(
     ),
     PlanError,
 > {
-    let encoding = match format {
+    let mut encoding = match format {
         Some(format) => Some(get_encoding(scx, format, envelope)?),
         None => None,
     };
 
-    let (key_desc, value_desc) = match &encoding {
+    // For JSON + Debezium, the user-declared table columns provide the schema
+    // for decoding the Debezium `before`/`after` JSON payloads. Save them
+    // before the encoding replaces value_desc.
+    let is_json_debezium = matches!(envelope, ast::SourceEnvelope::Debezium)
+        && matches!(
+            encoding.as_ref().map(|e| &e.value),
+            Some(DataEncoding::Json)
+        );
+    let dbz_json_table_desc = if is_json_debezium {
+        // Debezium JSON requires explicit user-declared columns to know how to decode
+        // the before/after JSON objects. If the value_desc is just the source default
+        // (e.g. a single bytes column from Kafka), reject with a clear error.
+        let cols: Vec<_> = value_desc.iter().collect();
+        if cols.len() == 1
+            && matches!(
+                cols[0].1.scalar_type,
+                SqlScalarType::Bytes | SqlScalarType::Jsonb
+            )
+        {
+            sql_bail!("ENVELOPE DEBEZIUM with FORMAT JSON requires explicit column definitions");
+        }
+        Some(value_desc.clone())
+    } else {
+        None
+    };
+
+    let (mut key_desc, mut value_desc) = match &encoding {
         Some(encoding) => {
-            // If we are applying an encoding we need to ensure that the incoming value_desc is a
-            // single column of type bytes.
-            match value_desc.typ().columns() {
-                [typ] => match typ.scalar_type {
-                    SqlScalarType::Bytes => {}
+            // For JSON + Debezium, the incoming value_desc is the user-declared
+            // table schema (not raw bytes). Skip the bytes check.
+            if !is_json_debezium {
+                // If we are applying an encoding we need to ensure that the incoming value_desc is a
+                // single column of type bytes.
+                match value_desc.typ().columns() {
+                    [typ] => match typ.scalar_type {
+                        SqlScalarType::Bytes => {}
+                        _ => sql_bail!(
+                            "The schema produced by the source is incompatible with format decoding"
+                        ),
+                    },
                     _ => sql_bail!(
                         "The schema produced by the source is incompatible with format decoding"
                     ),
-                },
-                _ => sql_bail!(
-                    "The schema produced by the source is incompatible with format decoding"
-                ),
+                }
             }
 
             let (key_desc, value_desc) = encoding.desc()?;
@@ -1397,18 +1428,95 @@ fn apply_source_envelope_encoding(
         ast::SourceEnvelope::None => UnplannedSourceEnvelope::None(key_envelope),
         ast::SourceEnvelope::Debezium => {
             //TODO check that key envelope is not set
-            let after_idx = match typecheck_debezium(&value_desc) {
-                Ok((_before_idx, after_idx)) => Ok(after_idx),
-                Err(type_err) => match encoding.as_ref().map(|e| &e.value) {
-                    Some(DataEncoding::Avro(_)) => Err(type_err),
-                    _ => Err(sql_err!(
-                        "ENVELOPE DEBEZIUM requires that VALUE FORMAT is set to AVRO"
-                    )),
-                },
-            }?;
+            if let Some(table_desc) = dbz_json_table_desc {
+                // JSON + Debezium: build synthetic value_desc from user-declared columns
+                // and update encoding to carry the table schema for the decoder.
+                let fields: Vec<(ColumnName, SqlColumnType)> = table_desc
+                    .iter()
+                    .map(|(name, typ)| (name.clone(), typ.clone()))
+                    .collect();
+                let record_type = SqlScalarType::Record {
+                    fields: fields.into(),
+                    custom_id: None,
+                };
+                // Check if INCLUDE DEBEZIUM METADATA was requested.
+                let dbz_meta_alias: Option<String> =
+                    include_metadata.iter().find_map(|m| match m {
+                        SourceIncludeMetadata::DebeziumMetadata { alias } => Some(
+                            alias
+                                .as_ref()
+                                .map_or("debezium_metadata".to_owned(), |a| a.to_string()),
+                        ),
+                        _ => None,
+                    });
+                let dbz_include_metadata = dbz_meta_alias.is_some();
 
-            UnplannedSourceEnvelope::Upsert {
-                style: UpsertStyle::Debezium { after_idx },
+                let mut vd_builder = RelationDesc::builder()
+                    .with_column("before", record_type.clone().nullable(true))
+                    .with_column("after", record_type.nullable(true));
+                if let Some(ref col_name) = dbz_meta_alias {
+                    vd_builder = vd_builder
+                        .with_column(col_name.as_str(), SqlScalarType::Jsonb.nullable(true));
+                }
+                value_desc = vd_builder.finish();
+                let after_idx = 1; // "after" is at index 1 in [before, after, ...]
+
+                // Build key_desc from user-declared primary key columns so
+                // match_key_indices can find key columns in the output.
+                let pk_indices = table_desc.typ().keys.first().cloned();
+                if let Some(pk) = &pk_indices {
+                    let key_cols: Vec<(ColumnName, SqlColumnType)> = pk
+                        .iter()
+                        .map(|&i| {
+                            let (name, typ) = table_desc.iter().nth(i).unwrap();
+                            (name.clone(), typ.clone())
+                        })
+                        .collect();
+                    key_desc = Some(RelationDesc::from_names_and_types(key_cols));
+                }
+
+                // Update the value encoding to carry the table schema for the decoder.
+                // Also update key encoding to TypedJson so upsert key hashes match.
+                if let Some(ref mut enc) = encoding {
+                    enc.value = DataEncoding::DebeziumJson {
+                        desc: table_desc,
+                        include_metadata: dbz_include_metadata,
+                    };
+                    if let Some(ref kd) = key_desc {
+                        enc.key = Some(DataEncoding::TypedJson(kd.clone()));
+                    }
+                }
+
+                let debezium_metadata_idx = if dbz_include_metadata {
+                    Some(2) // [before, after, metadata] — metadata is at index 2
+                } else {
+                    None
+                };
+
+                UnplannedSourceEnvelope::Upsert {
+                    style: UpsertStyle::Debezium {
+                        after_idx,
+                        debezium_metadata_idx,
+                    },
+                }
+            } else {
+                // Avro Debezium path (unchanged)
+                let after_idx = match typecheck_debezium(&value_desc) {
+                    Ok((_before_idx, after_idx)) => Ok(after_idx),
+                    Err(type_err) => match encoding.as_ref().map(|e| &e.value) {
+                        Some(DataEncoding::Avro(_)) => Err(type_err),
+                        _ => Err(sql_err!(
+                            "ENVELOPE DEBEZIUM requires that VALUE FORMAT is set to AVRO or JSON"
+                        )),
+                    },
+                }?;
+
+                UnplannedSourceEnvelope::Upsert {
+                    style: UpsertStyle::Debezium {
+                        after_idx,
+                        debezium_metadata_idx: None,
+                    },
+                }
             }
         }
         ast::SourceEnvelope::Upsert {
@@ -1897,8 +2005,10 @@ pub fn plan_create_table_from_source(
                             use_bytes: *use_bytes,
                         },
                     )),
-                    SourceIncludeMetadata::Key { .. } => {
-                        // handled below
+                    SourceIncludeMetadata::Key { .. }
+                    | SourceIncludeMetadata::DebeziumMetadata { .. } => {
+                        // Key is handled below.
+                        // DebeziumMetadata is handled in the decoder, not as Kafka metadata.
                         None
                     }
                 })
@@ -2531,6 +2641,8 @@ fn get_unnamed_key_envelope(
         Some(
             DataEncoding::Avro(_)
             | DataEncoding::Csv(_)
+            | DataEncoding::DebeziumJson { .. }
+            | DataEncoding::TypedJson(_)
             | DataEncoding::Protobuf(_)
             | DataEncoding::Regex { .. },
         ) => true,

@@ -23,7 +23,7 @@ use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
-use mz_repr::{Datum, Diff, Row};
+use mz_repr::{Datum, Diff, RelationDesc, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{CsrConnectError, DecodeError, DecodeErrorKind};
 use mz_storage_types::sources::encoding::{AvroEncoding, DataEncoding, RegexEncoding};
@@ -211,6 +211,15 @@ pub(crate) enum PreDelimitedFormat {
     Bytes,
     Text,
     Json,
+    /// Debezium JSON: parses Debezium envelope and decodes before/after records
+    /// against the declared table schema.
+    DebeziumJson {
+        desc: RelationDesc,
+        include_metadata: bool,
+    },
+    /// Schema-aware JSON: decodes a flat JSON object into typed columns matching the schema.
+    /// Used for keys in Debezium JSON sources.
+    TypedJson(RelationDesc),
     Regex(Regex, Row),
     Protobuf(ProtobufDecoderState),
 }
@@ -226,6 +235,15 @@ impl PreDelimitedFormat {
                     )
                 })?;
                 Ok(Some(j.into_row()))
+            }
+            PreDelimitedFormat::DebeziumJson {
+                desc,
+                include_metadata,
+            } => mz_interchange::json::decode_debezium_json(bytes, desc, *include_metadata)
+                .map_err(|e| DecodeErrorKind::Bytes(e.to_string().into())),
+            PreDelimitedFormat::TypedJson(desc) => {
+                mz_interchange::json::decode_json_typed_row(bytes, desc)
+                    .map_err(|e| DecodeErrorKind::Bytes(e.to_string().into()))
             }
             PreDelimitedFormat::Text => {
                 let s = std::str::from_utf8(bytes)
@@ -377,6 +395,8 @@ async fn get_decoder(
         DataEncoding::Text
         | DataEncoding::Bytes
         | DataEncoding::Json
+        | DataEncoding::DebeziumJson { .. }
+        | DataEncoding::TypedJson(_)
         | DataEncoding::Protobuf(_)
         | DataEncoding::Regex(_) => {
             let after_delimiting = match encoding {
@@ -391,6 +411,14 @@ async fn get_decoder(
                 }
                 DataEncoding::Bytes => PreDelimitedFormat::Bytes,
                 DataEncoding::Json => PreDelimitedFormat::Json,
+                DataEncoding::DebeziumJson {
+                    desc,
+                    include_metadata,
+                } => PreDelimitedFormat::DebeziumJson {
+                    desc,
+                    include_metadata,
+                },
+                DataEncoding::TypedJson(desc) => PreDelimitedFormat::TypedJson(desc),
                 DataEncoding::Text => PreDelimitedFormat::Text,
                 _ => unreachable!(),
             };
