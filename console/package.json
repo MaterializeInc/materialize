@@ -29,7 +29,7 @@
     "@chakra-ui/react": "^2.8.2",
     "@chakra-ui/toast": "^7.0.2",
     "@codemirror-toolkit/extensions": "^0.6.3",
-    "@codemirror-toolkit/react": "^0.6.0",
+    "@codemirror-toolkit/react": "^0.7.1",
     "@codemirror/commands": "^6.7.1",
     "@codemirror/lang-json": "^6.0.1",
     "@codemirror/lang-sql": "^6.8.0",
