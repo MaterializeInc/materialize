@@ -53,3 +53,46 @@ $ kafka-ingest format=avro topic=avro-decimal-fixed-large schema=${schema}
 
 > SELECT * FROM avro_decimal_fixed_large_tbl
 12345.67
+
+# Regression test: fixed-decimal encoding must left-pad unscaled bytes to the
+# exact fixed size. Without padding, the encoder writes fewer bytes than
+# fixed_size, causing UnexpectedEof on decode.
+
+$ set padding-schema={
+    "name": "row",
+    "type": "record",
+    "fields": [
+      {
+        "name": "a",
+        "type": {
+          "type": "fixed",
+          "name": "dec4",
+          "size": 4,
+          "logicalType": "decimal",
+          "precision": 9,
+          "scale": 2
+        }
+      }
+    ]
+  }
+
+$ kafka-create-topic topic=avro-decimal-fixed-padding
+
+# Value 2.56: unscaled=256=0x0100, only 2 bytes.
+# Encoder must left-pad to [0, 0, 1, 0] for the 4-byte fixed.
+$ kafka-ingest format=avro topic=avro-decimal-fixed-padding schema=${padding-schema}
+{"a": [1, 0]}
+
+> BEGIN
+
+> CREATE SOURCE avro_decimal_fixed_padding
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-decimal-fixed-padding-${testdrive.seed}')
+
+> CREATE TABLE avro_decimal_fixed_padding_tbl FROM SOURCE avro_decimal_fixed_padding (REFERENCE "testdrive-avro-decimal-fixed-padding-${testdrive.seed}")
+  FORMAT AVRO USING SCHEMA '${padding-schema}'
+
+> COMMIT
+
+> SELECT * FROM avro_decimal_fixed_padding_tbl
+2.56
