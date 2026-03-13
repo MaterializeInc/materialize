@@ -121,12 +121,14 @@ impl Coordinator {
         let id_ts = self.get_catalog_write_ts().await;
         let (item_id, global_id) = self.catalog().allocate_user_id(id_ts).await?;
 
+        let caching_secrets_reader = self.caching_secrets_reader.clone();
         let secrets_controller = Arc::clone(&self.secrets_controller);
         let payload = self.extract_secret(session, &mut plan.secret.secret_as)?;
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn(
             || "create secret ensure",
             async move {
+                caching_secrets_reader.invalidate(item_id);
                 secrets_controller.ensure(item_id, &payload).await?;
                 let stage = SecretStage::CreateFinish(CreateSecretFinish {
                     validity,
@@ -233,6 +235,8 @@ impl Coordinator {
                         "Dropping newly created secrets has encountered an error: {}",
                         e
                     );
+                } else {
+                    self.caching_secrets_reader.invalidate(item_id);
                 }
                 Err(err)
             }
@@ -268,12 +272,14 @@ impl Coordinator {
         plan: plan::AlterSecretPlan,
     ) -> Result<StageResult<Box<SecretStage>>, AdapterError> {
         let plan::AlterSecretPlan { id, mut secret_as } = plan;
+        let caching_secrets_reader = self.caching_secrets_reader.clone();
         let secrets_controller = Arc::clone(&self.secrets_controller);
         let payload = self.extract_secret(session, &mut secret_as)?;
         let span = Span::current();
         Ok(StageResult::HandleRetire(mz_ore::task::spawn(
             || "alter secret ensure",
             async move {
+                caching_secrets_reader.invalidate(id);
                 secrets_controller.ensure(id, &payload).await?;
                 Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
             }
@@ -305,6 +311,7 @@ impl Coordinator {
         &self,
         RotateKeysSecretEnsure { validity, id }: RotateKeysSecretEnsure,
     ) -> Result<StageResult<Box<SecretStage>>, AdapterError> {
+        let caching_secrets_reader = self.caching_secrets_reader.clone();
         let secrets_controller = Arc::clone(&self.secrets_controller);
         let entry = self.catalog().get_entry(&id).clone();
         let span = Span::current();
@@ -314,6 +321,7 @@ impl Coordinator {
                 let secret = secrets_controller.reader().read(id).await?;
                 let previous_key_set = SshKeyPairSet::from_bytes(&secret)?;
                 let new_key_set = previous_key_set.rotate()?;
+                caching_secrets_reader.invalidate(id);
                 secrets_controller
                     .ensure(id, &new_key_set.to_bytes())
                     .await?;
