@@ -30,7 +30,7 @@ sha2 = "0.10.9"
 socket2 = "0.6.0"
 thiserror = "2.0.18"
 tonic = { version = "0.14.2", features = ["gzip"] }
-tonic-prost = "0.14.2"
+tonic-prost = "0.14.5"
 tokio = { version = "1.49.0", features = ["rt"] }
 tokio-postgres = { version = "0.7.15" }
 tokio-stream = { version = "0.1.18", features = ["net"] }
@@ -47,7 +47,7 @@ insta = "1.45"
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build = "0.14.3"
 reqwest = { version = "0.12.28", features = ["blocking", "native-tls-vendored"] }
-tonic-prost-build = "0.14.2"
+tonic-prost-build = "0.14.5"
 
 [features]
 default = ["mz-build-tools/default", "workspace-hack"]
