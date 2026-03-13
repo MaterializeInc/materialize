@@ -1,0 +1,4949 @@
+[
+  {
+    "type": "Array",
+    "functions": [
+      {
+        "unique_name": "array_array_concat",
+        "category": "Array",
+        "signature": "any || any -> any",
+        "description": "Concatenates two arrays. Errors if the array dimensions are incompatible.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "array_contains",
+        "category": "Array",
+        "signature": "any array_contains anyarray -> boolean",
+        "description": "Returns true if an array contains an element.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "array_contains_array",
+        "category": "Array",
+        "signature": "anyarray @> anyarray -> boolean",
+        "description": "Returns true if an array `a` contains another array `b`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "array_contains_array_rev",
+        "category": "Array",
+        "signature": "anyarray <@ anyarray -> boolean",
+        "description": "Returns true if an array `b` contains another array `a`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "array_length",
+        "category": "Array",
+        "signature": "array_length(a anyarray, b int8) -> int4?",
+        "description": "Returns the length of the specified dimension of the array `a`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "array_lower",
+        "category": "Array",
+        "signature": "array_lower(a anyarray, i int8) -> int4?",
+        "description": "Returns the lower bound of the specified dimension of the array `a`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "array_remove",
+        "category": "Array",
+        "signature": "array_remove(arr anyarray, b any) -> any",
+        "description": "Removes all elements equal to `b` from one-dimensional array `arr`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      }
+    ]
+  },
+  {
+    "type": "Boolean",
+    "functions": [
+      {
+        "unique_name": "eq",
+        "category": "Boolean",
+        "signature": "any = any -> boolean",
+        "description": "Returns true if two values are equal.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "gt",
+        "category": "Boolean",
+        "signature": "any > any -> boolean",
+        "description": "Returns true if the first value is greater than the second value.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "gte",
+        "category": "Boolean",
+        "signature": "any >= any -> boolean",
+        "description": "Returns true if the first value is greater than or equal to the second value.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "lt",
+        "category": "Boolean",
+        "signature": "any < any -> boolean",
+        "description": "Returns true if the first value is less than the second value.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "lte",
+        "category": "Boolean",
+        "signature": "any <= any -> boolean",
+        "description": "Returns true if the first value is less than or equal to the second value.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "not_eq",
+        "category": "Boolean",
+        "signature": "any != any -> boolean",
+        "description": "Returns true if two values are not equal.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      }
+    ]
+  },
+  {
+    "type": "Cast",
+    "functions": [
+      {
+        "unique_name": "arraytoarray",
+        "category": "Cast",
+        "signature": "",
+        "description": "Casts an array of one type to an array of another type. Does so by casting\neach element of the first array to the desired inner type and collecting\nthe results into a new array.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "arraytojsonb",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "arraytolist",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "arraytostr",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bigint_to_numeric",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "date_to_timestamp",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "date_to_timestamp_with_timezone",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "double_to_numeric",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "int2vectortoarray",
+        "category": "Cast",
+        "signature": "int2vectortoarray(a: any)",
+        "description": "Casts the smallint vector `a` to an array.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "int2vectortostr",
+        "category": "Cast",
+        "signature": "int2vectortostr(a: any)",
+        "description": "Casts the smallint vector `a` to its string representation.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "integer_to_numeric",
+        "category": "Cast",
+        "signature": "CAST(a: int32 AS numeric) -> numeric",
+        "description": "Returns the number of elements in `m`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "jsonb_to_numeric",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "list1tolist2",
+        "category": "Cast",
+        "signature": "",
+        "description": "Casts between two list types by casting each element of `a` (\"list1\") using\n`cast_expr` and collecting the results into a new list (\"list2\").",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "listtojsonb",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "listtostr",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "maptostr",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "rangetostr",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "real_to_numeric",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "record1torecord2",
+        "category": "Cast",
+        "signature": "",
+        "description": "Casts between two record types by casting each element of `a` (\"record1\") using\n`cast_expr` and collecting the results into a new record (\"record2\").",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "recordtostr",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "smallint_to_numeric",
+        "category": "Cast",
+        "signature": "smallint_to_numeric(x: int16)",
+        "description": "Casts the smallint `x` to a numeric value.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "strtoarray",
+        "category": "Cast",
+        "signature": "CAST(s: str AS arrayany) -> arrayany",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "strtoint2vector",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "strtolist",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "strtomap",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "strtorange",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "text_to_char",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "text_to_numeric",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "text_to_timestamp",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "text_to_timestamp_with_time_zone",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "text_to_varchar",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "timestamp_to_timestamp_with_time_zone",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "timestamp_with_time_zone_to_timestamp",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "uint2_to_numeric",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "uint4_to_numeric",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "uint8_to_numeric",
+        "category": "Cast",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      }
+    ]
+  },
+  {
+    "type": "Char",
+    "functions": [
+      {
+        "unique_name": "padchar",
+        "category": "Char",
+        "signature": "",
+        "description": "All Char data is stored in Datum::String with its blank padding removed\n(i.e. trimmed), so this function provides a means of restoring any\nremoved padding.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      }
+    ]
+  },
+  {
+    "type": "Date/Time",
+    "functions": [
+      {
+        "unique_name": "add_date_interval",
+        "category": "Date/Time",
+        "signature": "date + interval -> timestamp",
+        "description": "Adds an interval to a date. Errors if the resulting timestamp is out of range.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "add_date_time",
+        "category": "Date/Time",
+        "signature": "date + time -> timestamp",
+        "description": "Adds a time to a date. Errors if the resulting timestamp is out of range.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "add_interval",
+        "category": "Date/Time",
+        "signature": "interval + interval -> interval",
+        "description": "Adds two interval values. Errors if the result is out of range.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "add_time_interval",
+        "category": "Date/Time",
+        "signature": "time + interval -> time",
+        "description": "Adds an interval to a time. Wraps on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "add_timestamp_interval",
+        "category": "Date/Time",
+        "signature": "timestamp + interval -> timestamp",
+        "description": "Adds an interval to a timestamp. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "add_timestamp_tz_interval",
+        "category": "Date/Time",
+        "signature": "timestamptz + interval -> timestamptz",
+        "description": "Adds an interval to a timestamptz. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "age_timestamp",
+        "category": "Date/Time",
+        "signature": "age(a timestamp, b timestamp) -> interval",
+        "description": "Subtracts two timestamps and returns an interval. Errors if the result is out of range.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "age_timestamp_tz",
+        "category": "Date/Time",
+        "signature": "age(a timestamptz, b timestamptz) -> interval",
+        "description": "Subtracts two timestamptz values and returns an interval. Errors if the result is out of range.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "date_bin_timestamp",
+        "category": "Date/Time",
+        "signature": "bin_unix_epoch_timestamp(stride interval, source timestamp) -> timestamp",
+        "description": "Bins a timestamp to the start of the specified time `stride` relative to the Unix epoch. Errors if stride contains months/years or is non-positive, or if the result is out of range.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "date_bin_timestamp_tz",
+        "category": "Date/Time",
+        "signature": "bin_unix_epoch_timestamptz(stride interval, source timestamptz) -> timestamptz",
+        "description": "Bins a timestamptz to the start of the specified time `stride` relative to the Unix epoch. Errors if stride contains months/years or is non-positive, or if the result is out of range.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "date_part_interval_f64",
+        "category": "Date/Time",
+        "signature": "date_partiv(units text, b interval) -> float8",
+        "description": "Extracts a subfield from an interval value as a float8. Errors if the units are unknown.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "date_part_interval_numeric",
+        "category": "Date/Time",
+        "signature": "extractiv(units text, b interval) -> numeric",
+        "description": "Extracts a subfield from an interval value as a numeric. Errors if the units are unknown.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "date_part_time_f64",
+        "category": "Date/Time",
+        "signature": "date_partt(units text, b time) -> float8",
+        "description": "Extracts a subfield from a time value as a float8. Errors if the units are unknown.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "date_part_time_numeric",
+        "category": "Date/Time",
+        "signature": "extractt(units text, b time) -> numeric",
+        "description": "Extracts a subfield from a time value as a numeric. Errors if the units are unknown.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "date_part_timestamp_timestamp_f64",
+        "category": "Date/Time",
+        "signature": "date_partts(units text, ts timestamp) -> float8",
+        "description": "Extracts a subfield from a timestamp value as a float8. Errors if the units are unknown.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "date_part_timestamp_timestamp_numeric",
+        "category": "Date/Time",
+        "signature": "extractts(units text, ts timestamp) -> numeric",
+        "description": "Extracts a subfield from a timestamp value as a numeric. Errors if the units are unknown.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "date_part_timestamp_timestamp_tz_f64",
+        "category": "Date/Time",
+        "signature": "date_parttstz(units text, ts timestamptz) -> float8",
+        "description": "Extracts a subfield from a timestamptz value as a float8. Errors if the units are unknown.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "date_part_timestamp_timestamp_tz_numeric",
+        "category": "Date/Time",
+        "signature": "extracttstz(units text, ts timestamptz) -> numeric",
+        "description": "Extracts a subfield from a timestamptz value as a numeric. Errors if the units are unknown.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "date_trunc_interval",
+        "category": "Date/Time",
+        "signature": "date_trunciv(units text, interval interval) -> interval",
+        "description": "Truncates an interval to the specified unit. Errors if the units are unknown.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "date_trunc_units_timestamp",
+        "category": "Date/Time",
+        "signature": "date_truncts(units text, ts timestamp) -> timestamp",
+        "description": "Truncates a timestamp to the specified unit. Errors if the units are unknown or unsupported.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "date_trunc_units_timestamp_tz",
+        "category": "Date/Time",
+        "signature": "date_trunctstz(units text, ts timestamptz) -> timestamptz",
+        "description": "Truncates a timestamptz to the specified unit. Errors if the units are unknown or unsupported.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "div_interval",
+        "category": "Date/Time",
+        "signature": "interval / float8 -> interval",
+        "description": "Divides an interval by a float8 value. Errors on division by zero or if the result is out of range.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "extract_date_units",
+        "category": "Date/Time",
+        "signature": "extractd(units text, b date) -> numeric",
+        "description": "Extracts a subfield from a date value as a numeric. Errors if the units are unknown.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mul_interval",
+        "category": "Date/Time",
+        "signature": "interval * float8 -> interval",
+        "description": "Multiplies an interval by a float8 value. Errors if the result is out of range.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sub_date",
+        "category": "Date/Time",
+        "signature": "date - date -> int4",
+        "description": "Subtracts two date values.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sub_date_interval",
+        "category": "Date/Time",
+        "signature": "date - interval -> timestamp",
+        "description": "Subtracts an interval from a date. Errors if the result is out of range.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sub_interval",
+        "category": "Date/Time",
+        "signature": "interval - interval -> interval",
+        "description": "Subtracts two interval values. Errors if the result is out of range.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sub_time",
+        "category": "Date/Time",
+        "signature": "time - time -> interval",
+        "description": "Subtracts two time values and returns an interval. Errors if the result is out of range.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sub_time_interval",
+        "category": "Date/Time",
+        "signature": "time - interval -> time",
+        "description": "Subtracts an interval from a time. Wraps on underflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sub_timestamp",
+        "category": "Date/Time",
+        "signature": "timestamp - timestamp -> interval",
+        "description": "Subtracts two timestamp values. Errors if the result is out of range.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sub_timestamp_tz",
+        "category": "Date/Time",
+        "signature": "timestamptz - timestamptz -> interval",
+        "description": "Subtracts two timestamptz values. Errors if the result is out of range.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "timezone_offset",
+        "category": "Date/Time",
+        "signature": "timezone_offset(tz_str text, b timestamptz) -> any",
+        "description": "Returns the offset of a timezone from UTC for a given timestamp. Errors if the timezone ID is invalid.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "to_char_timestamp_format",
+        "category": "Date/Time",
+        "signature": "tocharts(ts timestamp, format text) -> text",
+        "description": "Converts a timestamp into a string using the specified format.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "to_char_timestamp_tz_format",
+        "category": "Date/Time",
+        "signature": "tochartstz(ts timestamptz, format text) -> text",
+        "description": "Converts a timestamptz into a string using the specified format.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      }
+    ]
+  },
+  {
+    "type": "Extract",
+    "functions": [
+      {
+        "unique_name": "extract_date",
+        "category": "Extract",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "url": "/sql/functions/extract/",
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      }
+    ]
+  },
+  {
+    "type": "Hash",
+    "functions": [
+      {
+        "unique_name": "crc32_bytes",
+        "category": "Hash",
+        "signature": "crc32_bytes(a bytea) -> uint4",
+        "description": "Computes the 32-bit cyclic redundancy check of the given bytea `data` using the IEEE 802.3 polynomial.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "crc32_string",
+        "category": "Hash",
+        "signature": "crc32_string(a text) -> uint4",
+        "description": "Computes the 32-bit cyclic redundancy check of the given text `data` using the IEEE 802.3 polynomial.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "kafka_murmur2_bytes",
+        "category": "Hash",
+        "signature": "kafka_murmur2_bytes(a bytea) -> int4",
+        "description": "Computes the Murmur2 hash of the given bytea `data` using the seed used by Kafka's default partitioner and with the high bit cleared.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "kafka_murmur2_string",
+        "category": "Hash",
+        "signature": "kafka_murmur2_string(a text) -> int4",
+        "description": "Computes the Murmur2 hash of the given text `data` using the seed used by Kafka's default partitioner and with the high bit cleared.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "seahash_bytes",
+        "category": "Hash",
+        "signature": "seahash_bytes(a bytea) -> uint8",
+        "description": "Computes the [SeaHash](https://docs.rs/seahash) hash of the given bytea `data`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "seahash_string",
+        "category": "Hash",
+        "signature": "seahash_string(a text) -> uint8",
+        "description": "Computes the [SeaHash](https://docs.rs/seahash) hash of the given text `data`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      }
+    ]
+  },
+  {
+    "type": "JSON",
+    "functions": [
+      {
+        "unique_name": "jsonb_concat",
+        "category": "JSON",
+        "signature": "jsonb || jsonb -> jsonb?",
+        "description": "Concatenates two JSONB values. Returns `NULL` if concatenation is not possible.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "jsonb_contains_jsonb",
+        "category": "JSON",
+        "signature": "jsonb @> jsonb -> boolean",
+        "description": "Tests if a JSONB value contains another JSONB value.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "jsonb_contains_string",
+        "category": "JSON",
+        "signature": "any ? text -> boolean",
+        "description": "Tests if a JSONB value contains a specified string.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "jsonb_delete_int64",
+        "category": "JSON",
+        "signature": "any - int8 -> any",
+        "description": "Deletes an element from a JSONB array at a specified index. Returns `NULL` if `a` is not a list.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "jsonb_delete_string",
+        "category": "JSON",
+        "signature": "any - text -> any",
+        "description": "Deletes an element from a JSONB array by value or a field from a JSONB object by key. Returns `NULL` if `a` is not a list or map.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "jsonb_get_int64",
+        "category": "JSON",
+        "signature": "jsonb -> int8 -> jsonb?",
+        "description": "Returns the JSONB element at the specified index. Returns `NULL` if the element is not found or the index is invalid.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "jsonb_get_int64_stringify",
+        "category": "JSON",
+        "signature": "jsonb ->> int8 -> text?",
+        "description": "Returns the JSONB element at the specified index as a string. Returns `NULL` if the element is not found or the index is invalid.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "jsonb_get_path",
+        "category": "JSON",
+        "signature": "jsonb #> anyarray -> jsonb?",
+        "description": "Returns the JSONB element at the specified path. Returns `NULL` if the element is not found or the path is invalid.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "jsonb_get_path_stringify",
+        "category": "JSON",
+        "signature": "jsonb #>> anyarray -> text?",
+        "description": "Returns the JSONB element at the specified path as a string. Returns `NULL` if the element is not found or the path is invalid.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "jsonb_get_string",
+        "category": "JSON",
+        "signature": "jsonb -> text -> jsonb?",
+        "description": "Returns the JSONB object field with the specified key. Returns `NULL` if the field is not found.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "jsonb_get_string_stringify",
+        "category": "JSON",
+        "signature": "jsonb ->> text -> text?",
+        "description": "Returns the JSONB object field with the specified key as a string. Returns `NULL` if the field is not found.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      }
+    ]
+  },
+  {
+    "type": "List",
+    "functions": [
+      {
+        "unique_name": "element_list_concat",
+        "category": "List",
+        "signature": "any || listany? -> any",
+        "description": "Prepends `a` to `b`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false,
+        "alias": "list_prepend"
+      },
+      {
+        "unique_name": "list_contains_list",
+        "category": "List",
+        "signature": "listany @> listany -> boolean",
+        "description": "Returns true if list `a` contains list `b`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "list_contains_list_rev",
+        "category": "List",
+        "signature": "listany <@ listany -> boolean",
+        "description": "Returns true if list `b` contains list `a`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "list_element_concat",
+        "category": "List",
+        "signature": "listany? || any -> any",
+        "description": "Appends `e` to `list`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false,
+        "alias": "list_append"
+      },
+      {
+        "unique_name": "list_length",
+        "category": "List",
+        "signature": "list_length(l: listany)",
+        "description": "Returns the number of elements in `l`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "list_length_max",
+        "category": "List",
+        "signature": "list_length_max(list anylist, layer int8) -> int4?",
+        "description": "The length of list at the n-th layer, if it exists. Returns an error if the layer is past the list's dimension, or the length does not fit in an int4.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "list_list_concat",
+        "category": "List",
+        "signature": "listany? || listany? -> listany?",
+        "description": "Concatenates `a` and `b`. Returns the other argument if either is NULL, and NULL if both\narguments are NULL.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false,
+        "alias": "list_cat"
+      }
+    ]
+  },
+  {
+    "type": "Map",
+    "functions": [
+      {
+        "unique_name": "map_build",
+        "category": "Map",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "map_contains_all_keys",
+        "category": "Map",
+        "signature": "mapany ?& anyarray -> boolean",
+        "description": "Tests if a map contains all specified keys.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "map_contains_any_keys",
+        "category": "Map",
+        "signature": "mapany ?| anyarray -> boolean",
+        "description": "Tests if a map contains any of the specified keys.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "map_contains_key",
+        "category": "Map",
+        "signature": "mapany ? text -> boolean",
+        "description": "Tests if a map contains a specified key.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "map_contains_map",
+        "category": "Map",
+        "signature": "mapany @> mapany -> boolean",
+        "description": "Tests if a map contains another map (i.e., if all key-value pairs in `b` are present in `a`).",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "map_get_value",
+        "category": "Map",
+        "signature": "mapany -> text -> any",
+        "description": "Returns the value associated with `target_key` in the map `a`. Returns `NULL` if the key is not found.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "map_length",
+        "category": "Map",
+        "signature": "map_length(m: mapany)",
+        "description": "Returns the number of elements in `m`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      }
+    ]
+  },
+  {
+    "type": "Numbers",
+    "functions": [
+      {
+        "unique_name": "add_float32",
+        "category": "Numbers",
+        "signature": "float4 + float4 -> float4",
+        "description": "Adds two float4 values. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "add_float64",
+        "category": "Numbers",
+        "signature": "float8 + float8 -> float8",
+        "description": "Adds two float8 values. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "add_int16",
+        "category": "Numbers",
+        "signature": "int2 + int2 -> int2",
+        "description": "Adds two int2 values and returns a int2 value. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "add_int32",
+        "category": "Numbers",
+        "signature": "int4 + int4 -> int4",
+        "description": "Adds two int4 values. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "add_int64",
+        "category": "Numbers",
+        "signature": "int8 + int8 -> int8",
+        "description": "Adds two int8 values. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "add_numeric",
+        "category": "Numbers",
+        "signature": "numeric + numeric -> numeric",
+        "description": "Adds two numeric values. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "add_uint16",
+        "category": "Numbers",
+        "signature": "uint2 + uint2 -> uint2",
+        "description": "Adds two uint2 values. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "add_uint32",
+        "category": "Numbers",
+        "signature": "uint4 + uint4 -> uint4",
+        "description": "Adds two uint4 values. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "add_uint64",
+        "category": "Numbers",
+        "signature": "uint8 + uint8 -> uint8",
+        "description": "Adds two uint8 values. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_and_int16",
+        "category": "Numbers",
+        "signature": "int2 & int2 -> int2",
+        "description": "Computes the bitwise AND of two int2 values.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_and_int32",
+        "category": "Numbers",
+        "signature": "int4 & int4 -> int4",
+        "description": "Computes the bitwise AND of two int4 values.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_and_int64",
+        "category": "Numbers",
+        "signature": "int8 & int8 -> int8",
+        "description": "Computes the bitwise AND of two int8 values.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_and_uint16",
+        "category": "Numbers",
+        "signature": "uint2 & uint2 -> uint2",
+        "description": "Computes the bitwise AND of two uint2 values.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_and_uint32",
+        "category": "Numbers",
+        "signature": "uint4 & uint4 -> uint4",
+        "description": "Computes the bitwise AND of two uint4 values.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_and_uint64",
+        "category": "Numbers",
+        "signature": "uint8 & uint8 -> uint8",
+        "description": "Computes the bitwise AND of two uint8 values.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_or_int16",
+        "category": "Numbers",
+        "signature": "int2 | int2 -> int2",
+        "description": "Computes the bitwise OR of two int2 values.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_or_int32",
+        "category": "Numbers",
+        "signature": "int4 | int4 -> int4",
+        "description": "Computes the bitwise OR of two int4 values.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_or_int64",
+        "category": "Numbers",
+        "signature": "int8 | int8 -> int8",
+        "description": "Computes the bitwise OR of two int8 values.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_or_uint16",
+        "category": "Numbers",
+        "signature": "uint2 | uint2 -> uint2",
+        "description": "Computes the bitwise OR of two uint2 values.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_or_uint32",
+        "category": "Numbers",
+        "signature": "uint4 | uint4 -> uint4",
+        "description": "Computes the bitwise OR of two uint4 values.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_or_uint64",
+        "category": "Numbers",
+        "signature": "uint8 | uint8 -> uint8",
+        "description": "Computes the bitwise OR of two uint8 values.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_shift_left_int16",
+        "category": "Numbers",
+        "signature": "int2 << int4 -> int2",
+        "description": "Performs a bitwise left shift on an int2 value.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_shift_left_int32",
+        "category": "Numbers",
+        "signature": "int4 << int4 -> int4",
+        "description": "Performs a bitwise left shift on an int4 value.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_shift_left_int64",
+        "category": "Numbers",
+        "signature": "int8 << int4 -> int8",
+        "description": "Performs a bitwise left shift on an int8 value.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_shift_left_uint16",
+        "category": "Numbers",
+        "signature": "uint2 << uint4 -> uint2",
+        "description": "Performs a bitwise left shift on a uint2 value.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_shift_left_uint32",
+        "category": "Numbers",
+        "signature": "uint4 << uint4 -> uint4",
+        "description": "Performs a bitwise left shift on a uint4 value.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_shift_left_uint64",
+        "category": "Numbers",
+        "signature": "uint8 << uint4 -> uint8",
+        "description": "Performs a bitwise left shift on a uint8 value.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_shift_right_int16",
+        "category": "Numbers",
+        "signature": "int2 >> int4 -> int2",
+        "description": "Performs a bitwise right shift on an int2 value.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_shift_right_int32",
+        "category": "Numbers",
+        "signature": "int4 >> int4 -> int4",
+        "description": "Performs a bitwise right shift on an int4 value.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_shift_right_int64",
+        "category": "Numbers",
+        "signature": "int8 >> int4 -> int8",
+        "description": "Performs a bitwise right shift on an int8 value.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_shift_right_uint16",
+        "category": "Numbers",
+        "signature": "uint2 >> uint4 -> uint2",
+        "description": "Performs a bitwise right shift on a uint2 value.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_shift_right_uint32",
+        "category": "Numbers",
+        "signature": "uint4 >> uint4 -> uint4",
+        "description": "Performs a bitwise right shift on a uint4 value.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_shift_right_uint64",
+        "category": "Numbers",
+        "signature": "uint8 >> uint4 -> uint8",
+        "description": "Performs a bitwise right shift on a uint8 value.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_xor_int16",
+        "category": "Numbers",
+        "signature": "int2 # int2 -> int2",
+        "description": "Computes the bitwise XOR of two int2 values.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_xor_int32",
+        "category": "Numbers",
+        "signature": "int4 # int4 -> int4",
+        "description": "Computes the bitwise XOR of two int4 values.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_xor_int64",
+        "category": "Numbers",
+        "signature": "int8 # int8 -> int8",
+        "description": "Computes the bitwise XOR of two int8 values.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_xor_uint16",
+        "category": "Numbers",
+        "signature": "uint2 # uint2 -> uint2",
+        "description": "Computes the bitwise XOR of two uint2 values.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_xor_uint32",
+        "category": "Numbers",
+        "signature": "uint4 # uint4 -> uint4",
+        "description": "Computes the bitwise XOR of two uint4 values.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_xor_uint64",
+        "category": "Numbers",
+        "signature": "uint8 # uint8 -> uint8",
+        "description": "Computes the bitwise XOR of two uint8 values.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "div_float32",
+        "category": "Numbers",
+        "signature": "float4 / float4 -> float4",
+        "description": "Divides two float4 values. Errors on division by zero, overflow, or underflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "div_float64",
+        "category": "Numbers",
+        "signature": "float8 / float8 -> float8",
+        "description": "Divides two float8 values. Errors on division by zero, overflow, or underflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "div_int16",
+        "category": "Numbers",
+        "signature": "int2 / int2 -> int2",
+        "description": "Divides two int2 values. Errors on division by zero or overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "div_int32",
+        "category": "Numbers",
+        "signature": "int4 / int4 -> int4",
+        "description": "Divides two int4 values. Errors on division by zero or overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "div_int64",
+        "category": "Numbers",
+        "signature": "int8 / int8 -> int8",
+        "description": "Divides two int8 values. Errors on division by zero or overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "div_numeric",
+        "category": "Numbers",
+        "signature": "numeric / numeric -> numeric",
+        "description": "Divides two numeric values. Errors on division by zero, overflow, or underflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "div_uint16",
+        "category": "Numbers",
+        "signature": "uint2 / uint2 -> uint2",
+        "description": "Divides two uint2 values. Errors on division by zero.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "div_uint32",
+        "category": "Numbers",
+        "signature": "uint4 / uint4 -> uint4",
+        "description": "Divides two uint4 values. Errors on division by zero.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "div_uint64",
+        "category": "Numbers",
+        "signature": "uint8 / uint8 -> uint8",
+        "description": "Divides two uint8 values. Errors on division by zero.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "log_base_numeric",
+        "category": "Numbers",
+        "signature": "log(a numeric, b numeric) -> numeric",
+        "description": "Computes the logarithm of `b` with base `a`. Errors if `a` or `b` are zero or negative, or on division by zero.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mod_float32",
+        "category": "Numbers",
+        "signature": "float4 % float4 -> float4",
+        "description": "Computes the modulo of two float4 values. Errors on division by zero.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mod_float64",
+        "category": "Numbers",
+        "signature": "float8 % float8 -> float8",
+        "description": "Computes the modulo of two float8 values. Errors on division by zero.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mod_int16",
+        "category": "Numbers",
+        "signature": "int2 % int2 -> int2",
+        "description": "Computes the modulo of two int2 values. Errors on division by zero.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mod_int32",
+        "category": "Numbers",
+        "signature": "int4 % int4 -> int4",
+        "description": "Computes the modulo of two int4 values. Errors on division by zero.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mod_int64",
+        "category": "Numbers",
+        "signature": "int8 % int8 -> int8",
+        "description": "Computes the modulo of two int8 values. Errors on division by zero.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mod_numeric",
+        "category": "Numbers",
+        "signature": "numeric % numeric -> numeric",
+        "description": "Computes the modulo of two numeric values. Errors on division by zero.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mod_uint16",
+        "category": "Numbers",
+        "signature": "uint2 % uint2 -> uint2",
+        "description": "Computes the modulo of two uint2 values. Errors on division by zero.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mod_uint32",
+        "category": "Numbers",
+        "signature": "uint4 % uint4 -> uint4",
+        "description": "Computes the modulo of two uint4 values. Errors on division by zero.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mod_uint64",
+        "category": "Numbers",
+        "signature": "uint8 % uint8 -> uint8",
+        "description": "Computes the modulo of two uint8 values. Errors on division by zero.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mul_float32",
+        "category": "Numbers",
+        "signature": "float4 * float4 -> float4",
+        "description": "Multiplies two float4 values. Errors on overflow or underflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mul_float64",
+        "category": "Numbers",
+        "signature": "float8 * float8 -> float8",
+        "description": "Multiplies two float8 values. Errors on overflow or underflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mul_int16",
+        "category": "Numbers",
+        "signature": "int2 * int2 -> int2",
+        "description": "Multiplies two int2 values. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mul_int32",
+        "category": "Numbers",
+        "signature": "int4 * int4 -> int4",
+        "description": "Multiplies two int4 values. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mul_int64",
+        "category": "Numbers",
+        "signature": "int8 * int8 -> int8",
+        "description": "Multiplies two int8 values. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mul_numeric",
+        "category": "Numbers",
+        "signature": "numeric * numeric -> numeric",
+        "description": "Multiplies two numeric values. Errors on overflow or underflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mul_uint16",
+        "category": "Numbers",
+        "signature": "uint2 * uint2 -> uint2",
+        "description": "Multiplies two uint2 values. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mul_uint32",
+        "category": "Numbers",
+        "signature": "uint4 * uint4 -> uint4",
+        "description": "Multiplies two uint4 values. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mul_uint64",
+        "category": "Numbers",
+        "signature": "uint8 * uint8 -> uint8",
+        "description": "Multiplies two uint8 values. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "power",
+        "category": "Numbers",
+        "signature": "power(a float8, b float8) -> float8",
+        "description": "Raises `a` to the power of `b`. Errors on invalid arguments (e.g., zero to negative power, negative to non-integer power) or overflow/underflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "power_numeric",
+        "category": "Numbers",
+        "signature": "power_numeric(a numeric, b numeric) -> numeric",
+        "description": "Raises `a` to the power of `b` for numeric values. Errors on invalid arguments (e.g., zero to negative power, negative to non-integer power) or overflow/underflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "round_numeric_binary",
+        "category": "Numbers",
+        "signature": "round(a numeric, b int4) -> numeric",
+        "description": "Rounds a numeric value to a specified number of decimal places. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sub_float32",
+        "category": "Numbers",
+        "signature": "float4 - float4 -> float4",
+        "description": "Subtracts two float4 values. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sub_float64",
+        "category": "Numbers",
+        "signature": "float8 - float8 -> float8",
+        "description": "Subtracts two float8 values. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sub_int16",
+        "category": "Numbers",
+        "signature": "int2 - int2 -> int2",
+        "description": "Subtracts two int2 values. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sub_int32",
+        "category": "Numbers",
+        "signature": "int4 - int4 -> int4",
+        "description": "Subtracts two int4 values. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sub_int64",
+        "category": "Numbers",
+        "signature": "int8 - int8 -> int8",
+        "description": "Subtracts two int8 values. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sub_numeric",
+        "category": "Numbers",
+        "signature": "numeric - numeric -> numeric",
+        "description": "Subtracts two numeric values. Errors on overflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sub_uint16",
+        "category": "Numbers",
+        "signature": "uint2 - uint2 -> uint2",
+        "description": "Subtracts two uint2 values. Errors on underflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sub_uint32",
+        "category": "Numbers",
+        "signature": "uint4 - uint4 -> uint4",
+        "description": "Subtracts two uint4 values. Errors on underflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sub_uint64",
+        "category": "Numbers",
+        "signature": "uint8 - uint8 -> uint8",
+        "description": "Subtracts two uint8 values. Errors on underflow.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      }
+    ]
+  },
+  {
+    "type": "Numeric",
+    "functions": [
+      {
+        "unique_name": "adjust_numeric_scale",
+        "category": "Numeric",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      }
+    ]
+  },
+  {
+    "type": "Range",
+    "functions": [
+      {
+        "unique_name": "range_adjacent",
+        "category": "Range",
+        "signature": "rangeany -|- rangeany -> boolean",
+        "description": "Returns true if two ranges are adjacent.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_after",
+        "category": "Range",
+        "signature": "rangeany >> rangeany -> boolean",
+        "description": "Returns true if range `l` is entirely after range `r`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_before",
+        "category": "Range",
+        "signature": "rangeany << rangeany -> boolean",
+        "description": "Returns true if range `l` is entirely before range `r`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_contains_date",
+        "category": "Range",
+        "signature": "rangeany @> date -> boolean",
+        "description": "Returns true if the date range `a` contains the date element `b`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_contains_date_rev",
+        "category": "Range",
+        "signature": "rangeany <@ date -> boolean",
+        "description": "Returns true if the date range `b` contains the date element `a`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_contains_i32",
+        "category": "Range",
+        "signature": "rangeany @> int4 -> boolean",
+        "description": "Returns true if the int4 range `a` contains the int4 element `b`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_contains_i32_rev",
+        "category": "Range",
+        "signature": "rangeany <@ int4 -> boolean",
+        "description": "Returns true if the int4 range `b` contains the int4 element `a`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_contains_i64",
+        "category": "Range",
+        "signature": "rangeany @> int8 -> boolean",
+        "description": "Returns true if the int8 range `a` contains the int8 element `b`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_contains_i64_rev",
+        "category": "Range",
+        "signature": "rangeany <@ int8 -> boolean",
+        "description": "Returns true if the int8 range `b` contains the int8 element `a`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_contains_numeric",
+        "category": "Range",
+        "signature": "rangeany @> numeric -> boolean",
+        "description": "Returns true if the numeric range `a` contains the numeric element `b`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_contains_numeric_rev",
+        "category": "Range",
+        "signature": "rangeany <@ numeric -> boolean",
+        "description": "Returns true if the numeric range `b` contains the numeric element `a`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_contains_range",
+        "category": "Range",
+        "signature": "rangeany @> rangeany -> boolean",
+        "description": "Returns true if range `l` contains range `r`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_contains_range_rev",
+        "category": "Range",
+        "signature": "rangeany <@ rangeany -> boolean",
+        "description": "Returns true if range `r` contains range `l`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_contains_timestamp",
+        "category": "Range",
+        "signature": "rangeany @> timestamp -> boolean",
+        "description": "Returns true if the timestamp range `a` contains the timestamp element `b`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_contains_timestamp_rev",
+        "category": "Range",
+        "signature": "rangeany <@ timestamp -> boolean",
+        "description": "Returns true if the timestamp range `b` contains the timestamp element `a`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_contains_timestamp_tz",
+        "category": "Range",
+        "signature": "rangeany @> timestamptz -> boolean",
+        "description": "Returns true if the timestamptz range `a` contains the timestamptz element `b`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_contains_timestamp_tz_rev",
+        "category": "Range",
+        "signature": "rangeany <@ timestamptz -> boolean",
+        "description": "Returns true if the timestamptz range `b` contains the timestamptz element `a`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_difference",
+        "category": "Range",
+        "signature": "rangeany - rangeany -> any",
+        "description": "Computes the difference of two ranges. Errors if the ranges are not contiguous.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_intersection",
+        "category": "Range",
+        "signature": "rangeany * rangeany -> any",
+        "description": "Computes the intersection of two ranges.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_overlaps",
+        "category": "Range",
+        "signature": "rangeany && rangeany -> boolean",
+        "description": "Returns true if two ranges overlap.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_overleft",
+        "category": "Range",
+        "signature": "rangeany &< rangeany -> boolean",
+        "description": "Returns true if range `l` is to the left of, and overlaps, range `r`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_overright",
+        "category": "Range",
+        "signature": "rangeany &> rangeany -> boolean",
+        "description": "Returns true if range `l` is to the right of, and overlaps, range `r`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_union",
+        "category": "Range",
+        "signature": "rangeany + rangeany -> any",
+        "description": "Computes the union of two ranges. Errors if the ranges are not contiguous.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "rangelower",
+        "category": "Range",
+        "signature": "",
+        "description": "Returns the lower bound of the range, or NULL if the range is empty or has no lower bound.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "rangeupper",
+        "category": "Range",
+        "signature": "",
+        "description": "Returns the upper bound of the range, or NULL if the range is empty or has no lower bound.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      }
+    ]
+  },
+  {
+    "type": "Record",
+    "functions": [
+      {
+        "unique_name": "record_get",
+        "category": "Record",
+        "signature": "",
+        "description": "Gets the field at the specified index from a record.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      }
+    ]
+  },
+  {
+    "type": "String",
+    "functions": [
+      {
+        "unique_name": "ascii",
+        "category": "String",
+        "signature": "ascii(s text) -> int4",
+        "description": "The ASCII value of `s`'s left-most character.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_count_bytes",
+        "category": "String",
+        "signature": "bit_count(a bytea) -> int8",
+        "description": "Returns the number of bits set in the bit string `a` (also known as _popcount_).",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_length_bytes",
+        "category": "String",
+        "signature": "bit_length(a bytea) -> int4",
+        "description": "Number of bits in `a`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_length_string",
+        "category": "String",
+        "signature": "bit_length(a text) -> int4",
+        "description": "Number of bits in `a`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "byte_length_bytes",
+        "category": "String",
+        "signature": "octet_length(a bytea) -> int4",
+        "description": "Number of bytes in `a`.",
+        "unmaterializable": false,
+        "url": "/sql/functions/length",
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false,
+        "alias": "length"
+      },
+      {
+        "unique_name": "byte_length_string",
+        "category": "String",
+        "signature": "octet_length(a text) -> int4",
+        "description": "Number of bytes in `a`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "char_length",
+        "category": "String",
+        "signature": "char_length(a text) -> int4",
+        "description": "Number of code points in `a`.",
+        "unmaterializable": false,
+        "url": "/sql/functions/length",
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false,
+        "alias": "length"
+      },
+      {
+        "unique_name": "chr",
+        "category": "String",
+        "signature": "chr(a int4) -> text",
+        "description": "Return the character with the given Unicode codepoint.\nOnly supports codepoints that can be encoded in UTF-8.\nThe NULL (0) character is not allowed.\n\nErrors if the codepoint is invalid or too large.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "constant_time_eq_bytes",
+        "category": "String",
+        "signature": "constant_time_eq(a bytea, b bytea) -> boolean",
+        "description": "Returns `true` if the arrays are identical, otherwise returns `false`.\nThe implementation mitigates timing attacks by making a best-effort attempt to\nexecute in constant time if the arrays have the same length, regardless of their contents.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "constant_time_eq_string",
+        "category": "String",
+        "signature": "constant_time_eq(a text, b text) -> boolean",
+        "description": "Returns `true` if the strings are identical, otherwise returns `false`.\nThe implementation mitigates timing attacks by making a best-effort attempt to\nexecute in constant time if the strings have the same length, regardless of their contents.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "convert_from",
+        "category": "String",
+        "signature": "convert_from(a bytea, src_encoding text) -> text",
+        "description": "Converts data `a` from original encoding specified by `src_encoding` into `text`.\nThe only supported encoding is `utf-8`. Errors if the encoding is not supported or the byte sequence is invalid.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "decode",
+        "category": "String",
+        "signature": "decode(text text, format text) -> bytea",
+        "description": "Decode `text` using the specified textual representation. Errors if the\ntext is not a valid representation in the specified format, or if the\nformat is not recognized.\n\nThe maximum size of the result is 100 MiB.",
+        "unmaterializable": false,
+        "url": "/sql/functions/decode",
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "encode",
+        "category": "String",
+        "signature": "encode(bytes bytea, format text) -> text",
+        "description": "Encode `bytes` using the specified textual representation. Errors if the\nformat is not recognized.",
+        "unmaterializable": false,
+        "url": "/sql/functions/encode",
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "encoded_bytes_char_length",
+        "category": "String",
+        "signature": "length(a bytea, encoding_name text) -> int4",
+        "description": "Number of code points in `a` after encoding.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "get_bit",
+        "category": "String",
+        "signature": "get_bit(bytes bytea, index int4) -> int4",
+        "description": "Return the `index`th bit from `bytes`, where the left-most bit in `bytes` is at the 0th position.\n\nReturns an error if the index is out of range.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "get_byte",
+        "category": "String",
+        "signature": "get_byte(bytes bytea, index int4) -> int4",
+        "description": "Return the `index`th byte from `bytes`, where the left-most byte in `bytes` is at the 0th position.\n\nReturns an error if the index is out of range.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "initcap",
+        "category": "String",
+        "signature": "initcap(a text) -> text",
+        "description": "Returns `a` with the first character of every word in upper case and all\nother characters in lower case. Words are separated by non-alphanumeric\ncharacters.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "is_like_match",
+        "category": "String",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "is_like_match_case_insensitive",
+        "category": "String",
+        "signature": "text ilike text -> boolean",
+        "description": "Case-insensitively matches a string against a SQL LIKE pattern. Errors if the pattern is too long.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "is_like_match_case_sensitive",
+        "category": "String",
+        "signature": "text like text -> boolean",
+        "description": "Case-sensitively matches a string against a SQL LIKE pattern. Errors if the pattern is too long.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "is_regexp_match",
+        "category": "String",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "lower",
+        "category": "String",
+        "signature": "lower(s text) -> text",
+        "description": "Convert `s` to lowercase.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "parse_ident",
+        "category": "String",
+        "signature": "parse_ident(ident text, strict boolean) -> text[]",
+        "description": "Given a qualified identifier like `a.\"b\".c`, splits into an array of the\nconstituent identifiers with quoting removed and escape sequences decoded.\nExtra characters after the last identifier are ignored unless the\n`strict_mode` parameter is `true` (defaults to `false`).",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "position",
+        "category": "String",
+        "signature": "position(sub: str IN s: str) -> int",
+        "description": "The starting index of `sub` within `s` or `0` if `sub` is not a substring of `s`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "pretty_sql",
+        "category": "String",
+        "signature": "pretty_sql(sql text, width int4) -> text",
+        "description": "Formats an SQL query string for better readability. Errors if the width is invalid or on parsing errors.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "quote_ident",
+        "category": "String",
+        "signature": "quote_ident(s: String) -> String",
+        "description": "Quotes the given string as an SQL identifier.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "regexp_match",
+        "category": "String",
+        "signature": "regexp_match(haystack: str, needle: str [, flags: str]]) -> str[]",
+        "description": "Matches the regular expression `needle` against haystack, returning a\nstring array that contains the value of each capture group specified in\n`needle`, in order. If `flags` is set to the string `i` matches\ncase-insensitively.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "regexp_replace",
+        "category": "String",
+        "signature": "regexp_replace(source text, pattern text, replacement text) -> text",
+        "description": "Replaces substrings matching a POSIX regular expression.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "regexp_split_to_array",
+        "category": "String",
+        "signature": "regexp_split_to_array(text: str, pattern: str [, flags: str]]) -> str[]",
+        "description": "Splits `text` by the regular expression `pattern` into an array.\nIf `flags` is set to `i`, matches case-insensitively.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "reverse",
+        "category": "String",
+        "signature": "reverse(a text) -> text",
+        "description": "Reverse the characters in s.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "starts_with",
+        "category": "String",
+        "signature": "starts_with(a text, b text) -> boolean",
+        "description": "Returns true if string `a` starts with string `b`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "text_concat_binary",
+        "category": "String",
+        "signature": "text || text -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "trim",
+        "category": "String",
+        "signature": "btrim(s text, trim_chars text) -> text",
+        "description": "Trim any character in `trim_chars` from both sides of `s`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "trim_leading",
+        "category": "String",
+        "signature": "ltrim(a text, trim_chars text) -> text",
+        "description": "Trim any character in `trim_chars` from the left side of `a`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "trim_leading_whitespace",
+        "category": "String",
+        "signature": "ltrim(s text) -> text",
+        "description": "Trim all spaces from the left side of `s`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "trim_trailing",
+        "category": "String",
+        "signature": "rtrim(a text, trim_chars text) -> text",
+        "description": "Trim any character in `trim_chars` from the right side of `a`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "trim_trailing_whitespace",
+        "category": "String",
+        "signature": "rtrim(a text) -> text",
+        "description": "Trim all spaces from the right side of s.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "trim_whitespace",
+        "category": "String",
+        "signature": "btrim(s text) -> text",
+        "description": "Trim all spaces from both sides of `s`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "try_parse_monotonic_iso8601_timestamp",
+        "category": "String",
+        "signature": "try_parse_monotonic_iso8601_timestamp(a text) -> timestamp?",
+        "description": "Parses a specific subset of ISO8601 timestamps, returning `NULL` instead of\nerror on failure: `YYYY-MM-DDThh:mm:ss.sssZ`",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "upper",
+        "category": "String",
+        "signature": "upper(a text) -> text",
+        "description": "Convert s to uppercase.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      }
+    ]
+  },
+  {
+    "type": "Time",
+    "functions": [
+      {
+        "unique_name": "date_part_time",
+        "category": "Time",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "extract_time",
+        "category": "Time",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "url": "/sql/functions/extract/",
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "timezone_time",
+        "category": "Time",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      }
+    ]
+  },
+  {
+    "type": "Timestamp",
+    "functions": [
+      {
+        "unique_name": "adjust_timestamp_precision",
+        "category": "Timestamp",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "ajust_timestamp_with_time_zone_precision",
+        "category": "Timestamp",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "date_part_interval",
+        "category": "Timestamp",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "date_part_timestamp",
+        "category": "Timestamp",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "date_part_tstz",
+        "category": "Timestamp",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "date_truc_ts",
+        "category": "Timestamp",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "date_truc_tstz",
+        "category": "Timestamp",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "extract_interval",
+        "category": "Timestamp",
+        "signature": "EXTRACT (unit FROM interval) -> numeric",
+        "description": "Extracts the specified `unit` from the given `interval` and returns it as a numeric value.",
+        "unmaterializable": false,
+        "url": "/sql/functions/extract",
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "extract_timestamp",
+        "category": "Timestamp",
+        "signature": "EXTRACT (unit FROM timestamp) -> numeric",
+        "description": "Extracts the specified `unit` from the given `interval` and returns it as a numeric value.",
+        "unmaterializable": false,
+        "url": "/sql/functions/extract",
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "extract_tstz",
+        "category": "Timestamp",
+        "signature": "EXTRACT (unit FROM timestamp with timezone) -> numeric",
+        "description": "Extracts the specified `unit` from the given `timestamp with timezone` and returns it as a numeric value.",
+        "unmaterializable": false,
+        "url": "/sql/functions/extract",
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "timezone_ts",
+        "category": "Timestamp",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "timezone_tstz",
+        "category": "Timestamp",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "tocharts",
+        "category": "Timestamp",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "tochartstz",
+        "category": "Timestamp",
+        "signature": "",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      }
+    ]
+  },
+  {
+    "type": "Trigonometric",
+    "functions": [
+      {
+        "unique_name": "acos",
+        "category": "Trigonometric",
+        "signature": "acos(a float8) -> float8",
+        "description": "The inverse cosine of x, result in radians.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "acosh",
+        "category": "Trigonometric",
+        "signature": "acosh(a float8) -> float8",
+        "description": "The inverse hyperbolic cosine of x.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "asin",
+        "category": "Trigonometric",
+        "signature": "asin(a float8) -> float8",
+        "description": "The inverse sine of x, result in radians.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "asinh",
+        "category": "Trigonometric",
+        "signature": "asinh(a float8) -> float8",
+        "description": "The inverse hyperbolic sine of x.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "atan",
+        "category": "Trigonometric",
+        "signature": "atan(a float8) -> float8",
+        "description": "The inverse tangent of x, result in radians.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "atanh",
+        "category": "Trigonometric",
+        "signature": "atanh(a float8) -> float8",
+        "description": "The inverse hyperbolic tangent of x.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cos",
+        "category": "Trigonometric",
+        "signature": "cos(a float8) -> float8",
+        "description": "The cosine of x, with x in radians.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cosh",
+        "category": "Trigonometric",
+        "signature": "cosh(a float8) -> float8",
+        "description": "The hyperbolic cosine of x, with x as a hyperbolic angle.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cot",
+        "category": "Trigonometric",
+        "signature": "cot(a float8) -> float8",
+        "description": "The cotangent of x, with x in radians.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "degrees",
+        "category": "Trigonometric",
+        "signature": "degrees(a float8) -> float8",
+        "description": "Converts radians to degrees.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "radians",
+        "category": "Trigonometric",
+        "signature": "radians(a float8) -> float8",
+        "description": "Converts degrees to radians.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sin",
+        "category": "Trigonometric",
+        "signature": "sin(a float8) -> float8",
+        "description": "The sine of x, with x in radians.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sinh",
+        "category": "Trigonometric",
+        "signature": "sinh(a float8) -> float8",
+        "description": "The hyperbolic sine of x, with x as a hyperbolic angle.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "tan",
+        "category": "Trigonometric",
+        "signature": "tan(a float8) -> float8",
+        "description": "The tangent of x, with x in radians.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "tanh",
+        "category": "Trigonometric",
+        "signature": "tanh(a float8) -> float8",
+        "description": "The hyperbolic tangent of x, with x as a hyperbolic angle.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      }
+    ]
+  },
+  {
+    "type": "UUID",
+    "functions": [
+      {
+        "unique_name": "uuid_generate_v5",
+        "category": "UUID",
+        "signature": "uuid_generate_v5(a uuid, b text) -> uuid",
+        "description": "Generates a version 5 UUID.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      }
+    ]
+  },
+  {
+    "type": "Uncategorized",
+    "functions": [
+      {
+        "unique_name": "abs_float32",
+        "category": "Uncategorized",
+        "signature": "abs(a float4) -> float4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "abs_float64",
+        "category": "Uncategorized",
+        "signature": "abs(a float8) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "abs_int16",
+        "category": "Uncategorized",
+        "signature": "abs(a int2) -> int2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "abs_int32",
+        "category": "Uncategorized",
+        "signature": "abs(a int4) -> int4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "abs_int64",
+        "category": "Uncategorized",
+        "signature": "abs(a int8) -> int8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "abs_numeric",
+        "category": "Uncategorized",
+        "signature": "abs(a numeric) -> numeric",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "acl_item_grantee",
+        "category": "Uncategorized",
+        "signature": "aclitem_grantee(acl_item aclitem) -> oid",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "acl_item_grantor",
+        "category": "Uncategorized",
+        "signature": "aclitem_grantor(acl_item aclitem) -> oid",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "acl_item_privileges",
+        "category": "Uncategorized",
+        "signature": "aclitem_privileges(acl_item aclitem) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "array_upper",
+        "category": "Uncategorized",
+        "signature": "array_upper(a anyarray, i int8) -> int4?",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_not_int16",
+        "category": "Uncategorized",
+        "signature": "~(a int2) -> int2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_not_int32",
+        "category": "Uncategorized",
+        "signature": "~(a int4) -> int4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_not_int64",
+        "category": "Uncategorized",
+        "signature": "~(a int8) -> int8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_not_uint16",
+        "category": "Uncategorized",
+        "signature": "~(a uint2) -> uint2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_not_uint32",
+        "category": "Uncategorized",
+        "signature": "~(a uint4) -> uint4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "bit_not_uint64",
+        "category": "Uncategorized",
+        "signature": "~(a uint8) -> uint8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_bool_to_int32",
+        "category": "Uncategorized",
+        "signature": "boolean_to_integer(a boolean) -> int4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_bool_to_int64",
+        "category": "Uncategorized",
+        "signature": "boolean_to_bigint(a boolean) -> int8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_bool_to_string",
+        "category": "Uncategorized",
+        "signature": "boolean_to_text(a boolean) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_bool_to_string_nonstandard",
+        "category": "Uncategorized",
+        "signature": "boolean_to_nonstandard_text(a boolean) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_bytes_to_string",
+        "category": "Uncategorized",
+        "signature": "bytea_to_text(a bytea) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_char_to_string",
+        "category": "Uncategorized",
+        "signature": "char_to_text(a character) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_date_to_mz_timestamp",
+        "category": "Uncategorized",
+        "signature": "date_to_mz_timestamp(a date) -> mz_timestamp",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_date_to_string",
+        "category": "Uncategorized",
+        "signature": "date_to_text(a date) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_float32_to_float64",
+        "category": "Uncategorized",
+        "signature": "real_to_double(a float4) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_float32_to_int16",
+        "category": "Uncategorized",
+        "signature": "real_to_smallint(a float4) -> int2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_float32_to_int32",
+        "category": "Uncategorized",
+        "signature": "real_to_integer(a float4) -> int4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_float32_to_int64",
+        "category": "Uncategorized",
+        "signature": "real_to_bigint(a float4) -> int8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_float32_to_string",
+        "category": "Uncategorized",
+        "signature": "real_to_text(a float4) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_float32_to_uint16",
+        "category": "Uncategorized",
+        "signature": "real_to_uint2(a float4) -> uint2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_float32_to_uint32",
+        "category": "Uncategorized",
+        "signature": "real_to_uint4(a float4) -> uint4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_float32_to_uint64",
+        "category": "Uncategorized",
+        "signature": "real_to_uint8(a float4) -> uint8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_float64_to_float32",
+        "category": "Uncategorized",
+        "signature": "double_to_real(a float8) -> float4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_float64_to_int16",
+        "category": "Uncategorized",
+        "signature": "double_to_smallint(a float8) -> int2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_float64_to_int32",
+        "category": "Uncategorized",
+        "signature": "double_to_integer(a float8) -> int4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_float64_to_int64",
+        "category": "Uncategorized",
+        "signature": "f64toi64(a float8) -> int8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_float64_to_string",
+        "category": "Uncategorized",
+        "signature": "double_to_text(a float8) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_float64_to_uint16",
+        "category": "Uncategorized",
+        "signature": "double_to_uint2(a float8) -> uint2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_float64_to_uint32",
+        "category": "Uncategorized",
+        "signature": "double_to_uint4(a float8) -> uint4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_float64_to_uint64",
+        "category": "Uncategorized",
+        "signature": "double_to_uint8(a float8) -> uint8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int16_to_float32",
+        "category": "Uncategorized",
+        "signature": "smallint_to_real(a int2) -> float4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int16_to_float64",
+        "category": "Uncategorized",
+        "signature": "smallint_to_double(a int2) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int16_to_int32",
+        "category": "Uncategorized",
+        "signature": "smallint_to_integer(a int2) -> int4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int16_to_int64",
+        "category": "Uncategorized",
+        "signature": "smallint_to_bigint(a int2) -> int8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int16_to_string",
+        "category": "Uncategorized",
+        "signature": "smallint_to_text(a int2) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int16_to_uint16",
+        "category": "Uncategorized",
+        "signature": "smallint_to_uint2(a int2) -> uint2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int16_to_uint32",
+        "category": "Uncategorized",
+        "signature": "smallint_to_uint4(a int2) -> uint4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int16_to_uint64",
+        "category": "Uncategorized",
+        "signature": "smallint_to_uint8(a int2) -> uint8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int32_to_bool",
+        "category": "Uncategorized",
+        "signature": "integer_to_boolean(a int4) -> boolean",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int32_to_float32",
+        "category": "Uncategorized",
+        "signature": "integer_to_real(a int4) -> float4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int32_to_float64",
+        "category": "Uncategorized",
+        "signature": "integer_to_double(a int4) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int32_to_int16",
+        "category": "Uncategorized",
+        "signature": "integer_to_smallint(a int4) -> int2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int32_to_int64",
+        "category": "Uncategorized",
+        "signature": "integer_to_bigint(a int4) -> int8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int32_to_mz_timestamp",
+        "category": "Uncategorized",
+        "signature": "integer_to_mz_timestamp(a int4) -> mz_timestamp",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int32_to_oid",
+        "category": "Uncategorized",
+        "signature": "integer_to_oid(a int4) -> oid",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int32_to_pg_legacy_char",
+        "category": "Uncategorized",
+        "signature": "integer_to_\\char\\(a int4) -> character",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int32_to_string",
+        "category": "Uncategorized",
+        "signature": "integer_to_text(a int4) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int32_to_uint16",
+        "category": "Uncategorized",
+        "signature": "integer_to_uint2(a int4) -> uint2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int32_to_uint32",
+        "category": "Uncategorized",
+        "signature": "integer_to_uint4(a int4) -> uint4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int32_to_uint64",
+        "category": "Uncategorized",
+        "signature": "integer_to_uint8(a int4) -> uint8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int64_to_bool",
+        "category": "Uncategorized",
+        "signature": "bigint_to_boolean(a int8) -> boolean",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int64_to_float32",
+        "category": "Uncategorized",
+        "signature": "bigint_to_real(a int8) -> float4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int64_to_float64",
+        "category": "Uncategorized",
+        "signature": "bigint_to_double(a int8) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int64_to_int16",
+        "category": "Uncategorized",
+        "signature": "bigint_to_smallint(a int8) -> int2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int64_to_int32",
+        "category": "Uncategorized",
+        "signature": "bigint_to_integer(a int8) -> int4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int64_to_mz_timestamp",
+        "category": "Uncategorized",
+        "signature": "bigint_to_mz_timestamp(a int8) -> mz_timestamp",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int64_to_oid",
+        "category": "Uncategorized",
+        "signature": "bigint_to_oid(a int8) -> oid",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int64_to_string",
+        "category": "Uncategorized",
+        "signature": "bigint_to_text(a int8) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int64_to_uint16",
+        "category": "Uncategorized",
+        "signature": "bigint_to_uint2(a int8) -> uint2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int64_to_uint32",
+        "category": "Uncategorized",
+        "signature": "bigint_to_uint4(a int8) -> uint4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_int64_to_uint64",
+        "category": "Uncategorized",
+        "signature": "bigint_to_uint8(a int8) -> uint8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_interval_to_string",
+        "category": "Uncategorized",
+        "signature": "interval_to_text(a interval) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_interval_to_time",
+        "category": "Uncategorized",
+        "signature": "interval_to_time(i interval) -> time",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_jsonb_to_bool",
+        "category": "Uncategorized",
+        "signature": "jsonb_to_boolean(a jsonb) -> boolean",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_jsonb_to_float32",
+        "category": "Uncategorized",
+        "signature": "jsonb_to_real(a jsonb) -> float4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_jsonb_to_float64",
+        "category": "Uncategorized",
+        "signature": "jsonb_to_double(a jsonb) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_jsonb_to_int16",
+        "category": "Uncategorized",
+        "signature": "jsonb_to_smallint(a jsonb) -> int2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_jsonb_to_int32",
+        "category": "Uncategorized",
+        "signature": "jsonb_to_integer(a jsonb) -> int4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_jsonb_to_int64",
+        "category": "Uncategorized",
+        "signature": "jsonb_to_bigint(a jsonb) -> int8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_jsonb_to_string",
+        "category": "Uncategorized",
+        "signature": "jsonb_to_text(a jsonb) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_jsonbable_to_jsonb",
+        "category": "Uncategorized",
+        "signature": "jsonbable_to_jsonb(a jsonb) -> jsonb",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_mz_timestamp_to_string",
+        "category": "Uncategorized",
+        "signature": "mz_timestamp_to_text(a mz_timestamp) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_mz_timestamp_to_timestamp",
+        "category": "Uncategorized",
+        "signature": "mz_timestamp_to_timestamp(a mz_timestamp) -> timestamp",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_mz_timestamp_to_timestamp_tz",
+        "category": "Uncategorized",
+        "signature": "mz_timestamp_to_timestamp_tz(a mz_timestamp) -> timestamptz",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_numeric_to_float32",
+        "category": "Uncategorized",
+        "signature": "numeric_to_real(a numeric) -> float4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_numeric_to_float64",
+        "category": "Uncategorized",
+        "signature": "numeric_to_double(a numeric) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_numeric_to_int16",
+        "category": "Uncategorized",
+        "signature": "numeric_to_smallint(a numeric) -> int2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_numeric_to_int32",
+        "category": "Uncategorized",
+        "signature": "numeric_to_integer(a numeric) -> int4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_numeric_to_int64",
+        "category": "Uncategorized",
+        "signature": "numeric_to_bigint(a numeric) -> int8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_numeric_to_mz_timestamp",
+        "category": "Uncategorized",
+        "signature": "numeric_to_mz_timestamp(a numeric) -> mz_timestamp",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_numeric_to_string",
+        "category": "Uncategorized",
+        "signature": "numeric_to_text(a numeric) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_numeric_to_uint16",
+        "category": "Uncategorized",
+        "signature": "numeric_to_uint2(a numeric) -> uint2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_numeric_to_uint32",
+        "category": "Uncategorized",
+        "signature": "numeric_to_uint4(a numeric) -> uint4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_numeric_to_uint64",
+        "category": "Uncategorized",
+        "signature": "numeric_to_uint8(a numeric) -> uint8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_oid_to_int32",
+        "category": "Uncategorized",
+        "signature": "oid_to_integer(a oid) -> int4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_oid_to_int64",
+        "category": "Uncategorized",
+        "signature": "oid_to_bigint(a oid) -> int8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_oid_to_reg_class",
+        "category": "Uncategorized",
+        "signature": "oidtoregclass(a oid) -> regclass",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_oid_to_reg_proc",
+        "category": "Uncategorized",
+        "signature": "oidtoregproc(a oid) -> regprocedure",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_oid_to_reg_type",
+        "category": "Uncategorized",
+        "signature": "oidtoregtype(a oid) -> regtype",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_oid_to_string",
+        "category": "Uncategorized",
+        "signature": "oid_to_text(a oid) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_pg_legacy_char_to_char",
+        "category": "Uncategorized",
+        "signature": "\\char\\_to_char(a character) -> character",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_pg_legacy_char_to_int32",
+        "category": "Uncategorized",
+        "signature": "\\char\\_to_integer(a character) -> int4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_pg_legacy_char_to_string",
+        "category": "Uncategorized",
+        "signature": "\\char\\_to_text(a character) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_pg_legacy_char_to_var_char",
+        "category": "Uncategorized",
+        "signature": "\\char\\_to_varchar(a character) -> varchar",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_reg_class_to_oid",
+        "category": "Uncategorized",
+        "signature": "regclasstooid(a regclass) -> oid",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_reg_proc_to_oid",
+        "category": "Uncategorized",
+        "signature": "regproctooid(a regprocedure) -> oid",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_reg_type_to_oid",
+        "category": "Uncategorized",
+        "signature": "regtypetooid(a regtype) -> oid",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_string_to_bool",
+        "category": "Uncategorized",
+        "signature": "text_to_boolean(a text) -> boolean",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_string_to_bytes",
+        "category": "Uncategorized",
+        "signature": "text_to_bytea(a text) -> bytea",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_string_to_date",
+        "category": "Uncategorized",
+        "signature": "text_to_date(a text) -> date",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_string_to_float32",
+        "category": "Uncategorized",
+        "signature": "text_to_real(a text) -> float4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_string_to_float64",
+        "category": "Uncategorized",
+        "signature": "text_to_double(a text) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_string_to_int16",
+        "category": "Uncategorized",
+        "signature": "text_to_smallint(a text) -> int2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_string_to_int32",
+        "category": "Uncategorized",
+        "signature": "text_to_integer(a text) -> int4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_string_to_int64",
+        "category": "Uncategorized",
+        "signature": "text_to_bigint(a text) -> int8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_string_to_interval",
+        "category": "Uncategorized",
+        "signature": "text_to_interval(a text) -> interval",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_string_to_jsonb",
+        "category": "Uncategorized",
+        "signature": "text_to_jsonb(a text) -> jsonb",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_string_to_mz_timestamp",
+        "category": "Uncategorized",
+        "signature": "text_to_mz_timestamp(a text) -> mz_timestamp",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_string_to_oid",
+        "category": "Uncategorized",
+        "signature": "text_to_oid(a text) -> oid",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_string_to_pg_legacy_char",
+        "category": "Uncategorized",
+        "signature": "text_to_\\char\\(a text) -> character",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_string_to_pg_legacy_name",
+        "category": "Uncategorized",
+        "signature": "text_to_name(a text) -> name",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_string_to_time",
+        "category": "Uncategorized",
+        "signature": "text_to_time(a text) -> time",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_string_to_uint16",
+        "category": "Uncategorized",
+        "signature": "text_to_uint2(a text) -> uint2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_string_to_uint32",
+        "category": "Uncategorized",
+        "signature": "text_to_uint4(a text) -> uint4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_string_to_uint64",
+        "category": "Uncategorized",
+        "signature": "text_to_uint8(a text) -> uint8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_string_to_uuid",
+        "category": "Uncategorized",
+        "signature": "text_to_uuid(a text) -> uuid",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_time_to_interval",
+        "category": "Uncategorized",
+        "signature": "time_to_interval(t time) -> interval",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_time_to_string",
+        "category": "Uncategorized",
+        "signature": "time_to_text(a time) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_timestamp_to_date",
+        "category": "Uncategorized",
+        "signature": "timestamp_to_date(a timestamp) -> date",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_timestamp_to_mz_timestamp",
+        "category": "Uncategorized",
+        "signature": "timestamp_to_mz_timestamp(a timestamp) -> mz_timestamp",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_timestamp_to_string",
+        "category": "Uncategorized",
+        "signature": "timestamp_to_text(a timestamp) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_timestamp_to_time",
+        "category": "Uncategorized",
+        "signature": "timestamp_to_time(a timestamp) -> time",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_timestamp_tz_to_date",
+        "category": "Uncategorized",
+        "signature": "timestamp_with_time_zone_to_date(a timestamptz) -> date",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_timestamp_tz_to_mz_timestamp",
+        "category": "Uncategorized",
+        "signature": "timestamp_tz_to_mz_timestamp(a timestamptz) -> mz_timestamp",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_timestamp_tz_to_string",
+        "category": "Uncategorized",
+        "signature": "timestamp_with_time_zone_to_text(a timestamptz) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_timestamp_tz_to_time",
+        "category": "Uncategorized",
+        "signature": "timestamp_with_time_zone_to_time(a timestamptz) -> time",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint16_to_float32",
+        "category": "Uncategorized",
+        "signature": "uint2_to_real(a uint2) -> float4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint16_to_float64",
+        "category": "Uncategorized",
+        "signature": "uint2_to_double(a uint2) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint16_to_int16",
+        "category": "Uncategorized",
+        "signature": "uint2_to_smallint(a uint2) -> int2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint16_to_int32",
+        "category": "Uncategorized",
+        "signature": "uint2_to_integer(a uint2) -> int4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint16_to_int64",
+        "category": "Uncategorized",
+        "signature": "uint2_to_bigint(a uint2) -> int8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint16_to_string",
+        "category": "Uncategorized",
+        "signature": "uint2_to_text(a uint2) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint16_to_uint32",
+        "category": "Uncategorized",
+        "signature": "uint2_to_uint4(a uint2) -> uint4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint16_to_uint64",
+        "category": "Uncategorized",
+        "signature": "uint2_to_uint8(a uint2) -> uint8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint32_to_float32",
+        "category": "Uncategorized",
+        "signature": "uint4_to_real(a uint4) -> float4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint32_to_float64",
+        "category": "Uncategorized",
+        "signature": "uint4_to_double(a uint4) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint32_to_int16",
+        "category": "Uncategorized",
+        "signature": "uint4_to_smallint(a uint4) -> int2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint32_to_int32",
+        "category": "Uncategorized",
+        "signature": "uint4_to_integer(a uint4) -> int4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint32_to_int64",
+        "category": "Uncategorized",
+        "signature": "uint4_to_bigint(a uint4) -> int8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint32_to_mz_timestamp",
+        "category": "Uncategorized",
+        "signature": "uint4_to_mz_timestamp(a uint4) -> mz_timestamp",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint32_to_string",
+        "category": "Uncategorized",
+        "signature": "uint4_to_text(a uint4) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint32_to_uint16",
+        "category": "Uncategorized",
+        "signature": "uint4_to_uint2(a uint4) -> uint2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint32_to_uint64",
+        "category": "Uncategorized",
+        "signature": "uint4_to_uint8(a uint4) -> uint8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint64_to_float32",
+        "category": "Uncategorized",
+        "signature": "uint8_to_real(a uint8) -> float4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint64_to_float64",
+        "category": "Uncategorized",
+        "signature": "uint8_to_double(a uint8) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint64_to_int16",
+        "category": "Uncategorized",
+        "signature": "uint8_to_smallint(a uint8) -> int2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint64_to_int32",
+        "category": "Uncategorized",
+        "signature": "uint8_to_integer(a uint8) -> int4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint64_to_int64",
+        "category": "Uncategorized",
+        "signature": "uint8_to_bigint(a uint8) -> int8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint64_to_mz_timestamp",
+        "category": "Uncategorized",
+        "signature": "uint8_to_mz_timestamp(a uint8) -> mz_timestamp",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint64_to_string",
+        "category": "Uncategorized",
+        "signature": "uint8_to_text(a uint8) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint64_to_uint16",
+        "category": "Uncategorized",
+        "signature": "uint8_to_uint2(a uint8) -> uint2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uint64_to_uint32",
+        "category": "Uncategorized",
+        "signature": "uint8_to_uint4(a uint8) -> uint4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_uuid_to_string",
+        "category": "Uncategorized",
+        "signature": "uuid_to_text(u uuid) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cast_var_char_to_string",
+        "category": "Uncategorized",
+        "signature": "varchar_to_text(a varchar) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "cbrt_float64",
+        "category": "Uncategorized",
+        "signature": "cbrtf64(a float8) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "ceil_float32",
+        "category": "Uncategorized",
+        "signature": "ceilf32(a float4) -> float4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "ceil_float64",
+        "category": "Uncategorized",
+        "signature": "ceilf64(a float8) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "ceil_numeric",
+        "category": "Uncategorized",
+        "signature": "ceilnumeric(a numeric) -> numeric",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "digest_bytes",
+        "category": "Uncategorized",
+        "signature": "digest(bytes bytea, function text) -> bytea",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "digest_string",
+        "category": "Uncategorized",
+        "signature": "digest(string text, function text) -> bytea",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "exp",
+        "category": "Uncategorized",
+        "signature": "expf64(a float8) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "exp_numeric",
+        "category": "Uncategorized",
+        "signature": "expnumeric(a numeric) -> numeric",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "floor_float32",
+        "category": "Uncategorized",
+        "signature": "floorf32(a float4) -> float4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "floor_float64",
+        "category": "Uncategorized",
+        "signature": "floorf64(a float8) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "floor_numeric",
+        "category": "Uncategorized",
+        "signature": "floornumeric(a numeric) -> numeric",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "is_false",
+        "category": "Uncategorized",
+        "signature": "isfalse(a any) -> boolean",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "is_null",
+        "category": "Uncategorized",
+        "signature": "isnull(a any) -> boolean",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "is_regexp_match_case_insensitive",
+        "category": "Uncategorized",
+        "signature": "text ~* text -> boolean",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "is_regexp_match_case_sensitive",
+        "category": "Uncategorized",
+        "signature": "text ~ text -> boolean",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "is_true",
+        "category": "Uncategorized",
+        "signature": "istrue(a any) -> boolean",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "jsonb_array_length",
+        "category": "Uncategorized",
+        "signature": "jsonb_array_length(a jsonb) -> int4?",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "jsonb_pretty",
+        "category": "Uncategorized",
+        "signature": "jsonb_pretty(a jsonb) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "jsonb_strip_nulls",
+        "category": "Uncategorized",
+        "signature": "jsonb_strip_nulls(a jsonb) -> jsonb",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "jsonb_typeof",
+        "category": "Uncategorized",
+        "signature": "jsonb_typeof(a jsonb) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "justify_days",
+        "category": "Uncategorized",
+        "signature": "justify_days(i interval) -> interval",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "justify_hours",
+        "category": "Uncategorized",
+        "signature": "justify_hours(i interval) -> interval",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "justify_interval",
+        "category": "Uncategorized",
+        "signature": "justify_interval(i interval) -> interval",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "left",
+        "category": "Uncategorized",
+        "signature": "left(string text, n int4) -> text",
+        "description": "The first `n` characters of `string`.\nIf `n` is negative, all but the last `|n|` characters of `string`.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "like_escape",
+        "category": "Uncategorized",
+        "signature": "like_escape(pattern text, b text) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "list_remove",
+        "category": "Uncategorized",
+        "signature": "list_remove(a listany, b any) -> listany",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "ln",
+        "category": "Uncategorized",
+        "signature": "lnf64(a float8) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "ln_numeric",
+        "category": "Uncategorized",
+        "signature": "lnnumeric(a numeric) -> numeric",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "log10",
+        "category": "Uncategorized",
+        "signature": "log10f64(a float8) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "log10_numeric",
+        "category": "Uncategorized",
+        "signature": "log10numeric(a numeric) -> numeric",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mz_acl_item_contains_privilege",
+        "category": "Uncategorized",
+        "signature": "mz_aclitem_contains_privilege(mz_acl_item mz_acl_item, privileges text) -> boolean",
+        "description": "Determines if an mz_aclitem contains one of the specified privileges. This will return true if\nany of the listed privileges are contained in the mz_aclitem.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mz_acl_item_grantee",
+        "category": "Uncategorized",
+        "signature": "mz_aclitem_grantee(mz_acl_item mz_acl_item) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mz_acl_item_grantor",
+        "category": "Uncategorized",
+        "signature": "mz_aclitem_grantor(mz_acl_item mz_acl_item) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mz_acl_item_privileges",
+        "category": "Uncategorized",
+        "signature": "mz_aclitem_privileges(mz_acl_item mz_acl_item) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mz_format_privileges",
+        "category": "Uncategorized",
+        "signature": "mz_format_privileges(privileges text) -> text[]",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mz_render_typmod",
+        "category": "Uncategorized",
+        "signature": "mz_render_typmod(oid uint4, typmod int4) -> any",
+        "description": "Test",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mz_row_size",
+        "category": "Uncategorized",
+        "signature": "mz_row_size(a listany) -> int4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mz_type_name",
+        "category": "Uncategorized",
+        "signature": "mz_type_name(oid oid) -> text?",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mz_validate_privileges",
+        "category": "Uncategorized",
+        "signature": "mz_validate_privileges(privileges text) -> boolean",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "mz_validate_role_privilege",
+        "category": "Uncategorized",
+        "signature": "mz_validate_role_privilege(privilege text) -> boolean",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "neg_float32",
+        "category": "Uncategorized",
+        "signature": "-(a float4) -> float4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "neg_float64",
+        "category": "Uncategorized",
+        "signature": "-(a float8) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "neg_int16",
+        "category": "Uncategorized",
+        "signature": "-(a int2) -> int2",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "neg_int32",
+        "category": "Uncategorized",
+        "signature": "-(a int4) -> int4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "neg_int64",
+        "category": "Uncategorized",
+        "signature": "-(a int8) -> int8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "neg_interval",
+        "category": "Uncategorized",
+        "signature": "-(i interval) -> interval",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "neg_numeric",
+        "category": "Uncategorized",
+        "signature": "-(a numeric) -> numeric",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "normalize",
+        "category": "Uncategorized",
+        "signature": "normalize(text text, form_str text) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "not",
+        "category": "Uncategorized",
+        "signature": "NOT(a boolean) -> boolean",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "panic",
+        "category": "Uncategorized",
+        "signature": "mz_panic(a text) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "pg_column_size",
+        "category": "Uncategorized",
+        "signature": "pg_column_size(a any) -> int4?",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "pg_size_pretty",
+        "category": "Uncategorized",
+        "signature": "pg_size_pretty(a numeric) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_empty",
+        "category": "Uncategorized",
+        "signature": "range_empty(a rangeany) -> boolean",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_lower_inc",
+        "category": "Uncategorized",
+        "signature": "range_lower_inc(a rangeany) -> boolean",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_lower_inf",
+        "category": "Uncategorized",
+        "signature": "range_lower_inf(a rangeany) -> boolean",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_upper_inc",
+        "category": "Uncategorized",
+        "signature": "range_upper_inc(a rangeany) -> boolean",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "range_upper_inf",
+        "category": "Uncategorized",
+        "signature": "range_upper_inf(a rangeany) -> boolean",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "repeat_string",
+        "category": "Uncategorized",
+        "signature": "repeat(string text, count int4) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "right",
+        "category": "Uncategorized",
+        "signature": "right(string text, n int4) -> text",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "round_float32",
+        "category": "Uncategorized",
+        "signature": "roundf32(a float4) -> float4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "round_float64",
+        "category": "Uncategorized",
+        "signature": "roundf64(a float8) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "round_numeric",
+        "category": "Uncategorized",
+        "signature": "roundnumeric(a numeric) -> numeric",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sleep",
+        "category": "Uncategorized",
+        "signature": "mz_sleep(a float8) -> timestamptz?",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sqrt_float64",
+        "category": "Uncategorized",
+        "signature": "sqrtf64(a float8) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sqrt_numeric",
+        "category": "Uncategorized",
+        "signature": "sqrtnumeric(a numeric) -> numeric",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "step_mz_timestamp",
+        "category": "Uncategorized",
+        "signature": "step_mz_timestamp(a mz_timestamp) -> mz_timestamp",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "strpos",
+        "category": "Uncategorized",
+        "signature": "strpos(string text, substring text) -> int4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sub_timestamp_interval",
+        "category": "Uncategorized",
+        "signature": "timestamp - interval -> timestamp",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "sub_timestamp_tz_interval",
+        "category": "Uncategorized",
+        "signature": "timestamptz - interval -> timestamptz",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "timezone_interval_time_binary",
+        "category": "Uncategorized",
+        "signature": "timezoneit(interval interval, time time) -> time",
+        "description": "Converts the time datum `b`, which is assumed to be in UTC, to the timezone that the interval datum `a` is assumed\nto represent. The interval is not allowed to hold months, but there are no limits on the amount of seconds.\nThe interval acts like a `chrono::FixedOffset`, without the `-86,400 < x < 86,400` limitation.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "timezone_interval_timestamp_binary",
+        "category": "Uncategorized",
+        "signature": "timezoneits(interval interval, ts timestamp) -> timestamptz",
+        "description": "Converts the timestamp datum `b`, which is assumed to be in the time of the timezone datum `a` to a timestamptz\nin UTC. The interval is not allowed to hold months, but there are no limits on the amount of seconds.\nThe interval acts like a `chrono::FixedOffset`, without the `-86,400 < x < 86,400` limitation.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "timezone_interval_timestamp_tz_binary",
+        "category": "Uncategorized",
+        "signature": "timezoneitstz(interval interval, tstz timestamptz) -> timestamp",
+        "description": "Converts the UTC timestamptz datum `b`, to the local timestamp of the timezone datum `a`.\nThe interval is not allowed to hold months, but there are no limits on the amount of seconds.\nThe interval acts like a `chrono::FixedOffset`, without the `-86,400 < x < 86,400` limitation.",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "timezone_timestamp_binary",
+        "category": "Uncategorized",
+        "signature": "timezonets(tz text, ts timestamp) -> timestamptz",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "timezone_timestamp_tz_binary",
+        "category": "Uncategorized",
+        "signature": "timezonetstz(tz text, tstz timestamptz) -> timestamp",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "to_timestamp",
+        "category": "Uncategorized",
+        "signature": "tots(f float8) -> timestamptz",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "trunc_float32",
+        "category": "Uncategorized",
+        "signature": "truncf32(a float4) -> float4",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "trunc_float64",
+        "category": "Uncategorized",
+        "signature": "truncf64(a float8) -> float8",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      },
+      {
+        "unique_name": "trunc_numeric",
+        "category": "Uncategorized",
+        "signature": "truncnumeric(a numeric) -> numeric",
+        "description": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false,
+        "side_effecting": false
+      }
+    ]
+  }
+]

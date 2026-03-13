@@ -11,7 +11,7 @@ use darling::FromMeta;
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 use syn::spanned::Spanned;
-use syn::{Expr, Lifetime, Lit};
+use syn::{Expr, Lifetime, Lit, Meta};
 
 /// Modifiers passed as key-value pairs to the `#[sqlfunc]` macro.
 #[derive(Debug, Default, darling::FromMeta)]
@@ -45,6 +45,25 @@ pub(crate) struct Modifiers {
     is_associative: Option<Expr>,
     /// Whether to generate a snapshot test for the function. Defaults to false.
     test: Option<bool>,
+    /// Function category for documentation purposes.
+    category: Option<String>,
+    /// Signature of the function if different from the derived signature.
+    /// Used for documentation purposes.
+    signature: Option<String>,
+    /// Optional URL to link in the documentation.
+    url: Option<String>,
+    /// Optional string describing the version the function was added.
+    version_added: Option<String>,
+    /// Optional boolean expression to indicate the function is unmaterializable.
+    unmaterializable: Option<Expr>,
+    /// Optional boolean expression to indicate that the functions needs special time zone casts.
+    known_time_zone_limitation_cast: Option<Expr>,
+    /// Optional boolean expression to indicate that the function is side effecting.
+    side_effecting: Option<Expr>,
+    /// Optional alias for documentation purposes.
+    alias: Option<Expr>,
+    /// Optional documentation string. Overrides `///` doc comments if present.
+    doc: Option<String>,
 }
 
 /// A name for the SQL function. It can be either a literal or a macro, thus we
@@ -320,6 +339,32 @@ fn camel_case(ident: &Ident) -> Ident {
     Ident::new(&result, ident.span())
 }
 
+/// Determines the argument name of the nth argument of the function.
+///
+/// Panics if the function has fewer than `nth` arguments. Returns an error if
+/// the parameter is a `self` receiver.
+fn arg_name(arg: &syn::ItemFn, nth: usize) -> Result<String, syn::Error> {
+    match &arg.sig.inputs[nth] {
+        syn::FnArg::Typed(pat_ty) => {
+            let pat = &pat_ty.pat;
+            match pat.as_ref() {
+                syn::Pat::Ident(ident) => {
+                    let ident = &ident.ident;
+                    Ok(quote! {#ident}.to_string())
+                }
+                _ => Err(syn::Error::new(
+                    pat.span(),
+                    "Unsupported argument name pattern",
+                )),
+            }
+        }
+        _ => Err(syn::Error::new(
+            arg.sig.inputs[nth].span(),
+            "Unsupported argument name",
+        )),
+    }
+}
+
 /// Determines the argument type of the nth argument of the function.
 ///
 /// Adds a lifetime `'a` to the argument type if it is a reference type.
@@ -397,15 +442,196 @@ fn output_type(arg: &syn::ItemFn) -> Result<&syn::Type, syn::Error> {
     }
 }
 
+/// Extract the documentation string from a list of attributes.
+fn documentation_string(attrs: &[syn::Attribute]) -> String {
+    let mut doc_lines = Vec::new();
+
+    for attr in attrs {
+        if attr.path().is_ident("doc") {
+            // Ensure it is a NameValue (e.g., #[doc = "..."])
+            //  We ignore #[doc(hidden)] or #[doc(alias = ...)] which are Meta::List
+            if let Meta::NameValue(meta_nv) = &attr.meta {
+                if let Expr::Lit(expr_lit) = &meta_nv.value {
+                    if let Lit::Str(lit_str) = &expr_lit.lit {
+                        let trimmed = lit_str.value().trim().to_string();
+                        doc_lines.push(trimmed);
+                    } else {
+                        panic!("Invalid doc string literal: :{:?}", expr_lit.lit);
+                    }
+                } else {
+                    panic!("Invalid doc string literal: {:?}", meta_nv.value);
+                }
+            }
+        }
+    }
+
+    // Join lines with a newline to reconstruct the full block
+    doc_lines.join("\n")
+}
+
+/// Replace all lifetimes in a type with `'static` so the type can be used in contexts
+/// without lifetime parameters, such as `SqlDocName::sql_doc_name()` turbofish calls.
+fn staticify_lifetimes(ty: &syn::Type) -> syn::Type {
+    match ty {
+        syn::Type::Reference(r) => {
+            let elem = staticify_lifetimes(&r.elem);
+            syn::Type::Reference(syn::TypeReference {
+                lifetime: Some(Lifetime::new("'static", r.and_token.span())),
+                elem: Box::new(elem),
+                ..r.clone()
+            })
+        }
+        syn::Type::Path(p) => {
+            let mut p = p.clone();
+            for seg in &mut p.path.segments {
+                if let syn::PathArguments::AngleBracketed(args) = &mut seg.arguments {
+                    for arg in &mut args.args {
+                        match arg {
+                            syn::GenericArgument::Lifetime(lt) => {
+                                *lt = Lifetime::new("'static", lt.apostrophe);
+                            }
+                            syn::GenericArgument::Type(inner_ty) => {
+                                *inner_ty = staticify_lifetimes(inner_ty);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            syn::Type::Path(p)
+        }
+        syn::Type::Group(g) => syn::Type::Group(syn::TypeGroup {
+            elem: Box::new(staticify_lifetimes(&g.elem)),
+            ..g.clone()
+        }),
+        syn::Type::Slice(s) => syn::Type::Slice(syn::TypeSlice {
+            elem: Box::new(staticify_lifetimes(&s.elem)),
+            ..s.clone()
+        }),
+        syn::Type::Tuple(t) => {
+            let elems = t.elems.iter().map(staticify_lifetimes).collect();
+            syn::Type::Tuple(syn::TypeTuple { elems, ..t.clone() })
+        }
+        _ => ty.clone(),
+    }
+}
+
+/// Generate the `func_doc()` associated function implementation for a struct.
+fn generate_func_doc_impl(
+    struct_name: &Ident,
+    unique_name: &str,
+    category: &str,
+    signature_expr: TokenStream,
+    description: &str,
+    url: Option<&String>,
+    version_added: Option<&String>,
+    unmaterializable: Option<TokenStream>,
+    known_time_zone_limitation_cast: Option<TokenStream>,
+    side_effecting: Option<TokenStream>,
+    alias: Option<TokenStream>,
+) -> TokenStream {
+    let url_field = url.map(|u| quote! { url: Some(#u), });
+    let va_field = version_added.map(|v| quote! { version_added: Some(#v), });
+    let unmat_field = unmaterializable.map(|expr| quote! { unmaterializable: #expr, });
+    let tz_field = known_time_zone_limitation_cast
+        .map(|expr| quote! { known_time_zone_limitation_cast: #expr, });
+    let se_field = side_effecting.map(|expr| quote! { side_effecting: #expr, });
+    let alias_field = alias.map(|expr| quote! { alias: Some(#expr), });
+
+    quote! {
+        impl #struct_name {
+            pub fn func_doc() -> crate::func::FuncDoc {
+                crate::func::FuncDoc {
+                    unique_name: #unique_name,
+                    category: #category,
+                    signature: #signature_expr,
+                    description: #description,
+                    #url_field
+                    #va_field
+                    #unmat_field
+                    #tz_field
+                    #se_field
+                    #alias_field
+                    ..crate::func::FuncDoc::default()
+                }
+            }
+        }
+    }
+}
+
 /// Produce a `EagerUnaryFunc` implementation.
 fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<TokenStream> {
     let fn_name = &func.sig.ident;
     let struct_name = camel_case(&func.sig.ident);
     let input_ty = arg_type(func, 0)?;
     let output_ty = output_type(func)?;
+    let arg0_name = arg_name(func, 0)?;
+
+    // Build doc-related tokens before destructuring modifiers.
+    let doc_attrs: Vec<_> = func
+        .attrs
+        .iter()
+        .filter(|a| a.path().is_ident("doc"))
+        .collect();
+    let description = modifiers
+        .doc
+        .clone()
+        .unwrap_or_else(|| documentation_string(&func.attrs));
+    let sqlname_str = modifiers
+        .sqlname
+        .as_ref()
+        .map(|s| format!("{}", quote! { #s }).replace('"', ""))
+        .unwrap_or_else(|| fn_name.to_string());
+    let display_name = modifiers
+        .sqlname
+        .as_ref()
+        .map_or_else(|| quote! { stringify!(#fn_name) }, |name| quote! { #name });
+    let unique_name = fn_name.to_string();
+    let category = modifiers
+        .category
+        .as_deref()
+        .unwrap_or("Uncategorized")
+        .to_string();
+
+    let input_static = staticify_lifetimes(&input_ty);
+    let output_static = staticify_lifetimes(output_ty);
+
+    let signature_expr = if let Some(ref sig) = modifiers.signature {
+        quote! { #sig.to_string() }
+    } else {
+        quote! {
+            format!("{}({} {}) -> {}",
+                #sqlname_str,
+                #arg0_name,
+                <#input_static as ::mz_repr::SqlDocName>::sql_doc_name(),
+                <#output_static as ::mz_repr::SqlDocName>::sql_doc_name(),
+            )
+        }
+    };
+
+    let func_doc_impl = generate_func_doc_impl(
+        &struct_name,
+        &unique_name,
+        &category,
+        signature_expr,
+        &description,
+        modifiers.url.as_ref(),
+        modifiers.version_added.as_ref(),
+        modifiers.unmaterializable.as_ref().map(|e| quote! { #e }),
+        modifiers
+            .known_time_zone_limitation_cast
+            .as_ref()
+            .map(|e| quote! { #e }),
+        modifiers.side_effecting.as_ref().map(|e| quote! { #e }),
+        modifiers.alias.as_ref().map(|e| {
+            let s = quote!(#e).to_string();
+            quote! { #s }
+        }),
+    );
+
     let Modifiers {
         is_monotone,
-        sqlname,
+        sqlname: _,
         preserves_uniqueness,
         inverse,
         is_infix_op,
@@ -417,6 +643,15 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         introduces_nulls,
         is_associative,
         test: _,
+        category: _,
+        signature: _,
+        url: _,
+        version_added: _,
+        unmaterializable: _,
+        known_time_zone_limitation_cast: _,
+        side_effecting: _,
+        alias: _,
+        doc: _,
     } = modifiers;
 
     if is_infix_op.is_some() {
@@ -474,10 +709,6 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         }
     });
 
-    let name = sqlname
-        .as_ref()
-        .map_or_else(|| quote! { stringify!(#fn_name) }, |name| quote! { #name });
-
     let (mut output_type, mut introduces_nulls_fn) = if let Some(output_type) = output_type {
         let introduces_nulls_fn = quote! {
             fn introduces_nulls(&self) -> bool {
@@ -511,12 +742,15 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
     });
 
     let result = quote! {
+        #(#doc_attrs)*
         #[derive(
             proptest_derive::Arbitrary, Ord, PartialOrd, Clone,
             Debug, Eq, PartialEq, serde::Serialize,
             serde::Deserialize, Hash, mz_lowertest::MzReflect,
         )]
         pub struct #struct_name;
+
+        #func_doc_impl
 
         impl crate::func::EagerUnaryFunc for #struct_name {
             type Input<'a> = #input_ty;
@@ -548,7 +782,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
 
         impl std::fmt::Display for #struct_name {
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str(#name)
+                f.write_str(#display_name)
             }
         }
 
@@ -568,10 +802,87 @@ fn binary_func(
     let input1_ty = arg_type(func, 0)?;
     let input2_ty = arg_type(func, 1)?;
     let output_ty = output_type(func)?;
+    let arg0_name = arg_name(func, 0)?;
+    let arg1_name = arg_name(func, 1)?;
+
+    // Build doc-related tokens before destructuring modifiers.
+    let doc_attrs: Vec<_> = func
+        .attrs
+        .iter()
+        .filter(|a| a.path().is_ident("doc"))
+        .collect();
+    let description = modifiers
+        .doc
+        .clone()
+        .unwrap_or_else(|| documentation_string(&func.attrs));
+    let sqlname_str = modifiers
+        .sqlname
+        .as_ref()
+        .map(|s| format!("{}", quote! { #s }).replace('"', ""))
+        .unwrap_or_else(|| fn_name.to_string());
+    let display_name = modifiers
+        .sqlname
+        .as_ref()
+        .map_or_else(|| quote! { stringify!(#fn_name) }, |name| quote! { #name });
+    let unique_name = fn_name.to_string();
+    let category = modifiers
+        .category
+        .as_deref()
+        .unwrap_or("Uncategorized")
+        .to_string();
+
+    let input1_static = staticify_lifetimes(&input1_ty);
+    let input2_static = staticify_lifetimes(&input2_ty);
+    let output_static = staticify_lifetimes(output_ty);
+
+    let is_infix = modifiers.is_infix_op.is_some();
+    let signature_expr = if let Some(ref sig) = modifiers.signature {
+        quote! { #sig.to_string() }
+    } else if is_infix {
+        quote! {
+            format!("{} {} {} -> {}",
+                <#input1_static as ::mz_repr::SqlDocName>::sql_doc_name(),
+                #sqlname_str,
+                <#input2_static as ::mz_repr::SqlDocName>::sql_doc_name(),
+                <#output_static as ::mz_repr::SqlDocName>::sql_doc_name(),
+            )
+        }
+    } else {
+        quote! {
+            format!("{}({} {}, {} {}) -> {}",
+                #sqlname_str,
+                #arg0_name,
+                <#input1_static as ::mz_repr::SqlDocName>::sql_doc_name(),
+                #arg1_name,
+                <#input2_static as ::mz_repr::SqlDocName>::sql_doc_name(),
+                <#output_static as ::mz_repr::SqlDocName>::sql_doc_name(),
+            )
+        }
+    };
+
+    let func_doc_impl = generate_func_doc_impl(
+        &struct_name,
+        &unique_name,
+        &category,
+        signature_expr,
+        &description,
+        modifiers.url.as_ref(),
+        modifiers.version_added.as_ref(),
+        modifiers.unmaterializable.as_ref().map(|e| quote! { #e }),
+        modifiers
+            .known_time_zone_limitation_cast
+            .as_ref()
+            .map(|e| quote! { #e }),
+        modifiers.side_effecting.as_ref().map(|e| quote! { #e }),
+        modifiers.alias.as_ref().map(|e| {
+            let s = quote!(#e).to_string();
+            quote! { #s }
+        }),
+    );
 
     let Modifiers {
         is_monotone,
-        sqlname,
+        sqlname: _,
         preserves_uniqueness,
         inverse,
         is_infix_op,
@@ -583,6 +894,15 @@ fn binary_func(
         introduces_nulls,
         is_associative,
         test: _,
+        category: _,
+        signature: _,
+        url: _,
+        version_added: _,
+        unmaterializable: _,
+        known_time_zone_limitation_cast: _,
+        side_effecting: _,
+        alias: _,
+        doc: _,
     } = modifiers;
 
     if preserves_uniqueness.is_some() {
@@ -626,10 +946,6 @@ fn binary_func(
             }
         }
     });
-
-    let name = sqlname
-        .as_ref()
-        .map_or_else(|| quote! { stringify!(#fn_name) }, |name| quote! { #name });
 
     let (mut output_type, mut introduces_nulls_fn) = if let Some(output_type) = output_type {
         let introduces_nulls_fn = quote! {
@@ -691,12 +1007,15 @@ fn binary_func(
         non_nullable_position_checks(&[input1_ty.clone(), input2_ty.clone()]);
 
     let result = quote! {
+        #(#doc_attrs)*
         #[derive(
             proptest_derive::Arbitrary, Ord, PartialOrd, Clone,
             Debug, Eq, PartialEq, serde::Serialize,
             serde::Deserialize, Hash, mz_lowertest::MzReflect,
         )]
         pub struct #struct_name;
+
+        #func_doc_impl
 
         impl crate::func::binary::EagerBinaryFunc for #struct_name {
             type Input<'a> = (#input1_ty, #input2_ty);
@@ -744,13 +1063,13 @@ fn binary_func(
 
         impl std::fmt::Display for #struct_name {
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str(#name)
+                f.write_str(#display_name)
             }
         }
 
         #func
-
     };
+
     Ok(result)
 }
 
@@ -773,9 +1092,47 @@ fn variadic_func(
         .and_then(|ty| ty.segments.last())
         .map_or_else(|| camel_case(fn_name), |seg| seg.ident.clone());
 
+    // Build doc-related tokens before destructuring modifiers.
+    let doc_attrs: Vec<_> = func
+        .attrs
+        .iter()
+        .filter(|a| a.path().is_ident("doc"))
+        .collect();
+    let description = modifiers
+        .doc
+        .clone()
+        .unwrap_or_else(|| documentation_string(&func.attrs));
+    let sqlname_str = modifiers
+        .sqlname
+        .as_ref()
+        .map(|s| format!("{}", quote! { #s }).replace('"', ""))
+        .unwrap_or_else(|| fn_name.to_string());
+    let display_name = modifiers
+        .sqlname
+        .as_ref()
+        .map_or_else(|| quote! { stringify!(#fn_name) }, |name| quote! { #name });
+    let unique_name = fn_name.to_string();
+    let category = modifiers
+        .category
+        .as_deref()
+        .unwrap_or("Uncategorized")
+        .to_string();
+    let explicit_signature = modifiers.signature.clone();
+    let doc_url = modifiers.url.clone();
+    let doc_version_added = modifiers.version_added.clone();
+    let doc_unmaterializable = modifiers.unmaterializable.map(|e| quote! { #e });
+    let doc_known_tz = modifiers
+        .known_time_zone_limitation_cast
+        .map(|e| quote! { #e });
+    let doc_side_effecting = modifiers.side_effecting.map(|e| quote! { #e });
+    let doc_alias = modifiers.alias.as_ref().map(|e| {
+        let s = quote!(#e).to_string();
+        quote! { #s }
+    });
+
     let Modifiers {
         is_monotone,
-        sqlname,
+        sqlname: _,
         preserves_uniqueness,
         inverse,
         is_infix_op,
@@ -787,6 +1144,15 @@ fn variadic_func(
         introduces_nulls,
         is_associative,
         test: _,
+        category: _,
+        signature: _,
+        url: _,
+        version_added: _,
+        unmaterializable: _,
+        known_time_zone_limitation_cast: _,
+        side_effecting: _,
+        alias: _,
+        doc: _,
     } = modifiers;
 
     // Reject modifiers that don't apply to variadic functions.
@@ -885,11 +1251,6 @@ fn variadic_func(
         quote! { #fn_name(#(#param_names),* #arena_arg) }
     };
 
-    // Build modifier functions.
-    let name = sqlname
-        .as_ref()
-        .map_or_else(|| quote! { stringify!(#fn_name) }, |name| quote! { #name });
-
     let (mut output_type_code, mut introduces_nulls_fn) = if let Some(output_type) = output_type {
         let introduces_nulls_fn = quote! {
             fn introduces_nulls(&self) -> bool {
@@ -958,6 +1319,58 @@ fn variadic_func(
     // the corresponding input column is nullable.
     let non_nullable_checks = non_nullable_position_checks(&param_types);
 
+    // Build doc signature from parameter types.
+    let output_static = staticify_lifetimes(output_ty);
+    let param_statics: Vec<_> = param_types.iter().map(staticify_lifetimes).collect();
+    let param_name_strs: Vec<String> = param_names.iter().map(|n| n.to_string()).collect();
+    let signature_expr = if let Some(ref sig) = explicit_signature {
+        quote! { #sig.to_string() }
+    } else {
+        #[allow(clippy::disallowed_methods)] // compile-time zip, lengths always match
+        let param_parts: Vec<_> = param_name_strs
+            .iter()
+            .zip(param_statics.iter())
+            .map(|(name, ty)| {
+                quote! {
+                    <#ty as ::mz_repr::SqlDocName>::fmt_doc_param(#name)
+                }
+            })
+            .collect();
+        quote! {
+            {
+                let params: Vec<(String, bool)> = vec![#(#param_parts),*];
+                let mut sig = String::new();
+                for (formatted, is_optional) in &params {
+                    if *is_optional {
+                        sig.push_str(&format!(" [, {}]", formatted));
+                    } else {
+                        if !sig.is_empty() { sig.push_str(", "); }
+                        sig.push_str(formatted);
+                    }
+                }
+                format!("{}({}) -> {}",
+                    #sqlname_str,
+                    sig,
+                    <#output_static as ::mz_repr::SqlDocName>::sql_doc_name(),
+                )
+            }
+        }
+    };
+
+    let func_doc_impl = generate_func_doc_impl(
+        &struct_name,
+        &unique_name,
+        &category,
+        signature_expr,
+        &description,
+        doc_url.as_ref(),
+        doc_version_added.as_ref(),
+        doc_unmaterializable,
+        doc_known_tz,
+        doc_side_effecting,
+        doc_alias,
+    );
+
     let trait_impl = quote! {
         impl crate::func::variadic::EagerVariadicFunc for #struct_name {
             type Input<'a> = #input_type;
@@ -1008,7 +1421,7 @@ fn variadic_func(
     let display_impl = quote! {
         impl std::fmt::Display for #struct_name {
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str(#name)
+                f.write_str(#display_name)
             }
         }
     };
@@ -1021,10 +1434,12 @@ fn variadic_func(
             }
             #trait_impl
             #display_impl
+            #func_doc_impl
         }
     } else {
         // Unit struct: generate struct + trait impl + Display + original function.
         quote! {
+            #(#doc_attrs)*
             #[derive(
                 proptest_derive::Arbitrary, Ord, PartialOrd, Clone,
                 Debug, Eq, PartialEq, serde::Serialize,
@@ -1034,10 +1449,92 @@ fn variadic_func(
 
             #trait_impl
             #display_impl
+            #func_doc_impl
 
             #func
         }
     };
 
     Ok(result)
+}
+
+/// Convert a CamelCase identifier to snake_case.
+fn to_snake_case(name: &str) -> String {
+    let mut result = String::new();
+    for (i, ch) in name.chars().enumerate() {
+        if ch.is_uppercase() {
+            if i > 0 {
+                result.push('_');
+            }
+            result.push(ch.to_ascii_lowercase());
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
+/// Modifiers parsed from `#[sqldoc(...)]` attributes on structs.
+#[derive(Debug, Default, darling::FromMeta)]
+pub(crate) struct DocModifiers {
+    /// A unique name for the function, used internally. Defaults to the snake_case of the struct name.
+    unique_name: Option<String>,
+    /// The category of the function (e.g. "Cast", "String", "Timestamp").
+    category: Option<String>,
+    /// The signature of the function for documentation.
+    signature: Option<String>,
+    /// Optional URL for documentation.
+    url: Option<String>,
+    /// Optional version when the function was added.
+    version_added: Option<String>,
+    /// Whether the function is unmaterializable.
+    unmaterializable: Option<bool>,
+    /// Whether the function has known time zone cast limitations.
+    known_time_zone_limitation_cast: Option<bool>,
+    /// Whether the function has side effects.
+    side_effecting: Option<bool>,
+    /// Optional alias name for the function.
+    alias: Option<String>,
+}
+
+/// Implementation for the `#[sqldoc]` attribute macro. Generates a `func_doc()` associated
+/// function on a struct, extracting documentation from doc comments and explicit attributes.
+pub fn sqldoc(attr: TokenStream, item: TokenStream) -> darling::Result<TokenStream> {
+    let item_struct = syn::parse2::<syn::ItemStruct>(item)?;
+    let attr_args = darling::ast::NestedMeta::parse_meta_list(attr)?;
+    let modifiers = DocModifiers::from_list(&attr_args)?;
+
+    let struct_name = &item_struct.ident;
+    let description = documentation_string(&item_struct.attrs);
+
+    let unique_name = modifiers
+        .unique_name
+        .unwrap_or_else(|| to_snake_case(&struct_name.to_string()));
+    let category = modifiers
+        .category
+        .as_deref()
+        .unwrap_or("Uncategorized")
+        .to_string();
+    let signature = modifiers.signature.as_deref().unwrap_or("").to_string();
+
+    let func_doc_impl = generate_func_doc_impl(
+        struct_name,
+        &unique_name,
+        &category,
+        quote! { #signature.to_string() },
+        &description,
+        modifiers.url.as_ref(),
+        modifiers.version_added.as_ref(),
+        modifiers.unmaterializable.map(|b| quote! { #b }),
+        modifiers
+            .known_time_zone_limitation_cast
+            .map(|b| quote! { #b }),
+        modifiers.side_effecting.map(|b| quote! { #b }),
+        modifiers.alias.as_ref().map(|a| quote! { #a }),
+    );
+
+    Ok(quote! {
+        #item_struct
+        #func_doc_impl
+    })
 }

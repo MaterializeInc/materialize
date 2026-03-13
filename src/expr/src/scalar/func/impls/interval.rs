@@ -19,7 +19,9 @@ use crate::EvalError;
 #[sqlfunc(
     sqlname = "interval_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToInterval)
+    inverse = to_unary!(super::CastStringToInterval),
+    category = "Cast",
+    doc = "Converts interval to text."
 )]
 fn cast_interval_to_string(a: Interval) -> String {
     let mut buf = String::new();
@@ -30,7 +32,9 @@ fn cast_interval_to_string(a: Interval) -> String {
 #[sqlfunc(
     sqlname = "interval_to_time",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastTimeToInterval)
+    inverse = to_unary!(super::CastTimeToInterval),
+    category = "Cast",
+    doc = "Converts interval to time."
 )]
 fn cast_interval_to_time(i: Interval) -> NaiveTime {
     // Modeled after the PostgreSQL implementation:
@@ -64,26 +68,43 @@ fn cast_interval_to_time(i: Interval) -> NaiveTime {
 #[sqlfunc(
     sqlname = "-",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::NegInterval)
+    inverse = to_unary!(super::NegInterval),
+    category = "Date and time",
+    doc = "Negates the interval."
 )]
 fn neg_interval(i: Interval) -> Result<Interval, EvalError> {
     i.checked_neg()
         .ok_or_else(|| EvalError::IntervalOutOfRange(i.to_string().into()))
 }
 
-#[sqlfunc(sqlname = "justify_days")]
+#[sqlfunc(
+    sqlname = "justify_days",
+    category = "Date and time",
+    doc = "Adjusts the interval so 30-day time periods are represented as months.",
+    url = "/sql/functions/justify-days"
+)]
 fn justify_days(i: Interval) -> Result<Interval, EvalError> {
     i.justify_days()
         .map_err(|_| EvalError::IntervalOutOfRange(i.to_string().into()))
 }
 
-#[sqlfunc(sqlname = "justify_hours")]
+#[sqlfunc(
+    sqlname = "justify_hours",
+    category = "Date and time",
+    doc = "Adjusts the interval so 24-hour time periods are represented as days.",
+    url = "/sql/functions/justify-hours"
+)]
 fn justify_hours(i: Interval) -> Result<Interval, EvalError> {
     i.justify_hours()
         .map_err(|_| EvalError::IntervalOutOfRange(i.to_string().into()))
 }
 
-#[sqlfunc(sqlname = "justify_interval")]
+#[sqlfunc(
+    sqlname = "justify_interval",
+    category = "Date and time",
+    doc = "Adjusts the interval using justify_days and justify_hours, with additional sign adjustments.",
+    url = "/sql/functions/justify-interval"
+)]
 fn justify_interval(i: Interval) -> Result<Interval, EvalError> {
     i.justify_interval()
         .map_err(|_| EvalError::IntervalOutOfRange(i.to_string().into()))

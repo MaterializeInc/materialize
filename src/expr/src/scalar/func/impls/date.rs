@@ -10,7 +10,7 @@
 use std::fmt;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Utc};
-use mz_expr_derive::sqlfunc;
+use mz_expr_derive::{sqldoc, sqlfunc};
 use mz_lowertest::MzReflect;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::DateTimeUnits;
@@ -26,7 +26,9 @@ use crate::scalar::func::EagerUnaryFunc;
 #[sqlfunc(
     sqlname = "date_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToDate)
+    inverse = to_unary!(super::CastStringToDate),
+    category = "Cast",
+    doc = "Converts date to text."
 )]
 fn cast_date_to_string(a: Date) -> String {
     let mut buf = String::new();
@@ -34,6 +36,8 @@ fn cast_date_to_string(a: Date) -> String {
     buf
 }
 
+/// Converts date to timestamp.
+#[sqldoc(unique_name = "date_to_timestamp", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -82,6 +86,8 @@ impl fmt::Display for CastDateToTimestamp {
     }
 }
 
+/// Converts date to timestamptz.
+#[sqldoc(unique_name = "date_to_timestamp_with_timezone", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -165,6 +171,12 @@ pub fn extract_date_inner(units: DateTimeUnits, date: NaiveDate) -> Result<Numer
     }
 }
 
+/// Extracts a date/time field from a date.
+#[sqldoc(
+    unique_name = "extract_date",
+    category = "Date and time",
+    url = "/sql/functions/extract/"
+)]
 #[derive(
     Ord,
     PartialOrd,

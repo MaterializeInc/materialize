@@ -10,7 +10,7 @@
 use std::fmt;
 
 use chrono::{NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike};
-use mz_expr_derive::sqlfunc;
+use mz_expr_derive::{sqldoc, sqlfunc};
 use mz_lowertest::MzReflect;
 use mz_pgtz::timezone::Timezone;
 use mz_repr::adt::datetime::{DateTimeField, DateTimeUnits};
@@ -26,7 +26,9 @@ use crate::scalar::func::EagerUnaryFunc;
 #[sqlfunc(
     sqlname = "time_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToTime)
+    inverse = to_unary!(super::CastStringToTime),
+    category = "Cast",
+    doc = "Converts time to text."
 )]
 fn cast_time_to_string(a: NaiveTime) -> String {
     let mut buf = String::new();
@@ -37,7 +39,9 @@ fn cast_time_to_string(a: NaiveTime) -> String {
 #[sqlfunc(
     sqlname = "time_to_interval",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastIntervalToTime)
+    inverse = to_unary!(super::CastIntervalToTime),
+    category = "Cast",
+    doc = "Converts time to interval."
 )]
 fn cast_time_to_interval(t: NaiveTime) -> Interval {
     // wont overflow because value can't exceed 24 hrs + 1_000_000 ns = 86_400 seconds + 1_000_000 ns = 86_400_001_000 us
@@ -87,6 +91,12 @@ where
     }
 }
 
+/// Extracts a date/time field from a time.
+#[sqldoc(
+    unique_name = "extract_time",
+    category = "Date and time",
+    url = "/sql/functions/extract/"
+)]
 #[derive(
     Ord,
     PartialOrd,
@@ -120,6 +130,12 @@ impl fmt::Display for ExtractTime {
     }
 }
 
+/// Extracts a date/time field from a time.
+#[sqldoc(
+    unique_name = "date_part_time",
+    category = "Date and time",
+    url = "/sql/functions/date-part"
+)]
 #[derive(
     Ord,
     PartialOrd,
@@ -163,6 +179,12 @@ pub fn timezone_time(tz: Timezone, t: NaiveTime, wall_time: &NaiveDateTime) -> N
     t + offset
 }
 
+/// Converts a time to the specified timezone.
+#[sqldoc(
+    unique_name = "timezone_time",
+    category = "Date and time",
+    url = "/sql/functions/timezone-and-at-time-zone"
+)]
 #[derive(
     Ord,
     PartialOrd,

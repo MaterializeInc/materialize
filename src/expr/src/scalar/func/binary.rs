@@ -182,7 +182,7 @@ impl<T: EagerBinaryFunc> LazyBinaryFunc for T {
     }
 }
 
-pub use derive::BinaryFunc;
+pub use derive::{BinaryFunc, BinaryFuncKind};
 
 mod derive {
     use std::fmt;
@@ -302,8 +302,8 @@ mod derive {
         IsRegexpMatchCaseInsensitive(IsRegexpMatchCaseInsensitive),
         ToCharTimestamp(ToCharTimestampFormat),
         ToCharTimestampTz(ToCharTimestampTzFormat),
-        DateBinTimestamp(DateBinTimestamp),
-        DateBinTimestampTz(DateBinTimestampTz),
+        DateBinTimestamp(BinUnixEpochTimestamp),
+        DateBinTimestampTz(BinUnixEpochTimestampTz),
         ExtractInterval(DatePartIntervalNumeric),
         ExtractTime(DatePartTimeNumeric),
         ExtractTimestamp(DatePartTimestampTimestampNumeric),

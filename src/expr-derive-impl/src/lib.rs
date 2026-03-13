@@ -15,6 +15,7 @@
 
 mod sqlfunc;
 
+pub use sqlfunc::sqldoc;
 pub use sqlfunc::sqlfunc;
 
 /// Non-exported version of `sqlfunc` for testing purposes, accepting proc_macro2 token streams.
@@ -48,6 +49,25 @@ pub fn test_sqlfunc(
 #[cfg(any(feature = "test", test))]
 pub fn test_sqlfunc_str(attr: &str, item: &str) -> (String, String) {
     test_sqlfunc(attr.parse().unwrap(), item.parse().unwrap())
+}
+
+#[cfg(any(feature = "test", test))]
+pub fn test_sqldoc(
+    attr: proc_macro2::TokenStream,
+    item: proc_macro2::TokenStream,
+) -> (String, String) {
+    fn rust_fmt(input: &str) -> String {
+        let file = syn::parse_file(input).unwrap();
+        prettyplease::unparse(&file)
+    }
+
+    let input = rust_fmt(&format!("#[sqldoc({attr})]\n{item}"));
+    let output = rust_fmt(
+        &sqldoc(attr, item)
+            .unwrap_or_else(|err| err.write_errors())
+            .to_string(),
+    );
+    (output, input)
 }
 
 #[cfg(test)]
@@ -170,6 +190,20 @@ mod test {
 
     #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
+    fn insta_test_sqldoc_basic() {
+        let attr = quote! {
+            unique_name = "arraytolist",
+            category = "Cast"
+        };
+        let item = quote! {
+            pub struct CastArrayToListOneDim;
+        };
+        let (output, input) = super::test_sqldoc(attr, item);
+        insta::assert_snapshot!("sqldoc_basic", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
     fn insta_test_variadic_variadic_type() {
         let attr = quote! {
             Concat,
@@ -224,5 +258,22 @@ mod test {
         };
         let (output, input) = super::test_sqlfunc(attr, item);
         insta::assert_snapshot!("variadic_modifiers", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn insta_test_sqldoc_with_doc_comment() {
+        let attr = quote! {
+            unique_name = "extract_interval",
+            category = "Timestamp",
+            signature = "EXTRACT (unit FROM interval) -> numeric",
+            url = "/sql/functions/extract"
+        };
+        let item = quote! {
+            /// Extracts the specified `unit` from the given `interval` and returns it as a numeric value.
+            pub struct ExtractInterval;
+        };
+        let (output, input) = super::test_sqldoc(attr, item);
+        insta::assert_snapshot!("sqldoc_with_docs", output, &input);
     }
 }

@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use mz_expr_derive::sqlfunc;
+use mz_expr_derive::{sqldoc, sqlfunc};
 use mz_lowertest::MzReflect;
 use mz_repr::adt::range::Range;
 use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
@@ -18,6 +18,8 @@ use serde::{Deserialize, Serialize};
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
+/// Converts a range to text.
+#[sqldoc(unique_name = "rangetostr", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -82,31 +84,37 @@ impl fmt::Display for CastRangeToString {
     }
 }
 
+/// Returns the lower bound of the range, or NULL if the range is empty or has no lower bound.
 #[sqlfunc(
     sqlname = "rangelower",
     is_monotone = true,
     introduces_nulls = true,
+    category = "Range",
     output_type_expr = input_type.scalar_type.unwrap_range_element_type().clone().nullable(true)
 )]
 fn range_lower<'a>(a: Range<Datum<'a>>) -> Option<Datum<'a>> {
     a.inner.map(|inner| inner.lower.bound).flatten()
 }
 
+/// Returns the upper bound of the range, or NULL if the range is empty or has no lower bound.
 #[sqlfunc(
     sqlname = "rangeupper",
     introduces_nulls = true,
+    category = "Range",
     output_type_expr = input_type.scalar_type.unwrap_range_element_type().clone().nullable(true)
 )]
 fn range_upper<'a>(a: Range<Datum<'a>>) -> Option<Datum<'a>> {
     a.inner.map(|inner| inner.upper.bound).flatten()
 }
 
-#[sqlfunc(sqlname = "range_empty")]
+/// Returns true if the range is empty.
+#[sqlfunc(sqlname = "range_empty", category = "Range")]
 fn range_empty<'a>(a: Range<Datum<'a>>) -> bool {
     a.inner.is_none()
 }
 
-#[sqlfunc(sqlname = "range_lower_inc")]
+/// Returns true if the range's lower bound is inclusive.
+#[sqlfunc(sqlname = "range_lower_inc", category = "Range")]
 fn range_lower_inc<'a>(a: Range<Datum<'a>>) -> bool {
     match a.inner {
         None => false,
@@ -114,7 +122,8 @@ fn range_lower_inc<'a>(a: Range<Datum<'a>>) -> bool {
     }
 }
 
-#[sqlfunc(sqlname = "range_upper_inc")]
+/// Returns true if the range's upper bound is inclusive.
+#[sqlfunc(sqlname = "range_upper_inc", category = "Range")]
 fn range_upper_inc<'a>(a: Range<Datum<'a>>) -> bool {
     match a.inner {
         None => false,
@@ -122,7 +131,8 @@ fn range_upper_inc<'a>(a: Range<Datum<'a>>) -> bool {
     }
 }
 
-#[sqlfunc(sqlname = "range_lower_inf")]
+/// Returns true if the range's lower bound is infinite.
+#[sqlfunc(sqlname = "range_lower_inf", category = "Range")]
 fn range_lower_inf<'a>(a: Range<Datum<'a>>) -> bool {
     match a.inner {
         None => false,
@@ -130,7 +140,8 @@ fn range_lower_inf<'a>(a: Range<Datum<'a>>) -> bool {
     }
 }
 
-#[sqlfunc(sqlname = "range_upper_inf")]
+/// Returns true if the range's upper bound is infinite.
+#[sqlfunc(sqlname = "range_upper_inf", category = "Range")]
 fn range_upper_inf<'a>(a: Range<Datum<'a>>) -> bool {
     match a.inner {
         None => false,

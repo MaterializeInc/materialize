@@ -16,6 +16,23 @@ expression: "#[sqlfunc(test = true)]\nfn unary_fn<'a>(a: &i16) -> bool {\n    un
     mz_lowertest::MzReflect,
 )]
 pub struct UnaryFn;
+impl UnaryFn {
+    pub fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "unary_fn",
+            category: "Uncategorized",
+            signature: format!(
+                "{}({} {}) -> {}",
+                "unary_fn",
+                "a",
+                <&'static i16 as ::mz_repr::SqlDocName>::sql_doc_name(),
+                <bool as ::mz_repr::SqlDocName>::sql_doc_name(),
+            ),
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 impl crate::func::EagerUnaryFunc for UnaryFn {
     type Input<'a> = &'a i16;
     type Output<'a> = bool;

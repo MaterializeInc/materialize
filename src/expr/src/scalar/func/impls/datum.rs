@@ -12,22 +12,38 @@ use mz_repr::{Datum, DatumList};
 
 use crate::EvalError;
 
-#[sqlfunc(sqlname = "isnull", is_monotone = true)]
+#[sqlfunc(
+    sqlname = "isnull",
+    is_monotone = true,
+    category = "Boolean",
+    doc = "Returns true if the value is null."
+)]
 fn is_null<'a>(a: Datum<'a>) -> bool {
     a.is_null()
 }
 
-#[sqlfunc(sqlname = "istrue")]
+#[sqlfunc(
+    sqlname = "istrue",
+    category = "Boolean",
+    doc = "Returns true if the value is true."
+)]
 fn is_true<'a>(a: Datum<'a>) -> bool {
     a == Datum::True
 }
 
-#[sqlfunc(sqlname = "isfalse")]
+#[sqlfunc(
+    sqlname = "isfalse",
+    category = "Boolean",
+    doc = "Returns true if the value is false."
+)]
 fn is_false<'a>(a: Datum<'a>) -> bool {
     a == Datum::False
 }
 
-#[sqlfunc]
+#[sqlfunc(
+    category = "PostgreSQL compatibility",
+    doc = "Returns the number of bytes used to store a value."
+)]
 fn pg_column_size<'a>(a: Datum<'a>) -> Result<Option<i32>, EvalError> {
     match a {
         Datum::Null => Ok(None),
@@ -40,7 +56,10 @@ fn pg_column_size<'a>(a: Datum<'a>) -> Result<Option<i32>, EvalError> {
     }
 }
 
-#[sqlfunc]
+#[sqlfunc(
+    category = "System information",
+    doc = "Returns the byte size of a row."
+)]
 // TODO[btv] - if we plan to keep changing row format,
 // should we make this unmaterializable?
 fn mz_row_size<'a>(a: DatumList<'a>) -> Result<i32, EvalError> {

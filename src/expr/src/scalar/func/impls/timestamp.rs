@@ -12,7 +12,7 @@ use std::fmt;
 use chrono::{
     DateTime, Duration, FixedOffset, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike, Utc,
 };
-use mz_expr_derive::sqlfunc;
+use mz_expr_derive::{sqldoc, sqlfunc};
 use mz_lowertest::MzReflect;
 use mz_ore::result::ResultExt;
 use mz_pgtz::timezone::{Timezone, TimezoneSpec};
@@ -32,7 +32,9 @@ use crate::scalar::func::{EagerUnaryFunc, TimestampLike};
 #[sqlfunc(
     sqlname = "timestamp_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToTimestamp(None))
+    inverse = to_unary!(super::CastStringToTimestamp(None)),
+    category = "Cast",
+    doc = "Converts timestamp to text."
 )]
 fn cast_timestamp_to_string(a: CheckedTimestamp<NaiveDateTime>) -> String {
     let mut buf = String::new();
@@ -43,7 +45,9 @@ fn cast_timestamp_to_string(a: CheckedTimestamp<NaiveDateTime>) -> String {
 #[sqlfunc(
     sqlname = "timestamp_with_time_zone_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToTimestampTz(None))
+    inverse = to_unary!(super::CastStringToTimestampTz(None)),
+    category = "Cast",
+    doc = "Converts timestamptz to text."
 )]
 fn cast_timestamp_tz_to_string(a: CheckedTimestamp<DateTime<Utc>>) -> String {
     let mut buf = String::new();
@@ -55,7 +59,9 @@ fn cast_timestamp_tz_to_string(a: CheckedTimestamp<DateTime<Utc>>) -> String {
     sqlname = "timestamp_to_date",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastDateToTimestamp(None)),
-    is_monotone = true
+    is_monotone = true,
+    category = "Cast",
+    doc = "Converts timestamp to date."
 )]
 fn cast_timestamp_to_date(a: CheckedTimestamp<NaiveDateTime>) -> Result<Date, EvalError> {
     Ok(a.date().try_into()?)
@@ -65,12 +71,19 @@ fn cast_timestamp_to_date(a: CheckedTimestamp<NaiveDateTime>) -> Result<Date, Ev
     sqlname = "timestamp_with_time_zone_to_date",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastDateToTimestampTz(None)),
-    is_monotone = true
+    is_monotone = true,
+    category = "Cast",
+    doc = "Converts timestamptz to date."
 )]
 fn cast_timestamp_tz_to_date(a: CheckedTimestamp<DateTime<Utc>>) -> Result<Date, EvalError> {
     Ok(a.naive_utc().date().try_into()?)
 }
 
+/// Converts timestamp to timestamptz.
+#[sqldoc(
+    unique_name = "timestamp_to_timestamp_with_time_zone",
+    category = "Cast"
+)]
 #[derive(
     Ord,
     PartialOrd,
@@ -128,6 +141,8 @@ impl fmt::Display for CastTimestampToTimestampTz {
     }
 }
 
+/// Adjusts the precision of a timestamp value.
+#[sqldoc(unique_name = "adjust_timestamp_precision", category = "Date and time")]
 #[derive(
     Ord,
     PartialOrd,
@@ -184,6 +199,11 @@ impl fmt::Display for AdjustTimestampPrecision {
     }
 }
 
+/// Converts timestamptz to timestamp.
+#[sqldoc(
+    unique_name = "timestamp_with_time_zone_to_timestamp",
+    category = "Cast"
+)]
 #[derive(
     Ord,
     PartialOrd,
@@ -240,6 +260,11 @@ impl fmt::Display for CastTimestampTzToTimestamp {
     }
 }
 
+/// Adjusts the precision of a timestamptz value.
+#[sqldoc(
+    unique_name = "ajust_timestamp_with_time_zone_precision",
+    category = "Date and time"
+)]
 #[derive(
     Ord,
     PartialOrd,
@@ -296,14 +321,21 @@ impl fmt::Display for AdjustTimestampTzPrecision {
     }
 }
 
-#[sqlfunc(sqlname = "timestamp_to_time", preserves_uniqueness = false)]
+#[sqlfunc(
+    sqlname = "timestamp_to_time",
+    preserves_uniqueness = false,
+    category = "Cast",
+    doc = "Converts timestamp to time."
+)]
 fn cast_timestamp_to_time(a: CheckedTimestamp<NaiveDateTime>) -> NaiveTime {
     a.time()
 }
 
 #[sqlfunc(
     sqlname = "timestamp_with_time_zone_to_time",
-    preserves_uniqueness = false
+    preserves_uniqueness = false,
+    category = "Cast",
+    doc = "Converts timestamptz to time."
 )]
 fn cast_timestamp_tz_to_time(a: CheckedTimestamp<DateTime<Utc>>) -> NaiveTime {
     a.naive_utc().time()
@@ -341,6 +373,13 @@ where
     }
 }
 
+#[sqldoc(
+    unique_name = "extract_interval",
+    category = "Date and time",
+    signature = "EXTRACT (unit FROM interval) -> numeric",
+    url = "/sql/functions/extract"
+)]
+/// Extracts the specified `unit` from the given `interval` and returns it as a numeric value.
 #[derive(
     Ord,
     PartialOrd,
@@ -374,6 +413,12 @@ impl fmt::Display for ExtractInterval {
     }
 }
 
+/// Extracts a date/time field from an interval.
+#[sqldoc(
+    unique_name = "date_part_interval",
+    category = "Date and time",
+    url = "/sql/functions/date-part"
+)]
 #[derive(
     Ord,
     PartialOrd,
@@ -453,6 +498,13 @@ pub(crate) fn most_significant_unit(unit: DateTimeUnits) -> bool {
     }
 }
 
+#[sqldoc(
+    unique_name = "extract_timestamp",
+    category = "Date and time",
+    signature = "EXTRACT (unit FROM timestamp) -> numeric",
+    url = "/sql/functions/extract"
+)]
+/// Extracts the specified `unit` from the given `interval` and returns it as a numeric value.
 #[derive(
     Ord,
     PartialOrd,
@@ -490,6 +542,13 @@ impl fmt::Display for ExtractTimestamp {
     }
 }
 
+#[sqldoc(
+    unique_name = "extract_tstz",
+    category = "Date and time",
+    signature = "EXTRACT (unit FROM timestamp with timezone) -> numeric",
+    url = "/sql/functions/extract"
+)]
+/// Extracts the specified `unit` from the given `timestamp with timezone` and returns it as a numeric value.
 #[derive(
     Ord,
     PartialOrd,
@@ -530,6 +589,12 @@ impl fmt::Display for ExtractTimestampTz {
     }
 }
 
+/// Extracts a date/time field from a timestamp.
+#[sqldoc(
+    unique_name = "date_part_timestamp",
+    category = "Date and time",
+    url = "/sql/functions/date-part"
+)]
 #[derive(
     Ord,
     PartialOrd,
@@ -563,6 +628,12 @@ impl fmt::Display for DatePartTimestamp {
     }
 }
 
+/// Extracts a date/time field from a timestamptz.
+#[sqldoc(
+    unique_name = "date_part_tstz",
+    category = "Date and time",
+    url = "/sql/functions/date-part"
+)]
 #[derive(
     Ord,
     PartialOrd,
@@ -625,6 +696,8 @@ pub fn date_trunc_inner<T: TimestampLike>(units: DateTimeUnits, ts: &T) -> Resul
     }
 }
 
+/// Truncates a timestamp to the specified precision.
+#[sqldoc(unique_name = "date_truc_ts", category = "Date and time")]
 #[derive(
     Ord,
     PartialOrd,
@@ -662,6 +735,8 @@ impl fmt::Display for DateTruncTimestamp {
     }
 }
 
+/// Truncates a timestamptz to the specified precision.
+#[sqldoc(unique_name = "date_truc_tstz", category = "Date and time")]
 #[derive(
     Ord,
     PartialOrd,
@@ -755,6 +830,12 @@ fn checked_add_with_leapsecond(lhs: &NaiveDateTime, rhs: &FixedOffset) -> Option
     .map(|dt| dt.with_nanosecond(nanos).unwrap())
 }
 
+/// Converts a timestamp to the specified timezone.
+#[sqldoc(
+    unique_name = "timezone_ts",
+    category = "Date and time",
+    url = "/sql/functions/timezone-and-at-time-zone"
+)]
 #[derive(
     Ord,
     PartialOrd,
@@ -788,6 +869,12 @@ impl fmt::Display for TimezoneTimestamp {
     }
 }
 
+/// Converts a timestamptz to the specified timezone.
+#[sqldoc(
+    unique_name = "timezone_tstz",
+    category = "Date and time",
+    url = "/sql/functions/timezone-and-at-time-zone"
+)]
 #[derive(
     Ord,
     PartialOrd,
@@ -823,6 +910,12 @@ impl fmt::Display for TimezoneTimestampTz {
     }
 }
 
+/// Formats a timestamp as text using a format string.
+#[sqldoc(
+    unique_name = "tocharts",
+    category = "Date and time",
+    url = "/sql/functions/to_char"
+)]
 #[derive(
     Clone,
     Debug,
@@ -859,6 +952,12 @@ impl fmt::Display for ToCharTimestamp {
     }
 }
 
+/// Formats a timestamptz as text using a format string.
+#[sqldoc(
+    unique_name = "tochartstz",
+    category = "Date and time",
+    url = "/sql/functions/to_char"
+)]
 #[derive(
     Clone,
     Debug,
@@ -895,7 +994,12 @@ impl fmt::Display for ToCharTimestampTz {
     }
 }
 
-#[sqlfunc(sqlname = "timezonets")]
+#[sqlfunc(
+    sqlname = "timezonets",
+    category = "Date and time",
+    doc = "Converts a timestamp to the specified timezone.",
+    url = "/sql/functions/timezone-and-at-time-zone"
+)]
 fn timezone_timestamp_binary(
     tz: &str,
     ts: CheckedTimestamp<NaiveDateTime>,
@@ -904,7 +1008,12 @@ fn timezone_timestamp_binary(
     timezone_timestamp(tz, ts.into())
 }
 
-#[sqlfunc(sqlname = "timezonetstz")]
+#[sqlfunc(
+    sqlname = "timezonetstz",
+    category = "Date and time",
+    doc = "Converts a timestamptz to the specified timezone.",
+    url = "/sql/functions/timezone-and-at-time-zone"
+)]
 fn timezone_timestamp_tz_binary(
     tz: &str,
     tstz: CheckedTimestamp<DateTime<Utc>>,

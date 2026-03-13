@@ -16,6 +16,26 @@ expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = \"Op
     mz_lowertest::MzReflect,
 )]
 pub struct ComplexOutputTypeFn;
+impl ComplexOutputTypeFn {
+    pub fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "complex_output_type_fn",
+            category: "Uncategorized",
+            signature: format!(
+                "{} {} {} -> {}",
+                <Datum<'static> as ::mz_repr::SqlDocName>::sql_doc_name(),
+                "test",
+                <Datum<'static> as ::mz_repr::SqlDocName>::sql_doc_name(),
+                <Result<
+                    Datum<'static>,
+                    EvalError,
+                > as ::mz_repr::SqlDocName>::sql_doc_name(),
+            ),
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 impl crate::func::binary::EagerBinaryFunc for ComplexOutputTypeFn {
     type Input<'a> = (Datum<'a>, Datum<'a>);
     type Output<'a> = Result<Datum<'a>, EvalError>;

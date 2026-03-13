@@ -267,61 +267,11 @@
 
 - type: String
   functions:
-  - signature: 'ascii(s: str) -> int'
-    description: The ASCII value of `s`'s left-most character.
-
-  - signature: 'btrim(s: str) -> str'
-    description: Trim all spaces from both sides of `s`.
-
-  - signature: 'btrim(s: str, c: str) -> str'
-    description: Trim any character in `c` from both sides of `s`.
-
-  - signature: 'bit_count(b: bytea) -> bigint'
-    description: Returns the number of bits set in the bit string (aka _popcount_).
-
-  - signature: 'bit_length(s: str) -> int'
-    description: Number of bits in `s`.
-
-  - signature: 'bit_length(b: bytea) -> int'
-    description: Number of bits in `b`.
-
-  - signature: 'char_length(s: str) -> int'
-    description: Number of code points in `s`.
-
-  - signature: 'chr(i: int) -> str'
-    description: |
-      Character with the given Unicode codepoint.
-      Only supports codepoints that can be encoded in UTF-8.
-      The NULL (0) character is not allowed.
-
   - signature: 'concat(f: any, r: any...) -> text'
     description: Concatenates the text representation of non-NULL arguments. The maximum length of the result string is 100 MiB.
 
   - signature: 'concat_ws(sep: str, f: any, r: any...) -> text'
     description: Concatenates the text representation of non-NULL arguments from `f` and `r` separated by `sep`. The maximum length of the result string is 100 MiB.
-
-  - signature: 'convert_from(b: bytea, src_encoding: text) -> text'
-    description: Convert data `b` from original encoding specified by `src_encoding` into `text`.
-
-  - signature: 'decode(s: text, format: text) -> bytea'
-    description: Decode `s` using the specified textual representation. The maximum size of the result is 100 MiB.
-    url: /sql/functions/encode
-
-  - signature: 'encode(b: bytea, format: text) -> text'
-    description: Encode `b` using the specified textual representation
-    url: /sql/functions/encode
-
-  - signature: 'get_bit(b: bytea, n: int) -> int'
-    description: Return the `n`th bit from `b`, where the left-most bit in `b` is at the 0th position.
-
-  - signature: 'get_byte(b: bytea, n: int) -> int'
-    description: Return the `n`th byte from `b`, where the left-most byte in `b` is at the 0th position.
-
-  - signature: 'constant_time_eq(a: bytea, b: bytea) -> bool'
-    description: Returns `true` if the arrays are identical, otherwise returns `false`. The implementation mitigates timing attacks by making a best-effort attempt to execute in constant time if the arrays have the same length, regardless of their contents.
-
-  - signature: 'constant_time_eq(a: text, b: text) -> bool'
-    description: Returns `true` if the strings are identical, otherwise returns `false`. The implementation mitigates timing attacks by making a best-effort attempt to execute in constant time if the strings have the same length, regardless of their contents.
 
   - signature: 'initcap(a: text) -> text'
     description: |
@@ -329,24 +279,6 @@
       other characters in lower case. Words are separated by non-alphanumeric
       characters.
     version-added: v0.97
-
-  - signature: 'left(s: str, n: int) -> str'
-    description: The first `n` characters of `s`. If `n` is negative, all but the last `|n|` characters of `s`.
-
-  - signature: 'length(s: str) -> int'
-    description: Number of code points in `s`.
-    url: /sql/functions/length
-
-  - signature: 'length(b: bytea) -> int'
-    description: Number of bytes in `s`.
-    url: /sql/functions/length
-
-  - signature: 'length(s: bytea, encoding_name: str) -> int'
-    description: Number of code points in `s` after encoding
-    url: /sql/functions/length
-
-  - signature: 'lower(s: str) -> str'
-    description: Convert `s` to lowercase.
 
   - signature: 'lpad(s: str, len: int) -> str'
     description: "Prepend `s` with spaces up to length `len`,
@@ -356,12 +288,6 @@
     description: "Prepend `s` with characters pulled from `p` up to length `len`,
       or right truncate if `len` is less than the length of `s`. The maximum length of the result string is 100 MiB."
 
-  - signature: 'ltrim(s: str) -> str'
-    description: Trim all spaces from the left side of `s`.
-
-  - signature: 'ltrim(s: str, c: str) -> str'
-    description: Trim any character in `c` from the left side of `s`.
-
   - signature: 'normalize(s: str) -> str'
     description: Normalize `s` to Unicode Normalization Form NFC (default).
     url: /sql/functions/normalize
@@ -369,29 +295,6 @@
   - signature: 'normalize(s: str, form: keyword) -> str'
     description: Normalize `s` to the specified Unicode normalization form (NFC, NFD, NFKC, or NFKD).
     url: /sql/functions/normalize
-
-  - signature: 'octet_length(s: str) -> int'
-    description: Number of bytes in `s`.
-
-  - signature: 'octet_length(b: bytea) -> int'
-    description: Number of bytes in `b`.
-
-  - signature: 'parse_ident(ident: str[, strict_mode: bool]) -> str[]'
-    description: |
-      Given a qualified identifier like `a."b".c`, splits into an array of the
-      constituent identifiers with quoting removed and escape sequences decoded.
-      Extra characters after the last identifier are ignored unless the
-      `strict_mode` parameter is `true` (defaults to `false`).
-
-  - signature: 'position(sub: str IN s: str) -> int'
-    description: The starting index of `sub` within `s` or `0` if `sub` is not a substring of `s`.
-
-  - signature: 'regexp_match(haystack: str, needle: str [, flags: str]]) -> str[]'
-    description: |
-      Matches the regular expression `needle` against haystack, returning a
-      string array that contains the value of each capture group specified in
-      `needle`, in order. If `flags` is set to the string `i` matches
-      case-insensitively.
 
   - signature: 'regexp_replace(source: str, pattern: str, replacement: str [, flags: str]]) -> str'
     description: |
@@ -420,11 +323,6 @@
       case-insensitively. If `flags` is set to the string `g` all matches are
       returned, otherwise only the first match is returned. Without the `g`
       flag, the behavior is the same as `regexp_match`.
-
-  - signature: 'regexp_split_to_array(text: str, pattern: str [, flags: str]]) -> str[]'
-    description: |
-      Splits `text` by the regular expression `pattern` into an array.
-      If `flags` is set to `i`, matches case-insensitively.
 
   - signature: 'repeat(s: str, n: int) -> str'
     description: Replicate the string `n` times. The maximum length of the result string is 100 MiB.

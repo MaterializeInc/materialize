@@ -14,7 +14,9 @@ use mz_repr::strconv;
     sqlname = "NOT",
     preserves_uniqueness = true,
     inverse = to_unary!(Not),
-    is_monotone = true
+    is_monotone = true,
+    category = "Boolean",
+    doc = "Computes the logical NOT."
 )]
 fn not(a: bool) -> bool {
     !a
@@ -24,7 +26,9 @@ fn not(a: bool) -> bool {
     sqlname = "boolean_to_text",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastStringToBool),
-    is_monotone = true
+    is_monotone = true,
+    category = "Cast",
+    doc = "Converts boolean to text."
 )]
 fn cast_bool_to_string<'a>(a: bool) -> &'a str {
     match a {
@@ -37,7 +41,9 @@ fn cast_bool_to_string<'a>(a: bool) -> &'a str {
     sqlname = "boolean_to_nonstandard_text",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastStringToBool),
-    is_monotone = true
+    is_monotone = true,
+    category = "Cast",
+    doc = "Converts boolean to text using nonstandard format."
 )]
 fn cast_bool_to_string_nonstandard<'a>(a: bool) -> &'a str {
     // N.B. this function differs from `cast_bool_to_string` because
@@ -51,7 +57,9 @@ fn cast_bool_to_string_nonstandard<'a>(a: bool) -> &'a str {
     sqlname = "boolean_to_integer",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastInt32ToBool),
-    is_monotone = true
+    is_monotone = true,
+    category = "Cast",
+    doc = "Converts boolean to integer."
 )]
 fn cast_bool_to_int32(a: bool) -> i32 {
     match a {
@@ -64,7 +72,9 @@ fn cast_bool_to_int32(a: bool) -> i32 {
     sqlname = "boolean_to_bigint",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastInt64ToBool),
-    is_monotone = true
+    is_monotone = true,
+    category = "Cast",
+    doc = "Converts boolean to bigint."
 )]
 fn cast_bool_to_int64(a: bool) -> i64 {
     match a {

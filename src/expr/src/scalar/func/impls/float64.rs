@@ -10,7 +10,7 @@
 use std::fmt;
 
 use chrono::{DateTime, Utc};
-use mz_expr_derive::sqlfunc;
+use mz_expr_derive::{sqldoc, sqlfunc};
 use mz_lowertest::MzReflect;
 use mz_ore::cast::TryCastFrom;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
@@ -22,8 +22,10 @@ use crate::EvalError;
 use crate::scalar::DomainLimit;
 use crate::scalar::func::EagerUnaryFunc;
 
+/// Negates the value.
 #[sqlfunc(
     sqlname = "-",
+    category = "Numbers",
     preserves_uniqueness = false,
     inverse = to_unary!(NegFloat64),
     is_monotone = true
@@ -32,33 +34,40 @@ fn neg_float64(a: f64) -> f64 {
     -a
 }
 
-#[sqlfunc(sqlname = "abs")]
+/// Returns the absolute value.
+#[sqlfunc(sqlname = "abs", category = "Numbers")]
 fn abs_float64(a: f64) -> f64 {
     a.abs()
 }
 
-#[sqlfunc(sqlname = "roundf64")]
+/// Rounds to the nearest integer.
+#[sqlfunc(sqlname = "roundf64", category = "Numbers")]
 fn round_float64(a: f64) -> f64 {
     a.round_ties_even()
 }
 
-#[sqlfunc(sqlname = "truncf64")]
+/// Truncates toward zero.
+#[sqlfunc(sqlname = "truncf64", category = "Numbers")]
 fn trunc_float64(a: f64) -> f64 {
     a.trunc()
 }
 
-#[sqlfunc(sqlname = "ceilf64")]
+/// Returns the smallest integer not less than the value.
+#[sqlfunc(sqlname = "ceilf64", category = "Numbers")]
 fn ceil_float64(a: f64) -> f64 {
     a.ceil()
 }
 
-#[sqlfunc(sqlname = "floorf64")]
+/// Returns the largest integer not greater than the value.
+#[sqlfunc(sqlname = "floorf64", category = "Numbers")]
 fn floor_float64(a: f64) -> f64 {
     a.floor()
 }
 
+/// Converts float8 to int2.
 #[sqlfunc(
     sqlname = "double_to_smallint",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastInt16ToFloat64),
     is_monotone = true
@@ -74,8 +83,10 @@ fn cast_float64_to_int16(a: f64) -> Result<i16, EvalError> {
     }
 }
 
+/// Converts float8 to int4.
 #[sqlfunc(
     sqlname = "double_to_integer",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastInt32ToFloat64),
     is_monotone = true
@@ -95,8 +106,10 @@ fn cast_float64_to_int32(a: f64) -> Result<i32, EvalError> {
     }
 }
 
+/// Converts float8 to int8.
 #[sqlfunc(
     sqlname = "f64toi64",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastInt64ToFloat64),
     is_monotone = true
@@ -116,8 +129,10 @@ fn cast_float64_to_int64(a: f64) -> Result<i64, EvalError> {
     }
 }
 
+/// Converts float8 to float4.
 #[sqlfunc(
     sqlname = "double_to_real",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastFloat32ToFloat64),
     is_monotone = true
@@ -135,8 +150,10 @@ fn cast_float64_to_float32(a: f64) -> Result<f32, EvalError> {
     }
 }
 
+/// Converts float8 to text.
 #[sqlfunc(
     sqlname = "double_to_text",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastStringToFloat64)
 )]
@@ -146,8 +163,10 @@ fn cast_float64_to_string(a: f64) -> String {
     s
 }
 
+/// Converts float8 to uint2.
 #[sqlfunc(
     sqlname = "double_to_uint2",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastUint16ToFloat64),
     is_monotone = true
@@ -163,8 +182,10 @@ fn cast_float64_to_uint16(a: f64) -> Result<u16, EvalError> {
     }
 }
 
+/// Converts float8 to uint4.
 #[sqlfunc(
     sqlname = "double_to_uint4",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastUint32ToFloat64),
     is_monotone = true
@@ -180,8 +201,10 @@ fn cast_float64_to_uint32(a: f64) -> Result<u32, EvalError> {
     }
 }
 
+/// Converts float8 to uint8.
 #[sqlfunc(
     sqlname = "double_to_uint8",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastUint64ToFloat64),
     is_monotone = true
@@ -197,6 +220,8 @@ fn cast_float64_to_uint64(a: f64) -> Result<u64, EvalError> {
     }
 }
 
+/// Converts float8 to numeric.
+#[sqldoc(unique_name = "double_to_numeric", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -252,7 +277,8 @@ impl fmt::Display for CastFloat64ToNumeric {
     }
 }
 
-#[sqlfunc(sqlname = "sqrtf64")]
+/// Computes the square root.
+#[sqlfunc(sqlname = "sqrtf64", category = "Numbers")]
 fn sqrt_float64(a: f64) -> Result<f64, EvalError> {
     if a < 0.0 {
         return Err(EvalError::NegSqrt);
@@ -260,12 +286,14 @@ fn sqrt_float64(a: f64) -> Result<f64, EvalError> {
     Ok(a.sqrt())
 }
 
-#[sqlfunc(sqlname = "cbrtf64")]
+/// Computes the cube root.
+#[sqlfunc(sqlname = "cbrtf64", category = "Numbers")]
 fn cbrt_float64(a: f64) -> f64 {
     a.cbrt()
 }
 
-#[sqlfunc]
+/// The cosine of x, with x in radians.
+#[sqlfunc(category = "Trigonometric")]
 fn cos(a: f64) -> Result<f64, EvalError> {
     if a.is_infinite() {
         return Err(EvalError::InfinityOutOfDomain("cos".into()));
@@ -273,7 +301,8 @@ fn cos(a: f64) -> Result<f64, EvalError> {
     Ok(a.cos())
 }
 
-#[sqlfunc]
+/// The inverse cosine of x, result in radians.
+#[sqlfunc(category = "Trigonometric")]
 fn acos(a: f64) -> Result<f64, EvalError> {
     if a < -1.0 || 1.0 < a {
         return Err(EvalError::OutOfDomain(
@@ -285,12 +314,14 @@ fn acos(a: f64) -> Result<f64, EvalError> {
     Ok(a.acos())
 }
 
-#[sqlfunc]
+/// The hyperbolic cosine of x, with x as a hyperbolic angle.
+#[sqlfunc(category = "Trigonometric")]
 fn cosh(a: f64) -> f64 {
     a.cosh()
 }
 
-#[sqlfunc]
+/// The inverse hyperbolic cosine of x.
+#[sqlfunc(category = "Trigonometric")]
 fn acosh(a: f64) -> Result<f64, EvalError> {
     if a < 1.0 {
         return Err(EvalError::OutOfDomain(
@@ -302,7 +333,8 @@ fn acosh(a: f64) -> Result<f64, EvalError> {
     Ok(a.acosh())
 }
 
-#[sqlfunc]
+/// The sine of x, with x in radians.
+#[sqlfunc(category = "Trigonometric")]
 fn sin(a: f64) -> Result<f64, EvalError> {
     if a.is_infinite() {
         return Err(EvalError::InfinityOutOfDomain("sin".into()));
@@ -310,7 +342,8 @@ fn sin(a: f64) -> Result<f64, EvalError> {
     Ok(a.sin())
 }
 
-#[sqlfunc]
+/// The inverse sine of x, result in radians.
+#[sqlfunc(category = "Trigonometric")]
 fn asin(a: f64) -> Result<f64, EvalError> {
     if a < -1.0 || 1.0 < a {
         return Err(EvalError::OutOfDomain(
@@ -322,17 +355,20 @@ fn asin(a: f64) -> Result<f64, EvalError> {
     Ok(a.asin())
 }
 
-#[sqlfunc]
+/// The hyperbolic sine of x, with x as a hyperbolic angle.
+#[sqlfunc(category = "Trigonometric")]
 fn sinh(a: f64) -> f64 {
     a.sinh()
 }
 
-#[sqlfunc]
+/// The inverse hyperbolic sine of x.
+#[sqlfunc(category = "Trigonometric")]
 fn asinh(a: f64) -> f64 {
     a.asinh()
 }
 
-#[sqlfunc]
+/// The tangent of x, with x in radians.
+#[sqlfunc(category = "Trigonometric")]
 fn tan(a: f64) -> Result<f64, EvalError> {
     if a.is_infinite() {
         return Err(EvalError::InfinityOutOfDomain("tan".into()));
@@ -340,17 +376,20 @@ fn tan(a: f64) -> Result<f64, EvalError> {
     Ok(a.tan())
 }
 
-#[sqlfunc]
+/// The inverse tangent of x, result in radians.
+#[sqlfunc(category = "Trigonometric")]
 fn atan(a: f64) -> f64 {
     a.atan()
 }
 
-#[sqlfunc]
+/// The hyperbolic tangent of x, with x as a hyperbolic angle.
+#[sqlfunc(category = "Trigonometric")]
 fn tanh(a: f64) -> f64 {
     a.tanh()
 }
 
-#[sqlfunc]
+/// The inverse hyperbolic tangent of x.
+#[sqlfunc(category = "Trigonometric")]
 fn atanh(a: f64) -> Result<f64, EvalError> {
     if a < -1.0 || 1.0 < a {
         return Err(EvalError::OutOfDomain(
@@ -362,7 +401,8 @@ fn atanh(a: f64) -> Result<f64, EvalError> {
     Ok(a.atanh())
 }
 
-#[sqlfunc]
+/// The cotangent of x, with x in radians.
+#[sqlfunc(category = "Trigonometric")]
 fn cot(a: f64) -> Result<f64, EvalError> {
     if a.is_infinite() {
         return Err(EvalError::InfinityOutOfDomain("cot".into()));
@@ -370,17 +410,20 @@ fn cot(a: f64) -> Result<f64, EvalError> {
     Ok(1.0 / a.tan())
 }
 
-#[sqlfunc]
+/// Converts degrees to radians.
+#[sqlfunc(category = "Trigonometric")]
 fn radians(a: f64) -> f64 {
     a.to_radians()
 }
 
-#[sqlfunc]
+/// Converts radians to degrees.
+#[sqlfunc(category = "Trigonometric")]
 fn degrees(a: f64) -> f64 {
     a.to_degrees()
 }
 
-#[sqlfunc(sqlname = "log10f64")]
+/// Computes the base-10 logarithm.
+#[sqlfunc(sqlname = "log10f64", category = "Numbers")]
 fn log10(a: f64) -> Result<f64, EvalError> {
     if a.is_sign_negative() {
         return Err(EvalError::NegativeOutOfDomain("log10".into()));
@@ -391,7 +434,8 @@ fn log10(a: f64) -> Result<f64, EvalError> {
     Ok(a.log10())
 }
 
-#[sqlfunc(sqlname = "lnf64")]
+/// Computes the natural logarithm.
+#[sqlfunc(sqlname = "lnf64", category = "Numbers")]
 fn ln(a: f64) -> Result<f64, EvalError> {
     if a.is_sign_negative() {
         return Err(EvalError::NegativeOutOfDomain("ln".into()));
@@ -402,7 +446,8 @@ fn ln(a: f64) -> Result<f64, EvalError> {
     Ok(a.ln())
 }
 
-#[sqlfunc(sqlname = "expf64")]
+/// Computes the exponential (e^x).
+#[sqlfunc(sqlname = "expf64", category = "Numbers")]
 fn exp(a: f64) -> Result<f64, EvalError> {
     let r = a.exp();
     if r.is_infinite() {
@@ -414,14 +459,16 @@ fn exp(a: f64) -> Result<f64, EvalError> {
     Ok(r)
 }
 
-#[sqlfunc(sqlname = "mz_sleep")]
+/// Pauses execution for the specified number of seconds.
+#[sqlfunc(sqlname = "mz_sleep", category = "System information")]
 fn sleep(a: f64) -> Option<CheckedTimestamp<DateTime<Utc>>> {
     let duration = std::time::Duration::from_secs_f64(a);
     std::thread::sleep(duration);
     None
 }
 
-#[sqlfunc(sqlname = "tots")]
+/// Converts a Unix epoch (seconds since 1970-01-01 00:00:00 UTC) to a timestamptz.
+#[sqlfunc(sqlname = "tots", category = "Date and time")]
 fn to_timestamp(f: f64) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
     const NANO_SECONDS_PER_SECOND: i64 = 1_000_000_000;
     if f.is_nan() {

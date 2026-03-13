@@ -1939,6 +1939,324 @@ pub trait AsColumnType {
     fn as_column_type() -> SqlColumnType;
 }
 
+/// Types that have a SQL documentation name used for generating function documentation.
+pub trait SqlDocName {
+    /// Returns the SQL documentation name for this type.
+    fn sql_doc_name() -> String;
+
+    /// Format this type as a named parameter in a function signature.
+    /// Returns `(formatted, is_optional)` where `is_optional` indicates
+    /// the parameter can be omitted (should be wrapped in `[, ...]`).
+    fn fmt_doc_param(name: &str) -> (String, bool) {
+        (format!("{} {}", name, Self::sql_doc_name()), false)
+    }
+}
+
+impl SqlDocName for f32 {
+    fn sql_doc_name() -> String {
+        "float4".to_string()
+    }
+}
+
+impl SqlDocName for f64 {
+    fn sql_doc_name() -> String {
+        "float8".to_string()
+    }
+}
+
+impl SqlDocName for i16 {
+    fn sql_doc_name() -> String {
+        "int2".to_string()
+    }
+}
+
+impl SqlDocName for i32 {
+    fn sql_doc_name() -> String {
+        "int4".to_string()
+    }
+}
+
+impl SqlDocName for i64 {
+    fn sql_doc_name() -> String {
+        "int8".to_string()
+    }
+}
+
+impl SqlDocName for u16 {
+    fn sql_doc_name() -> String {
+        "uint2".to_string()
+    }
+}
+
+impl SqlDocName for u32 {
+    fn sql_doc_name() -> String {
+        "uint4".to_string()
+    }
+}
+
+impl SqlDocName for u64 {
+    fn sql_doc_name() -> String {
+        "uint8".to_string()
+    }
+}
+
+impl SqlDocName for bool {
+    fn sql_doc_name() -> String {
+        "boolean".to_string()
+    }
+}
+
+impl SqlDocName for str {
+    fn sql_doc_name() -> String {
+        "text".to_string()
+    }
+}
+
+impl SqlDocName for String {
+    fn sql_doc_name() -> String {
+        "text".to_string()
+    }
+}
+
+impl SqlDocName for [u8] {
+    fn sql_doc_name() -> String {
+        "bytea".to_string()
+    }
+}
+
+impl SqlDocName for Vec<u8> {
+    fn sql_doc_name() -> String {
+        "bytea".to_string()
+    }
+}
+
+impl SqlDocName for Date {
+    fn sql_doc_name() -> String {
+        "date".to_string()
+    }
+}
+
+impl SqlDocName for NaiveTime {
+    fn sql_doc_name() -> String {
+        "time".to_string()
+    }
+}
+
+impl SqlDocName for Interval {
+    fn sql_doc_name() -> String {
+        "interval".to_string()
+    }
+}
+
+impl SqlDocName for Uuid {
+    fn sql_doc_name() -> String {
+        "uuid".to_string()
+    }
+}
+
+impl SqlDocName for crate::Timestamp {
+    fn sql_doc_name() -> String {
+        "mz_timestamp".to_string()
+    }
+}
+
+impl SqlDocName for Numeric {
+    fn sql_doc_name() -> String {
+        "numeric".to_string()
+    }
+}
+
+impl SqlDocName for OrderedDecimal<Numeric> {
+    fn sql_doc_name() -> String {
+        "numeric".to_string()
+    }
+}
+
+impl<'a> SqlDocName for Datum<'a> {
+    fn sql_doc_name() -> String {
+        "any".to_string()
+    }
+}
+
+impl<'a> SqlDocName for DatumList<'a> {
+    fn sql_doc_name() -> String {
+        "listany".to_string()
+    }
+}
+
+impl<'a> SqlDocName for Array<'a> {
+    fn sql_doc_name() -> String {
+        "anyarray".to_string()
+    }
+}
+
+impl<'a> SqlDocName for DatumMap<'a> {
+    fn sql_doc_name() -> String {
+        "mapany".to_string()
+    }
+}
+
+impl<'a> SqlDocName for Range<DatumNested<'a>> {
+    fn sql_doc_name() -> String {
+        "rangeany".to_string()
+    }
+}
+
+impl<'a> SqlDocName for Range<Datum<'a>> {
+    fn sql_doc_name() -> String {
+        "rangeany".to_string()
+    }
+}
+
+impl SqlDocName for Oid {
+    fn sql_doc_name() -> String {
+        "oid".to_string()
+    }
+}
+
+impl SqlDocName for RegClass {
+    fn sql_doc_name() -> String {
+        "regclass".to_string()
+    }
+}
+
+impl SqlDocName for RegProc {
+    fn sql_doc_name() -> String {
+        "regprocedure".to_string()
+    }
+}
+
+impl SqlDocName for RegType {
+    fn sql_doc_name() -> String {
+        "regtype".to_string()
+    }
+}
+
+impl SqlDocName for CheckedTimestamp<NaiveDateTime> {
+    fn sql_doc_name() -> String {
+        "timestamp".to_string()
+    }
+}
+
+impl SqlDocName for CheckedTimestamp<DateTime<Utc>> {
+    fn sql_doc_name() -> String {
+        "timestamptz".to_string()
+    }
+}
+
+impl SqlDocName for Jsonb {
+    fn sql_doc_name() -> String {
+        "jsonb".to_string()
+    }
+}
+
+impl<'a> SqlDocName for JsonbRef<'a> {
+    fn sql_doc_name() -> String {
+        "jsonb".to_string()
+    }
+}
+
+impl SqlDocName for PgLegacyChar {
+    fn sql_doc_name() -> String {
+        "character".to_string()
+    }
+}
+
+impl<S: AsRef<str>> SqlDocName for Char<S> {
+    fn sql_doc_name() -> String {
+        "character".to_string()
+    }
+}
+
+impl<S: AsRef<str>> SqlDocName for PgLegacyName<S> {
+    fn sql_doc_name() -> String {
+        "name".to_string()
+    }
+}
+
+impl<S: AsRef<str>> SqlDocName for VarChar<S> {
+    fn sql_doc_name() -> String {
+        "varchar".to_string()
+    }
+}
+
+impl SqlDocName for MzAclItem {
+    fn sql_doc_name() -> String {
+        "mz_acl_item".to_string()
+    }
+}
+
+impl SqlDocName for AclItem {
+    fn sql_doc_name() -> String {
+        "aclitem".to_string()
+    }
+}
+
+impl<'a> SqlDocName for Int2Vector<'a> {
+    fn sql_doc_name() -> String {
+        "int2vector".to_string()
+    }
+}
+
+// Wrapper/generic impls
+
+impl<T: SqlDocName> SqlDocName for Option<T> {
+    fn sql_doc_name() -> String {
+        format!("{}?", T::sql_doc_name())
+    }
+}
+
+impl<T: SqlDocName, E> SqlDocName for Result<T, E> {
+    fn sql_doc_name() -> String {
+        T::sql_doc_name()
+    }
+}
+
+impl<T: SqlDocName> SqlDocName for ExcludeNull<T> {
+    fn sql_doc_name() -> String {
+        T::sql_doc_name()
+    }
+}
+
+impl<T: SqlDocName + ?Sized> SqlDocName for &T {
+    fn sql_doc_name() -> String {
+        T::sql_doc_name()
+    }
+}
+
+impl<B: ToOwned + SqlDocName + ?Sized> SqlDocName for Cow<'_, B> {
+    fn sql_doc_name() -> String {
+        B::sql_doc_name()
+    }
+}
+
+impl SqlDocName for ArrayRustType<String> {
+    fn sql_doc_name() -> String {
+        "text[]".to_string()
+    }
+}
+
+impl SqlDocName for ArrayRustType<Cow<'_, str>> {
+    fn sql_doc_name() -> String {
+        "text[]".to_string()
+    }
+}
+
+impl<T: SqlDocName> SqlDocName for Variadic<T> {
+    fn sql_doc_name() -> String {
+        format!("{}...", T::sql_doc_name())
+    }
+}
+
+impl<T: SqlDocName> SqlDocName for OptionalArg<T> {
+    fn sql_doc_name() -> String {
+        T::sql_doc_name()
+    }
+    fn fmt_doc_param(name: &str) -> (String, bool) {
+        (format!("{} {}", name, T::sql_doc_name()), true)
+    }
+}
+
 /// A bridge between native Rust types and SQL runtime types represented in Datums
 pub trait InputDatumType<'a, E>: Sized {
     /// Whether this Rust type can represent NULL values
@@ -2152,6 +2470,12 @@ macro_rules! impl_tuple_input_datum_type {
                 // (via `try_from_iter`), making the output potentially nullable
                 // even if `propagates_nulls` is false.
                 $( <$T>::nullable() )&&+
+            }
+        }
+
+        impl<$($T: SqlDocName),+> SqlDocName for ($($T,)+) {
+            fn sql_doc_name() -> String {
+                format!("({})", [$(<$T>::sql_doc_name()),+].join(", "))
             }
         }
     }

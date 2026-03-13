@@ -1,0 +1,16 @@
+---
+source: src/expr-derive-impl/src/lib.rs
+expression: "#[sqldoc(unique_name = \"arraytolist\", category = \"Cast\")]\npub struct CastArrayToListOneDim;\n"
+---
+pub struct CastArrayToListOneDim;
+impl CastArrayToListOneDim {
+    pub fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "arraytolist",
+            category: "Cast",
+            signature: "".to_string(),
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}

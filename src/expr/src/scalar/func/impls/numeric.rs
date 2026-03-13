@@ -10,7 +10,7 @@
 use std::fmt;
 
 use dec::{OrderedDecimal, Rounding};
-use mz_expr_derive::sqlfunc;
+use mz_expr_derive::{sqldoc, sqlfunc};
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::{SqlColumnType, SqlScalarType, strconv};
@@ -19,8 +19,10 @@ use serde::{Deserialize, Serialize};
 use crate::EvalError;
 use crate::scalar::func::EagerUnaryFunc;
 
+/// Negates the value.
 #[sqlfunc(
     sqlname = "-",
+    category = "Numbers",
     preserves_uniqueness = true,
     inverse = to_unary!(NegNumeric),
     is_monotone = true
@@ -31,13 +33,15 @@ fn neg_numeric(mut a: Numeric) -> Numeric {
     a
 }
 
-#[sqlfunc(sqlname = "abs")]
+/// Returns the absolute value.
+#[sqlfunc(sqlname = "abs", category = "Numbers")]
 fn abs_numeric(mut a: Numeric) -> Numeric {
     numeric::cx_datum().abs(&mut a);
     a
 }
 
-#[sqlfunc(sqlname = "ceilnumeric", is_monotone = true)]
+/// Returns the smallest integer not less than the value.
+#[sqlfunc(sqlname = "ceilnumeric", category = "Numbers", is_monotone = true)]
 fn ceil_numeric(mut a: Numeric) -> Numeric {
     // ceil will be nop if has no fractional digits.
     if a.exponent() >= 0 {
@@ -50,7 +54,8 @@ fn ceil_numeric(mut a: Numeric) -> Numeric {
     a
 }
 
-#[sqlfunc(sqlname = "expnumeric")]
+/// Computes the exponential (e^x).
+#[sqlfunc(sqlname = "expnumeric", category = "Numbers")]
 fn exp_numeric(mut a: Numeric) -> Result<Numeric, EvalError> {
     let mut cx = numeric::cx_datum();
     cx.exp(&mut a);
@@ -65,7 +70,8 @@ fn exp_numeric(mut a: Numeric) -> Result<Numeric, EvalError> {
     }
 }
 
-#[sqlfunc(sqlname = "floornumeric", is_monotone = true)]
+/// Returns the largest integer not greater than the value.
+#[sqlfunc(sqlname = "floornumeric", category = "Numbers", is_monotone = true)]
 fn floor_numeric(mut a: Numeric) -> Numeric {
     // floor will be nop if has no fractional digits.
     if a.exponent() >= 0 {
@@ -104,17 +110,20 @@ where
     Ok(a)
 }
 
-#[sqlfunc(sqlname = "lnnumeric")]
+/// Computes the natural logarithm.
+#[sqlfunc(sqlname = "lnnumeric", category = "Numbers")]
 fn ln_numeric(a: Numeric) -> Result<Numeric, EvalError> {
     log_numeric(a, dec::Context::ln, "ln")
 }
 
-#[sqlfunc(sqlname = "log10numeric")]
+/// Computes the base-10 logarithm.
+#[sqlfunc(sqlname = "log10numeric", category = "Numbers")]
 fn log10_numeric(a: Numeric) -> Result<Numeric, EvalError> {
     log_numeric(a, dec::Context::log10, "log10")
 }
 
-#[sqlfunc(sqlname = "roundnumeric", is_monotone = true)]
+/// Rounds to the nearest integer.
+#[sqlfunc(sqlname = "roundnumeric", category = "Numbers", is_monotone = true)]
 fn round_numeric(mut a: Numeric) -> Numeric {
     // round will be nop if has no fractional digits.
     if a.exponent() >= 0 {
@@ -124,7 +133,8 @@ fn round_numeric(mut a: Numeric) -> Numeric {
     a
 }
 
-#[sqlfunc(sqlname = "truncnumeric", is_monotone = true)]
+/// Truncates toward zero.
+#[sqlfunc(sqlname = "truncnumeric", category = "Numbers", is_monotone = true)]
 fn trunc_numeric(mut a: Numeric) -> Numeric {
     // trunc will be nop if has no fractional digits.
     if a.exponent() >= 0 {
@@ -137,7 +147,8 @@ fn trunc_numeric(mut a: Numeric) -> Numeric {
     a
 }
 
-#[sqlfunc(sqlname = "sqrtnumeric")]
+/// Computes the square root.
+#[sqlfunc(sqlname = "sqrtnumeric", category = "Numbers")]
 fn sqrt_numeric(mut a: Numeric) -> Result<Numeric, EvalError> {
     if a.is_negative() {
         return Err(EvalError::NegSqrt);
@@ -148,8 +159,10 @@ fn sqrt_numeric(mut a: Numeric) -> Result<Numeric, EvalError> {
     Ok(a)
 }
 
+/// Converts numeric to int2.
 #[sqlfunc(
     sqlname = "numeric_to_smallint",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastInt16ToNumeric(None)),
     is_monotone = true
@@ -164,8 +177,10 @@ pub fn cast_numeric_to_int16(mut a: Numeric) -> Result<i16, EvalError> {
     i16::try_from(i).or_else(|_| Err(EvalError::Int16OutOfRange(i.to_string().into())))
 }
 
+/// Converts numeric to int4.
 #[sqlfunc(
     sqlname = "numeric_to_integer",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastInt32ToNumeric(None)),
     is_monotone = true
@@ -178,8 +193,10 @@ pub fn cast_numeric_to_int32(mut a: Numeric) -> Result<i32, EvalError> {
         .or_else(|_| Err(EvalError::Int32OutOfRange(a.to_string().into())))
 }
 
+/// Converts numeric to int8.
 #[sqlfunc(
     sqlname = "numeric_to_bigint",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastInt64ToNumeric(None)),
     is_monotone = true
@@ -192,8 +209,10 @@ pub fn cast_numeric_to_int64(mut a: Numeric) -> Result<i64, EvalError> {
         .or_else(|_| Err(EvalError::Int64OutOfRange(a.to_string().into())))
 }
 
+/// Converts numeric to float4.
 #[sqlfunc(
     sqlname = "numeric_to_real",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastFloat32ToNumeric(None)),
     is_monotone = true
@@ -207,8 +226,10 @@ pub fn cast_numeric_to_float32(a: Numeric) -> Result<f32, EvalError> {
     }
 }
 
+/// Converts numeric to float8.
 #[sqlfunc(
     sqlname = "numeric_to_double",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastFloat64ToNumeric(None)),
     is_monotone = true
@@ -222,8 +243,10 @@ pub fn cast_numeric_to_float64(a: Numeric) -> Result<f64, EvalError> {
     }
 }
 
+/// Converts numeric to text.
 #[sqlfunc(
     sqlname = "numeric_to_text",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastStringToNumeric(None))
 )]
@@ -233,8 +256,10 @@ fn cast_numeric_to_string(a: Numeric) -> String {
     buf
 }
 
+/// Converts numeric to uint2.
 #[sqlfunc(
     sqlname = "numeric_to_uint2",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastUint16ToNumeric(None)),
     is_monotone = true
@@ -249,8 +274,10 @@ fn cast_numeric_to_uint16(mut a: Numeric) -> Result<u16, EvalError> {
     u16::try_from(u).or_else(|_| Err(EvalError::UInt16OutOfRange(u.to_string().into())))
 }
 
+/// Converts numeric to uint4.
 #[sqlfunc(
     sqlname = "numeric_to_uint4",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastUint32ToNumeric(None)),
     is_monotone = true
@@ -263,8 +290,10 @@ fn cast_numeric_to_uint32(mut a: Numeric) -> Result<u32, EvalError> {
         .or_else(|_| Err(EvalError::UInt32OutOfRange(a.to_string().into())))
 }
 
+/// Converts numeric to uint8.
 #[sqlfunc(
     sqlname = "numeric_to_uint8",
+    category = "Cast",
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastUint64ToNumeric(None)),
     is_monotone = true
@@ -277,7 +306,12 @@ fn cast_numeric_to_uint64(mut a: Numeric) -> Result<u64, EvalError> {
         .or_else(|_| Err(EvalError::UInt64OutOfRange(a.to_string().into())))
 }
 
-#[sqlfunc(sqlname = "pg_size_pretty", preserves_uniqueness = false)]
+/// Converts a byte size to a human-readable string.
+#[sqlfunc(
+    sqlname = "pg_size_pretty",
+    category = "PostgreSQL compatibility",
+    preserves_uniqueness = false
+)]
 fn pg_size_pretty(mut a: Numeric) -> Result<String, EvalError> {
     let mut cx = numeric::cx_datum();
     let units = ["bytes", "kB", "MB", "GB", "TB", "PB"];
@@ -305,6 +339,8 @@ fn pg_size_pretty(mut a: Numeric) -> Result<String, EvalError> {
     ))
 }
 
+/// Adjusts the scale of a numeric value.
+#[sqldoc(unique_name = "adjust_numeric_scale", category = "Numbers")]
 #[derive(
     Ord,
     PartialOrd,

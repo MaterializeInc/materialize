@@ -10,6 +10,7 @@
 use std::fmt;
 
 use itertools::Itertools;
+use mz_expr_derive::sqldoc;
 use mz_lowertest::MzReflect;
 use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,8 @@ use serde::{Deserialize, Serialize};
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
+/// Converts a record to text.
+#[sqldoc(unique_name = "recordtostr", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -83,6 +86,7 @@ impl fmt::Display for CastRecordToString {
 
 /// Casts between two record types by casting each element of `a` ("record1") using
 /// `cast_expr` and collecting the results into a new record ("record2").
+#[sqldoc(unique_name = "record1torecord2", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -155,6 +159,8 @@ impl fmt::Display for CastRecord1ToRecord2 {
     }
 }
 
+/// Gets the field at the specified index from a record.
+#[sqldoc(unique_name = "record_get", category = "Record")]
 #[derive(
     Ord,
     PartialOrd,

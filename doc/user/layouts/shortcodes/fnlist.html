@@ -1,17 +1,37 @@
-{{/*  Converts data/sql_funcs.yml into table. */}}
+{{/*  Converts data/sql-func-gen.json (or data/sql_funcs.yml) into table. */}}
 {{ $parentPath := partial "relative-link.html" . }}
 {{$releasedVersions := dict}}
 {{range (where $.Site.RegularPages "Section" "releases")}}
   {{$releasedVersions = merge $releasedVersions (dict .File.ContentBaseName .) }}
 {{end}}
 
+{{/* Merge generated function docs with manual ones. Generated data takes
+     precedence for categories it covers; manual YAML entries are kept for
+     categories not present in the generated JSON (e.g. Aggregate, Window). */}}
+{{ $allFuncs := slice }}
+{{ $genTypes := slice }}
+{{ with $.Site.Data.sql_func_gen }}
+  {{ $allFuncs = . }}
+  {{ range . }}
+    {{ $genTypes = $genTypes | append .type }}
+  {{ end }}
+{{ end }}
 {{ range $.Site.Data.sql_funcs }}
+  {{ if not (in $genTypes .type) }}
+    {{ $allFuncs = $allFuncs | append . }}
+  {{ end }}
+{{ end }}
+{{ range $allFuncs }}
 
 {{ if not (isset $.Params 0) }}
 
 ### {{.type}} functions
 
-<p>{{ if .description }} {{ .description | $.Page.RenderString }} {{ end }}</p>
+{{ if .description }}
+<p>{{ .description | $.Page.RenderString }}</p>
+{{ else }}
+<p>{{ index $.Site.Data.sql_funcs_types .type | $.Page.RenderString }}</p>
+{{ end }}
 
 {{end}}
 
@@ -26,6 +46,7 @@
 </th>
 </tr>
 {{ range .functions }}
+{{ if .signature }}
 <tr>
 {{/*  Extract the function's name from its signature and use it as the ID
     to facilitate deeplinking. The `docsearch_l3` class is a special
@@ -79,12 +100,13 @@ in some way.  */}}
 
 </td>
 </tr>
+{{ end }} {{/*  {{ if .signature }} */}}
 {{ end }} {{/*  {{ range .functions }} */}}
 </table>
 
 {{end}}
 
-{{ end }}{{/*  {{ range $.Site.Data.sql_funcs }} */}}
+{{ end }}{{/*  {{ range $allFuncs }} */}}
 
 {{/*  When someone is deeplinked to a td on the page, highlight the tr  */}}
 <script type="text/javascript">

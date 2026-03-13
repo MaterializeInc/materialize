@@ -6556,6 +6556,7 @@ dependencies = [
  "differential-dataflow",
  "encoding",
  "enum-iterator",
+ "enum-kinds",
  "fallible-iterator 0.2.0",
  "hex",
  "hmac",

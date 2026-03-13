@@ -14,10 +14,14 @@ use mz_lowertest::MzReflect;
 use mz_repr::{AsColumnType, Datum, DatumList, Row, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
+use mz_expr_derive::sqldoc;
+
 use crate::func::binary::EagerBinaryFunc;
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
+/// Converts a list to text.
+#[sqldoc(unique_name = "listtostr", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -82,6 +86,8 @@ impl fmt::Display for CastListToString {
     }
 }
 
+/// Converts a list to jsonb.
+#[sqldoc(unique_name = "listtojsonb", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -158,6 +164,7 @@ impl fmt::Display for CastListToJsonb {
 
 /// Casts between two list types by casting each element of `a` ("list1") using
 /// `cast_expr` and collecting the results into a new list ("list2").
+#[sqldoc(unique_name = "list1tolist2", category = "Cast")]
 #[derive(
     Ord,
     PartialOrd,
@@ -233,7 +240,8 @@ impl fmt::Display for CastList1ToList2 {
     }
 }
 
-#[sqlfunc(sqlname = "list_length")]
+/// Returns the number of elements in `l`.
+#[sqlfunc(sqlname = "list_length", category = "List")]
 fn list_length<'a>(a: DatumList<'a>) -> Result<i32, EvalError> {
     let count = a.iter().count();
     count
@@ -241,9 +249,12 @@ fn list_length<'a>(a: DatumList<'a>) -> Result<i32, EvalError> {
         .map_err(|_| EvalError::Int32OutOfRange(count.to_string().into()))
 }
 
-/// The `list_length_max` implementation.
-///
-/// We're not deriving `sqlfunc` here because we need to pass in the `max_layer` parameter.
+/// The length of list at the n-th layer, if it exists. Returns an error if the layer is past the list's dimension, or the length does not fit in an int4.
+#[sqldoc(
+    unique_name = "list_length_max",
+    category = "List",
+    signature = "list_length_max(list anylist, layer int8) -> int4?"
+)]
 #[derive(
     Ord,
     PartialOrd,

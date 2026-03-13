@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use mz_expr_derive::sqlfunc;
+use mz_expr_derive::{sqldoc, sqlfunc};
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::{SqlColumnType, SqlScalarType, strconv};
@@ -18,8 +18,10 @@ use serde::{Deserialize, Serialize};
 use crate::EvalError;
 use crate::scalar::func::EagerUnaryFunc;
 
+/// Negates the value.
 #[sqlfunc(
     sqlname = "-",
+    category = "Numbers",
     preserves_uniqueness = true,
     inverse = to_unary!(NegInt16),
     is_monotone = true
@@ -29,8 +31,10 @@ fn neg_int16(a: i16) -> Result<i16, EvalError> {
         .ok_or_else(|| EvalError::Int16OutOfRange(a.to_string().into()))
 }
 
+/// Computes the bitwise NOT.
 #[sqlfunc(
     sqlname = "~",
+    category = "Numbers",
     preserves_uniqueness = true,
     inverse = to_unary!(BitNotInt16)
 )]
@@ -38,14 +42,17 @@ fn bit_not_int16(a: i16) -> i16 {
     !a
 }
 
-#[sqlfunc(sqlname = "abs")]
+/// Returns the absolute value.
+#[sqlfunc(sqlname = "abs", category = "Numbers")]
 fn abs_int16(a: i16) -> Result<i16, EvalError> {
     a.checked_abs()
         .ok_or_else(|| EvalError::Int16OutOfRange(a.to_string().into()))
 }
 
+/// Converts int2 to float4.
 #[sqlfunc(
     sqlname = "smallint_to_real",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastFloat32ToInt16),
     is_monotone = true
@@ -54,8 +61,10 @@ fn cast_int16_to_float32(a: i16) -> f32 {
     f32::from(a)
 }
 
+/// Converts int2 to float8.
 #[sqlfunc(
     sqlname = "smallint_to_double",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastFloat64ToInt16),
     is_monotone = true
@@ -64,8 +73,10 @@ fn cast_int16_to_float64(a: i16) -> f64 {
     f64::from(a)
 }
 
+/// Converts int2 to int4.
 #[sqlfunc(
     sqlname = "smallint_to_integer",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastInt32ToInt16),
     is_monotone = true
@@ -74,8 +85,10 @@ fn cast_int16_to_int32(a: i16) -> i32 {
     i32::from(a)
 }
 
+/// Converts int2 to int8.
 #[sqlfunc(
     sqlname = "smallint_to_bigint",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastInt64ToInt16),
     is_monotone = true
@@ -84,8 +97,10 @@ fn cast_int16_to_int64(a: i16) -> i64 {
     i64::from(a)
 }
 
+/// Converts int2 to text.
 #[sqlfunc(
     sqlname = "smallint_to_text",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastStringToInt16)
 )]
@@ -95,8 +110,10 @@ fn cast_int16_to_string(a: i16) -> String {
     buf
 }
 
+/// Converts int2 to uint2.
 #[sqlfunc(
     sqlname = "smallint_to_uint2",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastUint16ToInt16),
     is_monotone = true
@@ -105,8 +122,10 @@ fn cast_int16_to_uint16(a: i16) -> Result<u16, EvalError> {
     u16::try_from(a).or_else(|_| Err(EvalError::UInt16OutOfRange(a.to_string().into())))
 }
 
+/// Converts int2 to uint4.
 #[sqlfunc(
     sqlname = "smallint_to_uint4",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastUint32ToInt16),
     is_monotone = true
@@ -115,8 +134,10 @@ fn cast_int16_to_uint32(a: i16) -> Result<u32, EvalError> {
     u32::try_from(a).or_else(|_| Err(EvalError::UInt32OutOfRange(a.to_string().into())))
 }
 
+/// Converts int2 to uint8.
 #[sqlfunc(
     sqlname = "smallint_to_uint8",
+    category = "Cast",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastUint64ToInt16),
     is_monotone = true
@@ -125,6 +146,12 @@ fn cast_int16_to_uint64(a: i16) -> Result<u64, EvalError> {
     u64::try_from(a).or_else(|_| Err(EvalError::UInt64OutOfRange(a.to_string().into())))
 }
 
+/// Casts the smallint `x` to a numeric value.
+#[sqldoc(
+    unique_name = "smallint_to_numeric",
+    category = "Cast",
+    signature = "smallint_to_numeric(x: int16)"
+)]
 #[derive(
     Ord,
     PartialOrd,
