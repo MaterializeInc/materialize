@@ -19,7 +19,9 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::dyncfgs::ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION;
+use mz_compute_types::dyncfgs::{
+    ENABLE_COMPILED_EXPRESSIONS, ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION,
+};
 use mz_compute_types::plan::AvailableCollections;
 use mz_dyncfg::ConfigSet;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
@@ -50,6 +52,12 @@ use crate::typedefs::{
     ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, MzTimestamp, RowRowAgent, RowRowEnter,
     RowRowSpine,
 };
+
+/// Dispatches between interpreted and WASM-compiled MFP evaluation.
+enum MfpEvaluator {
+    Interpreted(mz_expr::MfpPlan),
+    Compiled(mz_expr_compiler::eval::CompiledMfp),
+}
 
 /// Dataflow-local collections and arrangements.
 ///
@@ -738,42 +746,72 @@ where
         mfp.optimize();
         let mfp_plan = mfp.into_plan().unwrap();
 
+        // Attempt WASM compilation of MFP expressions when the feature flag is enabled.
+        let mut evaluator = if ENABLE_COMPILED_EXPRESSIONS.get(config_set) {
+            let input_types = mz_expr_compiler::analyze::infer_input_types_from_mfp(
+                mfp_plan.non_temporal(),
+            );
+            match mz_expr_compiler::eval::CompiledMfp::try_new(mfp_plan, &input_types) {
+                Ok(compiled) => MfpEvaluator::Compiled(compiled),
+                Err(plan) => MfpEvaluator::Interpreted(plan),
+            }
+        } else {
+            MfpEvaluator::Interpreted(mfp_plan)
+        };
+
         let mut datum_vec = DatumVec::new();
         // Wrap in an `Rc` so that lifetimes work out.
         let until = std::rc::Rc::new(until);
 
         let (stream, errors) = self.flat_map(key_val, max_demand, move |row_datums, time, diff| {
             let mut row_builder = SharedRow::get();
-            let until = std::rc::Rc::clone(&until);
             let temp_storage = RowArena::new();
             let row_iter = row_datums.iter();
             let mut datums_local = datum_vec.borrow();
             datums_local.extend(row_iter);
             let time = time.clone();
             let event_time = time.event_time();
-            mfp_plan
-                .evaluate(
-                    &mut datums_local,
-                    &temp_storage,
-                    event_time,
-                    diff.clone(),
-                    move |time| !until.less_equal(time),
-                    &mut row_builder,
-                )
-                .map(move |x| match x {
-                    Ok((row, event_time, diff)) => {
-                        // Copy the whole time, and re-populate event time.
-                        let mut time: S::Timestamp = time.clone();
-                        *time.event_time_mut() = event_time;
-                        (Ok(row), time, diff)
-                    }
-                    Err((e, event_time, diff)) => {
-                        // Copy the whole time, and re-populate event time.
-                        let mut time: S::Timestamp = time.clone();
-                        *time.event_time_mut() = event_time;
-                        (Err(e), time, diff)
-                    }
-                })
+            let results: Vec<
+                Result<(Row, mz_repr::Timestamp, Diff), (DataflowError, mz_repr::Timestamp, Diff)>,
+            > = match &mut evaluator {
+                MfpEvaluator::Interpreted(plan) => {
+                    let until = std::rc::Rc::clone(&until);
+                    plan.evaluate(
+                        &mut datums_local,
+                        &temp_storage,
+                        event_time,
+                        diff.clone(),
+                        move |time| !until.less_equal(time),
+                        &mut row_builder,
+                    )
+                    .collect()
+                }
+                MfpEvaluator::Compiled(compiled) => {
+                    let until = std::rc::Rc::clone(&until);
+                    compiled.evaluate(
+                        &mut datums_local,
+                        &temp_storage,
+                        event_time,
+                        diff.clone(),
+                        move |time| !until.less_equal(time),
+                        &mut row_builder,
+                    )
+                }
+            };
+            results.into_iter().map(move |x| match x {
+                Ok((row, event_time, diff)) => {
+                    // Copy the whole time, and re-populate event time.
+                    let mut time: S::Timestamp = time.clone();
+                    *time.event_time_mut() = event_time;
+                    (Ok(row), time, diff)
+                }
+                Err((e, event_time, diff)) => {
+                    // Copy the whole time, and re-populate event time.
+                    let mut time: S::Timestamp = time.clone();
+                    *time.event_time_mut() = event_time;
+                    (Err(e), time, diff)
+                }
+            })
         });
 
         use differential_dataflow::AsCollection;
@@ -786,6 +824,7 @@ where
 
         (oks, errors.concat(errs))
     }
+
     pub fn ensure_collections(
         mut self,
         collections: AvailableCollections,

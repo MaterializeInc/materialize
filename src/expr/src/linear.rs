@@ -1835,6 +1835,21 @@ pub mod plan {
             }
         }
 
+        /// Returns the non-temporal portion of this plan.
+        pub fn non_temporal(&self) -> &SafeMfpPlan {
+            &self.mfp
+        }
+
+        /// Returns the lower temporal bounds.
+        pub fn lower_bounds(&self) -> &[MirScalarExpr] {
+            &self.lower_bounds
+        }
+
+        /// Returns the upper temporal bounds.
+        pub fn upper_bounds(&self) -> &[MirScalarExpr] {
+            &self.upper_bounds
+        }
+
         /// Returns an iterator over mutable references to all non-temporal
         /// scalar expressions in the plan.
         ///

@@ -334,6 +334,13 @@ pub const SUBSCRIBE_SNAPSHOT_OPTIMIZATION: Config<bool> = Config::new(
     "If set, skip fetching or processing the snapshot data for subscribes when possible.",
 );
 
+/// Whether to use WASM-compiled expression evaluation instead of the tree-walking interpreter.
+pub const ENABLE_COMPILED_EXPRESSIONS: Config<bool> = Config::new(
+    "enable_compute_compiled_expressions",
+    false,
+    "Whether compute should use WASM-compiled expression evaluation for supported expressions.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -377,4 +384,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PEEK_STASH_NUM_BATCHES)
         .add(&PEEK_STASH_BATCH_SIZE)
         .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
+        .add(&ENABLE_COMPILED_EXPRESSIONS)
 }
