@@ -2223,10 +2223,9 @@ impl Coordinator {
     }
 
     /// Execute a side-effecting function from the frontend peek path.
-    /// This is separate from `sequence_side_effecting_func` because
-    /// - It doesn't have an ExecuteContext.
-    /// - It needs to do its own RBAC check, because the `rbac::check_plan` call in the frontend
-    ///   peek sequencing can't look at `active_conns`.
+    /// This is separate from `sequence_side_effecting_func` because it doesn't have an
+    /// ExecuteContext. RBAC is checked by the caller via `rbac::check_plan` before
+    /// sending `Command::ExecuteSideEffectingFunc`.
     ///
     /// TODO(peek-seq): Delete `sequence_side_effecting_func` after we delete the old peek
     /// sequencing.
@@ -2234,7 +2233,6 @@ impl Coordinator {
         &mut self,
         plan: SideEffectingFunc,
         conn_id: ConnectionId,
-        current_role: RoleId,
     ) -> Result<ExecuteResponse, AdapterError> {
         match plan {
             SideEffectingFunc::PgCancelBackend { connection_id } => {
@@ -2245,36 +2243,11 @@ impl Coordinator {
                     return Err(AdapterError::Canceled);
                 }
 
-                // Perform RBAC check: the current user must be a member of the role
-                // that owns the connection being cancelled.
-                if let Some((_id_handle, conn_meta)) =
+                // check_plan already verified role membership.
+                if let Some((id_handle, _conn_meta)) =
                     self.active_conns.get_key_value(&connection_id)
                 {
-                    let target_role = *conn_meta.authenticated_role_id();
-                    let role_membership = self
-                        .catalog()
-                        .state()
-                        .collect_role_membership(&current_role);
-                    if !role_membership.contains(&target_role) {
-                        let target_role_name = self
-                            .catalog()
-                            .try_get_role(&target_role)
-                            .map(|role| role.name().to_string())
-                            .unwrap_or_else(|| target_role.to_string());
-                        return Err(AdapterError::Unauthorized(
-                            rbac::UnauthorizedError::RoleMembership {
-                                role_names: vec![target_role_name],
-                            },
-                        ));
-                    }
-
-                    // RBAC check passed, proceed with cancellation.
-                    let id_handle = self
-                        .active_conns
-                        .get_key_value(&connection_id)
-                        .map(|(id, _)| id.clone())
-                        .expect("checked above");
-                    self.handle_privileged_cancel(id_handle).await;
+                    self.handle_privileged_cancel(id_handle.clone()).await;
                     Ok(Self::send_immediate_rows(Row::pack_slice(&[Datum::True])))
                 } else {
                     // Connection not found, return false.

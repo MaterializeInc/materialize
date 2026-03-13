@@ -25,7 +25,7 @@ use mz_repr::{Datum, GlobalId, IntoRowIterator, Timestamp};
 use mz_sql::ast::Raw;
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::Params;
-use mz_sql::plan::{self, Explainee, ExplaineeStatement, Plan, QueryWhen};
+use mz_sql::plan::{self, Explainee, ExplaineeStatement, Plan, QueryWhen, SideEffectingFunc};
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
@@ -396,14 +396,32 @@ impl PeekClient {
                 }
             }
             Plan::SideEffectingFunc(sef_plan) => {
-                // Side-effecting functions need Coordinator state (e.g., active_conns),
-                // so delegate to the Coordinator via a Command.
-                // The RBAC check is performed in the Coordinator where active_conns is available.
+                // Fetch the authenticated role for the target connection so
+                // check_plan can perform RBAC for side-effecting functions.
+                let active_conns_role = match sef_plan {
+                    SideEffectingFunc::PgCancelBackend { connection_id } => {
+                        self.call_coordinator(|tx| Command::GetConnectionAuthenticatedRole {
+                            connection_id: *connection_id,
+                            tx,
+                        })
+                        .await
+                    }
+                };
+
+                rbac::check_plan(
+                    &conn_catalog,
+                    Some(move |_id: u32| active_conns_role),
+                    session,
+                    &plan,
+                    None,
+                    &resolved_ids,
+                )?;
+
+                // RBAC passed. Delegate execution to the Coordinator.
                 let response = self
                     .call_coordinator(|tx| Command::ExecuteSideEffectingFunc {
                         plan: sef_plan.clone(),
                         conn_id: session.conn_id().clone(),
-                        current_role: session.role_metadata().current_role,
                         tx,
                     })
                     .await?;
@@ -454,8 +472,8 @@ impl PeekClient {
 
         rbac::check_plan(
             &conn_catalog,
-            // We can't look at `active_conns` here, but that's ok, because this case was handled
-            // above already inside `Command::ExecuteSideEffectingFunc`.
+            // SideEffectingFunc is handled above (with its own check_plan call) and returns
+            // early, so active_conns is not needed for the remaining plan types here.
             None::<fn(u32) -> Option<RoleId>>,
             session,
             &plan,
