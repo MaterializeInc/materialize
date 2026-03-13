@@ -6714,3 +6714,30 @@ def workflow_test_github_11219(c: Composition) -> None:
 
         c.sql_query("SELECT a FROM t1")
         c.sql_query("SELECT a FROM mv2")
+
+
+def workflow_test_item_parsing_expression_cache(c: Composition) -> None:
+    """
+    Test that the expression cache is hit during item parsing.
+
+    When creating a view, when applying the catalog implications, we parse the
+    view SQL. We rely on finding a compatible plan in the expression cache,
+    since otherwise we'd need to invoke the optimizer on the coordinator
+    thread.
+    """
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "log_filter": "mz_adapter::catalog::state=debug,info",
+            },
+        ),
+    ):
+        c.up("materialized")
+
+        c.sql("CREATE VIEW v AS SELECT 1")
+
+        logs = c.invoke("logs", "materialized", capture=True)
+        assert (
+            "local expression cache hit for User(" in logs.stdout
+        ), "expression cache was not hit during view application"

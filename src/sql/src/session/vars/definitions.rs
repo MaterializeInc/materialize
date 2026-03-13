@@ -1775,7 +1775,7 @@ feature_flags!(
         name: enable_guard_subquery_tablefunc,
         desc: "Whether HIR -> MIR lowering should use a new tablefunc to guard subquery sizes",
         default: true,
-        enable_for_item_parsing: true,
+        enable_for_item_parsing: false,
     },
     {
         name: enable_binary_date_bin,
@@ -1926,7 +1926,7 @@ feature_flags!(
         name: enable_cardinality_estimates,
         desc: "join planning with cardinality estimates",
         default: false,
-        enable_for_item_parsing: true,
+        enable_for_item_parsing: false,
     },
     {
         name: enable_connection_validation_syntax,
@@ -2280,5 +2280,77 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_fast_path_plan_insights: vars.enable_fast_path_plan_insights(),
             enable_cast_elimination: vars.enable_cast_elimination(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::vars::SystemVars;
+
+    /// Ensure that all vars used for optimizer features have `enable_for_item_parsing = false`.
+    ///
+    /// This is important to ensure that plan caching works as intended during item parsing. Cached
+    /// plans include the optimizer features they were produced with, and if they don't match on
+    /// lookup, that results in a cache miss.
+    #[mz_ore::test]
+    fn optimizer_features_no_enable_for_item_parsing() {
+        // Construct a `SystemVars` where all optimizer features are `false`.
+        //
+        // We do this in a roundabout way, by first constructing all-false `OptimizerFeatures` and
+        // then assigning them to their respective system vars, to ensure we don't forget to update
+        // this test when new optimizer features are added.
+        let false_features = OptimizerFeatures::default();
+        let OptimizerFeatures {
+            enable_eq_classes_withholding_errors,
+            enable_guard_subquery_tablefunc,
+            enable_consolidate_after_union_negate,
+            enable_eager_delta_joins,
+            enable_letrec_fixpoint_analysis,
+            enable_new_outer_join_lowering,
+            enable_reduce_mfp_fusion,
+            enable_variadic_left_join_lowering,
+            enable_cardinality_estimates,
+            persist_fast_path_limit,
+            reoptimize_imported_views,
+            enable_join_prioritize_arranged,
+            enable_projection_pushdown_after_relation_cse,
+            enable_less_reduce_in_eqprop,
+            enable_dequadratic_eqprop_map,
+            enable_fast_path_plan_insights,
+            enable_cast_elimination,
+        } = false_features;
+
+        let mut vars = SystemVars::new();
+
+        macro_rules! set_var {
+            ($var:ident) => {
+                vars.set(stringify!($var), VarInput::Flat(&$var.to_string()))
+                    .unwrap();
+            };
+        }
+
+        set_var!(enable_eq_classes_withholding_errors);
+        set_var!(enable_guard_subquery_tablefunc);
+        set_var!(enable_consolidate_after_union_negate);
+        set_var!(enable_eager_delta_joins);
+        set_var!(enable_letrec_fixpoint_analysis);
+        set_var!(enable_new_outer_join_lowering);
+        set_var!(enable_reduce_mfp_fusion);
+        set_var!(enable_variadic_left_join_lowering);
+        set_var!(enable_cardinality_estimates);
+        set_var!(persist_fast_path_limit);
+        let _ = reoptimize_imported_views; // no corresponding var
+        set_var!(enable_join_prioritize_arranged);
+        set_var!(enable_projection_pushdown_after_relation_cse);
+        set_var!(enable_less_reduce_in_eqprop);
+        set_var!(enable_dequadratic_eqprop_map);
+        set_var!(enable_fast_path_plan_insights);
+        set_var!(enable_cast_elimination);
+
+        // Enable for item parsing, then ensure we still get the same optimizer features.
+        vars.enable_for_item_parsing();
+        let features_for_item_parsing = OptimizerFeatures::from(&vars);
+        assert_eq!(features_for_item_parsing, false_features);
     }
 }
