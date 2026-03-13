@@ -225,8 +225,9 @@ impl Coordinator {
                 TransactionOps::DDL {
                     ops: txn_ops,
                     revision: txn_revision,
+                    state: txn_state,
+                    snapshot: txn_snapshot,
                     side_effects: _,
-                    state: _,
                 },
             ..
         }) = ctx.session().transaction().inner()
@@ -250,33 +251,50 @@ impl Coordinator {
             return Err(AdapterError::DDLTransactionRace);
         }
 
-        // Combine the existing ops with the new ops so we can replay them.
-        let mut all_ops = Vec::with_capacity(ops.len() + txn_ops.len() + 1);
-        all_ops.extend(txn_ops.iter().cloned());
-        all_ops.extend(ops.clone());
-        all_ops.push(Op::TransactionDryRun);
+        // Clone what we need from the session before taking &mut below.
+        let txn_ops_clone = txn_ops.clone();
+        let txn_state_clone = txn_state.clone();
+        let prev_snapshot = txn_snapshot.clone();
 
-        // Run our Catalog transaction, but abort before committing.
-        let result = self.catalog_transact(Some(ctx.session()), all_ops).await;
+        // Validate resource limits with all accumulated + new ops (cheap O(N) counting).
+        let mut combined_ops = txn_ops_clone;
+        combined_ops.extend(ops.iter().cloned());
+        let conn_id = ctx.session().conn_id().clone();
+        self.validate_resource_limits(&combined_ops, &conn_id)?;
 
-        let result = match result {
-            // We purposefully fail with this error to prevent committing the transaction.
-            Err(AdapterError::TransactionDryRun { new_ops, new_state }) => {
-                // Sets these ops to our transaction, bailing if the Catalog has changed since we
-                // ran the transaction.
-                ctx.session_mut()
-                    .transaction_mut()
-                    .add_ops(TransactionOps::DDL {
-                        ops: new_ops,
-                        state: new_state,
-                        side_effects: vec![Box::new(side_effect)],
-                        revision: self.catalog().transient_revision(),
-                    })?;
-                Ok(())
-            }
-            Ok(_) => unreachable!("unexpected success!"),
-            Err(e) => Err(e),
-        };
+        // Get oracle timestamp for audit log entries.
+        let oracle_write_ts = self.get_local_write_ts().await.timestamp;
+
+        // Get ConnMeta for the session.
+        let conn = self.active_conns.get(ctx.session().conn_id());
+
+        // Incremental dry run: process only NEW ops against accumulated state.
+        // If we have a saved snapshot from a previous dry run, use it to
+        // initialize the transaction so it starts in sync with the accumulated
+        // state. Otherwise (first statement), the fresh durable transaction is
+        // already in sync with the real catalog state.
+        let (new_state, new_snapshot) = self
+            .catalog()
+            .transact_incremental_dry_run(
+                &txn_state_clone,
+                ops.clone(),
+                conn,
+                prev_snapshot,
+                oracle_write_ts,
+            )
+            .await?;
+
+        // Accumulate ops for eventual COMMIT.
+        let result = ctx
+            .session_mut()
+            .transaction_mut()
+            .add_ops(TransactionOps::DDL {
+                ops: combined_ops,
+                state: new_state,
+                side_effects: vec![Box::new(side_effect)],
+                revision: self.catalog().transient_revision(),
+                snapshot: Some(new_snapshot),
+            });
 
         self.metrics
             .catalog_transact_seconds
@@ -1272,8 +1290,7 @@ impl Coordinator {
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::Comment { .. }
-                | Op::WeirdStorageUsageUpdates { .. }
-                | Op::TransactionDryRun => {}
+                | Op::WeirdStorageUsageUpdates { .. } => {}
             }
         }
 

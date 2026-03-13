@@ -27,7 +27,7 @@ use mz_audit_log::{
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
-use mz_catalog::durable::{NetworkPolicy, Transaction};
+use mz_catalog::durable::{NetworkPolicy, Snapshot, Transaction};
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
@@ -242,12 +242,6 @@ pub enum Op {
         size_bytes: u64,
         collection_timestamp: EpochMillis,
     },
-    /// Performs a dry run of the commit, but errors with
-    /// [`AdapterError::TransactionDryRun`].
-    ///
-    /// When using this value, it should be included only as the last element of
-    /// the transaction and should not be the only value in the transaction.
-    TransactionDryRun,
 }
 
 /// Almost the same as `ObjectId`, but the `ClusterReplica` case has an extra
@@ -343,6 +337,21 @@ pub struct TransactionResult {
     /// Parsed catalog updates from which we will derive catalog implications.
     pub catalog_updates: Vec<ParsedStateUpdate>,
     pub audit_events: Vec<VersionedEvent>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TransactInnerMode {
+    /// Prepare storage state and return a commit-ready transaction state.
+    ///
+    /// This mode is used by durable catalog transactions.
+    Commit,
+    /// Execute a dry run against a durable transaction that will not be
+    /// committed.
+    ///
+    /// This mode still validates and applies updates to an in-memory
+    /// `CatalogState`, but it must not call `prepare_state` because dry runs
+    /// must not trigger controller side effects.
+    DryRun,
 }
 
 impl Catalog {
@@ -445,6 +454,7 @@ impl Catalog {
             .unwrap_or_terminate("starting catalog transaction");
 
         let new_state = Self::transact_inner(
+            TransactInnerMode::Commit,
             storage_collections,
             oracle_write_ts,
             session,
@@ -492,6 +502,79 @@ impl Catalog {
         })
     }
 
+    /// Performs an incremental dry-run catalog transaction: processes only the
+    /// NEW ops against an accumulated `CatalogState` from previous dry runs.
+    /// This avoids the O(N^2) replay cost of replaying all accumulated ops.
+    ///
+    /// The durable transaction is intentionally never committed and no storage
+    /// controller prepare-state side effects are run.
+    ///
+    /// If `prev_snapshot` is `Some`, the transaction is initialized from that
+    /// snapshot (which represents the tx state after the previous dry run),
+    /// ensuring it starts in sync with `base_state`. If `None` (first
+    /// statement), a fresh transaction is loaded from durable storage.
+    ///
+    /// Returns the new accumulated state and a snapshot of the transaction's
+    /// state for use in subsequent incremental dry runs.
+    pub async fn transact_incremental_dry_run(
+        &self,
+        base_state: &CatalogState,
+        ops: Vec<Op>,
+        session: Option<&ConnMeta>,
+        prev_snapshot: Option<Snapshot>,
+        oracle_write_ts: mz_repr::Timestamp,
+    ) -> Result<(CatalogState, Snapshot), AdapterError> {
+        // For DDL transactions, items are not temporary (CREATE TABLE FROM SOURCE, etc.)
+        // but we still need to check for collisions.
+        let temporary_ids = self.temporary_ids(&ops, BTreeSet::new())?;
+
+        let mut builtin_table_updates = vec![];
+        let mut catalog_updates = vec![];
+        let mut audit_events = vec![];
+        let mut storage = self.storage().await;
+        let mut tx = if let Some(snapshot) = prev_snapshot {
+            // Restore transaction from saved snapshot so it starts in sync
+            // with the accumulated CatalogState from previous dry runs.
+            storage
+                .transaction_from_snapshot(snapshot)
+                .unwrap_or_terminate("starting catalog transaction from snapshot")
+        } else {
+            // First statement: fresh transaction from durable storage, which
+            // is in sync with the real catalog state.
+            storage
+                .transaction()
+                .await
+                .unwrap_or_terminate("starting catalog transaction")
+        };
+
+        // Process only the new ops against the accumulated state in dry-run mode.
+        let new_state = Self::transact_inner(
+            TransactInnerMode::DryRun,
+            None,
+            oracle_write_ts,
+            session,
+            ops,
+            temporary_ids,
+            &mut builtin_table_updates,
+            &mut catalog_updates,
+            &mut audit_events,
+            &mut tx,
+            base_state,
+        )
+        .await?;
+
+        // Save the transaction's current state as a snapshot for the next
+        // incremental dry run.
+        let new_snapshot = tx.current_snapshot();
+
+        // Transaction is NOT committed — drop it.
+        drop(storage);
+
+        // transact_inner returns Some(state) when ops produced changes.
+        let state = new_state.unwrap_or_else(|| base_state.clone());
+        Ok((state, new_snapshot))
+    }
+
     /// Extracts optimized expressions from `Op::CreateItem` operations for views
     /// and materialized views. These can be used to populate a `LocalExpressionCache`
     /// to avoid re-optimization during `apply_updates`.
@@ -533,18 +616,19 @@ impl Catalog {
     /// Performs the transaction described by `ops` and returns the new state of the catalog, if
     /// it has changed. If `ops` don't result in a change in the state this method returns `None`.
     ///
-    /// # Panics
-    /// - If `ops` contains [`Op::TransactionDryRun`] and the value is not the
-    ///   final element.
-    /// - If the only element of `ops` is [`Op::TransactionDryRun`].
+    /// `mode` controls whether storage prepare-state side effects are allowed.
+    /// In `DryRun` mode, this method may update the in-memory state returned to
+    /// the caller, but it must not trigger controller side effects.
+    ///
     #[instrument(name = "catalog::transact_inner")]
     async fn transact_inner(
+        mode: TransactInnerMode,
         storage_collections: Option<
             &mut Arc<dyn StorageCollections<Timestamp = mz_repr::Timestamp> + Send + Sync>,
         >,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
-        mut ops: Vec<Op>,
+        ops: Vec<Op>,
         temporary_ids: BTreeSet<CatalogItemId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         parsed_catalog_updates: &mut Vec<ParsedStateUpdate>,
@@ -583,16 +667,9 @@ impl Catalog {
         // The final state that we will return, if modified.
         let mut state = Cow::Borrowed(state);
 
-        let dry_run_ops = match ops.last() {
-            Some(Op::TransactionDryRun) => {
-                // Remove dry run marker.
-                ops.pop();
-                assert!(!ops.is_empty(), "TransactionDryRun must not be the only op");
-                ops.clone()
-            }
-            Some(_) => vec![],
-            None => return Ok(None),
-        };
+        if ops.is_empty() {
+            return Ok(None);
+        }
 
         // Extract optimized expressions from CreateItem ops to avoid re-optimization
         // during apply_updates. We extract before the loop since `ops` is moved there.
@@ -673,41 +750,44 @@ impl Catalog {
             parsed_catalog_updates.extend(op_catalog_updates);
         }
 
-        if dry_run_ops.is_empty() {
-            // `storage_collections` should only be `None` for tests.
-            if let Some(c) = storage_collections {
-                c.prepare_state(
-                    tx,
-                    storage_collections_to_create,
-                    storage_collections_to_drop,
-                    storage_collections_to_register,
-                )
-                .await?;
+        match mode {
+            TransactInnerMode::Commit => {
+                // `storage_collections` can be `None` in tests.
+                if let Some(c) = storage_collections {
+                    c.prepare_state(
+                        tx,
+                        storage_collections_to_create,
+                        storage_collections_to_drop,
+                        storage_collections_to_register,
+                    )
+                    .await?;
+                }
             }
+            TransactInnerMode::DryRun => {
+                debug_assert!(
+                    storage_collections.is_none(),
+                    "dry-run mode must not prepare storage state"
+                );
+            }
+        }
 
-            let updates = tx.get_and_commit_op_updates();
-            if !updates.is_empty() {
-                let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
-                let (op_builtin_table_updates, op_catalog_updates) = state
-                    .to_mut()
-                    .apply_updates(updates.clone(), &mut local_expr_cache)
-                    .await;
-                let op_builtin_table_updates = state
-                    .to_mut()
-                    .resolve_builtin_table_updates(op_builtin_table_updates);
-                builtin_table_updates.extend(op_builtin_table_updates);
-                parsed_catalog_updates.extend(op_catalog_updates);
-            }
+        let updates = tx.get_and_commit_op_updates();
+        if !updates.is_empty() {
+            let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
+            let (op_builtin_table_updates, op_catalog_updates) = state
+                .to_mut()
+                .apply_updates(updates.clone(), &mut local_expr_cache)
+                .await;
+            let op_builtin_table_updates = state
+                .to_mut()
+                .resolve_builtin_table_updates(op_builtin_table_updates);
+            builtin_table_updates.extend(op_builtin_table_updates);
+            parsed_catalog_updates.extend(op_catalog_updates);
+        }
 
-            match state {
-                Cow::Owned(state) => Ok(Some(state)),
-                Cow::Borrowed(_) => Ok(None),
-            }
-        } else {
-            Err(AdapterError::TransactionDryRun {
-                new_ops: dry_run_ops,
-                new_state: state.into_owned(),
-            })
+        match state {
+            Cow::Owned(state) => Ok(Some(state)),
+            Cow::Borrowed(_) => Ok(None),
         }
     }
 
@@ -735,9 +815,6 @@ impl Catalog {
         let mut temporary_item_updates = Vec::new();
 
         match op {
-            Op::TransactionDryRun => {
-                unreachable!("TransactionDryRun can only be used a final element of ops")
-            }
             Op::AlterRetainHistory { id, value, window } => {
                 let entry = state.get_entry(&id);
                 if id.is_system() {
@@ -2942,10 +3019,20 @@ impl ObjectsToDrop {
 
 #[cfg(test)]
 mod tests {
+    use mz_catalog::SYSTEM_CONN_ID;
+    use mz_catalog::memory::objects::{CatalogItem, Table, TableDataSource};
     use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
     use mz_repr::role_id::RoleId;
+    use mz_repr::{RelationDesc, RelationVersion, VersionedRelationDesc};
+    use mz_sql::DEFAULT_SCHEMA;
+    use mz_sql::catalog::CatalogDatabase;
+    use mz_sql::names::{
+        ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
+    };
+    use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 
-    use crate::catalog::Catalog;
+    use crate::catalog::{Catalog, Op};
+    use crate::session::DEFAULT_DATABASE_NAME;
 
     #[mz_ore::test]
     fn test_update_privilege_owners() {
@@ -3024,5 +3111,162 @@ mod tests {
             }],
             privileges.all_values_owned().collect::<Vec<_>>()
         );
+    }
+
+    /// Verifies that `transact_incremental_dry_run` processes only new ops
+    /// against the accumulated state, not all ops from scratch. Two paths are
+    /// compared:
+    ///   - Incremental: two separate calls, each with one op
+    ///   - All-at-once: one call with both ops
+    /// Both must produce equivalent catalog state.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn test_transact_incremental_dry_run_processes_only_new_ops() {
+        Catalog::with_debug(|catalog| async move {
+            // Resolve default database and schema.
+            let database = catalog
+                .resolve_database(DEFAULT_DATABASE_NAME)
+                .expect("default database");
+            let database_name = database.name.clone();
+            let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
+            let schema = catalog
+                .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
+                .expect("default schema");
+            let schema_name = schema.name.schema.clone();
+            let schema_spec = schema.id.clone();
+
+            // Allocate IDs for two tables.
+            let (id_t1, global_id_t1) = catalog
+                .allocate_user_id_for_test()
+                .await
+                .expect("allocate id for t1");
+            let (id_t2, global_id_t2) = catalog
+                .allocate_user_id_for_test()
+                .await
+                .expect("allocate id for t2");
+
+            let oracle_write_ts = catalog.current_upper().await;
+
+            // Build two CreateItem ops.
+            let make_table_op = |id, global_id, name: &str| Op::CreateItem {
+                id,
+                name: QualifiedItemName {
+                    qualifiers: ItemQualifiers {
+                        database_spec: database_spec.clone(),
+                        schema_spec: schema_spec.clone(),
+                    },
+                    item: name.to_string(),
+                },
+                item: CatalogItem::Table(Table {
+                    create_sql: Some(format!(
+                        "CREATE TABLE {database_name}.{schema_name}.{name} ()"
+                    )),
+                    desc: VersionedRelationDesc::new(RelationDesc::empty()),
+                    collections: [(RelationVersion::root(), global_id)].into_iter().collect(),
+                    conn_id: None,
+                    resolved_ids: ResolvedIds::empty(),
+                    custom_logical_compaction_window: None,
+                    is_retained_metrics_object: false,
+                    data_source: TableDataSource::TableWrites { defaults: vec![] },
+                }),
+                owner_id: MZ_SYSTEM_ROLE_ID,
+            };
+
+            let op_t1 = make_table_op(id_t1, global_id_t1, "t1");
+            let op_t2 = make_table_op(id_t2, global_id_t2, "t2");
+
+            let base_state = catalog.state().clone();
+
+            // --- Path A: Incremental (two separate dry-run calls) ---
+
+            // First call: only op_t1, no previous snapshot.
+            let (state_after_t1, snapshot_after_t1) = catalog
+                .transact_incremental_dry_run(
+                    &base_state,
+                    vec![op_t1.clone()],
+                    None,
+                    None,
+                    oracle_write_ts,
+                )
+                .await
+                .expect("first dry run");
+
+            // After first dry run: t1 exists, t2 does not.
+            assert!(
+                state_after_t1.try_get_entry(&id_t1).is_some(),
+                "t1 should exist after first dry run"
+            );
+            assert_eq!(
+                state_after_t1
+                    .try_get_entry(&id_t1)
+                    .expect("t1 entry")
+                    .name()
+                    .item,
+                "t1"
+            );
+            assert!(
+                state_after_t1.try_get_entry(&id_t2).is_none(),
+                "t2 should NOT exist after first dry run"
+            );
+
+            // Second call: only op_t2, using state/snapshot from first call.
+            let (state_incremental, _) = catalog
+                .transact_incremental_dry_run(
+                    &state_after_t1,
+                    vec![op_t2.clone()],
+                    None,
+                    Some(snapshot_after_t1),
+                    oracle_write_ts,
+                )
+                .await
+                .expect("second dry run");
+
+            // After second dry run: both t1 and t2 exist.
+            assert!(
+                state_incremental.try_get_entry(&id_t1).is_some(),
+                "t1 should exist in incremental result"
+            );
+            assert!(
+                state_incremental.try_get_entry(&id_t2).is_some(),
+                "t2 should exist in incremental result"
+            );
+
+            // --- Path B: All-at-once (single dry-run call with both ops) ---
+
+            let (state_all_at_once, _) = catalog
+                .transact_incremental_dry_run(
+                    &base_state,
+                    vec![op_t1.clone(), op_t2.clone()],
+                    None,
+                    None,
+                    oracle_write_ts,
+                )
+                .await
+                .expect("all-at-once dry run");
+
+            assert!(
+                state_all_at_once.try_get_entry(&id_t1).is_some(),
+                "t1 should exist in all-at-once result"
+            );
+            assert!(
+                state_all_at_once.try_get_entry(&id_t2).is_some(),
+                "t2 should exist in all-at-once result"
+            );
+
+            // --- Compare: both paths produce equivalent items ---
+
+            let inc_t1 = state_incremental.try_get_entry(&id_t1).expect("inc t1");
+            let all_t1 = state_all_at_once.try_get_entry(&id_t1).expect("all t1");
+            assert_eq!(inc_t1.name(), all_t1.name());
+            assert_eq!(inc_t1.owner_id, all_t1.owner_id);
+
+            let inc_t2 = state_incremental.try_get_entry(&id_t2).expect("inc t2");
+            let all_t2 = state_all_at_once.try_get_entry(&id_t2).expect("all t2");
+            assert_eq!(inc_t2.name(), all_t2.name());
+            assert_eq!(inc_t2.owner_id, all_t2.owner_id);
+
+            catalog.expire().await;
+        })
+        .await
     }
 }

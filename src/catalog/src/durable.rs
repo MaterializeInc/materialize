@@ -30,9 +30,10 @@ use crate::config::ClusterReplicaSizeMap;
 use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError, FenceError};
 pub use crate::durable::metrics::Metrics;
+use crate::durable::objects::AuditLog;
+pub use crate::durable::objects::Snapshot;
 pub use crate::durable::objects::state_update::StateUpdate;
 use crate::durable::objects::state_update::{StateUpdateKindJson, TryIntoStateUpdateKind};
-use crate::durable::objects::{AuditLog, Snapshot};
 pub use crate::durable::objects::{
     Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Comment,
     Database, DefaultPrivilege, IntrospectionSourceIndex, Item, NetworkPolicy, ReplicaConfig,
@@ -298,6 +299,16 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
 
     /// Creates a new durable catalog state transaction.
     async fn transaction(&mut self) -> Result<Transaction, CatalogError>;
+
+    /// Creates a new transaction initialized from the given [`Snapshot`]
+    /// instead of reading from durable storage. Used for incremental DDL
+    /// dry runs where the transaction state from a previous dry run has been
+    /// saved and needs to be restored so it stays in sync with the accumulated
+    /// `CatalogState`.
+    fn transaction_from_snapshot(
+        &mut self,
+        snapshot: Snapshot,
+    ) -> Result<Transaction, CatalogError>;
 
     /// Commits a durable catalog state transaction. The transaction will be committed at
     /// `commit_ts`.

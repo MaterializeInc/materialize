@@ -1713,6 +1713,14 @@ impl DurableCatalogState for PersistCatalogState {
         Transaction::new(self, snapshot, commit_ts)
     }
 
+    fn transaction_from_snapshot(
+        &mut self,
+        snapshot: Snapshot,
+    ) -> Result<Transaction, CatalogError> {
+        let commit_ts = self.upper.clone();
+        Transaction::new(self, snapshot, commit_ts)
+    }
+
     #[mz_ore::instrument(level = "debug")]
     async fn commit_transaction(
         &mut self,
