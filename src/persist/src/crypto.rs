@@ -428,8 +428,9 @@ fn encrypt_with_dek_versioned(
         .seal_in_place_append_tag(nonce, Aad::from(aad), &mut in_out)
         .map_err(|_| anyhow::anyhow!("AES-256-GCM seal failed"))?;
 
-    let header_size = 1 + WRAPPED_DEK_LEN_SIZE + wrapped_dek.len() + NONCE_LEN;
-    let mut output = Vec::with_capacity(header_size + in_out.len());
+    let capacity = compute_encrypt_capacity(wrapped_dek.len(), plaintext.len())
+        .ok_or_else(|| anyhow::anyhow!("envelope size overflow"))?;
+    let mut output = Vec::with_capacity(capacity);
     write_envelope_header(&mut output, version, wrapped_dek)?;
     output.extend_from_slice(&nonce_bytes);
     output.extend_from_slice(&in_out);
@@ -522,6 +523,36 @@ fn validate_decrypt_input(nonce_and_ciphertext: &[u8]) -> Option<usize> {
         return None;
     }
     Some(NONCE_LEN)
+}
+
+/// Compute the output layout for encrypt_with_dek_versioned.
+///
+/// Returns `(header_len, nonce_end, total_len)` where:
+/// - `output[0..header_len]` = version || wrapped_dek_len || wrapped_dek
+/// - `output[header_len..nonce_end]` = nonce
+/// - `output[nonce_end..total_len]` = ciphertext + GCM tag
+///
+/// Returns `None` on arithmetic overflow.
+fn compute_encrypt_output_layout(
+    wrapped_dek_len: usize,
+    ciphertext_with_tag_len: usize,
+) -> Option<(usize, usize, usize)> {
+    let header_len = 1usize
+        .checked_add(WRAPPED_DEK_LEN_SIZE)?
+        .checked_add(wrapped_dek_len)?;
+    let nonce_end = header_len.checked_add(NONCE_LEN)?;
+    let total = nonce_end.checked_add(ciphertext_with_tag_len)?;
+    Some((header_len, nonce_end, total))
+}
+
+/// Compute the exact output capacity for encrypt_with_dek_versioned.
+///
+/// Returns the total byte count: header + nonce + ciphertext + GCM tag.
+/// Returns `None` on arithmetic overflow.
+fn compute_encrypt_capacity(wrapped_dek_len: usize, plaintext_len: usize) -> Option<usize> {
+    let ct_tag_len = plaintext_len.checked_add(GCM_TAG_LEN)?;
+    let (_, _, total) = compute_encrypt_output_layout(wrapped_dek_len, ct_tag_len)?;
+    Some(total)
 }
 
 /// Decrypt using a raw AES-256-GCM key. Input is nonce || ciphertext || tag.
@@ -2031,5 +2062,125 @@ mod kani_proofs {
             let ct_len = len - split;
             assert!(ct_len >= GCM_TAG_LEN);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Proof 10: Full encrypt output layout matches parse_envelope expectations.
+    //
+    // Proves that constructing an envelope using compute_encrypt_output_layout
+    // produces bytes that validate_envelope_header and validate_decrypt_input
+    // both accept, and that the nonce lands exactly at wrapped_end.
+    // -----------------------------------------------------------------------
+    #[kani::proof]
+    fn encrypt_output_layout_matches_parse() {
+        // Small symbolic sizes for solver tractability.
+        let wrapped_dek_len: usize = kani::any();
+        kani::assume(wrapped_dek_len <= 4);
+        let plaintext_len: usize = kani::any();
+        kani::assume(plaintext_len <= 2);
+
+        let ct_tag_len = plaintext_len + GCM_TAG_LEN;
+
+        if let Some((header_len, nonce_end, total)) =
+            compute_encrypt_output_layout(wrapped_dek_len, ct_tag_len)
+        {
+            // Construct a synthetic envelope matching encrypt_with_dek_versioned's layout.
+            // Max total: 1 + 2 + 4 + 12 + (2 + 16) = 37 bytes.
+            const MAX_BUF: usize = 40;
+            kani::assume(total <= MAX_BUF);
+            let mut buf = [0u8; MAX_BUF];
+
+            let version: u8 = kani::any();
+            kani::assume(version == ENVELOPE_VERSION_V1 || version == ENVELOPE_VERSION_V2);
+
+            // Write header: version || wrapped_dek_len (LE u16) || wrapped_dek.
+            buf[0] = version;
+            let wl = wrapped_dek_len as u16;
+            buf[1] = wl as u8;
+            buf[2] = (wl >> 8) as u8;
+            // wrapped DEK and payload bytes are zero — content doesn't matter for layout.
+
+            let data = &buf[..total];
+
+            // validate_envelope_header must succeed and return the correct wrapped_end.
+            let result = validate_envelope_header(data);
+            assert!(result.is_some());
+            let (parsed_ver, wrapped_end) = result.unwrap();
+            assert_eq!(parsed_ver, version);
+            assert_eq!(wrapped_end, header_len);
+
+            // Nonce starts exactly at wrapped_end (= header_len).
+            assert_eq!(wrapped_end + NONCE_LEN, nonce_end);
+
+            // validate_decrypt_input must succeed on data[wrapped_end..].
+            let remainder = &data[wrapped_end..];
+            assert_eq!(remainder.len(), NONCE_LEN + ct_tag_len);
+            let decrypt_result = validate_decrypt_input(remainder);
+            assert!(decrypt_result.is_some());
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Proof 11: Encrypt capacity calculation is exact.
+    //
+    // Proves that compute_encrypt_capacity returns the exact number of bytes
+    // that encrypt_with_dek_versioned writes: header + nonce + ciphertext + tag.
+    // This ensures no Vec reallocation occurs (important for zeroization).
+    // -----------------------------------------------------------------------
+    #[kani::proof]
+    fn encrypt_capacity_is_exact() {
+        let wrapped_dek_len: usize = kani::any();
+        kani::assume(wrapped_dek_len <= 4);
+        let plaintext_len: usize = kani::any();
+        kani::assume(plaintext_len <= 4);
+
+        if let Some(capacity) = compute_encrypt_capacity(wrapped_dek_len, plaintext_len) {
+            let expected = (1 + WRAPPED_DEK_LEN_SIZE + wrapped_dek_len)
+                + NONCE_LEN
+                + (plaintext_len + GCM_TAG_LEN);
+            assert_eq!(capacity, expected);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Proof 12: parse_envelope output feeds valid input to validate_decrypt_input.
+    //
+    // Proves that when validate_envelope_header succeeds, data[wrapped_end..]
+    // is always valid input for validate_decrypt_input. This completes the chain:
+    // Proof 10 proves encrypt→parse, Proof 12 proves parse→decrypt.
+    // -----------------------------------------------------------------------
+    #[kani::proof]
+    fn parse_output_valid_for_decrypt_input() {
+        let data: [u8; MAX_INPUT_LEN] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= MAX_INPUT_LEN);
+
+        if let Some((_version, wrapped_end)) = validate_envelope_header(&data[..len]) {
+            // The remainder is what parse_envelope returns as nonce_and_ciphertext.
+            let remainder = &data[wrapped_end..len];
+            // validate_decrypt_input must accept it.
+            let result = validate_decrypt_input(remainder);
+            assert!(result.is_some());
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Proof 13: Capacity computation does not overflow for valid inputs.
+    //
+    // Proves that when wrapped_dek_len fits in u16 (enforced by
+    // write_envelope_header) and plaintext_len is within practical bounds
+    // (≤ 1 GiB), the capacity computation never overflows.
+    // -----------------------------------------------------------------------
+    #[kani::proof]
+    fn encrypt_capacity_no_overflow() {
+        let wrapped_dek_len: usize = kani::any();
+        // wrapped_dek_len is always ≤ u16::MAX (enforced by write_envelope_header).
+        kani::assume(wrapped_dek_len <= u16::MAX as usize);
+        let plaintext_len: usize = kani::any();
+        // Practical bound: 1 GiB. Actual S3 blobs are much smaller.
+        kani::assume(plaintext_len <= 1 << 30);
+
+        let result = compute_encrypt_capacity(wrapped_dek_len, plaintext_len);
+        assert!(result.is_some());
     }
 }
