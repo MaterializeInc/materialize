@@ -77,6 +77,6 @@ copyright_files=$(grep -vE \
     <<< "$files"
 )
 
-try xargs -n1 awk -f misc/lint/copyright.awk <<< "$copyright_files"
+try xargs misc/lint/copyright.py <<< "$copyright_files"
 
 try_status_report

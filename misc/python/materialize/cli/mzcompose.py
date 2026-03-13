@@ -324,16 +324,52 @@ class ListCompositionsCommand(Command):
     help = "list the directories that contain compositions and their summaries"
 
     def run(self, args: argparse.Namespace) -> None:
+        import multiprocessing
+
         repo = mzbuild.Repository.from_arguments(MZ_ROOT, args)
-        for name, path in sorted(repo.compositions.items(), key=lambda item: item[1]):
+        items = sorted(repo.compositions.items(), key=lambda item: item[1])
+
+        ctx = multiprocessing.get_context("fork")
+        with ctx.Pool(
+            processes=os.cpu_count(),
+            initializer=_init_list_worker,
+            initargs=(repo.rd, repo.compositions),
+        ) as pool:
+            descriptions = pool.map(
+                _load_composition_description, [name for name, _ in items]
+            )
+
+        for (name, path), description in zip(items, descriptions):
             print(os.path.relpath(path, repo.root))
-            composition = Composition(repo, name, munge_services=False)
-            if composition.description:
+            if description:
                 # Emit the first paragraph of the description.
-                for line in composition.description.split("\n"):
+                for line in description.split("\n"):
                     if line.strip() == "":
                         break
                     print(f"  {line}")
+
+
+_list_worker_repo: mzbuild.Repository | None = None
+
+
+def _init_list_worker(
+    rd: mzbuild.RepositoryDetails, compositions: dict[str, Path]
+) -> None:
+    global _list_worker_repo
+    _list_worker_repo = mzbuild.Repository.__new__(mzbuild.Repository)
+    _list_worker_repo.rd = rd
+    _list_worker_repo.images = {}
+    _list_worker_repo.compositions = compositions
+
+
+def _load_composition_description(name: str) -> str | None:
+    assert _list_worker_repo is not None
+    try:
+        composition = Composition(_list_worker_repo, name, munge_services=False)
+        return composition.description
+    except Exception as e:
+        print(f"warning: failed to load composition {name}: {e}", file=sys.stderr)
+        return None
 
 
 class ListWorkflowsCommand(Command):

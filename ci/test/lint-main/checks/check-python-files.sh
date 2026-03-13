@@ -19,7 +19,7 @@ cd "$(dirname "$0")/../../../.."
 
 if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
     pyright_version=$(sh ci/builder/pyright-version.sh)
-    typecheck_cmd="npx --yes pyright@$pyright_version --warnings"
+    typecheck_cmd="npx --yes pyright@$pyright_version --warnings --threads 4"
 
     python_folders=(ci misc/python)
 

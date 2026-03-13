@@ -36,7 +36,7 @@ def main() -> int:
             ("ruff-dbt", _ruff_dbt_cmd(check=args.check)),
         ]
 
-    return run_parallel(tasks)
+    return 1 if run_parallel(tasks, spinner_suffix="formatters") else 0
 
 
 def _rustfmt_fn(*, check: bool):

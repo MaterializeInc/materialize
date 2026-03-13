@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 
 from materialize import MZ_ROOT
-from materialize.parallel_task import FAIL, OK, TaskThread, _prefix, _SpinnerThread
+from materialize.parallel_task import FAIL, OK, _prefix, run_parallel
 
 MAIN_PATH = MZ_ROOT / "ci" / "test" / "lint-main"
 MAIN_CHECKS_PATH = MAIN_PATH / "checks"
@@ -100,46 +100,22 @@ class LintManager:
         lint_files.sort()
 
         check = "check" if len(lint_files) == 1 else "checks"
+        rel_path = checks_path.relative_to(MZ_ROOT)
 
-        spinner = _SpinnerThread(
-            f"{len(lint_files)} {check} in {checks_path.relative_to(MZ_ROOT)}"
-        )
-        spinner.start()
-
-        threads = []
+        tasks = []
         for lint_file in lint_files:
             command = [str(checks_path / lint_file)]
             if self.offline:
                 command.append("--offline")
-            thread = TaskThread(name=lint_file, command=command)
-            thread.start()
-            threads.append(thread)
+            tasks.append((lint_file, command))
 
-        for thread in threads:
-            thread.join()
-
-        spinner.stop()
-
-        failed_checks = []
-
-        for thread in sorted(threads, key=lambda thread: thread.duration):
-            formatted_duration = (
-                f" [{thread.duration.total_seconds():5.2f}s]"
-                if self.print_duration
-                else ""
-            )
-            if thread.success:
-                status = f"{OK}{formatted_duration}"
-                print(f"{_prefix('---')}{status} {thread.name}")
-            else:
-                status = f"{FAIL}{formatted_duration}"
-                print(f"{_prefix('+++')}{status} {thread.name}")
-                failed_checks.append(thread.name)
-
-            if thread.output and (not thread.success or self.verbose_output):
-                print(thread.output)
-
-        return failed_checks
+        return run_parallel(
+            tasks,
+            verbose=self.verbose_output,
+            print_duration=self.print_duration,
+            spinner_suffix=f"{check} in {rel_path}",
+            print_summary=False,
+        )
 
 
 if __name__ == "__main__":

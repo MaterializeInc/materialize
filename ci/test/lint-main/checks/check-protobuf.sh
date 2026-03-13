@@ -55,8 +55,13 @@ if [[ $IN_BUILDKITE_PR || $IN_LOCAL_NON_MAIN_BRANCH ]]; then
 
   ci_collapsed_heading "Lint protobuf"
   COMMON_ANCESTOR="$(get_common_ancestor_commit_of_pr_and_target)"
-  # Default is depth 50, which can be insufficient to grab the relevant ancestor commit
-  try buf breaking src --against ".git#ref=$COMMON_ANCESTOR,subdir=src,depth=10000" --verbose
+  # Extract src/ at the ancestor commit into a temp directory and compare
+  # against that, instead of using buf's .git# reference which does an
+  # expensive deep clone (depth=10000).
+  against_dir=$(mktemp -d)
+  trap 'rm -rf "$against_dir"' EXIT
+  git archive "$COMMON_ANCESTOR" -- src/ | tar -x -C "$against_dir"
+  try buf breaking src --against "$against_dir/src"
 
   ci_collapsed_heading "Lint protobuf formatting"
   # Proto formatting
