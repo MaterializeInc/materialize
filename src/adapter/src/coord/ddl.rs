@@ -1289,8 +1289,7 @@ impl Coordinator {
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
-                | Op::Comment { .. }
-                => {}
+                | Op::Comment { .. } => {}
             }
         }
 
