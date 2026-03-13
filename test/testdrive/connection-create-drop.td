@@ -387,14 +387,14 @@ contains:BROKER specified more than once
 ! CREATE CONNECTION no_broker TO KAFKA (
     SECURITY PROTOCOL PLAINTEXT
   );
-contains:must set one of BROKER, BROKERS, or AWS PRIVATELINK
+contains:must set one of BROKER, BROKERS, AWS PRIVATELINK, or AWS PRIVATELINKS
 
 ! CREATE CONNECTION ssl_underspeced TO KAFKA (
     BROKER 'kafka:9092',
     BROKERS ['kafka:9092', 'kafka:9093'],
     SECURITY PROTOCOL PLAINTEXT
   );
-contains:can only set one of BROKER, BROKERS, or AWS PRIVATELINK
+contains:can only set one of BROKER, BROKERS, AWS PRIVATELINK, or AWS PRIVATELINKS
 
 ! CREATE CONNECTION ssl_underspeced TO KAFKA (
     BROKER 'kafka:9092',

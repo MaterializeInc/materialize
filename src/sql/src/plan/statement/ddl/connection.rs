@@ -704,15 +704,23 @@ impl ConnectionOptionExtracted {
         scx: &StatementContext,
     ) -> Result<Vec<mz_storage_types::connections::KafkaBroker<ReferencedConnection>>, PlanError>
     {
-        let mut brokers = match (&self.broker, &self.brokers, &self.aws_privatelink) {
-            (Some(v), None, None) => v.to_vec(),
-            (None, Some(v), None) => v.to_vec(),
-            (None, None, Some(_)) => vec![],
-            (None, None, None) => {
-                sql_bail!("invalid CONNECTION: must set one of BROKER, BROKERS, or AWS PRIVATELINK")
+        let mut brokers = match (
+            &self.broker,
+            &self.brokers,
+            &self.aws_privatelink,
+            &self.aws_privatelinks,
+        ) {
+            (Some(v), None, None, None) => v.to_vec(),
+            (None, Some(v), None, None) => v.to_vec(),
+            (None, None, Some(_), None) => vec![],
+            (None, None, None, Some(_)) => vec![],
+            (None, None, None, None) => {
+                sql_bail!(
+                    "invalid CONNECTION: must set one of BROKER, BROKERS, AWS PRIVATELINK, or AWS PRIVATELINKS"
+                )
             }
             _ => sql_bail!(
-                "invalid CONNECTION: can only set one of BROKER, BROKERS, or AWS PRIVATELINK"
+                "invalid CONNECTION: can only set one of BROKER, BROKERS, AWS PRIVATELINK, or AWS PRIVATELINKS"
             ),
         };
 
