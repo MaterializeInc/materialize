@@ -7414,6 +7414,7 @@ dependencies = [
  "clap",
  "differential-dataflow",
  "mz-aws-util",
+ "mz-build-info",
  "mz-dyncfg",
  "mz-http-util",
  "mz-ore",
