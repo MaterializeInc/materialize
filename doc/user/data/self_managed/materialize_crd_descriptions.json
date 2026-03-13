@@ -5,7 +5,7 @@
       {
         "name": "backendSecretName",
         "type": "String",
-        "description": "The name of a secret containing `metadata_backend_url` and `persist_backend_url`.\nIt may also contain `external_login_password_mz_system`, which will be used as\nthe password for the `mz_system` user if `authenticatorKind` is `Password`.",
+        "description": "The name of a secret containing `metadata_backend_url` and `persist_backend_url`.\nIt may also contain `external_login_password_mz_system`, which will be used as\nthe password for the `mz_system` user if `authenticatorKind` is `Password`,\n`Sasl`, or `Oidc`.",
         "default": null,
         "required": true,
         "deprecated": false
