@@ -942,7 +942,8 @@ impl KafkaConnection {
         options.insert("allow.auto.create.topics".into(), "false".into());
 
         let brokers = match &self.default_tunnel {
-            Tunnel::AwsPrivatelink(t) => {
+            Tunnel::AwsPrivatelink(t)
+            | Tunnel::AwsPrivatelinks(AwsPrivatelinks { default: t, .. }) => {
                 assert!(&self.brokers.is_empty());
 
                 let algo = KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM
