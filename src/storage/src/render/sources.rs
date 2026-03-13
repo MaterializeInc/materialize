@@ -24,10 +24,13 @@ use mz_storage_operators::persist_source::Subtime;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs;
 use mz_storage_types::errors::{
-    DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertNullKeyError, UpsertValueError,
+    DataflowError, DecodeError, DecodeErrorKind, EnvelopeError, UpsertError, UpsertNullKeyError,
+    UpsertValueError,
 };
 use mz_storage_types::parameters::StorageMaxInflightBytesConfig;
-use mz_storage_types::sources::envelope::{KeyEnvelope, NoneEnvelope, UpsertEnvelope, UpsertStyle};
+use mz_storage_types::sources::envelope::{
+    DebeziumJsonMode, KeyEnvelope, NoneEnvelope, UpsertEnvelope, UpsertStyle,
+};
 use mz_storage_types::sources::*;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_timely_util::operator::CollectionExt;
@@ -516,8 +519,9 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
 
         // We can now apply the key envelope
         let key_row = match upsert_envelope.style {
-            // flattened or debezium
+            // flattened, debezium (avro or json)
             UpsertStyle::Debezium { .. }
+            | UpsertStyle::DebeziumJson { .. }
             | UpsertStyle::Default(KeyEnvelope::Flattened)
             | UpsertStyle::ValueErrInline {
                 key_envelope: KeyEnvelope::Flattened,
@@ -549,6 +553,29 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
 
         let value = match result.value {
             Some(Ok(ref row)) => match upsert_envelope.style {
+                UpsertStyle::DebeziumJson {
+                    ref mode,
+                    ref envelope_column,
+                } => {
+                    match extract_debezium_json(row, mode, envelope_column.is_some()) {
+                        Ok(Some((after_row, envelope_row))) => {
+                            let mut packer = row_buf.packer();
+                            // key, data (after), [envelope if requested], then metadata
+                            packer.extend_by_row(&key_row);
+                            packer.extend_by_row(&after_row);
+                            if let Some(env_row) = envelope_row {
+                                packer.extend_by_row(&env_row);
+                            }
+                            packer.extend_by_row(&metadata);
+                            Some(Ok(row_buf.clone()))
+                        }
+                        Ok(None) => None, // Delete or truncate
+                        Err(err) => Some(Err(Box::new(UpsertError::Value(UpsertValueError {
+                            for_key: key_row.clone(),
+                            inner: err,
+                        })))),
+                    }
+                }
                 UpsertStyle::Debezium { after_idx } => match row.iter().nth(after_idx).unwrap() {
                     Datum::List(after) => {
                         let mut packer = row_buf.packer();
@@ -610,6 +637,120 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
 
         (key, value, from_time)
     })
+}
+
+/// Extract the `after` payload from a Debezium JSON envelope message.
+///
+/// Handles both `payload`-wrapped (`{ "payload": { "op": ..., "after": ... } }`)
+/// and flat (`{ "op": ..., "after": ... }`) formats.
+///
+/// Extracts the `after` payload (and optionally the full envelope) from a Debezium JSON message.
+///
+/// Returns:
+/// - `Ok(Some((after_row, Some(envelope_row))))` when `include_envelope` is true
+/// - `Ok(Some((after_row, None)))` when `include_envelope` is false
+/// - `Ok(None)` for delete/truncate operations (op = d/t)
+/// - `Err(DecodeError)` for malformed messages
+fn extract_debezium_json(
+    row: &Row,
+    _mode: &DebeziumJsonMode,
+    include_envelope: bool,
+) -> Result<Option<(Row, Option<Row>)>, DecodeError> {
+    use mz_repr::adt::jsonb::JsonbRef;
+
+    let datum = row.iter().next().unwrap();
+    if datum == Datum::JsonNull {
+        // Null value treated as delete (tombstone)
+        return Ok(None);
+    }
+
+    // Wrap the datum as a JsonbRef and convert to serde_json::Value for field access
+    let jsonb = JsonbRef::from_datum(datum);
+    let json_value = jsonb.to_serde_json();
+
+    // Handle payload-wrapped vs flat format
+    let envelope = match json_value.get("payload") {
+        Some(payload) if payload.is_object() => payload,
+        _ => &json_value,
+    };
+
+    // Extract "op" field
+    let op = match envelope.get("op").and_then(|v| v.as_str()) {
+        Some(op) => op,
+        None => {
+            return Err(DecodeError {
+                kind: DecodeErrorKind::Text("Debezium JSON message missing 'op' field".into()),
+                raw: vec![],
+            });
+        }
+    };
+
+    match op {
+        "d" => Ok(None),
+        "t" => {
+            // Truncate: silently skip per DD-13
+            tracing::warn!("Debezium JSON: ignoring truncate event (op='t')");
+            Ok(None)
+        }
+        "c" | "u" | "r" => {
+            // Create, update, or read (snapshot) — extract "after" field
+            let after = match envelope.get("after") {
+                Some(serde_json::Value::Null) | None => {
+                    return Err(DecodeError {
+                        kind: DecodeErrorKind::Text(
+                            format!(
+                                "Debezium JSON message with op='{}' has null or missing 'after' field",
+                                op
+                            )
+                            .into(),
+                        ),
+                        raw: vec![],
+                    });
+                }
+                Some(after) => after,
+            };
+
+            // Re-serialize "after" into a Row with a single Jsonb datum
+            let after_json =
+                mz_repr::adt::jsonb::Jsonb::from_serde_json(after.clone()).map_err(|e| {
+                    DecodeError {
+                        kind: DecodeErrorKind::Text(
+                            format!("Failed to convert Debezium 'after' to Jsonb: {}", e).into(),
+                        ),
+                        raw: vec![],
+                    }
+                })?;
+
+            // Optionally preserve the full envelope as Jsonb for CDC metadata access
+            let envelope_row = if include_envelope {
+                let envelope_json =
+                    mz_repr::adt::jsonb::Jsonb::from_serde_json(envelope.clone()).map_err(|e| {
+                        DecodeError {
+                            kind: DecodeErrorKind::Text(
+                                format!("Failed to convert Debezium envelope to Jsonb: {}", e)
+                                    .into(),
+                            ),
+                            raw: vec![],
+                        }
+                    })?;
+                Some(envelope_json.into_row())
+            } else {
+                None
+            };
+
+            Ok(Some((after_json.into_row(), envelope_row)))
+        }
+        other => Err(DecodeError {
+            kind: DecodeErrorKind::Text(
+                format!(
+                    "Debezium JSON message has unrecognized 'op' value: '{}'",
+                    other
+                )
+                .into(),
+            ),
+            raw: vec![],
+        }),
+    }
 }
 
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]

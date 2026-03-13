@@ -560,6 +560,10 @@ pub enum SourceIncludeMetadata {
         alias: Ident,
         use_bytes: bool,
     },
+    /// `INCLUDE DEBEZIUM METADATA` — full Debezium envelope as jsonb
+    DebeziumMetadata {
+        alias: Option<Ident>,
+    },
 }
 
 impl AstDisplay for SourceIncludeMetadata {
@@ -605,6 +609,10 @@ impl AstDisplay for SourceIncludeMetadata {
                     f.write_str(" BYTES");
                 }
             }
+            SourceIncludeMetadata::DebeziumMetadata { alias } => {
+                f.write_str("DEBEZIUM METADATA");
+                print_alias(f, alias);
+            }
         }
     }
 }
@@ -634,9 +642,19 @@ impl AstDisplay for SourceErrorPolicy {
 impl_display!(SourceErrorPolicy);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum DebeziumMode {
+    /// Generic Debezium JSON/Avro format.
+    None,
+    /// TiCDC dialect of Debezium format.
+    TiCdc,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SourceEnvelope {
     None,
-    Debezium,
+    Debezium {
+        mode: DebeziumMode,
+    },
     Upsert {
         value_decode_err_policy: Vec<SourceErrorPolicy>,
     },
@@ -649,7 +667,7 @@ impl SourceEnvelope {
     pub fn requires_all_input(&self) -> bool {
         match self {
             SourceEnvelope::None => false,
-            SourceEnvelope::Debezium => false,
+            SourceEnvelope::Debezium { .. } => false,
             SourceEnvelope::Upsert { .. } => false,
             SourceEnvelope::CdcV2 => true,
         }
@@ -663,8 +681,12 @@ impl AstDisplay for SourceEnvelope {
                 // this is unreachable as long as the default is None, but include it in case we ever change that
                 f.write_str("NONE");
             }
-            Self::Debezium => {
+            Self::Debezium { mode } => {
                 f.write_str("DEBEZIUM");
+                match mode {
+                    DebeziumMode::None => {}
+                    DebeziumMode::TiCdc => f.write_str(" (MODE = 'TICDC')"),
+                }
             }
             Self::Upsert {
                 value_decode_err_policy,

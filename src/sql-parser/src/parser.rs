@@ -2363,7 +2363,21 @@ impl<'a> Parser<'a> {
         let envelope = if self.parse_keyword(NONE) {
             SourceEnvelope::None
         } else if self.parse_keyword(DEBEZIUM) {
-            SourceEnvelope::Debezium
+            let mode = if self.consume_token(&Token::LParen) {
+                self.expect_keyword(MODE)?;
+                self.expect_token(&Token::Eq)?;
+                let mode_str = self.parse_literal_string()?;
+                self.expect_token(&Token::RParen)?;
+                match mode_str.to_uppercase().as_str() {
+                    "TICDC" => DebeziumMode::TiCdc,
+                    _ => {
+                        return self.expected(self.peek_pos(), "TICDC", self.peek_token());
+                    }
+                }
+            } else {
+                DebeziumMode::None
+            };
+            SourceEnvelope::Debezium { mode }
         } else if self.parse_keyword(UPSERT) {
             let value_decode_err_policy = if self.consume_token(&Token::LParen) {
                 // We only support the `VALUE DECODING ERRORS` option for now, but if we add another
@@ -4830,9 +4844,9 @@ impl<'a> Parser<'a> {
     fn parse_source_include_metadata(&mut self) -> Result<Vec<SourceIncludeMetadata>, ParserError> {
         if self.parse_keyword(INCLUDE) {
             self.parse_comma_separated(|parser| {
-                let metadata = match parser
-                    .expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, OFFSET, HEADERS, HEADER])?
-                {
+                let metadata = match parser.expect_one_of_keywords(&[
+                    KEY, TIMESTAMP, PARTITION, OFFSET, HEADERS, HEADER, DEBEZIUM,
+                ])? {
                     KEY => SourceIncludeMetadata::Key {
                         alias: parser.parse_alias()?,
                     },
@@ -4857,6 +4871,12 @@ impl<'a> Parser<'a> {
                             alias,
                             key,
                             use_bytes,
+                        }
+                    }
+                    DEBEZIUM => {
+                        parser.expect_keyword(METADATA)?;
+                        SourceIncludeMetadata::DebeziumMetadata {
+                            alias: parser.parse_alias()?,
                         }
                     }
                     _ => unreachable!("only explicitly allowed items can be parsed"),

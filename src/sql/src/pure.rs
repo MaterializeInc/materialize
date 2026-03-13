@@ -2413,7 +2413,7 @@ async fn purify_csr_connection_proto(
                 .await
                 .ok();
 
-            if matches!(envelope, Some(SourceEnvelope::Debezium)) && key.is_none() {
+            if matches!(envelope, Some(SourceEnvelope::Debezium { .. })) && key.is_none() {
                 sql_bail!("Key schema is required for ENVELOPE DEBEZIUM");
             }
 
@@ -2465,7 +2465,7 @@ async fn purify_csr_connection_avro(
             topic,
         )
         .await?;
-        if matches!(envelope, Some(SourceEnvelope::Debezium)) && key_schema.is_none() {
+        if matches!(envelope, Some(SourceEnvelope::Debezium { .. })) && key_schema.is_none() {
             sql_bail!("Key schema is required for ENVELOPE DEBEZIUM");
         }
 
