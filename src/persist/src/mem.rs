@@ -259,20 +259,11 @@ impl Consensus for MemConsensus {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
+        let expected = new.seqno.previous();
         // Yield to maximize our chances for getting interesting orderings.
         let () = yield_now().await;
-        if let Some(expected) = expected {
-            if new.seqno <= expected {
-                return Err(ExternalError::from(anyhow!(
-                    "new seqno must be strictly greater than expected. Got new: {:?} expected: {:?}",
-                    new.seqno,
-                    expected
-                )));
-            }
-        }
 
         if new.seqno.0 > i64::MAX.try_into().expect("i64::MAX known to fit in u64") {
             return Err(ExternalError::from(anyhow!(

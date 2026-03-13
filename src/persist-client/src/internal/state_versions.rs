@@ -164,12 +164,16 @@ impl StateVersions {
 
         // Shard is not initialized, try initializing it.
         let (initial_state, initial_diff) = self.write_initial_rollup(shard_metrics).await;
+        assert_eq!(
+            initial_state.seqno(),
+            SeqNo::minimum(),
+            "initial state should have the initial seqno"
+        );
         let (cas_res, _diff) =
             retry_external(&self.metrics.retries.external.maybe_init_cas, || async {
                 self.try_compare_and_set_current(
                     "maybe_init_shard",
                     shard_metrics,
-                    None,
                     &initial_state,
                     &initial_diff,
                 )
@@ -221,7 +225,6 @@ impl StateVersions {
         &self,
         cmd_name: &str,
         shard_metrics: &ShardMetrics,
-        expected: Option<SeqNo>,
         new_state: &TypedState<K, V, T, D>,
         diff: &StateDiff<T>,
     ) -> Result<(CaSResult, VersionedData), Indeterminate>
@@ -253,11 +256,7 @@ impl StateVersions {
         let payload_len = new.data.len();
         let cas_res = retry_determinate(
             &self.metrics.retries.determinate.apply_unbatched_cmd_cas,
-            || async {
-                self.consensus
-                    .compare_and_set(&path, expected, new.clone())
-                    .await
-            },
+            || async { self.consensus.compare_and_set(&path, new.clone()).await },
         )
         .instrument(debug_span!("apply_unbatched_cmd::cas", payload_len))
         .await
@@ -386,7 +385,7 @@ impl StateVersions {
                     "apply_unbatched_cmd {} {} lost the CaS race, retrying: {:?}",
                     new_state.shard_id(),
                     cmd_name,
-                    expected,
+                    new_state.seqno.previous(),
                 );
                 Ok((CaSResult::ExpectationMismatch, new))
             }
@@ -733,7 +732,8 @@ impl StateVersions {
             self.cfg.hostname.clone(),
             (self.cfg.now)(),
         );
-        let rollup_seqno = empty_state.seqno.next();
+        let mut initial_state = empty_state.clone_for_rollup();
+        let rollup_seqno = initial_state.seqno();
         let rollup = HollowRollup {
             key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
             // Chicken-and-egg problem here. We don't know the size of the
@@ -741,10 +741,10 @@ impl StateVersions {
             // itself.
             encoded_size_bytes: None,
         };
-        let (applied, initial_state) = match empty_state
-            .clone_apply(&self.cfg, &mut |_, _, state| {
-                state.add_rollup((rollup_seqno, &rollup))
-            }) {
+        let applied = match initial_state
+            .collections
+            .add_rollup((rollup_seqno, &rollup))
+        {
             Continue(x) => x,
             Break(NoOpStateTransition(_)) => {
                 panic!("initial state transition should not be a no-op")
