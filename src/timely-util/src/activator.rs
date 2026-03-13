@@ -17,8 +17,11 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use timely::dataflow::Scope;
+use timely::dataflow::operators::generic::OperatorInfo;
 use timely::scheduling::Activator;
 
 /// Generic activator behavior
@@ -135,5 +138,55 @@ impl ActivatorInner {
 
     fn ack(&mut self) {
         self.activated = 0;
+    }
+}
+
+/// A [`timely::scheduling::SyncActivator`] wrapper that coalesces multiple activations.
+///
+/// Tasks can call [`ArcActivator::activate`] liberally. The actual
+/// `SyncActivator::activate` call is suppressed if the operator has not yet run since the
+/// last activation. The Timely operator holds the corresponding [`ActivationAck`] and calls
+/// [`ActivationAck::ack`] each time it is scheduled, resetting the flag so the next
+/// `activate` call goes through.
+pub struct ArcActivator {
+    inner: timely::scheduling::SyncActivator,
+    /// `true` if the operator has been activated but not yet scheduled.
+    pending: Arc<AtomicBool>,
+}
+
+/// Handle held by the Timely operator to acknowledge activations from a [`ArcActivator`].
+///
+/// Call [`ActivationAck::ack`] at the start of each operator scheduling to allow the
+/// [`ArcActivator`] to send new activations.
+pub struct ActivationAck(Arc<AtomicBool>);
+
+impl ArcActivator {
+    /// Create a new [`ArcActivator`] and its corresponding [`ActivationAck`].
+    pub fn new<S: Scope>(scope: &S, info: &OperatorInfo) -> (Self, ActivationAck) {
+        let sync_activator = scope.sync_activator_for(info.address.to_vec());
+        let pending = Arc::new(AtomicBool::new(false));
+        (
+            Self {
+                inner: sync_activator,
+                pending: Arc::clone(&pending),
+            },
+            ActivationAck(pending),
+        )
+    }
+
+    /// Activate the Timely operator, unless an activation is already pending.
+    pub fn activate(&self) {
+        if !self.pending.swap(true, Ordering::Relaxed) {
+            let _ = self.inner.activate();
+        }
+    }
+}
+
+impl ActivationAck {
+    /// Acknowledge the activation, allowing the [`ArcActivator`] to activate again.
+    ///
+    /// Call this at the start of each operator scheduling.
+    pub fn ack(&self) {
+        self.0.store(false, Ordering::Relaxed);
     }
 }
