@@ -39,6 +39,7 @@ use timely::progress::Timestamp;
 use tracing::{Instrument, debug_span};
 
 use crate::ShardId;
+use crate::async_runtime::IsolatedRuntime;
 use crate::fetch::{EncodedPart, FetchBatchFilter, FetchConfig};
 use crate::internal::encoding::Schemas;
 use crate::internal::metrics::{ReadMetrics, ShardMetrics};
@@ -143,10 +144,21 @@ impl StructuredUpdates {
 }
 
 /// Sort parts ordered by the codec-encoded key and value columns.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct StructuredSort<K: Codec, V: Codec, T, D> {
     schemas: Schemas<K, V>,
     _time_diff: PhantomData<fn(T, D)>,
+}
+
+// Manual Clone implementation that doesn't require K: Clone, V: Clone
+// because Schemas uses Arc internally.
+impl<K: Codec, V: Codec, T, D> Clone for StructuredSort<K, V, T, D> {
+    fn clone(&self) -> Self {
+        Self {
+            schemas: self.schemas.clone(),
+            _time_diff: PhantomData,
+        }
+    }
 }
 
 impl<K: Codec, V: Codec, T, D> StructuredSort<K, V, T, D> {
@@ -282,6 +294,8 @@ enum ConsolidationPart<T, D> {
 }
 
 impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
+    /// Synchronous version of from_encoded for use in tests.
+    #[cfg(test)]
     pub(crate) fn from_encoded(
         part: EncodedPart<T>,
         force_reconsolidation: bool,
@@ -308,6 +322,55 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
         ConsolidationPart::Encoded {
             part: updates,
             cursor,
+        }
+    }
+
+    /// Constructs an encoded part from a fetched part, running CPU-intensive
+    /// sorting on the isolated runtime to avoid blocking the main runtime.
+    ///
+    /// This prevents runtime stalls that could cause heartbeat tasks to miss
+    /// their deadlines and result in persist reader lease expirations.
+    pub(crate) async fn from_encoded_async<S: RowSort<T, D> + Clone + Send + 'static>(
+        part: EncodedPart<T>,
+        force_reconsolidation: bool,
+        metrics: &ColumnarMetrics,
+        sort: S,
+        isolated_runtime: &IsolatedRuntime,
+    ) -> Self
+    where
+        T: Send + Sync,
+        D: Send,
+    {
+        let reconsolidate = part.maybe_unconsolidated() || force_reconsolidation;
+        let updates = part.normalize(metrics);
+        let updates: StructuredUpdates = sort.updates_from_blob(updates);
+
+        if reconsolidate {
+            // Spawn the CPU-intensive sorting work on the isolated runtime
+            // to avoid blocking the main runtime's heartbeat tasks.
+            let (updates, sorted_indices) = isolated_runtime
+                .spawn_named(|| "consolidation::sort_indices", async move {
+                    let len = updates.len();
+                    let mut indices: Vec<_> = (0..len).collect();
+                    indices.sort_by_key(|i| updates.get::<T, D>(*i).map(|(kv, t, _d)| (kv, t)));
+                    (updates, indices)
+                })
+                .await;
+
+            let cursor = PartIndices {
+                sorted_indices: sorted_indices.into(),
+                next_index: updates.len(),
+            };
+
+            ConsolidationPart::Encoded {
+                part: updates,
+                cursor,
+            }
+        } else {
+            ConsolidationPart::Encoded {
+                part: updates,
+                cursor: PartIndices::default(),
+            }
         }
     }
 
@@ -355,6 +418,7 @@ pub(crate) struct Consolidator<T, D, Sort: RowSort<T, D>> {
     metrics: Arc<Metrics>,
     shard_metrics: Arc<ShardMetrics>,
     read_metrics: Arc<ReadMetrics>,
+    isolated_runtime: Arc<IsolatedRuntime>,
     runs: Vec<VecDeque<(ConsolidationPart<T, D>, usize)>>,
     filter: FetchBatchFilter<T>,
     budget: usize,
@@ -406,6 +470,7 @@ where
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
         read_metrics: ReadMetrics,
+        isolated_runtime: Arc<IsolatedRuntime>,
         filter: FetchBatchFilter<T>,
         lower_bound: Option<LowerBound<T>>,
         prefetch_budget_bytes: usize,
@@ -419,6 +484,7 @@ where
             blob,
             read_metrics: Arc::new(read_metrics),
             shard_metrics,
+            isolated_runtime,
             runs: vec![],
             filter,
             budget: prefetch_budget_bytes,
@@ -430,9 +496,9 @@ where
 
 impl<T, D, Sort> Consolidator<T, D, Sort>
 where
-    T: Timestamp + Codec64 + Lattice + Sync,
-    D: Codec64 + Monoid + Ord,
-    Sort: RowSort<T, D>,
+    T: Timestamp + Codec64 + Lattice + Sync + Send,
+    D: Codec64 + Monoid + Ord + Send,
+    Sort: RowSort<T, D> + Clone + Send + 'static,
 {
     /// Add another run of data to be consolidated.
     ///
@@ -572,81 +638,103 @@ where
                 .unwrap_or(self.runs.len())
         };
 
+        // Clone Arcs and data needed for the async closures
+        let cfg = self.cfg.clone();
+        let shard_id = self.shard_id;
+        let blob = Arc::clone(&self.blob);
+        let metrics = Arc::clone(&self.metrics);
+        let shard_metrics = Arc::clone(&self.shard_metrics);
+        let read_metrics = Arc::clone(&self.read_metrics);
+        let isolated_runtime = Arc::clone(&self.isolated_runtime);
+        let sort = self.sort.clone();
+
         let mut ready_futures: FuturesUnordered<_> = self.runs[0..first_larger]
             .iter_mut()
-            .map(|run| async {
-                // It's possible for there to be multiple layers of indirection between us and the first available encoded part:
-                // if the first part is a `HollowRuns`, we'll need to fetch both that and the first part in the run to have data
-                // to consolidate. So: we loop, and bail out of the loop when either the first part in the run is available or we
-                // hit some unrecoverable error.
-                loop {
-                    let (mut part, size) = run.pop_front().expect("trimmed run should be nonempty");
+            .map(|run| {
+                let cfg = cfg.clone();
+                let blob = Arc::clone(&blob);
+                let metrics = Arc::clone(&metrics);
+                let shard_metrics = Arc::clone(&shard_metrics);
+                let read_metrics = Arc::clone(&read_metrics);
+                let isolated_runtime = Arc::clone(&isolated_runtime);
+                let sort = sort.clone();
 
-                    let ConsolidationPart::Queued { data, task, .. } = &mut part else {
-                        run.push_front((part, size));
-                        return Ok(true);
-                    };
+                async move {
+                    // It's possible for there to be multiple layers of indirection between us and the first available encoded part:
+                    // if the first part is a `HollowRuns`, we'll need to fetch both that and the first part in the run to have data
+                    // to consolidate. So: we loop, and bail out of the loop when either the first part in the run is available or we
+                    // hit some unrecoverable error.
+                    loop {
+                        let (mut part, size) = run.pop_front().expect("trimmed run should be nonempty");
 
-                    let is_prefetched = task.as_ref().map_or(false, |t| t.is_finished());
-                    if is_prefetched {
-                        self.metrics.compaction.parts_prefetched.inc();
-                    } else {
-                        self.metrics.compaction.parts_waited.inc()
-                    }
-                    self.metrics.consolidation.parts_fetched.inc();
-
-                    let wrong_sort = data.run_meta.order != Some(RunOrder::Structured);
-                    let fetch_result: anyhow::Result<FetchResult<T>> = match task.take() {
-                        Some(handle) => handle.await,
-                        None => {
-                            data.clone()
-                                .fetch(
-                                    &self.cfg,
-                                    self.shard_id,
-                                    &*self.blob,
-                                    &*self.metrics,
-                                    &*self.shard_metrics,
-                                    &self.read_metrics,
-                                )
-                                .await
-                        }
-                    };
-                    match fetch_result {
-                        Err(err) => {
+                        let ConsolidationPart::Queued { data, task, .. } = &mut part else {
                             run.push_front((part, size));
-                            return Err(err);
+                            return Ok(true);
+                        };
+
+                        let is_prefetched = task.as_ref().map_or(false, |t| t.is_finished());
+                        if is_prefetched {
+                            metrics.compaction.parts_prefetched.inc();
+                        } else {
+                            metrics.compaction.parts_waited.inc()
                         }
-                        Ok(Err(run_part)) => {
-                            // Since we're pushing these onto the _front_ of the queue, we need to
-                            // iterate in reverse order.
-                            for part in run_part.parts.into_iter().rev() {
-                                let structured_lower = part.structured_key_lower();
-                                let size = part.max_part_bytes();
-                                run.push_front((
-                                    ConsolidationPart::Queued {
-                                        data: FetchData {
-                                            run_meta: data.run_meta.clone(),
-                                            part_desc: data.part_desc.clone(),
-                                            part,
-                                            structured_lower,
-                                        },
-                                        task: None,
-                                        _diff: Default::default(),
-                                    },
-                                    size,
-                                ));
+                        metrics.consolidation.parts_fetched.inc();
+
+                        let wrong_sort = data.run_meta.order != Some(RunOrder::Structured);
+                        let fetch_result: anyhow::Result<FetchResult<T>> = match task.take() {
+                            Some(handle) => handle.await,
+                            None => {
+                                data.clone()
+                                    .fetch(
+                                        &cfg,
+                                        shard_id,
+                                        &*blob,
+                                        &*metrics,
+                                        &*shard_metrics,
+                                        &read_metrics,
+                                    )
+                                    .await
                             }
-                        }
-                        Ok(Ok(part)) => {
-                            run.push_front((
-                                ConsolidationPart::from_encoded(
+                        };
+                        match fetch_result {
+                            Err(err) => {
+                                run.push_front((part, size));
+                                return Err(err);
+                            }
+                            Ok(Err(run_part)) => {
+                                // Since we're pushing these onto the _front_ of the queue, we need to
+                                // iterate in reverse order.
+                                for part in run_part.parts.into_iter().rev() {
+                                    let structured_lower = part.structured_key_lower();
+                                    let size = part.max_part_bytes();
+                                    run.push_front((
+                                        ConsolidationPart::Queued {
+                                            data: FetchData {
+                                                run_meta: data.run_meta.clone(),
+                                                part_desc: data.part_desc.clone(),
+                                                part,
+                                                structured_lower,
+                                            },
+                                            task: None,
+                                            _diff: Default::default(),
+                                        },
+                                        size,
+                                    ));
+                                }
+                            }
+                            Ok(Ok(part)) => {
+                                // Run the CPU-intensive sorting on the isolated runtime
+                                // to prevent blocking the main runtime's heartbeat tasks.
+                                let encoded_part = ConsolidationPart::from_encoded_async(
                                     part,
                                     wrong_sort,
-                                    &self.metrics.columnar,
-                                    &self.sort,
-                                ),
-                                size,
-                            ));
+                                    &metrics.columnar,
+                                    sort.clone(),
+                                    &isolated_runtime,
+                                )
+                                .await;
+                                run.push_front((encoded_part, size));
+                            }
                         }
                     }
                 }
@@ -1047,6 +1135,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::ShardId;
+    use crate::async_runtime::IsolatedRuntime;
     use crate::cfg::PersistConfig;
     use crate::internal::paths::PartialBatchKey;
     use crate::internal::state::{BatchPart, HollowBatchPart};
@@ -1122,6 +1211,7 @@ mod tests {
                 let fetch_cfg = FetchConfig {
                     validate_bounds_on_read: true,
                 };
+                let isolated_runtime = Arc::new(IsolatedRuntime::new_for_tests());
                 let mut consolidator = Consolidator {
                     cfg: fetch_cfg.clone(),
                     context: "test".to_string(),
@@ -1131,6 +1221,7 @@ mod tests {
                     metrics: Arc::clone(metrics),
                     shard_metrics: metrics.shards.shard(&ShardId::new(), "test"),
                     read_metrics: Arc::new(metrics.read.snapshot.clone()),
+                    isolated_runtime,
                     // Generated runs of data that are sorted, but not necessarily consolidated.
                     // This is because timestamp-advancement may cause us to have duplicate KVTs,
                     // including those that span runs.
@@ -1246,6 +1337,8 @@ mod tests {
                 validate_bounds_on_read: true,
             };
 
+            let isolated_runtime = Arc::new(IsolatedRuntime::new_for_tests());
+
             let mut consolidator: Consolidator<u64, i64, StructuredSort<_, _, _, _>> =
                 Consolidator::new(
                     "test".to_string(),
@@ -1256,6 +1349,7 @@ mod tests {
                     Arc::clone(&metrics),
                     shard_metrics,
                     metrics.read.batch_fetcher.clone(),
+                    isolated_runtime,
                     FetchBatchFilter::Compaction {
                         since: desc.since().clone(),
                     },
