@@ -16,7 +16,37 @@ expression: "#[sqlfunc(Replace, sqlname = \"replace\")]\nfn replace(text: &str, 
     mz_lowertest::MzReflect,
 )]
 pub struct Replace;
-impl crate::func::variadic::EagerVariadicFunc for Replace {
+impl crate::EagerScalarFunc for Replace {
+    type Input<'a> = (&'a str, &'a str, &'a str);
+    type Output<'a> = Result<String, EvalError>;
+    fn call<'a>(
+        &self,
+        (text, from, to): Self::Input<'a>,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
+        replace(text, from, to)
+    }
+    fn output_sql_type(
+        &self,
+        input_types: &[mz_repr::SqlColumnType],
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::EagerScalarFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        let non_nullable_input_is_nullable = false
+            || input_types.get(0usize).map_or(false, |t| t.nullable)
+            || input_types.get(1usize).map_or(false, |t| t.nullable)
+            || input_types.get(2usize).map_or(false, |t| t.nullable);
+        let inputs_nullable = input_types.iter().any(|it| it.nullable);
+        output
+            .nullable(
+                nullable || non_nullable_input_is_nullable
+                    || (propagates_nulls && inputs_nullable),
+            )
+    }
+}
+impl crate::func::EagerVariadicFunc for Replace {
     type Input<'a> = (&'a str, &'a str, &'a str);
     type Output<'a> = Result<String, EvalError>;
     fn call<'a>(
@@ -30,22 +60,7 @@ impl crate::func::variadic::EagerVariadicFunc for Replace {
         &self,
         input_types: &[mz_repr::SqlColumnType],
     ) -> mz_repr::SqlColumnType {
-        use mz_repr::AsColumnType;
-        let output = Self::Output::as_column_type();
-        let propagates_nulls = crate::func::variadic::EagerVariadicFunc::propagates_nulls(
-            self,
-        );
-        let nullable = output.nullable;
-        let non_nullable_input_is_nullable = false
-            || input_types.get(0usize).map_or(false, |t| t.nullable)
-            || input_types.get(1usize).map_or(false, |t| t.nullable)
-            || input_types.get(2usize).map_or(false, |t| t.nullable);
-        let inputs_nullable = input_types.iter().any(|it| it.nullable);
-        output
-            .nullable(
-                nullable || non_nullable_input_is_nullable
-                    || (propagates_nulls && inputs_nullable),
-            )
+        crate::EagerScalarFunc::output_sql_type(self, input_types)
     }
 }
 impl std::fmt::Display for Replace {
