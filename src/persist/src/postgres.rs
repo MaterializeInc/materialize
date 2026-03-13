@@ -291,6 +291,10 @@ impl PostgresConsensus {
         })
     }
 
+    fn postgres_tuned(&self) -> bool {
+        self.mode == PostgresMode::Postgres && USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg)
+    }
+
     /// Drops and recreates the `consensus` table in Postgres
     ///
     /// ONLY FOR TESTING
@@ -424,9 +428,7 @@ impl Consensus for PostgresConsensus {
             WHERE last_seq.sequence_number = $4;
             ";
 
-            let q = if USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg)
-                && self.mode == PostgresMode::Postgres
-            {
+            let q = if self.postgres_tuned() {
                 POSTGRES_CAS_QUERY
             } else {
                 CRDB_CAS_QUERY
@@ -475,7 +477,16 @@ impl Consensus for PostgresConsensus {
                 limit
             )));
         };
-        let rows = {
+        let rows = if self.postgres_tuned() {
+            // In serializable mode, postgres behaves better when read-only mode is explicitly
+            // declared, which requires explicitly initializing a transaction.
+            let mut client = self.get_connection().await?;
+            let txn = client.build_transaction().read_only(true).start().await?;
+            let statement = txn.prepare_cached(q).await?;
+            let result = txn.query(&statement, &[&key, &from, &limit]).await?;
+            txn.commit().await?;
+            result
+        } else {
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
             client.query(&statement, &[&key, &from, &limit]).await?
@@ -535,9 +546,7 @@ impl Consensus for PostgresConsensus {
         WHERE consensus.ctid = to_lock.ctid;
         ";
 
-        let q = if USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg)
-            && self.mode == PostgresMode::Postgres
-        {
+        let q = if self.postgres_tuned() {
             POSTGRES_TRUNCATE_QUERY
         } else {
             CRDB_TRUNCATE_QUERY
