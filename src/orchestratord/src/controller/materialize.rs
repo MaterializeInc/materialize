@@ -34,6 +34,7 @@ use crate::{
     k8s::{apply_resource, delete_resource, make_reflector},
     matching_image_from_environmentd_image_ref,
     metrics::Metrics,
+    parse_image_tag,
     tls::{DefaultCertificateSpecs, issuer_ref_defined},
 };
 use mz_cloud_provider::CloudProvider;
@@ -754,13 +755,8 @@ impl k8s_controller::Context for Context {
         // enforced by wait_for_balancer
 
         if self.config.create_console {
-            let Some((_, environmentd_image_tag)) = mz.spec.environmentd_image_ref.rsplit_once(':')
-            else {
-                return Err(Error::Anyhow(anyhow::anyhow!(
-                    "failed to parse environmentd image ref: {}",
-                    mz.spec.environmentd_image_ref
-                )));
-            };
+            let environmentd_image_tag =
+                parse_image_tag(&mz.spec.environmentd_image_ref).unwrap_or("unstable");
             let console_image_tag = self
                 .config
                 .console_image_tag_map
