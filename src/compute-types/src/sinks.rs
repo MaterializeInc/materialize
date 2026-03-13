@@ -9,6 +9,7 @@
 
 //! Types for describing dataflow sinks.
 
+use mz_expr::ColumnOrder;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc, Timestamp};
 use mz_storage_types::connections::aws::AwsConnection;
@@ -71,8 +72,11 @@ impl<S> ComputeSinkConnection<S> {
 }
 
 /// TODO(database-issues#7533): Add documentation.
-#[derive(Default, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct SubscribeSinkConnection {}
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct SubscribeSinkConnection {
+    /// An ordering for the data in the subscribe.
+    pub output: Vec<ColumnOrder>,
+}
 
 /// Connection attributes required to do a oneshot copy to s3.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]

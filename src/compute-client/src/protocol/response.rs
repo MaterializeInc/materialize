@@ -14,7 +14,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_types::ShardId;
-use mz_repr::{Diff, GlobalId, RelationDesc, Row};
+use mz_repr::{GlobalId, RelationDesc, UpdateCollection};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use uuid::Uuid;
@@ -236,7 +236,7 @@ pub struct StashedPeekResponse {
 }
 
 impl StashedPeekResponse {
-    /// Total count of [`Row`]s represented by this collection, considering a
+    /// Total count of [mz_repr::Row]s represented by this collection, considering a
     /// possible `OFFSET` and `LIMIT`.
     pub fn num_rows(&self, offset: usize, limit: Option<usize>) -> usize {
         let num_stashed_rows: usize = usize::cast_from(self.num_rows_batches);
@@ -290,8 +290,15 @@ pub struct SubscribeBatch<T = mz_repr::Timestamp> {
     pub upper: Antichain<T>,
     /// All updates greater than `lower` and not greater than `upper`.
     ///
+    /// Each of the update collections is sorted first by time, and then by the ordering specified
+    /// by the order-by of the subscribe. There is no implied ordering between different collections
+    /// of updates in the [Vec].
+    ///
+    /// It's typical to include just a single collection as part of the clusterd's response, but we
+    /// may aggregate different batches together later as we combine results from different workers.
+    ///
     /// An `Err` variant can be used to indicate e.g. that the size of the updates exceeds internal limits.
-    pub updates: Result<Vec<(T, Row, Diff)>, String>,
+    pub updates: Result<Vec<UpdateCollection<T>>, String>,
 }
 
 impl<T> SubscribeBatch<T> {
@@ -299,10 +306,7 @@ impl<T> SubscribeBatch<T> {
     fn to_error_if_exceeds(&mut self, max_result_size: usize) {
         use bytesize::ByteSize;
         if let Ok(updates) = &self.updates {
-            let total_size: usize = updates
-                .iter()
-                .map(|(_time, row, _diff)| row.byte_len())
-                .sum();
+            let total_size: usize = updates.iter().map(|updates| updates.byte_len()).sum();
             if total_size > max_result_size {
                 self.updates = Err(format!(
                     "result exceeds max size of {}",
