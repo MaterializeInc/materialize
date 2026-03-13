@@ -75,6 +75,11 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     &config.config.connection_context.ssh_tunnel_manager,
                 )
                 .await?;
+            let binlog_purged_set = query_sys_var(&mut stats_conn, "global.gtid_purged").await?;
+            if let Err(_) = gtid_set_frontier(&binlog_purged_set) {
+                tracing::warn!("Restore detected, exiting");
+                return Ok(());
+            };
 
             tokio::pin!(resume_uppers);
             let timestamp_interval = config.timestamp_interval;
