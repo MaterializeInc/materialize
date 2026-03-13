@@ -22,6 +22,10 @@ use mz_postgres_client::PostgresClientKnobs;
 use mz_postgres_client::metrics::PostgresClientMetrics;
 
 use crate::azure::{AzureBlob, AzureBlobConfig};
+/// Minimum DEK rotation interval in seconds. Prevents accidental tight-loop
+/// rotation that would flood KMS with `GenerateDataKey` calls.
+const MIN_DEK_ROTATION_SECS: u64 = 60;
+
 use crate::crypto::{BlobEncryptionConfig, EncryptedBlob, EncryptedConsensus, EncryptionConfig};
 use crate::file::{FileBlob, FileBlobConfig};
 #[cfg(feature = "foundationdb")]
@@ -84,8 +88,7 @@ impl BlobConfig {
                     None => Ok(blob),
                     Some(enc_cfg) => {
                         let kms_client = enc_cfg.build_kms_client().await?;
-                        let customer_kms_client =
-                            enc_cfg.build_customer_kms_client().await?;
+                        let customer_kms_client = enc_cfg.build_customer_kms_client().await?;
                         let customer_kms_key_id = enc_cfg.customer_kms_key_id.clone();
                         Ok(Arc::new(
                             EncryptedBlob::new(
@@ -159,27 +162,40 @@ impl BlobConfig {
                     .remove("dek_rotation_interval_secs")
                     .and_then(|x| x.parse::<u64>().ok());
 
-                let customer_kms_key_id =
-                    query_params.remove("customer_kms_key_id").map(|x| x.into_owned());
-                let customer_kms_region =
-                    query_params.remove("customer_kms_region").map(|x| x.into_owned());
-                let customer_kms_endpoint =
-                    query_params.remove("customer_kms_endpoint").map(|x| x.into_owned());
-                let customer_kms_role_arn =
-                    query_params.remove("customer_kms_role_arn").map(|x| x.into_owned());
+                let customer_kms_key_id = query_params
+                    .remove("customer_kms_key_id")
+                    .map(|x| x.into_owned());
+                let customer_kms_region = query_params
+                    .remove("customer_kms_region")
+                    .map(|x| x.into_owned());
+                let customer_kms_endpoint = query_params
+                    .remove("customer_kms_endpoint")
+                    .map(|x| x.into_owned());
+                let customer_kms_role_arn = query_params
+                    .remove("customer_kms_role_arn")
+                    .map(|x| x.into_owned());
 
-                let encryption = kms_key_id.map(|key_id| BlobEncryptionConfig {
-                    kms_key_id: key_id,
-                    kms_region: kms_region.or_else(|| region.clone()),
-                    endpoint: endpoint.clone(),
-                    role_arn: role_arn.clone(),
-                    dek_rotation_interval: Duration::from_secs(
-                        dek_rotation_interval_secs.unwrap_or(300),
-                    ),
-                    customer_kms_key_id,
-                    customer_kms_region,
-                    customer_kms_endpoint,
-                    customer_kms_role_arn,
+                let encryption = kms_key_id.map(|key_id| {
+                    let requested_secs = dek_rotation_interval_secs.unwrap_or(300);
+                    let clamped_secs = requested_secs.max(MIN_DEK_ROTATION_SECS);
+                    if requested_secs < MIN_DEK_ROTATION_SECS {
+                        warn!(
+                            requested_secs,
+                            min_secs = MIN_DEK_ROTATION_SECS,
+                            "dek_rotation_interval_secs below minimum, clamping"
+                        );
+                    }
+                    BlobEncryptionConfig {
+                        kms_key_id: key_id,
+                        kms_region: kms_region.or_else(|| region.clone()),
+                        endpoint: endpoint.clone(),
+                        role_arn: role_arn.clone(),
+                        dek_rotation_interval: Duration::from_secs(clamped_secs),
+                        customer_kms_key_id,
+                        customer_kms_region,
+                        customer_kms_endpoint,
+                        customer_kms_role_arn,
+                    }
                 });
 
                 let config = S3BlobConfig::new(
@@ -303,8 +319,7 @@ impl ConsensusConfig {
                     None => Ok(consensus),
                     Some(enc_cfg) => {
                         let kms_client = enc_cfg.build_kms_client().await?;
-                        let customer_kms_client =
-                            enc_cfg.build_customer_kms_client().await?;
+                        let customer_kms_client = enc_cfg.build_customer_kms_client().await?;
                         let customer_kms_key_id = enc_cfg.customer_kms_key_id.clone();
                         Ok(Arc::new(
                             EncryptedConsensus::new(
@@ -348,25 +363,37 @@ impl ConsensusConfig {
                     .remove("dek_rotation_interval_secs")
                     .and_then(|x| x.parse::<u64>().ok());
 
-                let customer_kms_key_id =
-                    query_params.remove("customer_kms_key_id").map(|x| x.into_owned());
-                let customer_kms_region =
-                    query_params.remove("customer_kms_region").map(|x| x.into_owned());
-                let customer_kms_role_arn =
-                    query_params.remove("customer_kms_role_arn").map(|x| x.into_owned());
+                let customer_kms_key_id = query_params
+                    .remove("customer_kms_key_id")
+                    .map(|x| x.into_owned());
+                let customer_kms_region = query_params
+                    .remove("customer_kms_region")
+                    .map(|x| x.into_owned());
+                let customer_kms_role_arn = query_params
+                    .remove("customer_kms_role_arn")
+                    .map(|x| x.into_owned());
 
-                let encryption = kms_key_id.map(|key_id| EncryptionConfig {
-                    kms_key_id: key_id,
-                    kms_region,
-                    endpoint: None,
-                    role_arn: None,
-                    dek_rotation_interval: Duration::from_secs(
-                        dek_rotation_interval_secs.unwrap_or(300),
-                    ),
-                    customer_kms_key_id,
-                    customer_kms_region,
-                    customer_kms_endpoint: None,
-                    customer_kms_role_arn,
+                let encryption = kms_key_id.map(|key_id| {
+                    let requested_secs = dek_rotation_interval_secs.unwrap_or(300);
+                    let clamped_secs = requested_secs.max(MIN_DEK_ROTATION_SECS);
+                    if requested_secs < MIN_DEK_ROTATION_SECS {
+                        warn!(
+                            requested_secs,
+                            min_secs = MIN_DEK_ROTATION_SECS,
+                            "dek_rotation_interval_secs below minimum, clamping"
+                        );
+                    }
+                    EncryptionConfig {
+                        kms_key_id: key_id,
+                        kms_region,
+                        endpoint: None,
+                        role_arn: None,
+                        dek_rotation_interval: Duration::from_secs(clamped_secs),
+                        customer_kms_key_id,
+                        customer_kms_region,
+                        customer_kms_endpoint: None,
+                        customer_kms_role_arn,
+                    }
                 });
 
                 // Strip KMS params from URL before passing to Postgres driver.
