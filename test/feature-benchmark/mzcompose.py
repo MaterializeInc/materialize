@@ -146,7 +146,7 @@ SERVICES = [
     SchemaRegistry(),
     Redpanda(),
     Cockroach(setup_materialize=True, in_memory=True),
-    Minio(setup_materialize=True),
+    Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Azurite(),
     KgenService(),
     Postgres(),

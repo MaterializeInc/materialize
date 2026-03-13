@@ -12,9 +12,6 @@
 # COPY TO expressions should immediately succeed or fail on their first runs
 $ set-max-tries max-tries=1
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_copy_to_expr = true;
-
 # Prepare table data
 > CREATE TABLE t (a int);
 > INSERT INTO t VALUES (1);
@@ -105,6 +102,12 @@ SELECT TO_CHAR(now(), 'YYYY-MM-DD')
     FORMAT = 'csv'
   );
 
+> CREATE TABLE t_from_1 (a INT)
+> COPY INTO t_from_1 FROM 's3://copytos3/test/1/${key-1}' (FORMAT CSV, AWS CONNECTION = aws_conn)
+> SELECT a FROM t_from_1 ORDER BY 1
+1
+2
+
 $ set-from-sql var=key-2
 SELECT TO_CHAR(now(), 'YYYY-MM-DD')
 
@@ -124,6 +127,12 @@ true
     FORMAT = 'csv'
   );
 
+> CREATE TABLE t_from_2 (a INT)
+> COPY INTO t_from_2 FROM 's3://copytos3/test/2' (FORMAT CSV, AWS CONNECTION = aws_conn)
+> SELECT a FROM t_from_2 ORDER BY 1
+1
+2
+
 # copy should work on non-table objects (views, etc)
 > CREATE VIEW my_view AS SELECT a FROM t WHERE a < 2;
 
@@ -134,6 +143,17 @@ true
     FORMAT = 'csv',
     HEADER = true
   );
+
+> CREATE TABLE t1 (a INT);
+
+> COPY INTO t1 FROM 's3://copytos3/test/2_5' (
+    FORMAT CSV,
+    AWS CONNECTION = aws_conn,
+    HEADER = true
+  );
+
+> SELECT * FROM t1;
+1
 
 > COPY (SELECT array[1,2]::int[], false::bool, 'Inf'::double, '{"s": "abc"}'::jsonb, 1::mz_timestamp, 32767::smallint, 2147483647::integer, 9223372036854775807::bigint, 12345678901234567890123.4567890123456789::numeric(39,16), '2010-10-10'::date, '10:10:10'::time, '2010-10-10 10:10:10+00'::timestamp, '2010-10-10 10:10:10+02'::timestamptz, '0 day'::interval, 'aaaa'::text, '\\xAAAA'::bytea, 'това е'::text, 'текст'::bytea) TO 's3://copytos3/test/3'
   WITH (
@@ -157,6 +177,11 @@ contains:S3 bucket path is not empty
     FORMAT = 'csv'
   );
 
+> CREATE TABLE t_from_4 (n INT)
+> COPY INTO t_from_4 FROM 's3://copytos3/test/4' (FORMAT CSV, AWS CONNECTION = aws_conn)
+> SELECT COUNT(*) FROM t_from_4
+1000000
+
 # test CSV format options
 > COPY (SELECT array[1,2]::int[], 83647::integer, '{"s": "ab`c"}'::jsonb, '2010-10-10 10:10:10+00'::timestamp) TO 's3://copytos3/test/4_5'
   WITH (
@@ -167,12 +192,28 @@ contains:S3 bucket path is not empty
     HEADER = true
   )
 
+> CREATE TABLE t_from_4_5 (c1 INT[], c2 INT, c3 JSONB, c4 TIMESTAMP)
+> COPY INTO t_from_4_5 FROM 's3://copytos3/test/4_5' (
+    FORMAT CSV,
+    AWS CONNECTION = aws_conn,
+    DELIMITER = ';',
+    QUOTE = '`',
+    HEADER = true
+  )
+> SELECT c1, c2, c3, c4 FROM t_from_4_5
+{1,2} 83647 "{\"s\":\"ab`c\"}" "2010-10-10 10:10:10"
+
 > COPY (SELECT 1 WHERE FALSE) TO 's3://copytos3/test/5'
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
     FORMAT = 'csv'
   );
+
+> CREATE TABLE t_from_5 (a INT)
+> COPY INTO t_from_5 FROM 's3://copytos3/test/5' (FORMAT CSV, AWS CONNECTION = aws_conn)
+> SELECT COUNT(*) FROM t_from_5
+0
 
 $ s3-verify-data bucket=copytos3 key=test/1/${key-1} sort-rows=true
 1
@@ -335,3 +376,148 @@ $ s3-verify-data bucket=copytos3 key=parquet_test/10 sort-rows=true
 [[0.0], ]   // allow-trailing-whitespace
  [] {a: } {items: [1, 2, , ], dimensions: 2}
 [[1.25, 2.5], [223.3333]] [a, b] {a: {b: 2.5}} {items: [1, 2, 3, 5], dimensions: 2}
+
+# Roundtrip corner case tests: exact data verification across COPY TO / COPY FROM
+
+# Newlines inside strings: embedded LF and CRLF must survive the CSV quoting round-trip
+> CREATE TABLE t_newlines (id INT, val TEXT)
+> INSERT INTO t_newlines VALUES
+  (1, E'first line\nsecond line'),
+  (2, E'carriage\r\nreturn'),
+  (3, 'no newline here')
+
+> COPY t_newlines TO 's3://copytos3/roundtrip/newlines'
+  WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv')
+
+> CREATE TABLE t_newlines_from (id INT, val TEXT)
+> COPY INTO t_newlines_from FROM 's3://copytos3/roundtrip/newlines' (FORMAT CSV, AWS CONNECTION = aws_conn)
+
+> SELECT id, replace(replace(val, E'\r\n', '<CRLF>'), E'\n', '<LF>') FROM t_newlines_from ORDER BY id
+1 "first line<LF>second line"
+2 "carriage<CRLF>return"
+3 "no newline here"
+
+# Unicode: CJK, Cyrillic, emoji, Arabic, and Latin extended characters
+> CREATE TABLE t_unicode (id INT, val TEXT)
+> INSERT INTO t_unicode VALUES
+  (1, '日本語テスト'),
+  (2, 'Привет мир'),
+  (3, '🎉🚀💡'),
+  (4, 'مرحبا بالعالم'),
+  (5, E'\u00e9\u00e0\u00fc\u00f1')
+
+> COPY t_unicode TO 's3://copytos3/roundtrip/unicode'
+  WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv')
+
+> CREATE TABLE t_unicode_from (id INT, val TEXT)
+> COPY INTO t_unicode_from FROM 's3://copytos3/roundtrip/unicode' (FORMAT CSV, AWS CONNECTION = aws_conn)
+
+> SELECT id, val FROM t_unicode_from ORDER BY id
+1 日本語テスト
+2 "Привет мир"
+3 🎉🚀💡
+4 "مرحبا بالعالم"
+5 éàüñ
+
+# Integer and float edge cases: bigint extremes, float specials (Infinity, -Infinity, NaN)
+> CREATE TABLE t_numbers (id INT, a BIGINT, b FLOAT8, c FLOAT4)
+> INSERT INTO t_numbers VALUES
+  (1,  9223372036854775807,  'Infinity'::float8,  'Infinity'::float4),
+  (2, -9223372036854775808, '-Infinity'::float8, '-Infinity'::float4),
+  (3,  0,                   'NaN'::float8,        'NaN'::float4),
+  (4,  1,                    0.1,                  0.1::float4),
+  (5, -1,                    1.0/3.0,             (1.0/3.0)::float4)
+
+> COPY t_numbers TO 's3://copytos3/roundtrip/numbers'
+  WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv')
+
+> CREATE TABLE t_numbers_from (id INT, a BIGINT, b FLOAT8, c FLOAT4)
+> COPY INTO t_numbers_from FROM 's3://copytos3/roundtrip/numbers' (FORMAT CSV, AWS CONNECTION = aws_conn)
+
+# Verify bigint extremes and float Infinity/-Infinity
+> SELECT id, a, b, c FROM t_numbers_from WHERE id IN (1, 2) ORDER BY id
+1 9223372036854775807 inf inf
+2 -9223372036854775808 -inf -inf
+
+# NaN: use text cast since NaN != NaN under IEEE 754
+> SELECT id, a, b::text, c::text FROM t_numbers_from WHERE id = 3
+3 0 NaN NaN
+
+# Float precision: 0.1 and 1/3 must roundtrip to the same bit pattern
+> SELECT COUNT(*) FROM t_numbers_from t1
+  JOIN t_numbers t2 USING (id)
+  WHERE t1.b = t2.b AND t1.c = t2.c AND id IN (4, 5)
+2
+
+# Large numerics: values near the 38-digit precision limit, positive and negative
+> CREATE TABLE t_numerics (id INT, a NUMERIC(38,0), b NUMERIC(38,10), c NUMERIC)
+> INSERT INTO t_numerics VALUES
+  (1,  99999999999999999999999999999999999999,  9999999999999999999999999999.9999999999,  123456789.987654321),
+  (2, -99999999999999999999999999999999999999, -9999999999999999999999999999.9999999999, -123456789.987654321),
+  (3,  0,                                       0,                                         0)
+
+> COPY t_numerics TO 's3://copytos3/roundtrip/numerics'
+  WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv')
+
+> CREATE TABLE t_numerics_from (id INT, a NUMERIC(38,0), b NUMERIC(38,10), c NUMERIC)
+> COPY INTO t_numerics_from FROM 's3://copytos3/roundtrip/numerics' (FORMAT CSV, AWS CONNECTION = aws_conn)
+
+> SELECT id, a, b, c FROM t_numerics_from ORDER BY id
+1 99999999999999999999999999999999999999 9999999999999999999999999999.9999999999 123456789.987654321
+2 -99999999999999999999999999999999999999 -9999999999999999999999999999.9999999999 -123456789.987654321
+3 0 0 0
+
+# Many columns: a 30-column table spanning multiple types to stress CSV column alignment
+> CREATE TABLE t_wide (
+    c01 SMALLINT,      c02 INT,            c03 BIGINT,
+    c04 FLOAT4,        c05 FLOAT8,         c06 NUMERIC(10,2),
+    c07 BOOL,          c08 TEXT,           c09 DATE,
+    c10 TIME,          c11 TIMESTAMP,      c12 SMALLINT,
+    c13 INT,           c14 BIGINT,         c15 FLOAT4,
+    c16 FLOAT8,        c17 NUMERIC(10,2),  c18 BOOL,
+    c19 TEXT,          c20 DATE,           c21 TIME,
+    c22 TIMESTAMP,     c23 INT,            c24 INT,
+    c25 INT,           c26 INT,            c27 INT,
+    c28 INT,           c29 INT,            c30 INT
+  )
+
+> INSERT INTO t_wide VALUES (
+    32767,              -2147483648,         9223372036854775807,
+    3.14::float4,       3.141592653589793,  99999999.99,
+    true,              'col08',             '2024-02-29',
+    '12:34:56',        '2024-02-29 12:34:56', -32768,
+    2147483647,        -9223372036854775808, -3.14::float4,
+    -2.718281828459045, -99999999.99,       false,
+    'col19',           '1970-01-01',        '00:00:00',
+    '1970-01-01 00:00:00', 23,             24,
+    25,                 26,                 27,
+    28,                 29,                 30
+  )
+
+> COPY t_wide TO 's3://copytos3/roundtrip/wide'
+  WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv')
+
+> CREATE TABLE t_wide_from (
+    c01 SMALLINT,      c02 INT,            c03 BIGINT,
+    c04 FLOAT4,        c05 FLOAT8,         c06 NUMERIC(10,2),
+    c07 BOOL,          c08 TEXT,           c09 DATE,
+    c10 TIME,          c11 TIMESTAMP,      c12 SMALLINT,
+    c13 INT,           c14 BIGINT,         c15 FLOAT4,
+    c16 FLOAT8,        c17 NUMERIC(10,2),  c18 BOOL,
+    c19 TEXT,          c20 DATE,           c21 TIME,
+    c22 TIMESTAMP,     c23 INT,            c24 INT,
+    c25 INT,           c26 INT,            c27 INT,
+    c28 INT,           c29 INT,            c30 INT
+  )
+
+> COPY INTO t_wide_from FROM 's3://copytos3/roundtrip/wide' (FORMAT CSV, AWS CONNECTION = aws_conn)
+
+> SELECT COUNT(*) FROM t_wide_from
+1
+
+# Verify exact round-trip using symmetric EXCEPT: no rows should appear in one table but not the other
+> SELECT COUNT(*) FROM (SELECT * FROM t_wide EXCEPT SELECT * FROM t_wide_from) AS diff
+0
+
+> SELECT COUNT(*) FROM (SELECT * FROM t_wide_from EXCEPT SELECT * FROM t_wide) AS diff
+0

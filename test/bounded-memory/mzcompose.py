@@ -72,7 +72,7 @@ SERVICES = [
     MySql(),
     Clusterd(),
     Mz(app_password=""),
-    Minio(),
+    Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Mc(),
     PolarisBootstrap(),
     Polaris(),
@@ -1429,6 +1429,50 @@ SCENARIOS = [
         materialized_memory="2.5Gb",
         clusterd_memory="1Gb",
     ),
+    Scenario(
+        name="copy-to-from-s3",
+        pre_restart=dedent(
+            f"""
+            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+            $ postgres-execute connection=mz_system
+            ALTER SYSTEM SET max_result_size = 2147483648;
+
+            > CREATE SECRET s3_secret AS '${{arg.aws-secret-access-key}}'
+
+            > CREATE CONNECTION s3_conn TO AWS (
+                ACCESS KEY ID = '${{arg.aws-access-key-id}}',
+                SECRET ACCESS KEY = SECRET s3_secret,
+                ENDPOINT = '${{arg.aws-endpoint}}',
+                REGION = 'us-east-1'
+              )
+
+            > CREATE TABLE t_src (f1 INTEGER, f2 TEXT)
+
+            > INSERT INTO t_src
+              SELECT i, repeat('x', {PAD_LEN})
+              FROM generate_series(1, {REPEAT}) AS s(i)
+
+            > COPY t_src TO 's3://copytos3/bounded-memory/copy-from-s3'
+              WITH (AWS CONNECTION = s3_conn, FORMAT = 'csv')
+
+            > CREATE TABLE t_dst (f1 INTEGER, f2 TEXT)
+
+            > COPY INTO t_dst FROM 's3://copytos3/bounded-memory/copy-from-s3'
+              (FORMAT CSV, AWS CONNECTION = s3_conn)
+
+            > SELECT COUNT(*) FROM t_dst
+            {REPEAT}
+            """
+        ),
+        post_restart=dedent(
+            f"""
+            > SELECT COUNT(*) FROM t_dst
+            {REPEAT}
+            """
+        ),
+        materialized_memory="1.8Gb",
+        clusterd_memory="0.5Gb",
+    ),
 ]
 
 
@@ -1566,6 +1610,7 @@ def run_scenario(
             "postgres",
             "mysql",
             "clusterd",
+            "minio",
             Service("testdrive", idle=True),
         )
 

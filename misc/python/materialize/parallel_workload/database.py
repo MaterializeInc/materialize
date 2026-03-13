@@ -795,6 +795,35 @@ class SqlServerSource(DBObject):
         self.executor.create(logging_exe=exe)
 
 
+class S3Object(DBObject):
+    key: str
+    bucket: str
+    format: str
+
+    def __init__(
+        self,
+        key: str,
+        bucket: str,
+        format: str,
+    ):
+        super().__init__()
+        self.key = key
+        self.bucket = bucket
+        self.format = format
+
+    def name(self) -> str:
+        return f"{self.bucket}/{self.key}"
+
+    def __str__(self) -> str:
+        return self.name()
+
+    def create(self, exe: Executor) -> None:
+        query = f"CREATE TABLE '{self.key}'("
+        query += ",\n    ".join(column.create() for column in self.columns)
+        query += ")"
+        exe.execute(query)
+
+
 class Index:
     _name: str
     lock: threading.Lock
@@ -938,6 +967,7 @@ class Database:
     kafka_sinks: list[KafkaSink]
     kafka_sink_id: int
     s3_path: int
+    s3_objects: list[S3Object]
     lock: threading.Lock
     seed: str
     sqlsmith_state: str
@@ -1012,6 +1042,7 @@ class Database:
         self.sql_server_sources = []
         self.iceberg_sinks = []
         self.kafka_sinks = []
+        self.s3_objects = []
         self.kafka_source_id = len(self.kafka_sources)
         self.mysql_source_id = len(self.mysql_sources)
         self.postgres_source_id = len(self.postgres_sources)

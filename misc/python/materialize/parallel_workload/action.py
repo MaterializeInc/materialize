@@ -73,6 +73,7 @@ from materialize.parallel_workload.database import (
     MzTempSchema,
     PostgresSource,
     Role,
+    S3Object,
     Schema,
     SqlServerSource,
     Table,
@@ -541,24 +542,56 @@ class CopyToS3Action(Action):
         return result
 
     def run(self, exe: Executor) -> bool:
-        obj = self.rng.choice(exe.db.db_objects())
+        db_objs = exe.db.db_objects()
+        if not db_objs:
+            return False
+        obj = self.rng.choice(db_objs)
         obj_name = str(obj)
         with exe.db.lock:
             location = exe.db.s3_path
             exe.db.s3_path += 1
         format = "csv" if self.rng.choice([True, False]) else "parquet"
+        s3_obj = S3Object(str(location), "copytos3", format)
         if self.rng.random() < 0.9:
+            dts = [
+                self.rng.choice(list(DATA_TYPES))
+                for _ in range(self.rng.randint(1, 10))
+            ]
             expressions = ", ".join(
-                [
-                    expression(self.rng.choice(list(DATA_TYPES)), obj.columns, self.rng)
-                    for i in range(self.rng.randint(1, 10))
-                ]
+                [expression(dt, obj.columns, self.rng) for dt in dts]
             )
+            cols = [Column(self.rng, i, dt, s3_obj) for i, dt in enumerate(dts)]
         else:
             expressions = "*"
-        query = f"COPY (SELECT {expressions} FROM {obj_name} WHERE {expression(Boolean, obj.columns, self.rng)} LIMIT {self.rng.randint(0, 100)}) TO 's3://copytos3/{location}' WITH (AWS CONNECTION = aws_conn, FORMAT = '{format}')"
+            cols = [
+                Column(self.rng, i, column.data_type, s3_obj)
+                for i, column in enumerate(obj.columns)
+            ]
+        s3_obj.columns = cols
+        to_query = f"COPY (SELECT {expressions} FROM {obj_name} WHERE {expression(Boolean, obj.columns, self.rng)} LIMIT {self.rng.randint(0, 100)}) TO 's3://copytos3/{location}' WITH (AWS CONNECTION = aws_conn, FORMAT = '{format}')"
 
-        exe.execute(query, explainable=False, http=Http.NO, fetch=False)
+        exe.execute(to_query, explainable=False, http=Http.NO, fetch=False)
+        return True
+
+
+class CopyFromS3Action(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        if exe.db.complexity == Complexity.DDL:
+            result.extend(
+                [
+                    "COPY FROM's target table",
+                ]
+            )
+        return result
+
+    def run(self, exe: Executor) -> bool:
+        if not exe.db.s3_objects:
+            return False
+        s3_obj = self.rng.choice(exe.db.s3_objects)
+        from_query = f"COPY INTO t1 FROM 's3://{s3_obj.bucket}/{s3_obj.key}' (FORMAT {format.upper()}, AWS CONNECTION = aws_conn)"
+        s3_obj.create(exe)
+        exe.execute(from_query, explainable=False, http=Http.NO, fetch=False)
         return True
 
 
@@ -3097,7 +3130,8 @@ read_action_list = ActionList(
         (
             CopyToS3Action,
             100,
-        ),  # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9661 is fixed
+        ),
+        (CopyFromS3Action, 100),
         (SetClusterAction, 1),
         (CommitRollbackAction, 30),
         (ReconnectAction, 1),

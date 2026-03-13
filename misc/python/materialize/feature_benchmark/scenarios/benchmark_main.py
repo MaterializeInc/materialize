@@ -546,6 +546,66 @@ class CopyFromStdin(DML):
         return [Lambda(setup), Lambda(do_copy)]
 
 
+class CopyFromS3(DML):
+    """Measure the time it takes for COPY INTO ... FROM S3 to load rows.
+
+    init() writes n() rows to S3 once via COPY TO. Each benchmark iteration
+    then measures a fresh COPY INTO ... FROM S3 into a destination table,
+    including the table creation but excluding the S3 upload.
+    """
+
+    def __init__(
+        self, scale: float, mz_version: MzVersion, default_size: int, seed: int
+    ) -> None:
+        super().__init__(scale, mz_version, default_size, seed)
+        self._s3_path = f"s3://copytos3/benchmark/copy_from_s3/{uuid.uuid4()}"
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 0, 0)
+
+    def init(self) -> Action:
+        n = self.n()
+        return TdAction(
+            f"""
+> CREATE SECRET copy_from_s3_secret AS '${{arg.aws-secret-access-key}}'
+
+> CREATE CONNECTION copy_from_s3_conn TO AWS (
+    ACCESS KEY ID = '${{arg.aws-access-key-id}}',
+    SECRET ACCESS KEY = SECRET copy_from_s3_secret,
+    ENDPOINT = '${{arg.aws-endpoint}}',
+    REGION = 'us-east-1'
+  )
+
+> CREATE TABLE copy_from_s3_src (f1 INTEGER, f2 TEXT, f3 DOUBLE, f4 BOOLEAN)
+
+> INSERT INTO copy_from_s3_src
+  SELECT i, repeat('x', 10), i * 1.5, i % 2 = 0
+  FROM generate_series(1, {n}) AS s(i)
+
+> COPY copy_from_s3_src TO '{self._s3_path}'
+  WITH (AWS CONNECTION = copy_from_s3_conn, FORMAT = 'csv')
+"""
+        )
+
+    def benchmark(self) -> MeasurementSource:
+        n = self.n()
+        return Td(
+            f"""
+> DROP TABLE IF EXISTS copy_from_s3_dst
+
+> CREATE TABLE copy_from_s3_dst (f1 INTEGER, f2 TEXT, f3 DOUBLE, f4 BOOLEAN)
+  /* A */
+
+> COPY INTO copy_from_s3_dst FROM '{self._s3_path}'
+  (FORMAT CSV, AWS CONNECTION = copy_from_s3_conn)
+
+> SELECT COUNT(*) FROM copy_from_s3_dst
+  /* B */
+{n}
+"""
+        )
+
+
 class Dataflow(Scenario):
     """Benchmark scenarios around individual dataflow patterns/operators"""
 
