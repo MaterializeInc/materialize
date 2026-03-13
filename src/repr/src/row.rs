@@ -154,11 +154,8 @@ impl Row {
 
     /// Creates a new row from supplied bytes.
     ///
-    /// # Safety
-    ///
-    /// This method relies on `data` being an appropriate row encoding, and can
-    /// result in unsafety if this is not the case.
-    pub unsafe fn from_bytes_unchecked(data: &[u8]) -> Self {
+    /// This method relies on `data` being an appropriate row encoding.
+    pub fn from_bytes_unchecked(data: &[u8]) -> Self {
         Row {
             data: CompactBytes::new(data),
         }
@@ -693,8 +690,7 @@ impl ToOwned for RowRef {
     type Owned = Row;
 
     fn to_owned(&self) -> Self::Owned {
-        // SAFETY: RowRef has the invariant that the wrapped data must be a valid Row encoding.
-        unsafe { Row::from_bytes_unchecked(&self.0) }
+        Row::from_bytes_unchecked(&self.0)
     }
 }
 
@@ -884,7 +880,7 @@ impl<'a> DatumNested<'a> {
     // call later on without storing the datum itself.
     pub fn extract(data: &mut &'a [u8]) -> DatumNested<'a> {
         let prev = *data;
-        let _ = unsafe { read_datum(data) };
+        let _ = read_datum(data);
         DatumNested {
             val: &prev[..(prev.len() - data.len())],
         }
@@ -893,7 +889,7 @@ impl<'a> DatumNested<'a> {
     /// Returns the datum `self` contains.
     pub fn datum(&self) -> Datum<'a> {
         let mut temp = self.val;
-        unsafe { read_datum(&mut temp) }
+        read_datum(&mut temp)
     }
 }
 
@@ -1089,11 +1085,9 @@ fn read_untagged_bytes<'a>(data: &mut &'a [u8]) -> &'a [u8] {
 ///
 /// Updates `offset` to point to the first byte after the end of the read region.
 ///
-/// # Safety
-///
 /// This function is safe if the datum's length and contents were previously written by `push_lengthed_bytes`,
-/// and it was only written with a `String` tag if it was indeed UTF-8.
-unsafe fn read_lengthed_datum<'a>(data: &mut &'a [u8], tag: Tag) -> Datum<'a> {
+/// and it was only written with a `String` tag if it was indeed UTF-8. Otherwise, it may panic.
+fn read_lengthed_datum<'a>(data: &mut &'a [u8], tag: Tag) -> Datum<'a> {
     let len = match tag {
         Tag::BytesTiny | Tag::StringTiny | Tag::ListTiny => usize::from(read_byte(data)),
         Tag::BytesShort | Tag::StringShort | Tag::ListShort => {
@@ -1112,7 +1106,7 @@ unsafe fn read_lengthed_datum<'a>(data: &mut &'a [u8], tag: Tag) -> Datum<'a> {
     match tag {
         Tag::BytesTiny | Tag::BytesShort | Tag::BytesLong | Tag::BytesHuge => Datum::Bytes(bytes),
         Tag::StringTiny | Tag::StringShort | Tag::StringLong | Tag::StringHuge => {
-            Datum::String(str::from_utf8_unchecked(bytes))
+            Datum::String(str::from_utf8(bytes).expect("decoding string datum"))
         }
         Tag::ListTiny | Tag::ListShort | Tag::ListLong | Tag::ListHuge => {
             Datum::List(DatumList { data: bytes })
@@ -1195,12 +1189,7 @@ pub(super) fn read_time(data: &mut &[u8]) -> NaiveTime {
 /// Read a datum starting at byte `offset`.
 ///
 /// Updates `offset` to point to the first byte after the end of the read region.
-///
-/// # Safety
-///
-/// This function is safe if a `Datum` was previously written at this offset by `push_datum`.
-/// Otherwise it could return invalid values, which is Undefined Behavior.
-pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
+pub fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
     let tag = Tag::try_from_primitive(read_byte(data)).expect("unknown row tag");
     match tag {
         Tag::Null => Datum::Null,
@@ -2109,13 +2098,10 @@ impl RowPacker<'_> {
 
     /// Appends the slice of data representing an entire `Row`. The data is not validated.
     ///
-    /// # Safety
-    ///
     /// The requirements from [`Row::from_bytes_unchecked`] apply here, too:
-    /// This method relies on `data` being an appropriate row encoding, and can
-    /// result in unsafety if this is not the case.
+    /// This method relies on `data` being an appropriate row encoding.
     #[inline]
-    pub unsafe fn extend_by_slice_unchecked(&mut self, data: &[u8]) {
+    pub fn extend_by_slice_unchecked(&mut self, data: &[u8]) {
         self.row.data.extend_from_slice(data)
     }
 
@@ -2294,28 +2280,25 @@ impl RowPacker<'_> {
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>,
     {
-        // SAFETY: The function returns the exact number of elements pushed into the array.
-        unsafe {
-            self.push_array_with_unchecked(dims, |packer| {
-                let mut nelements = 0;
-                for datum in iter {
-                    packer.push(datum);
-                    nelements += 1;
-                }
-                Ok::<_, InvalidArrayError>(nelements)
-            })
-        }
+        self.push_array_with_unchecked(dims, |packer| {
+            let mut nelements = 0;
+            for datum in iter {
+                packer.push(datum);
+                nelements += 1;
+            }
+            Ok::<_, InvalidArrayError>(nelements)
+        })
     }
 
     /// Convenience function to construct an array from a function. The function must return the
-    /// number of elements it pushed into the array. It is undefined behavior if the function returns
+    /// number of elements it pushed into the array. It is unspecified behavior if the function returns
     /// a number different to the number of elements it pushed.
     ///
     /// Returns an error if the number of elements pushed by `f` does not match
     /// the cardinality of the array as described by `dims`, or if the
     /// number of dimensions exceeds [`MAX_ARRAY_DIMENSIONS`], or if `f` errors. If an error
     /// occurs, the packer's state will be unchanged.
-    pub unsafe fn push_array_with_unchecked<F, E>(
+    pub fn push_array_with_unchecked<F, E>(
         &mut self,
         dims: &[ArrayDimension],
         f: F,
@@ -2607,7 +2590,7 @@ impl RowPacker<'_> {
         let mut seen = None;
         let mut dataz = &self.row.data[datum_check..];
         while !dataz.is_empty() {
-            let d = unsafe { read_datum(&mut dataz) };
+            let d = read_datum(&mut dataz);
             assert!(d != Datum::Null, "cannot push Datum::Null into range");
 
             match seen {
@@ -2643,18 +2626,7 @@ impl RowPacker<'_> {
     }
 
     /// Truncates the underlying storage to the specified byte position.
-    ///
-    /// # Safety
-    ///
-    /// `pos` MUST specify a byte offset that lies on a datum boundary.
-    /// If `pos` specifies a byte offset that is *within* a datum, the row
-    /// packer will produce an invalid row, the unpacking of which may
-    /// trigger undefined behavior!
-    ///
-    /// To find the byte offset of a datum boundary, inspect the packer's
-    /// byte length by calling `packer.data().len()` after pushing the desired
-    /// number of datums onto the packer.
-    pub unsafe fn truncate(&mut self, pos: usize) {
+    pub fn truncate(&mut self, pos: usize) {
         self.row.data.truncate(pos)
     }
 
@@ -2664,8 +2636,7 @@ impl RowPacker<'_> {
         let mut iter = self.row.iter();
         for _ in iter.by_ref().take(n) {}
         let next_len = iter.data.len();
-        // SAFETY: iterator offsets always lie on a datum boundary.
-        unsafe { self.truncate(prev_len - next_len) }
+        self.truncate(prev_len - next_len)
     }
 
     /// Returns the total amount of bytes used by the underlying row.
@@ -2734,7 +2705,7 @@ impl<'a> Iterator for DatumListIter<'a> {
         if self.data.is_empty() {
             None
         } else {
-            Some(unsafe { read_datum(&mut self.data) })
+            Some(read_datum(&mut self.data))
         }
     }
 }
@@ -2787,8 +2758,8 @@ impl<'a> Iterator for DatumDictIter<'a> {
                 "Dict keys must be strings, got {:?}",
                 key_tag
             );
-            let key = unsafe { read_lengthed_datum(&mut self.data, key_tag).unwrap_str() };
-            let val = unsafe { read_datum(&mut self.data) };
+            let key = read_lengthed_datum(&mut self.data, key_tag).unwrap_str();
+            let val = read_datum(&mut self.data);
 
             // if in debug mode, sanity check keys
             if cfg!(debug_assertions) {
