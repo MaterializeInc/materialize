@@ -1085,7 +1085,7 @@ mod tests {
         index_as_datum(&col.data, index, &arena).is_err()
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_add_int64_vectorized() {
         let col_a = column_from_iter((0..100).map(|i| ColumnDatum::Int64(i)));
         let col_b = column_from_iter((100..200).map(|i| ColumnDatum::Int64(i)));
@@ -1105,7 +1105,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_literal_broadcast() {
         let col_a = column_from_iter((0..50).map(|i| ColumnDatum::Int64(i)));
         let columns: Vec<&DatumColumn> = vec![&col_a];
@@ -1124,7 +1124,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_overflow_produces_error() {
         let col_a = column_from_iter(vec![ColumnDatum::Int64(i64::MAX)]);
         let col_b = column_from_iter(vec![ColumnDatum::Int64(1)]);
@@ -1141,7 +1141,7 @@ mod tests {
         assert!(is_error(&result, 0));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_evaluate_batch_simple() {
         use crate::MapFilterProject;
         use crate::linear::plan::SafeMfpPlan;
@@ -1174,7 +1174,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_evaluate_batch_with_predicate() {
         use crate::MapFilterProject;
         use crate::linear::plan::SafeMfpPlan;
@@ -1235,7 +1235,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_try_from_mir() {
         use crate::MirScalarExpr;
 
@@ -1250,7 +1250,7 @@ mod tests {
         assert!(vectorized.is_some());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_try_from_mir_unsupported_falls_back() {
         use crate::MirScalarExpr;
 
@@ -1269,7 +1269,7 @@ mod tests {
         assert!(matches!(with_fallback, VectorScalarExpr::Scalar(_)));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_rows_to_columns_roundtrip() {
         use mz_repr::{Datum, Row};
 
@@ -1294,7 +1294,7 @@ mod tests {
 
     /// Compare vectorized batch evaluation against scalar row-at-a-time
     /// evaluation, ensuring they produce identical results.
-    #[test]
+    #[mz_ore::test]
     fn test_vectorized_matches_scalar() {
         use crate::MapFilterProject;
         use crate::linear::plan::SafeMfpPlan;
