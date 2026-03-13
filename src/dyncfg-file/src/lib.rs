@@ -47,14 +47,21 @@ pub async fn sync_file_to_configset(
     };
 
     // Do initial sync
-    if let Err(err) = tokio::time::timeout(config_sync_timeout, async {
+    match tokio::time::timeout(config_sync_timeout, async {
         synced.sync()?;
         Ok::<_, anyhow::Error>(())
     })
     .await
     {
-        tracing::warn!("error while initializing file-backed config set: {}", err);
-        return Err(err.into());
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            tracing::warn!("error while initializing file-backed config set: {}", err);
+            return Err(err);
+        }
+        Err(err) => {
+            tracing::warn!("timeout while initializing file-backed config set: {}", err);
+            return Err(err.into());
+        }
     }
 
     // Start background sync task if interval is specified
@@ -104,6 +111,11 @@ impl<F: Fn(&ConfigUpdates, &ConfigSet) + Send> SyncedConfigSet<F> {
     pub fn sync(&self) -> Result<(), anyhow::Error> {
         let file_contents = fs::read_to_string(&self.config_file)
             .with_context(|| format!("failed to read config file: {:?}", self.config_file))?;
+
+        // Treat an empty file as an empty config (no overrides).
+        if file_contents.trim().is_empty() {
+            return Ok(());
+        }
 
         let values: BTreeMap<String, JsonValue> = serde_json::from_str(&file_contents)
             .with_context(|| format!("failed to parse config file: {:?}", self.config_file))?;
