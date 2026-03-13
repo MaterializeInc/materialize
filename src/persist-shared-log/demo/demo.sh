@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
 # Demo: Group Commit Consensus — flat S3 writes as shards scale.
 #
 # This script is fully self-contained. It will:
@@ -109,7 +119,7 @@ PGCONF
 fi
 
 # Create database and table — single row, updated in place.
-psql postgres://localhost:${PG_PORT}/postgres -c "CREATE DATABASE demo;" 2>/dev/null || true
+psql "postgres://localhost:${PG_PORT}/postgres" -c "CREATE DATABASE demo;" 2>/dev/null || true
 # Drop stale replication slots from previous runs.
 $PSQL_PG -c "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots;" 2>/dev/null || true
 $PSQL_PG -c "DROP PUBLICATION IF EXISTS mz_source;" 2>/dev/null || true

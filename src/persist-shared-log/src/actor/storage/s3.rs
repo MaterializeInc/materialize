@@ -14,10 +14,10 @@ use std::collections::BTreeMap;
 use aws_sdk_s3::primitives::ByteStream;
 use prost::Message;
 
-use mz_persist::generated::consensus_service::{ProtoSnapshot, ProtoLogBatch};
+use mz_persist::generated::consensus_service::{ProtoLogBatch, ProtoSnapshot};
 
-use crate::ShardState;
 use super::{Storage, StorageError, serialize_snapshot};
+use crate::ShardState;
 
 /// S3-backed storage for log batches and snapshots.
 pub struct S3Storage {

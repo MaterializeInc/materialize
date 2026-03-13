@@ -11,8 +11,8 @@
 //! (e.g. a persist-shard-backed variant) to be slotted in.
 
 use mz_persist::generated::consensus_service::{
-    ProtoAppendResponse, ProtoCompareAndSetResponse, ProtoHeadResponse, ProtoScanResponse,
-    ProtoTruncateResponse, ProtoLogProposal,
+    ProtoAppendResponse, ProtoCompareAndSetResponse, ProtoHeadResponse, ProtoLogProposal,
+    ProtoScanResponse, ProtoTruncateResponse,
 };
 
 /// Configuration for the [`ActorAcceptor`](crate::actor::acceptor::ActorAcceptor).

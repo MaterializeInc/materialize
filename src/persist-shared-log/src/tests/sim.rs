@@ -29,7 +29,7 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
 use mz_persist::generated::consensus_service::{
-    ProtoCasProposal, ProtoTruncateProposal, ProtoLogProposal, proto_log_proposal,
+    ProtoCasProposal, ProtoLogProposal, ProtoTruncateProposal, proto_log_proposal,
 };
 
 use crate::actor::acceptor::{AcceptorHandle, ActorAcceptor};
@@ -486,7 +486,7 @@ fn seed_range() -> std::ops::Range<u64> {
 /// Single acceptor + learner simulation. Mixes CAS, reads, truncates, log
 /// faults (transient + ambiguous), and crash/recovery. Checks log consistency
 /// (every observed value exists in the log).
-#[tokio::test(start_paused = true)]
+#[mz_ore::test(tokio::test(start_paused = true))]
 async fn sim_single() {
     for seed in seed_range() {
         let mut sim = Simulator::new(seed);
@@ -503,7 +503,7 @@ async fn sim_single() {
 /// the first to flush wins and all others are fenced. Fenced acceptors return
 /// errors to their callers and shut down. The surviving acceptor continues
 /// writing, and the log remains consistent.
-#[tokio::test(start_paused = true)]
+#[mz_ore::test(tokio::test(start_paused = true))]
 async fn sim_multi_acceptor_fencing() {
     for seed in seed_range() {
         let num_acceptors = 2 + usize::try_from(seed % 3).expect("small"); // 2–4 acceptors
@@ -612,7 +612,7 @@ async fn sim_multi_acceptor_fencing() {
 /// ```text
 /// SEED=0 cargo test -p mz-persist-shared-log sim_fuzz -- --ignored
 /// ```
-#[tokio::test(start_paused = true)]
+#[mz_ore::test(tokio::test(start_paused = true))]
 #[ignore]
 async fn sim_fuzz() {
     let start = specific_seed().unwrap_or(0);

@@ -25,8 +25,8 @@ use tracing::{debug, info, warn};
 
 use mz_ore::cast::CastFrom;
 use mz_persist::generated::consensus_service::{
-    ProtoCompareAndSetResponse, ProtoHeadResponse, ProtoScanResponse, ProtoTruncateResponse,
-    ProtoVersionedData, ProtoLogBatch, proto_log_proposal,
+    ProtoCompareAndSetResponse, ProtoHeadResponse, ProtoLogBatch, ProtoScanResponse,
+    ProtoTruncateResponse, ProtoVersionedData, proto_log_proposal,
 };
 
 use crate::actor::acceptor::AcceptorHandle;

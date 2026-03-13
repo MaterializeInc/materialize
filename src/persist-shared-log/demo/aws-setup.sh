@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
 # aws-setup.sh — Set up and run the consensus service demo on an EC2 scratch instance.
 #
 # Usage:
@@ -69,7 +79,7 @@ HBA"
 sudo pg_ctlcluster "$PG_VER" "$PG_CLUSTER" start
 
 # Wait for Postgres to be ready.
-for i in $(seq 1 30); do
+for _i in $(seq 1 30); do
     pg_isready -p "$PG_PORT" -q 2>/dev/null && break
     sleep 0.5
 done
@@ -101,6 +111,7 @@ echo "  Monitoring stack up (Grafana :3001, Prometheus :9090)."
 # [4/5] Build consensus service
 # =========================================================================
 echo "=== [4/5] Building consensus service (release) ==="
+# shellcheck source=/dev/null
 source "$HOME/.cargo/env" 2>/dev/null || true
 cargo build --release -p mz-persist-shared-log
 echo "  Consensus service built."

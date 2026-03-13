@@ -16,7 +16,7 @@ pub mod sim;
 use std::collections::BTreeMap;
 
 use mz_persist::generated::consensus_service::{
-    ProtoShardState, ProtoSnapshot, ProtoVersionedData, ProtoLogBatch,
+    ProtoLogBatch, ProtoShardState, ProtoSnapshot, ProtoVersionedData,
 };
 
 use crate::{ShardState, VersionedEntry};

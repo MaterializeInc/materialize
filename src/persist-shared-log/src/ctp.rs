@@ -273,7 +273,7 @@ async fn dispatch<A: Acceptor, L: Learner>(
     learner: &L,
 ) -> Result<Vec<u8>, String> {
     use mz_persist::generated::consensus_service::{
-        ProtoCasProposal, ProtoTruncateProposal, ProtoLogProposal, proto_log_proposal,
+        ProtoCasProposal, ProtoLogProposal, ProtoTruncateProposal, proto_log_proposal,
     };
 
     match opcode {

@@ -41,8 +41,8 @@ use tracing::{debug, warn};
 
 use mz_ore::cast::CastFrom;
 use mz_persist::generated::consensus_service::{
-    ProtoCompareAndSetResponse, ProtoHeadResponse, ProtoScanResponse, ProtoTruncateResponse,
-    ProtoVersionedData, ProtoLogProposal, proto_log_proposal,
+    ProtoCompareAndSetResponse, ProtoHeadResponse, ProtoLogProposal, ProtoScanResponse,
+    ProtoTruncateResponse, ProtoVersionedData, proto_log_proposal,
 };
 use mz_persist_client::read::{Listen, ListenEvent};
 use mz_persist_client::write::WriteHandle;
@@ -604,8 +604,7 @@ impl PersistLearner {
     fn handle_command(&mut self, cmd: PersistLearnerCommand) {
         match cmd {
             PersistLearnerCommand::Head { key, reply } => {
-                self.pending_reads
-                    .push(ReadCommand::Head { key, reply });
+                self.pending_reads.push(ReadCommand::Head { key, reply });
             }
             PersistLearnerCommand::Scan {
                 key,
@@ -681,9 +680,9 @@ impl PersistLearner {
     /// Serve any linearizing reads whose target has been reached by the listen.
     fn wake_linearizing_reads(&mut self) {
         let reads = std::mem::take(&mut self.linearizing_reads);
-        let (ready, still_waiting): (Vec<_>, Vec<_>) = reads
-            .into_iter()
-            .partition(|r| timely::PartialOrder::less_equal(&r.target_upper, &self.listen_frontier));
+        let (ready, still_waiting): (Vec<_>, Vec<_>) = reads.into_iter().partition(|r| {
+            timely::PartialOrder::less_equal(&r.target_upper, &self.listen_frontier)
+        });
         self.linearizing_reads = still_waiting;
 
         for read in ready {
@@ -789,10 +788,7 @@ impl PersistLearner {
             .expect("failed to open persist shard for learner");
 
         let since = read.since().clone();
-        let listen = read
-            .listen(since)
-            .await
-            .expect("listen should succeed");
+        let listen = read.listen(since).await.expect("listen should succeed");
 
         let (learner, handle) = Self::new(config, listen, upper_handle);
         let task = mz_ore::task::spawn(|| "persist-learner", learner.run());

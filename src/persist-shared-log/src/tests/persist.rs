@@ -12,20 +12,18 @@
 use std::sync::Arc;
 
 use mz_persist::generated::consensus_service::{
-    ProtoCasProposal, ProtoTruncateProposal, ProtoLogProposal, proto_log_proposal,
+    ProtoCasProposal, ProtoLogProposal, ProtoTruncateProposal, proto_log_proposal,
 };
 use mz_persist_client::Diagnostics;
 use mz_persist_client::PersistClient;
 use mz_persist_types::ShardId;
 use mz_persist_types::codec_impls::UnitSchema;
 
-use crate::traits::AcceptorConfig;
-use crate::traits::Acceptor as _;
-use crate::persist_log::{ConsensusProposal, ConsensusProposalSchema};
 use crate::persist_log::acceptor::{PersistAcceptor, PersistAcceptorHandle};
-use crate::persist_log::learner::{
-    PersistLearner, PersistLearnerConfig, PersistLearnerHandle,
-};
+use crate::persist_log::learner::{PersistLearner, PersistLearnerConfig, PersistLearnerHandle};
+use crate::persist_log::{ConsensusProposal, ConsensusProposalSchema};
+use crate::traits::Acceptor as _;
+use crate::traits::AcceptorConfig;
 
 // ---------------------------------------------------------------------------
 // Test harness
@@ -74,10 +72,7 @@ impl PersistTestHarness {
             .expect("open learner handles");
 
         let since = read.since().clone();
-        let listen = read
-            .listen(since)
-            .await
-            .expect("listen");
+        let listen = read.listen(since).await.expect("listen");
 
         // Now spawn tasks.
         let acceptor_config = AcceptorConfig {

@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use mz_persist::generated::consensus_service::{ProtoSnapshot, ProtoLogBatch};
+use mz_persist::generated::consensus_service::{ProtoLogBatch, ProtoSnapshot};
 
 use super::{Storage, StorageError, serialize_snapshot};
 use crate::ShardState;

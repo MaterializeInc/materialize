@@ -18,8 +18,8 @@ use mz_persist::generated::consensus_service::persist_shared_log_server::Persist
 use mz_persist::generated::consensus_service::{
     ProtoAppendRequest, ProtoAppendResponse, ProtoAwaitResultRequest, ProtoCompareAndSetRequest,
     ProtoCompareAndSetResponse, ProtoHeadRequest, ProtoHeadResponse, ProtoListKeysRequest,
-    ProtoListKeysResponse, ProtoScanRequest, ProtoScanResponse, ProtoTruncateRequest,
-    ProtoTruncateResponse, ProtoLogProposal, proto_log_proposal,
+    ProtoListKeysResponse, ProtoLogProposal, ProtoScanRequest, ProtoScanResponse,
+    ProtoTruncateRequest, ProtoTruncateResponse, proto_log_proposal,
 };
 
 use crate::traits;
@@ -72,7 +72,6 @@ impl<A: traits::Acceptor> ConsensusAcceptor for AcceptorGrpcService<A> {
         let resp = self.handle.append(proposal).await?;
         Ok(tonic::Response::new(resp))
     }
-
 }
 
 // ---------------------------------------------------------------------------

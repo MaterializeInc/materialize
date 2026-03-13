@@ -35,16 +35,16 @@ use tokio::sync::mpsc;
 use tonic::transport::Server;
 
 use mz_ore::metrics::MetricsRegistry;
-use mz_persist_client::PersistClient;
-use mz_persist_client::ShardId;
 use mz_persist::generated::consensus_service::consensus_acceptor_client::ConsensusAcceptorClient;
 use mz_persist::generated::consensus_service::consensus_acceptor_server::ConsensusAcceptorServer;
 use mz_persist::generated::consensus_service::consensus_learner_client::ConsensusLearnerClient;
 use mz_persist::generated::consensus_service::consensus_learner_server::ConsensusLearnerServer;
 use mz_persist::generated::consensus_service::{
     ProtoAppendRequest, ProtoAwaitResultRequest, ProtoCasProposal, ProtoHeadRequest,
-    ProtoScanRequest, ProtoTruncateProposal, ProtoLogProposal, proto_log_proposal,
+    ProtoLogProposal, ProtoScanRequest, ProtoTruncateProposal, proto_log_proposal,
 };
+use mz_persist_client::PersistClient;
+use mz_persist_client::ShardId;
 use mz_persist_shared_log::actor::acceptor::ActorAcceptor;
 use mz_persist_shared_log::actor::learner::{ActorLearner, LearnerConfig};
 use mz_persist_shared_log::actor::metrics::{AcceptorMetrics, LearnerMetrics};
@@ -53,8 +53,8 @@ use mz_persist_shared_log::ctp;
 use mz_persist_shared_log::persist_log::acceptor::PersistAcceptor;
 use mz_persist_shared_log::persist_log::learner::{PersistLearner, PersistLearnerConfig};
 use mz_persist_shared_log::service::{AcceptorGrpcService, LearnerGrpcService};
-use mz_persist_shared_log::traits::AcceptorConfig;
 use mz_persist_shared_log::traits::Acceptor as _;
+use mz_persist_shared_log::traits::AcceptorConfig;
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -1429,10 +1429,8 @@ async fn main() {
         std::net::SocketAddr,
         mz_ore::task::AbortOnDropHandle<()>,
     )> = None;
-    let mut ctp_server_handle: Option<(
-        std::net::SocketAddr,
-        mz_ore::task::AbortOnDropHandle<()>,
-    )> = None;
+    let mut ctp_server_handle: Option<(std::net::SocketAddr, mz_ore::task::AbortOnDropHandle<()>)> =
+        None;
     let mut log_learner_thread: Option<std::thread::JoinHandle<()>> = None;
     let mut persist_acceptor_task: Option<mz_ore::task::JoinHandle<()>> = None;
     let mut persist_learner_task: Option<mz_ore::task::JoinHandle<()>> = None;

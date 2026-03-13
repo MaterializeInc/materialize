@@ -16,23 +16,21 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio_stream::StreamExt;
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Interval;
+use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
 
 use mz_ore::retry::Retry;
-use mz_persist::generated::consensus_service::{
-    ProtoAppendResponse, ProtoLogProposal,
-};
+use mz_persist::generated::consensus_service::{ProtoAppendResponse, ProtoLogProposal};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use prost::Message;
 
-use crate::traits::{AcceptorConfig, AcceptorError};
 use super::{ConsensusProposal, ConsensusProposalSchema};
+use crate::traits::{AcceptorConfig, AcceptorError};
 
 /// Commands dispatched to the persist-backed acceptor.
 pub enum PersistAcceptorCommand {
@@ -43,9 +41,7 @@ pub enum PersistAcceptorCommand {
     },
     /// Explicitly trigger a flush. Used in tests.
     #[allow(dead_code)]
-    Flush {
-        reply: oneshot::Sender<()>,
-    },
+    Flush { reply: oneshot::Sender<()> },
 }
 
 /// A typed handle to the persist-backed acceptor's command channel.
@@ -249,8 +245,7 @@ impl PersistAcceptor {
                     for (position, reply) in replies.into_iter().enumerate() {
                         let _ = reply.send(Ok(ProtoAppendResponse {
                             batch_number,
-                            position: u32::try_from(position)
-                                .expect("batch position fits u32"),
+                            position: u32::try_from(position).expect("batch position fits u32"),
                         }));
                     }
                     debug!(
@@ -278,10 +273,7 @@ impl PersistAcceptor {
                 }
                 Err(invalid_usage) => {
                     // InvalidUsage is a programming error — fatal.
-                    error!(
-                        "persist compare_and_append InvalidUsage: {}",
-                        invalid_usage
-                    );
+                    error!("persist compare_and_append InvalidUsage: {}", invalid_usage);
                     let msg = format!("persist internal error: {}", invalid_usage);
                     for reply in replies {
                         let _ = reply.send(Err(msg.clone()));
@@ -296,9 +288,8 @@ impl PersistAcceptor {
             proposals = num_proposals,
             "persist acceptor flush failed: retries exhausted after repeated upper mismatch"
         );
-        let msg =
-            "persist acceptor flush failed: retries exhausted after repeated upper mismatch"
-                .to_string();
+        let msg = "persist acceptor flush failed: retries exhausted after repeated upper mismatch"
+            .to_string();
         for reply in replies {
             let _ = reply.send(Err(msg.clone()));
         }

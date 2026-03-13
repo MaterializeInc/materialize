@@ -13,15 +13,15 @@ use std::sync::Arc;
 
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::generated::consensus_service::{
-    ProtoCasProposal, ProtoTruncateProposal, ProtoLogProposal, proto_log_proposal,
+    ProtoCasProposal, ProtoLogProposal, ProtoTruncateProposal, proto_log_proposal,
 };
 
 use crate::actor::acceptor::{AcceptorHandle, ActorAcceptor};
 use crate::actor::learner::{ActorLearner, LearnerConfig, LearnerHandle};
 use crate::actor::metrics::{AcceptorMetrics, LearnerMetrics};
 use crate::actor::storage::sim::SimStorage;
-use crate::traits::AcceptorConfig;
 use crate::traits::Acceptor as _;
+use crate::traits::AcceptorConfig;
 
 pub(super) fn test_acceptor_metrics() -> AcceptorMetrics {
     AcceptorMetrics::register(&MetricsRegistry::new())
@@ -117,7 +117,7 @@ impl TestHarness {
 // Unit tests
 // ---------------------------------------------------------------------------
 
-#[tokio::test(start_paused = true)]
+#[mz_ore::test(tokio::test(start_paused = true))]
 async fn test_cas_commit_and_reject() {
     let log = Arc::new(SimStorage::new());
     let h = TestHarness::new(log);
@@ -132,7 +132,7 @@ async fn test_cas_commit_and_reject() {
     assert!(h.cas("s0", Some(1), 2, b"world").await);
 }
 
-#[tokio::test(start_paused = true)]
+#[mz_ore::test(tokio::test(start_paused = true))]
 async fn test_head_read() {
     let log = Arc::new(SimStorage::new());
     let h = TestHarness::new(log);
@@ -149,7 +149,7 @@ async fn test_head_read() {
     assert_eq!(data.data, b"data");
 }
 
-#[tokio::test(start_paused = true)]
+#[mz_ore::test(tokio::test(start_paused = true))]
 async fn test_scan() {
     let log = Arc::new(SimStorage::new());
     let h = TestHarness::new(log);
@@ -169,7 +169,7 @@ async fn test_scan() {
     assert_eq!(resp.data[0].seqno, 2);
 }
 
-#[tokio::test(start_paused = true)]
+#[mz_ore::test(tokio::test(start_paused = true))]
 async fn test_truncate() {
     let log = Arc::new(SimStorage::new());
     let h = TestHarness::new(log);
@@ -202,7 +202,7 @@ async fn test_truncate() {
     assert_eq!(resp.data[0].seqno, 2);
 }
 
-#[tokio::test(start_paused = true)]
+#[mz_ore::test(tokio::test(start_paused = true))]
 async fn test_truncate_errors() {
     let log = Arc::new(SimStorage::new());
     let h = TestHarness::new(log);
@@ -245,7 +245,7 @@ async fn test_truncate_errors() {
     assert!(result.is_err(), "expected error for seqno > head");
 }
 
-#[tokio::test(start_paused = true)]
+#[mz_ore::test(tokio::test(start_paused = true))]
 async fn test_batch_grouping() {
     let log = Arc::new(SimStorage::new());
     let h = TestHarness::new(log);
@@ -310,7 +310,7 @@ async fn test_batch_grouping() {
     assert!(c2.committed);
 }
 
-#[tokio::test(start_paused = true)]
+#[mz_ore::test(tokio::test(start_paused = true))]
 async fn test_intra_batch_cas_chaining() {
     let log = Arc::new(SimStorage::new());
     let h = TestHarness::new(log);
@@ -359,7 +359,7 @@ async fn test_intra_batch_cas_chaining() {
     assert_eq!(head.data.unwrap().seqno, 2);
 }
 
-#[tokio::test(start_paused = true)]
+#[mz_ore::test(tokio::test(start_paused = true))]
 async fn test_list_keys() {
     let log = Arc::new(SimStorage::new());
     let h = TestHarness::new(log);
@@ -373,7 +373,7 @@ async fn test_list_keys() {
     assert_eq!(keys, vec!["s0", "s1", "s2"]);
 }
 
-#[tokio::test(start_paused = true)]
+#[mz_ore::test(tokio::test(start_paused = true))]
 async fn test_recovery_from_log() {
     let log = Arc::new(SimStorage::new());
 

@@ -26,7 +26,9 @@ use arrow::array::{BinaryArray, BinaryBuilder};
 use bytes::{BufMut, Bytes};
 
 use mz_persist_types::Codec;
-use mz_persist_types::codec_impls::{SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder};
+use mz_persist_types::codec_impls::{
+    SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder,
+};
 use mz_persist_types::columnar::Schema;
 use mz_persist_types::stats::NoneStats;
 
