@@ -33,7 +33,7 @@
     "@codemirror/commands": "^6.7.1",
     "@codemirror/lang-json": "^6.0.1",
     "@codemirror/lang-sql": "^6.8.0",
-    "@codemirror/language": "^6.10.3",
+    "@codemirror/language": "^6.12.2",
     "@codemirror/state": "^6.4.1",
     "@codemirror/view": "^6.34.1",
     "@dagrejs/dagre": "^1.1.4",
