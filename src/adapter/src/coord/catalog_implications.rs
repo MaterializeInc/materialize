@@ -843,6 +843,7 @@ impl Coordinator {
             // See <https://github.com/MaterializeInc/materialize/issues/14551>
             task::spawn(|| "drop_replication_slots_and_secrets", {
                 let ssh_tunnel_manager = self.connection_context().ssh_tunnel_manager.clone();
+                let caching_secrets_reader = self.caching_secrets_reader.clone();
                 let secrets_controller = Arc::clone(&self.secrets_controller);
                 let secrets_reader = Arc::clone(self.secrets_reader());
                 let storage_config = self.controller.storage.config().clone();
@@ -901,6 +902,8 @@ impl Coordinator {
                     for secret in secrets_to_drop {
                         if let Err(e) = secrets_controller.delete(secret).await {
                             warn!("Dropping secrets has encountered an error: {}", e);
+                        } else {
+                            caching_secrets_reader.invalidate(secret);
                         }
                     }
                 }

@@ -706,6 +706,7 @@ impl Coordinator {
                 if let Err(err) = self.secrets_controller.ensure(connection_id, &secret).await {
                     return ctx.retire(Err(err.into()));
                 }
+                self.caching_secrets_reader.invalidate(connection_id);
             }
             _ => (),
         };
