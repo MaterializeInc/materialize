@@ -508,10 +508,20 @@ impl<'a> Transaction<'a> {
 
 impl Drop for Transaction<'_> {
     fn drop(&mut self) {
-        // Internally the query is synchronously sent down a channel, and the response is what
-        // we await. In other words, we don't need to `.await` here for the query to be run.
         if !self.closed {
-            let _fut = self.client.simple_query("ROLLBACK TRANSACTION");
+            // Send the ROLLBACK request directly through the channel, bypassing
+            // the async `simple_query` method. We cannot `.await` in `Drop`, and
+            // merely calling an async fn without awaiting it does nothing (the
+            // future is never polled so the channel send inside never executes).
+            //
+            // We intentionally drop the response receiver since we cannot await
+            // it in a synchronous context. The Connection task will execute the
+            // ROLLBACK and discard the response when the receiver is gone.
+            let (tx, _rx) = oneshot::channel();
+            let kind = RequestKind::SimpleQuery {
+                query: "ROLLBACK TRANSACTION".to_string(),
+            };
+            let _ = self.client.tx.send(Request { tx, kind });
         }
     }
 }

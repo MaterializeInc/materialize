@@ -64,6 +64,10 @@ pub async fn run_execute(
 ) -> Result<ControlFlow, anyhow::Error> {
     let name = cmd.args.string("name")?;
     let split_lines = cmd.args.opt_bool("split-lines")?.unwrap_or(true);
+    // When set, wraps the SQL in a Transaction and then drops it without
+    // calling commit or rollback. Used to test that Transaction::drop sends
+    // ROLLBACK correctly.
+    let abandon_txn = cmd.args.opt_bool("abandon-txn")?.unwrap_or(false);
     cmd.args.done()?;
 
     let client = state
@@ -71,17 +75,40 @@ pub async fn run_execute(
         .get_mut(&name)
         .ok_or_else(|| anyhow!("connection {} not found", name.quoted()))?;
 
-    if split_lines {
-        for query in &cmd.input {
-            println!(">> {}", query);
-            execute_with_deadlock_retry(client, query).await?;
+    if abandon_txn {
+        let mut txn = client
+            .transaction()
+            .await
+            .context("begin transaction for abandon-txn")?;
+        if split_lines {
+            for query in &cmd.input {
+                println!(">> (abandon-txn) {}", query);
+                txn.simple_query(query.to_string())
+                    .await
+                    .context("executing SQL Server query in transaction")?;
+            }
+        } else {
+            let query = cmd.input.join("\n");
+            println!(">> (abandon-txn) {}", query);
+            txn.simple_query(query)
+                .await
+                .context("executing SQL Server query in transaction")?;
         }
+        // Transaction dropped here without commit or rollback.
+        // If Drop is correct, a ROLLBACK is sent via the channel.
     } else {
-        let query = cmd.input.join("\n");
-        println!(">> {}", query);
-        // execute uses prepared statements, which will fail for CREATE FUNCTION/PROCEDURE etc, see
-        // https://github.com/prisma/tiberius/issues/236, so using simple_query instead
-        execute_with_deadlock_retry(client, &query).await?;
+        if split_lines {
+            for query in &cmd.input {
+                println!(">> {}", query);
+                execute_with_deadlock_retry(client, query).await?;
+            }
+        } else {
+            let query = cmd.input.join("\n");
+            println!(">> {}", query);
+            // execute uses prepared statements, which will fail for CREATE FUNCTION/PROCEDURE etc, see
+            // https://github.com/prisma/tiberius/issues/236, so using simple_query instead
+            execute_with_deadlock_retry(client, &query).await?;
+        }
     }
 
     Ok(ControlFlow::Continue)
