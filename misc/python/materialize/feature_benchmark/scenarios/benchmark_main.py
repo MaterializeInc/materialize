@@ -2611,6 +2611,68 @@ class SwapSchema(Scenario):
         )
 
 
+class DdlTransactionBatch(Coordinator):
+    """Measure the time it takes to execute a batch of DDL statements in a single transaction.
+
+    This catches O(n^2) regressions in the DDL transaction dry-run path
+    (catalog_transact_with_ddl_transaction / transact_incremental_dry_run).
+    With the incremental optimization, per-statement cost is O(1) and total is O(n).
+    Without it, each statement replays all prior ops, making total cost O(n^2).
+    """
+
+    SCALE = 2.477  # ~300 renames in one transaction
+    FIXED_SCALE = True
+
+    def init(self) -> list[Action]:
+        creates = "\n".join(
+            f"> CREATE TABLE ddl_batch_t{i} (x INT);" for i in range(self.n())
+        )
+        return [
+            TdAction(
+                f"""
+$ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+ALTER SYSTEM SET max_tables = {self.n() + 200};
+
+{creates}
+"""
+            )
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        renames_forward = "\n".join(
+            f"> ALTER TABLE ddl_batch_t{i} RENAME TO ddl_batch_t{i}_tmp;"
+            for i in range(self.n())
+        )
+        renames_back = "\n".join(
+            f"> ALTER TABLE ddl_batch_t{i}_tmp RENAME TO ddl_batch_t{i};"
+            for i in range(self.n())
+        )
+
+        return Td(
+            f"""
+> SELECT 1;
+  /* A */
+1
+
+> BEGIN;
+
+{renames_forward}
+
+> COMMIT;
+
+> BEGIN;
+
+{renames_back}
+
+> COMMIT;
+
+> SELECT 1;
+  /* B */
+1
+"""
+        )
+
+
 class ReplicaExpiration(Scenario):
     # Causes "tried to kill container, but did not receive an exit event" errors when killing container afterwards
     SCALE = 5
