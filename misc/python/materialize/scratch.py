@@ -289,9 +289,17 @@ def mkrepo(i: Instance, rev: str, init: bool = True, force: bool = False) -> Non
         cwd=MZ_ROOT,
         env=dict(os.environ, GIT_SSH_COMMAND=" ".join(SSH_COMMAND)),
     )
+    git_config_cmds = f"git config core.bare false && git checkout {rev} && git submodule sync --recursive && git submodule update --recursive"
+
+    # Propagate local git user.name and user.email to the scratch instance.
+    if git_name := git.get_user_name():
+        git_config_cmds += f" && git config user.name {shlex.quote(git_name)}"
+    if git_email := git.get_user_email():
+        git_config_cmds += f" && git config user.email {shlex.quote(git_email)}"
+
     mssh(
         i,
-        f"cd materialize && git config core.bare false && git checkout {rev} && git submodule sync --recursive && git submodule update --recursive",
+        f"cd materialize && {git_config_cmds}",
     )
 
 
