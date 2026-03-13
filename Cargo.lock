@@ -754,9 +754,9 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-rs"
-version = "1.16.2"
+version = "1.15.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a054912289d18629dc78375ba2c3726a3afe3ff71b4edba9dedfca0e3446d1fc"
+checksum = "7b7b6141e96a8c160799cc2d5adecd5cbbe5054cb8c7c4af53da0f83bb7ad256"
 dependencies = [
  "aws-lc-sys",
  "untrusted 0.7.1",
@@ -765,9 +765,9 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-sys"
-version = "0.39.0"
+version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fa7e52a4c5c547c741610a2c6f123f3881e409b714cd27e6798ef020c514f0a"
+checksum = "5c34dda4df7017c8db52132f0f8a2e0f8161649d15723ed63fc00c82d0f2081a"
 dependencies = [
  "cc",
  "cmake",
@@ -3272,7 +3272,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "778e2ac28f6c47af28e4907f13ffd1e1ddbd400980a9abd7c8df189bf578a5ad"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4505,7 +4505,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b0f83760fb341a774ed326568e19f5a863af4a952def8c39f9ab92fd95b88e5"
 dependencies = [
  "equivalent",
- "hashbrown 0.15.3",
+ "hashbrown 0.16.1",
  "serde",
  "serde_core",
 ]
@@ -5276,9 +5276,9 @@ dependencies = [
 
 [[package]]
 name = "lz4_flex"
-version = "0.12.1"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98c23545df7ecf1b16c303910a69b079e8e251d60f7dd2cc9b4177f2afaf1746"
+checksum = "ab6473172471198271ff72e9379150e9dfd70d8e533e0752a27e515b48dd375e"
 dependencies = [
  "twox-hash",
 ]
@@ -5803,7 +5803,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "26.18.0-dev.0"
+version = "26.16.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5944,7 +5944,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "26.18.0-dev.0"
+version = "26.16.0-dev.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -6104,7 +6104,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "26.18.0-dev.0"
+version = "26.16.0-dev.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6407,7 +6407,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "26.18.0-dev.0"
+version = "26.16.0-dev.0"
 dependencies = [
  "anyhow",
  "askama",
@@ -6580,7 +6580,6 @@ dependencies = [
  "mz-sql-parser",
  "mz-sql-pretty",
  "mz-timely-util",
- "mz-transform",
  "num",
  "num_enum 0.7.5",
  "ordered-float 5.1.0",
@@ -6938,7 +6937,7 @@ dependencies = [
 
 [[package]]
 name = "mz-materialized"
-version = "26.18.0-dev.0"
+version = "26.16.0-dev.0"
 dependencies = [
  "custom-labels",
  "mz-clusterd",
@@ -7155,7 +7154,7 @@ dependencies = [
 
 [[package]]
 name = "mz-orchestratord"
-version = "26.18.0-dev.0"
+version = "26.16.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7342,7 +7341,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "26.18.0-dev.0"
+version = "26.16.0-dev.0"
 dependencies = [
  "anyhow",
  "arrayvec 0.7.6",
@@ -8319,7 +8318,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "arrow",
- "arrow-ipc",
  "async-compression",
  "async-stream",
  "aws-sdk-s3",
@@ -8458,7 +8456,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "26.18.0-dev.0"
+version = "26.16.0-dev.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -10088,7 +10086,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
  "heck",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "petgraph",
@@ -10109,7 +10107,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.114",
@@ -10941,7 +10939,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -10954,7 +10952,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.9.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -11768,7 +11766,6 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.52.0",
  "windows-sys 0.59.0",
 ]
 
@@ -11978,9 +11975,9 @@ checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
 name = "tar"
-version = "0.4.45"
+version = "0.4.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22692a6476a21fa75fdfc11d452fda482af402c008cdbaf3476414e122040973"
+checksum = "1d863878d212c87a19c1a610eb53bb01fe12951c0501cf5a0d65f724914a667a"
 dependencies = [
  "filetime",
  "libc",
