@@ -48,6 +48,7 @@ impl crate::func::binary::EagerBinaryFunc for Infallible1 {
         true
     }
 }
+impl crate::scalar::func::binary::VectorizedBinaryFunc for Infallible1 {}
 impl std::fmt::Display for Infallible1 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("INFALLIBLE")
