@@ -10,13 +10,13 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.101"
+anyhow = "1.0.102"
 bytes = "1.11.1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-clap = { version = "4.5.23", features = ["derive"] }
+clap = { version = "4.5.60", features = ["derive"] }
 dec = "0.4.8"
 fallible-iterator = "0.2.0"
-futures = "0.3.31"
+futures = "0.3.32"
 itertools = "0.14.0"
 junit-report = "0.8.3"
 maplit = "1.0.2"

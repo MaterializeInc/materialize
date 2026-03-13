@@ -10,11 +10,11 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.101"
+anyhow = "1.0.102"
 base64 = "0.22.1"
-clap = { version = "4.5.23", features = ["wrap_help", "env", "derive"] }
+clap = { version = "4.5.60", features = ["wrap_help", "env", "derive"] }
 derivative = "2.2.0"
-futures = "0.3.31"
+futures = "0.3.32"
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
 lru = "0.16.3"
 mz-auth = { path = "../auth", default-features = false }

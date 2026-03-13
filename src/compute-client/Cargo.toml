@@ -10,13 +10,13 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.101"
+anyhow = "1.0.102"
 async-trait = "0.1.89"
 bytesize = "2.1.0"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 derivative = "2.2.0"
 differential-dataflow = "0.20.0"
-futures = "0.3.31"
+futures = "0.3.32"
 mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-types = { path = "../compute-types" }
