@@ -2836,8 +2836,7 @@ dependencies = [
 [[package]]
 name = "differential-dataflow"
 version = "0.20.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5234cd6b9b311e02e4ca235b4f1ce76cbc6673ddc11720156dbc3ed89a95779a"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow#f397826074ab094fddf5f2cbb85d2e7b825b6bd5"
 dependencies = [
  "columnar",
  "columnation",
@@ -12183,8 +12182,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bcf106b63e25ca7d1a1ff851b1ac1e839fedc6fb8e70024288804d01ba77bbf4"
+source = "git+https://github.com/antiguru/timely-dataflow?branch=pipeline-chain-fusion#583c5702e76e3be316721ee95d87fa68193f838d"
 dependencies = [
  "bincode",
  "byteorder",
@@ -12203,14 +12201,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7da8c4fc73324e5c15ddaf22606e7b66439ffa01c76c71d3369b38810d304e2"
+source = "git+https://github.com/antiguru/timely-dataflow?branch=pipeline-chain-fusion#583c5702e76e3be316721ee95d87fa68193f838d"
 
 [[package]]
 name = "timely_communication"
 version = "0.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7571e6613eea78e69c23015a02cee434b860aeb467956152ecca2c237169d7e6"
+source = "git+https://github.com/antiguru/timely-dataflow?branch=pipeline-chain-fusion#583c5702e76e3be316721ee95d87fa68193f838d"
 dependencies = [
  "byteorder",
  "columnar",
@@ -12224,14 +12220,12 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a131c394a24b12e07d70665cb2cad0557321e0f38fbe5b3457e7c592ff7100a"
+source = "git+https://github.com/antiguru/timely-dataflow?branch=pipeline-chain-fusion#583c5702e76e3be316721ee95d87fa68193f838d"
 
 [[package]]
 name = "timely_logging"
 version = "0.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "708002f1ad76646a2ab56b0166ebff310eec7fa860253bb175bea22989ea7acd"
+source = "git+https://github.com/antiguru/timely-dataflow?branch=pipeline-chain-fusion#583c5702e76e3be316721ee95d87fa68193f838d"
 dependencies = [
  "timely_container",
 ]
