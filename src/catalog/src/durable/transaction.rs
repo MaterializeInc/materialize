@@ -64,10 +64,9 @@ use crate::durable::{
     AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_CONTENT_VERSION_KEY, CatalogError,
     DATABASE_ID_ALLOC_KEY, DefaultPrivilege, DurableCatalogError, DurableCatalogState,
     EXPRESSION_CACHE_SHARD_KEY, MOCK_AUTHENTICATION_NONCE_KEY, NetworkPolicy, OID_ALLOC_KEY,
-    SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY,
-    SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, Snapshot, SystemConfiguration,
-    USER_ITEM_ALLOC_KEY, USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY,
-    USER_ROLE_ID_ALLOC_KEY,
+    SCHEMA_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
+    SYSTEM_REPLICA_ID_ALLOC_KEY, Snapshot, SystemConfiguration, USER_ITEM_ALLOC_KEY,
+    USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
@@ -900,10 +899,6 @@ impl<'a> Transaction<'a> {
 
     pub fn allocate_audit_log_id(&mut self) -> Result<u64, CatalogError> {
         self.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())
-    }
-
-    pub fn allocate_storage_usage_ids(&mut self) -> Result<u64, CatalogError> {
-        self.get_and_increment_id(STORAGE_USAGE_ID_ALLOC_KEY.to_string())
     }
 
     /// Allocates `amount` OIDs. OIDs can be recycled if they aren't currently assigned to any
