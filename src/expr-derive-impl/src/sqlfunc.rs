@@ -45,6 +45,9 @@ pub(crate) struct Modifiers {
     is_associative: Option<Expr>,
     /// Whether the function is a noop cast. Applies to unary functions.
     is_eliminable_cast: Option<Expr>,
+    /// Path to a vectorized evaluation function. Applies to binary functions.
+    /// When set, generates a `VectorizedBinaryFunc` impl that delegates to this function.
+    vectorized: Option<syn::Path>,
     /// Whether to generate a snapshot test for the function. Defaults to false.
     test: Option<bool>,
 }
@@ -874,6 +877,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         mut introduces_nulls,
         is_associative,
         is_eliminable_cast,
+        vectorized,
         test: _,
     } = modifiers;
 
@@ -900,6 +904,11 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
     if is_infix_op.is_some() {
         return Err(darling::Error::unknown_field(
             "is_infix_op not supported for unary functions",
+        ));
+    }
+    if vectorized.is_some() {
+        return Err(darling::Error::unknown_field(
+            "vectorized not supported for unary functions",
         ));
     }
     if output_type.is_some() && output_type_expr.is_some() {
@@ -1075,6 +1084,7 @@ fn binary_func(
         mut introduces_nulls,
         is_associative,
         is_eliminable_cast,
+        vectorized,
         test: _,
     } = modifiers;
 
@@ -1207,6 +1217,29 @@ fn binary_func(
     let binary_non_nullable_checks =
         non_nullable_position_checks(&[input1_ty.clone(), input2_ty.clone()]);
 
+    let vectorized_impl = if let Some(vectorized_fn) = vectorized {
+        quote! {
+            impl crate::scalar::func::binary::VectorizedBinaryFunc for #struct_name {
+                fn eval_vectorized(
+                    &self,
+                    col1: &crate::vectorized::DatumColumn,
+                    col2: &crate::vectorized::DatumColumn,
+                    batch_len: usize,
+                ) -> Option<crate::vectorized::DatumColumn> {
+                    #vectorized_fn(col1, col2, batch_len)
+                }
+
+                fn is_vectorized(&self) -> bool {
+                    true
+                }
+            }
+        }
+    } else {
+        quote! {
+            impl crate::scalar::func::binary::VectorizedBinaryFunc for #struct_name {}
+        }
+    };
+
     let result = quote! {
         #[derive(
             proptest_derive::Arbitrary, Ord, PartialOrd, Clone,
@@ -1259,6 +1292,8 @@ fn binary_func(
             #propagates_nulls_fn
         }
 
+        #vectorized_impl
+
         impl std::fmt::Display for #struct_name {
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 f.write_str(#name)
@@ -1306,6 +1341,7 @@ fn variadic_func(
         mut introduces_nulls,
         is_associative,
         is_eliminable_cast,
+        vectorized,
         test: _,
     } = modifiers;
 
@@ -1338,6 +1374,11 @@ fn variadic_func(
     if output_type_expr.is_some() && introduces_nulls.is_none() {
         return Err(darling::Error::unknown_field(
             "output_type_expr requires introduces_nulls",
+        ));
+    }
+    if vectorized.is_some() {
+        return Err(darling::Error::unknown_field(
+            "vectorized not supported for variadic functions",
         ));
     }
 

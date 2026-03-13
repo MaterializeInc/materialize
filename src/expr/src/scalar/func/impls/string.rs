@@ -1296,6 +1296,7 @@ impl binary::EagerBinaryFunc for RegexpReplace {
     }
 }
 
+impl binary::VectorizedBinaryFunc for RegexpReplace {}
 impl fmt::Display for RegexpReplace {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(

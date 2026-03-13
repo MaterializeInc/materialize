@@ -45,6 +45,7 @@ impl crate::func::binary::EagerBinaryFunc for Fallible1 {
         output.nullable(is_null)
     }
 }
+impl crate::scalar::func::binary::VectorizedBinaryFunc for Fallible1 {}
 impl std::fmt::Display for Fallible1 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(fallible1))

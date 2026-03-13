@@ -45,6 +45,7 @@ impl crate::func::binary::EagerBinaryFunc for Infallible3 {
         output.nullable(is_null)
     }
 }
+impl crate::scalar::func::binary::VectorizedBinaryFunc for Infallible3 {}
 impl std::fmt::Display for Infallible3 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(infallible3))

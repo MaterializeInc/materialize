@@ -72,6 +72,31 @@ pub(crate) trait LazyBinaryFunc {
     fn is_infix_op(&self) -> bool;
 }
 
+/// Trait for binary functions that support vectorized (columnar) evaluation.
+///
+/// The default implementation returns `None` / `false`, meaning no vectorized
+/// path is available. When `#[sqlfunc(vectorized = "...")]` is specified, the
+/// macro generates a specialized impl that delegates to the named function.
+pub(crate) trait VectorizedBinaryFunc {
+    /// Try to evaluate this function on two homogeneous columns.
+    /// Returns `None` if the columns aren't homogeneous for the expected type,
+    /// in which case the caller falls back to element-at-a-time evaluation.
+    fn eval_vectorized(
+        &self,
+        col1: &crate::vectorized::DatumColumn,
+        col2: &crate::vectorized::DatumColumn,
+        batch_len: usize,
+    ) -> Option<crate::vectorized::DatumColumn> {
+        let _ = (col1, col2, batch_len);
+        None
+    }
+
+    /// Returns `true` if this function has a vectorized implementation.
+    fn is_vectorized(&self) -> bool {
+        false
+    }
+}
+
 pub(crate) trait EagerBinaryFunc {
     type Input<'a>: InputDatumType<'a, EvalError>;
     type Output<'a>: OutputDatumType<'a, EvalError>;
