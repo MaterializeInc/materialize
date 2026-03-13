@@ -19,12 +19,10 @@ use mz_repr::{
     CatalogItemId, ColumnIndex, RelationDesc, RelationVersionSelector, SqlColumnType, SqlScalarType,
 };
 use mz_sql_parser::ast::{
-    ColumnDef, ColumnName, ConnectionDefaultAwsPrivatelink, CreateMaterializedViewStatement,
-    RawItemName, ShowStatement, StatementKind, TableConstraint, UnresolvedDatabaseName,
-    UnresolvedSchemaName,
+    ColumnDef, ColumnName, CreateMaterializedViewStatement, RawItemName, ShowStatement,
+    StatementKind, TableConstraint, UnresolvedDatabaseName, UnresolvedSchemaName,
 };
-use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
+use mz_storage_types::connections::Connection;
 
 use crate::ast::{Ident, Statement, UnresolvedItemName};
 use crate::catalog::{
@@ -39,7 +37,7 @@ use crate::names::{
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
-use crate::plan::{Params, Plan, PlanContext, PlanKind, query, with_options};
+use crate::plan::{Params, Plan, PlanContext, PlanKind, query};
 use crate::session::vars::FeatureFlag;
 
 mod acl;
@@ -881,44 +879,6 @@ impl<'a> StatementContext<'a> {
     /// the flag should be set in, e.g., the implementation of the `pg_typeof` function.
     pub fn humanize_column_type(&self, typ: &SqlColumnType, postgres_compat: bool) -> String {
         self.catalog.humanize_sql_column_type(typ, postgres_compat)
-    }
-
-    pub(crate) fn build_tunnel_definition(
-        &self,
-        ssh_tunnel: Option<with_options::Object>,
-        aws_privatelink: Option<ConnectionDefaultAwsPrivatelink<Aug>>,
-    ) -> Result<Tunnel<ReferencedConnection>, PlanError> {
-        match (ssh_tunnel, aws_privatelink) {
-            (None, None) => Ok(Tunnel::Direct),
-            (Some(ssh_tunnel), None) => {
-                let id = CatalogItemId::from(ssh_tunnel);
-                let ssh_tunnel = self.catalog.get_item(&id);
-                match ssh_tunnel.connection()? {
-                    Connection::Ssh(_connection) => Ok(Tunnel::Ssh(SshTunnel {
-                        connection_id: id,
-                        connection: id,
-                    })),
-                    _ => sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item),
-                }
-            }
-            (None, Some(aws_privatelink)) => {
-                let id = aws_privatelink.connection.item_id().clone();
-                let entry = self.catalog.get_item(&id);
-                match entry.connection()? {
-                    Connection::AwsPrivatelink(_) => Ok(Tunnel::AwsPrivatelink(AwsPrivatelink {
-                        connection_id: id,
-                        // By default we do not specify an availability zone for the tunnel.
-                        availability_zone: None,
-                        // We always use the port as specified by the top-level connection.
-                        port: aws_privatelink.port,
-                    })),
-                    _ => sql_bail!("{} is not an AWS PRIVATELINK connection", entry.name().item),
-                }
-            }
-            (Some(_), Some(_)) => {
-                sql_bail!("cannot specify both SSH TUNNEL and AWS PRIVATELINK");
-            }
-        }
     }
 
     pub fn relation_desc_into_table_defs(

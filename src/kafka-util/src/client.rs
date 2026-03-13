@@ -288,6 +288,13 @@ pub struct BrokerAddr {
     pub port: u16,
 }
 
+impl BrokerAddr {
+    /// Attempt to resolve this broker address into a list of socket addresses.
+    pub fn to_socket_addrs(&self) -> Result<Vec<SocketAddr>, io::Error> {
+        Ok((self.host.as_str(), self.port).to_socket_addrs()?.collect())
+    }
+}
+
 /// Rewrites a broker address.
 ///
 /// For use with [`TunnelingClientContext`].
@@ -299,6 +306,16 @@ pub struct BrokerRewrite {
     ///
     /// If unspecified, the broker's original port is left unchanged.
     pub port: Option<u16>,
+}
+
+impl BrokerRewrite {
+    /// Apply the rewrite to this broker address.
+    pub fn rewrite(&self, address: &BrokerAddr) -> BrokerAddr {
+        BrokerAddr {
+            host: self.host.clone(),
+            port: self.port.unwrap_or(address.port),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -313,6 +330,57 @@ enum BrokerRewriteHandle {
     FailedDefaultSshTunnel(String),
 }
 
+#[derive(Clone)]
+/// Parsed from a string, with optional leading and trailing '*' wildcards.
+pub struct ConnectionRulePattern {
+    /// If true, allow any combination of characters before the literal match.
+    pub prefix_wildcard: bool,
+    /// We expect the broker's host:port to match these characters in their entirety.
+    pub literal_match: String,
+    /// If true, allow any combination of characters after the literal match.
+    pub suffix_wildcard: bool,
+}
+
+impl ConnectionRulePattern {
+    /// Does this "{host}:{port}" address fit the pattern?
+    pub fn matches(&self, address: &str) -> bool {
+        if self.prefix_wildcard {
+            if self.suffix_wildcard {
+                address.contains(&self.literal_match)
+            } else {
+                address.ends_with(&self.literal_match)
+            }
+        } else if self.suffix_wildcard {
+            address.starts_with(&self.literal_match)
+        } else {
+            address == self.literal_match
+        }
+    }
+}
+
+#[derive(Clone)]
+/// Given a host address, map it to a different host.
+pub struct HostMappingRules {
+    /// Map matching hosts to a different host. First applicable rule wins.
+    pub rules: Vec<(ConnectionRulePattern, BrokerRewrite)>,
+    /// If no rules match, use this host.
+    pub default: BrokerRewrite,
+}
+
+impl HostMappingRules {
+    /// Rewrite this broker address according to the rules.
+    pub fn rewrite(&self, src: &BrokerAddr) -> BrokerAddr {
+        let address = format!("{}:{}", src.host, src.port);
+        for (pattern, dst) in &self.rules {
+            if pattern.matches(&address) {
+                return dst.rewrite(src);
+            }
+        }
+
+        self.default.rewrite(src)
+    }
+}
+
 /// Tunneling clients
 /// used for re-writing ports / hosts
 #[derive(Clone)]
@@ -321,6 +389,8 @@ pub enum TunnelConfig {
     Ssh(SshTunnelConfig),
     /// Re-writes internal hosts using the value, used for privatelink
     StaticHost(String),
+    /// Re-writes internal hosts according to an ordered list of rules, also used for privatelink
+    Rules(HostMappingRules),
     /// Performs no re-writes
     None,
 }
@@ -489,6 +559,10 @@ where
         }
     }
 
+    /// Look up the broker's address in our book of rewrites.
+    /// If we've already rewritten it before, reuse the existing rewrite.
+    /// Otherwise, use our "default tunnel" rewriting strategy to attempt to rewrite this broker's address
+    /// and record it in the book of rewrites.
     fn resolve_broker_addr(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, io::Error> {
         let return_rewrite = |rewrite: &BrokerRewriteHandle| -> Result<Vec<SocketAddr>, io::Error> {
             let rewrite = match rewrite {
@@ -525,8 +599,12 @@ where
         let rewrite = self.rewrites.lock().expect("poisoned").get(&addr).cloned();
 
         match rewrite {
+            // No (successful) broker address rewrite exists yet.
             None | Some(BrokerRewriteHandle::FailedDefaultSshTunnel(_)) => {
+                // "Default tunnel" is actually the configured rewriting strategy used for brokers we haven't already rewritten.
                 match &self.default_tunnel {
+                    // This "default tunnel" is actually a default tunnel.
+                    // Try connecting so we have a valid rewrite for thsi broker address.
                     TunnelConfig::Ssh(default_tunnel) => {
                         // Multiple users could all run `connect` at the same time; only one ssh
                         // tunnel will ever be connected, and only one will be inserted into the
@@ -543,6 +621,7 @@ where
                                 .await
                         });
                         match ssh_tunnel {
+                            // Use the tunnel we just created, but only if nobody beat us in the race.
                             Ok(ssh_tunnel) => {
                                 let mut rewrites = self.rewrites.lock().expect("poisoned");
                                 let rewrite = match rewrites.entry(addr.clone()) {
@@ -565,6 +644,7 @@ where
 
                                 return_rewrite(rewrite)
                             }
+                            // We couldn't connect. Someone else will have to try again.
                             Err(e) => {
                                 warn!(
                                     "failed to create ssh tunnel for {:?}: {}",
@@ -587,14 +667,19 @@ where
                             }
                         }
                     }
+                    // Our rewrite strategy is to use a specific host, e.g. a PrivateLink endpoint.
                     TunnelConfig::StaticHost(host) => (host.as_str(), port)
                         .to_socket_addrs()
                         .map(|addrs| addrs.collect()),
+                    // Rewrite according to the routing rules.
+                    TunnelConfig::Rules(rules) => rules.rewrite(&addr).to_socket_addrs(),
+                    // We leave the broker's address as it is.
                     TunnelConfig::None => {
                         (host, port).to_socket_addrs().map(|addrs| addrs.collect())
                     }
                 }
             }
+            // This broker's address was already rewritten. Reuse the existing rewrite.
             Some(rewrite) => return_rewrite(&rewrite),
         }
     }
@@ -957,4 +1042,44 @@ pub fn create_new_client_config(
     );
 
     config
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_connection_rule_pattern_matches() {
+        let p = ConnectionRulePattern {
+            prefix_wildcard: false,
+            literal_match: "broker:9092".to_string(),
+            suffix_wildcard: false,
+        };
+        assert!(p.matches("broker:9092"));
+        assert!(!p.matches("other:9092"));
+
+        let p = ConnectionRulePattern {
+            prefix_wildcard: true,
+            literal_match: ":9092".to_string(),
+            suffix_wildcard: false,
+        };
+        assert!(p.matches("any-host:9092"));
+        assert!(!p.matches("broker:9093"));
+
+        let p = ConnectionRulePattern {
+            prefix_wildcard: false,
+            literal_match: "broker:".to_string(),
+            suffix_wildcard: true,
+        };
+        assert!(p.matches("broker:9092"));
+        assert!(!p.matches("other:9092"));
+
+        let p = ConnectionRulePattern {
+            prefix_wildcard: true,
+            literal_match: "broker".to_string(),
+            suffix_wildcard: true,
+        };
+        assert!(p.matches("my-broker-host:1234"));
+        assert!(!p.matches("other:9092"));
+    }
 }

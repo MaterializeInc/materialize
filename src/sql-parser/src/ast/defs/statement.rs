@@ -604,6 +604,92 @@ impl<T: AstInfo> AstDisplay for ConnectionDefaultAwsPrivatelink<T> {
 impl_display_t!(ConnectionDefaultAwsPrivatelink);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ConnectionAwsPrivatelinkRule<T: AstInfo> {
+    /// Route to brokers through PrivateLink connections according to these rules.
+    AwsPrivatelinkRule(ConnectionAwsPrivatelinkPattern<T>),
+    /// Bootstrap through this PrivateLink connection.
+    AwsPrivatelinkRuleDefault(ConnectionDefaultAwsPrivatelink<T>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// Match this pattern against some brokers' host:port.
+pub struct ConnectionAwsPrivatelinkPattern<T: AstInfo> {
+    /// Given a broker's host:port, should we use this route?
+    pub pattern: ConnectionRulePattern,
+    /// Route to the broker through this PrivateLink connection.
+    pub to: KafkaBrokerAwsPrivatelink<T>,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
+/// Parsed from a string, with optional leading and trailing '*' wildcards.
+pub struct ConnectionRulePattern {
+    /// If true, allow any combination of characters before the literal match.
+    pub prefix_wildcard: bool,
+    /// We expect the broker's host:port to match these characters in their entirety.
+    pub literal_match: String,
+    /// If true, allow any combination of characters after the literal match.
+    pub suffix_wildcard: bool,
+}
+
+impl<T: AstInfo> AstDisplay for ConnectionAwsPrivatelinkRule<T> {
+    fn fmt<W>(&self, f: &mut AstFormatter<W>)
+    where
+        W: fmt::Write,
+    {
+        match self {
+            ConnectionAwsPrivatelinkRule::AwsPrivatelinkRule(x) => f.write_node(x),
+            ConnectionAwsPrivatelinkRule::AwsPrivatelinkRuleDefault(x) => f.write_node(x),
+        }
+    }
+}
+impl_display_t!(ConnectionAwsPrivatelinkRule);
+
+impl<T: AstInfo> AstDisplay for ConnectionAwsPrivatelinkPattern<T> {
+    fn fmt<W>(&self, f: &mut AstFormatter<W>)
+    where
+        W: fmt::Write,
+    {
+        f.write_node(&self.pattern);
+        f.write_str(" TO ");
+        f.write_node(&self.to.connection);
+        if !self.to.options.is_empty() {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(&self.to.options));
+            f.write_str(")");
+        }
+    }
+}
+impl_display_t!(ConnectionAwsPrivatelinkPattern);
+
+impl AstDisplay for ConnectionRulePattern {
+    fn fmt<W>(&self, f: &mut AstFormatter<W>)
+    where
+        W: fmt::Write,
+    {
+        f.write_str("'");
+        if self.prefix_wildcard {
+            f.write_str("*");
+        }
+        f.write_node(&display::escape_single_quote_string(&self.literal_match));
+        if self.suffix_wildcard {
+            f.write_str("*");
+        }
+        f.write_str("'");
+    }
+}
+impl_display!(ConnectionRulePattern);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct KafkaBroker<T: AstInfo> {
     pub address: String,
     pub tunnel: KafkaBrokerTunnel<T>,
@@ -4392,6 +4478,7 @@ pub enum WithOptionValue<T: AstInfo> {
     ClusterReplicas(Vec<ReplicaDefinition<T>>),
     ConnectionKafkaBroker(KafkaBroker<T>),
     ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink<T>),
+    ConnectionAwsPrivatelinkRule(ConnectionAwsPrivatelinkRule<T>),
     RetainHistoryFor(Value),
     Refresh(RefreshOptionValue<T>),
     ClusterScheduleOptionValue(ClusterScheduleOptionValue),
@@ -4422,6 +4509,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 | WithOptionValue::UnresolvedItemName(_)
                 | WithOptionValue::Ident(_)
                 | WithOptionValue::ConnectionAwsPrivatelink(_)
+                | WithOptionValue::ConnectionAwsPrivatelinkRule(_)
                 | WithOptionValue::ClusterReplicas(_)
                 | WithOptionValue::ClusterScheduleOptionValue(_)
                 | WithOptionValue::ClusterAlterStrategy(_)
@@ -4472,6 +4560,9 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
             }
             WithOptionValue::ConnectionAwsPrivatelink(aws_privatelink) => {
                 f.write_node(aws_privatelink);
+            }
+            WithOptionValue::ConnectionAwsPrivatelinkRule(rule) => {
+                f.write_node(rule);
             }
             WithOptionValue::ConnectionKafkaBroker(broker) => {
                 f.write_node(broker);
