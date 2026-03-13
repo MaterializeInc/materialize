@@ -250,7 +250,6 @@ def fetch(
     force: bool = False,
     branch: str | None = None,
     only_tags: bool = False,
-    include_submodules: bool = False,
 ) -> str:
     """Fetch from remotes"""
 
@@ -275,12 +274,6 @@ def fetch(
 
     if all_remotes:
         command.append("--all")
-
-    # explicitly specify both cases to be independent of the git config
-    if include_submodules:
-        command.append("--recurse-submodules")
-    else:
-        command.append("--no-recurse-submodules")
 
     fetch_tags = (
         include_tags == YesNoOnce.YES

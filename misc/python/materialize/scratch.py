@@ -264,10 +264,7 @@ async def setup(
 
 def mkrepo(i: Instance, rev: str, init: bool = True, force: bool = False) -> None:
     if init:
-        mssh(
-            i,
-            "git clone https://github.com/MaterializeInc/materialize.git --recurse-submodules",
-        )
+        mssh(i, "git clone https://github.com/MaterializeInc/materialize.git")
 
     rev = git.rev_parse(rev)
 
@@ -279,7 +276,6 @@ def mkrepo(i: Instance, rev: str, init: bool = True, force: bool = False) -> Non
         # Explicit refspec is required if the host repository is in detached
         # HEAD mode.
         f"{rev}:refs/heads/scratch",
-        "--no-recurse-submodules",
     ]
     if force:
         cmd.append("--force")
@@ -289,7 +285,7 @@ def mkrepo(i: Instance, rev: str, init: bool = True, force: bool = False) -> Non
         cwd=MZ_ROOT,
         env=dict(os.environ, GIT_SSH_COMMAND=" ".join(SSH_COMMAND)),
     )
-    git_config_cmds = f"git config core.bare false && git checkout {rev} && git submodule sync --recursive && git submodule update --recursive"
+    git_config_cmds = f"git config core.bare false && git checkout {rev}"
 
     # Propagate local git user.name and user.email to the scratch instance.
     if git_name := git.get_user_name():
