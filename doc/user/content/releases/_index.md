@@ -19,25 +19,13 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-03-12* <br>
 *Released to Materialize Self-Managed: 2026-03-13* <br>
 
-This release enables `COPY FROM` for remote (S3) sources in
-Self-Managed deployments, adds OIDC password authentication and custom
-authentication claims for Self-Managed, and fixes several bugs including
-a panic during concurrent `COPY FROM STDIN` with table drops and a Kafka
-sink authorization failure when a progress topic already exists.
+This release includes various improvements and bug fixes.
 
 ### Improvements {#v26.15-improvements}
 
-- **`COPY FROM` remote sources for Self-Managed**: Enabled the
-  `COPY FROM` feature flag for remote (S3) sources, making this
-  capability available to Self-Managed customers.
-- Added password authentication to the HTTP and WebSocket server for
-  OIDC-based authentication in Self-Managed deployments.
-- Added support for custom OIDC authentication claims in Self-Managed
-  deployments, allowing operators to configure which claim is used for
-  authentication.
 - Added support for setting `cpu_request` independently of `cpu_limit`
   in cluster replica sizes for Self-Managed deployments.
-- Renamed the "Org ID" label to "Environment ID" in the console Shell
+- Renamed the "Org ID" label to "Environment ID" in the Console Shell
   to disambiguate organization IDs from environment IDs, which was
   causing confusion for Self-Managed deployments.
 
