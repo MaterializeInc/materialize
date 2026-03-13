@@ -9,12 +9,17 @@ rows:
     orchestratord version: v26.15.0
     environmentd version: v26.15.0
     Release date: "2026-03-13"
-    Notes: "See [v26.15.0 release notes](/releases/#v26150)"
+    Notes: ""
+  - Materialize Operator: v26.15.0
+    orchestratord version: v26.15.0
+    environmentd version: v26.15.0
+    Release date: "2026-03-13"
+    Notes: See [v26.15.0 release notes](/releases/#v26150)
   - Materialize Operator: v26.14.1
     orchestratord version: v26.14.1
     environmentd version: v26.14.1
     Release date: "2026-03-06"
-    Notes: "See [v26.14 release notes](/releases/#v26141)"
+    Notes: See [v26.14 release notes](/releases/#v26141)
   - Materialize Operator: v26.14.0
     orchestratord version: v26.14.0
     environmentd version: v26.14.0
@@ -24,7 +29,7 @@ rows:
     orchestratord version: v26.13.0
     environmentd version: v26.13.0
     Release date: "2026-02-27"
-    Notes: "See [v26.13.0 release notes](/releases/#v26130)"
+    Notes: See [v26.13.0 release notes](/releases/#v26130)
   - Materialize Operator: v26.12.1
     orchestratord version: v26.12.1
     environmentd version: v26.12.1
