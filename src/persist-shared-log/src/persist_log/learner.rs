@@ -510,7 +510,9 @@ impl PersistLearner {
                 // cancel-safety: stale upper on cancel just delays linearization
                 // Guard: only fetch when reads are waiting for a linearization target,
                 // otherwise this branch completes immediately and busy-spins.
-                upper = self.upper_handle.fetch_recent_upper(), if !self.pending_reads.is_empty() => {
+                upper = self.upper_handle.fetch_recent_upper(),
+                    if !self.pending_reads.is_empty() =>
+                {
                     let upper = upper.clone();
                     self.assign_linearization_target(upper);
                     self.wake_linearizing_reads();
