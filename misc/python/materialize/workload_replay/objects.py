@@ -38,9 +38,77 @@ from materialize.workload_replay.util import (
     to_sql_server_data_type,
 )
 
+# Kafka topics created but not yet confirmed ready.  Populated by
+# run_create_objects_part_1, drained lazily by ensure_kafka_topic_ready.
+_pending_kafka_topics: dict[str, AdminClient] = {}
+_ready_kafka_topics: set[str] = set()
+
+
+def ensure_kafka_topic_ready(c: Composition, source_obj: dict[str, Any]) -> None:
+    """Block until the Kafka topic for *source_obj* is confirmed ready.
+
+    If the topic was already confirmed (or never created here), returns
+    immediately.  Called lazily from ingestion and source-creation code
+    so that topic creation can overlap with other work.
+    """
+    topic = get_kafka_topic(source_obj)
+    if topic in _ready_kafka_topics:
+        return
+    admin_client = _pending_kafka_topics.pop(topic, None)
+    if admin_client is None:
+        # Topic was never created by us (or already drained) — nothing to wait for.
+        _ready_kafka_topics.add(topic)
+        return
+    while True:
+        md = admin_client.list_topics(timeout=2)
+        if topic in md.topics and md.topics[topic].error is None:
+            break
+        print(f"Waiting for topic: {topic}")
+        time.sleep(1)
+    _ready_kafka_topics.add(topic)
+
+
+# Settings that are read-only and cannot be SET.
+READONLY_SETTINGS = {
+    "client_encoding",
+    "integer_datetimes",
+    "is_superuser",
+    "max_identifier_length",
+    "mz_version",
+    "server_version",
+    "server_version_num",
+    "standard_conforming_strings",
+}
+
+
+def apply_settings(c: Composition, workload: dict[str, Any], verbose: bool) -> None:
+    """Apply captured settings via ALTER SYSTEM SET."""
+    settings = workload.get("settings", {})
+    if not settings:
+        return
+
+    print("Applying settings")
+    for name, value in sorted(settings.items()):
+        if name in READONLY_SETTINGS:
+            continue
+        try:
+            c.sql(
+                SQL("ALTER SYSTEM SET {} = {}").format(SQL(name), Literal(value)),
+                user="mz_system",
+                port=6877,
+                print_statement=verbose,
+            )
+        except Exception as e:
+            if verbose:
+                print(f"  Warning: could not set {name}: {e}")
+
 
 def run_create_objects_part_1(
-    c: Composition, services: set[str], workload: dict[str, Any], verbose: bool
+    c: Composition,
+    services: set[str],
+    workload: dict[str, Any],
+    verbose: bool,
+    run_apply_settings: bool = True,
 ) -> None:
     """Create clusters, databases, schemas, types, connections, and prepare sources."""
     c.sql(

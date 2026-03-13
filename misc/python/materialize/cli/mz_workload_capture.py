@@ -8,16 +8,22 @@
 # by the Apache License, Version 2.0.
 
 import argparse
+import os
+import re
+import subprocess
 import sys
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, LiteralString
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 import psycopg
 import yaml
 from psycopg.sql import SQL, Composable, Composed, Identifier, Literal
+
+from materialize import MZ_ROOT, mzbuild
 
 
 @contextmanager
@@ -197,6 +203,363 @@ def attach_avg_column_sizes(
         col["avg_size"] = int(avg_size) if avg_size is not None else None
 
 
+def _build_capturable_objects(workload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Walk workload dict and return flat list of capturable objects with source_type info."""
+    objects = []
+    for db, schemas in workload["databases"].items():
+        for schema, items in schemas.items():
+            for name, table in items["tables"].items():
+                objects.append(
+                    {
+                        "database": db,
+                        "schema": schema,
+                        "name": name,
+                        "fqn": f"{db}.{schema}.{name}",
+                        "source_type": "table",
+                        "parent_source_fqn": None,
+                        "columns": table.get("columns", []),
+                        "id": table.get("id"),
+                    }
+                )
+
+            for name, source in items["sources"].items():
+                source_fqn = f"{db}.{schema}.{name}"
+                source_type = source["type"]
+
+                if source_type == "load-generator":
+                    continue
+
+                children = source.get("children", {})
+                if children:
+                    for child_fqn, child in children.items():
+                        parts = child_fqn.split(".", 2)
+                        if len(parts) == 3:
+                            child_db, child_schema, child_name = parts
+                        else:
+                            child_db = child.get("database", db)
+                            child_schema = child.get("schema", schema)
+                            child_name = child.get("name", child_fqn)
+                        objects.append(
+                            {
+                                "database": child_db,
+                                "schema": child_schema,
+                                "name": child_name,
+                                "fqn": f"{child_db}.{child_schema}.{child_name}",
+                                "source_type": source_type,
+                                "parent_source_fqn": source_fqn,
+                                "columns": child.get("columns", []),
+                                "id": child.get("id"),
+                            }
+                        )
+                else:
+                    objects.append(
+                        {
+                            "database": db,
+                            "schema": schema,
+                            "name": name,
+                            "fqn": source_fqn,
+                            "source_type": source_type,
+                            "parent_source_fqn": None,
+                            "columns": source.get("columns", []),
+                            "id": source.get("id"),
+                        }
+                    )
+    return objects
+
+
+def _acquire_persistcli_image() -> str:
+    """Use mzbuild to resolve and acquire the jobs image (contains persistcli).
+
+    Returns the full image spec (e.g. registry/jobs:mzbuild-FINGERPRINT).
+    """
+    repo = mzbuild.Repository(MZ_ROOT)
+    deps = repo.resolve_dependencies([repo.images["jobs"]])
+    deps.acquire()
+    return deps["jobs"].spec()
+
+
+def _lookup_shard_ids(
+    conn: psycopg.Connection,
+) -> dict[str, str]:
+    """Query mz_internal.mz_storage_shards to map object_id -> shard_id."""
+    result: dict[str, str] = {}
+    rows = query(conn, "SELECT object_id, shard_id FROM mz_internal.mz_storage_shards")
+    for object_id, shard_id in rows:
+        result[object_id] = shard_id
+    return result
+
+
+def _persistcli_cmd(jobs_image: str, container: str | None) -> list[str]:
+    """Return the command prefix for running persistcli via docker run.
+
+    When container is set, shares its volumes and network so persistcli
+    can access file:// blob storage and the consensus database.
+    """
+    cmd = ["docker", "run", "--rm"]
+    if container:
+        cmd += ["--volumes-from", container, f"--network=container:{container}"]
+    cmd.append(jobs_image)
+    # The jobs image entrypoint is "persistcli", so args follow directly.
+    return cmd
+
+
+def _normalize_consensus_uri_for_container(consensus_uri: str) -> str:
+    """Rewrite unix-socket consensus URIs for sidecar persistcli usage.
+
+    When persistcli runs in a separate container (`docker run`), unix-socket paths
+    like `%2Fvar%2Frun%2Fpostgresql` from environmentd are not available there.
+    In that case, use loopback TCP in the shared network namespace instead.
+    """
+    parsed = urlsplit(consensus_uri)
+    host = parsed.hostname
+    if not host:
+        return consensus_uri
+
+    decoded_host = unquote(host)
+    if not decoded_host.startswith("/"):
+        return consensus_uri
+
+    auth = ""
+    if parsed.username:
+        auth = parsed.username
+        if parsed.password is not None:
+            auth += f":{parsed.password}"
+        auth += "@"
+    port = parsed.port or 26257
+    netloc = f"{auth}127.0.0.1:{port}"
+    path = parsed.path or "/"
+    return urlunsplit((parsed.scheme, netloc, path, parsed.query, parsed.fragment))
+
+
+def _looks_like_url(value: str) -> bool:
+    return "://" in value
+
+
+def _discover_mz_url_from_docker_container(container: str) -> str:
+    """Build a best-effort SQL URL from docker port mappings.
+
+    Assumes local development defaults (mz_system/materialize user+password).
+    """
+    for internal_port in ("6875/tcp", "6875"):
+        result = subprocess.run(
+            ["docker", "port", container, internal_port],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            continue
+
+        # Typical output lines:
+        # 0.0.0.0:6875
+        # :::6875
+        # 127.0.0.1:50001
+        first_line = result.stdout.splitlines()[0].strip()
+        if ":" not in first_line:
+            continue
+        host, port = first_line.rsplit(":", 1)
+        host = host.strip("[]")
+        if not host or host == "0.0.0.0" or host == "::":
+            host = "127.0.0.1"
+        if not port.isdigit():
+            continue
+        return f"postgresql://mz_system:materialize@{host}:{port}/materialize"
+
+    raise RuntimeError(
+        f"Could not determine SQL endpoint from docker container '{container}'. "
+        "Pass --mz-url explicitly."
+    )
+
+
+def _capture_initial_data_persist(
+    jobs_image: str,
+    blob_uri: str,
+    consensus_uri: str,
+    objects: list[dict[str, Any]],
+    shard_map: dict[str, str],
+    output_dir: str,
+    container: str | None = None,
+) -> dict[str, int]:
+    """Capture initial data via persistcli export --mode snapshot (Parquet).
+
+    Streams Parquet output from persistcli stdout directly to the host file,
+    avoiding docker cp overhead.
+
+    Returns a mapping of shard_id -> as_of timestamp used for each snapshot,
+    so that subscribe mode can use the same as_of to exclude initial data.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    as_of_map: dict[str, int] = {}
+
+    for obj in objects:
+        fqn = obj["fqn"]
+        obj_id = obj.get("id")
+        shard_id = shard_map.get(obj_id, "") if obj_id else ""
+
+        if not shard_id:
+            print(
+                f"  Warning: no shard found for {fqn} (id={obj_id}), skipping",
+                file=sys.stderr,
+            )
+            continue
+
+        host_path = os.path.join(output_dir, f"{fqn}.parquet")
+
+        try:
+            print(f"  {fqn} (shard {shard_id})", file=sys.stderr, flush=True)
+            with open(host_path, "wb") as f:
+                result = subprocess.run(
+                    _persistcli_cmd(jobs_image, container)
+                    + [
+                        "export",
+                        "--shard-id",
+                        shard_id,
+                        "--blob-uri",
+                        blob_uri,
+                        "--consensus-uri",
+                        consensus_uri,
+                        "--mode",
+                        "snapshot",
+                    ],
+                    stdout=f,
+                    stderr=subprocess.PIPE,
+                    timeout=600,
+                )
+        except subprocess.TimeoutExpired as e:
+            if os.path.exists(host_path):
+                os.remove(host_path)
+            raise RuntimeError(
+                f"persistcli timed out for {fqn} (shard {shard_id}) after {e.timeout}s"
+            ) from e
+        except Exception as e:
+            if os.path.exists(host_path):
+                os.remove(host_path)
+            raise RuntimeError(f"error capturing {fqn} (shard {shard_id}): {e}") from e
+
+        stderr_text = (
+            result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
+        )
+        if stderr_text:
+            print(stderr_text, file=sys.stderr, end="")
+        if result.returncode != 0:
+            if os.path.exists(host_path):
+                os.remove(host_path)
+            detail = stderr_text.strip().splitlines()
+            reason = detail[-1] if detail else "unknown error"
+            raise RuntimeError(
+                f"persistcli failed for {fqn} (shard {shard_id}): {reason}"
+            )
+        # Parse the as_of from stderr: "Reading shard ... at as_of=<N> ..."
+        m = re.search(r"as_of=(\d+)", stderr_text)
+        if m:
+            as_of_map[shard_id] = int(m.group(1))
+        # Remove empty files (shard had no surviving data).
+        if os.path.exists(host_path) and os.path.getsize(host_path) == 0:
+            os.remove(host_path)
+
+    return as_of_map
+
+
+def _capture_continuous_data_persist(
+    jobs_image: str,
+    blob_uri: str,
+    consensus_uri: str,
+    objects: list[dict[str, Any]],
+    shard_map: dict[str, str],
+    output_dir: str,
+    as_of_map: dict[str, int],
+    container: str | None = None,
+) -> None:
+    """Capture continuous data via persistcli export --mode subscribe.
+
+    Uses subscribe mode starting from the initial snapshot's as_of timestamp
+    to capture only changes that occurred after the initial snapshot.
+    Streams Parquet output directly from persistcli stdout.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    for obj in objects:
+        fqn = obj["fqn"]
+        obj_id = obj.get("id")
+        shard_id = shard_map.get(obj_id, "") if obj_id else ""
+
+        if not shard_id:
+            print(
+                f"  Warning: no shard found for {fqn}, skipping",
+                file=sys.stderr,
+            )
+            continue
+
+        as_of = as_of_map.get(shard_id)
+        if as_of is None:
+            print(
+                f"  Warning: no as_of for {fqn} (shard {shard_id}), skipping",
+                file=sys.stderr,
+            )
+            continue
+
+        output_path = os.path.join(output_dir, f"{fqn}.parquet")
+
+        try:
+            print(
+                f"  {fqn} (shard {shard_id})",
+                file=sys.stderr,
+                flush=True,
+            )
+            with open(output_path, "wb") as f:
+                result = subprocess.run(
+                    _persistcli_cmd(jobs_image, container)
+                    + [
+                        "export",
+                        "--shard-id",
+                        shard_id,
+                        "--blob-uri",
+                        blob_uri,
+                        "--consensus-uri",
+                        consensus_uri,
+                        "--mode",
+                        "subscribe",
+                        "--as-of",
+                        str(as_of),
+                    ],
+                    stdout=f,
+                    stderr=subprocess.PIPE,
+                    timeout=600,
+                )
+        except subprocess.TimeoutExpired as e:
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            raise RuntimeError(
+                f"persistcli timed out for {fqn} (shard {shard_id}) after {e.timeout}s"
+            ) from e
+        except Exception as e:
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            raise RuntimeError(f"error capturing {fqn} (shard {shard_id}): {e}") from e
+
+        stderr_text = (
+            result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
+        )
+        if stderr_text:
+            print(stderr_text, file=sys.stderr, end="")
+        if result.returncode != 0:
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            detail = stderr_text.strip().splitlines()
+            reason = detail[-1] if detail else "unknown error"
+            raise RuntimeError(
+                f"persistcli failed for {fqn} (shard {shard_id}): {reason}"
+            )
+        # Remove empty files (no changes since initial snapshot).
+        if os.path.exists(output_path) and os.path.getsize(output_path) == 0:
+            os.remove(output_path)
+            print(f"  {fqn}: no changes", file=sys.stderr)
+        else:
+            print(f"  {fqn}: captured changes", file=sys.stderr)
+
+    print("  Continuous data capture complete", file=sys.stderr)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="mz-workload-capture",
@@ -204,21 +567,51 @@ def main() -> int:
         description="Records a workload profile from a running Materialize instance (without actual data)",
     )
 
-    parser.add_argument("mz_url", type=str)
+    parser.add_argument(
+        "target",
+        nargs="?",
+        type=str,
+        help="Materialize SQL URL (postgres://...) or Docker container name",
+    )
+    parser.add_argument(
+        "--mz-url",
+        type=str,
+        help="Materialize SQL URL (alternative to positional postgres://...)",
+    )
     # Default cluster to use
-    parser.add_argument("--cluster", type=str, default="quickstart")
+    parser.add_argument("--cluster", type=str, default="mz_catalog_server")
     parser.add_argument(
         "-o",
         "--output",
         type=str,
-        help="Path to write the workload.yml, - for stdout",
-        default=f"workload_{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')}.yml",
+        help="Path to write the workload (YAML file or directory when --capture-data)",
+        default=f"workload_{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')}",
     )
     parser.add_argument(
         "--time",
         type=int,
         help="How long of a query/data ingestion history to capture, in seconds",
         default=360,
+    )
+    parser.add_argument(
+        "--capture-data",
+        action=argparse.BooleanOptionalAction,
+        help="Capture actual data from persist storage into Parquet files",
+    )
+    parser.add_argument(
+        "--blob-uri",
+        type=str,
+        help="Blob URI for persist (required with --capture-data)",
+    )
+    parser.add_argument(
+        "--consensus-uri",
+        type=str,
+        help="Consensus URI for persist (required with --capture-data)",
+    )
+    parser.add_argument(
+        "--docker-container",
+        type=str,
+        help="Share volumes/network from this container when running persistcli (for file:// blobs or Unix-socket consensus)",
     )
     # Currently too slow to always enable, not used yet.
     parser.add_argument("--avg-column-size", action=argparse.BooleanOptionalAction)
@@ -229,17 +622,131 @@ def main() -> int:
     global VERBOSE
     VERBOSE = args.verbose
 
-    conn = psycopg.connect(args.mz_url)
+    mz_url = args.mz_url
+    container = args.docker_container
+
+    if args.target:
+        if _looks_like_url(args.target):
+            if mz_url:
+                print(
+                    "Error: SQL URL provided both positionally and via --mz-url",
+                    file=sys.stderr,
+                )
+                return 1
+            mz_url = args.target
+        else:
+            if container and container != args.target:
+                print(
+                    "Error: container provided both positionally and via --docker-container, but values differ",
+                    file=sys.stderr,
+                )
+                return 1
+            container = args.target
+
+    if not mz_url and not container:
+        print(
+            "Error: provide either a SQL URL (postgres://...) or a docker container name",
+            file=sys.stderr,
+        )
+        return 1
+
+    if not mz_url and container:
+        try:
+            mz_url = _discover_mz_url_from_docker_container(container)
+            print(f"Using auto-discovered SQL URL: {mz_url}", file=sys.stderr)
+        except RuntimeError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+
+    assert mz_url is not None
+    args.docker_container = container
+    conn = psycopg.connect(mz_url)
     conn.autocommit = True
     with conn.cursor() as cur:
-        cur.execute(SQL("SET CLUSTER = {}").format(Identifier(args.cluster)))
+        try:
+            cur.execute(SQL("SET CLUSTER = {}").format(Identifier(args.cluster)))
+        except Exception:
+            # Requested cluster doesn't exist; find a user cluster or fall back.
+            user_clusters = [
+                row[0]
+                for row in cur.execute(
+                    "SELECT name FROM mz_clusters WHERE id LIKE 'u%' LIMIT 1"
+                ).fetchall()
+            ]
+            cluster = user_clusters[0] if user_clusters else "mz_catalog_server"
+            print(f"Cluster '{args.cluster}' not found, using '{cluster}' instead")
+            cur.execute(SQL("SET CLUSTER = {}").format(Identifier(cluster)))
 
-    workload = {
+    workload: dict[str, Any] = {
         "databases": {},
         "clusters": {},
         "queries": [],
         "mz_workload_version": "1.0.0",
     }
+    printed_recent_ddls = False
+
+    def print_recent_ddls() -> None:
+        nonlocal printed_recent_ddls
+        if printed_recent_ddls:
+            return
+        try:
+            ddl_rows = query(
+                conn,
+                "SELECT began_at, statement_type, sql FROM mz_internal.mz_recent_activity_log "
+                "WHERE statement_type LIKE 'create_%' "
+                "OR statement_type LIKE 'alter_%' "
+                "OR statement_type LIKE 'drop_%' "
+                "ORDER BY began_at DESC LIMIT 25",
+            )
+            if ddl_rows:
+                print(
+                    "Recent DDL statements (most recent first):",
+                    file=sys.stderr,
+                )
+                for began_at, statement_type, ddl_sql in ddl_rows:
+                    print(
+                        f"  [{began_at}] {statement_type}: {ddl_sql}",
+                        file=sys.stderr,
+                    )
+            else:
+                print(
+                    "No recent DDL statements found in mz_recent_activity_log.",
+                    file=sys.stderr,
+                )
+        except Exception as e:
+            print(
+                f"Warning: failed to fetch recent DDL statements: {e}", file=sys.stderr
+            )
+        finally:
+            printed_recent_ddls = True
+
+    def show_create_or_none(
+        object_label: str,
+        show_create_sql: SQL | Composed,
+    ) -> str | None:
+        try:
+            rows = query(conn, show_create_sql)
+        except psycopg.Error as e:
+            print(
+                f"Warning: skipping {object_label}: SHOW CREATE failed: {e}",
+                file=sys.stderr,
+            )
+            print_recent_ddls()
+            return None
+        if not rows:
+            print(
+                f"Warning: skipping {object_label}: SHOW CREATE returned no rows",
+                file=sys.stderr,
+            )
+            print_recent_ddls()
+            return None
+        return rows[0][0]
+
+    with timed("Fetching settings"):
+        settings = {}
+        for row in query(conn, "SHOW ALL"):
+            settings[row[0]] = row[1]
+        workload["settings"] = settings
 
     with timed("Fetching clusters"):
         for cluster, managed in query(
@@ -247,12 +754,14 @@ def main() -> int:
         ):
             workload["clusters"][cluster] = {"managed": managed}
             if managed:
-                workload["clusters"][cluster]["create_sql"] = query(
-                    conn,
+                create_sql = show_create_or_none(
+                    f"cluster {cluster}",
                     SQL("SELECT create_sql FROM (SHOW CREATE CLUSTER {})").format(
                         Identifier(cluster)
                     ),
-                )[0][0]
+                )
+                if create_sql is not None:
+                    workload["clusters"][cluster]["create_sql"] = create_sql
 
     with timed("Fetching databases"):
         for (db,) in query(conn, "SELECT name FROM mz_databases"):
@@ -279,12 +788,14 @@ def main() -> int:
             conn,
             "SELECT mz_types.name, mz_schemas.name, mz_databases.name FROM mz_types JOIN mz_schemas ON mz_types.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
         ):
-            create_sql = query(
-                conn,
+            create_sql = show_create_or_none(
+                f"type {db}.{schema}.{typ}",
                 SQL("SELECT create_sql FROM (SHOW CREATE TYPE {}.{}.{})").format(
                     Identifier(db), Identifier(schema), Identifier(typ)
                 ),
-            )[0][0]
+            )
+            if create_sql is None:
+                continue
             workload["databases"][db][schema]["types"][typ] = {"create_sql": create_sql}
 
     with timed("Fetching connections"):
@@ -292,12 +803,14 @@ def main() -> int:
             conn,
             "SELECT mz_connections.name, mz_schemas.name, mz_databases.name, mz_connections.type FROM mz_connections JOIN mz_schemas ON mz_connections.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
         ):
-            create_sql = query(
-                conn,
+            create_sql = show_create_or_none(
+                f"connection {db}.{schema}.{connection}",
                 SQL("SELECT create_sql FROM (SHOW CREATE CONNECTION {}.{}.{})").format(
                     Identifier(db), Identifier(schema), Identifier(connection)
                 ),
-            )[0][0]
+            )
+            if create_sql is None:
+                continue
             workload["databases"][db][schema]["connections"][connection] = {
                 "create_sql": create_sql,
                 "type": typ,
@@ -308,13 +821,15 @@ def main() -> int:
             conn,
             "SELECT mz_sources.id, mz_sources.name, mz_schemas.name, mz_databases.name, mz_sources.type FROM mz_sources JOIN mz_schemas ON mz_sources.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id WHERE type not in ('subsource', 'progress')",
         ):
-            create_sql = query(
-                conn,
+            create_sql = show_create_or_none(
+                f"source {db}.{schema}.{source}",
                 SQL("SELECT create_sql FROM (SHOW CREATE SOURCE {}.{}.{})").format(
                     Identifier(db), Identifier(schema), Identifier(source)
                 ),
-            )[0][0]
-            obj = {
+            )
+            if create_sql is None:
+                continue
+            obj: dict[str, Any] = {
                 "create_sql": create_sql,
                 "type": typ,
                 "id": source_id,
@@ -353,12 +868,14 @@ def main() -> int:
             conn,
             "SELECT mz_sources.id, mz_sources.name, mz_schemas.name, mz_databases.name, mz_sources.type, source.name, mz_schemas2.name, mz_databases2.name FROM mz_sources JOIN mz_schemas ON mz_sources.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id JOIN mz_internal.mz_object_dependencies ON object_id = mz_sources.id JOIN mz_sources AS source ON referenced_object_id = source.id JOIN mz_schemas AS mz_schemas2 ON source.schema_id = mz_schemas2.id JOIN mz_databases AS mz_databases2 ON mz_schemas2.database_id = mz_databases2.id WHERE mz_sources.type = 'subsource'",
         ):
-            create_sql = query(
-                conn,
+            create_sql = show_create_or_none(
+                f"subsource {db}.{schema}.{subsource}",
                 SQL("SELECT create_sql FROM (SHOW CREATE SOURCE {}.{}.{})").format(
                     Identifier(db), Identifier(schema), Identifier(subsource)
                 ),
-            )[0][0]
+            )
+            if create_sql is None:
+                continue
             columns = []
             obj = {
                 "create_sql": create_sql,
@@ -387,21 +904,31 @@ def main() -> int:
             if columns:
                 obj["columns"] = columns
 
-            workload["databases"][source_db][source_schema]["sources"][
-                source
-            ].setdefault("children", {})[f"{db}.{schema}.{subsource}"] = obj
+            try:
+                source_obj = workload["databases"][source_db][source_schema]["sources"][
+                    source
+                ]
+            except KeyError:
+                print(
+                    f"Warning: skipping subsource {db}.{schema}.{subsource}: parent source {source_db}.{source_schema}.{source} is missing",
+                    file=sys.stderr,
+                )
+                continue
+            source_obj.setdefault("children", {})[f"{db}.{schema}.{subsource}"] = obj
 
     with timed("Fetching tables"):
         for table, schema, db, id in query(
             conn,
             "SELECT mz_tables.name, mz_schemas.name, mz_databases.name, mz_tables.id FROM mz_tables JOIN mz_schemas ON mz_tables.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
         ):
-            create_sql = query(
-                conn,
+            create_sql = show_create_or_none(
+                f"table {db}.{schema}.{table}",
                 SQL("SELECT create_sql FROM (SHOW CREATE TABLE {}.{}.{})").format(
                     Identifier(db), Identifier(schema), Identifier(table)
                 ),
-            )[0][0]
+            )
+            if create_sql is None:
+                continue
             columns = []
             for column, typ, nullable, default in query(
                 conn,
@@ -425,26 +952,37 @@ def main() -> int:
             }
 
             if "FROM SOURCE" in create_sql:
-                source, source_schema, source_db = query(
-                    conn,
-                    SQL(
-                        "SELECT mz_sources.name, mz_schemas.name, mz_databases.name FROM mz_internal.mz_object_dependencies JOIN mz_sources ON referenced_object_id = mz_sources.id JOIN mz_schemas ON mz_sources.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id WHERE object_id = {}"
-                    ).format(Literal(id)),
-                )[0]
+                try:
+                    source, source_schema, source_db = query(
+                        conn,
+                        SQL(
+                            "SELECT mz_sources.name, mz_schemas.name, mz_databases.name FROM mz_internal.mz_object_dependencies JOIN mz_sources ON referenced_object_id = mz_sources.id JOIN mz_schemas ON mz_sources.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id WHERE object_id = {}"
+                        ).format(Literal(id)),
+                    )[0]
+                    source_obj = workload["databases"][source_db][source_schema][
+                        "sources"
+                    ][source]
+                except Exception as e:
+                    print(
+                        f"Warning: skipping source-derived table {db}.{schema}.{table}: {e}",
+                        file=sys.stderr,
+                    )
+                    continue
                 obj["type"] = "table"
                 obj["schema"] = schema
                 obj["database"] = db
                 obj["name"] = table
-                workload["databases"][source_db][source_schema]["sources"][
-                    source
-                ].setdefault("children", {})[f"{db}.{schema}.{table}"] = obj
+                source_obj.setdefault("children", {})[f"{db}.{schema}.{table}"] = obj
             else:
-                obj["rows"] = query(
-                    conn,
-                    SQL("SELECT count(*) FROM {}.{}.{}").format(
-                        Identifier(db), Identifier(schema), Identifier(table)
-                    ),
-                )[0][0]
+                try:
+                    obj["rows"] = query(
+                        conn,
+                        SQL("SELECT count(*) FROM {}.{}.{}").format(
+                            Identifier(db), Identifier(schema), Identifier(table)
+                        ),
+                    )[0][0]
+                except Exception:
+                    obj["rows"] = 0
                 workload["databases"][db][schema]["tables"][table] = obj
 
     with timed("Fetching views"):
@@ -452,12 +990,14 @@ def main() -> int:
             conn,
             "SELECT mz_views.id, mz_views.name, mz_schemas.name, mz_databases.name FROM mz_views JOIN mz_schemas ON mz_views.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
         ):
-            create_sql = query(
-                conn,
+            create_sql = show_create_or_none(
+                f"view {db}.{schema}.{view}",
                 SQL("SELECT create_sql FROM (SHOW CREATE VIEW {}.{}.{})").format(
                     Identifier(db), Identifier(schema), Identifier(view)
                 ),
-            )[0][0]
+            )
+            if create_sql is None:
+                continue
 
             obj = {"create_sql": create_sql}
 
@@ -483,17 +1023,18 @@ def main() -> int:
             workload["databases"][db][schema]["views"][view] = obj
 
     with timed("Fetching materialized views"):
-        time.time()
         for mv_id, mv, schema, db in query(
             conn,
             "SELECT mz_materialized_views.id, mz_materialized_views.name, mz_schemas.name, mz_databases.name FROM mz_materialized_views JOIN mz_schemas ON mz_materialized_views.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
         ):
-            create_sql = query(
-                conn,
+            create_sql = show_create_or_none(
+                f"materialized view {db}.{schema}.{mv}",
                 SQL(
                     "SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW {}.{}.{})"
                 ).format(Identifier(db), Identifier(schema), Identifier(mv)),
-            )[0][0]
+            )
+            if create_sql is None:
+                continue
             obj = {"create_sql": create_sql}
 
             columns = []
@@ -522,12 +1063,14 @@ def main() -> int:
             conn,
             "SELECT mz_sinks.name, mz_schemas.name, mz_databases.name, mz_sinks.type FROM mz_sinks JOIN mz_schemas ON mz_sinks.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
         ):
-            create_sql = query(
-                conn,
+            create_sql = show_create_or_none(
+                f"sink {db}.{schema}.{sink}",
                 SQL("SELECT create_sql FROM (SHOW CREATE SINK {}.{}.{})").format(
                     Identifier(db), Identifier(schema), Identifier(sink)
                 ),
-            )[0][0]
+            )
+            if create_sql is None:
+                continue
             workload["databases"][db][schema]["sinks"][sink] = {
                 "create_sql": create_sql,
                 "type": typ,
@@ -538,12 +1081,14 @@ def main() -> int:
             conn,
             "SELECT mz_indexes.name, schema_name, database_name FROM mz_indexes JOIN mz_internal.mz_object_fully_qualified_names AS ofqn ON on_id = ofqn.id WHERE schema_name NOT IN ('mz_catalog', 'mz_internal', 'mz_introspection')",
         ):
-            create_sql = query(
-                conn,
+            create_sql = show_create_or_none(
+                f"index {database}.{schema}.{index}",
                 SQL("SELECT create_sql FROM (SHOW CREATE INDEX {}.{}.{})").format(
                     Identifier(database), Identifier(schema), Identifier(index)
                 ),
-            )[0][0]
+            )
+            if create_sql is None:
+                continue
             workload["databases"][database][schema]["indexes"][index] = {
                 "create_sql": create_sql
             }
@@ -551,49 +1096,62 @@ def main() -> int:
     end_time = time.time()
     start_time = end_time - args.time
 
-    with timed("Fetching queries"):
-        for (
-            sql,
-            cluster,
-            database,
-            search_path,
-            statement_type,
-            finished_status,
-            params,
-            transaction_isolation,
-            session_id,
-            transaction_id,
-            began_at,
-            duration,
-            result_size,
-        ) in query(
-            conn,
-            SQL(
-                "SELECT sql, cluster_name, database_name, search_path, statement_type, finished_status, params, transaction_isolation, session_id, transaction_id, began_at, finished_at - began_at, result_size FROM mz_internal.mz_recent_activity_log WHERE began_at > {} ORDER BY began_at ASC"
-            ).format(Literal(datetime.fromtimestamp(start_time, tz=timezone.utc))),
-        ):
-            assert (
-                search_path[0] == "{" and search_path[-1] == "}"
-            ), f"Unexpected search path: {search_path}"
-            workload["queries"].append(
-                {
-                    "sql": sql,
-                    "cluster": cluster,
-                    "database": database,
-                    "search_path": search_path[1:-1].split(","),
-                    "statement_type": statement_type,
-                    "finished_status": finished_status,
-                    "params": params,
-                    "transaction_isolation": transaction_isolation,
-                    "session_id": str(session_id),
-                    "transaction_id": int(transaction_id),
-                    "began_at": began_at,
-                    "duration": (
-                        duration.total_seconds() if duration is not None else None
-                    ),
-                    "result_size": result_size,
-                }
-            )
+    def fetch_queries() -> None:
+        """Fetch queries from mz_recent_activity_log into workload["queries"]."""
+        # Use the server's own clock to avoid timezone/clock-skew issues between
+        # the capture machine and the Materialize server.
+        server_now = query(conn, "SELECT now()")[0][0]
+        query_cutoff = server_now - timedelta(seconds=args.time)
+
+        with timed("Fetching queries"):
+            for (
+                sql,
+                cluster,
+                database,
+                search_path,
+                statement_type,
+                finished_status,
+                params,
+                transaction_isolation,
+                session_id,
+                transaction_id,
+                began_at,
+                duration,
+                result_size,
+            ) in query(
+                conn,
+                SQL(
+                    "SELECT sql, cluster_name, database_name, search_path, statement_type, finished_status, params, transaction_isolation, session_id, transaction_id, began_at, finished_at - began_at, result_size FROM mz_internal.mz_recent_activity_log WHERE began_at > {} ORDER BY began_at ASC"
+                ).format(Literal(query_cutoff)),
+            ):
+                assert (
+                    search_path[0] == "{" and search_path[-1] == "}"
+                ), f"Unexpected search path: {search_path}"
+                workload["queries"].append(
+                    {
+                        "sql": sql,
+                        "cluster": cluster,
+                        "database": database,
+                        "search_path": search_path[1:-1].split(","),
+                        "statement_type": statement_type,
+                        "finished_status": finished_status,
+                        "params": params,
+                        "transaction_isolation": transaction_isolation,
+                        "session_id": str(session_id),
+                        "transaction_id": int(transaction_id),
+                        "began_at": began_at,
+                        "duration": (
+                            duration.total_seconds() if duration is not None else None
+                        ),
+                        "result_size": result_size,
+                    }
+                )
+
+    # In non-capture-data mode, fetch queries now (before writing output).
+    # In capture-data mode, we fetch queries after the data capture completes
+    # so that queries executed during the capture window are also recorded.
+    if not args.capture_data:
+        fetch_queries()
 
     if args.avg_column_size:
         with timed("Fetching average column sizes"):
@@ -618,24 +1176,177 @@ def main() -> int:
                                 child,
                             )
 
-    with timed("Fetching source/subsource/table statistics"):
-        for schemas in workload["databases"].values():
-            for items in schemas.values():
-                for source_name, source in items["sources"].items():
-                    attach_source_statistics(
-                        conn, source_name, source, start_time, end_time
-                    )
-                    for child_name, child in source.get("children", {}).items():
+    if not args.capture_data:
+        with timed("Fetching source/subsource/table statistics"):
+            for schemas in workload["databases"].values():
+                for items in schemas.values():
+                    for source_name, source in items["sources"].items():
                         attach_source_statistics(
-                            conn, child_name, child, start_time, end_time
+                            conn, source_name, source, start_time, end_time
                         )
+                        for child_name, child in source.get("children", {}).items():
+                            attach_source_statistics(
+                                conn, child_name, child, start_time, end_time
+                            )
 
-    if args.output == "-":
+    if args.capture_data:
+        container = args.docker_container
+        blob_uri = args.blob_uri
+        consensus_uri = args.consensus_uri
+
+        # Auto-detect persist URIs from the container's environmentd process.
+        # The entrypoint script sets these env vars, but they're only visible
+        # in the environmentd process, not in new `docker exec` sessions.
+        if container and (not blob_uri or not consensus_uri):
+            with timed("Reading persist URIs from container"):
+                # Find the environmentd PID and read its environment.
+                result = subprocess.run(
+                    [
+                        "docker",
+                        "exec",
+                        container,
+                        "bash",
+                        "-c",
+                        "cat /proc/$(pgrep -x environmentd)/environ | tr '\\0' '\\n'",
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0:
+                    print(
+                        f"Error: failed to read environmentd env from container '{container}': {result.stderr.strip()}",
+                        file=sys.stderr,
+                    )
+                    return 1
+                env_vars = dict(
+                    line.split("=", 1)
+                    for line in result.stdout.splitlines()
+                    if "=" in line
+                )
+                if not blob_uri:
+                    blob_uri = env_vars.get("MZ_PERSIST_BLOB_URL", "")
+                if not consensus_uri:
+                    consensus_uri = env_vars.get("MZ_PERSIST_CONSENSUS_URL", "")
+
+        if not blob_uri or not consensus_uri:
+            print(
+                "Error: --blob-uri and --consensus-uri are required with --capture-data "
+                "(or use --docker-container to auto-detect them)",
+                file=sys.stderr,
+            )
+            return 1
+
+        if container and consensus_uri:
+            normalized_consensus_uri = _normalize_consensus_uri_for_container(
+                consensus_uri
+            )
+            if normalized_consensus_uri != consensus_uri:
+                print(
+                    "Consensus URI uses a unix socket path; rewriting to loopback TCP for sidecar persistcli",
+                    file=sys.stderr,
+                )
+                print(f"Original consensus URI: {consensus_uri}", file=sys.stderr)
+                print(
+                    f"Rewritten consensus URI: {normalized_consensus_uri}",
+                    file=sys.stderr,
+                )
+                consensus_uri = normalized_consensus_uri
+
+        print(f"Blob URI: {blob_uri}", file=sys.stderr)
+        print(f"Consensus URI: {consensus_uri}", file=sys.stderr)
+
+        with timed("Acquiring persistcli (jobs) image"):
+            jobs_image = _acquire_persistcli_image()
+        print(f"Using image: {jobs_image}", file=sys.stderr)
+
+        output_dir = args.output
+        if output_dir.endswith(".yml"):
+            output_dir = output_dir[:-4]
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Look up shard IDs for all objects.
+        with timed("Looking up shard IDs"):
+            shard_map = _lookup_shard_ids(conn)
+        print(f"Found {len(shard_map)} shards", file=sys.stderr)
+
+        # Build capturable objects (tables + source children).
+        capturable_objects = _build_capturable_objects(workload)
+        print(f"Found {len(capturable_objects)} capturable objects", file=sys.stderr)
+
+        # Write objects.yml early so it's available while data capture runs.
+        # Pop queries temporarily — they'll be fetched after capture.
+        workload["capture_method"] = "persist"
+        saved_queries = workload.pop("queries")
+        with timed(f"Writing {output_dir}/objects.yml"):
+            with open(os.path.join(output_dir, "objects.yml"), "w") as f:
+                yaml.dump(workload, f, Dumper=yaml.CSafeDumper)
+        workload["queries"] = saved_queries
+
+        with timed("Capturing initial data from persist"):
+            initial_data_dir = os.path.join(output_dir, "initial_data")
+            try:
+                as_of_map = _capture_initial_data_persist(
+                    jobs_image,
+                    blob_uri,
+                    consensus_uri,
+                    capturable_objects,
+                    shard_map,
+                    initial_data_dir,
+                    container=container,
+                )
+            except RuntimeError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                return 1
+
+        capture_start_ts = time.time()
+
+        # Wait for new data to flow into persist before capturing changes.
+        print(f"Waiting {args.time}s for new data...", file=sys.stderr)
+        time.sleep(args.time)
+
+        with timed("Capturing continuous data from persist"):
+            continuous_data_dir = os.path.join(output_dir, "continuous_data")
+            try:
+                _capture_continuous_data_persist(
+                    jobs_image,
+                    blob_uri,
+                    consensus_uri,
+                    capturable_objects,
+                    shard_map,
+                    continuous_data_dir,
+                    as_of_map=as_of_map,
+                    container=container,
+                )
+            except RuntimeError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                return 1
+
+        capture_end_ts = time.time()
+
+        # Fetch queries after data capture so queries from the capture window
+        # are included.
+        fetch_queries()
+
+        # Update objects.yml with capture timestamps.
+        workload["capture_start_ts"] = capture_start_ts
+        workload["capture_end_ts"] = capture_end_ts
+        queries = workload.pop("queries")
+        with timed(f"Updating {output_dir}/objects.yml"):
+            with open(os.path.join(output_dir, "objects.yml"), "w") as f:
+                yaml.dump(workload, f, Dumper=yaml.CSafeDumper)
+
+        with timed(f"Writing {output_dir}/queries.yml"):
+            with open(os.path.join(output_dir, "queries.yml"), "w") as f:
+                yaml.dump({"queries": queries}, f, Dumper=yaml.CSafeDumper)
+    elif args.output == "-":
         yaml.dump(workload, sys.stdout, Dumper=yaml.CSafeDumper)
     else:
-        time.time()
-        with timed(f"Writing workload to {args.output}"):
-            with open(args.output, "w") as f:
+        output_path = args.output
+        if not output_path.endswith(".yml"):
+            output_path += ".yml"
+        with timed(f"Writing workload to {output_path}"):
+            with open(output_path, "w") as f:
                 yaml.dump(workload, f, Dumper=yaml.CSafeDumper)
 
     return 0

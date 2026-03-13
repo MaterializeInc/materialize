@@ -40,6 +40,7 @@ futures = "0.3.31"
 futures-util = "0.3"
 hex = "0.4.3"
 itertools = "0.14.0"
+parquet = { version = "57", default-features = false, features = ["arrow", "snap"] }
 mz-build-info = { path = "../build-info" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", features = ["bytes", "process", "panic", "test", "tracing"] }

@@ -38,8 +38,11 @@ from materialize.workload_replay.data import (
     create_ingestions,
     create_initial_data_external,
     create_initial_data_requiring_mz,
+    import_captured_data_initial,
+    import_captured_data_streaming,
 )
 from materialize.workload_replay.objects import (
+    apply_settings,
     run_create_objects_part_1,
     run_create_objects_part_2,
 )
@@ -97,6 +100,8 @@ def test(
     run_ingestions: bool,
     run_queries: bool,
     max_concurrent_queries: int,
+    run_apply_settings: bool = True,
+    seed: str | int = 0,
 ) -> dict[str, Any]:
     """Run a single workload test."""
     print(f"--- {posixpath.relpath(file, LOCATION)}")
@@ -141,102 +146,155 @@ def test(
     }
     if create_objects:
         start_time = time.time()
-        run_create_objects_part_1(c, services, workload, verbose)
+        if run_apply_settings:
+            apply_settings(c, workload, verbose)
+        run_create_objects_part_1(c, services, workload, verbose, run_apply_settings)
         if not early_initial_data:
             run_create_objects_part_2(c, services, workload, verbose)
         stats["object_creation"] = time.time() - start_time
-    stats["initial_data"] = {"docker": [], "time": 0.0}
-    stats_thread = PropagatingThread(
-        target=docker_stats,
-        name="docker-stats",
-        args=(stats["initial_data"]["docker"], stop_event),
-    )
-    stats_thread.start()
-    try:
-        created_data = False
-        if initial_data:
-            print("Creating initial data")
+
+    captured_initial_data_dir = workload.get("captured_initial_data_dir")
+    captured_continuous_data_dir = workload.get("captured_continuous_data_dir")
+    created_data = False
+    if initial_data:
+        print("Creating initial data")
+        stats["initial_data"] = {"docker": [], "time": 0.0}
+        stats_thread = PropagatingThread(
+            target=docker_stats,
+            name="docker-stats",
+            args=(stats["initial_data"]["docker"], stop_event),
+        )
+        stats_thread.start()
+        try:
             start_time = time.time()
-            created_data = create_initial_data_external(
-                c,
-                workload,
-                factor_initial_data,
-                random.Random(random.randrange(SEED_RANGE)),
-            )
+            if captured_initial_data_dir:
+                print("Using captured initial data")
+                if early_initial_data:
+                    created_data = import_captured_data_initial(
+                        c,
+                        workload,
+                        captured_initial_data_dir,
+                        factor_initial_data,
+                        seed,
+                        requires_mz=False,
+                    )
+                else:
+                    created_data = import_captured_data_initial(
+                        c,
+                        workload,
+                        captured_initial_data_dir,
+                        factor_initial_data,
+                        seed,
+                    )
+            else:
+                created_data = create_initial_data_external(
+                    c,
+                    workload,
+                    factor_initial_data,
+                    random.Random(random.randrange(SEED_RANGE)),
+                )
             if early_initial_data:
                 obj_start = time.time()
                 run_create_objects_part_2(c, services, workload, verbose)
-                stats["initial_data"]["sources_created_at"] = time.time()
                 stats["object_creation"] += time.time() - obj_start
-            created_data_requiring_mz = create_initial_data_requiring_mz(
-                c,
-                workload,
-                factor_initial_data,
-                random.Random(random.randrange(SEED_RANGE)),
-            )
-            created_data = created_data or created_data_requiring_mz
-            stats["initial_data"]["time"] = time.time() - start_time
-        elif early_initial_data:
-            start_time = time.time()
-            run_create_objects_part_2(c, services, workload, verbose)
-            stats["object_creation"] += time.time() - start_time
-
-        # Wait for all user objects to hydrate before starting queries.
-        print("Waiting for hydration")
-        prev_not_hydrated: list[str] = []
-        while True:
-            not_hydrated: list[str] = [
-                entry[0]
-                for entry in c.sql_query(
-                    """
-                SELECT DISTINCT name
-                    FROM (
-                      SELECT o.name
-                      FROM mz_objects o
-                      JOIN mz_internal.mz_hydration_statuses h
-                        ON o.id = h.object_id
-                      WHERE NOT h.hydrated
-                        AND o.name NOT LIKE 'mz_%'
-                        AND o.id NOT IN (SELECT id FROM mz_sinks)
-
-                      UNION ALL
-
-                      SELECT o.name
-                      FROM mz_objects o
-                      JOIN mz_internal.mz_compute_hydration_statuses h
-                        ON o.id = h.object_id
-                      WHERE NOT h.hydrated
-                        AND o.name NOT LIKE 'mz_%'
-                        AND o.id NOT IN (SELECT id FROM mz_sinks)
-                    ) x
-                    ORDER BY 1;"""
+            if captured_initial_data_dir and early_initial_data:
+                created_data_requiring_mz = import_captured_data_initial(
+                    c,
+                    workload,
+                    captured_initial_data_dir,
+                    factor_initial_data,
+                    seed,
+                    requires_mz=True,
                 )
-            ]
-            if not_hydrated:
-                if not_hydrated != prev_not_hydrated:
-                    print(f"  Not yet hydrated: {', '.join(not_hydrated)}")
-                    prev_not_hydrated = not_hydrated
-                time.sleep(1)
-            else:
-                break
-        print("Hydration complete")
+                created_data = created_data or created_data_requiring_mz
+            elif not captured_initial_data_dir:
+                created_data_requiring_mz = create_initial_data_requiring_mz(
+                    c,
+                    workload,
+                    factor_initial_data,
+                    random.Random(random.randrange(SEED_RANGE)),
+                )
+                created_data = created_data or created_data_requiring_mz
+            stats["initial_data"]["time"] = time.time() - start_time
+            if not created_data:
+                del stats["initial_data"]
+        finally:
+            stop_event.set()
+            stats_thread.join()
+            stop_event.clear()
+    elif early_initial_data:
+        start_time = time.time()
+        run_create_objects_part_2(c, services, workload, verbose)
+        stats["object_creation"] += time.time() - start_time
 
-        wait_for_freshness(c)
-    finally:
-        stop_event.set()
-        stats_thread.join()
-        stop_event.clear()
+    # Wait for all user objects to hydrate before starting queries.
+    print("Waiting for hydration")
+    prev_not_hydrated: list[str] = []
+    while True:
+        not_hydrated: list[str] = [
+            entry[0]
+            for entry in c.sql_query(
+                """
+            SELECT DISTINCT name
+                FROM (
+                  SELECT o.name
+                  FROM mz_objects o
+                  JOIN mz_internal.mz_hydration_statuses h
+                    ON o.id = h.object_id
+                  WHERE NOT h.hydrated
+                    AND o.name NOT LIKE 'mz_%'
+                    AND o.id NOT IN (SELECT id FROM mz_sinks)
 
-    if not created_data:
-        del stats["initial_data"]
+                  UNION ALL
+
+                  SELECT o.name
+                  FROM mz_objects o
+                  JOIN mz_internal.mz_compute_hydration_statuses h
+                    ON o.id = h.object_id
+                  WHERE NOT h.hydrated
+                    AND o.name NOT LIKE 'mz_%'
+                    AND o.id NOT IN (SELECT id FROM mz_sinks)
+                ) x
+                ORDER BY 1;"""
+            )
+        ]
+        if not_hydrated:
+            if not_hydrated != prev_not_hydrated:
+                print(f"  Not yet hydrated: {', '.join(not_hydrated)}")
+                prev_not_hydrated = not_hydrated
+            time.sleep(1)
+        else:
+            break
+    print("Hydration complete")
+
+    wait_for_freshness(c)
 
     if run_ingestions:
         print("Starting continuous ingestions")
-        threads.extend(
-            create_ingestions(
-                c, workload, stop_event, factor_ingestions, verbose, stats["ingestions"]
+        if captured_continuous_data_dir:
+            print("Using captured continuous data")
+            threads.extend(
+                import_captured_data_streaming(
+                    c,
+                    workload,
+                    captured_continuous_data_dir,
+                    1.0,
+                    factor_ingestions,
+                    seed,
+                    stop_event,
+                )
             )
-        )
+        else:
+            threads.extend(
+                create_ingestions(
+                    c,
+                    workload,
+                    stop_event,
+                    factor_ingestions,
+                    verbose,
+                    stats["ingestions"],
+                )
+            )
     if run_queries and workload["queries"]:
         print("Starting continuous queries")
         stats["queries"]["timings"] = []
@@ -295,6 +353,7 @@ def benchmark(
     seed: str,
     early_initial_data: bool,
     max_concurrent_queries: int,
+    run_apply_settings: bool = True,
 ) -> None:
     """Run a benchmark comparing two versions of Materialize."""
     import random
@@ -345,6 +404,8 @@ def benchmark(
             True,
             True,
             max_concurrent_queries,
+            run_apply_settings,
+            seed,
         )
         old_version = c.query_mz_version()
     try:
@@ -379,6 +440,8 @@ def benchmark(
             True,
             True,
             max_concurrent_queries,
+            run_apply_settings,
+            seed,
         )
         new_version = c.query_mz_version()
     try:
