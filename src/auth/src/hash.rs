@@ -172,6 +172,10 @@ pub fn sasl_verify(
         .decode(proof)
         .map_err(|_| VerifyError::InvalidPassword)?;
 
+    if provided_client_proof.len() != client_signature.len() {
+        return Err(VerifyError::InvalidPassword);
+    }
+
     // Recover client_key = proof XOR client_signature
     let client_key: Vec<u8> = provided_client_proof
         .iter()
@@ -448,5 +452,38 @@ mod tests {
         let bad_proof = BASE64_STANDARD.encode([0u8; 32]);
         let res = sasl_verify(malformed_hash, &bad_proof, auth_message);
         assert!(matches!(res, Err(VerifyError::MalformedHash)));
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_sasl_verify_truncated_proof_no_panic() {
+        // A truncated client proof (not 32 bytes) should return InvalidPassword, not panic
+        let password: Password = "password".into();
+        let hashed_password = scram256_hash(&password, &DEFAULT_ITERATIONS).expect("hash password");
+        let auth_message = "n=user,r=clientnonce,s=somesalt";
+
+        // Truncated proof: 16 bytes instead of the expected 32 (SHA-256 output)
+        let truncated_proof = BASE64_STANDARD.encode([0u8; 16]);
+        let res = sasl_verify(&hashed_password, &truncated_proof, auth_message);
+        assert!(
+            matches!(res, Err(VerifyError::InvalidPassword)),
+            "truncated proof should return InvalidPassword, not panic"
+        );
+
+        // Oversized proof: 64 bytes instead of 32
+        let oversized_proof = BASE64_STANDARD.encode([0u8; 64]);
+        let res = sasl_verify(&hashed_password, &oversized_proof, auth_message);
+        assert!(
+            matches!(res, Err(VerifyError::InvalidPassword)),
+            "oversized proof should return InvalidPassword, not panic"
+        );
+
+        // Empty proof
+        let empty_proof = BASE64_STANDARD.encode([0u8; 0]);
+        let res = sasl_verify(&hashed_password, &empty_proof, auth_message);
+        assert!(
+            matches!(res, Err(VerifyError::InvalidPassword)),
+            "empty proof should return InvalidPassword, not panic"
+        );
     }
 }
