@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+* Reduce catalog server load during
+  [blue/green deployments](https://materialize.com/docs/manage/dbt/development-workflows/#bluegreen-deployments)
+  by consolidating per-cluster readiness polling into a single query. Previously,
+  `deploy_await` issued one complex query per cluster per poll iteration; it now
+  checks all deployment clusters in a single round-trip.
+
 ## 1.9.6 - 2026-03-10
 
 * Add `strict_mode` to enforce production-ready cluster and schema isolation
