@@ -906,6 +906,54 @@ impl CatalogState {
                     PrivilegeMap::from_mz_acl_items(acl_items),
                 );
             }
+            Builtin::MaterializedView(mv) => {
+                let mut acl_items = vec![rbac::owner_privilege(
+                    mz_sql::catalog::ObjectType::MaterializedView,
+                    MZ_SYSTEM_ROLE_ID,
+                )];
+                acl_items.extend_from_slice(&mv.access);
+                // Builtin materialized views can't be versioned.
+                let versions = BTreeMap::new();
+
+                let item = self
+                    .parse_item(
+                        global_id,
+                        &mv.create_sql(),
+                        &versions,
+                        None,
+                        false,
+                        None,
+                        local_expression_cache,
+                        None,
+                    )
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "internal error: failed to load bootstrap materialized view:\n\
+                             {}\n\
+                             error:\n\
+                             {e:?}\n\n\
+                             make sure that the schema name is specified in the builtin \
+                             materialized view's create sql statement.",
+                            mv.name,
+                        )
+                    });
+                if !matches!(item, CatalogItem::MaterializedView(_)) {
+                    panic!(
+                        "internal error: builtin materialized view {}'s SQL does not begin \
+                         with \"CREATE MATERIALIZED VIEW\".",
+                        mv.name,
+                    );
+                };
+
+                self.insert_item(
+                    item_id,
+                    mv.oid,
+                    name,
+                    item,
+                    MZ_SYSTEM_ROLE_ID,
+                    PrivilegeMap::from_mz_acl_items(acl_items),
+                );
+            }
             Builtin::ContinualTask(ct) => {
                 let mut acl_items = vec![rbac::owner_privilege(
                     mz_sql::catalog::ObjectType::Source,
@@ -1356,8 +1404,9 @@ impl CatalogState {
             StateUpdateKind::RoleAuth(role_auth) => {
                 vec![self.pack_role_auth_update(role_auth.role_id, diff)]
             }
-            StateUpdateKind::Database(database) => {
-                vec![self.pack_database_update(&database.id, diff)]
+            StateUpdateKind::Database(_database) => {
+                // mz_databases is a materialized view over mz_catalog_raw.
+                vec![]
             }
             StateUpdateKind::Schema(schema) => {
                 let db_spec = schema.database_id.into();
@@ -2050,7 +2099,15 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     let mut builtin_index_additions = Vec::new();
     for (builtin_item_update, ts, diff) in builtin_item_updates {
         match &builtin_item_update.description.object_type {
-            CatalogItemType::Index | CatalogItemType::ContinualTask => push_update(
+            // Views, MVs, indexes, and continual tasks go after clusters.
+            // MVs need clusters to exist. Views must come after MVs because
+            // views may depend on MVs (e.g. mz_databases). The ApplyState
+            // batching ensures MVs (Items) are applied before views
+            // (BuiltinViewAdditions) as long as MVs precede views in this vec.
+            CatalogItemType::Index
+            | CatalogItemType::ContinualTask
+            | CatalogItemType::MaterializedView
+            | CatalogItemType::View => push_update(
                 StateUpdate {
                     kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
                     ts,
@@ -2063,8 +2120,6 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             CatalogItemType::Table
             | CatalogItemType::Source
             | CatalogItemType::Sink
-            | CatalogItemType::View
-            | CatalogItemType::MaterializedView
             | CatalogItemType::Type
             | CatalogItemType::Func
             | CatalogItemType::Secret
@@ -2299,6 +2354,22 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     }
     let item_retractions = merge_item_updates(item_retractions, temp_item_retractions);
     let item_additions = merge_item_updates(item_additions, temp_item_additions);
+
+    // Sort builtin_index_additions so that MVs come before views. The
+    // ApplyState batching treats MVs as Items and views as
+    // BuiltinViewAdditions. By placing MVs first, they are applied to the
+    // catalog state before parse_builtin_views runs, allowing views to
+    // depend on MVs (e.g. mz_databases).
+    builtin_index_additions.sort_by_key(|update| match &update.kind {
+        StateUpdateKind::SystemObjectMapping(som) => match som.description.object_type {
+            CatalogItemType::MaterializedView => 0,
+            CatalogItemType::ContinualTask => 1,
+            CatalogItemType::View => 2,
+            CatalogItemType::Index => 3,
+            _ => 4,
+        },
+        _ => 4,
+    });
 
     // Put everything back together.
     iter::empty()

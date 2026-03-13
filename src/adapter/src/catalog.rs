@@ -1147,8 +1147,8 @@ impl Catalog {
     }
 
     #[mz_ore::instrument(level = "debug")]
-    pub async fn confirm_leadership(&self) -> Result<(), AdapterError> {
-        Ok(self.storage().await.confirm_leadership().await?)
+    pub async fn advance_upper(&self, new_upper: mz_repr::Timestamp) -> Result<(), AdapterError> {
+        Ok(self.storage().await.advance_upper(new_upper).await?)
     }
 
     /// Return the ids of all log sources the given object depends on.
@@ -2802,6 +2802,7 @@ mod tests {
                 let (schema, name, expected_desc) = match builtin {
                     Builtin::Table(t) => (&t.schema, &t.name, &t.desc),
                     Builtin::View(v) => (&v.schema, &v.name, &v.desc),
+                    Builtin::MaterializedView(mv) => (&mv.schema, &mv.name, &mv.desc),
                     Builtin::Source(s) => (&s.schema, &s.name, &s.desc),
                     Builtin::Log(_)
                     | Builtin::Type(_)

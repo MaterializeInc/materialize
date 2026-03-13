@@ -89,10 +89,10 @@ SELECT owner_id FROM mz_views GROUP BY owner_id
 ----
 s1
 
-# No builtin materialized views
 query T
 SELECT owner_id FROM mz_materialized_views GROUP BY owner_id
 ----
+s1
 
 query T
 SELECT owner_id FROM mz_databases GROUP BY owner_id

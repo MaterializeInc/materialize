@@ -89,6 +89,7 @@ pub enum Builtin<T: 'static + TypeReference> {
     Log(&'static BuiltinLog),
     Table(&'static BuiltinTable),
     View(&'static BuiltinView),
+    MaterializedView(&'static BuiltinMaterializedView),
     Type(&'static BuiltinType<T>),
     Func(BuiltinFunc),
     Source(&'static BuiltinSource),
@@ -103,6 +104,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Log(log) => log.name,
             Builtin::Table(table) => table.name,
             Builtin::View(view) => view.name,
+            Builtin::MaterializedView(mv) => mv.name,
             Builtin::Type(typ) => typ.name,
             Builtin::Func(func) => func.name,
             Builtin::Source(coll) => coll.name,
@@ -117,6 +119,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Log(log) => log.schema,
             Builtin::Table(table) => table.schema,
             Builtin::View(view) => view.schema,
+            Builtin::MaterializedView(mv) => mv.schema,
             Builtin::Type(typ) => typ.schema,
             Builtin::Func(func) => func.schema,
             Builtin::Source(coll) => coll.schema,
@@ -133,6 +136,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::ContinualTask(_) => CatalogItemType::ContinualTask,
             Builtin::Table(_) => CatalogItemType::Table,
             Builtin::View(_) => CatalogItemType::View,
+            Builtin::MaterializedView(_) => CatalogItemType::MaterializedView,
             Builtin::Type(_) => CatalogItemType::Type,
             Builtin::Func(_) => CatalogItemType::Func,
             Builtin::Index(_) => CatalogItemType::Index,
@@ -214,6 +218,30 @@ pub struct BuiltinView {
 impl BuiltinView {
     pub fn create_sql(&self) -> String {
         format!("CREATE VIEW {}.{} AS {}", self.schema, self.name, self.sql)
+    }
+}
+
+#[derive(Hash, Debug)]
+pub struct BuiltinMaterializedView {
+    pub name: &'static str,
+    pub schema: &'static str,
+    pub oid: u32,
+    pub desc: RelationDesc,
+    pub column_comments: BTreeMap<&'static str, &'static str>,
+    /// SQL fragment for the MV, following `CREATE MATERIALIZED VIEW [name]`
+    ///
+    /// Format: `IN CLUSTER [cluster_name] AS [query]`
+    pub sql: &'static str,
+    /// ACL items to apply to the object
+    pub access: Vec<MzAclItem>,
+}
+
+impl BuiltinMaterializedView {
+    pub fn create_sql(&self) -> String {
+        format!(
+            "CREATE MATERIALIZED VIEW {}.{} {}",
+            self.schema, self.name, self.sql
+        )
     }
 }
 
@@ -319,6 +347,7 @@ impl<T: TypeReference> Fingerprint for &Builtin<T> {
             Builtin::Log(log) => log.fingerprint(),
             Builtin::Table(table) => table.fingerprint(),
             Builtin::View(view) => view.fingerprint(),
+            Builtin::MaterializedView(mv) => mv.fingerprint(),
             Builtin::Type(typ) => typ.fingerprint(),
             Builtin::Func(func) => func.fingerprint(),
             Builtin::Source(coll) => coll.fingerprint(),
@@ -363,6 +392,12 @@ impl Fingerprint for &BuiltinView {
 impl Fingerprint for &BuiltinSource {
     fn fingerprint(&self) -> String {
         self.desc.fingerprint()
+    }
+}
+
+impl Fingerprint for &BuiltinMaterializedView {
+    fn fingerprint(&self) -> String {
+        self.create_sql()
     }
 }
 
@@ -2308,35 +2343,50 @@ pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| B
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_DATABASES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_databases",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_DATABASES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("owner_id", SqlScalarType::String.nullable(false))
-        .with_column(
-            "privileges",
-            SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
-        )
-        .with_key(vec![0])
-        .with_key(vec![1])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "Materialize's unique ID for the database."),
-        ("oid", "A PostgreSQL-compatible OID for the database."),
-        ("name", "The name of the database."),
-        (
-            "owner_id",
-            "The role ID of the owner of the database. Corresponds to `mz_roles.id`.",
-        ),
-        ("privileges", "The privileges belonging to the database."),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-});
+pub static MZ_DATABASES: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_databases",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_DATABASES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "Materialize's unique ID for the database."),
+            ("oid", "A PostgreSQL-compatible OID for the database."),
+            ("name", "The name of the database."),
+            (
+                "owner_id",
+                "The role ID of the owner of the database. Corresponds to `mz_roles.id`.",
+            ),
+            ("privileges", "The privileges belonging to the database."),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL privileges
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'id') AS id,
+    (data->'value'->>'oid')::oid AS oid,
+    data->'value'->>'name' AS name,
+    mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+    mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'Database'",
+        access: vec![PUBLIC_SELECT],
+    });
 pub static MZ_SCHEMAS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_schemas",
     schema: MZ_CATALOG_SCHEMA,
@@ -7054,7 +7104,6 @@ pub static PG_DATABASE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
             "datacl",
             SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true),
         )
-        .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::new(),
     sql: "SELECT
@@ -13965,7 +14014,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_KAFKA_SOURCES),
         Builtin::Table(&MZ_OBJECT_DEPENDENCIES),
         Builtin::Table(&MZ_ICEBERG_SINKS),
-        Builtin::Table(&MZ_DATABASES),
+        Builtin::MaterializedView(&MZ_DATABASES),
         Builtin::Table(&MZ_SCHEMAS),
         Builtin::Table(&MZ_COLUMNS),
         Builtin::Table(&MZ_INDEXES),

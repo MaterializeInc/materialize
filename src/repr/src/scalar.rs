@@ -2745,6 +2745,36 @@ impl<'a, E> OutputDatumType<'a, E> for ArrayRustType<Cow<'a, str>> {
     }
 }
 
+impl AsColumnType for ArrayRustType<MzAclItem> {
+    fn as_column_type() -> SqlColumnType {
+        SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false)
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for ArrayRustType<MzAclItem> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
+    }
+
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(temp_storage.make_datum(|packer| {
+            packer
+                .try_push_array(
+                    &[ArrayDimension {
+                        lower_bound: 1,
+                        length: self.0.len(),
+                    }],
+                    self.0.iter().map(|elem| Datum::MzAclItem(elem.clone())),
+                )
+                .expect("self is 1 dimensional, and its length is used for the array length");
+        }))
+    }
+}
+
 impl AsColumnType for Vec<u8> {
     fn as_column_type() -> SqlColumnType {
         SqlScalarType::Bytes.nullable(false)

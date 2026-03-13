@@ -797,6 +797,11 @@ fn add_new_remove_old_builtin_items_migration(
         })
         .collect();
 
+    // Builtins that changed type (e.g. table → view) but kept the same
+    // schema+name. We reuse their IDs so dependent objects aren't broken.
+    let mut type_changed_builtins: Vec<SystemObjectMapping> = Vec::new();
+    // Old descriptions for type-changed builtins that need to be removed from persist.
+    let mut type_changed_old_descriptions: BTreeSet<SystemObjectDescription> = BTreeSet::new();
     let (existing_builtins, new_builtins): (Vec<_>, Vec<_>) =
         builtins.into_iter().partition_map(|(desc, builtin)| {
             let fingerprint = match builtin.runtime_alterable() {
@@ -807,7 +812,39 @@ fn add_new_remove_old_builtin_items_migration(
                 Some(system_object_mapping) => {
                     Either::Left((builtin, system_object_mapping, fingerprint))
                 }
-                None => Either::Right((builtin, fingerprint)),
+                None => {
+                    // Check if there's a mapping with the same schema+name but
+                    // a different object type (e.g. a table that was converted
+                    // to a view). In that case, reuse the existing IDs so that
+                    // dependent objects aren't broken.
+                    let old_desc = system_object_mappings
+                        .keys()
+                        .find(|old_desc| {
+                            old_desc.schema_name == desc.schema_name
+                                && old_desc.object_name == desc.object_name
+                                && old_desc.object_type != desc.object_type
+                        })
+                        .cloned();
+                    match old_desc {
+                        Some(old_desc) => {
+                            let old_mapping =
+                                system_object_mappings.remove(&old_desc).expect("just found");
+                            type_changed_old_descriptions.insert(old_desc);
+                            // Persist the mapping with the updated object type.
+                            let updated_mapping = SystemObjectMapping {
+                                description: desc,
+                                unique_identifier: SystemObjectUniqueIdentifier {
+                                    catalog_id: old_mapping.unique_identifier.catalog_id,
+                                    global_id: old_mapping.unique_identifier.global_id,
+                                    fingerprint: fingerprint.clone(),
+                                },
+                            };
+                            type_changed_builtins.push(updated_mapping.clone());
+                            Either::Left((builtin, updated_mapping, fingerprint))
+                        }
+                        None => Either::Right((builtin, fingerprint)),
+                    }
+                }
             }
         });
     let new_builtin_ids = txn.allocate_system_item_ids(usize_to_u64(new_builtins.len()))?;
@@ -867,6 +904,11 @@ fn add_new_remove_old_builtin_items_migration(
             "runtime alterable object was not handled by migration",
         );
     }
+    // Remove old mappings for builtins that changed type (the key includes
+    // object_type, so we must retract the old key before inserting the new one).
+    txn.remove_system_object_mappings(type_changed_old_descriptions)?;
+    // Persist updated mappings for builtins that changed type.
+    new_builtin_mappings.extend(type_changed_builtins);
     txn.set_system_object_mappings(new_builtin_mappings)?;
 
     // Update comments of all builtin objects
@@ -884,6 +926,11 @@ fn add_new_remove_old_builtin_items_migration(
             Builtin::Source(s) => (CommentObjectId::Source(id), &s.desc, &s.column_comments),
             Builtin::View(v) => (CommentObjectId::View(id), &v.desc, &v.column_comments),
             Builtin::Table(t) => (CommentObjectId::Table(id), &t.desc, &t.column_comments),
+            Builtin::MaterializedView(mv) => (
+                CommentObjectId::MaterializedView(id),
+                &mv.desc,
+                &mv.column_comments,
+            ),
             Builtin::Log(_)
             | Builtin::Type(_)
             | Builtin::Func(_)
@@ -922,8 +969,8 @@ fn add_new_remove_old_builtin_items_migration(
             CatalogItemType::Table => CommentObjectId::Table(id),
             CatalogItemType::Source => CommentObjectId::Source(id),
             CatalogItemType::View => CommentObjectId::View(id),
+            CatalogItemType::MaterializedView => CommentObjectId::MaterializedView(id),
             CatalogItemType::Sink
-            | CatalogItemType::MaterializedView
             | CatalogItemType::Index
             | CatalogItemType::Type
             | CatalogItemType::Func
@@ -939,9 +986,8 @@ fn add_new_remove_old_builtin_items_migration(
     //
     // Objects can be removed from this set after one release.
     let delete_exceptions: HashSet<SystemObjectDescription> = [].into();
-    // TODO(jkosh44) Technically we could support changing the type of a builtin object outside
-    // of unstable schemas (i.e. from a table to a view). However, builtin migrations don't currently
-    // handle that scenario correctly.
+    // Changing the type of a builtin (e.g. table → view) is handled above by
+    // reusing the old IDs, so type-changed builtins won't appear here.
     assert!(
         deleted_system_objects
             .iter()

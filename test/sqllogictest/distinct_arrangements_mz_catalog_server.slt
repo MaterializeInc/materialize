@@ -52,7 +52,7 @@ ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Colu
 ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13),␠Column(14),␠Column(15),␠Column(16),␠Column(17),␠Column(18),␠Column(19),␠Column(20),␠Column(21)]]  2
 ArrangeBy[[Column(0),␠Column(1)]]  1
 ArrangeBy[[Column(0),␠Column(3)]]  1
-ArrangeBy[[Column(0)]]  34
+ArrangeBy[[Column(0)]]  30
 ArrangeBy[[Column(0,␠"attrelid"),␠Column(1,␠"attname"),␠Column(2,␠"atttypid"),␠Column(3,␠"attlen"),␠Column(4,␠"attnum"),␠Column(5,␠"atttypmod"),␠Column(7,␠"attnotnull"),␠Column(8,␠"atthasdef"),␠Column(9,␠"attidentity"),␠Column(10,␠"attgenerated"),␠Column(11,␠"attisdropped"),␠Column(12,␠"attcollation"),␠Column(13,␠"database_name"),␠Column(14,␠"pg_type_database_name")]]  1
 ArrangeBy[[Column(0,␠"attrelid"),␠Column(1,␠"attname"),␠Column(2,␠"atttypid"),␠Column(3,␠"attlen"),␠Column(4,␠"attnum"),␠Column(5,␠"atttypmod"),␠Column(7,␠"attnotnull"),␠Column(8,␠"atthasdef"),␠Column(9,␠"attidentity"),␠Column(10,␠"attgenerated"),␠Column(11,␠"attisdropped"),␠Column(12,␠"attcollation"),␠Column(13,␠"database_name"),␠Column(14,␠"pg_type_database_name")]]-errors  1
 ArrangeBy[[Column(0,␠"cluster")]]  1
@@ -68,7 +68,7 @@ ArrangeBy[[Column(0,␠"id"),␠Column(1,␠"replica_id")]]  3
 ArrangeBy[[Column(0,␠"id"),␠Column(1,␠"replica_id")]]-errors  3
 ArrangeBy[[Column(0,␠"id"),␠Column(2,␠"id")]]  1
 ArrangeBy[[Column(0,␠"id"),␠Column(2,␠"position")]]  1
-ArrangeBy[[Column(0,␠"id")]]  53
+ArrangeBy[[Column(0,␠"id")]]  57
 ArrangeBy[[Column(0,␠"id")]]-errors  17
 ArrangeBy[[Column(0,␠"index_id")]]  1
 ArrangeBy[[Column(0,␠"name")]]  3
@@ -166,13 +166,13 @@ ArrangeBy[[Column(6,␠"schema_id")]]-errors  1
 ArrangeBy[[Column(7,␠"database_id")]]  1
 ArrangeBy[[Column(9,␠"database_id")]]  1
 ArrangeBy[[]]  11
-Arranged␠DistinctBy  55
+Arranged␠DistinctBy  59
 Arranged␠MinsMaxesHierarchical␠input  14
 Arranged␠ReduceInaccumulable  3
 Arranged␠TopK␠input  95
 Distinct␠recursive␠err  3
-DistinctBy  55
-DistinctByErrorCheck  55
+DistinctBy  59
+DistinctByErrorCheck  59
 ReduceAccumulable  12
 ReduceInaccumulable  3
 ReduceInaccumulable␠Error␠Check  3
