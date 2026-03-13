@@ -8,6 +8,8 @@ menu:
     identifier: 'system-catalog'
     weight: 160
 disable_list: true
+aliases:
+  - /reference/system-catalog/
 ---
 
 Materialize exposes a system catalog that contains metadata about the running

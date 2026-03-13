@@ -52,7 +52,7 @@ operator:
 {{< note >}}
 
 If you have modified the default cluster size configurations, you can query the
-[`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
+[`mz_cluster_replica_sizes`](/reference/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
 system catalog table for the specific resource allocations.
 
 {{< /note >}}

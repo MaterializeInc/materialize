@@ -5,7 +5,9 @@ menu:
   main:
     parent: reference
     identifier: 'm1-cc-mapping'
-    weight: 195
+    weight: 50
+aliases:
+  - /sql/m1-cc-mapping/
 ---
 
 The following table provides a general mapping of M.1 to cc cluster sizes:
