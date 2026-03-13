@@ -15,6 +15,36 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.15.0
+*Released to Materialize Cloud: 2026-03-12* <br>
+*Released to Materialize Self-Managed: 2026-03-13* <br>
+
+This release includes various improvements and bug fixes.
+
+### Improvements {#v26.15-improvements}
+
+- Added support for setting `cpu_request` independently of `cpu_limit`
+  in cluster replica sizes for Self-Managed deployments.
+- Renamed the **Org ID** label to **Environment ID** in the Console Shell
+  to disambiguate organization IDs from environment IDs, which was
+  causing confusion for Self-Managed deployments.
+
+### Bug Fixes {#v26.15-bug-fixes}
+
+- Fixed unmaterializable functions (e.g., `now()`) being allowed in
+  `AS OF` queries, which could return incorrect results.
+- Fixed Kafka sink creation failing with an authorization error when the
+  progress topic already exists, which affected workflows where topics
+  are pre-created by a superuser.
+- Fixed a panic when running `COPY FROM STDIN` concurrently with table
+  drops.
+- Fixed unbounded command queue buildup in internal storage writer tasks
+  that could lead to out-of-memory conditions when environments have a
+  large number of indexes.
+- Fixed the Role Filters display in dark mode in the Console.
+- Fixed an incorrect join condition in the Console cluster list that
+  could cause incorrect cluster information to be displayed.
+
 ## v26.14.1
 *Released to Materialize Cloud: 2026-03-05* <br>
 *Released to Materialize Self-Managed: 2026-03-06* <br>
