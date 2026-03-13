@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use differential_dataflow::lattice::Lattice;
 use futures::{StreamExt, future::Either};
-use mz_expr::{ColumnSpecs, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
+use mz_expr::{ColumnSpecs, Interpreter, MfpEval, MfpPlan, ResultSpec, UnmaterializableFunc};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_persist_client::cache::PersistClientCache;
@@ -459,7 +459,10 @@ where
     let mut row_builder = Row::default();
 
     // Extract the MFP if it exists; leave behind an identity MFP in that case.
-    let map_filter_project = map_filter_project.as_mut().map(|mfp| mfp.take());
+    // Pre-convert to MfpEval so vectorized expressions are built once.
+    let eval_plan = map_filter_project
+        .as_mut()
+        .map(|mfp| MfpEval::from_mfp_plan(mfp.take()));
 
     builder.build(move |_caps| {
         let name = name.to_owned();
@@ -497,7 +500,7 @@ where
                     start_time,
                     yield_fn,
                     &until,
-                    map_filter_project.as_ref(),
+                    eval_plan.as_ref(),
                     &mut datum_vec,
                     &mut row_builder,
                     &mut output,
@@ -561,7 +564,7 @@ impl PendingWork {
         start_time: Instant,
         yield_fn: YFn,
         until: &Antichain<Timestamp>,
-        map_filter_project: Option<&MfpPlan>,
+        eval_plan: Option<&MfpEval>,
         datum_vec: &mut DatumVec,
         row_builder: &mut Row,
         output: &mut OutputBuilderSession<
@@ -579,21 +582,17 @@ impl PendingWork {
     where
         YFn: Fn(Instant, usize) -> bool,
     {
-        // Use the vectorized batch path when the MFP has no temporal predicates.
-        if let Some(mfp) = map_filter_project {
-            if mfp.is_nontemporal() {
+        // Dispatch based on the MfpEval variant.
+        match eval_plan {
+            Some(MfpEval::Vectorized { vectorized, plan }) => {
                 return self.do_work_batch(
-                    work,
-                    name,
-                    start_time,
-                    yield_fn,
-                    until,
-                    mfp,
-                    output,
+                    work, name, start_time, yield_fn, until, vectorized, plan, output,
                 );
             }
+            _ => {}
         }
 
+        let map_filter_project = eval_plan.map(|e| e.as_mfp_plan());
         self.do_work_row_at_a_time(
             work,
             name,
@@ -744,7 +743,8 @@ impl PendingWork {
     /// Vectorized batch evaluation path for nontemporal MFPs.
     ///
     /// Collects rows into batches, transposes them to columnar form,
-    /// evaluates the MFP on the batch, and emits results.
+    /// evaluates the MFP on the batch using the pre-converted vectorized
+    /// plan, and emits results.
     fn do_work_batch<YFn>(
         &mut self,
         work: &mut usize,
@@ -752,7 +752,8 @@ impl PendingWork {
         start_time: Instant,
         yield_fn: YFn,
         until: &Antichain<Timestamp>,
-        mfp: &MfpPlan,
+        vectorized: &mz_expr::VectorizedSafeMfpPlan,
+        mfp_plan: &MfpPlan,
         output: &mut OutputBuilderSession<
             '_,
             (mz_repr::Timestamp, Subtime),
@@ -768,6 +769,7 @@ impl PendingWork {
     where
         YFn: Fn(Instant, usize) -> bool,
     {
+        use mz_expr::vectorized::rows_to_columns;
         use mz_storage_types::errors::DataflowError;
 
         const BATCH_SIZE: usize = 1024;
@@ -814,26 +816,40 @@ impl PendingWork {
                 return exhausted;
             }
 
-            // Evaluate the batch.
+            // Transpose rows to columnar form and evaluate the vectorized plan.
             *work += batch.len();
-            let results: Vec<Result<Option<(Row, mz_repr::Timestamp, Diff)>, (DataflowError, mz_repr::Timestamp, Diff)>> =
-                mfp.evaluate_batch_nontemporal(&batch);
+            let batch_len = batch.len();
+            let input_arity = vectorized.input_arity;
 
-            // Emit results.
-            for result in results {
+            let transpose_start = std::time::Instant::now();
+            let columns = rows_to_columns(batch.iter().map(|(r, _, _)| r), input_arity);
+            let transpose_elapsed = transpose_start.elapsed();
+
+            let eval_start = std::time::Instant::now();
+            let mfp_results = vectorized.evaluate_batch(&columns, batch_len);
+            let eval_elapsed = eval_start.elapsed();
+
+            tracing::trace!(
+                batch_len,
+                transpose_us = transpose_elapsed.as_micros() as u64,
+                eval_us = eval_elapsed.as_micros() as u64,
+                "vectorized batch evaluation (eval_us includes row packing)"
+            );
+
+            // Zip results with the original time/diff and emit.
+            for (result, (_row, time, diff)) in mfp_results.into_iter().zip(batch.iter()) {
                 match result {
-                    Ok(Some((row, time, diff))) => {
+                    Ok(Some(out_row)) => {
                         if let Some(stats) = &is_filter_pushdown_audit {
                             sentry::with_scope(
                                 |scope| {
-                                    scope
-                                        .set_tag("alert_id", "persist_pushdown_audit_violation")
+                                    scope.set_tag("alert_id", "persist_pushdown_audit_violation")
                                 },
                                 || {
                                     error!(
                                         ?stats,
                                         name,
-                                        ?mfp,
+                                        ?mfp_plan,
                                         "persist filter pushdown correctness violation!"
                                     );
                                     if self.panic_on_audit_failure {
@@ -846,25 +862,24 @@ impl PendingWork {
                             );
                         }
                         let mut emit_time = *self.capability.time();
-                        emit_time.0 = time;
-                        session.give((Ok(row), emit_time, diff));
+                        emit_time.0 = *time;
+                        session.give((Ok(out_row), emit_time, *diff));
                         *work += 1;
                     }
                     Ok(None) => {
                         // Filtered out, nothing to emit.
                     }
-                    Err((err, time, diff)) => {
+                    Err(err) => {
                         if let Some(stats) = &is_filter_pushdown_audit {
                             sentry::with_scope(
                                 |scope| {
-                                    scope
-                                        .set_tag("alert_id", "persist_pushdown_audit_violation")
+                                    scope.set_tag("alert_id", "persist_pushdown_audit_violation")
                                 },
                                 || {
                                     error!(
                                         ?stats,
                                         name,
-                                        ?mfp,
+                                        ?mfp_plan,
                                         "persist filter pushdown correctness violation!"
                                     );
                                     if self.panic_on_audit_failure {
@@ -877,8 +892,8 @@ impl PendingWork {
                             );
                         }
                         let mut emit_time = *self.capability.time();
-                        emit_time.0 = time;
-                        session.give((Err(err), emit_time, diff));
+                        emit_time.0 = *time;
+                        session.give((Err(DataflowError::from(err)), emit_time, *diff));
                         *work += 1;
                     }
                 }

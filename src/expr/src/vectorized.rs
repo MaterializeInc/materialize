@@ -21,7 +21,8 @@
 
 use columnar::{Columnar, Len, Push};
 
-use crate::{BinaryFunc, MirScalarExpr};
+use crate::linear::plan::MfpPlan;
+use crate::{BinaryFunc, MapFilterProject, MirScalarExpr};
 
 /// An owned datum value suitable for columnar storage.
 ///
@@ -111,7 +112,10 @@ impl DatumColumn {
 /// column (i.e., per datum position in the rows).
 ///
 /// All rows must have the same arity.
-pub fn rows_to_columns<'a>(rows: impl Iterator<Item = &'a mz_repr::Row>, arity: usize) -> Vec<DatumColumn> {
+pub fn rows_to_columns<'a>(
+    rows: impl Iterator<Item = &'a mz_repr::Row>,
+    arity: usize,
+) -> Vec<DatumColumn> {
     let mut columns: Vec<DatumColumn> = (0..arity).map(|_| DatumColumn::new()).collect();
     for row in rows {
         let datums = row.unpack();
@@ -409,12 +413,22 @@ macro_rules! datum_column_from_typed_vec_with_errors {
 #[inline]
 fn detect_add_overflow<T>(a: &[T], b: &[T], results: &[T]) -> Vec<usize>
 where
-    T: std::ops::BitXor<Output = T> + std::ops::BitAnd<Output = T> + std::ops::BitOr<Output = T> + Ord + Default + Copy,
+    T: std::ops::BitXor<Output = T>
+        + std::ops::BitAnd<Output = T>
+        + std::ops::BitOr<Output = T>
+        + Ord
+        + Default
+        + Copy,
 {
     // Vectorized OR-reduction: accumulate all overflow indicators.
     // No branches — the compiler can SIMD this into a horizontal OR.
-    let any_overflow = a.iter().zip(b.iter()).zip(results.iter())
-        .fold(T::default(), |acc, ((x, y), r)| acc | ((*x ^ *r) & (*y ^ *r)));
+    let any_overflow = a
+        .iter()
+        .zip(b.iter())
+        .zip(results.iter())
+        .fold(T::default(), |acc, ((x, y), r)| {
+            acc | ((*x ^ *r) & (*y ^ *r))
+        });
     if any_overflow < T::default() {
         // Rare path: at least one overflow, find which ones.
         (0..a.len())
@@ -429,10 +443,20 @@ where
 #[inline]
 fn detect_sub_overflow<T>(a: &[T], b: &[T], results: &[T]) -> Vec<usize>
 where
-    T: std::ops::BitXor<Output = T> + std::ops::BitAnd<Output = T> + std::ops::BitOr<Output = T> + Ord + Default + Copy,
+    T: std::ops::BitXor<Output = T>
+        + std::ops::BitAnd<Output = T>
+        + std::ops::BitOr<Output = T>
+        + Ord
+        + Default
+        + Copy,
 {
-    let any_overflow = a.iter().zip(b.iter()).zip(results.iter())
-        .fold(T::default(), |acc, ((x, y), r)| acc | ((*x ^ *y) & (*x ^ *r)));
+    let any_overflow = a
+        .iter()
+        .zip(b.iter())
+        .zip(results.iter())
+        .fold(T::default(), |acc, ((x, y), r)| {
+            acc | ((*x ^ *y) & (*x ^ *r))
+        });
     if any_overflow < T::default() {
         (0..a.len())
             .filter(|&i| (a[i] ^ b[i]) & (a[i] ^ results[i]) < T::default())
@@ -449,7 +473,11 @@ where
 #[inline]
 fn eval_add_int64_vectorized(a: &[i64], b: &[i64]) -> DatumColumn {
     let arith_start = std::time::Instant::now();
-    let results: Vec<i64> = a.iter().zip(b.iter()).map(|(x, y)| x.wrapping_add(*y)).collect();
+    let results: Vec<i64> = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| x.wrapping_add(*y))
+        .collect();
     let arith_ns = arith_start.elapsed().as_nanos();
 
     let overflow_start = std::time::Instant::now();
@@ -457,10 +485,16 @@ fn eval_add_int64_vectorized(a: &[i64], b: &[i64]) -> DatumColumn {
     let overflow_ns = overflow_start.elapsed().as_nanos();
 
     let container_start = std::time::Instant::now();
-    let result = datum_column_from_typed_vec_with_errors!(results, errors, "integer out of range", DISCRIMINANT_INT64, Int64);
+    let result = datum_column_from_typed_vec_with_errors!(
+        results,
+        errors,
+        "integer out of range",
+        DISCRIMINANT_INT64,
+        Int64
+    );
     let container_ns = container_start.elapsed().as_nanos();
 
-    tracing::info!(
+    tracing::trace!(
         len = a.len(),
         arith_ns = arith_ns as u64,
         overflow_ns = overflow_ns as u64,
@@ -473,9 +507,19 @@ fn eval_add_int64_vectorized(a: &[i64], b: &[i64]) -> DatumColumn {
 /// Vectorized subtract for `i64` columns.
 #[inline]
 fn eval_sub_int64_vectorized(a: &[i64], b: &[i64]) -> DatumColumn {
-    let results: Vec<i64> = a.iter().zip(b.iter()).map(|(x, y)| x.wrapping_sub(*y)).collect();
+    let results: Vec<i64> = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| x.wrapping_sub(*y))
+        .collect();
     let errors = detect_sub_overflow(a, b, &results);
-    datum_column_from_typed_vec_with_errors!(results, errors, "integer out of range", DISCRIMINANT_INT64, Int64)
+    datum_column_from_typed_vec_with_errors!(
+        results,
+        errors,
+        "integer out of range",
+        DISCRIMINANT_INT64,
+        Int64
+    )
 }
 
 /// Vectorized multiply for `i64` columns.
@@ -496,23 +540,49 @@ fn eval_mul_int64_vectorized(a: &[i64], b: &[i64]) -> DatumColumn {
             }
         }
     }
-    datum_column_from_typed_vec_with_errors!(results, errors, "integer out of range", DISCRIMINANT_INT64, Int64)
+    datum_column_from_typed_vec_with_errors!(
+        results,
+        errors,
+        "integer out of range",
+        DISCRIMINANT_INT64,
+        Int64
+    )
 }
 
 /// Vectorized add for `i32` columns.
 #[inline]
 fn eval_add_int32_vectorized(a: &[i32], b: &[i32]) -> DatumColumn {
-    let results: Vec<i32> = a.iter().zip(b.iter()).map(|(x, y)| x.wrapping_add(*y)).collect();
+    let results: Vec<i32> = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| x.wrapping_add(*y))
+        .collect();
     let errors = detect_add_overflow(a, b, &results);
-    datum_column_from_typed_vec_with_errors!(results, errors, "integer out of range", DISCRIMINANT_INT32, Int32)
+    datum_column_from_typed_vec_with_errors!(
+        results,
+        errors,
+        "integer out of range",
+        DISCRIMINANT_INT32,
+        Int32
+    )
 }
 
 /// Vectorized subtract for `i32` columns.
 #[inline]
 fn eval_sub_int32_vectorized(a: &[i32], b: &[i32]) -> DatumColumn {
-    let results: Vec<i32> = a.iter().zip(b.iter()).map(|(x, y)| x.wrapping_sub(*y)).collect();
+    let results: Vec<i32> = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| x.wrapping_sub(*y))
+        .collect();
     let errors = detect_sub_overflow(a, b, &results);
-    datum_column_from_typed_vec_with_errors!(results, errors, "integer out of range", DISCRIMINANT_INT32, Int32)
+    datum_column_from_typed_vec_with_errors!(
+        results,
+        errors,
+        "integer out of range",
+        DISCRIMINANT_INT32,
+        Int32
+    )
 }
 
 /// Vectorized multiply for `i32` columns.
@@ -530,23 +600,49 @@ fn eval_mul_int32_vectorized(a: &[i32], b: &[i32]) -> DatumColumn {
             }
         }
     }
-    datum_column_from_typed_vec_with_errors!(results, errors, "integer out of range", DISCRIMINANT_INT32, Int32)
+    datum_column_from_typed_vec_with_errors!(
+        results,
+        errors,
+        "integer out of range",
+        DISCRIMINANT_INT32,
+        Int32
+    )
 }
 
 /// Vectorized add for `i16` columns.
 #[inline]
 fn eval_add_int16_vectorized(a: &[i16], b: &[i16]) -> DatumColumn {
-    let results: Vec<i16> = a.iter().zip(b.iter()).map(|(x, y)| x.wrapping_add(*y)).collect();
+    let results: Vec<i16> = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| x.wrapping_add(*y))
+        .collect();
     let errors = detect_add_overflow(a, b, &results);
-    datum_column_from_typed_vec_with_errors!(results, errors, "integer out of range", DISCRIMINANT_INT16, Int16)
+    datum_column_from_typed_vec_with_errors!(
+        results,
+        errors,
+        "integer out of range",
+        DISCRIMINANT_INT16,
+        Int16
+    )
 }
 
 /// Vectorized subtract for `i16` columns.
 #[inline]
 fn eval_sub_int16_vectorized(a: &[i16], b: &[i16]) -> DatumColumn {
-    let results: Vec<i16> = a.iter().zip(b.iter()).map(|(x, y)| x.wrapping_sub(*y)).collect();
+    let results: Vec<i16> = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| x.wrapping_sub(*y))
+        .collect();
     let errors = detect_sub_overflow(a, b, &results);
-    datum_column_from_typed_vec_with_errors!(results, errors, "integer out of range", DISCRIMINANT_INT16, Int16)
+    datum_column_from_typed_vec_with_errors!(
+        results,
+        errors,
+        "integer out of range",
+        DISCRIMINANT_INT16,
+        Int16
+    )
 }
 
 /// Vectorized multiply for `i16` columns.
@@ -564,7 +660,13 @@ fn eval_mul_int16_vectorized(a: &[i16], b: &[i16]) -> DatumColumn {
             }
         }
     }
-    datum_column_from_typed_vec_with_errors!(results, errors, "integer out of range", DISCRIMINANT_INT16, Int16)
+    datum_column_from_typed_vec_with_errors!(
+        results,
+        errors,
+        "integer out of range",
+        DISCRIMINANT_INT16,
+        Int16
+    )
 }
 
 /// Slow path: evaluate a binary function element-at-a-time.
@@ -697,6 +799,212 @@ pub fn index_as_datum<'a>(
     }
 }
 
+/// A pre-converted vectorized MFP plan.
+///
+/// Unlike `SafeMfpPlan::evaluate_batch`, which converts `MirScalarExpr` to
+/// `VectorScalarExpr` on every call, this struct stores the converted
+/// expressions so the conversion happens only once at construction time.
+#[derive(Debug)]
+pub struct VectorizedSafeMfpPlan {
+    /// Number of input columns.
+    pub input_arity: usize,
+    /// Pre-converted vectorized expressions.
+    pub expressions: Vec<VectorScalarExpr>,
+    /// Pre-converted vectorized predicates, each with a support level.
+    pub predicates: Vec<(usize, VectorScalarExpr)>,
+    /// Output column indices.
+    pub projection: Vec<usize>,
+}
+
+impl VectorizedSafeMfpPlan {
+    /// Build a vectorized plan from a `MapFilterProject`.
+    pub fn from_mfp(mfp: &MapFilterProject) -> Self {
+        VectorizedSafeMfpPlan {
+            input_arity: mfp.input_arity,
+            expressions: mfp
+                .expressions
+                .iter()
+                .map(|e| VectorScalarExpr::from_mir_or_scalar(e))
+                .collect(),
+            predicates: mfp
+                .predicates
+                .iter()
+                .map(|(support, pred)| (*support, VectorScalarExpr::from_mir_or_scalar(pred)))
+                .collect(),
+            projection: mfp.projection.clone(),
+        }
+    }
+
+    /// Evaluate a batch of rows using vectorized (columnar) evaluation.
+    ///
+    /// `input_columns` provides the input columns in columnar form, one
+    /// `DatumColumn` per input column (there should be `self.input_arity`
+    /// of them). All columns must have the same length (`batch_len`).
+    ///
+    /// Returns a vector of results, one per input row. Each result is either:
+    /// * `Ok(Some(row))` if the row passes all predicates,
+    /// * `Ok(None)` if a predicate filtered the row out,
+    /// * `Err(e)` if evaluation produced an error.
+    pub fn evaluate_batch(
+        &self,
+        input_columns: &[DatumColumn],
+        batch_len: usize,
+    ) -> Vec<Result<Option<mz_repr::Row>, crate::EvalError>> {
+        use mz_repr::{Datum, Row, RowArena};
+
+        let mut computed_columns: Vec<DatumColumn> = Vec::with_capacity(self.expressions.len());
+
+        // Track which rows are still "alive" (not yet filtered out).
+        let mut alive: Vec<bool> = vec![true; batch_len];
+
+        // Process expressions and predicates in order, mirroring
+        // evaluate_inner's interleaved expression/predicate evaluation.
+        let mut expression = 0;
+        for (support, predicate) in self.predicates.iter() {
+            // Evaluate expressions up to the support level of this predicate.
+            while self.input_arity + expression < *support {
+                let vec_expr = &self.expressions[expression];
+                let col_refs: Vec<&DatumColumn> = input_columns
+                    .iter()
+                    .chain(computed_columns.iter())
+                    .collect();
+                let col = vec_expr.eval(&col_refs, batch_len);
+                computed_columns.push(col);
+                expression += 1;
+            }
+
+            // Evaluate the predicate.
+            let col_refs: Vec<&DatumColumn> = input_columns
+                .iter()
+                .chain(computed_columns.iter())
+                .collect();
+            let pred_col = predicate.eval(&col_refs, batch_len);
+
+            // Update alive mask: only rows where predicate is True survive.
+            let arena = RowArena::new();
+            for i in 0..batch_len {
+                if alive[i] {
+                    match index_as_datum(&pred_col.data, i, &arena) {
+                        Ok(Datum::True) => {}      // still alive
+                        Ok(_) => alive[i] = false, // filtered out
+                        Err(_) => {}               // errors propagate later
+                    }
+                }
+            }
+        }
+
+        // Evaluate remaining expressions after the last predicate.
+        while expression < self.expressions.len() {
+            let vec_expr = &self.expressions[expression];
+            let col_refs: Vec<&DatumColumn> = input_columns
+                .iter()
+                .chain(computed_columns.iter())
+                .collect();
+            let col = vec_expr.eval(&col_refs, batch_len);
+            computed_columns.push(col);
+            expression += 1;
+        }
+
+        // Build the final combined column list for projection.
+        let all_columns: Vec<&DatumColumn> = input_columns
+            .iter()
+            .chain(computed_columns.iter())
+            .collect();
+
+        // Produce output: apply projection and pack into Rows.
+        let pack_start = std::time::Instant::now();
+        let arena = RowArena::new();
+        let mut results = Vec::with_capacity(batch_len);
+        for i in 0..batch_len {
+            if !alive[i] {
+                results.push(Ok(None));
+                continue;
+            }
+
+            // Collect projected datums for this row.
+            let mut row_buf = Row::default();
+            let mut has_error = None;
+            {
+                let mut packer = row_buf.packer();
+                for &col_idx in self.projection.iter() {
+                    match index_as_datum(&all_columns[col_idx].data, i, &arena) {
+                        Ok(d) => packer.push(d),
+                        Err(e) => {
+                            has_error = Some(e);
+                            break;
+                        }
+                    }
+                }
+            }
+            if let Some(e) = has_error {
+                results.push(Err(crate::EvalError::Internal(e.into())));
+            } else {
+                results.push(Ok(Some(row_buf)));
+            }
+        }
+        let pack_elapsed = pack_start.elapsed();
+        tracing::trace!(
+            batch_len,
+            pack_us = pack_elapsed.as_micros() as u64,
+            "vectorized batch row packing"
+        );
+
+        results
+    }
+}
+
+/// Dispatches between scalar (row-at-a-time) and vectorized (columnar)
+/// evaluation of an MFP.
+///
+/// At operator construction time, nontemporal MFPs are converted to
+/// `Vectorized` with pre-converted expressions. Temporal MFPs stay as
+/// `Scalar` and use the existing row-at-a-time path.
+#[derive(Debug)]
+pub enum MfpEval {
+    /// Row-at-a-time evaluation for temporal MFPs.
+    Scalar(MfpPlan),
+    /// Vectorized columnar evaluation for nontemporal MFPs.
+    Vectorized {
+        /// The pre-converted vectorized plan.
+        vectorized: VectorizedSafeMfpPlan,
+        /// The original MfpPlan, retained for `Debug` and filter pushdown audits.
+        plan: MfpPlan,
+    },
+}
+
+impl MfpEval {
+    /// Build the appropriate evaluation variant from an `MfpPlan`.
+    ///
+    /// Nontemporal plans get pre-converted to vectorized form.
+    /// Temporal plans stay as scalar.
+    pub fn from_mfp_plan(plan: MfpPlan) -> Self {
+        if plan.is_nontemporal() {
+            let vectorized = VectorizedSafeMfpPlan::from_mfp(&plan.mfp.mfp);
+            MfpEval::Vectorized { vectorized, plan }
+        } else {
+            MfpEval::Scalar(plan)
+        }
+    }
+
+    /// Returns a reference to the underlying `MfpPlan`.
+    pub fn as_mfp_plan(&self) -> &MfpPlan {
+        match self {
+            MfpEval::Scalar(plan) => plan,
+            MfpEval::Vectorized { plan, .. } => plan,
+        }
+    }
+
+    /// Returns `true` if this is the identity MFP.
+    pub fn is_identity(&self) -> bool {
+        self.as_mfp_plan().is_identity()
+    }
+
+    /// Returns `true` if the MFP has no temporal predicates.
+    pub fn is_nontemporal(&self) -> bool {
+        self.as_mfp_plan().is_nontemporal()
+    }
+}
+
 /// Try to convert a `Datum` to a `ColumnDatum`.
 /// Returns `None` for types not yet supported.
 fn column_datum_from_datum(datum: mz_repr::Datum<'_>) -> Option<ColumnDatum> {
@@ -810,13 +1118,11 @@ mod tests {
         // Build an MFP that computes: output = col0 + col1, no predicates,
         // projecting the computed column (index 2).
         let mfp = MapFilterProject {
-            expressions: vec![
-                MirScalarExpr::CallBinary {
-                    func: BinaryFunc::AddInt64(crate::func::AddInt64),
-                    expr1: Box::new(MirScalarExpr::Column(0, Default::default())),
-                    expr2: Box::new(MirScalarExpr::Column(1, Default::default())),
-                },
-            ],
+            expressions: vec![MirScalarExpr::CallBinary {
+                func: BinaryFunc::AddInt64(crate::func::AddInt64),
+                expr1: Box::new(MirScalarExpr::Column(0, Default::default())),
+                expr2: Box::new(MirScalarExpr::Column(1, Default::default())),
+            }],
             predicates: vec![],
             projection: vec![2], // output only the computed column
             input_arity: 2,
@@ -864,15 +1170,13 @@ mod tests {
         };
 
         let mfp = MapFilterProject {
-            expressions: vec![
-                MirScalarExpr::CallBinary {
-                    func: BinaryFunc::AddInt64(crate::func::AddInt64),
-                    expr1: Box::new(MirScalarExpr::Column(0, Default::default())),
-                    expr2: Box::new(MirScalarExpr::Column(1, Default::default())),
-                },
-            ],
+            expressions: vec![MirScalarExpr::CallBinary {
+                func: BinaryFunc::AddInt64(crate::func::AddInt64),
+                expr1: Box::new(MirScalarExpr::Column(0, Default::default())),
+                expr2: Box::new(MirScalarExpr::Column(1, Default::default())),
+            }],
             predicates: vec![(2, gt_predicate)], // support=2, before expression 0
-            projection: vec![2], // project the computed sum
+            projection: vec![2],                 // project the computed sum
             input_arity: 2,
         };
         let plan = SafeMfpPlan { mfp };
@@ -886,8 +1190,11 @@ mod tests {
 
         // Rows where col0 <= 5 should be None (filtered out).
         for i in 0..=5 {
-            assert!(results[i].as_ref().unwrap().is_none(),
-                "row {} should be filtered", i);
+            assert!(
+                results[i].as_ref().unwrap().is_none(),
+                "row {} should be filtered",
+                i
+            );
         }
         // Rows where col0 > 5 should have the sum.
         for i in 6..10 {
@@ -965,13 +1272,11 @@ mod tests {
         // MFP: compute col0 + col1 (expression 0, becomes column 2),
         // predicate col0 > 3, project [2] (just the sum).
         let mfp = MapFilterProject {
-            expressions: vec![
-                MirScalarExpr::CallBinary {
-                    func: BinaryFunc::AddInt64(crate::func::AddInt64),
-                    expr1: Box::new(MirScalarExpr::Column(0, Default::default())),
-                    expr2: Box::new(MirScalarExpr::Column(1, Default::default())),
-                },
-            ],
+            expressions: vec![MirScalarExpr::CallBinary {
+                func: BinaryFunc::AddInt64(crate::func::AddInt64),
+                expr1: Box::new(MirScalarExpr::Column(0, Default::default())),
+                expr2: Box::new(MirScalarExpr::Column(1, Default::default())),
+            }],
             predicates: vec![(
                 2,
                 MirScalarExpr::CallBinary {
@@ -1016,11 +1321,7 @@ mod tests {
 
         // --- Compare ---
         assert_eq!(scalar_results.len(), batch_results.len());
-        for (i, (scalar, batch)) in scalar_results
-            .iter()
-            .zip(batch_results.iter())
-            .enumerate()
-        {
+        for (i, (scalar, batch)) in scalar_results.iter().zip(batch_results.iter()).enumerate() {
             match (scalar, batch) {
                 (None, Ok(None)) => {} // both filtered
                 (Some(s_row), Ok(Some(b_row))) => {
