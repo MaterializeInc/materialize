@@ -29,6 +29,24 @@ MATERIALIZE_REMOTE_URL = "https://github.com/MaterializeInc/materialize"
 fetched_tags_in_remotes: set[str | None] = set()
 
 
+def get_config(key: str) -> str | None:
+    """Read a git config value, returning None if unset."""
+    try:
+        return spawn.capture(["git", "config", key]).strip()
+    except subprocess.CalledProcessError:
+        return None
+
+
+def get_user_name() -> str | None:
+    """Get the configured git user.name."""
+    return get_config("user.name")
+
+
+def get_user_email() -> str | None:
+    """Get the configured git user.email."""
+    return get_config("user.email")
+
+
 def rev_count(rev: str) -> int:
     """Count the commits up to a revision.
 
@@ -232,7 +250,6 @@ def fetch(
     force: bool = False,
     branch: str | None = None,
     only_tags: bool = False,
-    include_submodules: bool = False,
 ) -> str:
     """Fetch from remotes"""
 
@@ -257,12 +274,6 @@ def fetch(
 
     if all_remotes:
         command.append("--all")
-
-    # explicitly specify both cases to be independent of the git config
-    if include_submodules:
-        command.append("--recurse-submodules")
-    else:
-        command.append("--no-recurse-submodules")
 
     fetch_tags = (
         include_tags == YesNoOnce.YES

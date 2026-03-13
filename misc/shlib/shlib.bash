@@ -63,7 +63,7 @@ git_empty_tree() {
 #     3. symlinks are excluded.
 #
 git_files() {
-    git diff --ignore-submodules=all --raw "$(git_empty_tree)" -- "$@" \
+    git diff --raw "$(git_empty_tree)" -- "$@" \
         | awk '$2 != 120000 {print $6}'
 }
 
