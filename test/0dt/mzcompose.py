@@ -2774,3 +2774,101 @@ def workflow_stuck_collection(c: Composition) -> None:
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
     c.promote_mz("mz_new")
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+
+def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
+    """Verify that DDL detection works correctly with batch-allocated user IDs.
+
+    When IdPool batch-allocates IDs, the allocator counter jumps ahead by
+    the batch size, but items are created with IDs from the pool that are
+    far below the counter. DDL detection must use the max existing item ID,
+    not the allocator counter, to correctly detect new objects.
+    """
+    c.down(destroy_volumes=True)
+    c.up(
+        "mz_old",
+    )
+
+    # Use a small pool batch size so we can trigger pool refills predictably.
+    c.sql(
+        """
+        ALTER SYSTEM SET user_id_pool_batch_size = 5;
+        ALTER SYSTEM SET cluster = quickstart;
+        """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+
+    # Create initial objects to trigger pool allocation. The allocator counter
+    # will jump ahead by the batch size (5), but only a few IDs will be used.
+    c.sql(
+        """
+        CREATE TABLE pool_t1 (a INT);
+        CREATE TABLE pool_t2 (a INT);
+        INSERT INTO pool_t1 VALUES (1);
+        INSERT INTO pool_t2 VALUES (2);
+        """,
+        service="mz_old",
+    )
+
+    # Start mz_new in read-only mode (deploy_generation=1).
+    c.up("mz_new")
+
+    # Wait briefly for mz_new to boot and take its initial snapshot of IDs.
+    time.sleep(5)
+
+    # Create MORE objects on mz_old from the pool. These IDs will be below
+    # the allocator counter. Without the fix, mz_new would miss these objects
+    # because their IDs are below the initial_next_user_item_id derived from
+    # the allocator counter.
+    c.sql(
+        """
+        CREATE TABLE pool_t3 (a INT);
+        CREATE TABLE pool_t4 (a INT);
+        CREATE MATERIALIZED VIEW pool_mv AS SELECT sum(a) FROM pool_t1;
+        INSERT INTO pool_t3 VALUES (3);
+        INSERT INTO pool_t4 VALUES (4);
+        """,
+        service="mz_old",
+    )
+
+    # mz_new should detect the DDL changes (new tables/view created after it
+    # booted) and restart in read-only mode, eventually reaching READY_TO_PROMOTE.
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+
+    # Promote mz_new to leader.
+    c.promote_mz("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
+
+    # Verify ALL objects are visible on mz_new, including those created
+    # after mz_new initially booted.
+    with c.override(
+        Testdrive(
+            materialize_url="postgres://materialize@mz_new:6875",
+            materialize_url_internal="postgres://materialize@mz_new:6877",
+            mz_service="mz_new",
+            materialize_params={"cluster": "quickstart"},
+            no_reset=True,
+            seed=1,
+            default_timeout=DEFAULT_TIMEOUT,
+        )
+    ):
+        c.up(Service("testdrive", idle=True))
+        c.testdrive(
+            dedent(
+                """
+            > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
+            > SELECT * FROM pool_t1;
+            1
+            > SELECT * FROM pool_t2;
+            2
+            > SELECT * FROM pool_t3;
+            3
+            > SELECT * FROM pool_t4;
+            4
+            > SELECT * FROM pool_mv;
+            1
+            """
+            )
+        )

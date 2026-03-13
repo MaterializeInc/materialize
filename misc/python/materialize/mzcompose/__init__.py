@@ -615,6 +615,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "oidc_authentication_claim",
     "enable_mcp_agents",
     "enable_mcp_observatory",
+    "user_id_pool_batch_size",
 ]
 
 

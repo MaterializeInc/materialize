@@ -935,6 +935,72 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
     depends_on(c, "ix2", "t2_y_idx", True)
 
 
+def workflow_user_id_no_reuse_after_restart(c: Composition) -> None:
+    """Verify that batch-allocated user IDs are never reused across restarts.
+
+    Uses a small batch size so unused IDs in the pool are discarded on
+    shutdown. After restart a fresh batch is allocated, so all new IDs
+    must be strictly greater than every pre-restart ID.
+    """
+
+    def user_id_nums(c: Composition, name_prefix: str) -> list[int]:
+        """Return the numeric part of user IDs for objects matching the prefix."""
+        rows = c.sql_query(
+            f"SELECT id FROM mz_objects WHERE name LIKE '{name_prefix}%'"
+        )
+        # IDs look like 'u123'; extract the numeric suffix.
+        return sorted(int(row[0].lstrip("u")) for row in rows)
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    # Set a small batch size so most of the pool is unused at restart.
+    c.sql(
+        "ALTER SYSTEM SET user_id_pool_batch_size = 5",
+        port=6877,
+        user="mz_system",
+    )
+
+    # --- Phase 1: create objects before restart ---
+    c.sql("CREATE TABLE idreuse_t1 (a INT)")
+    c.sql("CREATE TABLE idreuse_t2 (b INT)")
+    c.sql("CREATE VIEW idreuse_v1 AS SELECT * FROM idreuse_t1")
+
+    ids_before = user_id_nums(c, "idreuse_")
+    assert len(ids_before) == 3, f"expected 3 objects, got {ids_before}"
+    max_id_before = max(ids_before)
+
+    # --- Restart ---
+    c.kill("materialized")
+    c.up("materialized")
+
+    # --- Phase 2: create objects after restart ---
+    c.sql("CREATE TABLE idreuse_t3 (c INT)")
+    c.sql("CREATE VIEW idreuse_v2 AS SELECT * FROM idreuse_t1")
+    c.sql("CREATE MATERIALIZED VIEW idreuse_mv1 AS SELECT count(*) FROM idreuse_t1")
+
+    ids_after = user_id_nums(c, "idreuse_")
+    # The 3 pre-restart objects should still exist, plus 3 new ones.
+    assert len(ids_after) == 6, f"expected 6 objects, got {ids_after}"
+
+    new_ids = [i for i in ids_after if i not in ids_before]
+    assert len(new_ids) == 3, f"expected 3 new IDs, got {new_ids}"
+
+    min_new_id = min(new_ids)
+    assert min_new_id > max_id_before, (
+        f"ID reuse detected! max pre-restart ID = {max_id_before}, "
+        f"but post-restart IDs include {min_new_id}"
+    )
+
+    # --- Cleanup ---
+    c.sql("DROP MATERIALIZED VIEW idreuse_mv1")
+    c.sql("DROP VIEW idreuse_v2")
+    c.sql("DROP VIEW idreuse_v1")
+    c.sql("DROP TABLE idreuse_t3")
+    c.sql("DROP TABLE idreuse_t2")
+    c.sql("DROP TABLE idreuse_t1")
+
+
 def workflow_default(c: Composition) -> None:
     def process(name: str) -> None:
         if name == "default":

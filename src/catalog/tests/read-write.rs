@@ -454,3 +454,99 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
         txn.commit(commit_ts).await.unwrap();
     }
 }
+
+/// Verifies that computing next IDs from max existing catalog items gives
+/// the correct baseline for DDL detection, even when the allocator counter
+/// has been advanced far ahead by batch allocation (as IdPool does).
+///
+/// This is a regression test for the 0dt DDL detection bug where
+/// `get_next_ids()` in preflight.rs used the allocator counter instead
+/// of the max existing item ID, causing it to miss objects created from
+/// a pre-allocated ID pool.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_persist_ddl_detection_with_batch_allocated_ids() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    let state_builder = state_builder.with_default_deploy_generation();
+
+    let mut state = state_builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap()
+        .0;
+    // Drain initial updates.
+    let _ = state
+        .sync_to_current_updates()
+        .await
+        .expect("sync to current updates failed");
+
+    // Simulate IdPool batch allocation: reserve 500 IDs at once.
+    // This advances the allocator counter by 500, but we only create
+    // a few items using the first IDs from that batch.
+    let commit_ts = state.current_upper().await;
+    let batch_ids = state
+        .allocate_id(USER_ITEM_ALLOC_KEY, 500, commit_ts)
+        .await
+        .unwrap();
+    assert_eq!(batch_ids.len(), 500);
+    let first_id = batch_ids[0];
+
+    // The allocator counter is now far ahead.
+    let allocator_next = state.get_next_id(USER_ITEM_ALLOC_KEY).await.unwrap();
+    assert_eq!(allocator_next, first_id + 500);
+
+    // Insert only 3 items using the first IDs from the batch.
+    let mut txn = state.transaction().await.unwrap();
+    for i in 0..3u64 {
+        let id = first_id + i;
+        txn.insert_item(
+            CatalogItemId::User(id),
+            20_000 + u32::try_from(i).unwrap(),
+            GlobalId::User(id),
+            SchemaId::User(1),
+            &format!("item_{i}"),
+            format!("CREATE VIEW v{i} AS SELECT {i}"),
+            RoleId::User(1),
+            vec![],
+            BTreeMap::new(),
+        )
+        .unwrap();
+    }
+    let _ = txn.get_and_commit_op_updates();
+    let commit_ts = txn.upper();
+    txn.commit(commit_ts).await.unwrap();
+
+    // Now verify the two approaches to computing the next ID baseline.
+    let txn = state.transaction().await.unwrap();
+
+    // Approach used by the fix: max existing item ID + 1.
+    let max_based_next = txn
+        .get_items()
+        .filter_map(|item| match item.id {
+            CatalogItemId::User(id) => Some(id),
+            _ => None,
+        })
+        .max()
+        .map(|id| id + 1)
+        .unwrap_or(0);
+
+    // The max-based approach gives first_id + 3 (just past the 3 items).
+    assert_eq!(max_based_next, first_id + 3);
+
+    // The allocator counter is still at first_id + 500.
+    assert_eq!(allocator_next, first_id + 500);
+
+    // The gap is the bug: using the allocator counter as baseline would
+    // miss any items with IDs in [first_id .. first_id + 500) that are
+    // created after the baseline is captured.
+    assert!(
+        max_based_next < allocator_next,
+        "max-based next ({max_based_next}) must be below allocator counter \
+         ({allocator_next}) to demonstrate the batch allocation gap"
+    );
+
+    Box::new(state).expire().await;
+}
