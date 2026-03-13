@@ -4,7 +4,7 @@
 //! on a walkthrough skill and updated README in a second commit.
 
 use crate::cli::CliError;
-use crate::cli::commands::new_project;
+use crate::cli::commands::new_project::{self, ScaffoldOpts};
 use crate::cli::progress;
 use std::fs;
 use std::path::Path;
@@ -15,8 +15,7 @@ const WALKTHROUGH_DOCKER_COMPOSE: &str =
     include_str!("../scaffold/walkthrough/references/docker-compose.yml");
 const WALKTHROUGH_POSTGRES_INIT: &str =
     include_str!("../scaffold/walkthrough/references/postgres-init.sql");
-const WALKTHROUGH_SETUP_SH: &str =
-    include_str!("../scaffold/walkthrough/references/setup.sh");
+const WALKTHROUGH_SETUP_SH: &str = include_str!("../scaffold/walkthrough/references/setup.sh");
 const WALKTHROUGH_PROFILES_TOML: &str = "\
 [default]
 host = \"localhost\"
@@ -27,7 +26,13 @@ const WALKTHROUGH_README: &str = include_str!("../scaffold/walkthrough-README.md
 
 pub fn run(name: &str, init_git: bool) -> Result<(), CliError> {
     // Step 1: scaffold the standard project (with first commit if git)
-    new_project::run(name, init_git)?;
+    new_project::run(
+        name,
+        ScaffoldOpts {
+            init_git,
+            install_skill: true,
+        },
+    )?;
 
     let project_dir = Path::new(name);
 

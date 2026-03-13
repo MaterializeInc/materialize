@@ -17,7 +17,14 @@ const SKILL_MD: &str = include_str!("../scaffold/skill/SKILL.md");
 const AGENT_MD: &str = include_str!("../scaffold/AGENT.md");
 const STABLE_API_REFERENCE_MD: &str = include_str!("../scaffold/skill/references/stable-api.md");
 
-pub fn run(name: &str, init_git: bool) -> Result<(), CliError> {
+/// Shared options for project scaffolding.
+pub struct ScaffoldOpts {
+    pub init_git: bool,
+    pub install_skill: bool,
+}
+
+/// `mz-deploy new <name>` — create a new directory and scaffold into it.
+pub fn run(name: &str, opts: ScaffoldOpts) -> Result<(), CliError> {
     let project_dir = Path::new(name);
 
     progress::info(&format!("Creating project {name}..."));
@@ -28,6 +35,30 @@ pub fn run(name: &str, init_git: bool) -> Result<(), CliError> {
         )));
     }
 
+    fs::create_dir_all(project_dir)
+        .map_err(|e| CliError::Message(format!("failed to create directory: {}", e)))?;
+
+    scaffold(project_dir, name, &opts)?;
+    progress::success(&format!("Created project `{}`", name));
+    Ok(())
+}
+
+/// `mz-deploy init` — scaffold the current directory as an mz-deploy project.
+pub fn init(opts: ScaffoldOpts) -> Result<(), CliError> {
+    let project_dir = Path::new(".");
+    let name = std::env::current_dir()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "my-project".to_string());
+
+    progress::info("Initializing project in current directory...");
+    scaffold(project_dir, &name, &opts)?;
+    progress::success(&format!("Initialized project `{}`", name));
+    Ok(())
+}
+
+/// Common scaffolding logic shared by `new` and `init`.
+fn scaffold(project_dir: &Path, name: &str, opts: &ScaffoldOpts) -> Result<(), CliError> {
     create_dir(project_dir, "models/materialize/public")?;
     create_dir(project_dir, "clusters")?;
     create_dir(project_dir, "roles")?;
@@ -60,12 +91,16 @@ pub fn run(name: &str, init_git: bool) -> Result<(), CliError> {
     )
     .map_err(|e| CliError::Message(format!("failed to create .claude/skills symlink: {}", e)))?;
 
-    install_agent_skills(project_dir)?;
+    if opts.install_skill {
+        install_agent_skills(project_dir)?;
+    }
 
-    if init_git {
+    if opts.init_git {
         progress::info("Initializing git repository");
+        let dir_arg = project_dir.as_os_str();
         let status = Command::new("git")
-            .args(["init", name])
+            .arg("init")
+            .arg(dir_arg)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
@@ -106,7 +141,6 @@ pub fn run(name: &str, init_git: bool) -> Result<(), CliError> {
         }
     }
 
-    progress::success(&format!("Created project `{}`", name));
     Ok(())
 }
 

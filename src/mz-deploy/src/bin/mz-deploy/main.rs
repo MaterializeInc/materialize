@@ -9,6 +9,7 @@ use mz_build_info::{BuildInfo, build_info};
 use mz_deploy::cli;
 use mz_deploy::cli::CliError;
 use mz_deploy::cli::commands::delete;
+use mz_deploy::cli::commands::new_project::ScaffoldOpts;
 use mz_deploy::config::Settings;
 use mz_deploy::log;
 use std::path::PathBuf;
@@ -34,6 +35,7 @@ static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(Non
 const GROUPED_HELP: &str = "\
 Getting started:
   new                  Create a new mz-deploy project
+  init                 Initialize current directory as an mz-deploy project
   walkthrough          Create a new project with an interactive tutorial
   profiles             List available connection profiles
   debug                Test database connection and display environment information
@@ -399,6 +401,32 @@ enum Command {
         /// Skip git repository initialization
         #[arg(long)]
         no_git: bool,
+
+        /// Skip npx agent skill installation
+        #[arg(long)]
+        no_skill: bool,
+    },
+
+    /// Initialize current directory as an mz-deploy project
+    ///
+    /// Scaffolds the current directory with the required structure for mz-deploy,
+    /// similar to `new` but without creating a new directory. Derives the project
+    /// name from the current directory name.
+    ///
+    /// Example:
+    ///   mkdir my-project && cd my-project && mz-deploy init
+    #[command(
+        hide = true,
+        after_help = "Run 'mz-deploy help init' for a detailed usage guide."
+    )]
+    Init {
+        /// Skip git repository initialization
+        #[arg(long)]
+        no_git: bool,
+
+        /// Skip npx agent skill installation
+        #[arg(long)]
+        no_skill: bool,
     },
 
     /// Create a new project with an interactive tutorial
@@ -688,8 +716,26 @@ async fn run(args: Args) -> Result<(), CliError> {
         return Ok(());
     }
 
-    if let Some(Command::New { name, no_git }) = &args.command {
-        return cli::commands::new_project::run(name, !no_git);
+    if let Some(Command::New {
+        name,
+        no_git,
+        no_skill,
+    }) = &args.command
+    {
+        return cli::commands::new_project::run(
+            name,
+            ScaffoldOpts {
+                init_git: !no_git,
+                install_skill: !no_skill,
+            },
+        );
+    }
+
+    if let Some(Command::Init { no_git, no_skill }) = &args.command {
+        return cli::commands::new_project::init(ScaffoldOpts {
+            init_git: !no_git,
+            install_skill: !no_skill,
+        });
     }
 
     if let Some(Command::Walkthrough { name, no_git }) = &args.command {
@@ -851,6 +897,7 @@ async fn run(args: Args) -> Result<(), CliError> {
         }
         Some(Command::Help { .. }) => unreachable!("handled above"),
         Some(Command::New { .. }) => unreachable!("handled above"),
+        Some(Command::Init { .. }) => unreachable!("handled above"),
         Some(Command::Walkthrough { .. }) => unreachable!("handled above"),
         Some(Command::Profiles) => unreachable!("handled above"),
         None => unreachable!("handled above"),
