@@ -25,6 +25,7 @@ mod scalar;
 
 pub mod explain;
 pub mod row;
+pub mod vectorized;
 pub mod virtual_syntax;
 pub mod visit;
 

@@ -580,6 +580,60 @@ impl PendingWork {
     where
         YFn: Fn(Instant, usize) -> bool,
     {
+        // Use the vectorized batch path when the MFP has no temporal predicates.
+        if let Some(mfp) = map_filter_project {
+            if mfp.is_nontemporal() {
+                return self.do_work_batch(
+                    work,
+                    name,
+                    start_time,
+                    yield_fn,
+                    until,
+                    mfp,
+                    output,
+                );
+            }
+        }
+
+        self.do_work_row_at_a_time(
+            work,
+            name,
+            start_time,
+            yield_fn,
+            until,
+            map_filter_project,
+            datum_vec,
+            row_builder,
+            output,
+        )
+    }
+
+    /// The original row-at-a-time evaluation path.
+    fn do_work_row_at_a_time<YFn>(
+        &mut self,
+        work: &mut usize,
+        name: &str,
+        start_time: Instant,
+        yield_fn: YFn,
+        until: &Antichain<Timestamp>,
+        map_filter_project: Option<&MfpPlan>,
+        datum_vec: &mut DatumVec,
+        row_builder: &mut Row,
+        output: &mut OutputBuilderSession<
+            '_,
+            (mz_repr::Timestamp, Subtime),
+            ConsolidatingContainerBuilder<
+                Vec<(
+                    Result<Row, DataflowError>,
+                    (mz_repr::Timestamp, Subtime),
+                    Diff,
+                )>,
+            >,
+        >,
+    ) -> bool
+    where
+        YFn: Fn(Instant, usize) -> bool,
+    {
         let mut session = output.session_with_builder(&self.capability);
         let fetched_part = self.part.part_mut();
         let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
@@ -686,6 +740,160 @@ impl PendingWork {
             }
         }
         true
+    }
+
+    /// Vectorized batch evaluation path for nontemporal MFPs.
+    ///
+    /// Collects rows into batches, transposes them to columnar form,
+    /// evaluates the MFP on the batch, and emits results.
+    fn do_work_batch<YFn>(
+        &mut self,
+        work: &mut usize,
+        name: &str,
+        start_time: Instant,
+        yield_fn: YFn,
+        until: &Antichain<Timestamp>,
+        mfp: &MfpPlan,
+        output: &mut OutputBuilderSession<
+            '_,
+            (mz_repr::Timestamp, Subtime),
+            ConsolidatingContainerBuilder<
+                Vec<(
+                    Result<Row, DataflowError>,
+                    (mz_repr::Timestamp, Subtime),
+                    Diff,
+                )>,
+            >,
+        >,
+    ) -> bool
+    where
+        YFn: Fn(Instant, usize) -> bool,
+    {
+        use mz_storage_types::errors::DataflowError;
+
+        const BATCH_SIZE: usize = 1024;
+
+        let mut session = output.session_with_builder(&self.capability);
+        let fetched_part = self.part.part_mut();
+        let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
+        let mut row_buf = None;
+
+        // Batch buffer: rows eligible for vectorized evaluation.
+        let mut batch: Vec<(Row, mz_repr::Timestamp, Diff)> = Vec::with_capacity(BATCH_SIZE);
+
+        loop {
+            // Fill the batch. `exhausted` is true only if the part ran out of rows.
+            let mut exhausted = false;
+            while batch.len() < BATCH_SIZE {
+                match fetched_part.next_with_storage(&mut row_buf, &mut None) {
+                    Some(((key, val), time, diff)) => {
+                        if until.less_equal(&time) {
+                            continue;
+                        }
+                        match (key, val) {
+                            (SourceData(Ok(row)), ()) => {
+                                batch.push((row.clone(), time, diff.into()));
+                                row_buf.replace(SourceData(Ok(row)));
+                            }
+                            (SourceData(Err(err)), ()) => {
+                                // Errors bypass the batch and are emitted directly.
+                                let mut emit_time = *self.capability.time();
+                                emit_time.0 = time;
+                                session.give((Err(err), emit_time, diff.into()));
+                                *work += 1;
+                            }
+                        }
+                    }
+                    None => {
+                        exhausted = true;
+                        break;
+                    }
+                }
+            }
+
+            if batch.is_empty() {
+                return exhausted;
+            }
+
+            // Evaluate the batch.
+            *work += batch.len();
+            let results: Vec<Result<Option<(Row, mz_repr::Timestamp, Diff)>, (DataflowError, mz_repr::Timestamp, Diff)>> =
+                mfp.evaluate_batch_nontemporal(&batch);
+
+            // Emit results.
+            for result in results {
+                match result {
+                    Ok(Some((row, time, diff))) => {
+                        if let Some(stats) = &is_filter_pushdown_audit {
+                            sentry::with_scope(
+                                |scope| {
+                                    scope
+                                        .set_tag("alert_id", "persist_pushdown_audit_violation")
+                                },
+                                || {
+                                    error!(
+                                        ?stats,
+                                        name,
+                                        ?mfp,
+                                        "persist filter pushdown correctness violation!"
+                                    );
+                                    if self.panic_on_audit_failure {
+                                        panic!(
+                                            "persist filter pushdown correctness violation! {}",
+                                            name
+                                        );
+                                    }
+                                },
+                            );
+                        }
+                        let mut emit_time = *self.capability.time();
+                        emit_time.0 = time;
+                        session.give((Ok(row), emit_time, diff));
+                        *work += 1;
+                    }
+                    Ok(None) => {
+                        // Filtered out, nothing to emit.
+                    }
+                    Err((err, time, diff)) => {
+                        if let Some(stats) = &is_filter_pushdown_audit {
+                            sentry::with_scope(
+                                |scope| {
+                                    scope
+                                        .set_tag("alert_id", "persist_pushdown_audit_violation")
+                                },
+                                || {
+                                    error!(
+                                        ?stats,
+                                        name,
+                                        ?mfp,
+                                        "persist filter pushdown correctness violation!"
+                                    );
+                                    if self.panic_on_audit_failure {
+                                        panic!(
+                                            "persist filter pushdown correctness violation! {}",
+                                            name
+                                        );
+                                    }
+                                },
+                            );
+                        }
+                        let mut emit_time = *self.capability.time();
+                        emit_time.0 = time;
+                        session.give((Err(err), emit_time, diff));
+                        *work += 1;
+                    }
+                }
+            }
+
+            batch.clear();
+
+            if yield_fn(start_time, *work) {
+                return false;
+            }
+            if exhausted {
+                return true;
+            }
+        }
     }
 }
 
