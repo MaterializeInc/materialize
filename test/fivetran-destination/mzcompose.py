@@ -50,6 +50,7 @@ name of the test directory.
 """
 
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -68,7 +69,10 @@ SERVICES = [
     Materialized(),
     Testdrive(
         no_reset=True,
-        default_timeout="5s",
+        default_timeout="30s",
+        fivetran_destination=True,
+        fivetran_destination_files_path="/data",
+        volumes_extra=["./data:/data"],
     ),
     FivetranDestination(
         volumes_extra=["./data:/data"],
@@ -83,12 +87,25 @@ SERVICES = [
 # Tests that are currently broken because the Fivetran Tester seems to do the wrong thing.
 BROKEN_TESTS = []
 
+# Test directories that have their own dedicated workflow and should be skipped
+# by the generic test-case runner.
+SKIP_IN_TEST_CASES = ["test-concurrent-scratch"]
+
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    c.up("materialized", "fivetran-destination")
+
+    for name in c.workflows:
+        if name == "default":
+            continue
+
+        with c.test_case(name):
+            c.workflow(name)
+
+
+def workflow_test_cases(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("filter", nargs="?")
     args = parser.parse_args()
-
-    c.up("materialized", "fivetran-destination")
 
     for path in ROOT.iterdir():
         if path.name.startswith("test-"):
@@ -98,8 +115,76 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if path.name in BROKEN_TESTS:
                 print(f"Test case {path.name!r} is currently broken; skipping...")
                 continue
+            if path.name in SKIP_IN_TEST_CASES:
+                continue
             with c.test_case(path.name):
                 _run_test_case(c, path)
+
+
+def workflow_concurrent_scratch(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Reproduce: concurrent write_batch requests for the same destination
+    table share a single scratch table (deterministic hash name), causing
+    data loss when their COPY/DELETE/INSERT operations interleave."""
+
+    c.sql("DROP DATABASE IF EXISTS test")
+    c.sql("CREATE DATABASE test")
+    c.sql("CREATE SCHEMA test.tester", database="test")
+    c.sql(
+        "CREATE TABLE test.tester.concurrent_test (id INT, val TEXT)", database="test"
+    )
+    c.sql(
+        "COMMENT ON COLUMN test.tester.concurrent_test.id IS 'mz_is_primary_key'",
+        database="test",
+    )
+
+    data_dir = ROOT / "data"
+    n_rows = 50000
+
+    # Generate CSV files with non-overlapping PKs.
+    for name, tag, start in [
+        ("warmup.csv", "warmup", 0),
+        ("batch_a.csv", "A", 1),
+        ("batch_b.csv", "B", n_rows + 1),
+    ]:
+        with open(data_dir / name, "w") as f:
+            f.write("id,val\n")
+            count = 1 if tag == "warmup" else n_rows
+            for i in range(start, start + count):
+                f.write(f"{i},{tag}\n")
+
+    try:
+        # Warm-up: create the scratch table so concurrent requests take the
+        # "clear and reuse" path (where the data-corruption race lives).
+        c.run_testdrive_files(
+            "test-concurrent-scratch/write-batch-warmup.td", persistent=False
+        )
+        c.sql("DELETE FROM test.tester.concurrent_test", database="test")
+
+        # Fire both write_batch requests concurrently.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futs = [
+                pool.submit(
+                    c.run_testdrive_files,
+                    f"test-concurrent-scratch/write-batch-{x}.td",
+                    persistent=False,
+                )
+                for x in ("a", "b")
+            ]
+            for f in futs:
+                f.result()
+
+        [[total]] = c.sql_query(
+            "SELECT COUNT(*) FROM test.tester.concurrent_test", database="test"
+        )
+        print(f"total={total}, expected={2 * n_rows}")
+        assert int(total) == 2 * n_rows, (
+            f"Wrong results: expected {2 * n_rows} rows, got {total}"
+        )
+    finally:
+        for name in ("warmup.csv", "batch_a.csv", "batch_b.csv"):
+            (data_dir / name).unlink(missing_ok=True)
 
 
 def _run_test_case(c: Composition, path: Path):
