@@ -135,6 +135,7 @@ pub(super) fn validate_options_per_connection_type(
             ProgressTopic,
             ProgressTopicReplicationFactor,
             AwsPrivatelink,
+            AwsPrivatelinks,
             SshTunnel,
             SslKey,
             SslCertificate,
