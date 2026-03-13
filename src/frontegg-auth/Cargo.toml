@@ -21,7 +21,7 @@ mz-auth = { path = "../auth", default-features = false }
 mz-ore = { path = "../ore", features = ["network", "metrics"] }
 mz-repr = { path = "../repr" }
 prometheus = { version = "0.14.0", default-features = false }
-reqwest = "0.12.28"
+reqwest = "0.13.2"
 reqwest-middleware = { version = "0.4.2", features = ["json"] }
 reqwest-retry = "0.8.0"
 serde = { version = "1.0.219", features = ["derive"] }
