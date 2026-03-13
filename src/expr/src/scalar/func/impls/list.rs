@@ -301,6 +301,7 @@ impl EagerBinaryFunc for ListLengthMax {
         output.nullable(nullable || (propagates_nulls && input_nullable))
     }
 }
+impl crate::scalar::func::binary::VectorizedBinaryFunc for ListLengthMax {}
 impl fmt::Display for ListLengthMax {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("list_length_max")

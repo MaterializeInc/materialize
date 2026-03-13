@@ -399,6 +399,29 @@ macro_rules! derive_binary {
                     $(Self::$name(f) => LazyBinaryFunc::is_monotone(f),)*
                 }
             }
+
+            pub fn eval_vectorized(
+                &self,
+                col1: &crate::vectorized::DatumColumn,
+                col2: &crate::vectorized::DatumColumn,
+                batch_len: usize,
+            ) -> Option<crate::vectorized::DatumColumn> {
+                use crate::scalar::func::binary::VectorizedBinaryFunc;
+                match self {
+                    $(Self::$name(f) => {
+                        VectorizedBinaryFunc::eval_vectorized(
+                            f, col1, col2, batch_len,
+                        )
+                    },)*
+                }
+            }
+
+            pub fn is_vectorized(&self) -> bool {
+                use crate::scalar::func::binary::VectorizedBinaryFunc;
+                match self {
+                    $(Self::$name(f) => VectorizedBinaryFunc::is_vectorized(f),)*
+                }
+            }
         }
 
         impl fmt::Display for BinaryFunc {

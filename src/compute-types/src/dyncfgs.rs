@@ -334,6 +334,16 @@ pub const SUBSCRIBE_SNAPSHOT_OPTIMIZATION: Config<bool> = Config::new(
     "If set, skip fetching or processing the snapshot data for subscribes when possible.",
 );
 
+/// Whether to use vectorized (columnar) evaluation for MapFilterProject plans.
+///
+/// When enabled, nontemporal MFPs are evaluated in batch over columnar data
+/// rather than row-at-a-time, amortizing interpretation overhead.
+pub const ENABLE_VECTORIZED_MFP: Config<bool> = Config::new(
+    "enable_compute_vectorized_mfp",
+    false,
+    "Whether to use vectorized (columnar) evaluation for MapFilterProject plans.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -377,4 +387,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PEEK_STASH_NUM_BATCHES)
         .add(&PEEK_STASH_BATCH_SIZE)
         .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
+        .add(&ENABLE_VECTORIZED_MFP)
 }

@@ -93,7 +93,8 @@ pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Option<&
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "+",
-    propagates_nulls = true
+    propagates_nulls = true,
+    vectorized = "crate::vectorized::eval_add_int16_dispatch"
 )]
 fn add_int16(a: i16, b: i16) -> Result<i16, EvalError> {
     a.checked_add(b).ok_or(EvalError::NumericFieldOverflow)
@@ -103,7 +104,8 @@ fn add_int16(a: i16, b: i16) -> Result<i16, EvalError> {
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "+",
-    propagates_nulls = true
+    propagates_nulls = true,
+    vectorized = "crate::vectorized::eval_add_int32_dispatch"
 )]
 fn add_int32(a: i32, b: i32) -> Result<i32, EvalError> {
     a.checked_add(b).ok_or(EvalError::NumericFieldOverflow)
@@ -113,7 +115,8 @@ fn add_int32(a: i32, b: i32) -> Result<i32, EvalError> {
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "+",
-    propagates_nulls = true
+    propagates_nulls = true,
+    vectorized = "crate::vectorized::eval_add_int64_dispatch"
 )]
 fn add_int64(a: i64, b: i64) -> Result<i64, EvalError> {
     a.checked_add(b).ok_or(EvalError::NumericFieldOverflow)
@@ -676,7 +679,8 @@ fn bit_shift_right_uint64(lhs: u64, rhs: u32) -> u64 {
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "-",
-    propagates_nulls = true
+    propagates_nulls = true,
+    vectorized = "crate::vectorized::eval_sub_int16_dispatch"
 )]
 fn sub_int16(a: i16, b: i16) -> Result<i16, EvalError> {
     a.checked_sub(b).ok_or(EvalError::NumericFieldOverflow)
@@ -686,7 +690,8 @@ fn sub_int16(a: i16, b: i16) -> Result<i16, EvalError> {
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "-",
-    propagates_nulls = true
+    propagates_nulls = true,
+    vectorized = "crate::vectorized::eval_sub_int32_dispatch"
 )]
 fn sub_int32(a: i32, b: i32) -> Result<i32, EvalError> {
     a.checked_sub(b).ok_or(EvalError::NumericFieldOverflow)
@@ -696,7 +701,8 @@ fn sub_int32(a: i32, b: i32) -> Result<i32, EvalError> {
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "-",
-    propagates_nulls = true
+    propagates_nulls = true,
+    vectorized = "crate::vectorized::eval_sub_int64_dispatch"
 )]
 fn sub_int64(a: i64, b: i64) -> Result<i64, EvalError> {
     a.checked_sub(b).ok_or(EvalError::NumericFieldOverflow)
@@ -890,7 +896,8 @@ fn sub_time_interval(time: chrono::NaiveTime, interval: Interval) -> chrono::Nai
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "*",
-    propagates_nulls = true
+    propagates_nulls = true,
+    vectorized = "crate::vectorized::eval_mul_int16_dispatch"
 )]
 fn mul_int16(a: i16, b: i16) -> Result<i16, EvalError> {
     a.checked_mul(b).ok_or(EvalError::NumericFieldOverflow)
@@ -900,7 +907,8 @@ fn mul_int16(a: i16, b: i16) -> Result<i16, EvalError> {
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "*",
-    propagates_nulls = true
+    propagates_nulls = true,
+    vectorized = "crate::vectorized::eval_mul_int32_dispatch"
 )]
 fn mul_int32(a: i32, b: i32) -> Result<i32, EvalError> {
     a.checked_mul(b).ok_or(EvalError::NumericFieldOverflow)
@@ -910,7 +918,8 @@ fn mul_int32(a: i32, b: i32) -> Result<i32, EvalError> {
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "*",
-    propagates_nulls = true
+    propagates_nulls = true,
+    vectorized = "crate::vectorized::eval_mul_int64_dispatch"
 )]
 fn mul_int64(a: i64, b: i64) -> Result<i64, EvalError> {
     a.checked_mul(b).ok_or(EvalError::NumericFieldOverflow)
