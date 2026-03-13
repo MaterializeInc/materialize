@@ -414,6 +414,7 @@ impl SessionVars {
             &EMIT_TRACE_ID_NOTICE,
             &AUTO_ROUTE_CATALOG_QUERIES,
             &ENABLE_SESSION_RBAC_CHECKS,
+            &RESTRICT_TO_USER_OBJECTS,
             &ENABLE_SESSION_CARDINALITY_ESTIMATES,
             &MAX_IDENTIFIER_LENGTH,
             &STATEMENT_LOGGING_SAMPLE_RATE,
@@ -586,7 +587,13 @@ impl SessionVars {
         let (name, input) = compat_translate(name, input);
 
         let name = UncasedStr::new(name);
-        self.check_read_only(name)?;
+
+        // Check if this variable is allowed to be set as a role default.
+        // Most read-only variables are blocked, but some (like restrict_to_user_objects)
+        // are specifically designed to be set via ALTER ROLE by superusers.
+        if !Self::allow_role_default(name) {
+            self.check_read_only(name)?;
+        }
 
         self.vars
             .get_mut(name)
@@ -594,6 +601,14 @@ impl SessionVars {
             .map(|v| v.set_default(input))
             .transpose()?
             .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
+    }
+
+    /// Returns true if the variable can be set as a role default even if it's
+    /// otherwise read-only from direct SET commands.
+    fn allow_role_default(name: &UncasedStr) -> bool {
+        // restrict_to_user_objects is designed to be set via ALTER ROLE by superusers
+        // to restrict MCP tool queries from accessing system catalog objects.
+        name == RESTRICT_TO_USER_OBJECTS.name
     }
 
     /// Sets the configuration parameter named `name` to its default value.
@@ -632,6 +647,11 @@ impl SessionVars {
     }
 
     /// Returns an error if the variable corresponding to `name` is read only.
+    ///
+    /// Note: This is called by `set()` (for SQL SET commands) but NOT by
+    /// `set_default()` (for role defaults). This allows variables like
+    /// `restrict_to_user_objects` to be set via `ALTER ROLE ... SET` by
+    /// superusers while blocking direct `SET` commands from regular users.
     fn check_read_only(&self, name: &UncasedStr) -> Result<(), VarError> {
         if name == MZ_VERSION_NAME {
             Err(VarError::ReadOnlyParameter(MZ_VERSION_NAME.as_str()))
@@ -640,6 +660,13 @@ impl SessionVars {
         } else if name == MAX_IDENTIFIER_LENGTH.name {
             Err(VarError::ReadOnlyParameter(
                 MAX_IDENTIFIER_LENGTH.name.as_str(),
+            ))
+        } else if name == RESTRICT_TO_USER_OBJECTS.name {
+            // This variable can only be set via ALTER ROLE ... SET by superusers,
+            // not via direct SET commands. This prevents malicious queries from
+            // bypassing the restriction.
+            Err(VarError::ReadOnlyParameter(
+                RESTRICT_TO_USER_OBJECTS.name.as_str(),
             ))
         } else {
             Ok(())
@@ -824,6 +851,11 @@ impl SessionVars {
         *self.expect_value(&ENABLE_SESSION_RBAC_CHECKS)
     }
 
+    /// Returns the value of `restrict_to_user_objects` configuration parameter.
+    pub fn restrict_to_user_objects(&self) -> bool {
+        *self.expect_value(&RESTRICT_TO_USER_OBJECTS)
+    }
+
     /// Returns the value of `enable_session_cardinality_estimates` configuration parameter.
     pub fn enable_session_cardinality_estimates(&self) -> bool {
         *self.expect_value(&ENABLE_SESSION_CARDINALITY_ESTIMATES)
@@ -862,6 +894,23 @@ impl SessionVars {
             .expect("cluster variable must exist");
         var.set(VarInput::Flat(&cluster), false)
             .expect("setting cluster must succeed");
+    }
+
+    /// Sets the `restrict_to_user_objects` session variable.
+    ///
+    /// This is an internal-only setter that bypasses the read-only check.
+    /// Used by the MCP adapter to restrict tool queries from accessing
+    /// system catalog objects. Users cannot set this via SQL.
+    pub fn set_restrict_to_user_objects(&mut self, restrict: bool) {
+        let var = self
+            .vars
+            .get_mut(UncasedStr::new(RESTRICT_TO_USER_OBJECTS.name()))
+            .expect("restrict_to_user_objects variable must exist");
+        var.set(
+            VarInput::Flat(if restrict { "true" } else { "false" }),
+            false,
+        )
+        .expect("setting restrict_to_user_objects must succeed");
     }
 
     pub fn set_local_transaction_isolation(&mut self, transaction_isolation: IsolationLevel) {
