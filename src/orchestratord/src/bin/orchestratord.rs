@@ -11,8 +11,10 @@ use std::{
     future,
     net::SocketAddr,
     sync::{Arc, LazyLock},
+    time::Duration,
 };
 
+use axum_server::tls_openssl::OpenSSLConfig;
 use http::HeaderValue;
 use k8s_openapi::{
     api::{
@@ -38,6 +40,7 @@ use mz_orchestratord::{
     k8s::register_crds,
     metrics::{self, Metrics},
     tls::DefaultCertificateSpecs,
+    webhook,
 };
 use mz_ore::{
     cli::{self, CliConfig, KeyValueArg},
@@ -58,6 +61,21 @@ pub struct Args {
     profiling_listen_address: SocketAddr,
     #[clap(long, default_value = "[::]:3100")]
     metrics_listen_address: SocketAddr,
+    #[clap(long, default_value = "[::]:8001")]
+    webhook_listen_address: SocketAddr,
+
+    #[clap(long)]
+    webhook_service_name: String,
+    #[clap(long)]
+    webhook_service_namespace: String,
+    #[clap(long, default_value = "8001")]
+    webhook_service_port: u16,
+    #[clap(long, default_value = "/etc/tls/ca.crt")]
+    tls_ca: String,
+    #[clap(long, default_value = "/etc/tls/tls.crt")]
+    tls_cert: String,
+    #[clap(long, default_value = "/etc/tls/tls.key")]
+    tls_key: String,
 
     #[clap(long)]
     cloud_provider: CloudProvider,
@@ -263,10 +281,41 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     let metrics = Arc::new(Metrics::register_into(&metrics_registry));
 
+    {
+        let tls_cert = args.tls_cert;
+        let tls_key = args.tls_key;
+        let config = OpenSSLConfig::from_pem_file(&tls_cert, &tls_key).unwrap();
+        let reload_config = config.clone();
+        let webhook_listen_address = args.webhook_listen_address;
+
+        mz_ore::task::spawn(|| "webhook server", async move {
+            if let Err(e) = axum_server::bind_openssl(webhook_listen_address, config)
+                .serve(webhook::router().into_make_service())
+                .await
+            {
+                panic!("webhook server failed: {}", e.display_with_causes());
+            }
+        });
+
+        mz_ore::task::spawn(|| "webhook certificate reload", async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60 * 60));
+            loop {
+                interval.tick().await;
+                if let Err(err) = reload_config.reload_from_pem_file(&tls_cert, &tls_key) {
+                    tracing::error!("failed to reload webhook TLS certificate: {err}");
+                }
+            }
+        });
+    }
+
     let (client, namespace) = create_client(args.kubernetes_context.clone()).await?;
     register_crds(
         client.clone(),
         args.additional_crd_columns.unwrap_or_default(),
+        args.webhook_service_name,
+        args.webhook_service_namespace,
+        args.webhook_service_port,
+        args.tls_ca,
     )
     .await?;
 
