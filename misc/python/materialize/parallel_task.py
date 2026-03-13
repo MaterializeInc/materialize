@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import queue
 import subprocess
 import sys
 import threading
@@ -41,13 +42,18 @@ class TaskThread(threading.Thread):
     """Runs a shell command or callable in a thread, capturing output, duration, and exit status."""
 
     def __init__(
-        self, name: str, spec: TaskSpec | None = None, command: list[str] | None = None
+        self,
+        name: str,
+        spec: TaskSpec | None = None,
+        command: list[str] | None = None,
+        done_queue: queue.Queue[TaskThread] | None = None,
     ):
         super().__init__()
         self.name = name
         self.output: str = ""
         self.success = False
         self.duration: timedelta = timedelta()
+        self._done_queue = done_queue
         resolved = command if spec is None else spec
         assert resolved is not None, "must provide spec or command"
         if callable(resolved):
@@ -76,21 +82,45 @@ class TaskThread(threading.Thread):
             self.output = str(e)
             self.success = False
         self.duration = datetime.now() - start
+        if self._done_queue is not None:
+            self._done_queue.put(self)
 
 
 class _SpinnerThread(threading.Thread):
-    def __init__(self, label: str) -> None:
+    def __init__(self, remaining: int, suffix: str = "tasks") -> None:
         super().__init__(daemon=True)
-        self.label = label
+        self._remaining = remaining
+        self._suffix = suffix
+        # "checks in foo" -> "check in foo"
+        parts = suffix.split(" ", 1)
+        self._singular = parts[0].rstrip("s") + (
+            " " + parts[1] if len(parts) > 1 else ""
+        )
+        self._lock = threading.Lock()
         self.active = not buildkite.is_in_buildkite() and sys.stdout.isatty()
 
     def run(self) -> None:
         symbols = ["⣾", "⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽"]
         i = 0
         while self.active:
-            print(f"\r\033[K{symbols[i]} {self.label}", end="", flush=True)
+            with self._lock:
+                remaining = self._remaining
+            suffix = self._suffix if remaining != 1 else self._singular
+            print(
+                f"\r\033[K{symbols[i]} {remaining} {suffix}",
+                end="",
+                flush=True,
+            )
             i = (i + 1) % len(symbols)
             time.sleep(0.1)
+
+    def task_done(self) -> None:
+        with self._lock:
+            self._remaining -= 1
+
+    def clear_line(self) -> None:
+        if self.active:
+            print("\r\033[K", end="", flush=True)
 
     def stop(self) -> None:
         if self.active:
@@ -101,42 +131,53 @@ class _SpinnerThread(threading.Thread):
 def run_parallel(
     tasks: list[tuple[str, TaskSpec]],
     verbose: bool = False,
-) -> int:
-    """Run tasks in parallel and print results sorted by duration.
+    print_duration: bool = True,
+    spinner_suffix: str = "tasks",
+    print_summary: bool = True,
+) -> list[str]:
+    """Run tasks in parallel and print results as each task finishes.
 
     Args:
-        tasks: List of (name, command) pairs.
+        tasks: List of (name, spec) pairs.
         verbose: If True, print output even for successful tasks.
+        print_duration: If True, include duration in status lines.
+        spinner_suffix: Suffix after the count in the spinner, e.g. "tasks".
+        print_summary: If True, print a final success/failure summary.
 
     Returns:
-        0 if all tasks succeeded, 1 otherwise.
+        List of failed task names (empty on full success).
     """
-    threads = [TaskThread(name, spec) for name, spec in tasks]
+    done_q: queue.Queue[TaskThread] = queue.Queue()
+    threads = [TaskThread(name, spec, done_queue=done_q) for name, spec in tasks]
 
-    spinner = _SpinnerThread(f"{len(threads)} tasks")
+    spinner = _SpinnerThread(len(threads), spinner_suffix)
     spinner.start()
 
     for t in threads:
         t.start()
-    for t in threads:
-        t.join()
-
-    spinner.stop()
 
     failed = []
-    for t in sorted(threads, key=lambda t: t.duration):
-        secs = t.duration.total_seconds()
+    for _ in threads:
+        t = done_q.get()
+        spinner.task_done()
+        spinner.clear_line()
+        formatted_duration = (
+            f" [{t.duration.total_seconds():5.2f}s]" if print_duration else ""
+        )
         if t.success:
-            print(f"{_prefix('---')}{OK} [{secs:5.2f}s] {t.name}")
+            print(f"{_prefix('---')}{OK}{formatted_duration} {t.name}")
         else:
-            print(f"{_prefix('+++')}{FAIL} [{secs:5.2f}s] {t.name}")
+            print(f"{_prefix('+++')}{FAIL}{formatted_duration} {t.name}")
             failed.append(t.name)
         if t.output and (not t.success or verbose):
             print(t.output)
 
-    if failed:
-        print(f"{_prefix('+++')}{FAIL} Failed: {failed}")
-        return 1
+    spinner.stop()
 
-    print(f"{_prefix('+++')}{OK} All tasks successful")
-    return 0
+    if print_summary:
+        if failed:
+            print(f"{_prefix('+++')}{FAIL} Failed: {failed}")
+        else:
+            print(f"{_prefix('+++')}{OK} All tasks successful")
+
+    return failed
