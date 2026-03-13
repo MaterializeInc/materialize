@@ -14,6 +14,8 @@ use differential_dataflow::VecCollection;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
+use mz_dyncfg::ConfigSet;
+use mz_ore::metrics::MetricsRegistry;
 use mz_repr::{Diff, Timestamp};
 use mz_storage_operators::persist_source::Subtime;
 use mz_storage_types::errors::DataflowError;
@@ -44,6 +46,9 @@ use crate::typedefs::{ErrBatcher, ErrBuilder};
 pub fn initialize<A: Allocate + 'static>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
+    metrics_registry: MetricsRegistry,
+    worker_config: Rc<ConfigSet>,
+    workers_per_process: usize,
 ) -> LoggingTraces {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
@@ -66,6 +71,9 @@ pub fn initialize<A: Allocate + 'static>(
         d_event_queue: EventQueue::new("d"),
         c_event_queue: EventQueue::new("c"),
         shared_state: Default::default(),
+        metrics_registry,
+        worker_config,
+        workers_per_process,
     };
 
     // Depending on whether we should log the creation of the logging dataflows, we register the
@@ -101,6 +109,9 @@ struct LoggingContext<'a, A: Allocate> {
     d_event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
     c_event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
+    metrics_registry: MetricsRegistry,
+    worker_config: Rc<ConfigSet>,
+    workers_per_process: usize,
 }
 
 pub(crate) struct LoggingTraces {
@@ -158,6 +169,19 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                 Rc::clone(&self.shared_state),
             );
             collections.extend(compute_collections);
+
+            let super::prometheus::Return {
+                collections: prometheus_collections,
+            } = super::prometheus::construct(
+                scope.clone(),
+                self.config,
+                self.metrics_registry.clone(),
+                self.now,
+                self.start_offset,
+                Rc::clone(&self.worker_config),
+                self.workers_per_process,
+            );
+            collections.extend(prometheus_collections);
 
             let errs = scope.scoped("logging errors", |scope| {
                 let collection: KeyCollection<_, DataflowError, Diff> =

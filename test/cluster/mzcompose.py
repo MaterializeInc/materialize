@@ -6714,3 +6714,72 @@ def workflow_test_github_11219(c: Composition) -> None:
 
         c.sql_query("SELECT a FROM t1")
         c.sql_query("SELECT a FROM mv2")
+
+
+def workflow_test_prometheus_metrics(c: Composition) -> None:
+    """Test that mz_compute_prometheus_metrics reports metrics."""
+
+    with c.override(
+        Testdrive(no_reset=True, default_timeout="60s"),
+    ):
+        c.up("materialized")
+
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 SIZE 'scale=2,workers=2';
+            """
+        )
+
+        # Create a materialized view to generate compute activity.
+        c.sql(
+            """
+            SET cluster = cluster1;
+            CREATE TABLE t (a int);
+            CREATE MATERIALIZED VIEW mv AS SELECT count(*) FROM t;
+            """
+        )
+
+        c.testdrive(
+            dedent(
+                """
+                > SET cluster = cluster1
+
+                > SELECT count(*) > 0
+                  FROM mz_introspection.mz_compute_prometheus_metrics
+                true
+
+                > SELECT DISTINCT metric_type
+                  FROM mz_introspection.mz_compute_prometheus_metrics
+                  WHERE metric_type IN ('counter', 'gauge')
+                counter
+                gauge
+
+                > SELECT DISTINCT process_id
+                  FROM mz_introspection.mz_compute_prometheus_metrics
+                  ORDER BY process_id
+                0
+                1
+                """
+            )
+        )
+
+        # Disable scraping by setting the interval to 0s.
+        c.sql(
+            """
+            ALTER SYSTEM SET compute_prometheus_introspection_scrape_interval = '0s';
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        c.testdrive(
+            dedent(
+                """
+                > SET cluster = cluster1
+
+                > SELECT count(*) = 0
+                  FROM mz_introspection.mz_compute_prometheus_metrics
+                true
+                """
+            )
+        )

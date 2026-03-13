@@ -1898,6 +1898,14 @@ pub static MZ_COMPUTE_DATAFLOW_GLOBAL_IDS_PER_WORKER: LazyLock<BuiltinLog> =
         access: vec![PUBLIC_SELECT],
     });
 
+pub static MZ_COMPUTE_PROMETHEUS_METRICS: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
+    name: "mz_compute_prometheus_metrics",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::LOG_MZ_COMPUTE_PROMETHEUS_METRICS_OID,
+    variant: LogVariant::Compute(ComputeLog::PrometheusMetrics),
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_COMPUTE_FRONTIERS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
     name: "mz_compute_frontiers_per_worker",
     schema: MZ_INTROSPECTION_SCHEMA,
@@ -13943,6 +13951,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW),
         Builtin::Log(&MZ_COMPUTE_EXPORTS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_DATAFLOW_GLOBAL_IDS_PER_WORKER),
+        Builtin::Log(&MZ_COMPUTE_PROMETHEUS_METRICS),
         Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_RAW),
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_RAW),
         Builtin::Log(&MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW),

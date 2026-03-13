@@ -925,6 +925,10 @@ mz_compute_operator_hydration_statuses_per_worker
 SOURCE
 materialize
 mz_introspection
+mz_compute_prometheus_metrics
+SOURCE
+materialize
+mz_introspection
 mz_dataflow_addresses
 VIEW
 materialize
