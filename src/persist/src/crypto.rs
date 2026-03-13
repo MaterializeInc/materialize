@@ -23,18 +23,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use aws_sdk_kms::Client as KmsClient;
 use aws_sdk_kms::primitives::Blob as KmsBlob;
 use aws_sdk_kms::types::DataKeySpec;
-use aws_sdk_kms::Client as KmsClient;
 use bytes::Bytes;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandle;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn, Instrument, Span};
-use zeroize::Zeroize;
+use tracing::{Instrument, Span, debug, info, warn};
+use zeroize::{Zeroize, Zeroizing};
 
-use aws_lc_rs::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
+use aws_lc_rs::aead::{AES_256_GCM, Aad, LessSafeKey, NONCE_LEN, Nonce, UnboundKey};
 
 use aws_config::sts::AssumeRoleProvider;
 
@@ -47,6 +47,34 @@ const ENVELOPE_VERSION_V1: u8 = 0x01;
 const ENVELOPE_VERSION_V2: u8 = 0x02;
 const WRAPPED_DEK_LEN_SIZE: usize = 2;
 const GCM_TAG_LEN: usize = 16;
+
+/// Typed error classification for decrypt operations.
+///
+/// Replaces string-based error classification with typed variants so that
+/// error handling doesn't depend on fragile message matching.
+#[derive(Debug)]
+pub(crate) enum CryptoError {
+    /// Envelope format errors (wrong version, too short, empty).
+    InvalidEnvelope(String),
+    /// AEAD authentication failure (tampered or wrong key).
+    AuthenticationFailed,
+    /// KMS or other transient errors.
+    Kms(anyhow::Error),
+}
+
+impl std::fmt::Display for CryptoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CryptoError::InvalidEnvelope(msg) => write!(f, "{}", msg),
+            CryptoError::AuthenticationFailed => {
+                write!(f, "AES-256-GCM authentication failed: data may be tampered")
+            }
+            CryptoError::Kms(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+impl std::error::Error for CryptoError {}
 
 struct DataEncryptionKey {
     plaintext: [u8; 32],
@@ -195,11 +223,9 @@ impl EnvelopeEncryption {
                     .map_err(|e| {
                         anyhow::anyhow!("customer KMS Encrypt (double-wrap) failed: {}", e)
                     })?;
-                let double_wrapped = resp
-                    .ciphertext_blob()
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("customer KMS Encrypt returned no ciphertext_blob")
-                    })?;
+                let double_wrapped = resp.ciphertext_blob().ok_or_else(|| {
+                    anyhow::anyhow!("customer KMS Encrypt returned no ciphertext_blob")
+                })?;
                 double_wrapped.as_ref().to_vec()
             }
             _ => wrapped_blob.as_ref().to_vec(),
@@ -214,73 +240,96 @@ impl EnvelopeEncryption {
     /// Spawn background rotation task (every `interval`).
     pub fn start_rotation(self: &Arc<Self>, interval: Duration) -> JoinHandle<()> {
         let this = Arc::clone(self);
-        mz_ore::task::spawn(|| "envelope_encryption_dek_rotation", async move {
-            let mut ticker = tokio::time::interval(interval);
-            ticker.tick().await; // skip first immediate tick
-            loop {
-                ticker.tick().await;
-                match Self::generate_dek(
-                    &this.mz_kms_client,
-                    &this.mz_kms_key_id,
-                    this.customer_kms_client.as_ref(),
-                    this.customer_kms_key_id.as_deref(),
-                )
-                .await
-                {
-                    Ok(new_dek) => {
-                        *this.current_dek.write().await = new_dek;
-                        info!("DEK rotated successfully");
-                    }
-                    Err(e) => {
-                        warn!("DEK rotation failed, keeping current key: {}", e);
+        mz_ore::task::spawn(
+            || "envelope_encryption_dek_rotation",
+            async move {
+                let mut ticker = tokio::time::interval(interval);
+                ticker.tick().await; // skip first immediate tick
+                loop {
+                    ticker.tick().await;
+                    match Self::generate_dek(
+                        &this.mz_kms_client,
+                        &this.mz_kms_key_id,
+                        this.customer_kms_client.as_ref(),
+                        this.customer_kms_key_id.as_deref(),
+                    )
+                    .await
+                    {
+                        Ok(new_dek) => {
+                            *this.current_dek.write().await = new_dek;
+                            info!("DEK rotated successfully");
+                        }
+                        Err(e) => {
+                            warn!("DEK rotation failed, keeping current key: {}", e);
+                        }
                     }
                 }
             }
-        }.instrument(Span::current()))
+            .instrument(Span::current()),
+        )
     }
 
     /// Encrypt plaintext. Reads cached DEK (RwLock read — uncontended).
     /// Returns: version || wrapped_dek_len || wrapped_dek || nonce || ciphertext || tag
-    pub async fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, anyhow::Error> {
+    ///
+    /// The `key` parameter is used as Additional Authenticated Data (AAD) to bind
+    /// the ciphertext to its storage key, preventing cross-key swap attacks.
+    pub async fn encrypt(&self, plaintext: &[u8], key: &str) -> Result<Vec<u8>, anyhow::Error> {
         let version = if self.customer_kms_key_id.is_some() {
             ENVELOPE_VERSION_V2
         } else {
             ENVELOPE_VERSION_V1
         };
         let dek = self.current_dek.read().await;
-        encrypt_with_dek_versioned(version, &dek.plaintext, &dek.wrapped, plaintext)
+        encrypt_with_dek_versioned(
+            version,
+            &dek.plaintext,
+            &dek.wrapped,
+            plaintext,
+            key.as_bytes(),
+        )
     }
 
     /// Decrypt ciphertext. Parses wrapped DEK from header, uses cached key if
     /// it matches, otherwise calls KMS Decrypt for the wrapped DEK.
-    pub async fn decrypt(&self, encrypted: &[u8]) -> Result<Vec<u8>, anyhow::Error> {
+    ///
+    /// The `key` parameter must match the AAD used during encryption (the storage key).
+    pub(crate) async fn decrypt(
+        &self,
+        encrypted: &[u8],
+        key: &str,
+    ) -> Result<Vec<u8>, CryptoError> {
         let (version, wrapped_dek, nonce_and_ciphertext) = parse_envelope(encrypted)?;
 
         // Fast path: check if wrapped DEK matches our cached key.
         let dek = self.current_dek.read().await;
-        let plaintext_key = if dek.wrapped == wrapped_dek {
-            dek.plaintext
+        let plaintext_key: Zeroizing<[u8; 32]> = if dek.wrapped == wrapped_dek {
+            Zeroizing::new(dek.plaintext)
         } else {
             drop(dek);
             debug!("wrapped DEK mismatch, calling KMS Decrypt for old DEK");
             self.decrypt_dek(version, wrapped_dek).await?
         };
 
-        decrypt_with_key(&plaintext_key, nonce_and_ciphertext)
+        decrypt_with_key(&plaintext_key, nonce_and_ciphertext, key.as_bytes())
     }
 
-    async fn decrypt_dek(&self, version: u8, wrapped_dek: &[u8]) -> Result<[u8; 32], anyhow::Error> {
+    async fn decrypt_dek(
+        &self,
+        version: u8,
+        wrapped_dek: &[u8],
+    ) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
         // For V2 (two-party), first unwrap with customer key, then with MZ key.
         let mz_wrapped = if version == ENVELOPE_VERSION_V2 {
             let customer_client = self.customer_kms_client.as_ref().ok_or_else(|| {
-                anyhow::anyhow!(
+                CryptoError::Kms(anyhow::anyhow!(
                     "v2 envelope requires customer KMS key, but none is configured"
-                )
+                ))
             })?;
             let customer_key_id = self.customer_kms_key_id.as_deref().ok_or_else(|| {
-                anyhow::anyhow!(
+                CryptoError::Kms(anyhow::anyhow!(
                     "v2 envelope requires customer KMS key ID, but none is configured"
-                )
+                ))
             })?;
             let resp = customer_client
                 .decrypt()
@@ -288,9 +337,13 @@ impl EnvelopeEncryption {
                 .ciphertext_blob(KmsBlob::new(wrapped_dek))
                 .send()
                 .await
-                .map_err(|e| anyhow::anyhow!("customer KMS Decrypt failed: {}", e))?;
+                .map_err(|e| {
+                    CryptoError::Kms(anyhow::anyhow!("customer KMS Decrypt failed: {}", e))
+                })?;
             let blob = resp.plaintext().ok_or_else(|| {
-                anyhow::anyhow!("customer KMS Decrypt returned no plaintext")
+                CryptoError::Kms(anyhow::anyhow!(
+                    "customer KMS Decrypt returned no plaintext"
+                ))
             })?;
             blob.as_ref().to_vec()
         } else {
@@ -304,19 +357,19 @@ impl EnvelopeEncryption {
             .ciphertext_blob(KmsBlob::new(mz_wrapped))
             .send()
             .await
-            .map_err(|e| anyhow::anyhow!("KMS Decrypt failed: {}", e))?;
+            .map_err(|e| CryptoError::Kms(anyhow::anyhow!("KMS Decrypt failed: {}", e)))?;
 
-        let plaintext_blob = resp
-            .plaintext()
-            .ok_or_else(|| anyhow::anyhow!("KMS Decrypt returned no plaintext"))?;
+        let plaintext_blob = resp.plaintext().ok_or_else(|| {
+            CryptoError::Kms(anyhow::anyhow!("KMS Decrypt returned no plaintext"))
+        })?;
         let bytes = plaintext_blob.as_ref();
         if bytes.len() != 32 {
-            return Err(anyhow::anyhow!(
+            return Err(CryptoError::Kms(anyhow::anyhow!(
                 "KMS Decrypt returned key of length {}, expected 32",
                 bytes.len()
-            ));
+            )));
         }
-        let mut key = [0u8; 32];
+        let mut key = Zeroizing::new([0u8; 32]);
         key.copy_from_slice(bytes);
         Ok(key)
     }
@@ -341,16 +394,27 @@ fn write_envelope_header(
 }
 
 /// Encrypt using a raw AES-256-GCM key. Builds the envelope format with the given version byte.
+///
+/// The `aad` parameter is bound into the GCM authentication tag, ensuring that
+/// ciphertext cannot be moved between different storage keys without detection.
 fn encrypt_with_dek_versioned(
     version: u8,
     key: &[u8; 32],
     wrapped_dek: &[u8],
     plaintext: &[u8],
+    aad: &[u8],
 ) -> Result<Vec<u8>, anyhow::Error> {
+    // Note: aws-lc-rs UnboundKey/LessSafeKey do not zeroize key material on drop.
+    // The key bytes may persist in memory after these values are dropped. This is a
+    // known limitation of the library. The DataEncryptionKey.plaintext field IS
+    // zeroized via our custom Drop impl.
     let unbound = UnboundKey::new(&AES_256_GCM, key)
         .map_err(|_| anyhow::anyhow!("failed to create AES-256-GCM key"))?;
     let aead_key = LessSafeKey::new(unbound);
 
+    // Safety: Random 96-bit nonces with AES-256-GCM. Birthday bound is ~2^48 per key.
+    // With DEK rotation every 300s and realistic write rates (~10K ops/s = ~2^21.5
+    // per key lifetime), collision probability is negligible (margin ~2^26).
     let mut nonce_bytes = [0u8; NONCE_LEN];
     aws_lc_rs::rand::fill(&mut nonce_bytes)
         .map_err(|_| anyhow::anyhow!("failed to generate random nonce"))?;
@@ -361,7 +425,7 @@ fn encrypt_with_dek_versioned(
     in_out.extend_from_slice(plaintext);
 
     aead_key
-        .seal_in_place_append_tag(nonce, Aad::empty(), &mut in_out)
+        .seal_in_place_append_tag(nonce, Aad::from(aad), &mut in_out)
         .map_err(|_| anyhow::anyhow!("AES-256-GCM seal failed"))?;
 
     let header_size = 1 + WRAPPED_DEK_LEN_SIZE + wrapped_dek.len() + NONCE_LEN;
@@ -374,12 +438,14 @@ fn encrypt_with_dek_versioned(
 }
 
 /// Encrypt using a raw AES-256-GCM key. Builds the V1 envelope format.
-pub fn encrypt_with_dek(
+#[cfg(test)]
+fn encrypt_with_dek(
     key: &[u8; 32],
     wrapped_dek: &[u8],
     plaintext: &[u8],
+    aad: &[u8],
 ) -> Result<Vec<u8>, anyhow::Error> {
-    encrypt_with_dek_versioned(ENVELOPE_VERSION_V1, key, wrapped_dek, plaintext)
+    encrypt_with_dek_versioned(ENVELOPE_VERSION_V1, key, wrapped_dek, plaintext, aad)
 }
 
 /// Validate the envelope header and compute slice boundaries.
@@ -414,25 +480,33 @@ fn validate_envelope_header(data: &[u8]) -> Option<(u8, usize)> {
 }
 
 /// Parse the envelope header, returning (version, wrapped_dek, nonce_and_ciphertext_with_tag).
-pub fn parse_envelope(data: &[u8]) -> Result<(u8, &[u8], &[u8]), anyhow::Error> {
+pub(crate) fn parse_envelope(data: &[u8]) -> Result<(u8, &[u8], &[u8]), CryptoError> {
     let min_header = 1 + WRAPPED_DEK_LEN_SIZE;
     match validate_envelope_header(data) {
-        Some((version, wrapped_end)) => {
-            Ok((version, &data[min_header..wrapped_end], &data[wrapped_end..]))
-        }
+        Some((version, wrapped_end)) => Ok((
+            version,
+            &data[min_header..wrapped_end],
+            &data[wrapped_end..],
+        )),
         None => {
             // Provide specific error messages for diagnostics.
             if data.is_empty() {
-                Err(anyhow::anyhow!("encrypted data is empty"))
+                Err(CryptoError::InvalidEnvelope(
+                    "encrypted data is empty".into(),
+                ))
             } else if data[0] != ENVELOPE_VERSION_V1 && data[0] != ENVELOPE_VERSION_V2 {
-                Err(anyhow::anyhow!(
+                Err(CryptoError::InvalidEnvelope(format!(
                     "unsupported envelope version: 0x{:02x}",
                     data[0]
-                ))
+                )))
             } else if data.len() < min_header {
-                Err(anyhow::anyhow!("encrypted data too short for header"))
+                Err(CryptoError::InvalidEnvelope(
+                    "encrypted data too short for header".into(),
+                ))
             } else {
-                Err(anyhow::anyhow!("encrypted data too short for envelope"))
+                Err(CryptoError::InvalidEnvelope(
+                    "encrypted data too short for envelope".into(),
+                ))
             }
         }
     }
@@ -451,16 +525,21 @@ fn validate_decrypt_input(nonce_and_ciphertext: &[u8]) -> Option<usize> {
 }
 
 /// Decrypt using a raw AES-256-GCM key. Input is nonce || ciphertext || tag.
-pub fn decrypt_with_key(
+///
+/// The `aad` parameter must match the AAD used during encryption.
+pub(crate) fn decrypt_with_key(
     key: &[u8; 32],
     nonce_and_ciphertext: &[u8],
-) -> Result<Vec<u8>, anyhow::Error> {
+    aad: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
     let split_at = validate_decrypt_input(nonce_and_ciphertext)
-        .ok_or_else(|| anyhow::anyhow!("ciphertext too short"))?;
+        .ok_or(CryptoError::InvalidEnvelope("ciphertext too short".into()))?;
     let (nonce_bytes, ciphertext_with_tag) = nonce_and_ciphertext.split_at(split_at);
 
+    // Note: aws-lc-rs UnboundKey/LessSafeKey do not zeroize key material on drop.
+    // See comment in encrypt_with_dek_versioned for details.
     let unbound = UnboundKey::new(&AES_256_GCM, key)
-        .map_err(|_| anyhow::anyhow!("failed to create AES-256-GCM key"))?;
+        .map_err(|_| CryptoError::InvalidEnvelope("failed to create AES-256-GCM key".into()))?;
     let aead_key = LessSafeKey::new(unbound);
 
     let mut nonce_arr = [0u8; NONCE_LEN];
@@ -469,10 +548,8 @@ pub fn decrypt_with_key(
 
     let mut buf = ciphertext_with_tag.to_vec();
     let plaintext = aead_key
-        .open_in_place(nonce, Aad::empty(), &mut buf)
-        .map_err(|_| {
-            anyhow::anyhow!("AES-256-GCM authentication failed: data may be tampered")
-        })?;
+        .open_in_place(nonce, Aad::from(aad), &mut buf)
+        .map_err(|_| CryptoError::AuthenticationFailed)?;
 
     Ok(plaintext.to_vec())
 }
@@ -566,18 +643,12 @@ impl EncryptionConfig {
 
 /// Classify a decryption error as `Determinate` (corrupt/invalid data that will
 /// never succeed on retry) or `Indeterminate` (transient KMS errors).
-fn classify_decrypt_error(e: anyhow::Error) -> ExternalError {
-    let msg = e.to_string();
-    if msg.contains("unsupported envelope version")
-        || msg.contains("authentication failed")
-        || msg.contains("ciphertext too short")
-        || msg.contains("too short for header")
-        || msg.contains("too short for envelope")
-        || msg.contains("data is empty")
-    {
-        ExternalError::from(Determinate::new(e))
-    } else {
-        ExternalError::from(e)
+fn classify_crypto_error(e: CryptoError) -> ExternalError {
+    match &e {
+        CryptoError::InvalidEnvelope(_) | CryptoError::AuthenticationFailed => {
+            ExternalError::from(Determinate::new(anyhow::anyhow!("{}", e)))
+        }
+        CryptoError::Kms(_) => ExternalError::from(anyhow::anyhow!("{}", e)),
     }
 }
 
@@ -640,10 +711,7 @@ impl EncryptedBlob {
                 vec![0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE],
             )
         } else {
-            EnvelopeEncryption::new_test(
-                [0x42u8; 32],
-                vec![0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE],
-            )
+            EnvelopeEncryption::new_test([0x42u8; 32], vec![0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE])
         });
         // No rotation in tests — use a no-op handle.
         let rotation_handle = mz_ore::task::spawn(|| "test_noop_rotation", async {});
@@ -666,9 +734,9 @@ impl Blob for EncryptedBlob {
                 let encrypted = segments.into_contiguous();
                 let plaintext = self
                     .encryption
-                    .decrypt(&encrypted)
+                    .decrypt(&encrypted, key)
                     .await
-                    .map_err(classify_decrypt_error)?;
+                    .map_err(classify_crypto_error)?;
                 Ok(Some(SegmentedBytes::from(plaintext)))
             }
         }
@@ -685,7 +753,7 @@ impl Blob for EncryptedBlob {
     async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         let ciphertext = self
             .encryption
-            .encrypt(&value)
+            .encrypt(&value, key)
             .await
             .map_err(ExternalError::from)?;
         self.inner.set(key, Bytes::from(ciphertext)).await
@@ -760,10 +828,7 @@ impl EncryptedConsensus {
                 vec![0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE],
             )
         } else {
-            EnvelopeEncryption::new_test(
-                [0x42u8; 32],
-                vec![0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE],
-            )
+            EnvelopeEncryption::new_test([0x42u8; 32], vec![0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE])
         });
         let rotation_handle = mz_ore::task::spawn(|| "test_noop_rotation", async {});
         EncryptedConsensus {
@@ -775,13 +840,14 @@ impl EncryptedConsensus {
 
     async fn decrypt_versioned_data(
         &self,
+        key: &str,
         vd: VersionedData,
     ) -> Result<VersionedData, ExternalError> {
         let plaintext = self
             .encryption
-            .decrypt(&vd.data)
+            .decrypt(&vd.data, key)
             .await
-            .map_err(classify_decrypt_error)?;
+            .map_err(classify_crypto_error)?;
         Ok(VersionedData {
             seqno: vd.seqno,
             data: Bytes::from(plaintext),
@@ -798,7 +864,7 @@ impl Consensus for EncryptedConsensus {
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         match self.inner.head(key).await? {
             None => Ok(None),
-            Some(vd) => Ok(Some(self.decrypt_versioned_data(vd).await?)),
+            Some(vd) => Ok(Some(self.decrypt_versioned_data(key, vd).await?)),
         }
     }
 
@@ -810,14 +876,16 @@ impl Consensus for EncryptedConsensus {
     ) -> Result<CaSResult, ExternalError> {
         let encrypted = self
             .encryption
-            .encrypt(&new.data)
+            .encrypt(&new.data, key)
             .await
             .map_err(ExternalError::from)?;
         let encrypted_new = VersionedData {
             seqno: new.seqno,
             data: Bytes::from(encrypted),
         };
-        self.inner.compare_and_set(key, expected, encrypted_new).await
+        self.inner
+            .compare_and_set(key, expected, encrypted_new)
+            .await
     }
 
     async fn scan(
@@ -829,7 +897,7 @@ impl Consensus for EncryptedConsensus {
         let entries = self.inner.scan(key, from, limit).await?;
         let mut decrypted = Vec::with_capacity(entries.len());
         for vd in entries {
-            decrypted.push(self.decrypt_versioned_data(vd).await?);
+            decrypted.push(self.decrypt_versioned_data(key, vd).await?);
         }
         Ok(decrypted)
     }
@@ -857,14 +925,14 @@ mod tests {
         let wrapped = test_wrapped_dek();
         let plaintext = b"hello, envelope encryption!";
 
-        let encrypted = encrypt_with_dek(&key, &wrapped, plaintext).unwrap();
+        let encrypted = encrypt_with_dek(&key, &wrapped, plaintext, b"").unwrap();
         assert_ne!(&encrypted[..], plaintext);
 
         let (version, parsed_wrapped, nonce_ct) = parse_envelope(&encrypted).unwrap();
         assert_eq!(version, ENVELOPE_VERSION_V1);
         assert_eq!(parsed_wrapped, &wrapped[..]);
 
-        let decrypted = decrypt_with_key(&key, nonce_ct).unwrap();
+        let decrypted = decrypt_with_key(&key, nonce_ct, b"").unwrap();
         assert_eq!(&decrypted[..], plaintext);
     }
 
@@ -873,9 +941,9 @@ mod tests {
         let key = test_key();
         let wrapped = test_wrapped_dek();
 
-        let encrypted = encrypt_with_dek(&key, &wrapped, b"").unwrap();
+        let encrypted = encrypt_with_dek(&key, &wrapped, b"", b"").unwrap();
         let (_, _, nonce_ct) = parse_envelope(&encrypted).unwrap();
-        let decrypted = decrypt_with_key(&key, nonce_ct).unwrap();
+        let decrypted = decrypt_with_key(&key, nonce_ct, b"").unwrap();
         assert!(decrypted.is_empty());
     }
 
@@ -884,21 +952,17 @@ mod tests {
         let key = test_key();
         let wrapped = test_wrapped_dek();
 
-        let mut encrypted = encrypt_with_dek(&key, &wrapped, b"secret data").unwrap();
+        let mut encrypted = encrypt_with_dek(&key, &wrapped, b"secret data", b"").unwrap();
         // Flip a byte in the ciphertext portion (after header + nonce).
         let flip_pos = encrypted.len() - 5;
         encrypted[flip_pos] ^= 0xFF;
 
         let (_, _, nonce_ct) = parse_envelope(&encrypted).unwrap();
-        let result = decrypt_with_key(&key, nonce_ct);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("authentication failed"),
-            "should detect tampered data"
-        );
+        let result = decrypt_with_key(&key, nonce_ct, b"");
+        assert!(matches!(
+            result.unwrap_err(),
+            CryptoError::AuthenticationFailed
+        ));
     }
 
     #[mz_ore::test]
@@ -907,9 +971,9 @@ mod tests {
         let wrong_key = [0x99u8; 32];
         let wrapped = test_wrapped_dek();
 
-        let encrypted = encrypt_with_dek(&key, &wrapped, b"secret").unwrap();
+        let encrypted = encrypt_with_dek(&key, &wrapped, b"secret", b"").unwrap();
         let (_, _, nonce_ct) = parse_envelope(&encrypted).unwrap();
-        let result = decrypt_with_key(&wrong_key, nonce_ct);
+        let result = decrypt_with_key(&wrong_key, nonce_ct, b"");
         assert!(result.is_err());
     }
 
@@ -922,11 +986,12 @@ mod tests {
         data.extend_from_slice(&[0u8; 16]); // minimal ciphertext (just tag)
 
         let result = parse_envelope(&data);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("unsupported envelope version"));
+        match result.unwrap_err() {
+            CryptoError::InvalidEnvelope(msg) => {
+                assert!(msg.contains("unsupported envelope version"));
+            }
+            other => panic!("expected InvalidEnvelope, got: {:?}", other),
+        }
     }
 
     #[mz_ore::test]
@@ -934,7 +999,7 @@ mod tests {
         let key = test_key();
         let wrapped = vec![1, 2, 3, 4, 5];
 
-        let encrypted = encrypt_with_dek(&key, &wrapped, b"test").unwrap();
+        let encrypted = encrypt_with_dek(&key, &wrapped, b"test", b"").unwrap();
 
         // Version byte
         assert_eq!(encrypted[0], ENVELOPE_VERSION_V1);
@@ -1112,9 +1177,7 @@ mod tests {
             seqno: SeqNo(1),
             data: Bytes::from(&plaintext[..]),
         };
-        consensus
-            .compare_and_set("key", None, data)
-            .await?;
+        consensus.compare_and_set("key", None, data).await?;
 
         // Read raw from inner — should be encrypted.
         let raw = mem.head("key").await?.unwrap();
@@ -1123,9 +1186,7 @@ mod tests {
         assert_eq!(raw.data[0], ENVELOPE_VERSION_V1);
         // Raw data must NOT contain the plaintext.
         assert!(
-            !raw.data
-                .windows(plaintext.len())
-                .any(|w| w == plaintext),
+            !raw.data.windows(plaintext.len()).any(|w| w == plaintext),
             "raw consensus data should not contain plaintext"
         );
 
@@ -1162,14 +1223,15 @@ mod tests {
 
         // Encrypt with V2 version byte (simulating double-wrapped DEK).
         let encrypted =
-            encrypt_with_dek_versioned(ENVELOPE_VERSION_V2, &key, &wrapped, plaintext).unwrap();
+            encrypt_with_dek_versioned(ENVELOPE_VERSION_V2, &key, &wrapped, plaintext, b"")
+                .unwrap();
         assert_ne!(&encrypted[..], plaintext);
 
         let (version, parsed_wrapped, nonce_ct) = parse_envelope(&encrypted).unwrap();
         assert_eq!(version, ENVELOPE_VERSION_V2);
         assert_eq!(parsed_wrapped, &wrapped[..]);
 
-        let decrypted = decrypt_with_key(&key, nonce_ct).unwrap();
+        let decrypted = decrypt_with_key(&key, nonce_ct, b"").unwrap();
         assert_eq!(&decrypted[..], plaintext);
     }
 
@@ -1180,13 +1242,13 @@ mod tests {
         let wrapped = test_wrapped_dek();
         let plaintext = b"v1 data written before two-party";
 
-        let encrypted = encrypt_with_dek(&key, &wrapped, plaintext).unwrap();
+        let encrypted = encrypt_with_dek(&key, &wrapped, plaintext, b"").unwrap();
         let (version, _, nonce_ct) = parse_envelope(&encrypted).unwrap();
         assert_eq!(version, ENVELOPE_VERSION_V1);
 
         // A two-party-enabled instance can still decrypt V1 envelopes
         // (the customer key unwrap step is skipped for V1).
-        let decrypted = decrypt_with_key(&key, nonce_ct).unwrap();
+        let decrypted = decrypt_with_key(&key, nonce_ct, b"").unwrap();
         assert_eq!(&decrypted[..], plaintext);
     }
 
@@ -1197,7 +1259,8 @@ mod tests {
         let wrapped = test_wrapped_dek();
 
         let encrypted =
-            encrypt_with_dek_versioned(ENVELOPE_VERSION_V2, &key, &wrapped, b"secret").unwrap();
+            encrypt_with_dek_versioned(ENVELOPE_VERSION_V2, &key, &wrapped, b"secret", b"")
+                .unwrap();
         let (version, _, _) = parse_envelope(&encrypted).unwrap();
         assert_eq!(version, ENVELOPE_VERSION_V2);
 
@@ -1219,7 +1282,7 @@ mod tests {
         let wrapped = vec![1, 2, 3, 4, 5, 6, 7, 8];
 
         let encrypted =
-            encrypt_with_dek_versioned(ENVELOPE_VERSION_V2, &key, &wrapped, b"test").unwrap();
+            encrypt_with_dek_versioned(ENVELOPE_VERSION_V2, &key, &wrapped, b"test", b"").unwrap();
 
         // Version byte is V2.
         assert_eq!(encrypted[0], ENVELOPE_VERSION_V2);
@@ -1247,10 +1310,11 @@ mod tests {
         let wrapped = test_wrapped_dek();
 
         let encrypted =
-            encrypt_with_dek_versioned(ENVELOPE_VERSION_V2, &key, &wrapped, b"secret").unwrap();
+            encrypt_with_dek_versioned(ENVELOPE_VERSION_V2, &key, &wrapped, b"secret", b"")
+                .unwrap();
         let (_, _, nonce_ct) = parse_envelope(&encrypted).unwrap();
 
-        let result = decrypt_with_key(&wrong_key, nonce_ct);
+        let result = decrypt_with_key(&wrong_key, nonce_ct, b"");
         assert!(result.is_err(), "revoked key should fail decryption");
     }
 
@@ -1366,11 +1430,11 @@ mod tests {
             plaintext in prop::collection::vec(any::<u8>(), 0..1024),
             version in prop::sample::select(vec![ENVELOPE_VERSION_V1, ENVELOPE_VERSION_V2]),
         ) {
-            let encrypted = encrypt_with_dek_versioned(version, &key, &wrapped_dek, &plaintext).unwrap();
+            let encrypted = encrypt_with_dek_versioned(version, &key, &wrapped_dek, &plaintext, b"").unwrap();
             let (parsed_version, parsed_wrapped, nonce_ct) = parse_envelope(&encrypted).unwrap();
             prop_assert_eq!(parsed_version, version);
             prop_assert_eq!(parsed_wrapped, &wrapped_dek[..]);
-            let decrypted = decrypt_with_key(&key, nonce_ct).unwrap();
+            let decrypted = decrypt_with_key(&key, nonce_ct, b"").unwrap();
             prop_assert_eq!(decrypted, plaintext);
         }
 
@@ -1388,7 +1452,7 @@ mod tests {
             data in prop::collection::vec(any::<u8>(), 0..512),
         ) {
             // decrypt_with_key must not panic on any input — Err is fine.
-            let _ = decrypt_with_key(&key, &data);
+            let _ = decrypt_with_key(&key, &data, b"");
         }
 
         #[test] // allow(test-attribute)
@@ -1398,7 +1462,7 @@ mod tests {
             plaintext in prop::collection::vec(any::<u8>(), 1..256),
             flip_offset in 0usize..256,
         ) {
-            let encrypted = encrypt_with_dek(&key, &wrapped_dek, &plaintext).unwrap();
+            let encrypted = encrypt_with_dek(&key, &wrapped_dek, &plaintext, b"").unwrap();
             let (_, _, nonce_ct) = parse_envelope(&encrypted).unwrap();
 
             // Flip a byte in the nonce+ciphertext region.
@@ -1408,7 +1472,7 @@ mod tests {
 
             // AEAD should detect the tamper (unless the flip is a no-op, which
             // can't happen since we XOR with 0xFF).
-            let result = decrypt_with_key(&key, &tampered);
+            let result = decrypt_with_key(&key, &tampered, b"");
             prop_assert!(result.is_err(), "tampered ciphertext should fail AEAD authentication");
         }
     }
@@ -1423,8 +1487,8 @@ mod tests {
         let wrapped = test_wrapped_dek();
         let plaintext = b"duplicate plaintext for nonce test";
 
-        let enc1 = encrypt_with_dek(&key, &wrapped, plaintext).unwrap();
-        let enc2 = encrypt_with_dek(&key, &wrapped, plaintext).unwrap();
+        let enc1 = encrypt_with_dek(&key, &wrapped, plaintext, b"").unwrap();
+        let enc2 = encrypt_with_dek(&key, &wrapped, plaintext, b"").unwrap();
 
         // Ciphertexts must differ (different random nonces).
         assert_ne!(enc1, enc2, "two encryptions of same plaintext must differ");
@@ -1438,8 +1502,31 @@ mod tests {
         // Both must still decrypt correctly.
         let (_, _, nc1) = parse_envelope(&enc1).unwrap();
         let (_, _, nc2) = parse_envelope(&enc2).unwrap();
-        assert_eq!(decrypt_with_key(&key, nc1).unwrap(), plaintext);
-        assert_eq!(decrypt_with_key(&key, nc2).unwrap(), plaintext);
+        assert_eq!(decrypt_with_key(&key, nc1, b"").unwrap(), plaintext);
+        assert_eq!(decrypt_with_key(&key, nc2, b"").unwrap(), plaintext);
+    }
+
+    /// AAD binding: ciphertext encrypted with one storage key cannot be
+    /// decrypted with a different storage key.
+    #[mz_ore::test]
+    fn aad_binding() {
+        let key = test_key();
+        let wrapped = test_wrapped_dek();
+        let plaintext = b"secret data";
+
+        let encrypted = encrypt_with_dek(&key, &wrapped, plaintext, b"key-a").unwrap();
+        let (_, _, nonce_ct) = parse_envelope(&encrypted).unwrap();
+
+        // Decrypt with matching AAD succeeds.
+        let decrypted = decrypt_with_key(&key, nonce_ct, b"key-a").unwrap();
+        assert_eq!(&decrypted[..], plaintext);
+
+        // Decrypt with different AAD fails — ciphertext is bound to its storage key.
+        let result = decrypt_with_key(&key, nonce_ct, b"key-b");
+        assert!(matches!(
+            result.unwrap_err(),
+            CryptoError::AuthenticationFailed
+        ));
     }
 
     /// QA Gap 5: Large payload roundtrip (10 MB cyclic byte pattern).
@@ -1501,7 +1588,7 @@ mod tests {
         let enc = EnvelopeEncryption::new_test(original_key, original_wrapped.clone());
 
         // Encrypt data with the original DEK.
-        let ct_old = enc.encrypt(b"before rotation").await.unwrap();
+        let ct_old = enc.encrypt(b"before rotation", "").await.unwrap();
         let (_, wrapped_old, _) = parse_envelope(&ct_old).unwrap();
         assert_eq!(wrapped_old, &original_wrapped[..]);
 
@@ -1515,13 +1602,16 @@ mod tests {
         }
 
         // New encryption uses the new wrapped DEK.
-        let ct_new = enc.encrypt(b"after rotation").await.unwrap();
+        let ct_new = enc.encrypt(b"after rotation", "").await.unwrap();
         let (_, wrapped_new, nonce_ct_new) = parse_envelope(&ct_new).unwrap();
         assert_eq!(wrapped_new, &new_wrapped[..]);
-        assert_ne!(wrapped_old, wrapped_new, "wrapped DEK must change after rotation");
+        assert_ne!(
+            wrapped_old, wrapped_new,
+            "wrapped DEK must change after rotation"
+        );
 
         // New ciphertext decrypts via fast path (current DEK matches).
-        let decrypted_new = decrypt_with_key(&new_key, nonce_ct_new).unwrap();
+        let decrypted_new = decrypt_with_key(&new_key, nonce_ct_new, b"").unwrap();
         assert_eq!(&decrypted_new[..], b"after rotation");
 
         // Old ciphertext: wrapped DEK doesn't match the current DEK (slow path would trigger).
@@ -1535,7 +1625,7 @@ mod tests {
         drop(current_dek);
 
         // Manually decrypt old ciphertext with the original key.
-        let decrypted_old = decrypt_with_key(&original_key, nonce_ct_old).unwrap();
+        let decrypted_old = decrypt_with_key(&original_key, nonce_ct_old, b"").unwrap();
         assert_eq!(&decrypted_old[..], b"before rotation");
     }
 
@@ -1569,8 +1659,7 @@ mod tests {
         let raw_after = inner.get("k2").await?.unwrap().into_contiguous();
         let (_, wrapped_after, _) = parse_envelope(&raw_after).unwrap();
         assert_ne!(
-            wrapped_before,
-            wrapped_after,
+            wrapped_before, wrapped_after,
             "wrapped DEK in raw storage must differ after rotation"
         );
 
@@ -1631,10 +1720,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)]
     async fn concurrent_rotation_contention() {
-        let enc = Arc::new(EnvelopeEncryption::new_test(
-            test_key(),
-            test_wrapped_dek(),
-        ));
+        let enc = Arc::new(EnvelopeEncryption::new_test(test_key(), test_wrapped_dek()));
 
         let mut handles = Vec::new();
 
@@ -1644,7 +1730,10 @@ mod tests {
             handles.push(mz_ore::task::spawn(
                 || format!("encrypt_task_{i}"),
                 async move {
-                    let ct = enc.encrypt(format!("data-{i}").as_bytes()).await.unwrap();
+                    let ct = enc
+                        .encrypt(format!("data-{i}").as_bytes(), "")
+                        .await
+                        .unwrap();
                     // Verify structural validity.
                     let (version, _, nonce_ct) = parse_envelope(&ct).unwrap();
                     assert_eq!(version, ENVELOPE_VERSION_V1);
@@ -1743,10 +1832,7 @@ mod kani_proofs {
             assert!(nonce_ct_len >= NONCE_LEN + GCM_TAG_LEN);
             // The wrapped DEK length matches the encoded length field.
             let wrapped_dek_len = wrapped_end - min_header;
-            assert_eq!(
-                min_header + wrapped_dek_len + nonce_ct_len,
-                len
-            );
+            assert_eq!(min_header + wrapped_dek_len + nonce_ct_len, len);
         }
     }
 
@@ -1787,8 +1873,7 @@ mod kani_proofs {
         }
         // Remaining bytes are already zeroed (nonce + ciphertext + tag).
 
-        let (parsed_ver, parsed_wrapped_end) =
-            validate_envelope_header(&buf[..total]).unwrap();
+        let (parsed_ver, parsed_wrapped_end) = validate_envelope_header(&buf[..total]).unwrap();
         assert_eq!(parsed_ver, version);
         assert_eq!(parsed_wrapped_end, min_header + wrapped_len);
 
