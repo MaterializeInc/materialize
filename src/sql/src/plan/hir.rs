@@ -2380,8 +2380,9 @@ impl HirRelationExpr {
     /// The HirRelationExpr is considered potentially expensive if and only if
     /// at least one of the following conditions is true:
     ///
-    ///  - It contains at least one CallTable or a Reduce operator.
     ///  - It contains at least one HirScalarExpr with a function call.
+    ///  - It contains at least one CallTable or a Reduce operator.
+    ///  - We run into a RecursionLimitError while analyzing the expression.
     ///
     /// !!!WARNING!!!: this method has an MirRelationExpr counterpart. The two
     /// should be kept in sync w.r.t. HIR ⇒ MIR lowering!

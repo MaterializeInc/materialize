@@ -51,6 +51,18 @@ EOF
 
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SUBSCRIBE (SELECT 1 / 1)
+----
+Explained Query:
+  Constant
+    - (1)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 (SELECT 1) UNION ALL (SELECT 1 + 2)
 ----
 Explained Query (fast path):
@@ -79,6 +91,18 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT 1 WHERE (SELECT 1 + 2) > 0
 ----
 Explained Query (fast path):
+  Constant
+    - (1)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SUBSCRIBE (SELECT 1 WHERE (SELECT 1 + 2) > 0)
+----
+Explained Query:
   Constant
     - (1)
 
