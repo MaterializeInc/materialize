@@ -555,13 +555,20 @@ where
             // Keep the task handle alive for the lifetime of this closure.
             let _ = &task_handle;
 
-            let Some(ref mut event_rx) = event_rx else {
+            // If the shutdown button was pressed, drop the event receiver to signal the
+            // task to exit, and drop capabilities.
+            if shutdown_handle.all_pressed() {
+                event_rx = None;
+                cap_set = CapabilitySet::new();
+            }
+
+            let Some(rx) = event_rx.as_mut() else {
                 return;
             };
 
             // Drain events from the Tokio task.
             loop {
-                match event_rx.try_recv() {
+                match rx.try_recv() {
                     Ok(DescsEvent::Setup {
                         as_of,
                         cfg: task_cfg,
@@ -707,12 +714,6 @@ where
                         break;
                     }
                 }
-            }
-
-            // If the shutdown button was pressed, drop the event receiver to signal the
-            // task to exit, and drop capabilities.
-            if shutdown_handle.all_pressed() {
-                cap_set = CapabilitySet::new();
             }
         }
     });
@@ -864,6 +865,13 @@ where
             // Keep the task handle alive for the lifetime of this closure.
             let _ = &task_handle;
 
+            // If the shutdown button was pressed, drop channels and capabilities.
+            if shutdown_handle.all_pressed() {
+                inflight_caps.clear();
+                fetched_rx = None;
+                return;
+            }
+
             if errored {
                 return;
             }
@@ -902,12 +910,6 @@ where
                         }
                     }
                 }
-            }
-
-            // If the shutdown button was pressed, drop channels and capabilities.
-            if shutdown_handle.all_pressed() {
-                inflight_caps.clear();
-                fetched_rx = None;
             }
         }
     });
