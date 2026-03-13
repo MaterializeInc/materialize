@@ -21,7 +21,8 @@ use std::rc::Rc;
 use timely::dataflow::Scope;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::scopes::ScopeParent;
-use timely::progress::operate::SharedProgress;
+
+use timely::progress::operate::{Connectivity, SharedProgress};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Operate, SubgraphBuilder, Timestamp};
 use timely::scheduling::Schedule;
@@ -239,40 +240,28 @@ impl<T: Timestamp, O: Operate<T>> Operate<T> for LabelledOperator<O> {
         self.inner.outputs()
     }
 
-    fn get_internal_summary(
-        &mut self,
-    ) -> (
-        timely::progress::operate::Connectivity<T::Summary>,
-        Rc<RefCell<SharedProgress<T>>>,
-    ) {
-        self.inner.get_internal_summary()
-    }
-
     fn local(&self) -> bool {
         self.inner.local()
-    }
-
-    fn set_external_summary(&mut self) {
-        self.inner.set_external_summary()
     }
 
     fn notify_me(&self) -> bool {
         self.inner.notify_me()
     }
-}
 
-impl<O: Schedule> Schedule for LabelledOperator<O> {
-    fn name(&self) -> &str {
-        self.inner.name()
-    }
-
-    fn path(&self) -> &[usize] {
-        self.inner.path()
-    }
-
-    #[inline(always)]
-    fn schedule(&mut self) -> bool {
-        custom_labels::with_label("timely-scope", &self.label, || self.inner.schedule())
+    fn initialize(
+        self: Box<Self>,
+    ) -> (
+        Connectivity<T::Summary>,
+        Rc<RefCell<SharedProgress<T>>>,
+        Box<dyn Schedule>,
+    ) {
+        let LabelledOperator { label, inner } = *self;
+        let (connectivity, shared, schedule) = Box::new(inner).initialize();
+        let schedule = Box::new(LabelledSchedule {
+            label,
+            inner: schedule,
+        });
+        (connectivity, shared, schedule)
     }
 }
 
@@ -287,40 +276,44 @@ impl<T: Timestamp> Operate<T> for BoxedOperator<T> {
         self.0.outputs()
     }
 
-    fn get_internal_summary(
-        &mut self,
-    ) -> (
-        timely::progress::operate::Connectivity<<T as Timestamp>::Summary>,
-        Rc<RefCell<SharedProgress<T>>>,
-    ) {
-        self.0.get_internal_summary()
-    }
-
     fn local(&self) -> bool {
         self.0.local()
-    }
-
-    fn set_external_summary(&mut self) {
-        self.0.set_external_summary()
     }
 
     fn notify_me(&self) -> bool {
         self.0.notify_me()
     }
+
+    fn initialize(
+        self: Box<Self>,
+    ) -> (
+        Connectivity<T::Summary>,
+        Rc<RefCell<SharedProgress<T>>>,
+        Box<dyn Schedule>,
+    ) {
+        (*self).0.initialize()
+    }
 }
 
-impl<T> Schedule for BoxedOperator<T> {
+/// A wrapper around a [`Schedule`] that sets a profiling label every time the operator is
+/// scheduled.
+struct LabelledSchedule {
+    label: String,
+    inner: Box<dyn Schedule>,
+}
+
+impl Schedule for LabelledSchedule {
     fn name(&self) -> &str {
-        self.0.name()
+        self.inner.name()
     }
 
     fn path(&self) -> &[usize] {
-        self.0.path()
+        self.inner.path()
     }
 
     #[inline(always)]
     fn schedule(&mut self) -> bool {
-        self.0.schedule()
+        custom_labels::with_label("timely-scope", &self.label, || self.inner.schedule())
     }
 }
 
