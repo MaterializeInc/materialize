@@ -25,7 +25,7 @@ This release includes various improvements and bug fixes.
 
 - Added support for setting `cpu_request` independently of `cpu_limit`
   in cluster replica sizes for Self-Managed deployments.
-- Renamed the "Org ID" label to "Environment ID" in the Console Shell
+- Renamed the **Org ID** label to **Environment ID** in the Console Shell
   to disambiguate organization IDs from environment IDs, which was
   causing confusion for Self-Managed deployments.
 
@@ -41,8 +41,8 @@ This release includes various improvements and bug fixes.
 - Fixed unbounded command queue buildup in internal storage writer tasks
   that could lead to out-of-memory conditions when environments have a
   large number of indexes.
-- Fixed the Role Filters display in dark mode in the console.
-- Fixed an incorrect join condition in the console cluster list that
+- Fixed the Role Filters display in dark mode in the Console.
+- Fixed an incorrect join condition in the Console cluster list that
   could cause incorrect cluster information to be displayed.
 
 ## v26.14.1
