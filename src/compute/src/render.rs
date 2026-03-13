@@ -122,7 +122,8 @@ use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
     COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
-    ENABLE_TEMPORAL_BUCKETING, SUBSCRIBE_SNAPSHOT_OPTIMIZATION, TEMPORAL_BUCKETING_SUMMARY,
+    ENABLE_TEMPORAL_BUCKETING, ENABLE_VECTORIZED_MFP, SUBSCRIBE_SNAPSHOT_OPTIMIZATION,
+    TEMPORAL_BUCKETING_SUMMARY,
 };
 use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::{
@@ -282,6 +283,8 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
+                    let enable_vectorized_mfp =
+                        ENABLE_VECTORIZED_MFP.get(&compute_state.worker_config);
                     let (mut ok_stream, err_stream, token) = persist_source::persist_source(
                         inner,
                         *source_id,
@@ -296,6 +299,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         compute_state.dataflow_max_inflight_bytes(),
                         start_signal.clone(),
                         ErrorHandler::Halt("compute_import"),
+                        enable_vectorized_mfp,
                     );
 
                     // If `mfp` is non-identity, we need to apply what remains.
