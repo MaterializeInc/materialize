@@ -184,9 +184,9 @@ export function useSubscribeManager<T extends object, R = SubscribeRow<T>>({
     target: subscribeInstance,
     subscribe: subscribeInstance,
     request,
-    sessionVariables: {
+    getSessionVariables: () => ({
       cluster: options?.clusterName,
-    },
+    }),
   });
 
   const { data, error, snapshotComplete } = React.useSyncExternalStore(

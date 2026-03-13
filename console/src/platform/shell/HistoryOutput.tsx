@@ -7,7 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { StackProps, VStack } from "@chakra-ui/react";
+import { RepeatIcon } from "@chakra-ui/icons";
+import { Button, HStack, StackProps, VStack } from "@chakra-ui/react";
 import { useAtom } from "jotai";
 import React, { forwardRef } from "react";
 
@@ -21,7 +22,9 @@ import {
   HistoryId,
   historyItemAtom,
   historyItemCommandResultsSelector,
+  shellStateAtom,
 } from "./store/shell";
+import useShellWebsocket from "./useShellWebsocket";
 
 type HistoryOutputProps = {
   historyId?: HistoryId;
@@ -35,6 +38,17 @@ const CommandOutput = ({
   commandResults: CommandResultType[];
 }) => {
   const error = commandOutput.error;
+  const { send, isSocketAvailable } = useShellWebsocket();
+  const [{ webSocketState }] = useAtom(shellStateAtom);
+  const canRetry = isSocketAvailable && webSocketState === "readyForQuery";
+
+  const handleRetry = () => {
+    if (!canRetry) return;
+    send({
+      queries: commandOutput.statements,
+      originalCommand: commandOutput.command,
+    });
+  };
 
   return (
     <CommandBlockOutputContainer
@@ -60,6 +74,19 @@ const CommandOutput = ({
             />
           );
         })}
+        {commandOutput.interrupted && (
+          <HStack justifyContent="flex-end" width="100%" mt="1">
+            <Button
+              leftIcon={<RepeatIcon />}
+              variant="tertiary"
+              size="sm"
+              isDisabled={!canRetry}
+              onClick={handleRetry}
+            >
+              Retry
+            </Button>
+          </HStack>
+        )}
       </>
     </CommandBlockOutputContainer>
   );

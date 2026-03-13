@@ -15,6 +15,7 @@ import { SubscribeManager } from "~/api/materialize/SubscribeManager";
 import { SessionVariables, SqlRequest } from "~/api/materialize/types";
 import {
   Connectable,
+  ConnectionInfo,
   ReconnectionState,
   WebsocketConnectionManager,
 } from "~/api/materialize/WebsocketConnectionManager";
@@ -42,17 +43,19 @@ export const useAutomaticallyConnectSocket = <T extends object, R>({
   target,
   subscribe,
   request,
-  sessionVariables,
+  getSessionVariables,
 }: {
   target: Connectable;
   subscribe?: SubscribeManager<T, R>;
   request?: SqlRequest;
-  sessionVariables?: SessionVariables;
-}): { reconnectionState: ReconnectionState } => {
+  getSessionVariables?: (info: ConnectionInfo) => SessionVariables | undefined;
+}): {
+  reconnectionState: ReconnectionState;
+} => {
   const store = useStore();
   const reconnectionState = useAtomValue(reconnectionStateAtom);
   const managerRef = useRef<WebsocketConnectionManager | null>(null);
-  const sessionVariablesRef = useLatestRef(sessionVariables);
+  const getSessionVariablesRef = useLatestRef(getSessionVariables);
 
   // Manager lifecycle - create on mount/target change, destroy on cleanup
   React.useEffect(() => {
@@ -60,14 +63,16 @@ export const useAutomaticallyConnectSocket = <T extends object, R>({
       target,
       store,
       reconnectionStateAtom,
-      { sessionVariables: sessionVariablesRef.current },
+      {
+        getSessionVariables: (info) => getSessionVariablesRef.current?.(info),
+      },
     );
 
     return () => {
       managerRef.current?.destroy();
       managerRef.current = null;
     };
-  }, [target, store, sessionVariablesRef]);
+  }, [target, store, getSessionVariablesRef]);
 
   // Handle request changes for subscribe queries
   const currentEnvironment = useAtomValue(currentEnvironmentState);
@@ -81,14 +86,14 @@ export const useAutomaticallyConnectSocket = <T extends object, R>({
     subscribe.connect(
       request,
       currentEnvironment.httpAddress,
-      sessionVariablesRef.current,
+      getSessionVariablesRef.current?.({ hasEverConnected: false }),
     );
   }, [
     subscribe,
     request,
     previousRequest,
     currentEnvironment,
-    sessionVariablesRef,
+    getSessionVariablesRef,
   ]);
 
   return { reconnectionState };

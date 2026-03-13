@@ -108,6 +108,8 @@ export type CommandOutput = {
   // When a command contains multiple statements such as "SELECT 1; SELECT 1; SELECT 1;"
   commandResults: CommandResult[];
   commandResultsDisplayStates: CommandResultsDisplayState[];
+  // True when the command was in-flight when the WebSocket connection dropped
+  interrupted?: boolean;
 };
 
 export type NoticeOutput = Notice & {

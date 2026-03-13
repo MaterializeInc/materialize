@@ -30,11 +30,11 @@ import { useCurrentEnvironmentHttpAddress } from "~/store/environments";
 import { appendToCache } from "./commandCache";
 import {
   COMMAND_RESULT_MAX_SIZE_BYTES,
-  CONNECTION_LOST_NOTICE_MESSAGE,
   JOTAI_DEBOUNCE_WAIT_MS,
 } from "./constants";
 import WebSocketFsm, {
   getLatestCommandOutputClone,
+  isCommandProcessing,
   WebSocketFsmContext,
   WebSocketFsmEvent,
   WebSocketFsmState,
@@ -48,6 +48,7 @@ import {
 } from "./store/shell";
 import { useResetShellStateOnRegionChange } from "./store/useResetShellStateOnRegionChange";
 import useResetPromptCache from "./useResetPromptCache";
+import { useShellConnectionToasts } from "./useShellConnectionToasts";
 import {
   commandResultDisplayStateReducer,
   SendCallback,
@@ -175,6 +176,9 @@ export const ShellWebsocketProvider = ({
       httpAddress,
       sessionVariables: sessionVariables,
       onOpen: () => {
+        // Reset the FSM so it doesn't stay stuck in commandSent/processing
+        // state from a previous connection's in-flight query.
+        stateMachineRef.current = null;
         const stateMachine = getStateMachine();
 
         let prevWebSocketState: WebSocketFsmState["value"] | null = null;
@@ -275,7 +279,10 @@ export const ShellWebsocketProvider = ({
               saveLatestCommandOutputToGlobalState();
               break;
             case "Notice":
-              if (stateMachine.state.matches("readyForQuery")) {
+              if (
+                stateMachine.state.matches("readyForQuery") ||
+                stateMachine.state.matches("initialState")
+              ) {
                 commitToHistory(createDefaultNoticeOutput(result.payload));
               } else {
                 stateMachine.send({
@@ -303,13 +310,14 @@ export const ShellWebsocketProvider = ({
       },
       onClose: () => {
         const stateMachine = getStateMachine();
+
+        // Let the FSM mark any in-flight command as interrupted
+        if (isCommandProcessing(stateMachine.state.value)) {
+          stateMachine.send({ type: "CONNECTION_CLOSED" });
+          updateHistoryItem(getLatestCommandOutputClone(stateMachine));
+        }
+
         stateMachine.stop();
-        commitToHistory(
-          createDefaultNoticeOutput({
-            message: CONNECTION_LOST_NOTICE_MESSAGE,
-            severity: "Info",
-          }),
-        );
       },
     }),
   );
@@ -349,9 +357,19 @@ export const ShellWebsocketProvider = ({
 
   useAutomaticallyConnectSocket({
     target: socketRef.current,
-    sessionVariables: sessionVariables,
+    getSessionVariables: ({ hasEverConnected }) => {
+      if (hasEverConnected) {
+        return {
+          ...sessionVariables,
+          welcome_message: "off",
+          current_object_missing_warnings: "off",
+        };
+      }
+      return sessionVariables;
+    },
   });
 
+  useShellConnectionToasts();
   useResetShellStateOnRegionChange();
 
   return (

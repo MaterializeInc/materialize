@@ -45,6 +45,7 @@ type ErrorEvent = { type: "ERROR"; error: Error };
 type NoticeEvent = { type: "NOTICE"; notice: Notice };
 
 type ReadyForQueryEvent = { type: "READY_FOR_QUERY" };
+type ConnectionClosedEvent = { type: "CONNECTION_CLOSED" };
 
 export type WebSocketFsmContext = {
   latestCommandOutput?: CommandOutput;
@@ -60,7 +61,8 @@ export type WebSocketFsmEvent =
   | RowEvent
   | ErrorEvent
   | NoticeEvent
-  | ReadyForQueryEvent;
+  | ReadyForQueryEvent
+  | ConnectionClosedEvent;
 
 export type WebSocketFsmState =
   | {
@@ -86,6 +88,10 @@ export type WebSocketFsmState =
   | {
       value: "commandInProgressStreaming";
       context: WebSocketFsmContext;
+    }
+  | {
+      value: "interrupted";
+      context: WebSocketFsmContext;
     };
 
 function completeCommandResult(commandResult: CommandResult) {
@@ -108,6 +114,23 @@ function getLatestCommandResult(latestCommandOutput?: CommandOutput) {
   assert(latestCommandResult);
   return latestCommandResult;
 }
+
+const markCommandAsInterrupted = assign<
+  WebSocketFsmContext,
+  ConnectionClosedEvent
+>({
+  latestCommandOutput: ({ latestCommandOutput }) => {
+    if (latestCommandOutput) {
+      latestCommandOutput.interrupted = true;
+    }
+    return latestCommandOutput;
+  },
+});
+
+const connectionClosedTransition = {
+  target: "interrupted" as const,
+  actions: markCommandAsInterrupted,
+};
 
 const addNoticeToLatestCommandResult = assign<WebSocketFsmContext, NoticeEvent>(
   {
@@ -271,6 +294,7 @@ export const webSocketFsm = createMachine<
           target: "readyForQuery",
           actions: assign({}),
         },
+        CONNECTION_CLOSED: connectionClosedTransition,
       },
     },
     commandInProgressDefault: {
@@ -287,6 +311,7 @@ export const webSocketFsm = createMachine<
           target: "commandSent",
           actions: addErrorDuringCommandInProgress,
         },
+        CONNECTION_CLOSED: connectionClosedTransition,
       },
     },
     commandInProgressHasRows: {
@@ -311,6 +336,7 @@ export const webSocketFsm = createMachine<
           target: "commandInProgressHasRows",
           actions: addRowToLatestCommandResult,
         },
+        CONNECTION_CLOSED: connectionClosedTransition,
       },
     },
     commandInProgressStreaming: {
@@ -335,13 +361,19 @@ export const webSocketFsm = createMachine<
           target: "commandSent",
           actions: completeLatestCommandResult,
         },
+        CONNECTION_CLOSED: connectionClosedTransition,
       },
     },
+    interrupted: {},
   },
 });
 
 export function isCommandProcessing(state: WebSocketFsmState["value"]) {
-  return state !== "initialState" && state !== "readyForQuery";
+  return (
+    state !== "initialState" &&
+    state !== "readyForQuery" &&
+    state !== "interrupted"
+  );
 }
 
 /**
