@@ -94,8 +94,8 @@ class MzClient:
         if self._bg_task:
             self._bg_task.cancel()
             try:
-                await self._bg_task
-            except asyncio.CancelledError:
+                await asyncio.wait_for(self._bg_task, timeout=5.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
 
     async def _subscribe(self) -> None:
@@ -125,7 +125,7 @@ class MzClient:
                         )
                     )
                     while True:
-                        await cur.execute("FETCH ALL c")
+                        await cur.execute("FETCH ALL c WITH (timeout = '5s')")
                         reload = False
                         async for row in cur:
                             if not row["mz_progressed"]:
