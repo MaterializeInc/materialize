@@ -1209,6 +1209,20 @@ impl JoinKind {
             JoinKind::RightOuter | JoinKind::FullOuter => false,
         }
     }
+
+    pub fn can_elide_identity_left_join(&self) -> bool {
+        match self {
+            JoinKind::Inner | JoinKind::RightOuter => true,
+            JoinKind::LeftOuter | JoinKind::FullOuter => false,
+        }
+    }
+
+    pub fn can_elide_identity_right_join(&self) -> bool {
+        match self {
+            JoinKind::Inner | JoinKind::LeftOuter => true,
+            JoinKind::RightOuter | JoinKind::FullOuter => false,
+        }
+    }
 }
 
 #[derive(
@@ -1894,7 +1908,10 @@ impl HirRelationExpr {
         on: HirScalarExpr,
         kind: JoinKind,
     ) -> HirRelationExpr {
-        if self.is_join_identity() && !right.is_correlated() && on == HirScalarExpr::literal_true()
+        if self.is_join_identity()
+            && !right.is_correlated()
+            && on == HirScalarExpr::literal_true()
+            && kind.can_elide_identity_left_join()
         {
             // The join can be elided, but we need to adjust column references
             // on the right-hand side to account for the removal of the scope
@@ -1906,7 +1923,10 @@ impl HirRelationExpr {
                 }
             });
             right
-        } else if right.is_join_identity() && on == HirScalarExpr::literal_true() {
+        } else if right.is_join_identity()
+            && on == HirScalarExpr::literal_true()
+            && kind.can_elide_identity_right_join()
+        {
             self
         } else {
             HirRelationExpr::Join {
