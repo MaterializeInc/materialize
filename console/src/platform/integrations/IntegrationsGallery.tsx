@@ -211,7 +211,7 @@ const IntegrationsGallery = ({
                     {section.children.map((integration) => {
                       let link = integration.link;
                       if (integration.sourceType) {
-                        link = `../../sources/new/${integration.sourceType}`;
+                        link = `../sources/new/${integration.sourceType}`;
                       }
                       return (
                         <IntegrationCard
