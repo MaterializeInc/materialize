@@ -1738,7 +1738,13 @@ where
                                     }
                                 }
 
-                                RetryResult::Ok(table)
+                                RetryResult::RetryableErr(anyhow!(
+                                    "Commit conflict detected when committing batch [{}, {}) to Iceberg table '{}.{}'. Retrying...",
+                                    batch.0.pretty(),
+                                    batch.1.pretty(),
+                                    connection.namespace,
+                                    connection.table
+                                ))
                             }
                             Err(e) => {
                                 metrics.commit_failures.inc();
