@@ -701,6 +701,155 @@ pub(crate) fn eval_mul_int16_dispatch(
     }
 }
 
+// --- Dispatch wrappers for vectorized binary functions ---
+//
+// Each wrapper checks column homogeneity and delegates to the typed implementation.
+// These are referenced by `#[sqlfunc(vectorized = "...")]`.
+
+/// Dispatch wrapper for vectorized i64 addition.
+pub(crate) fn eval_add_int64_dispatch(
+    col1: &DatumColumn,
+    col2: &DatumColumn,
+    batch_len: usize,
+) -> Option<DatumColumn> {
+    if Len::len(&col1.data.Int64) == batch_len && Len::len(&col2.data.Int64) == batch_len {
+        Some(eval_add_int64_vectorized(
+            &col1.data.Int64,
+            &col2.data.Int64,
+        ))
+    } else {
+        None
+    }
+}
+
+/// Dispatch wrapper for vectorized i64 subtraction.
+pub(crate) fn eval_sub_int64_dispatch(
+    col1: &DatumColumn,
+    col2: &DatumColumn,
+    batch_len: usize,
+) -> Option<DatumColumn> {
+    if Len::len(&col1.data.Int64) == batch_len && Len::len(&col2.data.Int64) == batch_len {
+        Some(eval_sub_int64_vectorized(
+            &col1.data.Int64,
+            &col2.data.Int64,
+        ))
+    } else {
+        None
+    }
+}
+
+/// Dispatch wrapper for vectorized i64 multiplication.
+pub(crate) fn eval_mul_int64_dispatch(
+    col1: &DatumColumn,
+    col2: &DatumColumn,
+    batch_len: usize,
+) -> Option<DatumColumn> {
+    if Len::len(&col1.data.Int64) == batch_len && Len::len(&col2.data.Int64) == batch_len {
+        Some(eval_mul_int64_vectorized(
+            &col1.data.Int64,
+            &col2.data.Int64,
+        ))
+    } else {
+        None
+    }
+}
+
+/// Dispatch wrapper for vectorized i32 addition.
+pub(crate) fn eval_add_int32_dispatch(
+    col1: &DatumColumn,
+    col2: &DatumColumn,
+    batch_len: usize,
+) -> Option<DatumColumn> {
+    if Len::len(&col1.data.Int32) == batch_len && Len::len(&col2.data.Int32) == batch_len {
+        Some(eval_add_int32_vectorized(
+            &col1.data.Int32,
+            &col2.data.Int32,
+        ))
+    } else {
+        None
+    }
+}
+
+/// Dispatch wrapper for vectorized i32 subtraction.
+pub(crate) fn eval_sub_int32_dispatch(
+    col1: &DatumColumn,
+    col2: &DatumColumn,
+    batch_len: usize,
+) -> Option<DatumColumn> {
+    if Len::len(&col1.data.Int32) == batch_len && Len::len(&col2.data.Int32) == batch_len {
+        Some(eval_sub_int32_vectorized(
+            &col1.data.Int32,
+            &col2.data.Int32,
+        ))
+    } else {
+        None
+    }
+}
+
+/// Dispatch wrapper for vectorized i32 multiplication.
+pub(crate) fn eval_mul_int32_dispatch(
+    col1: &DatumColumn,
+    col2: &DatumColumn,
+    batch_len: usize,
+) -> Option<DatumColumn> {
+    if Len::len(&col1.data.Int32) == batch_len && Len::len(&col2.data.Int32) == batch_len {
+        Some(eval_mul_int32_vectorized(
+            &col1.data.Int32,
+            &col2.data.Int32,
+        ))
+    } else {
+        None
+    }
+}
+
+/// Dispatch wrapper for vectorized i16 addition.
+pub(crate) fn eval_add_int16_dispatch(
+    col1: &DatumColumn,
+    col2: &DatumColumn,
+    batch_len: usize,
+) -> Option<DatumColumn> {
+    if Len::len(&col1.data.Int16) == batch_len && Len::len(&col2.data.Int16) == batch_len {
+        Some(eval_add_int16_vectorized(
+            &col1.data.Int16,
+            &col2.data.Int16,
+        ))
+    } else {
+        None
+    }
+}
+
+/// Dispatch wrapper for vectorized i16 subtraction.
+pub(crate) fn eval_sub_int16_dispatch(
+    col1: &DatumColumn,
+    col2: &DatumColumn,
+    batch_len: usize,
+) -> Option<DatumColumn> {
+    if Len::len(&col1.data.Int16) == batch_len && Len::len(&col2.data.Int16) == batch_len {
+        Some(eval_sub_int16_vectorized(
+            &col1.data.Int16,
+            &col2.data.Int16,
+        ))
+    } else {
+        None
+    }
+}
+
+/// Dispatch wrapper for vectorized i16 multiplication.
+pub(crate) fn eval_mul_int16_dispatch(
+    col1: &DatumColumn,
+    col2: &DatumColumn,
+    batch_len: usize,
+) -> Option<DatumColumn> {
+    if Len::len(&col1.data.Int16) == batch_len && Len::len(&col2.data.Int16) == batch_len {
+        Some(eval_mul_int16_vectorized(
+            &col1.data.Int16,
+            &col2.data.Int16,
+        ))
+    } else {
+        None
+    }
+}
+
 /// Slow path: evaluate a binary function element-at-a-time.
 ///
 /// Constructs a `MirScalarExpr::CallBinary` that reads from column positions
