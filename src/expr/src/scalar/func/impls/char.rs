@@ -63,6 +63,7 @@ impl fmt::Display for PadChar {
 #[sqlfunc(
     sqlname = "char_to_text",
     preserves_uniqueness = true,
+    is_eliminable_cast = true,
     inverse = to_unary!(super::CastStringToChar{
         length: None,
         fail_on_len: false,

@@ -74,6 +74,10 @@ impl LazyUnaryFunc for CastListToString {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastListToString {
@@ -146,6 +150,10 @@ impl LazyUnaryFunc for CastListToJsonb {
     }
 
     fn is_monotone(&self) -> bool {
+        false
+    }
+
+    fn is_eliminable_cast(&self) -> bool {
         false
     }
 }
@@ -223,6 +231,10 @@ impl LazyUnaryFunc for CastList1ToList2 {
     }
 
     fn is_monotone(&self) -> bool {
+        false
+    }
+
+    fn is_eliminable_cast(&self) -> bool {
         false
     }
 }

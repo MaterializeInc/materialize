@@ -73,6 +73,10 @@ impl LazyUnaryFunc for CastRecordToString {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastRecordToString {
@@ -147,6 +151,10 @@ impl LazyUnaryFunc for CastRecord1ToRecord2 {
         // track enough information to make that call, though!
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastRecord1ToRecord2 {
@@ -216,6 +224,10 @@ impl LazyUnaryFunc for RecordGet {
     }
 
     fn is_monotone(&self) -> bool {
+        false
+    }
+
+    fn is_eliminable_cast(&self) -> bool {
         false
     }
 }
