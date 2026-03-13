@@ -755,7 +755,8 @@ To see the available workflows, run:
     def handle_composition(
         self, args: argparse.Namespace, composition: Composition
     ) -> None:
-        if args.workflow not in composition.workflows:
+        workflow_name = args.workflow.replace("_", "-") if args.workflow else None
+        if workflow_name not in composition.workflows:
             # Restart any dependencies whose definitions have changed. This is
             # Docker Compose's default behavior for `up`, but not for `run`,
             # which is a constant irritation that we paper over here. The trick,
@@ -799,7 +800,7 @@ To see the available workflows, run:
                     else []
                 )
                 composition.workflow(
-                    args.workflow, *args.unknown_subargs[1:], *extra_args
+                    workflow_name, *args.unknown_subargs[1:], *extra_args
                 )
 
             if self.shall_generate_junit_report(args.find):
