@@ -111,10 +111,15 @@ impl Connection {
         ) {
             Ok((header, hlen)) => (header, hlen),
             Err(proxy_header::Error::Invalid) => {
-                debug!(
-                    "Proxy header is invalid. This is likely due to no no header being provided",
-                );
+                debug!("Proxy header is invalid. This is likely due to no header being provided",);
                 return None;
+            }
+            // Data matches the PROXY v2 signature prefix but the header
+            // is incomplete — likely split across TCP segments. Read the
+            // 16-byte fixed v2 header to learn the total size, then read
+            // the remaining address bytes.
+            Err(proxy_header::Error::BufferTooShort) => {
+                return self.read_proxy_v2_header(&mut buf).await;
             }
             Err(e) => {
                 debug!("Proxy header parse error '{:?}', ignoring header.", e);
@@ -126,6 +131,49 @@ impl Connection {
         // Proxy header found, clear the bytes.
         let _ = self.read_exact(&mut buf[..hlen]).await;
         address
+    }
+
+    /// Fallback path for [`Self::take_proxy_header_address`] when the initial
+    /// peek returned an incomplete PROXY v2 header. Reads the fixed 16-byte
+    /// v2 prefix to learn the total header size, then reads the rest.
+    async fn read_proxy_v2_header(&mut self, buf: &mut [u8; 1024]) -> Option<ProxiedAddress> {
+        // PROXY v2 fixed prefix: 12-byte signature + ver/cmd + fam/proto + 2-byte length.
+        const V2_PREFIX_LEN: usize = 16;
+        if self.read_exact(&mut buf[..V2_PREFIX_LEN]).await.is_err() {
+            debug!("Failed to read PROXY v2 fixed header");
+            return None;
+        }
+        let addr_len = usize::from(u16::from_be_bytes([buf[14], buf[15]]));
+        let total = V2_PREFIX_LEN + addr_len;
+        if total > buf.len() {
+            debug!("PROXY v2 header too large: {total} bytes");
+            return None;
+        }
+        if self
+            .read_exact(&mut buf[V2_PREFIX_LEN..total])
+            .await
+            .is_err()
+        {
+            debug!("Failed to read PROXY v2 address data");
+            return None;
+        }
+        match ProxyHeader::parse(
+            &buf[..total],
+            ParseConfig {
+                include_tlvs: false,
+                allow_v1: false,
+                allow_v2: true,
+            },
+        ) {
+            Ok((header, _)) => {
+                debug!("Proxied connection with header {:?}", header);
+                header.proxied_address().map(|a| a.to_owned())
+            }
+            Err(e) => {
+                debug!("Proxy header parse error '{:?}', ignoring header.", e);
+                None
+            }
+        }
     }
 
     /// Peer address of the inner tcp_stream.
