@@ -20,6 +20,7 @@
 //! row-at-a-time evaluation.
 
 use columnar::{Columnar, Len, Push};
+use enum_kinds::EnumKind;
 
 use crate::linear::plan::MfpPlan;
 use crate::{BinaryFunc, MapFilterProject, MirScalarExpr};
@@ -32,7 +33,8 @@ use crate::{BinaryFunc, MapFilterProject, MirScalarExpr};
 ///
 /// Additional `Datum` variants (Date, Timestamp, Numeric, etc.) will be added
 /// as we expand vectorized evaluation to cover more types.
-#[derive(Clone, Debug, Columnar)]
+#[derive(Clone, Debug, Columnar, EnumKind)]
+#[enum_kind(ColumnDatumKind)]
 pub enum ColumnDatum {
     /// Null value.
     Null,
@@ -272,24 +274,20 @@ fn eval_binary_vectorized(
     eval_binary_slow(func, col1, col2, batch_len)
 }
 
-/// Discriminant values for `ColumnDatum` variants in the columnar container.
-/// These must match the enum definition order.
-const DISCRIMINANT_INT16: u8 = 3;
-const DISCRIMINANT_INT32: u8 = 4;
-const DISCRIMINANT_INT64: u8 = 5;
-const DISCRIMINANT_ERROR: u8 = 12;
-
 /// Build a `DatumColumn` directly from a homogeneous `Vec<T>` and its
-/// discriminant, bypassing per-element enum dispatch.
+/// variant, bypassing per-element enum dispatch.
+///
+/// `$field` must be a `ColumnDatum` variant name (e.g. `Int64`). The
+/// discriminant is derived from `ColumnDatumKind` automatically.
 ///
 /// This constructs the columnar container's `variant` and `offset` arrays
 /// in bulk, which is much faster than pushing elements one at a time.
 macro_rules! datum_column_from_typed_vec {
-    ($vec:expr, $discriminant:expr, $field:ident) => {{
+    ($vec:expr, $field:ident) => {{
         let len = $vec.len();
         let mut data: <ColumnDatum as Columnar>::Container = Default::default();
         data.$field = $vec;
-        data.variant = vec![$discriminant; len];
+        data.variant = vec![ColumnDatumKind::$field as u8; len];
         data.offset = (0..len as u64).collect();
         DatumColumn { data }
     }};
@@ -297,12 +295,12 @@ macro_rules! datum_column_from_typed_vec {
 
 /// Build a `DatumColumn` that is mostly one typed vec but with some error
 /// positions. `results` has the computed values, `errors` has indices where
-/// overflow occurred.
+/// overflow occurred. `$field` must be a `ColumnDatum` variant name.
 macro_rules! datum_column_from_typed_vec_with_errors {
-    ($results:expr, $errors:expr, $err_msg:expr, $discriminant:expr, $field:ident) => {{
+    ($results:expr, $errors:expr, $err_msg:expr, $field:ident) => {{
         if $errors.is_empty() {
             // Common case: no errors at all.
-            datum_column_from_typed_vec!($results, $discriminant, $field)
+            datum_column_from_typed_vec!($results, $field)
         } else {
             // Rare case: some overflows. Build element by element but only
             // for the error positions; the rest go in bulk.
@@ -319,13 +317,13 @@ macro_rules! datum_column_from_typed_vec_with_errors {
             let mut error_offset = 0u64;
             for i in 0..len {
                 if error_idx < $errors.len() && $errors[error_idx] == i {
-                    data.variant.push(DISCRIMINANT_ERROR);
+                    data.variant.push(ColumnDatumKind::Error as u8);
                     data.offset.push(error_offset);
                     Push::push(&mut data.Error, $err_msg);
                     error_offset += 1;
                     error_idx += 1;
                 } else {
-                    data.variant.push($discriminant);
+                    data.variant.push(ColumnDatumKind::$field as u8);
                     data.offset.push(typed_offset);
                     data.$field.push($results[i]);
                     typed_offset += 1;
@@ -415,13 +413,8 @@ fn eval_add_int64_vectorized(a: &[i64], b: &[i64]) -> DatumColumn {
     let overflow_ns = overflow_start.elapsed().as_nanos();
 
     let container_start = std::time::Instant::now();
-    let result = datum_column_from_typed_vec_with_errors!(
-        results,
-        errors,
-        "integer out of range",
-        DISCRIMINANT_INT64,
-        Int64
-    );
+    let result =
+        datum_column_from_typed_vec_with_errors!(results, errors, "integer out of range", Int64);
     let container_ns = container_start.elapsed().as_nanos();
 
     tracing::trace!(
@@ -443,13 +436,7 @@ fn eval_sub_int64_vectorized(a: &[i64], b: &[i64]) -> DatumColumn {
         .map(|(x, y)| x.wrapping_sub(*y))
         .collect();
     let errors = detect_sub_overflow(a, b, &results);
-    datum_column_from_typed_vec_with_errors!(
-        results,
-        errors,
-        "integer out of range",
-        DISCRIMINANT_INT64,
-        Int64
-    )
+    datum_column_from_typed_vec_with_errors!(results, errors, "integer out of range", Int64)
 }
 
 /// Vectorized multiply for `i64` columns.
@@ -470,13 +457,7 @@ fn eval_mul_int64_vectorized(a: &[i64], b: &[i64]) -> DatumColumn {
             }
         }
     }
-    datum_column_from_typed_vec_with_errors!(
-        results,
-        errors,
-        "integer out of range",
-        DISCRIMINANT_INT64,
-        Int64
-    )
+    datum_column_from_typed_vec_with_errors!(results, errors, "integer out of range", Int64)
 }
 
 /// Vectorized add for `i32` columns.
@@ -488,13 +469,7 @@ fn eval_add_int32_vectorized(a: &[i32], b: &[i32]) -> DatumColumn {
         .map(|(x, y)| x.wrapping_add(*y))
         .collect();
     let errors = detect_add_overflow(a, b, &results);
-    datum_column_from_typed_vec_with_errors!(
-        results,
-        errors,
-        "integer out of range",
-        DISCRIMINANT_INT32,
-        Int32
-    )
+    datum_column_from_typed_vec_with_errors!(results, errors, "integer out of range", Int32)
 }
 
 /// Vectorized subtract for `i32` columns.
@@ -506,13 +481,7 @@ fn eval_sub_int32_vectorized(a: &[i32], b: &[i32]) -> DatumColumn {
         .map(|(x, y)| x.wrapping_sub(*y))
         .collect();
     let errors = detect_sub_overflow(a, b, &results);
-    datum_column_from_typed_vec_with_errors!(
-        results,
-        errors,
-        "integer out of range",
-        DISCRIMINANT_INT32,
-        Int32
-    )
+    datum_column_from_typed_vec_with_errors!(results, errors, "integer out of range", Int32)
 }
 
 /// Vectorized multiply for `i32` columns.
@@ -530,13 +499,7 @@ fn eval_mul_int32_vectorized(a: &[i32], b: &[i32]) -> DatumColumn {
             }
         }
     }
-    datum_column_from_typed_vec_with_errors!(
-        results,
-        errors,
-        "integer out of range",
-        DISCRIMINANT_INT32,
-        Int32
-    )
+    datum_column_from_typed_vec_with_errors!(results, errors, "integer out of range", Int32)
 }
 
 /// Vectorized add for `i16` columns.
@@ -548,13 +511,7 @@ fn eval_add_int16_vectorized(a: &[i16], b: &[i16]) -> DatumColumn {
         .map(|(x, y)| x.wrapping_add(*y))
         .collect();
     let errors = detect_add_overflow(a, b, &results);
-    datum_column_from_typed_vec_with_errors!(
-        results,
-        errors,
-        "integer out of range",
-        DISCRIMINANT_INT16,
-        Int16
-    )
+    datum_column_from_typed_vec_with_errors!(results, errors, "integer out of range", Int16)
 }
 
 /// Vectorized subtract for `i16` columns.
@@ -566,13 +523,7 @@ fn eval_sub_int16_vectorized(a: &[i16], b: &[i16]) -> DatumColumn {
         .map(|(x, y)| x.wrapping_sub(*y))
         .collect();
     let errors = detect_sub_overflow(a, b, &results);
-    datum_column_from_typed_vec_with_errors!(
-        results,
-        errors,
-        "integer out of range",
-        DISCRIMINANT_INT16,
-        Int16
-    )
+    datum_column_from_typed_vec_with_errors!(results, errors, "integer out of range", Int16)
 }
 
 /// Vectorized multiply for `i16` columns.
@@ -590,13 +541,7 @@ fn eval_mul_int16_vectorized(a: &[i16], b: &[i16]) -> DatumColumn {
             }
         }
     }
-    datum_column_from_typed_vec_with_errors!(
-        results,
-        errors,
-        "integer out of range",
-        DISCRIMINANT_INT16,
-        Int16
-    )
+    datum_column_from_typed_vec_with_errors!(results, errors, "integer out of range", Int16)
 }
 
 // --- Dispatch wrappers for vectorized binary functions ---

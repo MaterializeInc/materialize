@@ -32,6 +32,7 @@ chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
 crc32fast = "1.4.2"
 csv = "1.4.0"
 differential-dataflow = "0.20.0"
+enum-kinds = "0.5.1"
 dec = "0.4.8"
 derivative = "2.2.0"
 encoding = "0.2.0"
