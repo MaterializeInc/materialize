@@ -146,7 +146,7 @@ tokio = { version = "1.49.0", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.18", features = ["net", "sync"] }
 tokio-util = { version = "0.7.18", features = ["codec", "compat", "io", "time"] }
-toml_datetime = { version = "0.6.11", default-features = false, features = ["serde"] }
+toml_datetime = { version = "1.0.0", default-features = false, features = ["serde"] }
 toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.14.2", features = ["gzip"] }
 tower = { version = "0.5.3", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
@@ -229,7 +229,7 @@ subtle = { version = "2.6.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.109", features = ["extra-traits", "full", "visit", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.114", features = ["extra-traits", "full", "visit", "visit-mut"] }
 time-macros = { version = "0.2.27", default-features = false, features = ["formatting", "parsing", "serde"] }
-toml_datetime = { version = "0.6.11", default-features = false, features = ["serde"] }
+toml_datetime = { version = "1.0.0", default-features = false, features = ["serde"] }
 toml_edit = { version = "0.22.26", features = ["serde"] }
 tracing = { version = "0.1.44", features = ["log"] }
 tracing-core = { version = "0.1.36" }
