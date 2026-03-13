@@ -1703,6 +1703,14 @@ pub mod plan {
             self.mfp.is_identity()
         }
 
+        /// Pre-convert this plan to a vectorized form for batch evaluation.
+        ///
+        /// Unlike [`Self::evaluate_batch`], which re-converts expressions on
+        /// every call, the returned plan stores the converted expressions once.
+        pub fn to_vectorized(&self) -> crate::vectorized::VectorizedSafeMfpPlan {
+            crate::vectorized::VectorizedSafeMfpPlan::from_mfp(&self.mfp)
+        }
+
         /// Evaluate a batch of rows using vectorized (columnar) evaluation.
         ///
         /// `input_columns` provides the input columns in columnar form, one

@@ -158,6 +158,7 @@ pub fn persist_source<G>(
     max_inflight_bytes: Option<usize>,
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
+    enable_vectorized_mfp: bool,
 ) -> (
     StreamVec<G, (Row, Timestamp, Diff)>,
     StreamVec<G, (DataflowError, Timestamp, Diff)>,
@@ -223,6 +224,7 @@ where
             subscribe_sleep,
             start_signal,
             error_handler,
+            enable_vectorized_mfp,
         );
         tokens.extend(source_tokens);
 
@@ -294,6 +296,7 @@ pub fn persist_source_core<'g, G>(
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
+    enable_vectorized_mfp: bool,
 ) -> (
     Stream<
         RefinedScope<'g, G>,
@@ -384,7 +387,14 @@ where
         start_signal,
         error_handler,
     );
-    let rows = decode_and_mfp(cfg, fetched, &name, until, map_filter_project);
+    let rows = decode_and_mfp(
+        cfg,
+        fetched,
+        &name,
+        until,
+        map_filter_project,
+        enable_vectorized_mfp,
+    );
     (rows, token)
 }
 
@@ -440,6 +450,7 @@ pub fn decode_and_mfp<G>(
     name: &str,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
+    enable_vectorized_mfp: bool,
 ) -> StreamVec<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>
 where
     G: Scope<Timestamp = (mz_repr::Timestamp, Subtime)>,
@@ -463,7 +474,7 @@ where
     // Pre-convert to MfpEval so vectorized expressions are built once.
     let eval_plan = map_filter_project
         .as_mut()
-        .map(|mfp| MfpEval::from_mfp_plan(mfp.take()));
+        .map(|mfp| MfpEval::from_mfp_plan(mfp.take(), enable_vectorized_mfp));
 
     builder.build(move |_caps| {
         let name = name.to_owned();

@@ -73,6 +73,7 @@ where
             None,
             async {},
             error_handler,
+            false,
         );
         tokens.extend(persist_tokens);
 

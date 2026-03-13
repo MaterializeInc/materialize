@@ -76,7 +76,7 @@ use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::Codec;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_repr::{DatumVec, GlobalId, Row, RowArena, Timestamp};
+use mz_repr::{GlobalId, Row, Timestamp};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
@@ -201,6 +201,7 @@ where
         format.clone(),
         records_stream,
         shape.source_mfp,
+        false,
     );
     // Stage the Rows in Persist.
     let (batch_stream, batch_token) = render_stage_batches_operator(
@@ -435,6 +436,7 @@ pub fn render_decode_chunk<G, F>(
     format: F,
     record_chunks: StreamVec<G, Result<F::RecordChunk, StorageErrorX>>,
     mfp: SafeMfpPlan,
+    enable_vectorized_mfp: bool,
 ) -> (StreamVec<G, Result<Row, StorageErrorX>>, PressOnDropButton)
 where
     G: Scope,
@@ -445,11 +447,18 @@ where
     let (row_handle, row_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let mut record_chunk_handle = builder.new_input_for(record_chunks, Distribute, &row_handle);
 
+    // Pre-convert to vectorized form so expression conversion happens once.
+    let vectorized_plan = if enable_vectorized_mfp {
+        Some(mfp.to_vectorized())
+    } else {
+        None
+    };
+
     let shutdown = builder.build(move |caps| async move {
         let [_row_cap] = caps.try_into().unwrap();
 
-        let mut datum_vec = DatumVec::default();
-        let row_arena = RowArena::default();
+        let mut datum_vec = mz_repr::DatumVec::default();
+        let row_arena = mz_repr::RowArena::default();
         let mut row_buf = Row::default();
 
         while let Some(event) = record_chunk_handle.next().await {
@@ -471,14 +480,25 @@ where
 
             match result {
                 Ok(rows) => {
-                    // For each row of source data, we pass it through an MFP to re-arrange column
-                    // orders and/or fill in default values for missing columns.
-                    for row in rows {
-                        let mut datums = datum_vec.borrow_with(&row);
-                        let result = mfp
-                            .evaluate_into(&mut *datums, &row_arena, &mut row_buf)
-                            .map(|row| row.cloned());
+                    // For each row of source data, we pass it through an MFP to re-arrange
+                    // column orders and/or fill in default values for missing columns.
+                    let results: Vec<Result<Option<Row>, mz_expr::EvalError>> =
+                        if let Some(plan) = &vectorized_plan {
+                            let batch_len = rows.len();
+                            let columns =
+                                mz_expr::vectorized::rows_to_columns(rows.iter(), plan.input_arity);
+                            plan.evaluate_batch(&columns, batch_len)
+                        } else {
+                            rows.iter()
+                                .map(|row| {
+                                    let mut datums = datum_vec.borrow_with(row);
+                                    mfp.evaluate_into(&mut *datums, &row_arena, &mut row_buf)
+                                        .map(|row| row.cloned())
+                                })
+                                .collect()
+                        };
 
+                    for result in results {
                         match result {
                             Ok(Some(row)) => row_handle.give(&capability, Ok(row)),
                             Ok(None) => {

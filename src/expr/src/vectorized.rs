@@ -1006,10 +1006,10 @@ pub enum MfpEval {
 impl MfpEval {
     /// Build the appropriate evaluation variant from an `MfpPlan`.
     ///
-    /// Nontemporal plans get pre-converted to vectorized form.
-    /// Temporal plans stay as scalar.
-    pub fn from_mfp_plan(plan: MfpPlan) -> Self {
-        if plan.is_nontemporal() {
+    /// When `enable_vectorized` is true, nontemporal plans get pre-converted
+    /// to vectorized form. Temporal plans always stay as scalar.
+    pub fn from_mfp_plan(plan: MfpPlan, enable_vectorized: bool) -> Self {
+        if enable_vectorized && plan.is_nontemporal() {
             let vectorized = VectorizedSafeMfpPlan::from_mfp(&plan.mfp.mfp);
             MfpEval::Vectorized { vectorized, plan }
         } else {
