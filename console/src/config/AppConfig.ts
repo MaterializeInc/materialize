@@ -68,17 +68,26 @@ type FronteggAuthMode = "Frontegg";
 type PasswordAuthMode = "Password";
 type NoneAuthMode = "None";
 type SaslAuthMode = "Sasl";
+type OidcAuthMode = "Oidc";
 type CloudAuthMode = FronteggAuthMode;
 export type SelfManagedAuthMode =
   | PasswordAuthMode
   | NoneAuthMode
-  | SaslAuthMode;
+  | SaslAuthMode
+  | OidcAuthMode;
+
+export interface OidcConfig {
+  issuer: string;
+  clientId: string;
+  scopes: string;
+}
 
 type AuthMode =
   | FronteggAuthMode
   | PasswordAuthMode
   | NoneAuthMode
-  | SaslAuthMode;
+  | SaslAuthMode
+  | OidcAuthMode;
 
 interface IBaseAppConfig {
   // Discriminant for the type of app config.
@@ -203,6 +212,15 @@ export class SelfManagedAppConfig implements IBaseAppConfig {
   mode = "self-managed" as const;
 
   authMode: SelfManagedAuthMode = appConfigJson.auth.mode;
+
+  oidcConfig: OidcConfig | undefined =
+    this.authMode === "Oidc"
+      ? {
+          issuer: appConfigJson.auth.issuer!,
+          clientId: appConfigJson.auth.clientId!,
+          scopes: appConfigJson.auth.scopes!,
+        }
+      : undefined;
 
   environmentdScheme = getEnvironmentdScheme({
     buildConstants,

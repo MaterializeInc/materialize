@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { type SelfManagedAuthMode } from "./AppConfig";
+import { type OidcConfig, type SelfManagedAuthMode } from "./AppConfig";
 
 const DEFAULT_APP_CONFIG = {
   auth: {
@@ -33,7 +33,7 @@ const appConfigJson = await fetchAppConfigJson();
 export function importAppConfig(): {
   auth: {
     mode: SelfManagedAuthMode;
-  };
+  } & Partial<OidcConfig>;
 } {
   if (process.env.NODE_ENV === "test") {
     return DEFAULT_APP_CONFIG;
@@ -42,6 +42,6 @@ export function importAppConfig(): {
   return appConfigJson as {
     auth: {
       mode: SelfManagedAuthMode;
-    };
+    } & Partial<OidcConfig>;
   };
 }

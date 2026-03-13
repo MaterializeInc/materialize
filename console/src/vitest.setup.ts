@@ -33,6 +33,7 @@ debugHandlers.log = console.log.bind(console);
 
 // Mock the facade for the frontegg library
 vi.mock("~/external-library-wrappers/frontegg");
+vi.mock("~/external-library-wrappers/oidc");
 vi.mock("~/hooks/useFlags", () => {
   return { useFlags: () => ({}) };
 });

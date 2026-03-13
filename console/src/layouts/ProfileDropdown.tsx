@@ -27,8 +27,9 @@ import React from "react";
 import { Link as RouterLink } from "react-router-dom";
 
 import { useSegment } from "~/analytics/segment";
+import { apiClient } from "~/api/apiClient";
 import { getCurrentTenant, useCurrentOrganization } from "~/api/auth";
-import { logoutAndRedirectOrThrow } from "~/api/materialize/auth";
+import { logout, logoutAndRedirectOrThrow } from "~/api/materialize/auth";
 import ThemeSwitcher from "~/components/ThemeSwitcher";
 import { AppConfigSwitch } from "~/config/AppConfigSwitch";
 import {
@@ -37,6 +38,7 @@ import {
   AuthState,
   type User,
 } from "~/external-library-wrappers/frontegg";
+import { getOidcUserManager } from "~/external-library-wrappers/oidc";
 import { AUTH_ROUTES } from "~/fronteggRoutes";
 import { NAV_HORIZONTAL_SPACING, NAV_HOVER_STYLES } from "~/layouts/constants";
 import docUrls from "~/mz-doc-urls.json";
@@ -112,10 +114,25 @@ const SignOutMenuItem = () => {
         if (appConfig.authMode === "None") {
           return null;
         }
+        const handleLogout =
+          appConfig.authMode === "Oidc"
+            ? async () => {
+                // Clear both the session cookie and OIDC state so that
+                // logout works regardless of which method the user used.
+                if (apiClient.type === "self-managed") {
+                  try {
+                    await logout({ apiClient });
+                  } catch {
+                    // Cookie may not exist if user logged in via OIDC only.
+                  }
+                }
+                getOidcUserManager()?.signoutRedirect();
+              }
+            : logoutAndRedirectOrThrow;
         return (
           <>
             <MenuDivider />
-            <MenuItem fontWeight="medium" onClick={logoutAndRedirectOrThrow}>
+            <MenuItem fontWeight="medium" onClick={handleLogout}>
               Sign out
             </MenuItem>
           </>

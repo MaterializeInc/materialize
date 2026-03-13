@@ -18,6 +18,7 @@ import { DevtoolsContainer } from "~/components/DevtoolsContainer";
 import { FronteggProviderWrapper } from "~/components/FronteggProviderWrapper";
 import { IntercomAnonymousContainer } from "~/components/IntercomAnonymousContainer";
 import LoadingScreen from "~/components/LoadingScreen";
+import { OidcProviderWrapper } from "~/components/OidcProviderWrapper";
 import { useAppConfig } from "~/config/useAppConfig";
 import { JotaiProviderWrapper } from "~/layouts/JotaiProviderWrapper";
 import { getQueryClient } from "~/queryClient";
@@ -55,11 +56,13 @@ export const App = () => {
                   <DevtoolsContainer />
                   <IntercomAnonymousContainer />
                   <FronteggProviderWrapper>
-                    <AppErrorBoundary containerProps={{ height: "100vh" }}>
-                      <React.Suspense fallback={<LoadingScreen />}>
-                        <UnauthenticatedRoutes />
-                      </React.Suspense>
-                    </AppErrorBoundary>
+                    <OidcProviderWrapper>
+                      <AppErrorBoundary containerProps={{ height: "100vh" }}>
+                        <React.Suspense fallback={<LoadingScreen />}>
+                          <UnauthenticatedRoutes />
+                        </React.Suspense>
+                      </AppErrorBoundary>
+                    </OidcProviderWrapper>
                   </FronteggProviderWrapper>
                 </QueryClientProvider>
               </AppErrorBoundary>
