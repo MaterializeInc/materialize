@@ -6123,10 +6123,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"cacheable-lookup@npm:6.1.0":
-  version: 6.1.0
-  resolution: "cacheable-lookup@npm:6.1.0"
-  checksum: 10c0/fe922b24e9868ac65cbd3b4ccd7449063d572431471aab71cbca49a2b33839c7c888b237b0922ae6b8f4ddf25d61debe204e473195d2e77a835099b8953aeb0a
+"cacheable-lookup@npm:7.0.0":
+  version: 7.0.0
+  resolution: "cacheable-lookup@npm:7.0.0"
+  checksum: 10c0/63a9c144c5b45cb5549251e3ea774c04d63063b29e469f7584171d059d3a88f650f47869a974e2d07de62116463d742c287a81a625e791539d987115cb081635
   languageName: node
   linkType: hard
 
@@ -10711,7 +10711,7 @@ __metadata:
     base32-encoding: "npm:^1.0.0"
     browserslist-to-esbuild: "npm:^2.1.1"
     buffer: "npm:^6.0.3"
-    cacheable-lookup: "npm:6.1.0"
+    cacheable-lookup: "npm:7.0.0"
     codemirror: "npm:^6.0.1"
     copy-to-clipboard: "npm:^3.3.3"
     core-js: "npm:^3.38.1"
