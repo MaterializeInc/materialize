@@ -34,9 +34,10 @@ use mz_persist_shared_log::traits::AcceptorConfig;
 /// Backend storage mode.
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 enum Backend {
-    /// Log + S3 object storage (production).
+    /// Log + S3 object storage (actor implementation).
     Log,
-    /// Persist shard (in-memory for now — for development/testing).
+    /// Persist shard (default). Uses --blob-url and --consensus-url if
+    /// provided, otherwise falls back to in-memory.
     Persist,
 }
 
@@ -79,6 +80,20 @@ struct Args {
     /// Write a snapshot every this many log batches.
     #[arg(long, default_value = "100")]
     snapshot_interval: u64,
+
+    /// Blob storage URL for persist backend (e.g. file:///tmp/persist/blob).
+    /// If omitted, persist backend uses in-memory storage.
+    #[arg(long, env = "PERSIST_BLOB_URL")]
+    blob_url: Option<String>,
+
+    /// Consensus storage URL for persist backend (e.g. postgres://root@localhost:26257/consensus).
+    /// If omitted, persist backend uses in-memory storage.
+    #[arg(long, env = "PERSIST_CONSENSUS_URL")]
+    consensus_url: Option<String>,
+
+    /// Shard ID for the persist backend. If omitted, a new shard is created.
+    #[arg(long, env = "PERSIST_SHARD_ID")]
+    shard_id: Option<String>,
 }
 
 fn main() {
@@ -252,9 +267,44 @@ async fn run_persist(args: Args, metrics_registry: mz_ore::metrics::MetricsRegis
     let _acceptor_metrics = AcceptorMetrics::register(&metrics_registry);
     let _learner_metrics = LearnerMetrics::register(&metrics_registry);
 
-    info!("creating in-memory persist client...");
-    let persist_client = mz_persist_client::PersistClient::new_for_tests().await;
-    let shard_id = mz_persist_client::ShardId::new();
+    let persist_client = match (&args.blob_url, &args.consensus_url) {
+        (Some(blob_url), Some(consensus_url)) => {
+            info!(%blob_url, %consensus_url, "creating persist client with external storage");
+            let persist_config = mz_persist_client::cfg::PersistConfig::new_default_configs(
+                &mz_build_info::DUMMY_BUILD_INFO,
+                mz_ore::now::SYSTEM_TIME.clone(),
+            );
+            let cache = mz_persist_client::cache::PersistClientCache::new(
+                persist_config,
+                &metrics_registry,
+                |_, _| mz_persist_client::rpc::PubSubClientConnection::noop(),
+            );
+            let location = mz_persist_types::PersistLocation {
+                blob_uri: blob_url.parse().expect("invalid --blob-url"),
+                consensus_uri: consensus_url.parse().expect("invalid --consensus-url"),
+            };
+            cache
+                .open(location)
+                .await
+                .expect("failed to open persist client")
+        }
+        (None, None) => {
+            info!("creating in-memory persist client (non-durable)");
+            mz_persist_client::PersistClient::new_for_tests().await
+        }
+        _ => {
+            panic!("--blob-url and --consensus-url must both be provided, or both omitted");
+        }
+    };
+
+    let shard_id = match &args.shard_id {
+        Some(id) => id.parse().expect("invalid --shard-id"),
+        None => {
+            let id = mz_persist_client::ShardId::new();
+            info!(%id, "generated new shard ID (pass --shard-id to reuse across restarts)");
+            id
+        }
+    };
 
     let acceptor_config = AcceptorConfig {
         flush_interval_ms: args.flush_interval_ms,
@@ -267,10 +317,7 @@ async fn run_persist(args: Args, metrics_registry: mz_ore::metrics::MetricsRegis
     let (learner_handle, _learner_task) =
         PersistLearner::spawn(learner_config, &persist_client, shard_id).await;
 
-    info!(
-        %shard_id,
-        "persist backend ready (in-memory, non-durable)"
-    );
+    info!(%shard_id, "persist backend ready");
 
     serve_grpc(acceptor_handle, learner_handle, args.listen_addr).await;
 }
