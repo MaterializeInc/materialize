@@ -548,14 +548,18 @@ impl Coordinator {
         // WARNING: If we support `ALTER SECRET`, we'll need to also check
         // for connectors that were altered while we were purifying.
         if let Err(e) = plan_validity.check(self.catalog()) {
-            let _ = self.secrets_controller.delete(connection_id).await;
+            if self.secrets_controller.delete(connection_id).await.is_ok() {
+                self.caching_secrets_reader.invalidate(connection_id);
+            }
             return ctx.retire(Err(e));
         }
 
         let plan = match result {
             Ok(ok) => ok,
             Err(e) => {
-                let _ = self.secrets_controller.delete(connection_id).await;
+                if self.secrets_controller.delete(connection_id).await.is_ok() {
+                    self.caching_secrets_reader.invalidate(connection_id);
+                }
                 return ctx.retire(Err(e));
             }
         };

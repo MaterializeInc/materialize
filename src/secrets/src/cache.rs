@@ -141,6 +141,15 @@ impl CachingSecretsReader {
     fn set_ttl(&self, ttl: Duration) -> Duration {
         self.policy.set_ttl(ttl)
     }
+
+    /// Invalidates a single cached secret, returning whether the cache contained it.
+    pub fn invalidate(&self, id: CatalogItemId) -> bool {
+        self.cache
+            .write()
+            .expect("CachingSecretsReader panicked!")
+            .remove(&id)
+            .is_some()
+    }
 }
 
 #[async_trait]
