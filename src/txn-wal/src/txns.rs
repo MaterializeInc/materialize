@@ -1518,7 +1518,9 @@ mod tests {
                     let data_id = format!("{:.9}", data_id.to_string());
                     let _guard = info_span!("read_worker", %data_id, as_of).entered();
                     loop {
-                        subscribe.worker.step_or_park(None);
+                        subscribe
+                            .worker
+                            .step_or_park(Some(Duration::from_millis(1)));
                         subscribe.capture_output();
                         let until = match rx.try_recv() {
                             Ok(ts) => ts,
@@ -1528,7 +1530,9 @@ mod tests {
                             Err(oneshot::error::TryRecvError::Closed) => 0,
                         };
                         while subscribe.progress() < until {
-                            subscribe.worker.step_or_park(None);
+                            subscribe
+                                .worker
+                                .step_or_park(Some(Duration::from_millis(1)));
                             subscribe.capture_output();
                         }
                         return subscribe.output().clone();
