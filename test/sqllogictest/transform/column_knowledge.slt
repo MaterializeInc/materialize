@@ -603,17 +603,17 @@ SELECT f1, f2, f1 + f2 FROM c0;
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Map (3, 5) // { arity: 2, types: "(integer, integer)" }
+      Map (3, 5) // { arity: 2, types: "(rint32, rint32)" }
         Distinct project=[] // { arity: 0, types: "()" }
           Union // { arity: 0, types: "()" }
             Project () // { arity: 0, types: "()" }
-              Filter (#0{f1} = 3) AND (#1{f2} = 5) // { arity: 2, types: "(integer, integer)" }
-                ReadStorage materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
+              Filter (#0{f1} = 3) AND (#1{f2} = 5) // { arity: 2, types: "(rint32, rint32)" }
+                ReadStorage materialize.public.t1 // { arity: 2, types: "(rint32, rint32?)" }
             Project () // { arity: 0, types: "()" }
-              Get l0 // { arity: 2, types: "(integer, integer)" }
-  Return // { arity: 3, types: "(integer, integer, integer)" }
-    Map (8) // { arity: 3, types: "(integer, integer, integer)" }
-      Get l0 // { arity: 2, types: "(integer, integer)" }
+              Get l0 // { arity: 2, types: "(rint32, rint32)" }
+  Return // { arity: 3, types: "(rint32, rint32, rint32)" }
+    Map (8) // { arity: 3, types: "(rint32, rint32, rint32)" }
+      Get l0 // { arity: 2, types: "(rint32, rint32)" }
 
 Source materialize.public.t1
   filter=((#0{f1} = 3) AND (#1{f2} = 5))
@@ -638,14 +638,14 @@ SELECT f1, f2, f1 IS NOT NULL, f2 IS NULL FROM c0;
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Distinct project=[#0{f1}, #1{f2}] // { arity: 2, types: "(integer, integer)" }
-        Union // { arity: 2, types: "(integer, integer)" }
-          Filter (#1{f2}) IS NOT NULL // { arity: 2, types: "(integer, integer)" }
-            ReadStorage materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
-          Get l0 // { arity: 2, types: "(integer, integer)" }
-  Return // { arity: 4, types: "(integer, integer, boolean, boolean)" }
-    Map (true, false) // { arity: 4, types: "(integer, integer, boolean, boolean)" }
-      Get l0 // { arity: 2, types: "(integer, integer)" }
+      Distinct project=[#0{f1}, #1{f2}] // { arity: 2, types: "(rint32, rint32)" }
+        Union // { arity: 2, types: "(rint32, rint32)" }
+          Filter (#1{f2}) IS NOT NULL // { arity: 2, types: "(rint32, rint32)" }
+            ReadStorage materialize.public.t1 // { arity: 2, types: "(rint32, rint32?)" }
+          Get l0 // { arity: 2, types: "(rint32, rint32)" }
+  Return // { arity: 4, types: "(rint32, rint32, rbool, rbool)" }
+    Map (true, false) // { arity: 4, types: "(rint32, rint32, rbool, rbool)" }
+      Get l0 // { arity: 2, types: "(rint32, rint32)" }
 
 Source materialize.public.t1
   filter=((#1{f2}) IS NOT NULL)
@@ -670,15 +670,15 @@ SELECT f1, f2, f1 IS NOT NULL, f2 IS NULL FROM c0;
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Distinct project=[#0{f1}, #1{f2}] // { arity: 2, types: "(integer, integer?)" }
-        Union // { arity: 2, types: "(integer, integer?)" }
-          ReadStorage materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
-          Filter (#1{f2}) IS NOT NULL // { arity: 2, types: "(integer, integer)" }
-            Get l0 // { arity: 2, types: "(integer, integer?)" }
-  Return // { arity: 4, types: "(integer, integer?, boolean, boolean)" }
-    Project (#0{f1}, #1{f2}, #3, #2) // { arity: 4, types: "(integer, integer?, boolean, boolean)" }
-      Map ((#1{f2}) IS NULL, true) // { arity: 4, types: "(integer, integer?, boolean, boolean)" }
-        Get l0 // { arity: 2, types: "(integer, integer?)" }
+      Distinct project=[#0{f1}, #1{f2}] // { arity: 2, types: "(rint32, rint32?)" }
+        Union // { arity: 2, types: "(rint32, rint32?)" }
+          ReadStorage materialize.public.t1 // { arity: 2, types: "(rint32, rint32?)" }
+          Filter (#1{f2}) IS NOT NULL // { arity: 2, types: "(rint32, rint32)" }
+            Get l0 // { arity: 2, types: "(rint32, rint32?)" }
+  Return // { arity: 4, types: "(rint32, rint32?, rbool, rbool)" }
+    Project (#0{f1}, #1{f2}, #3, #2) // { arity: 4, types: "(rint32, rint32?, rbool, rbool)" }
+      Map ((#1{f2}) IS NULL, true) // { arity: 4, types: "(rint32, rint32?, rbool, rbool)" }
+        Get l0 // { arity: 2, types: "(rint32, rint32?)" }
 
 Source materialize.public.t1
 
@@ -705,28 +705,28 @@ SELECT * FROM c0;
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Map (1) // { arity: 1, types: "(integer)" }
+      Map (1) // { arity: 1, types: "(rint32)" }
         Distinct project=[] monotonic // { arity: 0, types: "()" }
           Union // { arity: 0, types: "()" }
             Project () // { arity: 0, types: "()" }
-              Get l0 // { arity: 1, types: "(integer)" }
+              Get l0 // { arity: 1, types: "(rint32)" }
             Constant // { arity: 0, types: "()" }
               - ()
     cte l1 =
-      Project (#2, #0{f1}, #1{f2}) // { arity: 3, types: "(integer, integer, integer?)" }
-        Map (2) // { arity: 3, types: "(integer, integer?, integer)" }
-          Distinct project=[#0{f1}, #1{f2}] // { arity: 2, types: "(integer, integer?)" }
-            Union // { arity: 2, types: "(integer, integer?)" }
-              CrossJoin type=differential // { arity: 2, types: "(integer, integer?)" }
+      Project (#2, #0{f1}, #1{f2}) // { arity: 3, types: "(rint32, rint32, rint32?)" }
+        Map (2) // { arity: 3, types: "(rint32, rint32?, rint32)" }
+          Distinct project=[#0{f1}, #1{f2}] // { arity: 2, types: "(rint32, rint32?)" }
+            Union // { arity: 2, types: "(rint32, rint32?)" }
+              CrossJoin type=differential // { arity: 2, types: "(rint32, rint32?)" }
                 ArrangeBy keys=[[]] // { arity: 0, types: "()" }
                   Project () // { arity: 0, types: "()" }
-                    Get l0 // { arity: 1, types: "(integer)" }
-                ArrangeBy keys=[[]] // { arity: 2, types: "(integer, integer?)" }
-                  ReadStorage materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
-              Project (#1{f1}, #2{f2}) // { arity: 2, types: "(integer, integer?)" }
-                Get l1 // { arity: 3, types: "(integer, integer, integer?)" }
-  Return // { arity: 3, types: "(integer, integer, integer?)" }
-    Get l1 // { arity: 3, types: "(integer, integer, integer?)" }
+                    Get l0 // { arity: 1, types: "(rint32)" }
+                ArrangeBy keys=[[]] // { arity: 2, types: "(rint32, rint32?)" }
+                  ReadStorage materialize.public.t1 // { arity: 2, types: "(rint32, rint32?)" }
+              Project (#1{f1}, #2{f2}) // { arity: 2, types: "(rint32, rint32?)" }
+                Get l1 // { arity: 3, types: "(rint32, rint32, rint32?)" }
+  Return // { arity: 3, types: "(rint32, rint32, rint32?)" }
+    Get l1 // { arity: 3, types: "(rint32, rint32, rint32?)" }
 
 Source materialize.public.t1
 
@@ -758,28 +758,28 @@ SELECT * FROM c0;
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Map (1) // { arity: 1, types: "(integer)" }
+      Map (1) // { arity: 1, types: "(rint32)" }
         Distinct project=[] monotonic // { arity: 0, types: "()" }
           Union // { arity: 0, types: "()" }
             Project () // { arity: 0, types: "()" }
-              Get l0 // { arity: 1, types: "(integer)" }
+              Get l0 // { arity: 1, types: "(rint32)" }
             Constant // { arity: 0, types: "()" }
               - ()
     cte l1 =
-      Project (#2, #0{f1}, #1{f2}) // { arity: 3, types: "(boolean, integer, integer?)" }
-        Map (false) // { arity: 3, types: "(integer, integer?, boolean)" }
-          Distinct project=[#0{f1}, #1{f2}] // { arity: 2, types: "(integer, integer?)" }
-            Union // { arity: 2, types: "(integer, integer?)" }
-              CrossJoin type=differential // { arity: 2, types: "(integer, integer?)" }
+      Project (#2, #0{f1}, #1{f2}) // { arity: 3, types: "(rbool, rint32, rint32?)" }
+        Map (false) // { arity: 3, types: "(rint32, rint32?, rbool)" }
+          Distinct project=[#0{f1}, #1{f2}] // { arity: 2, types: "(rint32, rint32?)" }
+            Union // { arity: 2, types: "(rint32, rint32?)" }
+              CrossJoin type=differential // { arity: 2, types: "(rint32, rint32?)" }
                 ArrangeBy keys=[[]] // { arity: 0, types: "()" }
                   Project () // { arity: 0, types: "()" }
-                    Get l0 // { arity: 1, types: "(integer)" }
-                ArrangeBy keys=[[]] // { arity: 2, types: "(integer, integer?)" }
-                  ReadStorage materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
-              Project (#1{f1}, #2{f2}) // { arity: 2, types: "(integer, integer?)" }
-                Get l1 // { arity: 3, types: "(boolean, integer, integer?)" }
-  Return // { arity: 3, types: "(boolean, integer, integer?)" }
-    Get l1 // { arity: 3, types: "(boolean, integer, integer?)" }
+                    Get l0 // { arity: 1, types: "(rint32)" }
+                ArrangeBy keys=[[]] // { arity: 2, types: "(rint32, rint32?)" }
+                  ReadStorage materialize.public.t1 // { arity: 2, types: "(rint32, rint32?)" }
+              Project (#1{f1}, #2{f2}) // { arity: 2, types: "(rint32, rint32?)" }
+                Get l1 // { arity: 3, types: "(rbool, rint32, rint32?)" }
+  Return // { arity: 3, types: "(rbool, rint32, rint32?)" }
+    Get l1 // { arity: 3, types: "(rbool, rint32, rint32?)" }
 
 Source materialize.public.t1
 

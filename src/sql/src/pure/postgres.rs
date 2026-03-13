@@ -686,7 +686,7 @@ pub(crate) fn generate_column_casts(
 
                 PlanError::TableContainsUningestableTypes {
                     name: table.name.to_string(),
-                    type_: scx.humanize_scalar_type(&scalar_type, false),
+                    type_: scx.humanize_sql_scalar_type(&scalar_type, false),
                     column: column.name.to_string(),
                 }
             })?;

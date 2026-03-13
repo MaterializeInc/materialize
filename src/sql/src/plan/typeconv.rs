@@ -1134,8 +1134,8 @@ fn get_cast(
         None => {
             return Err(CastError::InvalidCast {
                 ccx,
-                from: ecx.humanize_scalar_type(from, false),
-                to: ecx.humanize_scalar_type(to, false),
+                from: ecx.humanize_sql_scalar_type(from, false),
+                to: ecx.humanize_sql_scalar_type(to, false),
             });
         }
     };
@@ -1148,8 +1148,8 @@ fn get_cast(
         Some(cast) => Ok(cast),
         None => Err(CastError::InvalidCast {
             ccx,
-            from: ecx.humanize_scalar_type(from, false),
-            to: ecx.humanize_scalar_type(to, false),
+            from: ecx.humanize_sql_scalar_type(from, false),
+            to: ecx.humanize_sql_scalar_type(to, false),
         }),
     }
 }
@@ -1358,8 +1358,8 @@ pub fn guess_best_common_type(
             sql_bail!(
                 "{} types {} and {} cannot be matched",
                 ecx.name,
-                ecx.humanize_scalar_type(candidate, false),
-                ecx.humanize_scalar_type(typ, false),
+                ecx.humanize_sql_scalar_type(candidate, false),
+                ecx.humanize_sql_scalar_type(typ, false),
             );
         };
 
@@ -1433,8 +1433,8 @@ pub fn plan_coerce<'a>(
                          the type of parameter ${}: \
                          should be both {} and {}",
                         n,
-                        ecx.humanize_scalar_type(&prev, false),
-                        ecx.humanize_scalar_type(coerce_to, false),
+                        ecx.humanize_sql_scalar_type(&prev, false),
+                        ecx.humanize_sql_scalar_type(coerce_to, false),
                     );
                 }
             }
@@ -1463,7 +1463,7 @@ fn validate_range_element_type(
         Ok(())
     } else {
         Err(CastError::UnsupportedRangeElementType {
-            element_type_name: ecx.humanize_scalar_type(element_type, false),
+            element_type_name: ecx.humanize_sql_scalar_type(element_type, false),
         })
     }
 }
