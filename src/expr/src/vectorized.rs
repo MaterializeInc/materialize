@@ -21,6 +21,7 @@
 
 use columnar::{Columnar, Len, Push};
 use enum_kinds::EnumKind;
+use mz_ore::cast::CastFrom;
 
 use crate::linear::plan::MfpPlan;
 use crate::{BinaryFunc, MapFilterProject, MirScalarExpr};
@@ -274,6 +275,12 @@ fn eval_binary_vectorized(
     eval_binary_slow(func, col1, col2, batch_len)
 }
 
+/// Convert a `ColumnDatumKind` to the `u8` discriminant used by the columnar container.
+#[allow(clippy::as_conversions)]
+const fn discriminant(kind: ColumnDatumKind) -> u8 {
+    kind as u8
+}
+
 /// Build a `DatumColumn` directly from a homogeneous `Vec<T>` and its
 /// variant, bypassing per-element enum dispatch.
 ///
@@ -287,8 +294,8 @@ macro_rules! datum_column_from_typed_vec {
         let len = $vec.len();
         let mut data: <ColumnDatum as Columnar>::Container = Default::default();
         data.$field = $vec;
-        data.variant = vec![ColumnDatumKind::$field as u8; len];
-        data.offset = (0..len as u64).collect();
+        data.variant = vec![discriminant(ColumnDatumKind::$field); len];
+        data.offset = (0..u64::cast_from(len)).collect();
         DatumColumn { data }
     }};
 }
@@ -317,13 +324,13 @@ macro_rules! datum_column_from_typed_vec_with_errors {
             let mut error_offset = 0u64;
             for i in 0..len {
                 if error_idx < $errors.len() && $errors[error_idx] == i {
-                    data.variant.push(ColumnDatumKind::Error as u8);
+                    data.variant.push(discriminant(ColumnDatumKind::Error));
                     data.offset.push(error_offset);
                     Push::push(&mut data.Error, $err_msg);
                     error_offset += 1;
                     error_idx += 1;
                 } else {
-                    data.variant.push(ColumnDatumKind::$field as u8);
+                    data.variant.push(discriminant(ColumnDatumKind::$field));
                     data.offset.push(typed_offset);
                     data.$field.push($results[i]);
                     typed_offset += 1;

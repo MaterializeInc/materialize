@@ -413,7 +413,11 @@ macro_rules! derive_binary {
             ) -> Option<crate::vectorized::DatumColumn> {
                 use crate::scalar::func::binary::VectorizedBinaryFunc;
                 match self {
-                    $(Self::$name(f) => VectorizedBinaryFunc::eval_vectorized(f, col1, col2, batch_len),)*
+                    $(Self::$name(f) => {
+                        VectorizedBinaryFunc::eval_vectorized(
+                            f, col1, col2, batch_len,
+                        )
+                    },)*
                 }
             }
 
