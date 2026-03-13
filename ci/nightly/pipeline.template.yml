@@ -1439,6 +1439,19 @@ steps:
               composition: persist
               args: [--node-count=4, --consensus=cockroach, --blob=maelstrom, --time-limit=300, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1]
 
+      - id: persist-maelstrom-multi-node-dynamo
+        label: Long multi-node Maelstrom coverage of persist with DynamoDB consensus
+        depends_on: build-aarch64
+        timeout_in_minutes: 40
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        artifact_paths: [ test/persist/maelstrom/**/*.log ]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: persist
+              args: [ --node-count=4, --consensus=cockroach, --blob=maelstrom, --time-limit=300, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1 ]
+
+
       - id: persist-maelstrom-multi-node-postgres
         label: "Long multi-node Maelstrom coverage of persist with :postgres: Consensus"
         depends_on: build-aarch64
