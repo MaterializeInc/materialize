@@ -15,11 +15,11 @@ path = "benches/benches.rs"
 harness = false
 
 [dependencies]
-anyhow = "1.0.101"
+anyhow = "1.0.102"
 byteorder = "1.4.3"
 bytes = "1.11.1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-clap = { version = "4.5.23", features = ["derive"] }
+clap = { version = "4.5.60", features = ["derive"] }
 differential-dataflow = "0.20.0"
 itertools = "0.14.0"
 maplit = "1.0.2"

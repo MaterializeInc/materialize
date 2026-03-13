@@ -10,12 +10,12 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.101"
+anyhow = "1.0.102"
 async-trait = "0.1.89"
 chrono = { version = "0.4.39", default-features = false }
-clap = { version = "4.5.23", features = ["derive"] }
+clap = { version = "4.5.60", features = ["derive"] }
 fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.31"
+futures = "0.3.32"
 maplit = "1.0.2"
 mz-cloud-resources = { path = "../cloud-resources", default-features = false, features = ["vpc-endpoints"] }
 mz-orchestrator = { path = "../orchestrator", default-features = false }

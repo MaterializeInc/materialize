@@ -15,7 +15,7 @@ name = "sign"
 required-features = ["signing"]
 
 [dependencies]
-anyhow = "1.0.101"
+anyhow = "1.0.102"
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
 serde = { version = "1.0.219", features = ["derive"] }
 
@@ -30,7 +30,7 @@ uuid = { version = "1.19.0", features = ["v4"], optional = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-clap = { version = "4.5.23", features = ["derive"] }
+clap = { version = "4.5.60", features = ["derive"] }
 mz-aws-util = { path = "../aws-util" }
 tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }
 
