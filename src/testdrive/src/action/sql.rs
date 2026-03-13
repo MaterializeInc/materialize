@@ -677,7 +677,7 @@ pub fn decode_row(
             Type::BOOL_ARRAY => row
                 .get::<_, Option<Array<ArrayElement<bool>>>>(i)
                 .map(|a| a.to_string()),
-            Type::INT2_ARRAY => row
+            Type::INT2_ARRAY | Type::INT2_VECTOR => row
                 .get::<_, Option<Array<ArrayElement<i16>>>>(i)
                 .map(|a| a.to_string()),
             Type::INT4_ARRAY => row
