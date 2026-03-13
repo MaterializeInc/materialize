@@ -9,14 +9,18 @@
 
 use std::{future::ready, time::Duration};
 
-use apiextensions::v1::CustomResourceColumnDefinition;
 use futures::StreamExt;
-use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions;
+use k8s_openapi::{
+    ByteString,
+    apiextensions_apiserver::pkg::apis::apiextensions::v1::{
+        CustomResourceColumnDefinition, CustomResourceConversion, CustomResourceDefinition,
+        ServiceReference, WebhookClientConfig, WebhookConversion,
+    },
+};
 use kube::{
     Api, Client, CustomResourceExt, Resource, ResourceExt,
-    api::{DeleteParams, Patch, PatchParams, PostParams},
-    core::Status,
-    core::response::StatusSummary,
+    api::{DeleteParams, ListParams, Patch, PatchParams, PostParams},
+    core::{Status, response::StatusSummary},
     runtime::{reflector, watcher},
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -99,8 +103,13 @@ where
 pub async fn register_crds(
     client: Client,
     additional_crd_columns: Vec<CustomResourceColumnDefinition>,
+    webhook_service_name: String,
+    webhook_service_namespace: String,
+    webhook_service_port: u16,
+    ca_cert_path: String,
 ) -> Result<(), anyhow::Error> {
-    let mut mz_crd = crd::materialize::v1alpha1::Materialize::crd();
+    let ca_bytes = tokio::fs::read(ca_cert_path).await?;
+    let mut mz_crd = crd::materialize::v1alpha2::Materialize::crd();
     let default_columns = mz_crd.spec.versions[0]
         .additional_printer_columns
         .take()
@@ -111,26 +120,46 @@ pub async fn register_crds(
             .chain(default_columns)
             .collect(),
     );
+    let mz_conversion = CustomResourceConversion {
+        strategy: "Webhook".to_owned(),
+        webhook: Some(WebhookConversion {
+            client_config: Some(WebhookClientConfig {
+                ca_bundle: Some(ByteString(ca_bytes)),
+                service: Some(ServiceReference {
+                    name: webhook_service_name,
+                    namespace: webhook_service_namespace,
+                    path: Some("/convert".to_owned()),
+                    port: Some(webhook_service_port.into()),
+                }),
+                url: None,
+            }),
+            conversion_review_versions: vec!["v1".to_owned()],
+        }),
+    };
     tokio::time::timeout(
         Duration::from_secs(120),
         register_versioned_crds(
             client.clone(),
             vec![
                 VersionedCrd {
-                    crds: vec![mz_crd],
-                    stored_version: String::from("v1alpha1"),
+                    crds: vec![mz_crd, crd::materialize::v1alpha1::Materialize::crd()],
+                    stored_version: String::from("v1alpha2"),
+                    conversion: Some(mz_conversion),
                 },
                 VersionedCrd {
                     crds: vec![crd::balancer::v1alpha1::Balancer::crd()],
                     stored_version: String::from("v1alpha1"),
+                    conversion: None,
                 },
                 VersionedCrd {
                     crds: vec![crd::console::v1alpha1::Console::crd()],
                     stored_version: String::from("v1alpha1"),
+                    conversion: None,
                 },
                 VersionedCrd {
                     crds: vec![crd::vpc_endpoint::v1::VpcEndpoint::crd()],
                     stored_version: String::from("v1"),
+                    conversion: None,
                 },
             ],
             FIELD_MANAGER,
@@ -139,6 +168,79 @@ pub async fn register_crds(
     .await??;
 
     info!("Done rewriting CRDs");
+
+    Ok(())
+}
+
+/// After updating the stored version to v1alpha2 in the CRD, any existing
+/// resources that were stored as v1alpha1 need to be re-saved so that they
+/// are stored in the new version. This function reads all Materialize
+/// resources (triggering conversion via the webhook) and writes them back.
+/// If all resources are successfully migrated, it also removes v1alpha1
+/// from the CRD's storedVersions.
+pub async fn migrate_materialize_storage_version(client: Client) -> Result<(), anyhow::Error> {
+    let crd_api = Api::<CustomResourceDefinition>::all(client.clone());
+    let mz_crd = crd_api.get("materializes.materialize.cloud").await?;
+
+    let stored_versions = mz_crd
+        .status
+        .as_ref()
+        .and_then(|s| s.stored_versions.as_ref())
+        .cloned()
+        .unwrap_or_default();
+
+    if !stored_versions.contains(&"v1alpha1".to_string()) {
+        info!("No v1alpha1 stored versions found, skipping storage migration");
+        return Ok(());
+    }
+
+    info!("Migrating stored Materialize resources from v1alpha1 to v1alpha2");
+
+    let mz_api = Api::<crd::materialize::v1alpha2::Materialize>::all(client.clone());
+    let mz_list = mz_api.list(&ListParams::default()).await?;
+
+    let mut all_succeeded = true;
+    for mz in mz_list.items {
+        let name = mz.name_unchecked();
+        let namespace = mz.namespace();
+        let namespaced_api =
+            Api::<crd::materialize::v1alpha2::Materialize>::namespaced(client.clone(), &namespace);
+        match replace_resource(&namespaced_api, &mz).await {
+            Ok(_) => {
+                info!(
+                    "Migrated Materialize resource {}/{} to v1alpha2 storage",
+                    namespace, name,
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to migrate Materialize resource {}/{}: {}",
+                    namespace, name, e,
+                );
+                all_succeeded = false;
+            }
+        }
+    }
+
+    if all_succeeded {
+        let new_stored_versions: Vec<String> = stored_versions
+            .into_iter()
+            .filter(|v| v != "v1alpha1")
+            .collect();
+        let patch = serde_json::json!({
+            "status": {
+                "storedVersions": new_stored_versions,
+            }
+        });
+        crd_api
+            .patch_status(
+                "materializes.materialize.cloud",
+                &PatchParams::default(),
+                &Patch::Merge(patch),
+            )
+            .await?;
+        info!("Removed v1alpha1 from CRD storedVersions");
+    }
 
     Ok(())
 }

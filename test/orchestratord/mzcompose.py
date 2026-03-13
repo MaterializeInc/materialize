@@ -20,6 +20,7 @@ import random
 import shutil
 import signal
 import subprocess
+import tempfile
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -1605,6 +1606,200 @@ class RolloutStrategy(Modification):
         return
 
 
+class MaterializeCRDVersion(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return [
+            "materialize.cloud/v1alpha1",
+            "materialize.cloud/v1alpha2",
+        ]
+
+    @classmethod
+    def default(cls) -> Any:
+        return "materialize.cloud/v1alpha2"
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if operator_supports_v1alpha2(definition):
+            definition["materialize"]["apiVersion"] = self.value
+        else:
+            # Older versions do not support v1alpha2
+            definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha1"
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        # This should be OK without additional validation,
+        # as we check we deployed in post_run_check.
+        return
+
+
+class CertificateSource(Modification):
+    SECRET_NAME = "orchestratord-custom-cert"
+
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return ["cert-manager", "secret"]
+
+    @classmethod
+    def default(cls) -> Any:
+        return "cert-manager"
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        definition["operator"]["operator"]["certificate"]["source"] = self.value
+        if self.value == "secret":
+            definition["operator"]["operator"]["certificate"][
+                "secretName"
+            ] = self.SECRET_NAME
+            self._create_cert_secret()
+
+    @classmethod
+    def _create_cert_secret(cls) -> None:
+        dns_name = "operator-materialize-operator.materialize.svc"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ca_key = os.path.join(tmpdir, "ca.key")
+            ca_crt = os.path.join(tmpdir, "ca.crt")
+            tls_key = os.path.join(tmpdir, "tls.key")
+            tls_crt = os.path.join(tmpdir, "tls.crt")
+            csr_path = os.path.join(tmpdir, "server.csr")
+            ext_path = os.path.join(tmpdir, "ext.cnf")
+
+            # Generate CA key and self-signed cert
+            spawn.runv(
+                [
+                    "openssl",
+                    "req",
+                    "-x509",
+                    "-newkey",
+                    "rsa:2048",
+                    "-keyout",
+                    ca_key,
+                    "-out",
+                    ca_crt,
+                    "-days",
+                    "1",
+                    "-nodes",
+                    "-subj",
+                    "/CN=Test CA",
+                ]
+            )
+
+            # Generate server key
+            spawn.runv(
+                [
+                    "openssl",
+                    "genpkey",
+                    "-algorithm",
+                    "rsa",
+                    "-pkeyopt",
+                    "rsa_keygen_bits:2048",
+                    "-out",
+                    tls_key,
+                ]
+            )
+
+            # Generate CSR
+            spawn.runv(
+                [
+                    "openssl",
+                    "req",
+                    "-new",
+                    "-key",
+                    tls_key,
+                    "-out",
+                    csr_path,
+                    "-subj",
+                    f"/CN={dns_name}",
+                ]
+            )
+
+            # Write extension file for SAN
+            with open(ext_path, "w") as f:
+                f.write(f"subjectAltName=DNS:{dns_name}\n")
+
+            # Sign CSR with CA
+            spawn.runv(
+                [
+                    "openssl",
+                    "x509",
+                    "-req",
+                    "-in",
+                    csr_path,
+                    "-CA",
+                    ca_crt,
+                    "-CAkey",
+                    ca_key,
+                    "-CAcreateserial",
+                    "-out",
+                    tls_crt,
+                    "-days",
+                    "1",
+                    "-extfile",
+                    ext_path,
+                ]
+            )
+
+            # Delete existing secret if present
+            try:
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "delete",
+                        "secret",
+                        cls.SECRET_NAME,
+                        "-n",
+                        "materialize",
+                    ],
+                    stderr=subprocess.DEVNULL,
+                )
+            except subprocess.CalledProcessError:
+                pass
+
+            # Create the secret with ca.crt, tls.crt, and tls.key
+            spawn.runv(
+                [
+                    "kubectl",
+                    "create",
+                    "secret",
+                    "generic",
+                    cls.SECRET_NAME,
+                    f"--from-file=ca.crt={ca_crt}",
+                    f"--from-file=tls.crt={tls_crt}",
+                    f"--from-file=tls.key={tls_key}",
+                    "-n",
+                    "materialize",
+                ]
+            )
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        def check() -> None:
+            orchestratord = get_orchestratord_data()
+            volumes = orchestratord["items"][0]["spec"]["volumes"]
+            cert_volume = next(
+                (v for v in volumes if v.get("name") == "certificate"),
+                None,
+            )
+            assert cert_volume is not None, f"Expected certificate volume in {volumes}"
+
+            secret_name = cert_volume["secret"]["secretName"]
+            if self.value == "cert-manager":
+                expected = "operator-materialize-operator-cert"
+            else:
+                expected = self.SECRET_NAME
+            assert (
+                secret_name == expected
+            ), f"Expected certificate secret name '{expected}', got '{secret_name}'"
+
+        retry(check, 120)
+
+
+def operator_supports_v1alpha2(definition: dict[str, Any]):
+    operator_version = Version.parse(
+        definition["operator"]["operator"]["image"]["tag"].removeprefix("v")
+    )
+    if operator_version >= Version.parse("26.16.0-dev.0"):
+        return True
+    return False
+
+
 class Properties(Enum):
     Defaults = "defaults"
     Individual = "individual"
@@ -1682,6 +1877,8 @@ def workflow_documentation_defaults(
                 "workload=materialize-instance",
             ]
         )
+
+        helm_install_cert_manager()
 
         shutil.copyfile(
             "misc/helm-charts/operator/values.yaml",
@@ -2047,7 +2244,8 @@ def workflow_upgrade_downtime(c: Composition, parser: WorkflowArgumentParser) ->
     thread.start()
     time.sleep(10)  # some time to make sure the thread runs fine
     request = str(uuid.uuid4())
-    definition["materialize"]["spec"]["requestRollout"] = request
+    if definition["materialize"]["apiVersion"] == "materialize.cloud/v1alpha1":
+        definition["materialize"]["spec"]["requestRollout"] = request
     definition["materialize"]["spec"]["forceRollout"] = request
     run(definition, False)
     time.sleep(120)  # some time to make sure there is no downtime later
@@ -2093,6 +2291,453 @@ def workflow_balancer(c: Composition, parser: WorkflowArgumentParser) -> None:
     definition = setup(c, args)
     init(definition)
     run_balancer(definition, False)
+
+
+def get_materialize_v1alpha2() -> dict[str, Any]:
+    """Get the first Materialize resource at v1alpha2."""
+    data = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "materializes.v1alpha2.materialize.cloud",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "json",
+            ],
+            stderr=subprocess.DEVNULL,
+        )
+    )
+    return data["items"][0]
+
+
+def get_materialize_status_v1alpha2() -> dict[str, Any] | None:
+    """Get the status of the first Materialize resource at v1alpha2."""
+    return get_materialize_v1alpha2().get("status")
+
+
+def get_materialize_condition_reason_v1alpha2() -> str | None:
+    """Get the reason of the first UpToDate condition."""
+    status = get_materialize_status_v1alpha2()
+    if not status:
+        return None
+    conditions = status.get("conditions", [])
+    if not conditions:
+        return None
+    for condition in conditions:
+        if condition.get("type") == "UpToDate":
+            return condition.get("reason")
+    return None
+
+
+def wait_for_condition_reason_v1alpha2(reason: str, timeout: int = 900) -> None:
+    """Wait until the Materialize resource has the given condition reason."""
+    for _ in range(timeout):
+        try:
+            if get_materialize_condition_reason_v1alpha2() == reason:
+                return
+        except (subprocess.CalledProcessError, KeyError, IndexError):
+            pass
+        time.sleep(1)
+    spawn.runv(
+        [
+            "kubectl",
+            "get",
+            "materializes",
+            "-n",
+            "materialize-environment",
+            "-o",
+            "yaml",
+        ],
+    )
+    raise RuntimeError(
+        f"Materialize resource never reached condition reason {reason!r}"
+    )
+
+
+def scale_orchestratord(replicas: int) -> None:
+    """Scale the orchestratord deployment."""
+    spawn.runv(
+        [
+            "kubectl",
+            "scale",
+            "deployment",
+            "-n",
+            "materialize",
+            "-l",
+            "app.kubernetes.io/instance=operator",
+            "--replicas",
+            str(replicas),
+        ]
+    )
+    # Wait for the scale to take effect
+    for _ in range(120):
+        data = get_orchestratord_data()
+        running = sum(
+            1
+            for item in data.get("items", [])
+            if item.get("status", {}).get("phase") == "Running"
+        )
+        if running == replicas:
+            return
+        time.sleep(1)
+    raise RuntimeError(f"Orchestratord never scaled to {replicas} replicas")
+
+
+def patch_materialize_status_promoting() -> None:
+    """Patch the Materialize resource status to have the Promoting condition."""
+    mz_data = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "materializes",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "json",
+            ],
+            stderr=subprocess.DEVNULL,
+        )
+    )
+    mz_name = mz_data["items"][0]["metadata"]["name"]
+
+    patch = {
+        "status": {
+            "conditions": [
+                {
+                    "type": "UpToDate",
+                    "status": "Unknown",
+                    "lastTransitionTime": datetime.datetime.now(
+                        datetime.timezone.utc
+                    ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "message": "Attempting to promote generation (test-injected)",
+                    "observedGeneration": mz_data["items"][0]["metadata"].get(
+                        "generation", 1
+                    ),
+                    "reason": "Promoting",
+                }
+            ]
+        }
+    }
+
+    spawn.runv(
+        [
+            "kubectl",
+            "patch",
+            "materializes",
+            mz_name,
+            "-n",
+            "materialize-environment",
+            "--type=merge",
+            "--subresource=status",
+            "-p",
+            json.dumps(patch),
+        ]
+    )
+
+
+def workflow_mid_rollout_migration(
+    c: Composition,
+    parser: WorkflowArgumentParser,
+) -> None:
+    """Test CRD migration from v1alpha1 to v1alpha2 while a rollout is in progress.
+
+    This tests two scenarios described in the design doc:
+    1. Mid-rollout, NOT in "Promoting" status: uses ManuallyPromote strategy to
+       hold the rollout at ReadyToPromote, then upgrades orchestratord. Verifies
+       that the conversion webhook correctly sets lastCompletedRolloutHash=None,
+       and that the new orchestratord restarts and completes the rollout.
+    2. Mid-rollout, already in "Promoting" status: reaches ReadyToPromote, then
+       scales down orchestratord and patches the status to Promoting before
+       upgrading. Verifies that the new orchestratord unconditionally completes
+       the promotion.
+    """
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+
+    versions = get_all_self_managed_versions()
+    current_version = get_version(args.tag)
+    versions.append(current_version)
+
+    # Find the last version that does NOT support v1alpha2.
+    # We need to start with this version so the CRD is stored as v1alpha1.
+    old_version = None
+    for v in reversed(versions):
+        test_def = copy.deepcopy(definition)
+        test_def["operator"]["operator"]["image"]["tag"] = str(v)
+        if not operator_supports_v1alpha2(test_def):
+            old_version = v
+            break
+    if old_version is None:
+        print("No pre-v1alpha2 version found, skipping mid-rollout migration test")
+        return
+
+    print(f"Old version (v1alpha1 only): {old_version}")
+    print(f"New version (v1alpha2 support): {current_version}")
+
+    # ===================================================================
+    # Scenario 1: Mid-rollout, NOT in Promoting status
+    # ===================================================================
+    print("--- Scenario 1: Mid-rollout migration, not promoting")
+
+    # Deploy with the old orchestratord version using v1alpha1.
+    # Use the default WaitUntilReady strategy for the initial deployment.
+    definition["operator"]["operator"]["image"]["tag"] = str(old_version)
+    definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha1"
+    definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
+        c.compose["services"]["environmentd"]["image"], str(old_version)
+    )
+    init(definition)
+    definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+    run(definition, False)
+
+    # Now switch to ManuallyPromote and trigger a second rollout with a new
+    # image. ManuallyPromote will hold the rollout at ReadyToPromote.
+    definition["materialize"]["spec"]["rolloutStrategy"] = "ManuallyPromote"
+    definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
+        c.compose["services"]["environmentd"]["image"], str(current_version)
+    )
+    definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+
+    # Apply without waiting for completion (don't call run() which waits
+    # for Applied status and also handles ManuallyPromote promotion).
+    defs = [
+        definition["namespace"],
+        definition["secret"],
+        definition["materialize"],
+    ]
+    yaml_str = yaml.dump_all(defs)
+    print("Applying mid-rollout change...")
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml_str.encode(),
+    )
+
+    # Wait for ReadyToPromote — the new generation is ready but not promoted
+    print("Waiting for ReadyToPromote...")
+    wait_for_condition_reason_v1alpha2("ReadyToPromote")
+    print("Reached ReadyToPromote — rollout is mid-flight, not promoting")
+
+    # Upgrade orchestratord to the new version (which reconciles v1alpha2).
+    # The API server will call the conversion webhook when the new
+    # orchestratord reads the stored v1alpha1 resource as v1alpha2.
+    print(f"Upgrading orchestratord to {current_version}...")
+    definition["operator"]["operator"]["image"]["tag"] = str(current_version)
+    helm_install_operator(definition["operator"], upgrade=True)
+
+    # Verify the conversion: read the resource at v1alpha2 and check that
+    # lastCompletedRolloutHash is None (null), because we were mid-rollout.
+    print("Verifying v1alpha2 conversion result...")
+    for attempt in range(60):
+        try:
+            mz_v2 = get_materialize_v1alpha2()
+            status = mz_v2.get("status", {})
+            last_hash = status.get("lastCompletedRolloutHash")
+            if last_hash is None:
+                print("Confirmed: lastCompletedRolloutHash is null after conversion")
+                break
+        except subprocess.CalledProcessError:
+            pass
+        time.sleep(2)
+    else:
+        raise RuntimeError(
+            "lastCompletedRolloutHash was never null after conversion; "
+            f"got: {status.get('lastCompletedRolloutHash')!r}"
+        )
+
+    # The new orchestratord should detect a spec change (since
+    # lastCompletedRolloutHash=None != requestedRolloutHash) and restart
+    # the rollout. Since we're still ManuallyPromote, wait for
+    # ReadyToPromote again, then promote.
+    print("Waiting for ReadyToPromote under v1alpha2...")
+    wait_for_condition_reason_v1alpha2("ReadyToPromote")
+
+    mz_data = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "materializes.v1alpha2.materialize.cloud",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "json",
+            ],
+            stderr=subprocess.DEVNULL,
+        )
+    )
+    rollout_hash = mz_data["items"][0]["status"]["requestedRolloutHash"]
+    assert rollout_hash is not None, "requestedRolloutHash should be set"
+    definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha2"
+    definition["materialize"]["spec"].pop("requestRollout", None)
+    definition["materialize"]["spec"]["forcePromote"] = rollout_hash
+    for attempt in range(30):
+        result = subprocess.run(
+            ["kubectl", "apply", "-f", "-"],
+            input=yaml.dump(definition["materialize"]).encode(),
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            break
+        stderr_str = result.stderr.decode(errors="replace")
+        if attempt < 29 and "connection refused" in stderr_str:
+            print(f"Webhook not yet reachable (attempt {attempt + 1}), retrying...")
+            time.sleep(2)
+            continue
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            result.args,
+            output=result.stdout,
+            stderr=result.stderr,
+        )
+
+    post_run_check(definition, False)
+    print("Scenario 1 PASSED: Mid-rollout migration (not promoting) succeeded")
+
+    # ===================================================================
+    # Scenario 2: Mid-rollout, already in Promoting status
+    # ===================================================================
+    # We need a clean cluster since we cannot easily downgrade orchestratord.
+    print("--- Scenario 2: Mid-rollout migration, already promoting")
+    spawn.runv(["kind", "delete", "cluster", "--name", "kind"])
+    definition = setup(c, args)
+
+    # Deploy with the old orchestratord version using v1alpha1.
+    # Default WaitUntilReady strategy for the initial deployment.
+    definition["operator"]["operator"]["image"]["tag"] = str(old_version)
+    definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha1"
+    definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
+        c.compose["services"]["environmentd"]["image"], str(old_version)
+    )
+    init(definition)
+    definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+    run(definition, False)
+
+    # Switch to ManuallyPromote and trigger a second rollout.
+    definition["materialize"]["spec"]["rolloutStrategy"] = "ManuallyPromote"
+    definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
+        c.compose["services"]["environmentd"]["image"], str(current_version)
+    )
+    definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+    defs = [
+        definition["namespace"],
+        definition["secret"],
+        definition["materialize"],
+    ]
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump_all(defs).encode(),
+    )
+
+    # Wait for ReadyToPromote
+    print("Waiting for ReadyToPromote...")
+    wait_for_condition_reason_v1alpha2("ReadyToPromote")
+    print("Reached ReadyToPromote")
+
+    # Scale down orchestratord so it doesn't interfere while we patch status
+    print("Scaling down orchestratord...")
+    scale_orchestratord(0)
+
+    # Patch the status to simulate being in "Promoting" state.
+    # This is what would happen if orchestratord had started promoting
+    # but crashed/was upgraded before completing the promotion.
+    print("Patching status to Promoting...")
+    patch_materialize_status_promoting()
+
+    # Verify the patch took effect
+    assert (
+        get_materialize_condition_reason_v1alpha2() == "Promoting"
+    ), "Status should be Promoting after patch"
+    print("Status is now Promoting")
+
+    # Upgrade orchestratord to the new version.
+    # When it starts, it will read the resource as v1alpha2 via the
+    # conversion webhook. The conversion sees is_promoting()=true, so it
+    # sets requestedRolloutHash=None. The reconciler sees is_promoting()
+    # and unconditionally completes the promotion.
+    print(f"Upgrading orchestratord to {current_version}...")
+    definition["operator"]["operator"]["image"]["tag"] = str(current_version)
+    helm_install_operator(definition["operator"], upgrade=True)
+
+    # The rollout should complete — orchestratord should promote
+    # unconditionally since it was in "Promoting" state.
+    post_run_check(definition, False)
+    print("Scenario 2 PASSED: Mid-rollout migration (promoting) succeeded")
+
+
+def workflow_force_rollout_annotation(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Test that setting the materialize.cloud/force-rollout annotation
+    triggers a new rollout."""
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+    definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha2"
+    init(definition)
+    run(definition, False)
+
+    # Record the initial rollout hash from the Materialize resource status.
+    status = get_materialize_status_v1alpha2()
+    assert status is not None, "Expected Materialize status to be set"
+    initial_hash = status.get("lastCompletedRolloutHash")
+    assert initial_hash is not None, "Expected an initial completed rollout hash"
+    print(f"Initial rollout hash: {initial_hash}")
+
+    # Set the force-rollout annotation to trigger a new rollout.
+    annotation_value = str(uuid.uuid4())
+    print(f"Setting force-rollout annotation to {annotation_value}")
+    definition["materialize"]["metadata"].setdefault("annotations", {})[
+        "materialize.cloud/force-rollout"
+    ] = annotation_value
+    run(definition, False)
+
+    # Verify the rollout completed with a new hash.
+    status = get_materialize_status_v1alpha2()
+    assert status is not None, "Expected Materialize status to be set after rollout"
+    new_hash = status.get("lastCompletedRolloutHash")
+    assert new_hash is not None, "Expected a completed rollout hash after annotation"
+    assert (
+        new_hash != initial_hash
+    ), f"Expected rollout hash to change after setting force-rollout annotation, but got {new_hash} both times"
+    print(
+        f"Rollout triggered successfully: hash changed from {initial_hash} to {new_hash}"
+    )
 
 
 def workflow_orchestratord_upgrade(
@@ -2193,8 +2838,21 @@ def workflow_orchestratord_upgrade(
     versions = get_all_self_managed_versions()
     versions.append(get_version(args.tag))
 
+    def set_latest_supported_crd_version(definition: dict[str, Any]):
+        if operator_supports_v1alpha2(definition):
+            definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha2"
+        else:
+            definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha1"
+
+    def request_rollout_if_needed(definition: dict[str, Any]):
+        if definition["materialize"]["apiVersion"] == "materialize.cloud/v1alpha1":
+            definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+        else:
+            definition["materialize"]["spec"].pop("requestRollout", None)
+
     print(f"running orchestratord {versions[-3]}")
     definition["operator"]["operator"]["image"]["tag"] = str(versions[-3])
+    set_latest_supported_crd_version(definition)
     init(definition)
     check_orchestratord_version(versions[-3])
 
@@ -2212,6 +2870,7 @@ def workflow_orchestratord_upgrade(
         print(f"running orchestratord {version}")
         definition["operator"]["operator"]["image"]["tag"] = str(version)
         helm_install_operator(definition["operator"], upgrade=True)
+        wait_for_crd_established()
         check_orchestratord_version(version)
 
         print(f"running environmentd {version}")
@@ -2219,7 +2878,8 @@ def workflow_orchestratord_upgrade(
             c.compose["services"]["environmentd"]["image"],
             str(version),
         )
-        definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+        set_latest_supported_crd_version(definition)
+        request_rollout_if_needed(definition)
         run(definition, False)
         check_environmentd_version(version)
         check_clusterd_version(version)
@@ -2227,10 +2887,22 @@ def workflow_orchestratord_upgrade(
         if str(version) != "v26.4.0":
             check_balancerd_version(version)
 
+    # We cannot roll back orchestratord versions once the CRD is updated,
+    # so let's just get a clean cluster and start over.
+    spawn.runv(
+        [
+            "kind",
+            "delete",
+            "cluster",
+            "--name",
+            "kind",
+        ]
+    )
     definition = setup(c, args)
 
     print(f"running orchestratord {versions[-3]}")
     definition["operator"]["operator"]["image"]["tag"] = str(versions[-3])
+    set_latest_supported_crd_version(definition)
     init(definition)
     check_orchestratord_version(versions[-3])
 
@@ -2254,7 +2926,8 @@ def workflow_orchestratord_upgrade(
         c.compose["services"]["environmentd"]["image"],
         str(versions[-1]),
     )
-    definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+    set_latest_supported_crd_version(definition)
+    request_rollout_if_needed(definition)
     run(definition, False)
     check_environmentd_version(versions[-1])
     check_clusterd_version(versions[-1])
@@ -2519,6 +3192,8 @@ def setup(c: Composition, args) -> dict[str, Any]:
             ]
         )
 
+        helm_install_cert_manager()
+
         spawn.runv(["kubectl", "create", "namespace", "materialize"])
 
         spawn.runv(
@@ -2651,7 +3326,8 @@ def run_scenario(
                 values=definition["operator"],
                 upgrade=True,
             )
-            definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+            if definition["materialize"]["apiVersion"] == "materialize.cloud/v1alpha1":
+                definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
             run(definition, expect_fail)
         mod_dict = {mod.__class__: mod.value for mod in mods}
         for subclass in all_subclasses(Modification):
@@ -2720,6 +3396,24 @@ def helm_install_operator(
             "-",
         ],
         stdin=yaml.dump(values).encode(),
+    )
+
+
+def helm_install_cert_manager():
+    spawn.runv(
+        [
+            "helm",
+            "install",
+            "cert-manager",
+            "oci://quay.io/jetstack/charts/cert-manager",
+            "--version",
+            "v1.19.2",
+            "--namespace",
+            "cert-manager",
+            "--create-namespace",
+            "--set",
+            "crds.enabled=true",
+        ]
     )
 
 
@@ -2794,14 +3488,31 @@ def run(definition: dict[str, Any], expect_fail: bool) -> None:
         defs.append(definition["materialize2"])
     if "system_params_configmap" in definition:
         defs.append(definition["system_params_configmap"])
-    try:
-        spawn.runv(
+    yaml_str = yaml.dump_all(defs)
+    print(f"Attempting to apply:\n{yaml_str}")
+    # Retry to handle transient webhook unavailability (e.g. endpoint
+    # propagation delay after pod restart during helm upgrade).
+    max_attempts = 120
+    for attempt in range(max_attempts):
+        result = subprocess.run(
             ["kubectl", "apply", "-f", "-"],
-            stdin=yaml.dump_all(defs).encode(),
+            input=yaml_str.encode(),
+            capture_output=True,
         )
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to apply: {e.stdout}\nSTDERR:{e.stderr}")
-        raise
+        if result.returncode == 0:
+            break
+        stderr_str = result.stderr.decode(errors="replace")
+        if attempt < max_attempts - 1 and "connection refused" in stderr_str:
+            print(f"Webhook not yet reachable (attempt {attempt + 1}), retrying...")
+            time.sleep(2)
+            continue
+        print(f"Failed to apply: {result.stdout}\nSTDERR:{result.stderr}")
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            result.args,
+            output=result.stdout,
+            stderr=result.stderr,
+        )
 
     if definition["materialize"]["spec"].get("rolloutStrategy") == "ManuallyPromote":
         # First wait for it to become ready to promote, but not yet promoted
@@ -2842,21 +3553,10 @@ def run(definition: dict[str, Any], expect_fail: bool) -> None:
             )
 
         # Manually promote it
-        mz = json.loads(
-            spawn.capture(
-                [
-                    "kubectl",
-                    "get",
-                    "materializes",
-                    "-n",
-                    "materialize-environment",
-                    "-o",
-                    "json",
-                ],
-                stderr=subprocess.DEVNULL,
-            )
-        )["items"][0]
-        definition["materialize"]["spec"]["forcePromote"] = mz["spec"]["requestRollout"]
+        mz = get_materialize_v1alpha2()
+        rollout_spec_hash = mz["status"]["requestedRolloutHash"]
+        assert rollout_spec_hash is not None
+        definition["materialize"]["spec"]["forcePromote"] = rollout_spec_hash
         try:
             spawn.runv(
                 ["kubectl", "apply", "-f", "-"],
@@ -2870,21 +3570,8 @@ def run(definition: dict[str, Any], expect_fail: bool) -> None:
 
 
 def is_ready_to_manually_promote():
-    data = json.loads(
-        spawn.capture(
-            [
-                "kubectl",
-                "get",
-                "materializes",
-                "-n",
-                "materialize-environment",
-                "-o",
-                "json",
-            ],
-            stderr=subprocess.DEVNULL,
-        )
-    )
-    conditions = data["items"][0].get("status", {}).get("conditions")
+    mz = get_materialize_v1alpha2()
+    conditions = mz.get("status", {}).get("conditions")
     return (
         conditions is not None
         and len(conditions)
@@ -2895,24 +3582,12 @@ def is_ready_to_manually_promote():
 
 
 def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
+    # Read at v1alpha2 explicitly to avoid going through the conversion
+    # webhook, which may not be ready yet during initial deployment.
     for i in range(900):
         time.sleep(1)
         try:
-            data = json.loads(
-                spawn.capture(
-                    [
-                        "kubectl",
-                        "get",
-                        "materializes",
-                        "-n",
-                        "materialize-environment",
-                        "-o",
-                        "json",
-                    ],
-                    stderr=subprocess.DEVNULL,
-                )
-            )
-            status = data["items"][0].get("status")
+            status = get_materialize_status_v1alpha2()
             if not status:
                 continue
             if expect_fail:
@@ -2923,10 +3598,10 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
                 or status["conditions"][0]["status"] != "True"
             ):
                 continue
-            if (
-                status["lastCompletedRolloutRequest"]
-                == data["items"][0]["spec"]["requestRollout"]
+            if status.get("lastCompletedRolloutHash") or status.get(
+                "lastCompletedRolloutRequest"
             ):
+                # TODO should I check somehow that this is the latest to handle upgrades?
                 break
         except subprocess.CalledProcessError:
             pass
@@ -2935,7 +3610,7 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
             [
                 "kubectl",
                 "get",
-                "materializes",
+                "materializes.v1alpha2.materialize.cloud",
                 "-n",
                 "materialize-environment",
                 "-o",
@@ -2978,7 +3653,7 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
                         stderr=subprocess.DEVNULL,
                     )
                     if (
-                        f"ERROR k8s_controller::controller: Materialize reconciliation error. err=reconciler for object Materialize.v1alpha1.materialize.cloud/{definition['materialize']['metadata']['name']}.materialize-environment failed"
+                        f"ERROR k8s_controller::controller: Materialize reconciliation error. err=reconciler for object Materialize.v1alpha2.materialize.cloud/{definition['materialize']['metadata']['name']}.materialize-environment failed"
                         in logs
                     ):
                         break
@@ -3096,7 +3771,7 @@ def post_run_check_balancer(definition: dict[str, Any], expect_fail: bool) -> No
                         stderr=subprocess.DEVNULL,
                     )
                     if (
-                        f"ERROR k8s_controller::controller: Balancer reconciliation error. err=reconciler for object Balancer.v1alpha1.materialize.cloud/{definition['balancer']['metadata']['name']}.materialize-environment failed"
+                        f"ERROR k8s_controller::controller: Balancer reconciliation error. err=reconciler for object Balancer.v1alpha2.materialize.cloud/{definition['balancer']['metadata']['name']}.materialize-environment failed"
                         in logs
                     ):
                         break

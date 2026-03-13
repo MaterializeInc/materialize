@@ -156,17 +156,10 @@
   content: |
 
     **After** you have upgraded your Materialize Operator, upgrade your
-    Materialize instance(s) to the **APP Version** of the Operator. When
-    upgrading Materialize Instances versions, changes are not automatically
-    rolled out by the Operator in order to minimize unexpected downtime and
-    avoid connection drops at critical periods. Instead, the upgrade process
-    involves two steps:
-
-    - First, staging the version change to the Materialize custom resource.
-    - Second, rolling out the changes via a `requestRollout` flag.
+    Materialize instance(s) to the **APP Version** of the Operator.
 
     1. Find the name of the Materialize instance to upgrade. The sample example
-    deployment using the unified Terraform module deploys the Materialie
+    deployment using the unified Terraform module deploys the Materialize
     instance in the`materialize-environment` namespace.
 
        ```shell
@@ -180,22 +173,13 @@
        main
        ```
 
-    1. Stage, but not rollout, the Materialize instance version upgrade.
+    1. Apply the Materialize instance version upgrade.
 
        ```shell
        kubectl patch materialize main\
          -n materialize-environment \
          --type='merge' \
          -p "{\"spec\": {\"environmentdImageRef\": \"docker.io/materialize/environmentd:{{< self-managed/versions/get-latest-version >}}\"}}"
-       ```
-
-    1. Rollout the Materialize instance version change.
-
-       ```shell
-       kubectl patch materialize main \
-         -n materialize-environment \
-         --type='merge' \
-         -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\"}}"
        ```
 
     1. Verify the upgrade by checking the `environmentd` events:
