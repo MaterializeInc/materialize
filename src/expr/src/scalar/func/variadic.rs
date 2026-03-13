@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
 
+use crate::func::CaseLiteral;
 use crate::func::{
     MAX_STRING_FUNC_RESULT_BYTES, array_create_scalar, build_regex, date_bin, parse_timezone,
     regexp_match_static, regexp_replace_parse_flags, regexp_split_to_array_re, stringify_datum,
@@ -1753,6 +1754,7 @@ derive_variadic! {
     TimezoneTimeVariadic(TimezoneTimeVariadic),
     RegexpSplitToArray(RegexpSplitToArray),
     RegexpReplace(RegexpReplace),
+    CaseLiteral(CaseLiteral),
 }
 
 impl VariadicFunc {

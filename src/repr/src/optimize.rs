@@ -132,6 +132,8 @@ optimizer_feature_flags!({
     enable_fast_path_plan_insights: bool,
     // See the feature flag of the same name.
     enable_cast_elimination: bool,
+    // See the feature flag of the same name.
+    enable_case_literal_transform: bool,
 });
 
 /// A trait used to implement layered config construction.

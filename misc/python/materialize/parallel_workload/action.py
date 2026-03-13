@@ -1522,6 +1522,7 @@ class FlipFlagsAction(Action):
             "true",
             "false",
         ]
+        self.flags_with_values["enable_case_literal_transform"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_cast_elimination"] = BOOLEAN_FLAG_VALUES
 
         # If you are adding a new config flag in Materialize, consider using it
