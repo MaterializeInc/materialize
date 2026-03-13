@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:17
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+    command: ["postgres", "-c", "wal_level=logical"]
+    volumes:
+      - "postgres-data:/var/lib/postgresql/data"
+      - "./postgres-init.sql:/docker-entrypoint-initdb.d/init.sql"
+
+  materialized:
+    image: materialize/materialized:latest
+    command:
+      - --system-parameter-default=enable_create_table_from_source=true
+    ports:
+      - "6874:6874"
+      - "6875:6875"
+      - "6876:6876"
+      - "6878:6878"
+    depends_on:
+      - postgres
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6878/api/readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  postgres-data:

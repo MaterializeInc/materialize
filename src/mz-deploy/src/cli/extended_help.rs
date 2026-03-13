@@ -36,6 +36,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("wait", include_str!("help/wait.md")),
     ("stage", include_str!("help/stage.md")),
     ("test", include_str!("help/test.md")),
+    ("walkthrough", include_str!("help/walkthrough.md")),
 ];
 
 /// Aliases that map alternative names to canonical command names.

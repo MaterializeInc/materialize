@@ -34,6 +34,7 @@ static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(Non
 const GROUPED_HELP: &str = "\
 Getting started:
   new                  Create a new mz-deploy project
+  walkthrough          Create a new project with an interactive tutorial
   profiles             List available connection profiles
   debug                Test database connection and display environment information
 
@@ -400,6 +401,28 @@ enum Command {
         no_git: bool,
     },
 
+    /// Create a new project with an interactive tutorial
+    ///
+    /// Scaffolds a project directory like `new`, then adds a walkthrough skill
+    /// that guides you through building a data mesh with Materialize. The result
+    /// is a two-commit project: the standard scaffold plus the walkthrough.
+    ///
+    /// Example:
+    ///   mz-deploy walkthrough my-project
+    #[command(
+        hide = true,
+        after_help = "Run 'mz-deploy help walkthrough' for a detailed usage guide."
+    )]
+    Walkthrough {
+        /// Name of the project directory to create
+        #[arg(value_name = "NAME", default_value = "the-great-ontology")]
+        name: String,
+
+        /// Skip git repository initialization
+        #[arg(long)]
+        no_git: bool,
+    },
+
     /// List available connection profiles
     ///
     /// Shows all profiles defined in profiles.toml and indicates which one
@@ -669,6 +692,10 @@ async fn run(args: Args) -> Result<(), CliError> {
         return cli::commands::new_project::run(name, !no_git);
     }
 
+    if let Some(Command::Walkthrough { name, no_git }) = &args.command {
+        return cli::commands::walkthrough::run(name, !no_git);
+    }
+
     if let Some(Command::Profiles) = &args.command {
         return cli::commands::profiles::run(
             &args.directory,
@@ -824,6 +851,7 @@ async fn run(args: Args) -> Result<(), CliError> {
         }
         Some(Command::Help { .. }) => unreachable!("handled above"),
         Some(Command::New { .. }) => unreachable!("handled above"),
+        Some(Command::Walkthrough { .. }) => unreachable!("handled above"),
         Some(Command::Profiles) => unreachable!("handled above"),
         None => unreachable!("handled above"),
     }

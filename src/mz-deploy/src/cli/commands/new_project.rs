@@ -90,8 +90,10 @@ pub fn run(name: &str, init_git: bool) -> Result<(), CliError> {
         let status = Command::new("git")
             .args([
                 "commit",
+                "--author",
+                "Materialize Inc <noreply@materialize.com>",
                 "-m",
-                "Initial commit\n\nCo-Authored-By: Materialize Inc <noreply@materialize.com>",
+                "Initial commit",
             ])
             .current_dir(project_dir)
             .stdout(std::process::Stdio::null())
