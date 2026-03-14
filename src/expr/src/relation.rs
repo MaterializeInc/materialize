@@ -1979,20 +1979,20 @@ impl MirRelationExpr {
     /// should be kept in sync w.r.t. HIR ⇒ MIR lowering!
     pub fn could_run_expensive_function(&self) -> bool {
         let mut result = false;
+        use MirRelationExpr::*;
+        use MirScalarExpr::*;
+        if let Err(_) = self.try_visit_scalars::<_, RecursionLimitError>(&mut |scalar| {
+            result |= match scalar {
+                Column(_, _) | Literal(_, _) | CallUnmaterializable(_) | If { .. } => false,
+                // Function calls are considered expensive
+                CallUnary { .. } | CallBinary { .. } | CallVariadic { .. } => true,
+            };
+            Ok(())
+        }) {
+            // Conservatively set `true` if on RecursionLimitError.
+            result = true;
+        }
         self.visit_pre(|e: &MirRelationExpr| {
-            use MirRelationExpr::*;
-            use MirScalarExpr::*;
-            if let Err(_) = self.try_visit_scalars::<_, RecursionLimitError>(&mut |scalar| {
-                result |= match scalar {
-                    Column(_, _) | Literal(_, _) | CallUnmaterializable(_) | If { .. } => false,
-                    // Function calls are considered expensive
-                    CallUnary { .. } | CallBinary { .. } | CallVariadic { .. } => true,
-                };
-                Ok(())
-            }) {
-                // Conservatively set `true` if on RecursionLimitError.
-                result = true;
-            }
             // FlatMap has a table function; Reduce has an aggregate function.
             // Other constructs use MirScalarExpr to run a function
             result |= matches!(e, FlatMap { .. } | Reduce { .. });
