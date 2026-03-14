@@ -190,42 +190,51 @@ pub enum PersistLearnerCommand {
     Head {
         key: String,
         reply: oneshot::Sender<ProtoHeadResponse>,
+        received_at: std::time::Instant,
     },
     Scan {
         key: String,
         from: u64,
         limit: u64,
         reply: oneshot::Sender<ProtoScanResponse>,
+        received_at: std::time::Instant,
     },
     ListKeys {
         reply: oneshot::Sender<Vec<String>>,
+        received_at: std::time::Instant,
     },
     AwaitCasResult {
         batch_number: u64,
         position: u32,
         reply: oneshot::Sender<ProtoCompareAndSetResponse>,
+        received_at: std::time::Instant,
     },
     AwaitTruncateResult {
         batch_number: u64,
         position: u32,
         reply: oneshot::Sender<Result<ProtoTruncateResponse, String>>,
+        received_at: std::time::Instant,
     },
 }
 
 /// A read command waiting for linearization.
+#[allow(dead_code)] // received_at on ListKeys is present for uniformity
 enum ReadCommand {
     Head {
         key: String,
         reply: oneshot::Sender<ProtoHeadResponse>,
+        received_at: std::time::Instant,
     },
     Scan {
         key: String,
         from: u64,
         limit: u64,
         reply: oneshot::Sender<ProtoScanResponse>,
+        received_at: std::time::Instant,
     },
     ListKeys {
         reply: oneshot::Sender<Vec<String>>,
+        received_at: std::time::Instant,
     },
 }
 
@@ -257,6 +266,7 @@ impl PersistLearnerHandle {
             .send(PersistLearnerCommand::Head {
                 key,
                 reply: reply_tx,
+                received_at: std::time::Instant::now(),
             })
             .await
             .map_err(|_| LearnerError::Shutdown)?;
@@ -276,6 +286,7 @@ impl PersistLearnerHandle {
                 from,
                 limit,
                 reply: reply_tx,
+                received_at: std::time::Instant::now(),
             })
             .await
             .map_err(|_| LearnerError::Shutdown)?;
@@ -285,7 +296,10 @@ impl PersistLearnerHandle {
     pub async fn list_keys(&self) -> Result<Vec<String>, LearnerError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
-            .send(PersistLearnerCommand::ListKeys { reply: reply_tx })
+            .send(PersistLearnerCommand::ListKeys {
+                reply: reply_tx,
+                received_at: std::time::Instant::now(),
+            })
             .await
             .map_err(|_| LearnerError::Shutdown)?;
         reply_rx.await.map_err(|_| LearnerError::DroppedReply)
@@ -302,6 +316,7 @@ impl PersistLearnerHandle {
                 batch_number,
                 position,
                 reply: reply_tx,
+                received_at: std::time::Instant::now(),
             })
             .await
             .map_err(|_| LearnerError::Shutdown)?;
@@ -319,6 +334,7 @@ impl PersistLearnerHandle {
                 batch_number,
                 position,
                 reply: reply_tx,
+                received_at: std::time::Instant::now(),
             })
             .await
             .map_err(|_| LearnerError::Shutdown)?;
@@ -379,10 +395,12 @@ enum ResultWaiter {
     Cas {
         position: u32,
         reply: oneshot::Sender<ProtoCompareAndSetResponse>,
+        received_at: std::time::Instant,
     },
     Truncate {
         position: u32,
         reply: oneshot::Sender<Result<ProtoTruncateResponse, String>>,
+        received_at: std::time::Instant,
     },
 }
 
@@ -641,35 +659,58 @@ impl PersistLearner {
 
     fn handle_command(&mut self, cmd: PersistLearnerCommand) {
         match cmd {
-            PersistLearnerCommand::Head { key, reply } => {
-                self.pending_reads.push(ReadCommand::Head { key, reply });
+            PersistLearnerCommand::Head {
+                key,
+                reply,
+                received_at,
+            } => {
+                self.metrics
+                    .cmd_queue_seconds
+                    .observe(received_at.elapsed().as_secs_f64());
+                self.pending_reads
+                    .push(ReadCommand::Head { key, reply, received_at });
             }
             PersistLearnerCommand::Scan {
                 key,
                 from,
                 limit,
                 reply,
+                received_at,
             } => {
+                self.metrics
+                    .cmd_queue_seconds
+                    .observe(received_at.elapsed().as_secs_f64());
                 self.pending_reads.push(ReadCommand::Scan {
                     key,
                     from,
                     limit,
                     reply,
+                    received_at,
                 });
             }
-            PersistLearnerCommand::ListKeys { reply } => {
-                self.pending_reads.push(ReadCommand::ListKeys { reply });
+            PersistLearnerCommand::ListKeys { reply, received_at } => {
+                self.metrics
+                    .cmd_queue_seconds
+                    .observe(received_at.elapsed().as_secs_f64());
+                self.pending_reads
+                    .push(ReadCommand::ListKeys { reply, received_at });
             }
             PersistLearnerCommand::AwaitCasResult {
                 batch_number,
                 position,
                 reply,
-                ..
+                received_at,
             } => {
+                self.metrics
+                    .cmd_queue_seconds
+                    .observe(received_at.elapsed().as_secs_f64());
                 if let Some(results) = self.results.get(&batch_number) {
                     if let Some(ProposalResult::Cas(result)) =
                         results.get(usize::cast_from(position))
                     {
+                        self.metrics
+                            .cas_result_seconds
+                            .observe(received_at.elapsed().as_secs_f64());
                         let _ = reply.send(result.clone());
                         return;
                     }
@@ -677,18 +718,28 @@ impl PersistLearner {
                 self.result_waiters
                     .entry(batch_number)
                     .or_default()
-                    .push(ResultWaiter::Cas { position, reply });
+                    .push(ResultWaiter::Cas {
+                        position,
+                        reply,
+                        received_at,
+                    });
             }
             PersistLearnerCommand::AwaitTruncateResult {
                 batch_number,
                 position,
                 reply,
-                ..
+                received_at,
             } => {
+                self.metrics
+                    .cmd_queue_seconds
+                    .observe(received_at.elapsed().as_secs_f64());
                 if let Some(results) = self.results.get(&batch_number) {
                     if let Some(ProposalResult::Truncate(result)) =
                         results.get(usize::cast_from(position))
                     {
+                        self.metrics
+                            .truncate_result_seconds
+                            .observe(received_at.elapsed().as_secs_f64());
                         let _ = reply.send(result.clone());
                         return;
                     }
@@ -696,7 +747,11 @@ impl PersistLearner {
                 self.result_waiters
                     .entry(batch_number)
                     .or_default()
-                    .push(ResultWaiter::Truncate { position, reply });
+                    .push(ResultWaiter::Truncate {
+                        position,
+                        reply,
+                        received_at,
+                    });
             }
         }
     }
@@ -734,8 +789,15 @@ impl PersistLearner {
 
     fn serve_read(&self, cmd: ReadCommand) {
         match cmd {
-            ReadCommand::Head { key, reply } => {
+            ReadCommand::Head {
+                key,
+                reply,
+                received_at,
+            } => {
                 self.metrics.head_ops.inc();
+                self.metrics
+                    .head_seconds
+                    .observe(received_at.elapsed().as_secs_f64());
                 let _ = reply.send(self.state.head(&key));
             }
             ReadCommand::Scan {
@@ -743,11 +805,15 @@ impl PersistLearner {
                 from,
                 limit,
                 reply,
+                received_at,
             } => {
                 self.metrics.scan_ops.inc();
+                self.metrics
+                    .scan_seconds
+                    .observe(received_at.elapsed().as_secs_f64());
                 let _ = reply.send(self.state.scan(&key, from, limit));
             }
-            ReadCommand::ListKeys { reply } => {
+            ReadCommand::ListKeys { reply, received_at: _ } => {
                 self.metrics.list_keys_ops.inc();
                 let _ = reply.send(self.state.keys());
             }
@@ -771,20 +837,30 @@ impl PersistLearner {
         for waiter in waiters {
             match waiter {
                 ResultWaiter::Cas {
-                    position, reply, ..
+                    position,
+                    reply,
+                    received_at,
                 } => {
                     if let Some(ProposalResult::Cas(result)) =
                         results.get(usize::cast_from(position))
                     {
+                        self.metrics
+                            .cas_result_seconds
+                            .observe(received_at.elapsed().as_secs_f64());
                         let _ = reply.send(result.clone());
                     }
                 }
                 ResultWaiter::Truncate {
-                    position, reply, ..
+                    position,
+                    reply,
+                    received_at,
                 } => {
                     if let Some(ProposalResult::Truncate(result)) =
                         results.get(usize::cast_from(position))
                     {
+                        self.metrics
+                            .truncate_result_seconds
+                            .observe(received_at.elapsed().as_secs_f64());
                         let _ = reply.send(result.clone());
                     }
                 }

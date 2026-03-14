@@ -146,21 +146,7 @@ impl Storage for NoopStorage {
     }
 }
 
-/// Latency profile for [`LatencyStorage`]. Defines how long `write_batch`
-/// sleeps before returning.
-#[derive(Debug, Clone)]
-pub enum LatencyProfile {
-    /// Return immediately (same as `NoopStorage`).
-    Zero,
-    /// Fixed latency for every write.
-    Fixed(std::time::Duration),
-    /// Sample from a distribution: p50 latency with occasional p99 spikes.
-    /// Roughly 95% of writes take `p50`, 5% take `p99`.
-    P50P99 {
-        p50: std::time::Duration,
-        p99: std::time::Duration,
-    },
-}
+pub use crate::LatencyProfile;
 
 /// A storage backend that simulates latency for benchmarking. Writes are
 /// no-ops (data is discarded) but `write_batch` sleeps according to the

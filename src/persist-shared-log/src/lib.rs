@@ -19,6 +19,8 @@
 //! Batches independent cross-shard proposals into a single durable object store
 //! PUT per flush interval, making cost O(1/batch_window) instead of O(shards).
 
+use std::time::Duration;
+
 use bytes::Bytes;
 
 pub mod actor;
@@ -26,6 +28,20 @@ pub mod ctp;
 pub mod persist_log;
 pub mod service;
 pub mod traits;
+
+/// Latency profile for benchmarking storage backends. Used by both the actor
+/// backend ([`LatencyStorage`](actor::storage::LatencyStorage)) and the persist
+/// backend ([`LatencyBlob`](persist_log::latency_blob::LatencyBlob)).
+#[derive(Debug, Clone)]
+pub enum LatencyProfile {
+    /// Return immediately (no added latency).
+    Zero,
+    /// Fixed latency for every operation.
+    Fixed(Duration),
+    /// Sample from a distribution: p50 latency with occasional p99 spikes.
+    /// Roughly 95% of operations take `p50`, 5% take `p99`.
+    P50P99 { p50: Duration, p99: Duration },
+}
 
 #[cfg(test)]
 mod tests;

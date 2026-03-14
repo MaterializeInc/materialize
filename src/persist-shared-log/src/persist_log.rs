@@ -20,6 +20,8 @@
 //! - D: `i64` (always +1, proposals are append-only)
 
 pub mod acceptor;
+pub mod client;
+pub mod latency_blob;
 pub mod learner;
 
 use arrow::array::{BinaryArray, BinaryBuilder};

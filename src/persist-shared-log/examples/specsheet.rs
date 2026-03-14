@@ -43,12 +43,12 @@ use mz_persist::generated::consensus_service::{
     ProtoAppendRequest, ProtoAwaitResultRequest, ProtoCasProposal, ProtoHeadRequest,
     ProtoLogProposal, ProtoScanRequest, ProtoTruncateProposal, proto_log_proposal,
 };
-use mz_persist_client::PersistClient;
 use mz_persist_client::ShardId;
 use mz_persist_shared_log::actor::acceptor::ActorAcceptor;
 use mz_persist_shared_log::actor::learner::{ActorLearner, LearnerConfig};
 use mz_persist_shared_log::actor::metrics::{AcceptorMetrics, LearnerMetrics};
-use mz_persist_shared_log::actor::storage::{LatencyProfile, LatencyStorage};
+use mz_persist_shared_log::LatencyProfile;
+use mz_persist_shared_log::actor::storage::LatencyStorage;
 use mz_persist_shared_log::ctp;
 use mz_persist_shared_log::persist_log::acceptor::PersistAcceptor;
 use mz_persist_shared_log::persist_log::learner::{PersistLearner, PersistLearnerConfig};
@@ -227,6 +227,11 @@ struct Cli {
     /// Emit JSON output instead of human-readable text.
     #[arg(long)]
     json: bool,
+
+    /// Open-loop mode: clients fire as fast as possible with no inter-op sleep.
+    /// Use to find the saturation point (max throughput before latency degrades).
+    #[arg(long)]
+    open_loop: bool,
 }
 
 /// Workload configuration. Deserializable directly from YAML with defaults
@@ -257,9 +262,11 @@ struct WorkloadConfig {
     backend: BackendMode,
     duration: u64,
     warmup: u64,
-    // Not in YAML — CLI-only flag.
+    // Not in YAML — CLI-only flags.
     #[serde(skip)]
     json: bool,
+    #[serde(skip)]
+    open_loop: bool,
 }
 
 impl Default for WorkloadConfig {
@@ -287,6 +294,7 @@ impl Default for WorkloadConfig {
             duration: 60,
             warmup: 10,
             json: false,
+            open_loop: false,
         }
     }
 }
@@ -344,6 +352,7 @@ impl WorkloadConfig {
             grpc_connections,
         );
         cfg.json = cli.json;
+        cfg.open_loop = cli.open_loop;
 
         cfg
     }
@@ -353,10 +362,12 @@ impl WorkloadConfig {
         assert_eq!(total, 100, "operation mix must sum to 100, got {}", total);
         assert!(self.num_shards > 0, "num_shards must be > 0");
         assert!(self.writers_per_shard > 0, "writers_per_shard must be > 0");
-        assert!(
-            self.write_rate_per_second > 0.0,
-            "write_rate_per_second must be > 0"
-        );
+        if !self.open_loop {
+            assert!(
+                self.write_rate_per_second > 0.0,
+                "write_rate_per_second must be > 0"
+            );
+        }
         assert!(self.duration > 0, "duration must be > 0");
         assert!(
             self.truncate_to < self.max_entries,
@@ -768,6 +779,7 @@ struct ClientConfig {
     scan_limit: u64,
     truncate_to: u64,
     seed: u64,
+    open_loop: bool,
 }
 
 async fn client_task(
@@ -864,9 +876,12 @@ async fn client_task(
 
         // Sleep for remaining interval so we target start-to-start timing,
         // not end-to-start. If the op took longer than the interval, skip sleep.
-        let elapsed = start.elapsed();
-        if let Some(remaining) = sleep_dur.checked_sub(elapsed) {
-            tokio::time::sleep(remaining).await;
+        // In open-loop mode, skip sleep entirely — fire as fast as possible.
+        if !cfg.open_loop {
+            let elapsed = start.elapsed();
+            if let Some(remaining) = sleep_dur.checked_sub(elapsed) {
+                tokio::time::sleep(remaining).await;
+            }
         }
     }
 
@@ -1575,7 +1590,12 @@ async fn main() {
             transports
         }
         BackendMode::Persist => {
-            let persist_client = PersistClient::new_for_tests().await;
+            use mz_persist_shared_log::persist_log::client::{self, PersistClientConfig};
+
+            let persist_client_config = PersistClientConfig {
+                latency_profile: cfg.latency_profile(),
+            };
+            let persist_client = client::new_persist_client(persist_client_config);
             let shard_id = ShardId::new();
 
             let acceptor_config = AcceptorConfig {
@@ -1639,6 +1659,7 @@ async fn main() {
             scan_limit: cfg.scan_limit,
             truncate_to: cfg.truncate_to,
             seed: u64::cast_from(seed),
+            open_loop: cfg.open_loop,
         };
         client_handles.push(mz_ore::task::spawn(|| "specsheet-client", async move {
             client_task(t, client_cfg, stop, warmup_end).await

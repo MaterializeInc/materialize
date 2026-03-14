@@ -11,4 +11,5 @@
 
 mod actor;
 mod persist;
+mod persist_sim;
 mod sim;

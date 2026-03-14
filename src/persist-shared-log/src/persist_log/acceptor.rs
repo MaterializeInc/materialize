@@ -22,7 +22,7 @@ use tokio::time::Interval;
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
 
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::retry::Retry;
 use mz_persist::generated::consensus_service::{ProtoAppendResponse, ProtoLogProposal};
 use mz_persist_client::write::WriteHandle;
@@ -221,6 +221,8 @@ impl PersistAcceptor {
             .into_retry_stream();
         tokio::pin!(retry);
 
+        let write_start = std::time::Instant::now();
+
         while let Some(state) = retry.next().await {
             // Read the (possibly updated) upper and derive batch_number.
             let upper = self.write.upper().clone();
@@ -270,13 +272,17 @@ impl PersistAcceptor {
                     self.metrics.flush_count.inc();
                     self.metrics
                         .flush_proposals_per_batch
-                        .observe(f64::from(num_proposals as u32));
+                        .observe(f64::cast_lossy(num_proposals));
                     self.metrics
                         .flush_latency_seconds
                         .observe(flush_start.elapsed().as_secs_f64());
                     self.metrics
                         .object_store_log_write_bytes
                         .inc_by(u64::cast_from(batch_bytes));
+                    self.metrics.object_store_log_writes.inc();
+                    self.metrics
+                        .object_store_log_write_latency_seconds
+                        .observe(write_start.elapsed().as_secs_f64());
 
                     debug!(
                         batch = batch_number,
@@ -288,6 +294,7 @@ impl PersistAcceptor {
                 Ok(Err(upper_mismatch)) => {
                     // Another writer advanced the upper — retryable.
                     // WriteHandle auto-updates its cached upper on mismatch.
+                    self.metrics.object_store_write_retries.inc();
                     let actual = upper_mismatch
                         .current
                         .as_option()
