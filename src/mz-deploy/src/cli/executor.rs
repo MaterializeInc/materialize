@@ -16,13 +16,34 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 
+/// What happened when applying a single object.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObjectAction {
+    Created,
+    Altered,
+    UpToDate,
+    Skipped,
+}
+
+impl fmt::Display for ObjectAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ObjectAction::Created => write!(f, "created"),
+            ObjectAction::Altered => write!(f, "altered"),
+            ObjectAction::UpToDate => write!(f, "up_to_date"),
+            ObjectAction::Skipped => write!(f, "skipped"),
+        }
+    }
+}
+
 /// Result of applying a single object (cluster, role, connection, etc.).
 #[derive(Clone, Serialize)]
 pub struct ObjectResult {
     /// Fully-qualified object name, e.g. "materialize.raw.pgconn".
     pub object: String,
-    /// What happened: "created", "altered", "up_to_date", "skipped".
-    pub action: String,
+    /// What happened: created, altered, up_to_date, skipped.
+    pub action: ObjectAction,
     /// SQL statements that were (or would be) executed.
     pub statements: Vec<String>,
     /// SQL statements that must be executed but contain sensitive values
@@ -33,23 +54,24 @@ pub struct ObjectResult {
 
 impl fmt::Display for ObjectResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.action.as_str() {
-            "created" | "altered" => write!(f, "  {} {}", "✓".green(), self.object),
-            "up_to_date" => write!(
+        match self.action {
+            ObjectAction::Created | ObjectAction::Altered => {
+                write!(f, "  {} {}", "✓".green(), self.object)
+            }
+            ObjectAction::UpToDate => write!(
                 f,
                 "  {} {} ({})",
                 "=".dimmed(),
                 self.object,
                 "up to date".dimmed()
             ),
-            "skipped" => write!(
+            ObjectAction::Skipped => write!(
                 f,
                 "  {} {} ({})",
                 "-".dimmed(),
                 self.object,
                 "skipped".dimmed()
             ),
-            _ => write!(f, "  {} {}", "?".dimmed(), self.object),
         }
     }
 }
@@ -59,47 +81,8 @@ impl fmt::Display for ObjectResult {
 pub struct ApplyResult {
     /// Phase name: "clusters", "roles", "connections", etc.
     pub phase: String,
-    /// Setup SQL (CREATE DATABASE/SCHEMA, mod_statements) captured during planning.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub setup_statements: Vec<String>,
     /// Per-object results.
     pub results: Vec<ObjectResult>,
-}
-
-impl ApplyResult {
-    /// Execute all captured SQL (setup + per-object) against the database.
-    pub async fn execute(&self, client: &Client) -> Result<(), CliError> {
-        for sql in &self.setup_statements {
-            client
-                .execute(sql, &[])
-                .await
-                .map_err(|source| CliError::SqlExecutionFailed {
-                    statement: sql.clone(),
-                    source,
-                })?;
-        }
-        for obj in &self.results {
-            for sql in &obj.redacted_statements {
-                client
-                    .execute(sql, &[])
-                    .await
-                    .map_err(|source| CliError::SqlExecutionFailed {
-                        statement: "[REDACTED — contains secret value]".to_string(),
-                        source,
-                    })?;
-            }
-            for sql in &obj.statements {
-                client
-                    .execute(sql, &[])
-                    .await
-                    .map_err(|source| CliError::SqlExecutionFailed {
-                        statement: sql.clone(),
-                        source,
-                    })?;
-            }
-        }
-        Ok(())
-    }
 }
 
 impl fmt::Display for ApplyResult {
@@ -111,17 +94,17 @@ impl fmt::Display for ApplyResult {
         let created = self
             .results
             .iter()
-            .filter(|r| r.action == "created")
+            .filter(|r| r.action == ObjectAction::Created)
             .count();
         let altered = self
             .results
             .iter()
-            .filter(|r| r.action == "altered")
+            .filter(|r| r.action == ObjectAction::Altered)
             .count();
         let up_to_date = self
             .results
             .iter()
-            .filter(|r| r.action == "up_to_date")
+            .filter(|r| r.action == ObjectAction::UpToDate)
             .count();
 
         let label = &self.phase;
@@ -153,7 +136,7 @@ impl fmt::Display for ApplyResult {
         }
 
         for r in &self.results {
-            if r.action != "up_to_date" {
+            if r.action != ObjectAction::UpToDate {
                 lines.push(format!("{}", r));
             }
         }
@@ -162,26 +145,99 @@ impl fmt::Display for ApplyResult {
     }
 }
 
-/// Result of running all apply phases together.
+/// A complete apply plan: global setup + ordered phase results.
+/// Built incrementally by adding phases, then executed as a unit.
 #[derive(Serialize)]
-pub struct ApplyAllResult {
-    pub results: Vec<ApplyResult>,
+pub struct ApplyPlan {
+    /// Global setup SQL (CREATE DATABASE/SCHEMA, mod_statements).
+    /// Deduplicated across all phases.
+    pub setup_statements: Vec<String>,
+    /// Per-phase results in dependency order.
+    pub phases: Vec<ApplyResult>,
+    /// Tracks which schemas have already been prepared (for deduplication).
+    #[serde(skip)]
+    prepared_schemas: BTreeSet<project::SchemaQualifier>,
 }
 
-impl ApplyAllResult {
-    /// Execute all phases in order against the database.
+impl ApplyPlan {
+    pub fn new() -> Self {
+        Self {
+            setup_statements: Vec::new(),
+            phases: Vec::new(),
+            prepared_schemas: BTreeSet::new(),
+        }
+    }
+
+    /// Prepare databases and schemas for the given schema set.
+    /// Deduplicates against previously prepared schemas.
+    pub async fn prepare_schemas(
+        &mut self,
+        executor: &DeploymentExecutor<'_>,
+        planned_project: &project::planned::Project,
+        schema_set: &BTreeSet<project::SchemaQualifier>,
+    ) -> Result<(), CliError> {
+        let new_schemas: BTreeSet<_> = schema_set
+            .difference(&self.prepared_schemas)
+            .cloned()
+            .collect();
+        if new_schemas.is_empty() {
+            return Ok(());
+        }
+        executor
+            .prepare_databases_and_schemas(planned_project, &new_schemas, None)
+            .await?;
+        self.setup_statements
+            .extend(executor.take_statements());
+        self.prepared_schemas.extend(new_schemas);
+        Ok(())
+    }
+
+    /// Add a completed phase result.
+    pub fn add_phase(&mut self, result: ApplyResult) {
+        self.phases.push(result);
+    }
+
+    /// Execute: run global setup, then each phase's per-object SQL.
     pub async fn execute(&self, client: &Client) -> Result<(), CliError> {
-        for phase in &self.results {
-            phase.execute(client).await?;
+        for sql in &self.setup_statements {
+            client
+                .execute(sql, &[])
+                .await
+                .map_err(|source| CliError::SqlExecutionFailed {
+                    statement: sql.clone(),
+                    source,
+                })?;
+        }
+        for phase in &self.phases {
+            for obj in &phase.results {
+                for sql in &obj.redacted_statements {
+                    client
+                        .execute(sql, &[])
+                        .await
+                        .map_err(|source| CliError::SqlExecutionFailed {
+                            statement: "[REDACTED — contains secret value]".to_string(),
+                            source,
+                        })?;
+                }
+                for sql in &obj.statements {
+                    client
+                        .execute(sql, &[])
+                        .await
+                        .map_err(|source| CliError::SqlExecutionFailed {
+                            statement: sql.clone(),
+                            source,
+                        })?;
+                }
+            }
         }
         Ok(())
     }
 }
 
-impl fmt::Display for ApplyAllResult {
+impl fmt::Display for ApplyPlan {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut first = true;
-        for phase in &self.results {
+        for phase in &self.phases {
             if phase.results.is_empty() {
                 continue;
             }

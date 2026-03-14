@@ -1,7 +1,7 @@
 //! Roles apply command - converge live role state to match definitions.
 
 use crate::cli::CliError;
-use crate::cli::executor::{ApplyResult, DeploymentExecutor, ObjectResult};
+use crate::cli::executor::{ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult};
 use crate::client::Client;
 use crate::client::quote_identifier;
 use crate::config::Settings;
@@ -11,7 +11,11 @@ use mz_sql_parser::ast::SetRoleVar;
 use std::collections::BTreeSet;
 
 /// Plan role changes without executing or printing.
-pub async fn plan(settings: &Settings, client: &Client) -> Result<ApplyResult, CliError> {
+pub async fn plan(
+    settings: &Settings,
+    client: &Client,
+    executor: &DeploymentExecutor<'_>,
+) -> Result<ApplyResult, CliError> {
     let profile = settings.connection();
     let directory = &settings.directory;
 
@@ -20,66 +24,83 @@ pub async fn plan(settings: &Settings, client: &Client) -> Result<ApplyResult, C
     if definitions.is_empty() {
         return Ok(ApplyResult {
             phase: "roles".to_string(),
-            setup_statements: vec![],
             results: vec![],
         });
     }
 
-    let executor = DeploymentExecutor::new_dry_run(client);
-
-    let mut object_results = Vec::new();
+    // Pass 1: Create all roles so inter-role GRANT ROLE dependencies are satisfied.
+    let mut actions = Vec::new();
     for def in &definitions {
-        let obj_result = plan_role(client, &executor, def).await?;
-        object_results.push(obj_result);
+        executor.take_statements();
+        let action = create_role(client, executor, def).await?;
+        actions.push((action, executor.take_statements()));
+    }
+
+    // Pass 2: Configure each role (ALTER, GRANT, COMMENT, reconcile).
+    let mut object_results = Vec::new();
+    for (def, (action, create_stmts)) in definitions.iter().zip(actions) {
+        executor.take_statements();
+        configure_role(client, executor, def).await?;
+        let mut statements = create_stmts;
+        statements.extend(executor.take_statements());
+        object_results.push(ObjectResult {
+            object: def.name.clone(),
+            action,
+            statements,
+            redacted_statements: vec![],
+        });
     }
 
     Ok(ApplyResult {
         phase: "roles".to_string(),
-        setup_statements: vec![],
         results: object_results,
     })
 }
 
 /// Run the `roles apply` command: plan, render, optionally execute.
-pub async fn run(settings: &Settings, dry_run: bool) -> Result<ApplyResult, CliError> {
+pub async fn run(settings: &Settings, dry_run: bool) -> Result<ApplyPlan, CliError> {
     let client = Client::connect_with_profile(settings.connection().clone())
         .await
         .map_err(CliError::Connection)?;
 
-    let result = plan(settings, &client).await?;
+    let mut plan = ApplyPlan::new();
+    let executor = DeploymentExecutor::new_dry_run(&client);
+    plan.add_phase(self::plan(settings, &client, &executor).await?);
 
     if !dry_run {
-        result.execute(&client).await?;
+        plan.execute(&client).await?;
     }
 
-    Ok(result)
+    Ok(plan)
 }
 
-/// Plan a single role definition: create if missing, then plan
-/// ALTER, GRANT, REVOKE, RESET, and COMMENT statements.
-async fn plan_role(
+/// Create a role if it doesn't already exist.
+async fn create_role(
     client: &Client,
     executor: &DeploymentExecutor<'_>,
     def: &RoleDefinition,
-) -> Result<ObjectResult, CliError> {
-    let role_name = &def.name;
-
-    // Drain any prior statements
-    executor.take_statements();
-
-    // Check if role already exists
+) -> Result<ObjectAction, CliError> {
     let exists = client
         .introspection()
-        .role_exists(role_name)
+        .role_exists(&def.name)
         .await
         .map_err(CliError::Connection)?;
 
-    let action = if exists {
-        "up_to_date"
+    if exists {
+        Ok(ObjectAction::UpToDate)
     } else {
         executor.execute_sql(&def.create_stmt).await?;
-        "created"
-    };
+        Ok(ObjectAction::Created)
+    }
+}
+
+/// Configure a role: ALTER, GRANT, COMMENT statements and reconcile stale grants/params.
+async fn configure_role(
+    client: &Client,
+    executor: &DeploymentExecutor<'_>,
+    def: &RoleDefinition,
+) -> Result<(), CliError> {
+    let role_name = &def.name;
 
     // Execute ALTER ROLE statements
     for alter in &def.alter_stmts {
@@ -149,10 +170,5 @@ async fn plan_role(
         }
     }
 
-    Ok(ObjectResult {
-        object: role_name.clone(),
-        action: action.to_string(),
-        statements: executor.take_statements(),
-        redacted_statements: vec![],
-    })
+    Ok(())
 }

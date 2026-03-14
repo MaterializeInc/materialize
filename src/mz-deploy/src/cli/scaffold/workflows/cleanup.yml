@@ -1,0 +1,22 @@
+name: Cleanup
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  cleanup:
+    name: Abort staging deployment
+    runs-on: ubuntu-latest
+    env:
+      MZ_DEPLOY_PROFILE: ci
+      MZ_DEPLOY_PROFILES_DIR: .
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mz-deploy
+        run: # TODO: install mz-deploy
+
+      - name: Abort staging deployment
+        continue-on-error: true
+        run: mz-deploy abort "pr-${{ github.event.pull_request.number }}" --yes

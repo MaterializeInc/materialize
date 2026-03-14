@@ -1,0 +1,82 @@
+name: Hydration
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_id:
+        required: true
+      sha:
+        required: true
+      pr_number:
+        required: true
+
+jobs:
+  check:
+    name: Check hydration
+    runs-on: ubuntu-latest
+    env:
+      MZ_DEPLOY_PROFILE: ci
+      MZ_DEPLOY_PROFILES_DIR: .
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+
+      - name: Install mz-deploy
+        run: # TODO: install mz-deploy
+
+      - name: Check if deployment still exists
+        id: check
+        continue-on-error: true
+        run: mz-deploy describe ${{ inputs.deploy_id }}
+
+      - name: Check hydration status
+        id: wait
+        if: steps.check.outcome == 'success'
+        continue-on-error: true
+        run: mz-deploy wait ${{ inputs.deploy_id }} --once
+
+      - name: Deployment was aborted
+        if: steps.check.outcome == 'failure'
+        run: echo "Deployment ${{ inputs.deploy_id }} no longer exists. Stopping poll."
+
+      - name: Handle ready
+        if: steps.check.outcome == 'success' && steps.wait.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Set commit status to success
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: '${{ inputs.sha }}',
+              state: 'success',
+              context: 'mz-deploy/hydration',
+              description: 'Staging clusters hydrated and ready',
+            });
+            // Comment on PR
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt('${{ inputs.pr_number }}'),
+              body: 'Deployment `${{ inputs.deploy_id }}` is hydrated and ready to merge.',
+            });
+
+      - name: Retry in 5 minutes
+        if: steps.check.outcome == 'success' && steps.wait.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Wait 5 minutes then re-dispatch
+            await new Promise(r => setTimeout(r, 5 * 60 * 1000));
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'hydration.yml',
+              ref: '${{ inputs.sha }}',
+              inputs: {
+                deploy_id: '${{ inputs.deploy_id }}',
+                sha: '${{ inputs.sha }}',
+                pr_number: '${{ inputs.pr_number }}',
+              },
+            });

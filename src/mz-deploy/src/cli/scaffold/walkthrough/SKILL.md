@@ -2,7 +2,7 @@
 name: walkthrough
 description: >
   Interactive tutorial that guides a user through building a data mesh with
-  mz-deploy across 9 modules and ~63 steps. Framed as a Middle-earth quest
+  mz-deploy across 9 modules and ~60 steps. Framed as a Middle-earth quest
   where the user is a Lorekeeper forging the Great Ontology.
 user_invocable: true
 ---
@@ -1275,88 +1275,10 @@ mz-deploy test --junit-xml test-results.xml
 
 GitHub Actions, Jenkins, and other CI tools parse this format to show test results inline in PRs. The command exits 1 if any test fails, failing the pipeline."
 
-STEP 60: Show a concrete pipeline skeleton.
-
-Say: "Here's the full watchtower, end to end. Read through it — don't run it, just understand each step:
-
-```yaml
-name: Deploy Materialize
-on:
-  push:
-    branches: [main]
-
-jobs:
-  validate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: mz-deploy compile
-      - run: mz-deploy test --junit-xml results.xml
-      - run: mz-deploy stage --dry-run --output json > plan.json
-
-  deploy:
-    needs: validate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: mz-deploy apply
-      - run: mz-deploy stage --deploy-id ${{ github.sha.substring(0,7) }}
-      - run: mz-deploy wait ${{ github.sha.substring(0,7) }} --timeout 600
-      - run: mz-deploy promote ${{ github.sha.substring(0,7) }}
-```
-
-Let's walk through it:
-
-- **validate** — runs on every push. `compile` catches SQL errors (exit 1 = pipeline fails). `test` runs unit tests with JUnit output. `stage --dry-run` produces a deployment plan.
-- **deploy** — only runs if validate passes. `apply` updates infrastructure. `stage` creates the deployment with a deterministic ID (the commit SHA). `wait` blocks until hydration completes (10-minute timeout). `promote` swaps to production.
-
-Every command's exit code is the gate: if anything fails, the pipeline stops."
-
-STEP 61: Teach rollback.
-
-Say: "Even well-forged deployments sometimes need to be undone. Here's the rollback pattern:
-
-1. **Revert the commit** in git (or push a fix)
-2. **Re-stage** with the new (reverted) code
-3. **Promote** — the old logic becomes the new deployment
-
-Let's practice this right now. Make a small change to an internal view — edit `models/materialize/internal/products.sql` and change the filter from `inventory > 0` to `inventory > 5`. Then run the full cycle:
-
-```
-mz-deploy stage --deploy-id rollback-test
-mz-deploy wait rollback-test
-mz-deploy promote rollback-test
-```"
-
-WAIT FOR: User confirms they've deployed the change.
-
-Say: "Good. Now revert the change — set the filter back to `inventory > 0`. Then deploy the revert:
-
-```
-mz-deploy stage --deploy-id rollback-fix
-mz-deploy wait rollback-fix
-mz-deploy promote rollback-fix
-```
-
-Check the log to see both deployments:
-
-```
-mz-deploy log
-```
-
-This is rollback in practice: there's no special 'undo' command. You deploy forward with corrected code. The stable API ensures downstream consumers never noticed."
-
-WAIT FOR: User confirms rollback cycle succeeded.
-
-CHECKPOINT: Say: "The Watchtower stands watch. Your deployments are automated and guarded. Ready to complete the quest?"
-
-WAIT FOR: User confirmation.
-
----
 
 ## SESSION COMPLETION: "The Quest is Complete"
 
-STEP 62: Summary and celebration.
+STEP 60: Summary and celebration.
 
 Say: "**The Quest is Complete, Lorekeeper.**
 

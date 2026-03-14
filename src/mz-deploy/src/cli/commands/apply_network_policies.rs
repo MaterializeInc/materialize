@@ -2,15 +2,18 @@
 
 use crate::cli::CliError;
 use crate::cli::commands::grants;
-use crate::cli::executor::{ApplyResult, DeploymentExecutor, ObjectResult};
-use crate::client::{Client, quote_identifier};
+use crate::cli::executor::{ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult};
+use crate::client::Client;
 use crate::config::Settings;
 use crate::project::network_policies::{self, NetworkPolicyDefinition};
 use mz_sql_parser::ast::AlterNetworkPolicyStatement;
-use std::collections::BTreeSet;
 
 /// Plan network policy changes without executing or printing.
-pub async fn plan(settings: &Settings, client: &Client) -> Result<ApplyResult, CliError> {
+pub async fn plan(
+    settings: &Settings,
+    client: &Client,
+    executor: &DeploymentExecutor<'_>,
+) -> Result<ApplyResult, CliError> {
     let profile = settings.connection();
     let directory = &settings.directory;
 
@@ -20,39 +23,37 @@ pub async fn plan(settings: &Settings, client: &Client) -> Result<ApplyResult, C
     if definitions.is_empty() {
         return Ok(ApplyResult {
             phase: "network_policies".to_string(),
-            setup_statements: vec![],
             results: vec![],
         });
     }
 
-    let executor = DeploymentExecutor::new_dry_run(client);
-
     let mut object_results = Vec::new();
     for def in &definitions {
-        let obj_result = plan_network_policy(client, &executor, def).await?;
+        let obj_result = plan_network_policy(client, executor, def).await?;
         object_results.push(obj_result);
     }
 
     Ok(ApplyResult {
         phase: "network_policies".to_string(),
-        setup_statements: vec![],
         results: object_results,
     })
 }
 
 /// Run the `network-policies apply` command: plan, render, optionally execute.
-pub async fn run(settings: &Settings, dry_run: bool) -> Result<ApplyResult, CliError> {
+pub async fn run(settings: &Settings, dry_run: bool) -> Result<ApplyPlan, CliError> {
     let client = Client::connect_with_profile(settings.connection().clone())
         .await
         .map_err(CliError::Connection)?;
 
-    let result = plan(settings, &client).await?;
+    let mut plan = ApplyPlan::new();
+    let executor = DeploymentExecutor::new_dry_run(&client);
+    plan.add_phase(self::plan(settings, &client, &executor).await?);
 
     if !dry_run {
-        result.execute(&client).await?;
+        plan.execute(&client).await?;
     }
 
-    Ok(result)
+    Ok(plan)
 }
 
 /// Plan a single network policy definition: create if missing, alter if exists,
@@ -81,41 +82,21 @@ async fn plan_network_policy(
             options: def.create_stmt.options.clone(),
         };
         executor.execute_sql(&alter_stmt).await?;
-        "altered"
+        ObjectAction::Altered
     } else {
         executor.execute_sql(&def.create_stmt).await?;
-        "created"
+        ObjectAction::Created
     };
 
-    // Execute GRANT statements
-    for grant in &def.grants {
-        executor.execute_sql(grant).await?;
-    }
-
-    // Revoke stale grants (protecting default privilege grants)
-    let current_grants = client
-        .introspection()
-        .get_network_policy_grants(policy_name)
-        .await
-        .map_err(CliError::Connection)?;
-    let default_privs = client
-        .introspection()
-        .get_default_privilege_grants_for_network_policy(policy_name)
-        .await
-        .map_err(CliError::Connection)?;
-    let protected: BTreeSet<_> = default_privs
-        .iter()
-        .map(|g| (g.grantee.to_lowercase(), g.privilege_type.to_uppercase()))
-        .collect();
-    let desired = grants::desired_grants(&def.grants, &["USAGE"]);
-    let revocations = grants::stale_grant_revocations(
-        &current_grants,
-        &desired,
-        &protected,
-        "NETWORK POLICY",
-        &quote_identifier(policy_name),
-    );
-    grants::execute_revocations(executor, &revocations, "network policy", &policy_name).await?;
+    // Reconcile grants
+    grants::reconcile_named_object(
+        client,
+        executor,
+        policy_name,
+        &def.grants,
+        &grants::GrantNamedObjectKind::NetworkPolicy,
+    )
+    .await?;
 
     // Execute COMMENT statements
     for comment in &def.comments {
@@ -124,7 +105,7 @@ async fn plan_network_policy(
 
     Ok(ObjectResult {
         object: policy_name.clone(),
-        action: action.to_string(),
+        action,
         statements: executor.take_statements(),
         redacted_statements: vec![],
     })

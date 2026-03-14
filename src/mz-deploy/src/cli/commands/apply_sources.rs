@@ -1,4 +1,4 @@
-//! Apply tables command - create tables that don't exist in the database.
+//! Apply sources command - create sources that don't exist in the database.
 
 use crate::cli::commands::apply_objects::{self, DatabaseObjectPhase};
 use crate::cli::commands::grants;
@@ -9,27 +9,24 @@ use crate::config::Settings;
 use crate::project;
 use crate::project::ast::Statement;
 
-pub struct Tables;
+pub struct Sources;
 
-impl DatabaseObjectPhase for Tables {
-    const PHASE_NAME: &'static str = "tables";
-    const GRANT_KIND: grants::GrantObjectKind = grants::GrantObjectKind::Table;
+impl DatabaseObjectPhase for Sources {
+    const PHASE_NAME: &'static str = "sources";
+    const GRANT_KIND: grants::GrantObjectKind = grants::GrantObjectKind::Source;
 
     fn new(_settings: &Settings) -> Result<Self, CliError> {
-        Ok(Tables)
+        Ok(Sources)
     }
 
     fn matches(stmt: &Statement) -> bool {
-        matches!(
-            stmt,
-            Statement::CreateTable(_) | Statement::CreateTableFromSource(_)
-        )
+        matches!(stmt, Statement::CreateSource(_))
     }
     // Uses default handle_existing (reconcile grants → "up_to_date")
     // Uses default handle_new (execute stmt + indexes + grants + comments → "created")
 }
 
-/// Plan only table objects (no deployment tracking, no execution).
+/// Plan only source objects (no deployment tracking, no execution).
 pub async fn plan(
     settings: &Settings,
     client: &Client,
@@ -37,10 +34,10 @@ pub async fn plan(
     planned_project: &project::planned::Project,
     apply_plan: &mut ApplyPlan,
 ) -> Result<ApplyResult, CliError> {
-    apply_objects::plan::<Tables>(settings, client, executor, planned_project, apply_plan).await
+    apply_objects::plan::<Sources>(settings, client, executor, planned_project, apply_plan).await
 }
 
-/// Run the `apply tables` command: compile, plan, optionally execute.
+/// Run the `apply sources` command: compile, plan, optionally execute.
 pub async fn run(settings: &Settings, dry_run: bool) -> Result<ApplyPlan, CliError> {
-    apply_objects::run::<Tables>(settings, dry_run).await
+    apply_objects::run::<Sources>(settings, dry_run).await
 }

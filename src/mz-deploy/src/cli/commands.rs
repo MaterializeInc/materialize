@@ -15,7 +15,8 @@
 //! - **[`promote`]** — Promote a staged deployment to production.
 //! - **[`apply_all`]** — Orchestrate all infrastructure apply steps.
 //! - **[`abort`]** — Roll back a staged deployment.
-//! - **[`apply_tables`]** — Helpers for creating tables and sources.
+//! - **[`apply_sources`]** — Create sources that don't exist.
+//! - **[`apply_tables`]** — Create tables that don't exist.
 //! - **[`lock`]** — Generate or refresh the `types.lock` file from
 //!   the live region.
 //! - **[`describe`]** — Print a summary of the compiled project.
@@ -46,8 +47,10 @@ pub type ObjectRef<'a> = (
 pub mod abort;
 pub mod apply_all;
 pub mod apply_connections;
+pub mod apply_objects;
 pub mod apply_network_policies;
 pub mod apply_secrets;
+pub mod apply_sources;
 pub mod apply_tables;
 pub mod clusters;
 pub mod compile;

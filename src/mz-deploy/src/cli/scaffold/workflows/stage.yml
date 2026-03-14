@@ -1,0 +1,87 @@
+name: Stage
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  stage:
+    name: Stage
+    runs-on: ubuntu-latest
+    if: >
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '/deploy')
+    env:
+      MZ_DEPLOY_PROFILE: ci
+      MZ_DEPLOY_PROFILES_DIR: .
+    steps:
+      - name: Get PR info
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            core.setOutput('ref', pr.head.sha);
+            core.setOutput('number', context.issue.number);
+            core.setOutput('deploy_id', `pr-${context.issue.number}`);
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.ref }}
+
+      - name: Install mz-deploy
+        run: # TODO: install mz-deploy
+
+      - name: Abort previous staging
+        continue-on-error: true
+        run: mz-deploy abort "${{ steps.pr.outputs.deploy_id }}" --yes
+
+      - name: Apply infrastructure
+        run: mz-deploy apply
+
+      - name: Stage deployment
+        run: mz-deploy stage --deploy-id "${{ steps.pr.outputs.deploy_id }}"
+
+      - name: Set pending status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: '${{ steps.pr.outputs.ref }}',
+              state: 'pending',
+              context: 'mz-deploy/hydration',
+              description: 'Waiting for staging clusters to hydrate...',
+            });
+
+      - name: Trigger hydration polling
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'hydration.yml',
+              ref: '${{ github.event.repository.default_branch }}',
+              inputs: {
+                deploy_id: '${{ steps.pr.outputs.deploy_id }}',
+                sha: '${{ steps.pr.outputs.ref }}',
+                pr_number: '${{ steps.pr.outputs.number }}',
+              },
+            });
+
+      - name: Comment progress
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: 'Staged deployment `${{ steps.pr.outputs.deploy_id }}`. Waiting for hydration...',
+            });

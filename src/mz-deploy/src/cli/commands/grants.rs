@@ -2,9 +2,14 @@
 
 use crate::cli::CliError;
 use crate::cli::executor::DeploymentExecutor;
-use crate::client::{Client, ObjectGrant, quote_identifier};
+use crate::client::{Client, ObjectGrant};
 use crate::info;
-use mz_sql_parser::ast::{GrantPrivilegesStatement, PrivilegeSpecification, Raw};
+use crate::project::object_id::ObjectId;
+use mz_sql_parser::ast::{
+    GrantPrivilegesStatement, GrantTargetSpecification, GrantTargetSpecificationInner, Ident,
+    ObjectType, Privilege, PrivilegeSpecification, Raw, RevokePrivilegesStatement,
+    UnresolvedItemName, UnresolvedObjectName,
+};
 use owo_colors::OwoColorize;
 use std::collections::BTreeSet;
 use std::fmt;
@@ -13,6 +18,7 @@ use std::fmt;
 ///
 /// Groups the catalog table name, SQL keyword, privilege set, and display label
 /// that vary per object type so callers don't have to pass four loose strings.
+#[derive(Clone, Copy)]
 pub enum GrantObjectKind {
     Table,
     Source,
@@ -30,13 +36,18 @@ impl GrantObjectKind {
         }
     }
 
-    pub fn sql_keyword(&self) -> &'static str {
-        match self {
-            Self::Table => "TABLE",
-            Self::Source => "TABLE",
-            Self::Secret => "SECRET",
-            Self::Connection => "CONNECTION",
-        }
+    pub fn grant_target(&self, obj_id: &ObjectId) -> GrantTargetSpecification<Raw> {
+        let object_type = match self {
+            Self::Table | Self::Source => ObjectType::Table,
+            Self::Secret => ObjectType::Secret,
+            Self::Connection => ObjectType::Connection,
+        };
+        let item_name = UnresolvedItemName::qualified(&[
+            Ident::new_unchecked(&obj_id.database),
+            Ident::new_unchecked(&obj_id.schema),
+            Ident::new_unchecked(&obj_id.object),
+        ]);
+        build_grant_target(object_type, UnresolvedObjectName::Item(item_name))
     }
 
     pub fn all_privileges(&self) -> &'static [&'static str] {
@@ -66,18 +77,123 @@ impl GrantObjectKind {
     }
 }
 
+/// Build a [`GrantTargetSpecification`] for a single named object.
+fn build_grant_target(
+    object_type: ObjectType,
+    name: UnresolvedObjectName,
+) -> GrantTargetSpecification<Raw> {
+    GrantTargetSpecification::Object {
+        object_type,
+        object_spec_inner: GrantTargetSpecificationInner::Objects {
+            names: vec![name],
+        },
+    }
+}
+
+/// The kind of named infrastructure object for grant reconciliation.
+///
+/// Named objects (clusters, network policies) use simpler catalog lookups
+/// than schema-qualified database objects.
+pub enum GrantNamedObjectKind {
+    Cluster,
+    NetworkPolicy,
+}
+
+impl GrantNamedObjectKind {
+    fn grant_target(&self, name: &str) -> GrantTargetSpecification<Raw> {
+        let (object_type, object_name) = match self {
+            Self::Cluster => (
+                ObjectType::Cluster,
+                UnresolvedObjectName::Cluster(Ident::new_unchecked(name)),
+            ),
+            Self::NetworkPolicy => (
+                ObjectType::NetworkPolicy,
+                UnresolvedObjectName::NetworkPolicy(Ident::new_unchecked(name)),
+            ),
+        };
+        build_grant_target(object_type, object_name)
+    }
+
+    fn all_privileges(&self) -> &'static [&'static str] {
+        match self {
+            Self::Cluster => &["USAGE", "CREATE"],
+            Self::NetworkPolicy => &["USAGE"],
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Cluster => "cluster",
+            Self::NetworkPolicy => "network policy",
+        }
+    }
+}
+
+/// Reconcile grants for a named infrastructure object (cluster or network policy).
+///
+/// Three-step algorithm:
+/// 1. Apply all desired GRANTs idempotently (GRANT is a no-op if already present).
+/// 2. Query the live grant state and default-privilege grants from the catalog.
+/// 3. Compute the set difference (current - desired - protected) and REVOKE stale grants.
+pub async fn reconcile_named_object(
+    client: &Client,
+    executor: &DeploymentExecutor<'_>,
+    name: &str,
+    grants: &[GrantPrivilegesStatement<Raw>],
+    kind: &GrantNamedObjectKind,
+) -> Result<(), CliError> {
+    for grant in grants {
+        executor.execute_sql(grant).await?;
+    }
+    let introspection = client.introspection();
+    let (current, default_privs) = match kind {
+        GrantNamedObjectKind::Cluster => (
+            introspection
+                .get_cluster_grants(name)
+                .await
+                .map_err(CliError::Connection)?,
+            introspection
+                .get_default_privilege_grants_for_cluster(name)
+                .await
+                .map_err(CliError::Connection)?,
+        ),
+        GrantNamedObjectKind::NetworkPolicy => (
+            introspection
+                .get_network_policy_grants(name)
+                .await
+                .map_err(CliError::Connection)?,
+            introspection
+                .get_default_privilege_grants_for_network_policy(name)
+                .await
+                .map_err(CliError::Connection)?,
+        ),
+    };
+    let protected: BTreeSet<_> = default_privs
+        .iter()
+        .map(|g| (g.grantee.to_lowercase(), g.privilege_type.to_uppercase()))
+        .collect();
+    let desired = desired_grants(grants, kind.all_privileges());
+    let target = kind.grant_target(name);
+    let revocations = stale_grant_revocations(&current, &desired, &protected, &target);
+    execute_revocations(executor, &revocations, kind.label(), &name).await
+}
+
 /// Reconcile grants for a single object: apply desired grants, revoke stale ones.
+///
+/// Three-step algorithm:
+/// 1. Apply all desired GRANTs idempotently (GRANT is a no-op if already present).
+/// 2. Query the live grant state and default-privilege grants from the catalog.
+/// 3. Compute the set difference (current - desired - protected) and REVOKE stale grants.
 pub async fn reconcile(
     client: &Client,
     executor: &DeploymentExecutor<'_>,
-    obj_id: &crate::project::object_id::ObjectId,
+    obj_id: &ObjectId,
     grants: &[GrantPrivilegesStatement<Raw>],
     kind: &GrantObjectKind,
 ) -> Result<(), CliError> {
     for grant in grants {
         executor.execute_sql(grant).await?;
     }
-    let fqn = quoted_fqn(&obj_id.database, &obj_id.schema, &obj_id.object);
     let current = client
         .introspection()
         .get_database_object_grants(
@@ -104,19 +220,9 @@ pub async fn reconcile(
         .map(|g| (g.grantee.to_lowercase(), g.privilege_type.to_uppercase()))
         .collect();
     let desired = desired_grants(grants, kind.all_privileges());
-    let revocations =
-        stale_grant_revocations(&current, &desired, &protected, kind.sql_keyword(), &fqn);
+    let target = kind.grant_target(obj_id);
+    let revocations = stale_grant_revocations(&current, &desired, &protected, &target);
     execute_revocations(executor, &revocations, kind.label(), obj_id).await
-}
-
-/// Build a quoted fully-qualified name from components.
-pub fn quoted_fqn(database: &str, schema: &str, name: &str) -> String {
-    format!(
-        "{}.{}.{}",
-        quote_identifier(database),
-        quote_identifier(schema),
-        quote_identifier(name),
-    )
 }
 
 /// Extract `(grantee, privilege_type)` pairs from parsed GRANT statements.
@@ -145,8 +251,38 @@ pub fn desired_grants(
     result
 }
 
-/// Compute REVOKE SQL strings for grants that exist in `current` but not in
-/// `desired` and not in `protected`.
+/// Parse a privilege type string (e.g. `"SELECT"`) into a [`Privilege`] enum value.
+fn parse_privilege(s: &str) -> Privilege {
+    if s.eq_ignore_ascii_case("SELECT") {
+        Privilege::SELECT
+    } else if s.eq_ignore_ascii_case("INSERT") {
+        Privilege::INSERT
+    } else if s.eq_ignore_ascii_case("UPDATE") {
+        Privilege::UPDATE
+    } else if s.eq_ignore_ascii_case("DELETE") {
+        Privilege::DELETE
+    } else if s.eq_ignore_ascii_case("USAGE") {
+        Privilege::USAGE
+    } else if s.eq_ignore_ascii_case("CREATE") {
+        Privilege::CREATE
+    } else if s.eq_ignore_ascii_case("CREATEROLE") {
+        Privilege::CREATEROLE
+    } else if s.eq_ignore_ascii_case("CREATEDB") {
+        Privilege::CREATEDB
+    } else if s.eq_ignore_ascii_case("CREATECLUSTER") {
+        Privilege::CREATECLUSTER
+    } else if s.eq_ignore_ascii_case("CREATENETWORKPOLICY") {
+        Privilege::CREATENETWORKPOLICY
+    } else {
+        panic!("unknown privilege type: {s}")
+    }
+}
+
+/// Compute REVOKE statements for grants that exist in `current` but not in
+/// `desired` and not in `protected` (3-way set difference).
+///
+/// Grantee names are lowercased and privilege types uppercased before comparison
+/// so that catalog casing differences don't cause spurious revocations.
 ///
 /// `protected` contains grants that should never be revoked (e.g., grants
 /// originating from `ALTER DEFAULT PRIVILEGES`).
@@ -154,9 +290,8 @@ pub fn stale_grant_revocations(
     current: &[ObjectGrant],
     desired: &BTreeSet<(String, String)>,
     protected: &BTreeSet<(String, String)>,
-    object_type_keyword: &str,
-    object_name_sql: &str,
-) -> Vec<String> {
+    target: &GrantTargetSpecification<Raw>,
+) -> Vec<RevokePrivilegesStatement<Raw>> {
     let mut revocations = Vec::new();
     for grant in current {
         let key = (
@@ -164,10 +299,13 @@ pub fn stale_grant_revocations(
             grant.privilege_type.to_uppercase(),
         );
         if !desired.contains(&key) && !protected.contains(&key) {
-            revocations.push(format!(
-                "REVOKE {} ON {} {} FROM \"{}\"",
-                grant.privilege_type, object_type_keyword, object_name_sql, grant.grantee
-            ));
+            revocations.push(RevokePrivilegesStatement {
+                privileges: PrivilegeSpecification::Privileges(vec![parse_privilege(
+                    &grant.privilege_type,
+                )]),
+                target: target.clone(),
+                roles: vec![Ident::new_unchecked(grant.grantee.clone())],
+            });
         }
     }
     revocations
@@ -176,11 +314,11 @@ pub fn stale_grant_revocations(
 /// Execute REVOKE statements for stale grants, printing status for each.
 pub async fn execute_revocations(
     executor: &DeploymentExecutor<'_>,
-    revocations: &[String],
+    revocations: &[RevokePrivilegesStatement<Raw>],
     object_type_label: &str,
     display_name: &impl fmt::Display,
 ) -> Result<(), CliError> {
-    for sql in revocations {
+    for stmt in revocations {
         if !executor.is_dry_run() {
             info!(
                 "  {} Revoking stale grant on {} '{}'",
@@ -189,7 +327,7 @@ pub async fn execute_revocations(
                 display_name,
             );
         }
-        executor.execute_sql(sql).await?;
+        executor.execute_sql(stmt).await?;
     }
     Ok(())
 }
@@ -216,24 +354,37 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // quoted_fqn tests
-    // =========================================================================
-
-    #[test]
-    fn test_quoted_fqn_simple() {
-        assert_eq!(
-            quoted_fqn("db", "public", "my_table"),
-            "\"db\".\"public\".\"my_table\""
-        );
+    fn cluster_target(name: &str) -> GrantTargetSpecification<Raw> {
+        GrantNamedObjectKind::Cluster.grant_target(name)
     }
 
-    #[test]
-    fn test_quoted_fqn_with_special_chars() {
-        assert_eq!(
-            quoted_fqn("my db", "my schema", "my\"table"),
-            "\"my db\".\"my schema\".\"my\"\"table\""
-        );
+    fn network_policy_target(name: &str) -> GrantTargetSpecification<Raw> {
+        GrantNamedObjectKind::NetworkPolicy.grant_target(name)
+    }
+
+    fn obj_id(db: &str, schema: &str, name: &str) -> ObjectId {
+        ObjectId::new(db.to_string(), schema.to_string(), name.to_string())
+    }
+
+    fn table_target(db: &str, schema: &str, name: &str) -> GrantTargetSpecification<Raw> {
+        GrantObjectKind::Table.grant_target(&obj_id(db, schema, name))
+    }
+
+    fn secret_target(db: &str, schema: &str, name: &str) -> GrantTargetSpecification<Raw> {
+        GrantObjectKind::Secret.grant_target(&obj_id(db, schema, name))
+    }
+
+    fn connection_target(db: &str, schema: &str, name: &str) -> GrantTargetSpecification<Raw> {
+        GrantObjectKind::Connection.grant_target(&obj_id(db, schema, name))
+    }
+
+    fn source_target(db: &str, schema: &str, name: &str) -> GrantTargetSpecification<Raw> {
+        GrantObjectKind::Source.grant_target(&obj_id(db, schema, name))
+    }
+
+    /// Convert revocations to strings for easier assertion.
+    fn to_strings(revocations: &[RevokePrivilegesStatement<Raw>]) -> Vec<String> {
+        revocations.iter().map(|r| r.to_string()).collect()
     }
 
     // =========================================================================
@@ -339,13 +490,9 @@ mod tests {
         let mut desired = BTreeSet::new();
         desired.insert(("reader".to_string(), "USAGE".to_string()));
 
-        let revocations = stale_grant_revocations(
-            &current,
-            &desired,
-            &BTreeSet::new(),
-            "CLUSTER",
-            "\"my_cluster\"",
-        );
+        let target = cluster_target("my_cluster");
+        let revocations =
+            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         assert!(revocations.is_empty());
     }
 
@@ -358,17 +505,14 @@ mod tests {
         let mut desired = BTreeSet::new();
         desired.insert(("reader".to_string(), "USAGE".to_string()));
 
-        let revocations = stale_grant_revocations(
-            &current,
-            &desired,
-            &BTreeSet::new(),
-            "CLUSTER",
-            "\"my_cluster\"",
-        );
-        assert_eq!(revocations.len(), 1);
+        let target = cluster_target("my_cluster");
+        let revocations =
+            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let strings = to_strings(&revocations);
+        assert_eq!(strings.len(), 1);
         assert_eq!(
-            revocations[0],
-            "REVOKE CREATE ON CLUSTER \"my_cluster\" FROM \"writer\""
+            strings[0],
+            "REVOKE CREATE ON CLUSTER my_cluster FROM writer"
         );
     }
 
@@ -377,17 +521,14 @@ mod tests {
         let current = vec![make_object_grant("reader", "USAGE")];
         let desired = BTreeSet::new();
 
-        let revocations = stale_grant_revocations(
-            &current,
-            &desired,
-            &BTreeSet::new(),
-            "TABLE",
-            "\"db\".\"public\".\"t\"",
-        );
-        assert_eq!(revocations.len(), 1);
+        let target = table_target("db", "public", "t");
+        let revocations =
+            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let strings = to_strings(&revocations);
+        assert_eq!(strings.len(), 1);
         assert_eq!(
-            revocations[0],
-            "REVOKE USAGE ON TABLE \"db\".\"public\".\"t\" FROM \"reader\""
+            strings[0],
+            "REVOKE USAGE ON TABLE db.public.t FROM reader"
         );
     }
 
@@ -396,15 +537,17 @@ mod tests {
         let mut desired = BTreeSet::new();
         desired.insert(("reader".to_string(), "USAGE".to_string()));
 
+        let target = cluster_target("my_cluster");
         let revocations =
-            stale_grant_revocations(&[], &desired, &BTreeSet::new(), "CLUSTER", "\"my_cluster\"");
+            stale_grant_revocations(&[], &desired, &BTreeSet::new(), &target);
         assert!(revocations.is_empty());
     }
 
     #[test]
     fn test_stale_grant_revocations_both_empty() {
+        let target = secret_target("db", "public", "s");
         let revocations =
-            stale_grant_revocations(&[], &BTreeSet::new(), &BTreeSet::new(), "SECRET", "\"s\"");
+            stale_grant_revocations(&[], &BTreeSet::new(), &BTreeSet::new(), &target);
         assert!(revocations.is_empty());
     }
 
@@ -415,13 +558,9 @@ mod tests {
         let mut desired = BTreeSet::new();
         desired.insert(("reader".to_string(), "USAGE".to_string()));
 
-        let revocations = stale_grant_revocations(
-            &current,
-            &desired,
-            &BTreeSet::new(),
-            "CLUSTER",
-            "\"my_cluster\"",
-        );
+        let target = cluster_target("my_cluster");
+        let revocations =
+            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         assert!(revocations.is_empty());
     }
 
@@ -434,13 +573,9 @@ mod tests {
         ];
         let desired = BTreeSet::new(); // All grants removed
 
-        let revocations = stale_grant_revocations(
-            &current,
-            &desired,
-            &BTreeSet::new(),
-            "CLUSTER",
-            "\"my_cluster\"",
-        );
+        let target = cluster_target("my_cluster");
+        let revocations =
+            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         assert_eq!(revocations.len(), 3);
     }
 
@@ -449,17 +584,14 @@ mod tests {
         let current = vec![make_object_grant("reader", "USAGE")];
         let desired = BTreeSet::new();
 
-        let revocations = stale_grant_revocations(
-            &current,
-            &desired,
-            &BTreeSet::new(),
-            "NETWORK POLICY",
-            "\"my_policy\"",
-        );
-        assert_eq!(revocations.len(), 1);
+        let target = network_policy_target("my_policy");
+        let revocations =
+            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let strings = to_strings(&revocations);
+        assert_eq!(strings.len(), 1);
         assert_eq!(
-            revocations[0],
-            "REVOKE USAGE ON NETWORK POLICY \"my_policy\" FROM \"reader\""
+            strings[0],
+            "REVOKE USAGE ON NETWORK POLICY my_policy FROM reader"
         );
     }
 
@@ -468,17 +600,14 @@ mod tests {
         let current = vec![make_object_grant("app", "USAGE")];
         let desired = BTreeSet::new();
 
-        let revocations = stale_grant_revocations(
-            &current,
-            &desired,
-            &BTreeSet::new(),
-            "CONNECTION",
-            "\"db\".\"public\".\"my_conn\"",
-        );
-        assert_eq!(revocations.len(), 1);
+        let target = connection_target("db", "public", "my_conn");
+        let revocations =
+            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let strings = to_strings(&revocations);
+        assert_eq!(strings.len(), 1);
         assert_eq!(
-            revocations[0],
-            "REVOKE USAGE ON CONNECTION \"db\".\"public\".\"my_conn\" FROM \"app\""
+            strings[0],
+            "REVOKE USAGE ON CONNECTION db.public.my_conn FROM app"
         );
     }
 
@@ -487,17 +616,14 @@ mod tests {
         let current = vec![make_object_grant("app", "USAGE")];
         let desired = BTreeSet::new();
 
-        let revocations = stale_grant_revocations(
-            &current,
-            &desired,
-            &BTreeSet::new(),
-            "SECRET",
-            "\"db\".\"public\".\"my_secret\"",
-        );
-        assert_eq!(revocations.len(), 1);
+        let target = secret_target("db", "public", "my_secret");
+        let revocations =
+            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let strings = to_strings(&revocations);
+        assert_eq!(strings.len(), 1);
         assert_eq!(
-            revocations[0],
-            "REVOKE USAGE ON SECRET \"db\".\"public\".\"my_secret\" FROM \"app\""
+            strings[0],
+            "REVOKE USAGE ON SECRET db.public.my_secret FROM app"
         );
     }
 
@@ -506,17 +632,14 @@ mod tests {
         let current = vec![make_object_grant("reader", "SELECT")];
         let desired = BTreeSet::new();
 
-        let revocations = stale_grant_revocations(
-            &current,
-            &desired,
-            &BTreeSet::new(),
-            "TABLE",
-            "\"db\".\"public\".\"my_source\"",
-        );
-        assert_eq!(revocations.len(), 1);
+        let target = source_target("db", "public", "my_source");
+        let revocations =
+            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let strings = to_strings(&revocations);
+        assert_eq!(strings.len(), 1);
         assert_eq!(
-            revocations[0],
-            "REVOKE SELECT ON TABLE \"db\".\"public\".\"my_source\" FROM \"reader\""
+            strings[0],
+            "REVOKE SELECT ON TABLE db.public.my_source FROM reader"
         );
     }
 
@@ -532,16 +655,13 @@ mod tests {
         let mut protected = BTreeSet::new();
         protected.insert(("reader".to_string(), "SELECT".to_string()));
 
-        let revocations = stale_grant_revocations(
-            &current,
-            &desired,
-            &protected,
-            "TABLE",
-            "\"db\".\"public\".\"t\"",
-        );
-        assert_eq!(revocations.len(), 1);
-        assert!(revocations[0].contains("writer"));
-        assert!(!revocations[0].contains("reader"));
+        let target = table_target("db", "public", "t");
+        let revocations =
+            stale_grant_revocations(&current, &desired, &protected, &target);
+        let strings = to_strings(&revocations);
+        assert_eq!(strings.len(), 1);
+        assert!(strings[0].contains("writer"));
+        assert!(!strings[0].contains("reader"));
     }
 
     // =========================================================================
@@ -554,13 +674,9 @@ mod tests {
         let desired = desired_grants(&[grant], &["USAGE", "CREATE"]);
         let current = vec![make_object_grant("reader", "USAGE")];
 
-        let revocations = stale_grant_revocations(
-            &current,
-            &desired,
-            &BTreeSet::new(),
-            "CLUSTER",
-            "\"my_cluster\"",
-        );
+        let target = cluster_target("my_cluster");
+        let revocations =
+            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         assert!(revocations.is_empty());
     }
 
@@ -574,16 +690,13 @@ mod tests {
             make_object_grant("writer", "CREATE"),
         ];
 
-        let revocations = stale_grant_revocations(
-            &current,
-            &desired,
-            &BTreeSet::new(),
-            "CLUSTER",
-            "\"my_cluster\"",
-        );
-        assert_eq!(revocations.len(), 1);
-        assert!(revocations[0].contains("writer"));
-        assert!(revocations[0].contains("CREATE"));
+        let target = cluster_target("my_cluster");
+        let revocations =
+            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let strings = to_strings(&revocations);
+        assert_eq!(strings.len(), 1);
+        assert!(strings[0].contains("writer"));
+        assert!(strings[0].contains("CREATE"));
     }
 
     #[test]
@@ -595,13 +708,9 @@ mod tests {
             make_object_grant("writer", "CREATE"),
         ];
 
-        let revocations = stale_grant_revocations(
-            &current,
-            &desired,
-            &BTreeSet::new(),
-            "CLUSTER",
-            "\"my_cluster\"",
-        );
+        let target = cluster_target("my_cluster");
+        let revocations =
+            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         assert_eq!(revocations.len(), 2);
     }
 
@@ -615,13 +724,9 @@ mod tests {
             make_object_grant("admin", "CREATE"),
         ];
 
-        let revocations = stale_grant_revocations(
-            &current,
-            &desired,
-            &BTreeSet::new(),
-            "CLUSTER",
-            "\"my_cluster\"",
-        );
+        let target = cluster_target("my_cluster");
+        let revocations =
+            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         assert!(revocations.is_empty());
     }
 
@@ -636,15 +741,12 @@ mod tests {
             make_object_grant("reader", "USAGE"),
         ];
 
-        let revocations = stale_grant_revocations(
-            &current,
-            &desired,
-            &BTreeSet::new(),
-            "CLUSTER",
-            "\"my_cluster\"",
-        );
-        assert_eq!(revocations.len(), 1);
-        assert!(revocations[0].contains("reader"));
+        let target = cluster_target("my_cluster");
+        let revocations =
+            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let strings = to_strings(&revocations);
+        assert_eq!(strings.len(), 1);
+        assert!(strings[0].contains("reader"));
     }
 
     #[test]
@@ -661,9 +763,11 @@ mod tests {
             make_object_grant("admin", "USAGE"),
         ];
 
+        let target = cluster_target("c");
         let revocations =
-            stale_grant_revocations(&current, &desired, &BTreeSet::new(), "CLUSTER", "\"c\"");
-        assert_eq!(revocations.len(), 1);
-        assert!(revocations[0].contains("admin"));
+            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let strings = to_strings(&revocations);
+        assert_eq!(strings.len(), 1);
+        assert!(strings[0].contains("admin"));
     }
 }

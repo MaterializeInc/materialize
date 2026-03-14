@@ -780,46 +780,47 @@ async fn run(args: Args) -> Result<(), CliError> {
             subcommand,
         }) => match subcommand {
             Some(ApplyCommand::Clusters) => {
-                let r = cli::commands::clusters::run(&settings, dry_run).await?;
-                log::output(&r);
+                let plan = cli::commands::clusters::run(&settings, dry_run).await?;
+                log::output(&plan);
                 Ok(())
             }
             Some(ApplyCommand::Roles) => {
-                let r = cli::commands::roles::run(&settings, dry_run).await?;
-                log::output(&r);
+                let plan = cli::commands::roles::run(&settings, dry_run).await?;
+                log::output(&plan);
                 Ok(())
             }
             Some(ApplyCommand::NetworkPolicies) => {
-                let r = cli::commands::apply_network_policies::run(&settings, dry_run).await?;
-                log::output(&r);
+                let plan = cli::commands::apply_network_policies::run(&settings, dry_run).await?;
+                log::output(&plan);
                 Ok(())
             }
             Some(ApplyCommand::Secrets) => {
-                let r = cli::commands::apply_secrets::run(&settings, dry_run).await?;
-                log::output(&r);
+                let plan = cli::commands::apply_secrets::run(&settings, dry_run).await?;
+                log::output(&plan);
                 Ok(())
             }
             Some(ApplyCommand::Connections) => {
-                let r = cli::commands::apply_connections::run(&settings, dry_run).await?;
-                log::output(&r);
+                let plan = cli::commands::apply_connections::run(&settings, dry_run).await?;
+                log::output(&plan);
                 Ok(())
             }
             Some(ApplyCommand::Sources) => {
-                let r = cli::commands::apply_tables::apply_sources(&settings, dry_run).await?;
-                log::output(&r);
+                let plan = cli::commands::apply_sources::run(&settings, dry_run).await?;
+                log::output(&plan);
                 Ok(())
             }
             Some(ApplyCommand::Tables) => {
-                let r = cli::commands::apply_tables::apply_tables(&settings, dry_run).await?;
+                let plan = cli::commands::apply_tables::run(&settings, dry_run).await?;
                 if !dry_run {
                     cli::commands::lock::run(&settings).await?;
                 }
-                log::output(&r);
+                log::output(&plan);
                 Ok(())
             }
             None => {
-                let r = cli::commands::apply_all::run(&settings, skip_secrets, dry_run).await?;
-                log::output(&r);
+                let plan =
+                    cli::commands::apply_all::run(&settings, skip_secrets, dry_run).await?;
+                log::output(&plan);
                 Ok(())
             }
         },

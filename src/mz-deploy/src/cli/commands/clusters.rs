@@ -2,14 +2,17 @@
 
 use crate::cli::CliError;
 use crate::cli::commands::grants;
-use crate::cli::executor::{ApplyResult, DeploymentExecutor, ObjectResult};
+use crate::cli::executor::{ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult};
 use crate::client::{Client, ClusterOptions, quote_identifier};
 use crate::config::Settings;
 use crate::project::clusters::{self, ClusterDefinition, extract_replication_factor, extract_size};
-use std::collections::BTreeSet;
 
 /// Plan cluster changes without executing or printing.
-pub async fn plan(settings: &Settings, client: &Client) -> Result<ApplyResult, CliError> {
+pub async fn plan(
+    settings: &Settings,
+    client: &Client,
+    executor: &DeploymentExecutor<'_>,
+) -> Result<ApplyResult, CliError> {
     let profile = settings.connection();
     let directory = &settings.directory;
 
@@ -23,39 +26,37 @@ pub async fn plan(settings: &Settings, client: &Client) -> Result<ApplyResult, C
     if definitions.is_empty() {
         return Ok(ApplyResult {
             phase: "clusters".to_string(),
-            setup_statements: vec![],
             results: vec![],
         });
     }
 
-    let executor = DeploymentExecutor::new_dry_run(client);
-
     let mut object_results = Vec::new();
     for def in &definitions {
-        let obj_result = plan_cluster(client, &executor, def).await?;
+        let obj_result = plan_cluster(client, executor, def).await?;
         object_results.push(obj_result);
     }
 
     Ok(ApplyResult {
         phase: "clusters".to_string(),
-        setup_statements: vec![],
         results: object_results,
     })
 }
 
 /// Run the `clusters apply` command: plan, render, optionally execute.
-pub async fn run(settings: &Settings, dry_run: bool) -> Result<ApplyResult, CliError> {
+pub async fn run(settings: &Settings, dry_run: bool) -> Result<ApplyPlan, CliError> {
     let client = Client::connect_with_profile(settings.connection().clone())
         .await
         .map_err(CliError::Connection)?;
 
-    let result = plan(settings, &client).await?;
+    let mut plan = ApplyPlan::new();
+    let executor = DeploymentExecutor::new_dry_run(&client);
+    plan.add_phase(self::plan(settings, &client, &executor).await?);
 
     if !dry_run {
-        result.execute(&client).await?;
+        plan.execute(&client).await?;
     }
 
-    Ok(result)
+    Ok(plan)
 }
 
 /// Plan a single cluster definition: create if missing, alter if drifted,
@@ -80,7 +81,7 @@ async fn plan_cluster(
     let action = match existing {
         None => {
             executor.execute_sql(&def.create_stmt).await?;
-            "created"
+            ObjectAction::Created
         }
         Some(existing_cluster) => {
             let desired_size = extract_size(&def.create_stmt);
@@ -118,42 +119,22 @@ async fn plan_cluster(
                     options.replication_factor
                 );
                 executor.execute_sql(&alter_sql).await?;
-                "altered"
+                ObjectAction::Altered
             } else {
-                "up_to_date"
+                ObjectAction::UpToDate
             }
         }
     };
 
-    // Execute GRANT statements
-    for grant in &def.grants {
-        executor.execute_sql(grant).await?;
-    }
-
-    // Revoke stale grants (protecting default privilege grants)
-    let current_grants = client
-        .introspection()
-        .get_cluster_grants(cluster_name)
-        .await
-        .map_err(CliError::Connection)?;
-    let default_privs = client
-        .introspection()
-        .get_default_privilege_grants_for_cluster(cluster_name)
-        .await
-        .map_err(CliError::Connection)?;
-    let protected: BTreeSet<_> = default_privs
-        .iter()
-        .map(|g| (g.grantee.to_lowercase(), g.privilege_type.to_uppercase()))
-        .collect();
-    let desired = grants::desired_grants(&def.grants, &["USAGE", "CREATE"]);
-    let revocations = grants::stale_grant_revocations(
-        &current_grants,
-        &desired,
-        &protected,
-        "CLUSTER",
-        &quote_identifier(cluster_name),
-    );
-    grants::execute_revocations(executor, &revocations, "cluster", &cluster_name).await?;
+    // Reconcile grants
+    grants::reconcile_named_object(
+        client,
+        executor,
+        cluster_name,
+        &def.grants,
+        &grants::GrantNamedObjectKind::Cluster,
+    )
+    .await?;
 
     // Execute COMMENT statements
     for comment in &def.comments {
@@ -162,7 +143,7 @@ async fn plan_cluster(
 
     Ok(ObjectResult {
         object: cluster_name.clone(),
-        action: action.to_string(),
+        action,
         statements: executor.take_statements(),
         redacted_statements: vec![],
     })

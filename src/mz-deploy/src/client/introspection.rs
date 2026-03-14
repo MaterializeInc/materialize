@@ -842,6 +842,8 @@ async fn get_named_object_grants(
 ) -> Result<Vec<ObjectGrant>, ConnectionError> {
     let query = format!(
         r#"
+        -- Explode the ACL bitmap into individual (grantee, privilege_type) rows.
+        -- Each object stores privileges as a compact bitmap; mz_aclexplode unpacks it.
         WITH privilege AS (
             SELECT mz_internal.mz_aclexplode(privileges).*, owner_id
             FROM {}
@@ -851,8 +853,11 @@ async fn get_named_object_grants(
             grantee.name AS grantee,
             p.privilege_type
         FROM privilege AS p
+        -- Resolve grantee role IDs to human-readable names.
         JOIN mz_roles AS grantee ON p.grantee = grantee.id
+        -- Exclude system roles that are not user-manageable.
         WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+          -- Owners implicitly have all privileges; don't surface those as explicit grants.
           AND p.grantee != p.owner_id
         "#,
         catalog_table
@@ -897,6 +902,9 @@ pub async fn get_database_object_grants(
 ) -> Result<Vec<ObjectGrant>, ConnectionError> {
     let query = format!(
         r#"
+        -- Locate the object by its fully-qualified name (database.schema.object)
+        -- using a 3-table join chain: catalog_table -> mz_schemas -> mz_databases.
+        -- Then explode the ACL bitmap into individual privilege rows.
         WITH privilege AS (
             SELECT mz_internal.mz_aclexplode(t.privileges).*, t.owner_id
             FROM {} t
@@ -939,17 +947,24 @@ async fn get_default_privilege_grants_for_named_object(
 ) -> Result<Vec<ObjectGrant>, ConnectionError> {
     let query = format!(
         r#"
+        -- Query default privileges from ALTER DEFAULT PRIVILEGES rules.
+        -- These are auto-applied grants that should be protected from revocation.
         SELECT
             grantee_role.name AS grantee,
             dp_priv.privilege_type
         FROM mz_default_privileges dp
+        -- Expand the privilege bitmap into individual privilege type strings.
         CROSS JOIN LATERAL unnest(
             mz_internal.mz_format_privileges(dp.privileges)
         ) AS dp_priv(privilege_type)
         JOIN {} obj ON obj.name = $1
         JOIN mz_roles AS grantee_role ON dp.grantee = grantee_role.id
         WHERE dp.object_type = $2
+          -- Match rules targeting the object's owner, or PUBLIC ('p') rules
+          -- that apply to all owners.
           AND (dp.role_id = obj.owner_id OR dp.role_id = 'p')
+          -- Named objects (clusters, network policies) are not schema-scoped,
+          -- so only global default privileges (both NULL) apply.
           AND dp.database_id IS NULL
           AND dp.schema_id IS NULL
           AND grantee_role.name NOT IN ('none', 'mz_system', 'mz_support')
@@ -999,21 +1014,29 @@ pub async fn get_default_privilege_grants_for_database_object(
 ) -> Result<Vec<ObjectGrant>, ConnectionError> {
     let query = format!(
         r#"
+        -- Query default privileges from ALTER DEFAULT PRIVILEGES rules
+        -- for a schema-qualified database object.
         SELECT
             grantee_role.name AS grantee,
             dp_priv.privilege_type
         FROM mz_default_privileges dp
+        -- Expand the privilege bitmap into individual privilege type strings.
         CROSS JOIN LATERAL unnest(
             mz_internal.mz_format_privileges(dp.privileges)
         ) AS dp_priv(privilege_type)
+        -- Locate the object by FQN to determine its owner, database, and schema.
         JOIN {} obj ON obj.name = $3
         JOIN mz_schemas s ON obj.schema_id = s.id
         JOIN mz_databases d ON s.database_id = d.id
         JOIN mz_roles AS grantee_role ON dp.grantee = grantee_role.id
         WHERE d.name = $1 AND s.name = $2
           AND dp.object_type = $4
+          -- Match rules targeting the object's owner, or PUBLIC ('p') rules.
           AND (dp.role_id = obj.owner_id OR dp.role_id = 'p')
+          -- Match both global rules (database_id IS NULL) and rules scoped to
+          -- this specific database. Global rules apply to all databases.
           AND (dp.database_id IS NULL OR dp.database_id = d.id)
+          -- Same for schema: global or scoped to this specific schema.
           AND (dp.schema_id IS NULL OR dp.schema_id = s.id)
           AND grantee_role.name NOT IN ('none', 'mz_system', 'mz_support')
         "#,
@@ -1067,6 +1090,15 @@ impl IntrospectionClient<'_> {
         objects: &BTreeSet<ObjectId>,
     ) -> Result<Vec<String>, ConnectionError> {
         check_objects_exist(self.client, objects).await
+    }
+
+    /// Check which objects from a set exist in a specific catalog table.
+    pub async fn check_catalog_objects_exist(
+        &self,
+        objects: &BTreeSet<ObjectId>,
+        catalog_table: &str,
+    ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
+        check_catalog_objects_exist(self.client, objects, catalog_table).await
     }
 
     /// Check which tables from the given set exist in the database.
