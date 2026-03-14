@@ -1583,7 +1583,7 @@ async fn main() {
                 flush_interval_ms: cfg.flush_interval_ms,
             };
             let (acceptor_handle, acc_task) =
-                PersistAcceptor::spawn(acceptor_config, &persist_client, shard_id).await;
+                PersistAcceptor::spawn(acceptor_config, &persist_client, shard_id, acceptor_metrics.clone()).await;
             persist_acceptor_task = Some(acc_task);
 
             let learner_config = PersistLearnerConfig {
@@ -1591,7 +1591,7 @@ async fn main() {
                 ..Default::default()
             };
             let (learner_handle, lrn_task) =
-                PersistLearner::spawn(learner_config, &persist_client, shard_id).await;
+                PersistLearner::spawn(learner_config, &persist_client, shard_id, learner_metrics.clone()).await;
             persist_learner_task = Some(lrn_task);
 
             let transports = vec![Transport::PersistDirect {

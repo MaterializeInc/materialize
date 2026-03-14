@@ -22,6 +22,7 @@ use tokio::time::Interval;
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
 
+use mz_ore::cast::CastFrom;
 use mz_ore::retry::Retry;
 use mz_persist::generated::consensus_service::{ProtoAppendResponse, ProtoLogProposal};
 use mz_persist_client::write::WriteHandle;
@@ -30,6 +31,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 use prost::Message;
 
 use super::{ConsensusProposal, ConsensusProposalSchema};
+use crate::actor::metrics::AcceptorMetrics;
 use crate::traits::{AcceptorConfig, AcceptorError};
 
 /// Commands dispatched to the persist-backed acceptor.
@@ -104,6 +106,7 @@ pub struct PersistAcceptor {
     pending: Vec<PendingAppend>,
     flush_interval: Interval,
     rx: mpsc::Receiver<PersistAcceptorCommand>,
+    metrics: AcceptorMetrics,
 }
 
 impl PersistAcceptor {
@@ -114,6 +117,7 @@ impl PersistAcceptor {
     pub fn new(
         config: AcceptorConfig,
         write: WriteHandle<ConsensusProposal, (), u64, i64>,
+        metrics: AcceptorMetrics,
     ) -> (Self, PersistAcceptorHandle) {
         let mut flush_interval =
             tokio::time::interval(std::time::Duration::from_millis(config.flush_interval_ms));
@@ -126,6 +130,7 @@ impl PersistAcceptor {
             pending: Vec::new(),
             flush_interval,
             rx,
+            metrics,
         };
         let handle = PersistAcceptorHandle::new(tx);
         (acceptor, handle)
@@ -151,6 +156,7 @@ impl PersistAcceptor {
                         });
                     }
                     Some(PersistAcceptorCommand::Flush { reply }) => {
+                        self.metrics.flush_explicit_triggered.inc();
                         if self.has_pending() {
                             if !self.flush().await {
                                 return; // fenced
@@ -167,7 +173,9 @@ impl PersistAcceptor {
                 },
                 // cancel-safety: consumed tick only delays next flush
                 _ = self.flush_interval.tick() => {
+                    self.metrics.flush_timer_ticked.inc();
                     if self.has_pending() {
+                        self.metrics.flush_timer_triggered.inc();
                         if !self.flush().await {
                             return; // fenced
                         }
@@ -191,7 +199,15 @@ impl PersistAcceptor {
             return true;
         }
 
+        let flush_start = std::time::Instant::now();
         let num_proposals = pending.len();
+
+        // Record per-proposal queue time (time waiting in the pending buffer).
+        for p in &pending {
+            self.metrics
+                .proposal_queue_seconds
+                .observe((flush_start - p.received_at).as_secs_f64());
+        }
 
         // Split proposals from reply senders.
         let (proposals, replies): (Vec<_>, Vec<_>) =
@@ -248,6 +264,20 @@ impl PersistAcceptor {
                             position: u32::try_from(position).expect("batch position fits u32"),
                         }));
                     }
+
+                    // Compute bytes written (sum of encoded proposal sizes).
+                    let batch_bytes: usize = proposals.iter().map(|p| p.encoded_len()).sum();
+                    self.metrics.flush_count.inc();
+                    self.metrics
+                        .flush_proposals_per_batch
+                        .observe(f64::from(num_proposals as u32));
+                    self.metrics
+                        .flush_latency_seconds
+                        .observe(flush_start.elapsed().as_secs_f64());
+                    self.metrics
+                        .object_store_log_write_bytes
+                        .inc_by(u64::cast_from(batch_bytes));
+
                     debug!(
                         batch = batch_number,
                         proposals = num_proposals,
@@ -306,6 +336,7 @@ impl PersistAcceptor {
         config: AcceptorConfig,
         client: &PersistClient,
         shard_id: ShardId,
+        metrics: AcceptorMetrics,
     ) -> (PersistAcceptorHandle, mz_ore::task::JoinHandle<()>) {
         let write = client
             .open_writer::<ConsensusProposal, (), u64, i64>(
@@ -317,7 +348,7 @@ impl PersistAcceptor {
             .await
             .expect("failed to open persist shard for acceptor");
 
-        let (acceptor, handle) = Self::new(config, write);
+        let (acceptor, handle) = Self::new(config, write, metrics);
         let task = mz_ore::task::spawn(|| "persist-acceptor", acceptor.run());
         (handle, task)
     }

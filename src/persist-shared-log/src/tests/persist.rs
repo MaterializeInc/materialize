@@ -19,6 +19,9 @@ use mz_persist_client::PersistClient;
 use mz_persist_types::ShardId;
 use mz_persist_types::codec_impls::UnitSchema;
 
+use mz_ore::metrics::MetricsRegistry;
+
+use crate::actor::metrics::{AcceptorMetrics, LearnerMetrics};
 use crate::persist_log::acceptor::{PersistAcceptor, PersistAcceptorHandle};
 use crate::persist_log::learner::{PersistLearner, PersistLearnerConfig, PersistLearnerHandle};
 use crate::persist_log::{ConsensusProposal, ConsensusProposalSchema};
@@ -79,7 +82,11 @@ impl PersistTestHarness {
             flush_interval_ms: 1,
             ..Default::default()
         };
-        let (acceptor, acceptor_handle) = PersistAcceptor::new(acceptor_config, write);
+        let registry = MetricsRegistry::new();
+        let acceptor_metrics = AcceptorMetrics::register(&registry);
+        let learner_metrics = LearnerMetrics::register(&registry);
+
+        let (acceptor, acceptor_handle) = PersistAcceptor::new(acceptor_config, write, acceptor_metrics);
         let acceptor_task =
             mz_ore::task::spawn(|| "test-persist-acceptor", acceptor.run()).abort_on_drop();
 
@@ -87,7 +94,7 @@ impl PersistTestHarness {
             result_retention_batches: 1_000_000,
             ..Default::default()
         };
-        let (learner, learner_handle) = PersistLearner::new(learner_config, listen, upper_handle);
+        let (learner, learner_handle) = PersistLearner::new(learner_config, listen, upper_handle, learner_metrics);
         let learner_task =
             mz_ore::task::spawn(|| "test-persist-learner", learner.run()).abort_on_drop();
 

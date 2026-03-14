@@ -50,6 +50,7 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 
 use super::{ConsensusProposal, ConsensusProposalSchema};
+use crate::actor::metrics::LearnerMetrics;
 use crate::traits::LearnerError;
 use crate::{ShardState, VersionedEntry};
 
@@ -432,6 +433,9 @@ pub struct PersistLearner {
     // --- Configuration ---
     config: PersistLearnerConfig,
 
+    // --- Metrics ---
+    metrics: LearnerMetrics,
+
     // --- Channels ---
     cmd_rx: mpsc::Receiver<PersistLearnerCommand>,
     /// Events from the dedicated listen task.
@@ -466,6 +470,7 @@ impl PersistLearner {
         config: PersistLearnerConfig,
         listen: Listen<ConsensusProposal, (), u64, i64>,
         upper_handle: WriteHandle<ConsensusProposal, (), u64, i64>,
+        metrics: LearnerMetrics,
     ) -> (Self, PersistLearnerHandle) {
         let (cmd_tx, cmd_rx) = mpsc::channel(config.queue_depth);
         let (event_tx, event_rx) = mpsc::channel(256);
@@ -477,6 +482,7 @@ impl PersistLearner {
             results: BTreeMap::new(),
             result_waiters: BTreeMap::new(),
             config,
+            metrics,
             cmd_rx,
             event_rx,
             upper_handle,
@@ -557,6 +563,7 @@ impl PersistLearner {
 
     /// Apply a single batch of proposals at the given timestamp.
     fn apply_batch(&mut self, batch_number: u64, proposals: Vec<ConsensusProposal>) {
+        let batch_start = std::time::Instant::now();
         let num_proposals = proposals.len();
         debug!(
             batch_number,
@@ -571,10 +578,16 @@ impl PersistLearner {
                 Ok(proposal) => match proposal.op {
                     Some(proto_log_proposal::Op::Cas(cas)) => {
                         let result = self.state.apply_cas(cas);
+                        if result.committed {
+                            self.metrics.cas_committed.inc();
+                        } else {
+                            self.metrics.cas_rejected.inc();
+                        }
                         batch_results.push(ProposalResult::Cas(result));
                     }
                     Some(proto_log_proposal::Op::Truncate(trunc)) => {
                         let result = self.state.apply_truncate(&trunc);
+                        self.metrics.truncate_ops.inc();
                         batch_results.push(ProposalResult::Truncate(result));
                     }
                     None => {
@@ -594,6 +607,29 @@ impl PersistLearner {
         }
 
         self.results.insert(batch_number, batch_results);
+        self.metrics.batches_materialized.inc();
+        self.metrics
+            .batch_materialize_latency_seconds
+            .observe(batch_start.elapsed().as_secs_f64());
+
+        // Update state gauges.
+        let total_entries: usize = self.state.shards.values().map(|s| s.entries.len()).sum();
+        let approx_bytes: usize = self
+            .state
+            .shards
+            .values()
+            .flat_map(|s| s.entries.iter())
+            .map(|e| e.data.len())
+            .sum();
+        self.metrics
+            .active_shards
+            .set(i64::try_from(self.state.shards.len()).expect("shard count"));
+        self.metrics
+            .total_entries
+            .set(i64::try_from(total_entries).expect("entry count"));
+        self.metrics
+            .approx_bytes
+            .set(i64::try_from(approx_bytes).expect("byte count"));
 
         self.wake_result_waiters(batch_number);
         self.prune_old_results();
@@ -699,6 +735,7 @@ impl PersistLearner {
     fn serve_read(&self, cmd: ReadCommand) {
         match cmd {
             ReadCommand::Head { key, reply } => {
+                self.metrics.head_ops.inc();
                 let _ = reply.send(self.state.head(&key));
             }
             ReadCommand::Scan {
@@ -707,9 +744,11 @@ impl PersistLearner {
                 limit,
                 reply,
             } => {
+                self.metrics.scan_ops.inc();
                 let _ = reply.send(self.state.scan(&key, from, limit));
             }
             ReadCommand::ListKeys { reply } => {
+                self.metrics.list_keys_ops.inc();
                 let _ = reply.send(self.state.keys());
             }
         }
@@ -774,6 +813,7 @@ impl PersistLearner {
         config: PersistLearnerConfig,
         client: &PersistClient,
         shard_id: ShardId,
+        metrics: LearnerMetrics,
     ) -> (PersistLearnerHandle, mz_ore::task::JoinHandle<()>) {
         let key_schema = Arc::new(ConsensusProposalSchema);
         let val_schema = Arc::new(UnitSchema);
@@ -792,7 +832,7 @@ impl PersistLearner {
         let since = read.since().clone();
         let listen = read.listen(since).await.expect("listen should succeed");
 
-        let (learner, handle) = Self::new(config, listen, upper_handle);
+        let (learner, handle) = Self::new(config, listen, upper_handle, metrics);
         let task = mz_ore::task::spawn(|| "persist-learner", learner.run());
         (handle, task)
     }

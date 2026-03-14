@@ -262,10 +262,8 @@ async fn run_log(args: Args, metrics_registry: mz_ore::metrics::MetricsRegistry)
 }
 
 async fn run_persist(args: Args, metrics_registry: mz_ore::metrics::MetricsRegistry) {
-    // Register metrics (unused by persist backend today, but keeps the
-    // HTTP /metrics endpoint populated with the same gauge names).
-    let _acceptor_metrics = AcceptorMetrics::register(&metrics_registry);
-    let _learner_metrics = LearnerMetrics::register(&metrics_registry);
+    let acceptor_metrics = AcceptorMetrics::register(&metrics_registry);
+    let learner_metrics = LearnerMetrics::register(&metrics_registry);
 
     let persist_client = match (&args.blob_url, &args.consensus_url) {
         (Some(blob_url), Some(consensus_url)) => {
@@ -311,11 +309,11 @@ async fn run_persist(args: Args, metrics_registry: mz_ore::metrics::MetricsRegis
         ..Default::default()
     };
     let (acceptor_handle, _acceptor_task) =
-        PersistAcceptor::spawn(acceptor_config, &persist_client, shard_id).await;
+        PersistAcceptor::spawn(acceptor_config, &persist_client, shard_id, acceptor_metrics).await;
 
     let learner_config = PersistLearnerConfig::default();
     let (learner_handle, _learner_task) =
-        PersistLearner::spawn(learner_config, &persist_client, shard_id).await;
+        PersistLearner::spawn(learner_config, &persist_client, shard_id, learner_metrics).await;
 
     info!(%shard_id, "persist backend ready");
 
