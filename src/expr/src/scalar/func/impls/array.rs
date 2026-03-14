@@ -21,13 +21,9 @@ use crate::{EvalError, MirScalarExpr};
 #[sqlfunc(
     sqlname = "arraytolist",
     preserves_uniqueness = true,
-    introduces_nulls = false,
-    output_type_expr = SqlScalarType::List {
-        element_type: Box::new(input_type.scalar_type.unwrap_array_element_type().clone()),
-        custom_id: None,
-    }.nullable(true)
+    introduces_nulls = false
 )]
-fn cast_array_to_list_one_dim<'a>(a: Array<'a>) -> Result<DatumList<'a>, EvalError> {
+fn cast_array_to_list_one_dim<'a, T>(a: Array<'a, T>) -> Result<DatumList<'a, T>, EvalError> {
     let ndims = a.dims().ndims();
     if ndims > 1 {
         return Err(EvalError::Unsupported {
