@@ -1650,7 +1650,7 @@ SELECT * FROM (
 Explained Query (fast path):
   Constant <empty>
 
-Target cluster: mz_catalog_server
+Target cluster: quickstart
 
 EOF
 

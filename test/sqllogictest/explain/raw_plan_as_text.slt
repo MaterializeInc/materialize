@@ -329,7 +329,7 @@ Return
     Get l0
     Get l1
 
-Target cluster: mz_catalog_server
+Target cluster: quickstart
 
 EOF
 
