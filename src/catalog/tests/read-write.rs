@@ -32,13 +32,13 @@ use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_persist_confirm_leadership() {
+async fn test_persist_advance_upper_fencing() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
-    test_confirm_leadership(state_builder).await;
+    test_advance_upper_fencing(state_builder).await;
 }
 
-async fn test_confirm_leadership(state_builder: TestCatalogStateBuilder) {
+async fn test_advance_upper_fencing(state_builder: TestCatalogStateBuilder) {
     let state_builder = state_builder.with_default_deploy_generation();
     let mut state1 = state_builder
         .clone()
@@ -48,7 +48,8 @@ async fn test_confirm_leadership(state_builder: TestCatalogStateBuilder) {
         .await
         .unwrap()
         .0;
-    assert_ok!(state1.confirm_leadership().await);
+    let ts = state1.current_upper().await.step_forward();
+    assert_ok!(state1.advance_upper(ts).await);
 
     let mut state2 = state_builder
         .unwrap_build()
@@ -57,9 +58,11 @@ async fn test_confirm_leadership(state_builder: TestCatalogStateBuilder) {
         .await
         .unwrap()
         .0;
-    assert_ok!(state2.confirm_leadership().await);
+    let ts = state2.current_upper().await.step_forward();
+    assert_ok!(state2.advance_upper(ts).await);
 
-    let err = state1.confirm_leadership().await.unwrap_err();
+    let ts = ts.step_forward();
+    let err = state1.advance_upper(ts).await.unwrap_err();
     assert!(matches!(
         err,
         CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
