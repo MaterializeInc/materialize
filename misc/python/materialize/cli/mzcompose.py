@@ -485,7 +485,7 @@ class SqlCommand(Command):
                     ],
                     docker_args=[
                         "--interactive",
-                        f"--network={composition.name}_default",
+                        f"--network={composition.project_name}_default",
                     ],
                     env={"PGPASSWORD": "materialize", "PGCLIENTENCODING": "utf-8"},
                 )
@@ -502,7 +502,7 @@ class SqlCommand(Command):
                     ],
                     docker_args=[
                         "--interactive",
-                        f"--network={composition.name}_default",
+                        f"--network={composition.project_name}_default",
                     ],
                     env={"PGCLIENTENCODING": "utf-8"},
                 )
@@ -522,7 +522,10 @@ class SqlCommand(Command):
                     "materialize",
                     "materialize",
                 ],
-                docker_args=["--interactive", f"--network={composition.name}_default"],
+                docker_args=[
+                    "--interactive",
+                    f"--network={composition.project_name}_default",
+                ],
                 env={"PGCLIENTENCODING": "utf-8"},
             )
         elif image == "materialize/postgres":
@@ -539,7 +542,10 @@ class SqlCommand(Command):
                     "postgres",
                     "postgres",
                 ],
-                docker_args=["--interactive", f"--network={composition.name}_default"],
+                docker_args=[
+                    "--interactive",
+                    f"--network={composition.project_name}_default",
+                ],
                 env={"PGPASSWORD": "postgres", "PGCLIENTENCODING": "utf-8"},
             )
         elif image == "cockroachdb/cockroach" or args.service == "postgres-metadata":
@@ -557,7 +563,10 @@ class SqlCommand(Command):
                     "root",
                     "root",
                 ],
-                docker_args=["--interactive", f"--network={composition.name}_default"],
+                docker_args=[
+                    "--interactive",
+                    f"--network={composition.project_name}_default",
+                ],
                 env={"PGCLIENTENCODING": "utf-8"},
             )
         elif image == "mysql":
@@ -577,7 +586,7 @@ class SqlCommand(Command):
                 ],
                 docker_args=[
                     "--interactive",
-                    f"--network={composition.name}_default",
+                    f"--network={composition.project_name}_default",
                     "-e=MYSQL_PWD=p@ssw0rd",
                 ],
             )
@@ -600,7 +609,7 @@ class SqlCommand(Command):
                 docker_args=[
                     "--entrypoint=/opt/mssql-tools18/bin/sqlcmd",
                     "--interactive",
-                    f"--network={composition.name}_default",
+                    f"--network={composition.project_name}_default",
                 ],
             )
         else:

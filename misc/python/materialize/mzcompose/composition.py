@@ -123,7 +123,7 @@ class Composition:
         self.description = None
         self.repo = repo
         self.preserve_ports = preserve_ports
-        self.project_name = project_name
+        self.project_name = project_name or name
         self.silent = silent
         self.workflows: dict[str, Callable[..., None]] = {}
         self.test_results: OrderedDict[str, TestResult] = OrderedDict()
@@ -357,9 +357,7 @@ class Composition:
         stderr = None
         if capture_stderr:
             stderr = subprocess.PIPE if capture_stderr == True else capture_stderr
-        project_name_args = (
-            ("--project-name", self.project_name) if self.project_name else ()
-        )
+        project_name_args = ("--project-name", self.project_name)
 
         # One file per thread to make sure we don't try to read a file which is
         # not seeked to 0, leading to "empty compose file" errors
@@ -1304,7 +1302,7 @@ class Composition:
             self.wait(*services, expect_exit_code=137 if signal == "SIGKILL" else None)
 
     def is_running(self, container_name: str) -> bool:
-        qualified_container_name = f"{self.name}-{container_name}-1"
+        qualified_container_name = f"{self.project_name}-{container_name}-1"
         output_str = self.invoke(
             "ps",
             "--filter",
@@ -1409,7 +1407,7 @@ class Composition:
             force: Whether to force the removal (i.e., don't error if the
                 volume does not exist).
         """
-        volumes = tuple(f"{self.name}_{v}" for v in volumes)
+        volumes = tuple(f"{self.project_name}_{v}" for v in volumes)
         spawn.runv(
             ["docker", "volume", "rm", *(["--force"] if force else []), *volumes]
         )
