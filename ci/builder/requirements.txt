@@ -27,7 +27,7 @@ ipympl==0.10.0
 ipywidgets==8.1.8
 junit-xml==1.9
 junitparser==4.0.2
-jupyterlab==4.5.4
+jupyterlab==4.5.6
 jupyter-black==0.4.0
 kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
@@ -52,7 +52,7 @@ psycopg==3.3.3
 psycopg-binary==3.3.3
 pydantic==2.12.5
 pyelftools==0.32
-pyjwt==2.11.0
+pyjwt==2.12.0
 PyMySQL==1.1.2
 pytest==8.4.2
 pytest-split==0.11.0
@@ -90,4 +90,4 @@ pyarrow==23.0.0
 minio==7.2.15
 zstandard==0.25.0
 build==1.4.0
-hatchling==1.28.0
+hatchling==1.29.0
