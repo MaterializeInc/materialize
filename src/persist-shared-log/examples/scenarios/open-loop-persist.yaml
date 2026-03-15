@@ -1,0 +1,45 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Open-loop saturation benchmark for the persist backend.
+# Run with --open-loop to skip inter-op sleep. Clients fire as fast as
+# possible; backpressure comes from mpsc channel capacity.
+#
+# Usage:
+#   cargo run --release -p mz-persist-shared-log --example specsheet -- \
+#       --workload examples/scenarios/open-loop-persist.yaml --open-loop
+#
+# Sweep writers_per_shard to find saturation:
+#   for w in 1 2 4 8; do
+#     cargo run --release -p mz-persist-shared-log --example specsheet -- \
+#       --workload examples/scenarios/open-loop-persist.yaml \
+#       --open-loop --writers-per-shard $w --json
+#   done
+
+backend: persist
+transport: direct
+num_shards: 1000
+writers_per_shard: 1
+
+cas_pct: 100
+scan_pct: 0
+head_pct: 0
+truncate_pct: 0
+
+value_size: 64
+max_entries: 10000
+
+flush_interval_ms: 5
+
+# write_rate_per_second is ignored in open-loop mode, but must be set
+# for closed-loop fallback / validation.
+write_rate_per_second: 1.0
+
+duration: 30
+warmup: 5

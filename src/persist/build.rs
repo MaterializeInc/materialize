@@ -10,6 +10,7 @@
 use std::path::PathBuf;
 
 fn main() {
+    // Existing prost-only compilation for persist.proto (no gRPC services).
     prost_build::Config::new()
         .protoc_executable(mz_build_tools::protoc())
         .btree_map(["."])
@@ -23,5 +24,17 @@ fn main() {
             &["persist/src/persist.proto"],
             &[PathBuf::from(".."), mz_build_tools::protoc_include()],
         )
-        .unwrap_or_else(|e| panic!("{e}"))
+        .unwrap_or_else(|e| panic!("{e}"));
+
+    // Tonic + prost compilation for consensus_service.proto (gRPC service).
+    let mut config = prost_build::Config::new();
+    config.protoc_executable(mz_build_tools::protoc());
+    tonic_prost_build::configure()
+        .emit_rerun_if_changed(false)
+        .compile_with_config(
+            config,
+            &[PathBuf::from("persist/src/consensus_service.proto")],
+            &[PathBuf::from(".."), mz_build_tools::protoc_include()],
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
 }

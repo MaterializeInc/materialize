@@ -1,0 +1,130 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! Persist-shard-backed acceptor and learner.
+//!
+//! Replaces the log+S3 storage layer with a persist shard. The `WriteHandle`
+//! drives the acceptor (blind writes); the `ReadHandle`/`Subscribe` drives the
+//! learner (CAS evaluation + reads). Data lives in differential format.
+//!
+//! A single persist shard stores all proposals:
+//! - K: `ConsensusProposal` (serialized protobuf bytes)
+//! - V: `()`
+//! - T: `u64` (incremented by 1 per batch, in lock-step with persist upper)
+//! - D: `i64` (always +1, proposals are append-only)
+
+pub mod acceptor;
+pub mod client;
+pub mod latency_blob;
+pub mod learner;
+
+use arrow::array::{BinaryArray, BinaryBuilder};
+use bytes::{BufMut, Bytes};
+
+use mz_persist_types::Codec;
+use mz_persist_types::codec_impls::{
+    SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder,
+};
+use mz_persist_types::columnar::Schema;
+use mz_persist_types::stats::NoneStats;
+
+/// A consensus proposal stored as the key in a persist shard.
+///
+/// Wraps serialized `ProtoLogProposal` protobuf bytes. Each proposal is stored
+/// as a single row in the persist shard at timestamp T (the batch number).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ConsensusProposal {
+    /// Serialized ProtoLogProposal (protobuf bytes).
+    pub encoded: Vec<u8>,
+}
+
+// ---------------------------------------------------------------------------
+// Codec
+// ---------------------------------------------------------------------------
+
+/// Stateless schema for [`ConsensusProposal`].
+#[derive(Debug, PartialEq)]
+pub struct ConsensusProposalSchema;
+
+impl Codec for ConsensusProposal {
+    type Storage = ();
+    type Schema = ConsensusProposalSchema;
+
+    fn codec_name() -> String {
+        "ConsensusProposal".into()
+    }
+
+    fn encode<B>(&self, buf: &mut B)
+    where
+        B: BufMut,
+    {
+        buf.put(self.encoded.as_slice());
+    }
+
+    fn decode<'a>(buf: &'a [u8], _schema: &ConsensusProposalSchema) -> Result<Self, String> {
+        Ok(ConsensusProposal {
+            encoded: buf.to_vec(),
+        })
+    }
+
+    fn encode_schema(_schema: &Self::Schema) -> Bytes {
+        Bytes::new()
+    }
+
+    fn decode_schema(buf: &Bytes) -> Self::Schema {
+        assert_eq!(*buf, Bytes::new());
+        ConsensusProposalSchema
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SimpleColumnarData (maps to BinaryBuilder / BinaryArray)
+// ---------------------------------------------------------------------------
+
+impl SimpleColumnarData for ConsensusProposal {
+    type ArrowBuilder = BinaryBuilder;
+    type ArrowColumn = BinaryArray;
+
+    fn goodbytes(builder: &Self::ArrowBuilder) -> usize {
+        builder.values_slice().len()
+    }
+
+    fn push(&self, builder: &mut Self::ArrowBuilder) {
+        builder.append_value(self.encoded.as_slice());
+    }
+
+    fn push_null(builder: &mut Self::ArrowBuilder) {
+        builder.append_null();
+    }
+
+    fn read(&mut self, idx: usize, column: &Self::ArrowColumn) {
+        self.encoded.clear();
+        self.encoded.extend(column.value(idx));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Schema
+// ---------------------------------------------------------------------------
+
+impl Schema<ConsensusProposal> for ConsensusProposalSchema {
+    type ArrowColumn = BinaryArray;
+    type Statistics = NoneStats;
+
+    type Decoder = SimpleColumnarDecoder<ConsensusProposal>;
+    type Encoder = SimpleColumnarEncoder<ConsensusProposal>;
+
+    fn encoder(&self) -> Result<Self::Encoder, anyhow::Error> {
+        Ok(SimpleColumnarEncoder::default())
+    }
+
+    fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error> {
+        Ok(SimpleColumnarDecoder::new(col))
+    }
+}

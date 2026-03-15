@@ -14,3 +14,15 @@
 pub mod persist {
     include!(concat!(env!("OUT_DIR"), "/mz_persist.r#gen.persist.rs"));
 }
+
+pub mod consensus_service {
+    #![allow(
+        clippy::as_conversions,
+        clippy::clone_on_ref_ptr,
+        clippy::disallowed_types
+    )]
+    include!(concat!(
+        env!("OUT_DIR"),
+        "/mz_persist.r#gen.consensus_service.rs"
+    ));
+}

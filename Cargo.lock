@@ -7327,6 +7327,9 @@ dependencies = [
  "timely",
  "tokio",
  "tokio-postgres",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
  "tracing",
  "turmoil",
  "url",
@@ -7394,6 +7397,42 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-persist-shared-log"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "arrow",
+ "async-trait",
+ "aws-sdk-s3",
+ "axum",
+ "bincode",
+ "bytes",
+ "clap",
+ "differential-dataflow",
+ "mz-aws-util",
+ "mz-build-info",
+ "mz-dyncfg",
+ "mz-http-util",
+ "mz-ore",
+ "mz-persist",
+ "mz-persist-client",
+ "mz-persist-types",
+ "prometheus",
+ "prost",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "timely",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tracing",
+ "tracing-subscriber",
  "workspace-hack",
 ]
 

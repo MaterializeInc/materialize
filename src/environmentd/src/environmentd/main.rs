@@ -344,7 +344,6 @@ pub struct Args {
         long,
         env = "METADATA_BACKEND_URL",
         conflicts_with_all = &[
-            "persist_consensus_url",
             "timestamp_oracle_url",
         ],
     )]
