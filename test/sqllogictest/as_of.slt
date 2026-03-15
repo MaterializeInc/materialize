@@ -24,13 +24,15 @@ SELECT * FROM data
 2 1
 3 1
 
-query error calling an unmaterializable function in AS OF or UP TO not yet supported
-SELECT * FROM data AS OF now()
+query I
+SELECT 1 AS OF now();
+----
+1
 
-query error calling an unmaterializable function in AS OF or UP TO not yet supported
+query error calling an unmaterializable function other than `now\(\)` in AS OF or UP TO not yet supported
 SELECT * FROM data AS OF current_database()
 
-query error calling an unmaterializable function in AS OF or UP TO not yet supported
+query error calling an unmaterializable function other than `now\(\)` in AS OF or UP TO not yet supported
 SELECT * FROM data AS OF current_database()::mz_timestamp
 
 query error db error: ERROR: unmaterializable function \(except `mz_now`\) in an AS OF query not yet supported
@@ -80,7 +82,7 @@ SELECT * FROM data AS OF 1E38;
 query error AS OF or UP TO should be castable to a \(non\-null\) mz_timestamp value
 SELECT * FROM data AS OF 1.2;
 
-query error calling an unmaterializable function in AS OF or UP TO not yet supported
+query error calling an unmaterializable function other than `now\(\)` in AS OF or UP TO not yet supported
 SELECT * FROM data AS OF mz_now();
 
 query error column "a" does not exist

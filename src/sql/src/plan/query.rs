@@ -1090,14 +1090,20 @@ pub fn plan_as_of_or_up_to(
         allow_parameters: false,
         allow_windows: false,
     };
-    let hir = plan_expr(ecx, &expr)?.cast_to(
+    let mut hir = plan_expr(ecx, &expr)?.cast_to(
         ecx,
         CastContext::Assignment,
         &SqlScalarType::MzTimestamp,
     )?;
+
+    // `now()` is the only unmaterializable function that we allow in AS OF / UP TO for now.
+    hir.resolve_now(scx.pcx()?.wall_time)?;
     if hir.contains_unmaterializable() {
-        bail_unsupported!("calling an unmaterializable function in AS OF or UP TO");
+        bail_unsupported!(
+            "calling an unmaterializable function other than `now()` in AS OF or UP TO"
+        );
     }
+
     // At this point, we definitely have a constant expression:
     // - it can't contain any unmaterializable functions;
     // - it can't refer to any columns.

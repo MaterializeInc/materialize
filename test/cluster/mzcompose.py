@@ -6741,3 +6741,42 @@ def workflow_test_item_parsing_expression_cache(c: Composition) -> None:
         assert (
             "local expression cache hit for User(" in logs.stdout
         ), "expression cache was not hit during view application"
+
+
+def workflow_test_subscribe_as_of_up_to_now(c: Composition) -> None:
+    """
+    Test that SUBSCRIBE works with AS OF now() and UP TO now() offsets.
+
+    (This can't be tested in an slt file because the timestamps in the
+    output depend on the current time.)
+    """
+
+    c.up("materialized")
+
+    c.sql(
+        """
+        CREATE TABLE t (a int);
+        INSERT INTO t VALUES (1);
+        """
+    )
+
+    cursor = c.sql_cursor()
+    cursor.execute("BEGIN")
+    cursor.execute(
+        """
+        DECLARE c CURSOR FOR
+        SUBSCRIBE (
+            SELECT * FROM t
+        ) WITH (progress = false)
+        AS OF now() + '3 seconds'
+        UP TO now() + '5 seconds'
+        """
+    )
+    cursor.execute("FETCH ALL c")
+    rows = cursor.fetchall()
+    assert len(rows) == 1, f"expected 1 row, got {len(rows)}: {rows}"
+    # The row should be (timestamp, diff, a).
+    # We don't test the timestamp, because it always changes.
+    assert rows[0][1] == 1, f"unexpected diff: {rows[0][1]}"
+    assert rows[0][2] == 1, f"unexpected value: {rows[0][2]}"
+    cursor.execute("COMMIT")
