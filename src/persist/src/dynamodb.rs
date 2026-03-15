@@ -2,7 +2,7 @@ use crate::location::{
     CaSResult, Consensus, Determinate, ExternalError, Indeterminate, ResultStream, SeqNo,
     VersionedData,
 };
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use aws_config::meta::region::ProvideRegion;
 use aws_credential_types::Credentials;
@@ -19,17 +19,35 @@ use aws_sdk_dynamodb::operation::update_item::UpdateItemError;
 use aws_sdk_dynamodb::operation::update_item::builders::UpdateItemFluentBuilder;
 use aws_sdk_dynamodb::types::{
     AttributeDefinition, AttributeValue, ConsumedCapacity, KeySchemaElement, KeyType,
-    ProvisionedThroughput, ReturnValue, ScalarAttributeType,
+    ProvisionedThroughput, ReturnValue, ReturnValuesOnConditionCheckFailure, ScalarAttributeType,
 };
 use aws_sdk_s3::error::SdkError;
 use aws_types::region::Region;
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use mz_ore::url::SensitiveUrl;
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::pin::pin;
+use std::sync::{Arc, Mutex};
 
 type AttrMap = HashMap<String, AttributeValue>;
+
+#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Debug, Default)]
+enum Offset {
+    #[default]
+    Init,
+    Entry(SeqNo),
+}
+
+impl Offset {
+    fn next_entry(self) -> SeqNo {
+        match self {
+            Offset::Init => SeqNo(0),
+            Offset::Entry(n) => n.next(),
+        }
+    }
+}
 
 const KEY: &str = "k";
 const OFFSET: &str = "i";
@@ -37,16 +55,28 @@ const DATA: &str = "d";
 const HEAD: &str = "h";
 const TAIL: &str = "t";
 
-fn parse_string(v: &AttributeValue) -> anyhow::Result<String> {
+fn parse_key(v: &AttributeValue) -> anyhow::Result<String> {
     let s = v.as_s().map_err(|e| anyhow!("non_string attr: {e:?}"))?;
     Ok(s.to_owned())
 }
-fn format_string(v: &str) -> AttributeValue {
+fn format_key(v: &str) -> AttributeValue {
     AttributeValue::S(v.to_string())
 }
 
-fn format_offset(value: Option<SeqNo>) -> AttributeValue {
-    AttributeValue::N(value.map_or("-1".to_string(), |v| v.0.to_string()))
+fn format_offset(value: Offset) -> AttributeValue {
+    let value = match value {
+        Offset::Init => "-1".to_string(),
+        Offset::Entry(seqno) => seqno.0.to_string(),
+    };
+    AttributeValue::N(value)
+}
+
+fn parse_offset(v: &AttributeValue) -> anyhow::Result<Offset> {
+    if v.as_n().is_ok_and(|s| s == "-1") {
+        Ok(Offset::Init)
+    } else {
+        parse_seqno(v).map(Offset::Entry)
+    }
 }
 
 fn parse_seqno(v: &AttributeValue) -> anyhow::Result<SeqNo> {
@@ -83,11 +113,14 @@ fn parse_attr<T>(
     parse(attr)
 }
 
-fn parse_state(hash: &AttrMap) -> anyhow::Result<State> {
-    Ok(State {
+fn parse_state(hash: &Option<AttrMap>) -> anyhow::Result<Option<State>> {
+    let Some(hash) = hash else {
+        return Ok(None);
+    };
+    Ok(Some(State {
         head: parse_attr(hash, HEAD, parse_seqno)?,
         tail: parse_attr(hash, TAIL, parse_seqno)?,
-    })
+    }))
 }
 
 fn parse_entry(hash: &AttrMap) -> anyhow::Result<VersionedData> {
@@ -150,10 +183,24 @@ impl From<UpdateItemError> for ExternalError {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct State {
     head: SeqNo,
     tail: SeqNo,
+}
+
+impl State {
+    // /// Update the cache after successfully observing the head.
+    // fn observe_head(&mut self, next_head: Offset) {
+    //     self.head = self.head.max(next_head);
+    // }
+    //
+    // /// Update the cache after successfully observing the tail.
+    // fn observe_tail(&mut self, next_tail: Offset) {
+    //     self.tail = self.tail.max(next_tail);
+    //     // By construction, the tail cannot be any larger than the head.
+    //     self.head = self.head.max(next_tail);
+    // }
 }
 
 /// Dynamodb-backed consensus.
@@ -161,6 +208,7 @@ struct State {
 pub struct DynamoConsensus {
     client: aws_sdk_dynamodb::Client,
     table_name: String,
+    pointers: Arc<Mutex<BTreeMap<String, State>>>,
 }
 
 impl DynamoConsensus {
@@ -188,7 +236,11 @@ impl DynamoConsensus {
             .strip_prefix('/')
             .expect("path validation")
             .to_string();
-        let this = Self { client, table_name };
+        let this = Self {
+            client,
+            table_name,
+            pointers: Arc::new(Mutex::new(BTreeMap::new())),
+        };
 
         let result = this
             .client
@@ -242,16 +294,33 @@ impl DynamoConsensus {
 
     fn consumed_capacity(&self, cap: Option<ConsumedCapacity>) {}
 
+    fn cached_state(&self, key: &str) -> Option<State> {
+        self.pointers.lock().unwrap().get(key).copied()
+    }
+
+    fn update_cached_state(&self, key: &str, state: Option<State>) {
+        let Some(state) = state else { return };
+        let mut guard = self.pointers.lock().unwrap();
+        guard
+            .entry(key.to_string())
+            .and_modify(|old| {
+                if old.head <= state.head && old.tail <= state.tail {
+                    *old = state;
+                }
+            })
+            .or_insert(state);
+    }
+
     async fn get(
         &self,
         key: &str,
-        offset: Option<SeqNo>,
+        offset: Offset,
         mut builder: impl FnMut(GetItemFluentBuilder) -> GetItemFluentBuilder,
     ) -> anyhow::Result<Option<AttrMap>> {
         let get = self.client.get_item();
         let get = builder(get)
             .table_name(&self.table_name)
-            .key(KEY, format_string(key))
+            .key(KEY, format_key(key))
             .key(OFFSET, format_offset(offset))
             .consistent_read(true)
             .send()
@@ -265,15 +334,14 @@ impl DynamoConsensus {
     async fn put(
         &self,
         key: &str,
-        offset: Option<SeqNo>,
+        offset: Offset,
         mut builder: impl FnMut(PutItemFluentBuilder) -> PutItemFluentBuilder,
     ) -> anyhow::Result<CaSResult> {
         let put = self.client.put_item();
         let put = builder(put)
             .table_name(&self.table_name)
-            .item(KEY, format_string(key))
+            .item(KEY, format_key(key))
             .item(OFFSET, format_offset(offset))
-            .return_values(ReturnValue::AllOld)
             .send()
             .await;
 
@@ -293,41 +361,42 @@ impl DynamoConsensus {
     async fn update(
         &self,
         key: &str,
-        offset: Option<SeqNo>,
+        offset: Offset,
         mut builder: impl FnMut(UpdateItemFluentBuilder) -> UpdateItemFluentBuilder,
     ) -> anyhow::Result<Option<AttrMap>> {
         let put = self.client.update_item();
         let put = builder(put)
             .table_name(&self.table_name)
-            .key(KEY, format_string(key))
+            .key(KEY, format_key(key))
             .key(OFFSET, format_offset(offset))
             .return_values(ReturnValue::AllNew)
+            .return_values_on_condition_check_failure(ReturnValuesOnConditionCheckFailure::AllOld)
             .send()
             .await;
 
-        let update = match put {
-            Ok(result) => result,
-            Err(SdkError::ServiceError(s)) if s.err().is_conditional_check_failed_exception() => {
-                return Ok(None);
+        match put {
+            Ok(out) => {
+                self.consumed_capacity(out.consumed_capacity);
+                Ok(out.attributes)
             }
-            Err(e) => return Err(e.into()),
-        };
-
-        self.consumed_capacity(update.consumed_capacity);
-
-        Ok(update.attributes)
+            Err(SdkError::ServiceError(s)) => match s.into_err() {
+                UpdateItemError::ConditionalCheckFailedException(e) => dbg!(Ok(e.item)),
+                e => Err(e.into()),
+            },
+            Err(e) => Err(e.into()),
+        }
     }
 
     async fn delete(
         &self,
         key: &str,
-        offset: Option<SeqNo>,
+        offset: Offset,
         mut builder: impl FnMut(DeleteItemFluentBuilder) -> DeleteItemFluentBuilder,
     ) -> anyhow::Result<Option<AttrMap>> {
         let delete = self.client.delete_item();
         let delete = builder(delete)
             .table_name(&self.table_name)
-            .key(KEY, format_string(key))
+            .key(KEY, format_key(key))
             .key(OFFSET, format_offset(offset))
             .return_values(ReturnValue::AllNew)
             .send()
@@ -347,44 +416,52 @@ impl DynamoConsensus {
     }
 
     async fn get_state(&self, key: &str) -> Result<Option<State>, ExternalError> {
-        let attrs = self.get(key, None, |b| b).await?;
-        let Some(attrs) = attrs else {
-            return Ok(None);
-        };
-        Ok(Some(parse_state(&attrs)?))
+        let attrs = self.get(key, Offset::Init, |b| b).await?;
+        let state = parse_state(&attrs)?;
+        self.update_cached_state(key, state);
+        Ok(state)
     }
 
-    async fn put_state(
-        &self,
-        key: &str,
-        prev: Option<State>,
-        new: State,
-    ) -> Result<CaSResult, ExternalError> {
-        let result = self
-            .put(key, None, |b| {
-                let b = b
-                    .item(HEAD, format_seqno(new.head))
-                    .item(TAIL, format_seqno(new.tail));
-                if let Some(prev) = &prev {
-                    b.expression_attribute_values(format!(":{HEAD}"), format_seqno(prev.head))
-                        .expression_attribute_values(format!(":{TAIL}"), format_seqno(prev.tail))
-                        .condition_expression(format!("{HEAD} = :{HEAD} AND {TAIL} = :{TAIL}",))
-                } else {
-                    b.condition_expression(format!(
-                        "attribute_not_exists({}) AND attribute_not_exists({})",
-                        KEY, OFFSET
+    async fn update_head(&self, key: &str, new: SeqNo) -> anyhow::Result<Option<State>> {
+        let updated = self
+            .update(key, Offset::Init, |b| match new.previous() {
+                None => b
+                    .condition_expression(format!(
+                        "attribute_not_exists({HEAD}) AND attribute_not_exists({TAIL})"
                     ))
-                }
+                    .update_expression(format!("SET {HEAD}=:n, {TAIL}=:n"))
+                    .expression_attribute_values(":n", format_seqno(new)),
+                Some(prev) => b
+                    .condition_expression(format!("{HEAD} = :p"))
+                    .update_expression(format!("SET {HEAD}=:n"))
+                    .expression_attribute_values(":p", format_seqno(prev))
+                    .expression_attribute_values(":n", format_seqno(new)),
             })
             .await?;
 
-        Ok(result)
+        let state = parse_state(&updated)?;
+        self.update_cached_state(key, state);
+        Ok(state)
+    }
+
+    async fn update_tail(&self, key: &str, new: SeqNo) -> anyhow::Result<Option<State>> {
+        let attrs = self
+            .update(key, Offset::Init, |b| {
+                b.condition_expression(format!("{HEAD} >= :t AND {TAIL} < :t"))
+                    .update_expression(format!("SET {TAIL}=:t"))
+                    .expression_attribute_values(":t", format_seqno(new))
+            })
+            .await?;
+
+        let state = parse_state(&attrs)?;
+        self.update_cached_state(key, state);
+        Ok(state)
     }
 
     fn scan(
         &self,
         mut builder: impl FnMut(ScanFluentBuilder) -> ScanFluentBuilder,
-    ) -> impl Stream<Item = anyhow::Result<Vec<HashMap<String, AttributeValue>>>> {
+    ) -> impl Stream<Item = anyhow::Result<Vec<AttrMap>>> {
         async_stream::try_stream! {
             let mut last_key = None;
             loop {
@@ -436,13 +513,13 @@ impl Consensus for DynamoConsensus {
         let scan = self.scan(|b| {
             b.projection_expression(format!("{}", KEY))
                 .filter_expression(format!("{OFFSET} = :{OFFSET}"))
-                .expression_attribute_values(format!(":{OFFSET}"), format_offset(None))
+                .expression_attribute_values(format!(":{OFFSET}"), format_offset(Offset::Init))
         });
 
         Box::pin(async_stream::try_stream! {
             for await result in scan {
                 for item in result? {
-                    let key: String = parse_attr(&item, KEY, parse_string)?;
+                    let key: String = parse_attr(&item, KEY, parse_key)?;
                     yield key;
                 }
             }
@@ -450,14 +527,35 @@ impl Consensus for DynamoConsensus {
     }
 
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
-        let state = self.get_state(key).await?;
-        let Some(state) = state else {
-            return Ok(None);
-        };
-        let Some(attrs) = self.get(key, Some(state.head), |b| b).await? else {
-            return Ok(None);
-        };
-        Ok(Some(parse_entry(&attrs)?))
+        // Similar to `scan`, this code is a little tricky...
+        // the obvious thing to do is to fetch the state, then fetch whatever's at the head
+        // pointer, but we risk returning the wrong answer if it's been truncated away in
+        // between. Instead, we fetch the data first and then the state, using our state cache
+        // for our initial guess and looping if the data's missing or doesn't match.
+        let mut candidate_state = None;
+        loop {
+            // Fetch the log entry, then the state.
+            let fetch_state = candidate_state.or_else(|| self.cached_state(key));
+            let attrs = match fetch_state {
+                Some(state) => self.get(key, Offset::Entry(state.head), |b| b).await?,
+                None => None,
+            };
+            let Some(state) = self.get_state(key).await? else {
+                // Easy: log doesn't exist; nothing to return.
+                return Ok(None);
+            };
+            let Some(attrs) = attrs else {
+                continue;
+            };
+            let entry = parse_entry(&attrs)?;
+            if entry.seqno < state.tail {
+                candidate_state = None;
+            }
+            let candidate_state = *candidate_state.get_or_insert(state);
+            if candidate_state.head == entry.seqno {
+                return Ok(Some(entry));
+            }
+        }
     }
 
     async fn compare_and_set(
@@ -470,17 +568,32 @@ impl Consensus for DynamoConsensus {
                 Determinate::new(anyhow!("unreasonably large seqno: {}", new.seqno)).into(),
             );
         }
-        let previous_state = self.get_state(key).await?;
-        let next_head = previous_state
-            .as_ref()
-            .map_or(SeqNo::minimum(), |s| s.head.next());
 
-        if new.seqno != next_head {
-            return Ok(CaSResult::ExpectationMismatch);
+        let cached_offsets = self.cached_state(key);
+        let cached_next = cached_offsets.map_or(SeqNo::minimum(), |s| s.head.next());
+        match cached_next.cmp(&new.seqno) {
+            Ordering::Less => {
+                // Either our cache is stale (likely) or the caller is trying to skip sequence numbers
+                // (possible but unusual). Fetch the latest head from the database to check.
+                // TODO: we don't need to fetch the data here, just the next pointer.
+                let state = self.get_state(key).await?;
+                let next = state.map_or(SeqNo::minimum(), |s| s.head.next());
+                if next != new.seqno {
+                    return Ok(CaSResult::ExpectationMismatch);
+                }
+            }
+            Ordering::Equal => {
+                // Great - the last offset we observed is exactly the one we expected.
+            }
+            Ordering::Greater => {
+                // We've already seen a seqno bigger than this; this data can never be appended.
+                // Bail early.
+                return Ok(CaSResult::ExpectationMismatch);
+            }
         }
 
         let data_result = self
-            .put(key, Some(new.seqno), |b| {
+            .put(key, Offset::Entry(new.seqno), |b| {
                 b.item(DATA, format_data(&new.data))
                     .condition_expression(format!(
                         "attribute_not_exists({KEY}) AND attribute_not_exists({OFFSET})",
@@ -488,51 +601,22 @@ impl Consensus for DynamoConsensus {
             })
             .await?;
 
-        let tail = match &previous_state {
-            Some(previous_state) => previous_state.tail,
-            None => SeqNo::minimum(),
-        };
+        let state_result = self.update_head(key, new.seqno).await?;
 
-        let state_result = self
-            .put_state(
-                key,
-                previous_state,
-                State {
-                    head: new.seqno,
-                    tail,
-                },
-            )
-            .await?;
+        if data_result == CaSResult::ExpectationMismatch {
+            return Ok(CaSResult::ExpectationMismatch);
+        }
 
-        // There are three possible cases here:
-        // - We are the first to insert this seqno into the log. This is good!
-        // - Someone else has claimed this seqno, and we will fail. (But we will still try and update
-        //   the head pointer, in case whoever claimed it didn't manage to.)
-        // - We're so out of date that this entry was truncated away, which is why we were able to
-        //   claim it.
-        let result = match (data_result, state_result) {
-            (CaSResult::Committed, CaSResult::Committed) => {
-                // We were the first to append, and successfully updated the state... the good case!
-                CaSResult::Committed
+        match state_result {
+            None => Err(anyhow!("just-incremented state should not be none").into()),
+            Some(state) => {
+                if new.seqno < state.tail {
+                    Err(anyhow!("truncated past the inserted record: must retry").into())
+                } else {
+                    Ok(CaSResult::Committed)
+                }
             }
-            (CaSResult::ExpectationMismatch, CaSResult::Committed) => {
-                // Someone else did the append, and we committed their append. Nice of us, but
-                // this specific operation is a failure.
-                CaSResult::ExpectationMismatch
-            }
-            (CaSResult::Committed, CaSResult::ExpectationMismatch) => {
-                // Dang! This means that we wrote successfully, but the head pointer was no longer
-                // where we expected. This implies that the world has moved along without us...
-                // TODO: delete the useless write.
-                CaSResult::ExpectationMismatch
-            }
-            (CaSResult::ExpectationMismatch, CaSResult::ExpectationMismatch) => {
-                // Utter failure: we neither appended successfully nor updated the state.
-                CaSResult::ExpectationMismatch
-            }
-        };
-
-        Ok(result)
+        }
     }
 
     async fn scan(
@@ -541,67 +625,83 @@ impl Consensus for DynamoConsensus {
         from: SeqNo,
         limit: usize,
     ) -> Result<Vec<VersionedData>, ExternalError> {
-        let scan = self.query(|b| {
-            b.key_condition_expression(format!("{KEY} = :{KEY} AND {OFFSET} >= :{OFFSET}"))
-                .expression_attribute_values(format!(":{KEY}"), format_string(key))
-                .expression_attribute_values(format!(":{OFFSET}"), format_offset(Some(from)))
-        });
-
-        let mut result = Vec::with_capacity(limit.min(1000));
-        let mut scan = pin!(scan);
-
-        while let Some(items) = scan.next().await {
-            for item in items? {
-                if result.len() == limit {
-                    break;
-                }
-                result.push(parse_entry(&item)?);
-            }
+        if limit == 0 {
+            return Ok(vec![]);
         }
 
-        let Some(state) = self.get_state(key).await? else {
-            return Ok(vec![]);
-        };
-        dbg!(&state, from, limit);
-        result.retain(|d| d.seqno >= state.tail);
-        result.truncate(limit);
+        // Scan is a little tricky, largely because we can't do a transactional read of many entries
+        // - we have to stream them in - and because we can't trust data that is from before the tail.
+        let mut result = Vec::with_capacity(limit.min(128));
+        let mut continue_from = from;
+        let mut continue_to = None;
+        'scan: loop {
+            let limit_remaining = limit - result.len();
+            let fetch_limit = limit_remaining
+                .clamp(1, 1024)
+                .try_into()
+                .expect("constant upper bound");
+            let query = self
+                .client
+                .query()
+                .table_name(&self.table_name)
+                .consistent_read(true)
+                .key_condition_expression(format!("{KEY} = :k AND {OFFSET} >= :o"))
+                .expression_attribute_values(":k", format_key(key))
+                .expression_attribute_values(":o", format_offset(Offset::Entry(from)))
+                .limit(fetch_limit)
+                .send()
+                .await
+                .context("scan query")?;
+            let Some(latest_state) = self.get_state(key).await? else {
+                return Ok(vec![]);
+            };
+            if latest_state.head < from {
+                // The caller is scanning starting from past the head! That's empty for sure.
+                return Ok(vec![]);
+            }
+
+            if continue_from < latest_state.tail {
+                // There's a gap in the log - we've truncated past this point already.
+                // Drop the current results and continue from the new tail.
+                result.clear();
+                continue_from = latest_state.tail;
+                continue_to = None;
+            }
+
+            // We only need to fetch and parse data that's not past the target upper bound.
+            let continue_to = continue_to.get_or_insert(latest_state.head);
+
+            for item in query.items.unwrap_or_default() {
+                let entry = parse_entry(&item)?;
+                let seqno = entry.seqno;
+                if seqno < continue_from {
+                    continue;
+                }
+                result.push(entry);
+                if seqno >= *continue_to || result.len() == limit {
+                    break 'scan;
+                }
+                continue_from = seqno.next();
+            }
+        }
 
         Ok(result)
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
-        let state = self
-            .get_state(key)
-            .await?
-            .ok_or_else(|| anyhow!("truncating empty state: {}", key))?;
+        let state = self.update_tail(key, seqno).await?;
 
-        if state.head < seqno {
-            return Err(ExternalError::Determinate(
-                anyhow!(
-                    "attempted to truncate {key} to {seqno}, which is before head: {}",
-                    state.head,
-                )
-                .into(),
-            ));
-        }
-
-        if state.tail >= seqno {
-            return Ok(Some(0));
-        }
-
-        let mut new_state = state.clone();
-        new_state.tail = seqno;
-
-        match self.put_state(key, Some(state), new_state).await? {
-            CaSResult::ExpectationMismatch => {
-                return Err(Determinate::new(anyhow!("conflict")).into());
+        match state {
+            None => Err(anyhow!("attempted to truncate an empty state").into()),
+            Some(state) => {
+                if state.head < seqno {
+                    Err(anyhow!("attempted to truncate past the head").into())
+                } else {
+                    // TODO: actually truncate away data.
+                    Ok(None)
+                }
             }
-            CaSResult::Committed => {}
         }
-
-        // TODO: actual deletes!
-
-        Ok(None)
     }
 }
 
