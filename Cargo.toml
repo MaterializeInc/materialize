@@ -265,7 +265,7 @@ edition = "2024"
 rust-version = "1.89.0"
 
 [profile.dev]
-split-debuginfo = "unpacked"
+split-debuginfo = "packed"
 
 [profile.dev.package]
 # Compile the backtrace crate and its dependencies with all optimizations, even
@@ -302,6 +302,7 @@ debug = 2
 
 [profile.optimized]
 inherits = "release"
+split-debuginfo = "packed"
 lto = "off"
 debug = 1
 incremental = true
