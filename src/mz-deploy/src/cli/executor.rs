@@ -186,8 +186,7 @@ impl ApplyPlan {
         executor
             .prepare_databases_and_schemas(planned_project, &new_schemas, None)
             .await?;
-        self.setup_statements
-            .extend(executor.take_statements());
+        self.setup_statements.extend(executor.take_statements());
         self.prepared_schemas.extend(new_schemas);
         Ok(())
     }
@@ -211,22 +210,20 @@ impl ApplyPlan {
         for phase in &self.phases {
             for obj in &phase.results {
                 for sql in &obj.redacted_statements {
-                    client
-                        .execute(sql, &[])
-                        .await
-                        .map_err(|source| CliError::SqlExecutionFailed {
+                    client.execute(sql, &[]).await.map_err(|source| {
+                        CliError::SqlExecutionFailed {
                             statement: "[REDACTED — contains secret value]".to_string(),
                             source,
-                        })?;
+                        }
+                    })?;
                 }
                 for sql in &obj.statements {
-                    client
-                        .execute(sql, &[])
-                        .await
-                        .map_err(|source| CliError::SqlExecutionFailed {
+                    client.execute(sql, &[]).await.map_err(|source| {
+                        CliError::SqlExecutionFailed {
                             statement: sql.clone(),
                             source,
-                        })?;
+                        }
+                    })?;
                 }
             }
         }

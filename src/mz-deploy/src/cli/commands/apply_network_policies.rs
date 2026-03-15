@@ -2,7 +2,9 @@
 
 use crate::cli::CliError;
 use crate::cli::commands::grants;
-use crate::cli::executor::{ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult};
+use crate::cli::executor::{
+    ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult,
+};
 use crate::client::Client;
 use crate::config::Settings;
 use crate::project::network_policies::{self, NetworkPolicyDefinition};

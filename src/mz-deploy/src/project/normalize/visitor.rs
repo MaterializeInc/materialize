@@ -562,12 +562,14 @@ impl<'a> NormalizingVisitor<StagingTransformer<'a>> {
         suffix: String,
         external_dependencies: &'a std::collections::BTreeSet<ObjectId>,
         objects_to_deploy: Option<&'a std::collections::BTreeSet<ObjectId>>,
+        replacement_objects: &'a std::collections::BTreeSet<ObjectId>,
     ) -> Self {
         Self::new(StagingTransformer::new(
             fqn,
             suffix,
             external_dependencies,
             objects_to_deploy,
+            replacement_objects,
         ))
     }
 }

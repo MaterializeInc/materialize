@@ -1,9 +1,9 @@
 //! Apply sources command - create sources that don't exist in the database.
 
+use crate::cli::CliError;
 use crate::cli::commands::apply_objects::{self, DatabaseObjectPhase};
 use crate::cli::commands::grants;
 use crate::cli::executor::{ApplyPlan, ApplyResult, DeploymentExecutor};
-use crate::cli::CliError;
 use crate::client::Client;
 use crate::config::Settings;
 use crate::project;

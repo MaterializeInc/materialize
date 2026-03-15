@@ -818,8 +818,7 @@ async fn run(args: Args) -> Result<(), CliError> {
                 Ok(())
             }
             None => {
-                let plan =
-                    cli::commands::apply_all::run(&settings, skip_secrets, dry_run).await?;
+                let plan = cli::commands::apply_all::run(&settings, skip_secrets, dry_run).await?;
                 log::output(&plan);
                 Ok(())
             }

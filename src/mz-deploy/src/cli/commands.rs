@@ -47,8 +47,8 @@ pub type ObjectRef<'a> = (
 pub mod abort;
 pub mod apply_all;
 pub mod apply_connections;
-pub mod apply_objects;
 pub mod apply_network_policies;
+pub mod apply_objects;
 pub mod apply_secrets;
 pub mod apply_sources;
 pub mod apply_tables;

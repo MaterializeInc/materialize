@@ -5,9 +5,11 @@
 //! trait captures these differences so each module is a small, self-documenting
 //! impl while [`plan`] and [`run`] handle all shared orchestration.
 
-use crate::cli::commands::grants;
-use crate::cli::executor::{ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult};
 use crate::cli::CliError;
+use crate::cli::commands::grants;
+use crate::cli::executor::{
+    ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult,
+};
 use crate::client::Client;
 use crate::config::Settings;
 use crate::project;
@@ -205,8 +207,14 @@ pub async fn run<K: DatabaseObjectPhase>(
 
     let mut apply_plan = ApplyPlan::new();
     let executor = DeploymentExecutor::new_dry_run(&client);
-    let phase =
-        plan::<K>(settings, &client, &executor, &planned_project, &mut apply_plan).await?;
+    let phase = plan::<K>(
+        settings,
+        &client,
+        &executor,
+        &planned_project,
+        &mut apply_plan,
+    )
+    .await?;
     apply_plan.add_phase(phase);
 
     if !dry_run {

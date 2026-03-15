@@ -136,6 +136,14 @@ pub enum CliError {
     #[error("deployment '{name}' is failing due to cluster health issues")]
     DeploymentFailing { name: String },
 
+    /// Cannot add new objects to an existing stable schema during incremental deployment
+    #[error("cannot add new objects to existing stable schema '{database}.{schema}'")]
+    NewObjectInExistingStableSchema {
+        database: String,
+        schema: String,
+        objects: Vec<String>,
+    },
+
     /// Secret resolution failed
     #[error("failed to resolve secret '{secret_name}': {source}")]
     SecretResolution {
@@ -314,6 +322,27 @@ impl CliError {
                 "check that environment variables are set and function arguments are string literals"
                     .to_string(),
             ),
+            Self::NewObjectInExistingStableSchema { objects, .. } => {
+                let object_list = objects
+                    .iter()
+                    .take(5)
+                    .map(|obj| format!("  - {}", obj.yellow()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let more = if objects.len() > 5 {
+                    format!("\n  ... and {} more", objects.len() - 5)
+                } else {
+                    String::new()
+                };
+                Some(format!(
+                    "the following new objects cannot be added during incremental deployment:\n{}{}\n\n\
+                     To add new objects, either:\n  \
+                     - Place them in a new schema (new schemas deploy via blue-green swap)\n  \
+                     - Deploy them separately before modifying existing objects in the same schema",
+                    object_list,
+                    more,
+                ))
+            }
             Self::Config(_) | Self::Validation(_) | Self::Types(_) | Self::DeploymentSnapshot(_) | Self::Dependency(_) => {
                 // These errors provide their own context via transparent wrapping
                 None

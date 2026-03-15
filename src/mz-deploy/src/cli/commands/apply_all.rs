@@ -39,34 +39,19 @@ pub async fn run(
         plan.add_phase(phase);
     }
 
-    let phase = super::apply_connections::plan(
-        settings,
-        &client,
-        &executor,
-        &planned_project,
-        &mut plan,
-    )
-    .await?;
+    let phase =
+        super::apply_connections::plan(settings, &client, &executor, &planned_project, &mut plan)
+            .await?;
     plan.add_phase(phase);
 
-    let phase = super::apply_sources::plan(
-        settings,
-        &client,
-        &executor,
-        &planned_project,
-        &mut plan,
-    )
-    .await?;
+    let phase =
+        super::apply_sources::plan(settings, &client, &executor, &planned_project, &mut plan)
+            .await?;
     plan.add_phase(phase);
 
-    let phase = super::apply_tables::plan(
-        settings,
-        &client,
-        &executor,
-        &planned_project,
-        &mut plan,
-    )
-    .await?;
+    let phase =
+        super::apply_tables::plan(settings, &client, &executor, &planned_project, &mut plan)
+            .await?;
     plan.add_phase(phase);
 
     if !dry_run {

@@ -20,6 +20,16 @@ pub trait NameTransformer {
     /// to the strategy. The input may be partially qualified (1, 2, or 3 parts).
     fn transform_name(&self, name: &UnresolvedItemName) -> UnresolvedItemName;
 
+    /// Transform the object's own name (the name in the CREATE statement).
+    ///
+    /// By default, delegates to `transform_name`. Override to apply different
+    /// rules for the object being created vs. references to other objects.
+    /// For example, the staging transformer always suffixes the object's own
+    /// schema even when it is a replacement object.
+    fn transform_own_name(&self, name: &UnresolvedItemName) -> UnresolvedItemName {
+        self.transform_name(name)
+    }
+
     /// Get the database name from the transformer's FQN context.
     fn database_name(&self) -> &str;
 }
@@ -148,6 +158,7 @@ pub struct StagingTransformer<'a> {
     staging_suffix: String,
     external_dependencies: &'a std::collections::BTreeSet<ObjectId>,
     objects_to_deploy: Option<&'a std::collections::BTreeSet<ObjectId>>,
+    replacement_objects: &'a std::collections::BTreeSet<ObjectId>,
 }
 
 impl<'a> StagingTransformer<'a> {
@@ -163,12 +174,14 @@ impl<'a> StagingTransformer<'a> {
         staging_suffix: String,
         external_dependencies: &'a std::collections::BTreeSet<ObjectId>,
         objects_to_deploy: Option<&'a std::collections::BTreeSet<ObjectId>>,
+        replacement_objects: &'a std::collections::BTreeSet<ObjectId>,
     ) -> Self {
         Self {
             fqn,
             staging_suffix,
             external_dependencies,
             objects_to_deploy,
+            replacement_objects,
         }
     }
 
@@ -207,6 +220,12 @@ impl<'a> StagingTransformer<'a> {
 
         // Check if it's in the external dependencies
         if self.external_dependencies.contains(&object_id) {
+            return true;
+        }
+
+        // Replacement objects are deployed in-place (not to staging schemas),
+        // so references to them should never be suffixed.
+        if self.replacement_objects.contains(&object_id) {
             return true;
         }
 
@@ -261,6 +280,39 @@ impl<'a> NameTransformer for StagingTransformer<'a> {
                 // Invalid - return as-is
                 name.clone()
             }
+        }
+    }
+
+    /// Always suffix the object's own name, even for replacement objects.
+    ///
+    /// During staging, the object being created must always go into the staging
+    /// schema (e.g., `core_v1`). The `is_external` check for replacement objects
+    /// only applies to *references* to other objects — not to the object's own
+    /// CREATE statement name.
+    fn transform_own_name(&self, name: &UnresolvedItemName) -> UnresolvedItemName {
+        match name.0.len() {
+            1 => {
+                let object = name.0[0].clone();
+                let database = Ident::new(self.fqn.database()).expect("valid database identifier");
+                let staging_schema = format!("{}{}", self.fqn.schema(), self.staging_suffix);
+                let schema = Ident::new(&staging_schema).expect("valid schema identifier");
+                UnresolvedItemName(vec![database, schema, object])
+            }
+            2 => {
+                let schema_name = format!("{}{}", name.0[0], self.staging_suffix);
+                let schema = Ident::new(&schema_name).expect("valid schema identifier");
+                let object = name.0[1].clone();
+                let database = Ident::new(self.fqn.database()).expect("valid database identifier");
+                UnresolvedItemName(vec![database, schema, object])
+            }
+            3 => {
+                let database = name.0[0].clone();
+                let schema_name = format!("{}{}", name.0[1], self.staging_suffix);
+                let schema = Ident::new(&schema_name).expect("valid schema identifier");
+                let object = name.0[2].clone();
+                UnresolvedItemName(vec![database, schema, object])
+            }
+            _ => name.clone(),
         }
     }
 

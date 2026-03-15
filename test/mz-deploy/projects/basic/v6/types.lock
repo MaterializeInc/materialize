@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "objects": {
+    "app.ingest.orders": {
+      "amount": {
+        "type": "numeric",
+        "nullable": true
+      },
+      "order_id": {
+        "type": "integer",
+        "nullable": false
+      },
+      "status": {
+        "type": "text",
+        "nullable": true
+      },
+      "user_id": {
+        "type": "integer",
+        "nullable": true
+      }
+    },
+    "app.ingest.users": {
+      "email": {
+        "type": "text",
+        "nullable": true
+      },
+      "name": {
+        "type": "text",
+        "nullable": true
+      },
+      "user_id": {
+        "type": "integer",
+        "nullable": false
+      }
+    }
+  }
+}

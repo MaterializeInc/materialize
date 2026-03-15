@@ -84,9 +84,7 @@ fn build_grant_target(
 ) -> GrantTargetSpecification<Raw> {
     GrantTargetSpecification::Object {
         object_type,
-        object_spec_inner: GrantTargetSpecificationInner::Objects {
-            names: vec![name],
-        },
+        object_spec_inner: GrantTargetSpecificationInner::Objects { names: vec![name] },
     }
 }
 
@@ -491,8 +489,7 @@ mod tests {
         desired.insert(("reader".to_string(), "USAGE".to_string()));
 
         let target = cluster_target("my_cluster");
-        let revocations =
-            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let revocations = stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         assert!(revocations.is_empty());
     }
 
@@ -506,8 +503,7 @@ mod tests {
         desired.insert(("reader".to_string(), "USAGE".to_string()));
 
         let target = cluster_target("my_cluster");
-        let revocations =
-            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let revocations = stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         let strings = to_strings(&revocations);
         assert_eq!(strings.len(), 1);
         assert_eq!(
@@ -522,14 +518,10 @@ mod tests {
         let desired = BTreeSet::new();
 
         let target = table_target("db", "public", "t");
-        let revocations =
-            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let revocations = stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         let strings = to_strings(&revocations);
         assert_eq!(strings.len(), 1);
-        assert_eq!(
-            strings[0],
-            "REVOKE USAGE ON TABLE db.public.t FROM reader"
-        );
+        assert_eq!(strings[0], "REVOKE USAGE ON TABLE db.public.t FROM reader");
     }
 
     #[test]
@@ -538,16 +530,14 @@ mod tests {
         desired.insert(("reader".to_string(), "USAGE".to_string()));
 
         let target = cluster_target("my_cluster");
-        let revocations =
-            stale_grant_revocations(&[], &desired, &BTreeSet::new(), &target);
+        let revocations = stale_grant_revocations(&[], &desired, &BTreeSet::new(), &target);
         assert!(revocations.is_empty());
     }
 
     #[test]
     fn test_stale_grant_revocations_both_empty() {
         let target = secret_target("db", "public", "s");
-        let revocations =
-            stale_grant_revocations(&[], &BTreeSet::new(), &BTreeSet::new(), &target);
+        let revocations = stale_grant_revocations(&[], &BTreeSet::new(), &BTreeSet::new(), &target);
         assert!(revocations.is_empty());
     }
 
@@ -559,8 +549,7 @@ mod tests {
         desired.insert(("reader".to_string(), "USAGE".to_string()));
 
         let target = cluster_target("my_cluster");
-        let revocations =
-            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let revocations = stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         assert!(revocations.is_empty());
     }
 
@@ -574,8 +563,7 @@ mod tests {
         let desired = BTreeSet::new(); // All grants removed
 
         let target = cluster_target("my_cluster");
-        let revocations =
-            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let revocations = stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         assert_eq!(revocations.len(), 3);
     }
 
@@ -585,8 +573,7 @@ mod tests {
         let desired = BTreeSet::new();
 
         let target = network_policy_target("my_policy");
-        let revocations =
-            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let revocations = stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         let strings = to_strings(&revocations);
         assert_eq!(strings.len(), 1);
         assert_eq!(
@@ -601,8 +588,7 @@ mod tests {
         let desired = BTreeSet::new();
 
         let target = connection_target("db", "public", "my_conn");
-        let revocations =
-            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let revocations = stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         let strings = to_strings(&revocations);
         assert_eq!(strings.len(), 1);
         assert_eq!(
@@ -617,8 +603,7 @@ mod tests {
         let desired = BTreeSet::new();
 
         let target = secret_target("db", "public", "my_secret");
-        let revocations =
-            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let revocations = stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         let strings = to_strings(&revocations);
         assert_eq!(strings.len(), 1);
         assert_eq!(
@@ -633,8 +618,7 @@ mod tests {
         let desired = BTreeSet::new();
 
         let target = source_target("db", "public", "my_source");
-        let revocations =
-            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let revocations = stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         let strings = to_strings(&revocations);
         assert_eq!(strings.len(), 1);
         assert_eq!(
@@ -656,8 +640,7 @@ mod tests {
         protected.insert(("reader".to_string(), "SELECT".to_string()));
 
         let target = table_target("db", "public", "t");
-        let revocations =
-            stale_grant_revocations(&current, &desired, &protected, &target);
+        let revocations = stale_grant_revocations(&current, &desired, &protected, &target);
         let strings = to_strings(&revocations);
         assert_eq!(strings.len(), 1);
         assert!(strings[0].contains("writer"));
@@ -675,8 +658,7 @@ mod tests {
         let current = vec![make_object_grant("reader", "USAGE")];
 
         let target = cluster_target("my_cluster");
-        let revocations =
-            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let revocations = stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         assert!(revocations.is_empty());
     }
 
@@ -691,8 +673,7 @@ mod tests {
         ];
 
         let target = cluster_target("my_cluster");
-        let revocations =
-            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let revocations = stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         let strings = to_strings(&revocations);
         assert_eq!(strings.len(), 1);
         assert!(strings[0].contains("writer"));
@@ -709,8 +690,7 @@ mod tests {
         ];
 
         let target = cluster_target("my_cluster");
-        let revocations =
-            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let revocations = stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         assert_eq!(revocations.len(), 2);
     }
 
@@ -725,8 +705,7 @@ mod tests {
         ];
 
         let target = cluster_target("my_cluster");
-        let revocations =
-            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let revocations = stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         assert!(revocations.is_empty());
     }
 
@@ -742,8 +721,7 @@ mod tests {
         ];
 
         let target = cluster_target("my_cluster");
-        let revocations =
-            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let revocations = stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         let strings = to_strings(&revocations);
         assert_eq!(strings.len(), 1);
         assert!(strings[0].contains("reader"));
@@ -764,8 +742,7 @@ mod tests {
         ];
 
         let target = cluster_target("c");
-        let revocations =
-            stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        let revocations = stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         let strings = to_strings(&revocations);
         assert_eq!(strings.len(), 1);
         assert!(strings[0].contains("admin"));

@@ -1,7 +1,9 @@
 //! Roles apply command - converge live role state to match definitions.
 
 use crate::cli::CliError;
-use crate::cli::executor::{ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult};
+use crate::cli::executor::{
+    ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult,
+};
 use crate::client::Client;
 use crate::client::quote_identifier;
 use crate::config::Settings;

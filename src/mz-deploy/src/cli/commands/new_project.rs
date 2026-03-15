@@ -87,9 +87,17 @@ fn scaffold(project_dir: &Path, name: &str, opts: &ScaffoldOpts) -> Result<(), C
     add_file(project_dir, "CLAUDE.md", AGENT_MD)?;
     add_file(project_dir, ".github/workflows/test.yml", WORKFLOW_TEST)?;
     add_file(project_dir, ".github/workflows/stage.yml", WORKFLOW_STAGE)?;
-    add_file(project_dir, ".github/workflows/hydration.yml", WORKFLOW_HYDRATION)?;
+    add_file(
+        project_dir,
+        ".github/workflows/hydration.yml",
+        WORKFLOW_HYDRATION,
+    )?;
     add_file(project_dir, ".github/workflows/deploy.yml", WORKFLOW_DEPLOY)?;
-    add_file(project_dir, ".github/workflows/cleanup.yml", WORKFLOW_CLEANUP)?;
+    add_file(
+        project_dir,
+        ".github/workflows/cleanup.yml",
+        WORKFLOW_CLEANUP,
+    )?;
     add_file(project_dir, ".github/workflows/README.md", WORKFLOW_README)?;
     add_file(project_dir, ".agents/skills/mz-deploy/SKILL.md", SKILL_MD)?;
     add_file(

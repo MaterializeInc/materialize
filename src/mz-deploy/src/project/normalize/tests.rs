@@ -1191,7 +1191,14 @@ fn test_staging_unqualified_name() {
     // Test that unqualified names get staging suffix on schema
     let fqn = staging_test_fqn();
     let external_deps = BTreeSet::new();
-    let visitor = NormalizingVisitor::staging(&fqn, "_deploy123".to_string(), &external_deps, None);
+    let replacement_objects = BTreeSet::new();
+    let visitor = NormalizingVisitor::staging(
+        &fqn,
+        "_deploy123".to_string(),
+        &external_deps,
+        None,
+        &replacement_objects,
+    );
 
     let sql = r#"
         CREATE VIEW my_view AS
@@ -1222,7 +1229,14 @@ fn test_staging_schema_qualified_name() {
     // Test that schema-qualified names get staging suffix
     let fqn = staging_test_fqn();
     let external_deps = BTreeSet::new();
-    let visitor = NormalizingVisitor::staging(&fqn, "_deploy123".to_string(), &external_deps, None);
+    let replacement_objects = BTreeSet::new();
+    let visitor = NormalizingVisitor::staging(
+        &fqn,
+        "_deploy123".to_string(),
+        &external_deps,
+        None,
+        &replacement_objects,
+    );
 
     let sql = r#"
         CREATE VIEW my_view AS
@@ -1259,7 +1273,14 @@ fn test_staging_external_dependency_not_transformed() {
         object: "kafka_events".to_string(),
     });
 
-    let visitor = NormalizingVisitor::staging(&fqn, "_deploy123".to_string(), &external_deps, None);
+    let replacement_objects = BTreeSet::new();
+    let visitor = NormalizingVisitor::staging(
+        &fqn,
+        "_deploy123".to_string(),
+        &external_deps,
+        None,
+        &replacement_objects,
+    );
 
     let sql = r#"
         CREATE VIEW my_view AS
@@ -1302,7 +1323,14 @@ fn test_staging_mixed_internal_and_external() {
         object: "raw_events".to_string(),
     });
 
-    let visitor = NormalizingVisitor::staging(&fqn, "_staging".to_string(), &external_deps, None);
+    let replacement_objects = BTreeSet::new();
+    let visitor = NormalizingVisitor::staging(
+        &fqn,
+        "_staging".to_string(),
+        &external_deps,
+        None,
+        &replacement_objects,
+    );
 
     let sql = r#"
         CREATE VIEW my_view AS
@@ -1349,11 +1377,13 @@ fn test_staging_objects_to_deploy_filter() {
     });
     // Note: "inventory" is NOT in objects_to_deploy
 
+    let replacement_objects = BTreeSet::new();
     let visitor = NormalizingVisitor::staging(
         &fqn,
         "_staging".to_string(),
         &external_deps,
         Some(&objects_to_deploy),
+        &replacement_objects,
     );
 
     let sql = r#"
@@ -1389,11 +1419,232 @@ fn test_staging_objects_to_deploy_filter() {
 }
 
 #[test]
+fn test_staging_cross_schema_objects_to_deploy_filter() {
+    // Test that references to specific replacement objects are NOT suffixed,
+    // even when those objects are in objects_to_deploy.
+    //
+    // Scenario: deploying ops.top_spenders which references core.order_summary.
+    // Both are in objects_to_deploy, but order_summary is a replacement object.
+    // The reference to app.core.order_summary should NOT become app.core_v3.order_summary
+    // because replacement MVs are deployed in-place, not to staging schemas.
+
+    let database = Ident::new("app").expect("valid");
+    let schema = Ident::new("ops").expect("valid");
+    let object = Ident::new("top_spenders").expect("valid");
+    let fqn = FullyQualifiedName::from(UnresolvedItemName(vec![database, schema, object]));
+
+    let external_deps = BTreeSet::new();
+    let mut objects_to_deploy = BTreeSet::new();
+    objects_to_deploy.insert(ObjectId {
+        database: "app".to_string(),
+        schema: "ops".to_string(),
+        object: "top_spenders".to_string(),
+    });
+    // order_summary IS in objects_to_deploy (it changed)
+    objects_to_deploy.insert(ObjectId {
+        database: "app".to_string(),
+        schema: "core".to_string(),
+        object: "order_summary".to_string(),
+    });
+
+    // Mark order_summary as a replacement object (deployed in-place)
+    let mut replacement_objects = BTreeSet::new();
+    replacement_objects.insert(ObjectId {
+        database: "app".to_string(),
+        schema: "core".to_string(),
+        object: "order_summary".to_string(),
+    });
+
+    let visitor = NormalizingVisitor::staging(
+        &fqn,
+        "_v3".to_string(),
+        &external_deps,
+        Some(&objects_to_deploy),
+        &replacement_objects,
+    );
+
+    let sql = r#"
+        CREATE VIEW top_spenders AS
+        SELECT user_id, name, total_spent
+        FROM app.core.order_summary
+        WHERE total_spent > 0
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+        println!("Cross-schema staging SQL:\n{}", normalized_sql);
+
+        // order_summary is a replacement object, so its schema should NOT be suffixed
+        assert!(
+            !normalized_sql.contains("core_v3"),
+            "Reference to replacement object should NOT be suffixed, got: {}",
+            normalized_sql
+        );
+        // The reference should remain as-is (app.core.order_summary)
+        assert!(
+            normalized_sql.contains("app.core.order_summary"),
+            "Reference to replacement object should remain unchanged, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_staging_replacement_schema_full_deploy() {
+    // When replacement_objects is empty (first deployment / full blue-green swap),
+    // ALL references — even to objects in "stable" schemas — must be suffixed
+    // so they point to the staging schemas where the objects are being created.
+
+    let database = Ident::new("app").expect("valid");
+    let schema = Ident::new("ops").expect("valid");
+    let object = Ident::new("top_spenders").expect("valid");
+    let fqn = FullyQualifiedName::from(UnresolvedItemName(vec![database, schema, object]));
+
+    let external_deps = BTreeSet::new();
+    let mut objects_to_deploy = BTreeSet::new();
+    objects_to_deploy.insert(ObjectId {
+        database: "app".to_string(),
+        schema: "ops".to_string(),
+        object: "top_spenders".to_string(),
+    });
+    objects_to_deploy.insert(ObjectId {
+        database: "app".to_string(),
+        schema: "core".to_string(),
+        object: "order_summary".to_string(),
+    });
+
+    // Empty replacement_objects — first deploy, no MVs exist in production yet
+    let replacement_objects = BTreeSet::new();
+
+    let visitor = NormalizingVisitor::staging(
+        &fqn,
+        "_v1".to_string(),
+        &external_deps,
+        Some(&objects_to_deploy),
+        &replacement_objects,
+    );
+
+    let sql = r#"
+        CREATE VIEW top_spenders AS
+        SELECT user_id, name, total_spent
+        FROM app.core.order_summary
+        WHERE total_spent > 0
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+        println!("Full deploy staging SQL:\n{}", normalized_sql);
+
+        // With empty replacement_objects, ALL references should be suffixed
+        assert!(
+            normalized_sql.contains("core_v1"),
+            "Reference to core.order_summary should be suffixed on full deploy, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("app.core_v1.order_summary"),
+            "Expected app.core_v1.order_summary, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_staging_replacement_schema_incremental_deploy() {
+    // When replacement_objects contains the MV ID (incremental update),
+    // references to that specific MV are NOT suffixed — it already exists
+    // in production and will be updated in-place.
+
+    let database = Ident::new("app").expect("valid");
+    let schema = Ident::new("ops").expect("valid");
+    let object = Ident::new("top_spenders").expect("valid");
+    let fqn = FullyQualifiedName::from(UnresolvedItemName(vec![database, schema, object]));
+
+    let external_deps = BTreeSet::new();
+    let mut objects_to_deploy = BTreeSet::new();
+    objects_to_deploy.insert(ObjectId {
+        database: "app".to_string(),
+        schema: "ops".to_string(),
+        object: "top_spenders".to_string(),
+    });
+    objects_to_deploy.insert(ObjectId {
+        database: "app".to_string(),
+        schema: "core".to_string(),
+        object: "order_summary".to_string(),
+    });
+
+    // order_summary is a replacement object (exists in production, being updated)
+    let mut replacement_objects = BTreeSet::new();
+    replacement_objects.insert(ObjectId {
+        database: "app".to_string(),
+        schema: "core".to_string(),
+        object: "order_summary".to_string(),
+    });
+
+    let visitor = NormalizingVisitor::staging(
+        &fqn,
+        "_v3".to_string(),
+        &external_deps,
+        Some(&objects_to_deploy),
+        &replacement_objects,
+    );
+
+    let sql = r#"
+        CREATE VIEW top_spenders AS
+        SELECT user_id, name, total_spent
+        FROM app.core.order_summary
+        WHERE total_spent > 0
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+        println!("Incremental deploy staging SQL:\n{}", normalized_sql);
+
+        // order_summary is a replacement object, so its reference should NOT be suffixed
+        assert!(
+            !normalized_sql.contains("core_v3"),
+            "Reference to replacement object should NOT be suffixed, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("app.core.order_summary"),
+            "Reference to replacement object should remain unchanged, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
 fn test_staging_cte_not_transformed() {
     // Test that CTEs are not transformed (they're local to the query)
     let fqn = staging_test_fqn();
     let external_deps = BTreeSet::new();
-    let visitor = NormalizingVisitor::staging(&fqn, "_staging".to_string(), &external_deps, None);
+    let replacement_objects = BTreeSet::new();
+    let visitor = NormalizingVisitor::staging(
+        &fqn,
+        "_staging".to_string(),
+        &external_deps,
+        None,
+        &replacement_objects,
+    );
 
     let sql = r#"
         CREATE VIEW my_view AS

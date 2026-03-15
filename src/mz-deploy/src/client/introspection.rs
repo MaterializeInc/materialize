@@ -98,7 +98,7 @@ pub async fn list_clusters(client: &Client) -> Result<Vec<Cluster>, ConnectionEr
             id,
             name,
             size,
-            replication_factor
+            replication_factor::bigint AS replication_factor
         FROM mz_catalog.mz_clusters
         ORDER BY name
     "#;
@@ -133,7 +133,7 @@ pub async fn get_cluster_config(
             c.name,
             c.managed,
             c.size,
-            c.replication_factor,
+            c.replication_factor::bigint AS replication_factor,
             r.name AS replica_name,
             r.size AS replica_size,
             r.availability_zone

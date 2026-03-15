@@ -230,7 +230,7 @@ impl Statement {
         visitor: &NormalizingVisitor<T>,
         item_name: &UnresolvedItemName,
     ) -> Self {
-        let transformed_name = visitor.transformer().transform_name(item_name);
+        let transformed_name = visitor.transformer().transform_own_name(item_name);
 
         match self {
             Statement::CreateSink(mut s) => {

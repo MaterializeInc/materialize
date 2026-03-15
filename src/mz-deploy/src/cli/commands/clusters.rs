@@ -2,7 +2,9 @@
 
 use crate::cli::CliError;
 use crate::cli::commands::grants;
-use crate::cli::executor::{ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult};
+use crate::cli::executor::{
+    ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult,
+};
 use crate::client::{Client, ClusterOptions, quote_identifier};
 use crate::config::Settings;
 use crate::project::clusters::{self, ClusterDefinition, extract_replication_factor, extract_size};

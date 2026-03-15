@@ -1,10 +1,12 @@
 //! Apply connections command - create missing connections and reconcile drifted ones.
 
-use crate::cli::commands::apply_objects::{self, DatabaseObjectPhase, HandleResult, reconcile_grants_and_comments};
-use crate::cli::executor::ObjectAction;
-use crate::cli::commands::grants;
-use crate::cli::executor::{ApplyPlan, ApplyResult, DeploymentExecutor};
 use crate::cli::CliError;
+use crate::cli::commands::apply_objects::{
+    self, DatabaseObjectPhase, HandleResult, reconcile_grants_and_comments,
+};
+use crate::cli::commands::grants;
+use crate::cli::executor::ObjectAction;
+use crate::cli::executor::{ApplyPlan, ApplyResult, DeploymentExecutor};
 use crate::client::Client;
 use crate::config::Settings;
 use crate::project;
