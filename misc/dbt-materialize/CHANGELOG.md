@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.9.7 - 2026-03-16
+
 * Reduce catalog server load during
   [blue/green deployments](https://materialize.com/docs/manage/dbt/development-workflows/#bluegreen-deployments)
   by consolidating per-cluster readiness polling into a single query. Previously,
