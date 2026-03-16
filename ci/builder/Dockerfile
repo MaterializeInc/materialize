@@ -388,7 +388,7 @@ RUN arch_fdb=$(echo "$ARCH_GCC" | sed -e "s/x86_64/amd64/") \
 COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
 
 ENV LDFLAGS="-fuse-ld=lld -static-libstdc++"
-ENV RUSTFLAGS="-Clink-arg=-Wl,--compress-debug-sections=zlib -Clink-arg=-Wl,-O3 -Clink-arg=-fuse-ld=lld -Csymbol-mangling-version=v0 -Ctarget-cpu=$RUST_CPU_TARGET -Ctarget-feature=$RUST_TARGET_FEATURES --cfg=tokio_unstable"
+ENV RUSTFLAGS="-Clink-arg=-Wl,--compress-debug-sections=zstd -Clink-arg=-Wl,-O3 -Clink-arg=-fuse-ld=lld -Csymbol-mangling-version=v0 -Ctarget-cpu=$RUST_CPU_TARGET -Ctarget-feature=$RUST_TARGET_FEATURES --cfg=tokio_unstable"
 ENV PATH=/opt/google-cloud-sdk/bin:$PATH
 ENV CARGO_TARGET_DIR=/mnt/build
 ENV CARGO_INCREMENTAL=1
