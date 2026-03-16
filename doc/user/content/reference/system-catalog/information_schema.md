@@ -6,7 +6,7 @@ menu:
     parent: 'system-catalog'
     weight: 3
 aliases:
-  - /reference/system-catalog/information_schema/
+  - /sql/system-catalog/information_schema/
 ---
 
 Materialize has compatibility shims for the following relations from the

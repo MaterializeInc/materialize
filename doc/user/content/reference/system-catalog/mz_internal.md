@@ -6,7 +6,7 @@ menu:
     parent: 'system-catalog'
     weight: 4
 aliases:
-  - /reference/system-catalog/mz_internal/
+  - /sql/system-catalog/mz_internal/
 ---
 
 The following sections describe the available objects in the `mz_internal`
