@@ -231,7 +231,6 @@ if [[ "$BUILDKITE_TAG" != *"-rc."* ]]; then
   ORCHESTRATORD_VERSION=$(yq -r '.operator.image.tag' misc/helm-charts/operator/values.yaml)
   git fetch origin main
   git checkout origin/main
-  git submodule update --init --recursive
   git config user.email "noreply@materialize.com"
   git config user.name "Buildkite"
   VERSIONS_YAML_PATH=doc/user/data/self_managed/latest_versions.yml

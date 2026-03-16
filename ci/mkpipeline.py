@@ -54,9 +54,7 @@ from .deploy.deploy_util import rust_version
 # exercise as much of the glue code as possible.
 #
 # It's tough to track this code with any sort of fine-grained granularity, so we
-# err on the side of including too much rather than too little. (For example,
-# bin/resync-submodules is not presently used by CI, but it's just not worth
-# trying to capture that.)
+# err on the side of including too much rather than too little.
 CI_GLUE_GLOBS = ["bin", "ci", "misc/python/materialize/cli/ci_annotate_errors.py"]
 
 DEFAULT_AGENT = "hetzner-aarch64-4cpu-8gb"

@@ -174,13 +174,8 @@ There are currently three classes of sqllogictest files:
 
   1. The offical SQLite test files are in
      [test/sqllogictest/sqlite](/test/sqllogictest/sqlite). Note that the
-     directory is a git submodule, so the folder will start off as empty if you
-     did not clone this repository with `--recurse-submodules`. To populate it,
-     run:
-
-     ```shell
-     $ git submodule update --init
-     ```
+     directory is a git repository that gets automatically cloned when you run
+     the tests.
 
   2. Additional test files from CockroachDB are in
      [test/sqllogictest/cockroach](/test/sqllogictest/cockroach). Note that we
