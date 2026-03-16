@@ -527,7 +527,7 @@ pub fn validate_unit_test(
     for mock in &test.mocks {
         let mock_fqn = normalize_fqn(&mock.fqn, target_id);
 
-        if let Some(actual_columns) = types.get_object(&mock_fqn) {
+        if let Some(actual_columns) = types.get_table(&mock_fqn) {
             let (extra, missing, type_mismatches) = compare_columns(&mock.columns, actual_columns);
 
             if !extra.is_empty() || !missing.is_empty() || !type_mismatches.is_empty() {
@@ -554,7 +554,7 @@ pub fn validate_unit_test(
     }
 
     // 3. Validate expected output schema against target view
-    if let Some(target_columns) = types.get_object(&target_fqn) {
+    if let Some(target_columns) = types.get_table(&target_fqn) {
         let (extra, missing, type_mismatches) =
             compare_columns(&test.expected.columns, target_columns);
 
@@ -1107,7 +1107,7 @@ mod tests {
 
         Types {
             version: 1,
-            objects,
+            tables: objects,
         }
     }
 

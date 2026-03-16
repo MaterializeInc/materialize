@@ -62,7 +62,7 @@ impl TypeInfoClient<'_> {
 
         Ok(Types {
             version: 1,
-            objects,
+            tables: objects,
         })
     }
 
@@ -109,7 +109,7 @@ impl TypeInfoClient<'_> {
 
         Ok(Types {
             version: 1,
-            objects,
+            tables: objects,
         })
     }
 }

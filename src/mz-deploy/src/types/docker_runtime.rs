@@ -94,10 +94,10 @@ impl DockerRuntime {
         let client = Client::connect_with_profile(profile).await?;
 
         // Create temporary tables from types.lock (includes external deps and project tables)
-        if !types.objects.is_empty() {
+        if !types.tables.is_empty() {
             verbose!(
                 "Creating {} temporary tables from types.lock",
-                types.objects.len()
+                types.tables.len()
             );
             self.create_tables_from_types_lock(&client, types).await?;
         }
@@ -295,7 +295,7 @@ impl DockerRuntime {
         client: &Client,
         types: &Types,
     ) -> Result<(), TypeCheckError> {
-        for (fqn, columns) in &types.objects {
+        for (fqn, columns) in &types.tables {
             let mut col_defs = Vec::new();
             for (col_name, col_type) in columns {
                 let nullable = if col_type.nullable { "" } else { " NOT NULL" };

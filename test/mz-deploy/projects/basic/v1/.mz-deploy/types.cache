@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "objects": {
+  "tables": {
     "app.core.order_summary": {
       "name": {
         "type": "text",

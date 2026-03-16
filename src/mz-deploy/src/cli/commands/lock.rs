@@ -70,7 +70,7 @@ pub async fn run(settings: &Settings) -> Result<(), CliError> {
 
     progress::success(&format!(
         "Successfully generated types.lock with {} object schemas",
-        types.objects.len()
+        types.tables.len()
     ));
 
     Ok(())

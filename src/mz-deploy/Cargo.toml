@@ -40,7 +40,6 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 
 [dev-dependencies]
 tempfile = "3.0"
-testcontainers = "0.23"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

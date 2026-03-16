@@ -184,7 +184,7 @@ async fn typecheck_with_docker(
         }
         crate::types::Types {
             version: 1,
-            objects: std::collections::BTreeMap::new(),
+            tables: std::collections::BTreeMap::new(),
         }
     });
 
