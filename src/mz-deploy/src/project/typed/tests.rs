@@ -130,7 +130,7 @@ fn test_valid_with_indexes_and_grants() {
     let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
-    let obj = result.unwrap();
+    let obj = result.unwrap().unwrap();
     assert_eq!(obj.indexes.len(), 1);
     assert_eq!(obj.grants.len(), 1);
     assert_eq!(obj.comments.len(), 1);
@@ -211,7 +211,7 @@ fn test_valid_column_comment() {
     let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
-    let obj = result.unwrap();
+    let obj = result.unwrap().unwrap();
     assert_eq!(obj.comments.len(), 2);
 }
 
@@ -273,7 +273,7 @@ fn test_view_dependency_normalization() {
     let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
-    let obj = result.unwrap();
+    let obj = result.unwrap().unwrap();
 
     // Verify the statement name is normalized
     let view_stmt = match obj.stmt {
@@ -321,7 +321,7 @@ fn test_materialized_view_dependency_normalization() {
     let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
-    let obj = result.unwrap();
+    let obj = result.unwrap().unwrap();
 
     // Verify the statement is a materialized view
     let mv_stmt = match obj.stmt {
@@ -361,7 +361,7 @@ fn test_view_with_join_normalization() {
     let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
-    let obj = result.unwrap();
+    let obj = result.unwrap().unwrap();
 
     let view_stmt = match obj.stmt {
         super::super::ast::Statement::CreateView(ref s) => s,
@@ -411,7 +411,7 @@ fn test_view_with_subquery_normalization() {
     let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
-    let obj = result.unwrap();
+    let obj = result.unwrap().unwrap();
 
     let view_stmt = match obj.stmt {
         super::super::ast::Statement::CreateView(ref s) => s,
@@ -455,7 +455,7 @@ fn test_view_with_cte_normalization() {
     let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
-    let obj = result.unwrap();
+    let obj = result.unwrap().unwrap();
 
     let view_stmt = match obj.stmt {
         super::super::ast::Statement::CreateView(ref s) => s,
@@ -497,7 +497,7 @@ fn test_table_from_source_normalization() {
     let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
-    let obj = result.unwrap();
+    let obj = result.unwrap().unwrap();
 
     // Verify the source reference is normalized
     let table_stmt = match obj.stmt {
@@ -529,7 +529,7 @@ fn test_sink_normalization() {
     let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
-    let obj = result.unwrap();
+    let obj = result.unwrap().unwrap();
 
     let sink_stmt = match obj.stmt {
         super::super::ast::Statement::CreateSink(ref s) => s,
@@ -563,7 +563,7 @@ fn test_index_normalization() {
     let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
-    let obj = result.unwrap();
+    let obj = result.unwrap().unwrap();
 
     // Verify index reference is normalized
     assert_eq!(obj.indexes.len(), 1);
@@ -587,7 +587,7 @@ fn test_comment_normalization() {
     let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
-    let obj = result.unwrap();
+    let obj = result.unwrap().unwrap();
 
     // Verify comment references are normalized
     assert_eq!(obj.comments.len(), 2);
@@ -625,7 +625,7 @@ fn test_schema_qualified_dependency_normalization() {
     let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
-    let obj = result.unwrap();
+    let obj = result.unwrap().unwrap();
 
     let view_stmt = match obj.stmt {
         super::super::ast::Statement::CreateView(ref s) => s,
@@ -662,7 +662,7 @@ fn test_already_fully_qualified_unchanged() {
     let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
-    let obj = result.unwrap();
+    let obj = result.unwrap().unwrap();
 
     let view_stmt = match obj.stmt {
         super::super::ast::Statement::CreateView(ref s) => s,
@@ -2277,7 +2277,7 @@ fn test_source_normalization() {
     let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
-    let obj = result.unwrap();
+    let obj = result.unwrap().unwrap();
 
     let source_stmt = match obj.stmt {
         super::super::ast::Statement::CreateSource(ref s) => s,
@@ -2493,7 +2493,7 @@ fn test_source_with_comments_and_grants() {
     let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
-    let obj = result.unwrap();
+    let obj = result.unwrap().unwrap();
 
     // Verify 1 comment, 1 grant
     assert_eq!(obj.comments.len(), 1);
@@ -2519,7 +2519,7 @@ fn test_valid_secret_simple() {
     let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
-    let obj = result.unwrap();
+    let obj = result.unwrap().unwrap();
     assert!(matches!(
         obj.stmt,
         super::super::ast::Statement::CreateSecret(_)
@@ -2567,7 +2567,7 @@ fn test_secret_with_grants_and_comments() {
     let result = DatabaseObject::validate(raw, "default");
 
     assert!(result.is_ok());
-    let obj = result.unwrap();
+    let obj = result.unwrap().unwrap();
 
     assert_eq!(obj.grants.len(), 1);
     assert_eq!(obj.comments.len(), 1);
@@ -2845,7 +2845,7 @@ fn test_active_variant_resolution_picks_profile() {
         "should resolve staging variant: {:?}",
         result.err()
     );
-    let obj = result.unwrap();
+    let obj = result.unwrap().expect("staging variant should be resolved");
     // The staging variant has 'staging_val'
     let stmt_str = format!("{}", obj.stmt);
     assert!(
@@ -2887,7 +2887,7 @@ fn test_active_variant_resolution_falls_back_to_default() {
         "should fall back to default variant: {:?}",
         result.err()
     );
-    let obj = result.unwrap();
+    let obj = result.unwrap().expect("should fall back to default variant");
     let stmt_str = format!("{}", obj.stmt);
     assert!(
         stmt_str.contains("default_val"),

@@ -58,7 +58,8 @@ def create_profiles(c: Composition) -> None:
     mz_port = c.default_port("materialized")
     with open(PROJECTS_DIR / "profiles.toml", "w") as f:
         f.write(
-            f'[default]\nhost = "127.0.0.1"\nport = {mz_port}\nuser = "materialize"\n'
+            f'[default]\nhost = "127.0.0.1"\nport = {mz_port}\nuser = "materialize"\n\n'
+            f'[staging]\nhost = "127.0.0.1"\nport = {mz_port}\nuser = "materialize"\n'
         )
 
 
@@ -575,3 +576,177 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             database="app",
         )
         assert len(rows) >= 1, f"Expected ops views after v3, got {rows}"
+
+    with c.test_case("mz-deploy-multi-profile"):
+        # ── 1. Apply default profile ──────────────────────
+        result = run_mz_deploy(c, "multi-profile/v1", "apply")
+        assert result.returncode == 0
+
+        # Verify database "app" exists (no suffix for default)
+        rows = c.sql_query("SELECT name FROM mz_databases WHERE name = 'app'")
+        assert len(rows) == 1
+
+        # Verify cluster "compute" exists (no suffix)
+        rows = c.sql_query("SELECT name FROM mz_clusters WHERE name = 'compute'")
+        assert len(rows) == 1
+
+        # Verify secret comment is 'default secret' (default profile override)
+        rows = c.sql_query(
+            "SELECT comment FROM mz_internal.mz_comments "
+            "JOIN mz_secrets ON mz_comments.id = mz_secrets.id "
+            "JOIN mz_schemas ON mz_secrets.schema_id = mz_schemas.id "
+            "JOIN mz_databases ON mz_schemas.database_id = mz_databases.id "
+            "WHERE mz_secrets.name = 'my_secret' AND mz_databases.name = 'app'",
+            database="app",
+        )
+        assert len(rows) == 1, f"Expected 1 comment row, got {rows}"
+        assert rows[0][0] == "default secret", f"Expected 'default secret', got '{rows[0][0]}'"
+
+        # Verify default_config exists (default-only table)
+        rows = c.sql_query(
+            "SELECT t.name FROM mz_tables t "
+            "JOIN mz_schemas sc ON t.schema_id = sc.id "
+            "JOIN mz_databases db ON sc.database_id = db.id "
+            "WHERE t.name = 'default_config' AND sc.name = 'public' AND db.name = 'app'",
+            database="app",
+        )
+        assert len(rows) == 1, f"Expected default_config table in app, got {rows}"
+
+        # Verify staging_config does NOT exist (staging-only table)
+        rows = c.sql_query(
+            "SELECT t.name FROM mz_tables t "
+            "JOIN mz_schemas sc ON t.schema_id = sc.id "
+            "JOIN mz_databases db ON sc.database_id = db.id "
+            "WHERE t.name = 'staging_config' AND sc.name = 'public' AND db.name = 'app'",
+            database="app",
+        )
+        assert len(rows) == 0, f"Expected no staging_config table in app, got {rows}"
+
+        # ── 2. Stage + promote default profile (deploys MV) ──
+        result = run_mz_deploy(
+            c, "multi-profile/v1", "stage", "--deploy-id", "mp_default", "--allow-dirty"
+        )
+        assert result.returncode == 0
+
+        result = run_mz_deploy(
+            c, "multi-profile/v1", "wait", "mp_default", "--timeout", "300", "--allowed-lag", "86400"
+        )
+        assert result.returncode == 0
+
+        result = run_mz_deploy(
+            c, "multi-profile/v1", "promote", "mp_default", "--no-ready-check"
+        )
+        assert result.returncode == 0
+
+        # Verify MV 'summary' has env column = 'production' (variable resolved)
+        c.sql("INSERT INTO app.public.my_table VALUES (1, 'test')", database="app")
+        rows = c.sql_query("SELECT env FROM app.core.summary", database="app")
+        assert len(rows) == 1
+        assert rows[0][0] == "production"
+
+        # Verify ambiguous view works (variable pragma + slice syntax)
+        rows = c.sql_query(
+            "SELECT arr_slice::text, b FROM app.core.ambiguous ORDER BY b",
+            database="app",
+        )
+        assert len(rows) == 3, f"Expected 3 rows from ambiguous view, got {rows}"
+
+        # ── 3. Apply staging profile ──────────────────────
+        result = run_mz_deploy(
+            c, "multi-profile/v1", "apply", "--profile", "staging"
+        )
+        assert result.returncode == 0
+
+        # Verify database "app__staging" exists (suffix applied)
+        rows = c.sql_query("SELECT name FROM mz_databases WHERE name = 'app__staging'")
+        assert len(rows) == 1
+
+        # Verify cluster "compute__staging" exists (suffix applied)
+        rows = c.sql_query("SELECT name FROM mz_clusters WHERE name = 'compute__staging'")
+        assert len(rows) == 1
+
+        # Verify secret comment is 'staging secret' (staging profile override)
+        rows = c.sql_query(
+            "SELECT comment FROM mz_internal.mz_comments "
+            "JOIN mz_secrets ON mz_comments.id = mz_secrets.id "
+            "JOIN mz_schemas ON mz_secrets.schema_id = mz_schemas.id "
+            "JOIN mz_databases ON mz_schemas.database_id = mz_databases.id "
+            "WHERE mz_secrets.name = 'my_secret' AND mz_databases.name = 'app__staging'",
+            database="app__staging",
+        )
+        assert len(rows) == 1, f"Expected 1 comment row for my_secret in app__staging, got {rows}"
+        assert rows[0][0] == "staging secret", f"Expected 'staging secret', got '{rows[0][0]}'"
+
+        # Verify staging_config exists (staging-only table)
+        rows = c.sql_query(
+            "SELECT t.name FROM mz_tables t "
+            "JOIN mz_schemas sc ON t.schema_id = sc.id "
+            "JOIN mz_databases db ON sc.database_id = db.id "
+            "WHERE t.name = 'staging_config' AND sc.name = 'public' AND db.name = 'app__staging'",
+            database="app__staging",
+        )
+        assert len(rows) == 1, f"Expected staging_config table in app__staging, got {rows}"
+
+        # Verify default_config does NOT exist (default-only table)
+        rows = c.sql_query(
+            "SELECT t.name FROM mz_tables t "
+            "JOIN mz_schemas sc ON t.schema_id = sc.id "
+            "JOIN mz_databases db ON sc.database_id = db.id "
+            "WHERE t.name = 'default_config' AND sc.name = 'public' AND db.name = 'app__staging'",
+            database="app__staging",
+        )
+        assert len(rows) == 0, f"Expected no default_config table in app__staging, got {rows}"
+
+        # ── 4. Stage + promote staging profile (deploys MV) ──
+        result = run_mz_deploy(
+            c, "multi-profile/v1", "stage", "--deploy-id", "mp_staging",
+            "--allow-dirty", "--profile", "staging"
+        )
+        assert result.returncode == 0
+
+        result = run_mz_deploy(
+            c, "multi-profile/v1", "wait", "mp_staging", "--timeout", "300",
+            "--allowed-lag", "86400", "--profile", "staging"
+        )
+        assert result.returncode == 0
+
+        result = run_mz_deploy(
+            c, "multi-profile/v1", "promote", "mp_staging", "--no-ready-check",
+            "--profile", "staging"
+        )
+        assert result.returncode == 0
+
+        # Verify MV 'summary' in staging has env column = 'staging'
+        c.sql(
+            "INSERT INTO app__staging.public.my_table VALUES (1, 'test')",
+            database="app__staging",
+        )
+        rows = c.sql_query(
+            "SELECT env FROM app__staging.core.summary",
+            database="app__staging",
+        )
+        assert len(rows) == 1
+        assert rows[0][0] == "staging"
+
+        # Verify ambiguous view works in staging
+        rows = c.sql_query(
+            "SELECT arr_slice::text, b FROM app__staging.core.ambiguous ORDER BY b",
+            database="app__staging",
+        )
+        assert len(rows) == 3, f"Expected 3 rows from ambiguous view in staging, got {rows}"
+
+        # ── 5. Idempotent re-apply for both profiles ──────
+        # Default
+        result = run_mz_deploy(
+            c, "multi-profile/v1", "apply", "--dry-run", "--output", "json"
+        )
+        dry_run = parse_dry_run_json(result)
+        assert count_actions(dry_run["phases"], "created") == 0
+
+        # Staging
+        result = run_mz_deploy(
+            c, "multi-profile/v1", "apply", "--profile", "staging",
+            "--dry-run", "--output", "json"
+        )
+        dry_run = parse_dry_run_json(result)
+        assert count_actions(dry_run["phases"], "created") == 0

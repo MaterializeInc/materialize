@@ -350,7 +350,7 @@ impl DatabaseObject {
     pub fn validate(
         value: super::super::raw::DatabaseObject,
         profile: &str,
-    ) -> Result<Self, ValidationErrors> {
+    ) -> Result<Option<Self>, ValidationErrors> {
         let mut errors = Vec::new();
 
         // Step 1: Classify all variants to determine their object types
@@ -427,25 +427,21 @@ impl DatabaseObject {
             return Err(ValidationErrors::new(errors));
         }
 
-        // Step 4: Resolve active variant — pick profile match or fall back to default
+        // Step 4: Resolve active variant — pick profile match or fall back to default.
+        // If no matching profile variant and no default variant exist, skip this object
+        // (it belongs to a different profile).
         let active_variant = value
             .variants
             .iter()
             .find(|v| v.profile.as_deref() == Some(profile))
-            .or_else(|| value.variants.iter().find(|v| v.profile.is_none()))
-            .or_else(|| value.variants.first());
+            .or_else(|| value.variants.iter().find(|v| v.profile.is_none()));
 
         let active_variant = match active_variant {
             Some(v) => v,
             None => {
-                // Should not happen since we require at least one variant
-                errors.push(ValidationError::with_file(
-                    ValidationErrorKind::NoMainStatement {
-                        object_name: value.name.clone(),
-                    },
-                    PathBuf::from(&value.name),
-                ));
-                return Err(ValidationErrors::new(errors));
+                // No variant matches the active profile and no default exists.
+                // This object is defined only for other profiles — skip it.
+                return Ok(None);
             }
         };
 
@@ -457,6 +453,7 @@ impl DatabaseObject {
             &active_variant.path,
             active_variant.statements.clone(),
         )
+        .map(Some)
     }
 }
 
@@ -471,7 +468,10 @@ impl Schema {
 
         for obj in value.objects {
             match DatabaseObject::validate(obj, profile) {
-                Ok(db_obj) => objects.push(db_obj),
+                Ok(Some(db_obj)) => objects.push(db_obj),
+                Ok(None) => {
+                    // Object belongs to a different profile — skip it
+                }
                 Err(errs) => {
                     all_errors.extend(errs.errors);
                 }

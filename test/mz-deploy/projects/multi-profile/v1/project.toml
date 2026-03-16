@@ -1,0 +1,10 @@
+profile = "default"
+
+[profiles.staging]
+profile_suffix = "__staging"
+
+[profiles.staging.variables]
+env_label = "staging"
+
+[profiles.default.variables]
+env_label = "production"
