@@ -214,6 +214,7 @@ The next session picks up where the previous one left off.
 | `sql` | done |
 | `transform` | done |
 | `storage` | done |
+| `adapter` | done |
 
 ## Tracking files
 
