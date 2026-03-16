@@ -89,7 +89,6 @@ def get_minimal_system_parameters(
         "enable_iceberg_sink": "true",
         "enable_introspection_subscribes": "true",
         "enable_kafka_sink_partition_by": "true",
-        "enable_lgalloc": "false",
         "enable_load_generator_counter": "true",
         "enable_logical_compaction_window": "true",
         "enable_multi_worker_storage_persist_sink": "true",
@@ -183,6 +182,11 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "compute_subscribe_snapshot_optimization",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_lgalloc",
             "true",
             ["true", "false"],
         ),

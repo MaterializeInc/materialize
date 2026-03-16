@@ -1321,7 +1321,6 @@ SCENARIOS = [
             $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             $ postgres-execute connection=mz_system
             ALTER SYSTEM SET min_timestamp_interval = '10ms';
-            ALTER SYSTEM SET enable_lgalloc = false;
             ALTER SYSTEM SET enable_index_options = true;
             ALTER SYSTEM SET enable_compute_logical_backpressure = true;
 

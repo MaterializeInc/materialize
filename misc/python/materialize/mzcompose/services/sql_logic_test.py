@@ -32,11 +32,8 @@ class SqlLogicTest(Service):
         environment += [
             "MZ_SYSTEM_PARAMETER_DEFAULT="
             + ";".join(
-                [
-                    f"{key}={value}"
-                    for key, value in get_default_system_parameters().items()
-                ]
-                + ["enable_lgalloc=false"]
+                f"{key}={value}"
+                for key, value in get_default_system_parameters().items()
             )
         ]
 
