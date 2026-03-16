@@ -209,6 +209,11 @@ The next session picks up where the previous one left off.
 | `catalog` | done |
 | `compute` | done |
 | `repr` | done |
+| `testdrive` | done |
+| `expr` | done |
+| `sql` | done |
+| `transform` | done |
+| `storage` | done |
 
 ## Tracking files
 
