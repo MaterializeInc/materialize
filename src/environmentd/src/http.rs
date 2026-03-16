@@ -16,19 +16,19 @@
 //! ## Authentication flow
 //!
 //! The server supports several authentication modes, controlled by the
-//! configured [`AuthenticatorKind`]. The general flow is:
+//! configured [`listeners::AuthenticatorKind`]. The general flow is:
 //!
 //! 1. **Identity resolution.** An authentication middleware runs on every
 //!    protected request and resolves the caller's identity via one of:
 //!    - **Credentials in headers.** The caller supplies a username/password or
-//!      token in the request headers. Supported by all [`AuthenticatorKind`]s.
+//!      token in the request headers. Supported by all [`listeners::AuthenticatorKind`]s.
 //!    - **Session reuse.** If the caller has an active authenticated session
 //!      (established via `POST /api/login`) and has not supplied credentials
 //!      in the request headers, the session is reused. Only available for
-//!      [`AuthenticatorKind::Password`] and [`AuthenticatorKind::Oidc`].
+//!      [`listeners::AuthenticatorKind::Password`] and [`listeners::AuthenticatorKind::Oidc`].
 //!    - **Trusted header injection.** A trusted upstream proxy (e.g. Teleport)
 //!      may inject the caller's identity into the request headers. Only available
-//!      for [`AuthenticatorKind::None`].
+//!      for [`listeners::AuthenticatorKind::None`].
 //!
 //! 2. **Session initialization.** Once the caller's identity is known, an
 //!    adapter session is opened on their behalf. This happens as part of
@@ -87,7 +87,8 @@ use mz_ore::now::{NowFn, SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_ore::str::StrExt;
 use mz_pgwire_common::{ConnectionCounter, ConnectionHandle};
 use mz_repr::user::ExternalUserMetadata;
-use mz_server_core::listeners::{AllowedRoles, AuthenticatorKind, HttpRoutesEnabled};
+use mz_server_core::listeners;
+use mz_server_core::listeners::{AllowedRoles, HttpRoutesEnabled};
 use mz_server_core::{Connection, ConnectionHandler, ReloadingSslContext, Server};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{
@@ -145,7 +146,7 @@ const PROFILING_API_ENDPOINTS: &[&str] = &["/memory", "/hierarchical-memory", "/
 pub struct HttpConfig {
     pub source: &'static str,
     pub tls: Option<ReloadingSslContext>,
-    pub authenticator_kind: AuthenticatorKind,
+    pub authenticator_kind: listeners::AuthenticatorKind,
     pub frontegg: Option<mz_frontegg_auth::Authenticator>,
     pub oidc_rx: Delayed<mz_authenticator::GenericOidcAuthenticator>,
     pub adapter_client_rx: Shared<Receiver<Client>>,
@@ -172,7 +173,7 @@ pub struct InternalRouteConfig {
 pub struct WsState {
     frontegg: Option<mz_frontegg_auth::Authenticator>,
     oidc_rx: Delayed<mz_authenticator::GenericOidcAuthenticator>,
-    authenticator_kind: AuthenticatorKind,
+    authenticator_kind: listeners::AuthenticatorKind,
     adapter_client_rx: Delayed<mz_adapter::Client>,
     active_connection_counter: ConnectionCounter,
     helm_chart_version: Option<String>,
@@ -277,7 +278,7 @@ impl HttpServer {
                     helm_chart_version,
                     allowed_roles,
                 });
-            if let AuthenticatorKind::None = authenticator_kind {
+            if let listeners::AuthenticatorKind::None = authenticator_kind {
                 ws_router = ws_router.layer(middleware::from_fn(x_materialize_user_header_auth));
             }
             router = router.merge(ws_router);
@@ -511,7 +512,7 @@ impl HttpServer {
             );
 
         match authenticator_kind {
-            AuthenticatorKind::Password | AuthenticatorKind::Oidc => {
+            listeners::AuthenticatorKind::Password | listeners::AuthenticatorKind::Oidc => {
                 base_router = base_router.layer(session_layer.clone());
 
                 let login_router = Router::new()
@@ -520,7 +521,7 @@ impl HttpServer {
                     .layer(Extension(adapter_client_rx));
                 router = router.merge(login_router).layer(session_layer);
             }
-            AuthenticatorKind::None => {
+            listeners::AuthenticatorKind::None => {
                 base_router =
                     base_router.layer(middleware::from_fn(x_materialize_user_header_auth));
             }
@@ -643,6 +644,7 @@ async fn x_materialize_user_header_auth(mut req: Request, next: Next) -> impl In
             name: username,
             external_metadata_rx: None,
             authenticated: Authenticated,
+            authenticator_kind: mz_auth::AuthenticatorKind::None,
         });
     }
     Ok(next.run(req).await)
@@ -661,6 +663,7 @@ pub struct AuthedUser {
     name: String,
     external_metadata_rx: Option<watch::Receiver<ExternalUserMetadata>>,
     authenticated: Authenticated,
+    authenticator_kind: mz_auth::AuthenticatorKind,
 }
 
 pub struct AuthedClient {
@@ -691,6 +694,7 @@ impl AuthedClient {
                 client_ip: Some(peer_addr),
                 external_metadata_rx: user.external_metadata_rx,
                 helm_chart_version,
+                authenticator_kind: user.authenticator_kind,
             },
             user.authenticated,
         );
@@ -866,6 +870,7 @@ pub async fn handle_login(
         created_at: SystemTime::now(),
         last_activity: SystemTime::now(),
         authenticated,
+        authenticator_kind: mz_auth::AuthenticatorKind::Password,
     };
     // Store session data
     let session = session.and_then(|Extension(session)| Some(session));
@@ -895,7 +900,7 @@ async fn http_auth(
     mut req: Request,
     next: Next,
     tls_enabled: bool,
-    authenticator_kind: AuthenticatorKind,
+    authenticator_kind: listeners::AuthenticatorKind,
     frontegg: Option<mz_frontegg_auth::Authenticator>,
     oidc_rx: Delayed<mz_authenticator::GenericOidcAuthenticator>,
     adapter_client_rx: Delayed<Client>,
@@ -1084,21 +1089,21 @@ enum Credentials {
 }
 
 async fn get_authenticator(
-    kind: AuthenticatorKind,
+    kind: listeners::AuthenticatorKind,
     creds: Option<&Credentials>,
     frontegg: Option<mz_frontegg_auth::Authenticator>,
     oidc_rx: &Delayed<mz_authenticator::GenericOidcAuthenticator>,
     adapter_client_rx: &Delayed<Client>,
 ) -> Authenticator {
     match kind {
-        AuthenticatorKind::Frontegg => Authenticator::Frontegg(
-            frontegg.expect("Frontegg authenticator should exist with AuthenticatorKind::Frontegg"),
-        ),
-        AuthenticatorKind::Password | AuthenticatorKind::Sasl => {
+        listeners::AuthenticatorKind::Frontegg => Authenticator::Frontegg(frontegg.expect(
+            "Frontegg authenticator should exist with listeners::AuthenticatorKind::Frontegg",
+        )),
+        listeners::AuthenticatorKind::Password | listeners::AuthenticatorKind::Sasl => {
             let client = adapter_client_rx.clone().await.expect("sender not dropped");
             Authenticator::Password(client)
         }
-        AuthenticatorKind::Oidc => match creds {
+        listeners::AuthenticatorKind::Oidc => match creds {
             // Use the password authenticator if the credentials are password-based
             Some(Credentials::Password { .. }) => {
                 let client = adapter_client_rx.clone().await.expect("sender not dropped");
@@ -1106,7 +1111,7 @@ async fn get_authenticator(
             }
             _ => Authenticator::Oidc(oidc_rx.clone().await.expect("sender not dropped")),
         },
-        AuthenticatorKind::None => Authenticator::None,
+        listeners::AuthenticatorKind::None => Authenticator::None,
     }
 }
 
@@ -1150,6 +1155,7 @@ pub(crate) async fn ensure_session_unexpired(
         name: session_data.username,
         external_metadata_rx: None,
         authenticated: session_data.authenticated,
+        authenticator_kind: session_data.authenticator_kind,
     })
 }
 
@@ -1238,6 +1244,7 @@ async fn auth(
         name,
         external_metadata_rx,
         authenticated,
+        authenticator_kind: authenticator.kind(),
     })
 }
 
@@ -1305,6 +1312,7 @@ pub struct TowerSessionData {
     created_at: SystemTime,
     last_activity: SystemTime,
     authenticated: Authenticated,
+    authenticator_kind: mz_auth::AuthenticatorKind,
 }
 
 #[cfg(test)]
