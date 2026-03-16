@@ -126,6 +126,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         cwd=MZ_ROOT,
         check=True,
     )
+    c.down(destroy_volumes=True)
     c.up("postgres", "materialized")
 
     with c.test_case("mz-deploy"):

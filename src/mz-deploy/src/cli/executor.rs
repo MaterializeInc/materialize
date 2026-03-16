@@ -6,7 +6,7 @@
 
 use crate::cli::CliError;
 use crate::cli::git::get_git_commit;
-use crate::client::{Client, quote_identifier};
+use crate::client::{Client, ClusterConfig, quote_identifier};
 use crate::project::{self, typed};
 use crate::verbose;
 use owo_colors::OwoColorize;
@@ -481,6 +481,86 @@ impl<'a> DeploymentExecutor<'a> {
                 statement: sql,
                 source,
             })?;
+        Ok(())
+    }
+
+    /// Ensure a database exists.
+    ///
+    /// Real mode: delegates to `client.provisioning().create_database()`.
+    /// Dry-run: logs `CREATE DATABASE IF NOT EXISTS ...`.
+    pub async fn ensure_database(&self, name: &str) -> Result<(), CliError> {
+        if self.dry_run {
+            let sql = format!("CREATE DATABASE IF NOT EXISTS {}", quote_identifier(name));
+            self.statement_log.borrow_mut().push(sql);
+        } else {
+            self.client.provisioning().create_database(name).await?;
+        }
+        Ok(())
+    }
+
+    /// Ensure a schema exists in the given database.
+    ///
+    /// Real mode: delegates to `client.provisioning().create_schema()`.
+    /// Dry-run: logs `CREATE SCHEMA IF NOT EXISTS ...`.
+    pub async fn ensure_schema(&self, database: &str, schema: &str) -> Result<(), CliError> {
+        if self.dry_run {
+            let sql = format!(
+                "CREATE SCHEMA IF NOT EXISTS {}.{}",
+                quote_identifier(database),
+                quote_identifier(schema)
+            );
+            self.statement_log.borrow_mut().push(sql);
+        } else {
+            self.client
+                .provisioning()
+                .create_schema(database, schema)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Create a staging cluster by cloning a production cluster's configuration.
+    ///
+    /// Real mode: delegates to `client.provisioning().create_cluster_with_config()`.
+    /// Dry-run: logs a placeholder `CREATE CLUSTER ...` statement.
+    pub async fn create_cluster(
+        &self,
+        staging_name: &str,
+        prod_name: &str,
+        config: &ClusterConfig,
+    ) -> Result<(), CliError> {
+        if self.dry_run {
+            let sql = format!(
+                "CREATE CLUSTER {} (SIZE = '<from {}')",
+                quote_identifier(staging_name),
+                prod_name
+            );
+            self.statement_log.borrow_mut().push(sql);
+        } else {
+            self.client
+                .provisioning()
+                .create_cluster_with_config(staging_name, config)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Record cluster mappings for a deployment.
+    ///
+    /// Real mode: delegates to `client.deployments().insert_deployment_clusters()`.
+    /// Dry-run: no-op (internal bookkeeping).
+    pub async fn record_deployment_clusters(
+        &self,
+        stage_name: &str,
+        clusters: &[String],
+    ) -> Result<(), CliError> {
+        if !self.dry_run {
+            self.client
+                .deployments()
+                .insert_deployment_clusters(stage_name, clusters)
+                .await?;
+            verbose!("Cluster mappings recorded");
+        }
         Ok(())
     }
 }

@@ -3,8 +3,7 @@
 use super::ObjectRef;
 use crate::cli::{CliError, executor};
 use crate::cli::{git, progress};
-use crate::client::quote_identifier;
-use crate::client::{Client, ClusterConfig, DeploymentKind, PendingStatement, ReplacementMvRecord};
+use crate::client::{Client, ClusterConfig, ClusterOptions, DeploymentKind, PendingStatement, ReplacementMvRecord};
 use crate::config::Settings;
 use crate::log;
 use crate::project::SchemaQualifier;
@@ -659,10 +658,11 @@ async fn record_stage_metadata(
     Ok(())
 }
 
-/// Create staging resources (schemas, clusters, objects) with automatic rollback on failure.
+/// Top-level orchestrator for the staging deployment pipeline.
 ///
-/// This function performs all resource creation and automatically triggers rollback
-/// on failure unless the no_rollback flag is set.
+/// Provisions all databases, schemas, clusters, and objects needed for a blue-green
+/// deployment. On failure, automatically rolls back every resource created during
+/// this invocation unless the `no_rollback` flag is set.
 #[allow(clippy::too_many_arguments)]
 async fn create_resources_with_rollback<'a>(
     client: &crate::client::Client,
@@ -676,283 +676,26 @@ async fn create_resources_with_rollback<'a>(
     no_rollback: bool,
     dry_run: bool,
 ) -> Result<usize, CliError> {
-    // Create executor with dry-run mode
     let executor = executor::DeploymentExecutor::with_dry_run(client, dry_run);
 
-    // Wrap resource creation in a closure that we can call and handle errors from
-    let create_result = async {
-        // Stage 4a: Create project databases that aren't in schema_set
-        // (schema_set databases will be created by prepare_databases_and_schemas)
-        progress::info("Creating project databases if not exists");
-        let schema_set_dbs: BTreeSet<&str> = schema_set.iter().map(|sq| sq.database.as_str()).collect();
-        if !dry_run {
-            for db in &planned_project.databases {
-                if !schema_set_dbs.contains(db.name.as_str()) {
-                    client.provisioning().create_database(&db.name).await?;
-                    verbose!("  Ensured database {} exists", db.name);
-                }
-            }
-        } else {
-            for db in &planned_project.databases {
-                if !schema_set_dbs.contains(db.name.as_str()) {
-                    let create_db_sql =
-                        format!("CREATE DATABASE IF NOT EXISTS {}", quote_identifier(&db.name));
-                    executor.execute_sql(&create_db_sql).await?;
-                }
-            }
-        }
-
-        // Stage 4b: Create staging schemas + apply mod_statements
-        progress::stage_start("Creating staging schemas and applying setup statements");
-        let schema_start = Instant::now();
-        executor.prepare_databases_and_schemas(planned_project, schema_set, Some(staging_suffix)).await?;
-        let schema_duration = schema_start.elapsed();
-        progress::stage_success(
-            &format!("Created {} staging schema(s) with setup statements", schema_set.len()),
-            schema_duration,
-        );
-
-        // Create production schemas for swap (non-dry-run only)
-        if !dry_run {
-            progress::info("Creating production schemas if not exists");
-            for sq in schema_set {
-                client.provisioning().create_schema(&sq.database, &sq.schema).await?;
-                verbose!("  Ensured schema {}.{} exists", sq.database, sq.schema);
-            }
-        }
-
-        if !dry_run {
-            // Write cluster mappings to deploy.clusters table BEFORE creating clusters
-            // This allows abort logic to clean up even if cluster creation fails
-            let cluster_names: Vec<String> = cluster_set.iter().cloned().collect();
-            client
-                .deployments().insert_deployment_clusters(stage_name, &cluster_names)
-                .await?;
-            verbose!("Cluster mappings recorded");
-        }
-
-        // Stage 5: Create staging clusters (by cloning production cluster configs)
-        progress::stage_start("Creating staging clusters");
-        let cluster_start = Instant::now();
-        let mut created_clusters = 0;
-
-        // Batch check which staging clusters already exist (skip in dry-run mode)
-        let existing_staging_clusters = if !dry_run {
-            let staging_cluster_names: Vec<String> = cluster_set
-                .iter()
-                .map(|name| format!("{}{}", name, staging_suffix))
-                .collect();
-            client.introspection().check_clusters_exist(&staging_cluster_names).await?
-        } else {
-            BTreeSet::new()
-        };
-
-        for prod_cluster in cluster_set {
-            let staging_cluster = format!("{}{}", prod_cluster, staging_suffix);
-
-            if dry_run {
-                // In dry-run mode, just print the CREATE CLUSTER statement
-                // We can't check if cluster exists or get prod config without side effects
-                let create_cluster_sql = format!(
-                    "CREATE CLUSTER {} (SIZE = '<from {}>')",
-                    staging_cluster, prod_cluster
-                );
-                executor.execute_sql(&create_cluster_sql).await?;
-                created_clusters += 1;
-                continue;
-            }
-
-            // Check if staging cluster already exists using batch result
-            if existing_staging_clusters.contains(&staging_cluster) {
-                verbose!("  Cluster '{}' already exists, skipping", staging_cluster);
-                continue;
-            }
-
-            // Get production cluster configuration (handles both managed and unmanaged)
-            let config = client.introspection().get_cluster_config(prod_cluster).await?;
-
-            let config = match config {
-                Some(config) => config,
-                None => {
-                    return Err(CliError::ClusterNotFound {
-                        name: prod_cluster.clone(),
-                    });
-                }
-            };
-
-            // Create staging cluster with same configuration
-            client
-                .provisioning()
-                .create_cluster_with_config(&staging_cluster, &config)
-                .await?;
-            created_clusters += 1;
-
-            // Log details based on cluster type
-            match &config {
-                ClusterConfig::Managed { options, grants } => {
-                    verbose!(
-                        "  Created managed cluster '{}' (size: {}, replication_factor: {}, {} grant(s), cloned from '{}')",
-                        staging_cluster,
-                        options.size,
-                        options.replication_factor,
-                        grants.len(),
-                        prod_cluster
-                    );
-                }
-                ClusterConfig::Unmanaged { replicas, grants } => {
-                    verbose!(
-                        "  Created unmanaged cluster '{}' with {} replica(s), {} grant(s) (cloned from '{}')",
-                        staging_cluster,
-                        replicas.len(),
-                        grants.len(),
-                        prod_cluster
-                    );
-                    for replica in replicas {
-                        verbose!(
-                            "    - {} (size: {}{})",
-                            replica.name,
-                            replica.size,
-                            replica
-                                .availability_zone
-                                .as_ref()
-                                .map(|az| format!(", az: {}", az))
-                                .unwrap_or_default()
-                        );
-                    }
-                }
-            }
-        }
-
-        let cluster_duration = cluster_start.elapsed();
-        progress::stage_success(
-            &format!("Created {} cluster(s)", created_clusters),
-            cluster_duration,
-        );
-
-        // Stage 6: Deploy objects using staging transformer
-        progress::stage_start("Deploying objects to staging");
-        let deploy_start = Instant::now();
-
-        // Collect ObjectIds from objects being deployed for the staging transformer
-        // Include both regular objects and replacement MVs
-        let objects_to_deploy_set: BTreeSet<_> = objects
-            .iter()
-            .chain(replacement_mvs.iter())
-            .map(|(oid, _)| oid.clone())
-            .collect();
-
-        // Deploy external indexes
-        let mut external_indexes: Vec<_> = planned_project
-            .iter_objects()
-            .filter(|object| !objects_to_deploy_set.contains(&object.id))
-            .flat_map(extract_external_indexes)
-            .filter_map(|(cluster, index)| cluster_set.contains(&cluster.name).then_some(index))
-            .collect();
-
-        // Transform cluster names in external indexes for staging
-        crate::project::normalize::transform_cluster_names_for_staging(
-            &mut external_indexes,
-            staging_suffix,
-        );
-        for index in external_indexes {
-            verbose!("Creating external index {}", index);
-            executor.execute_sql(&index).await?;
-        }
-
-        // Build the set of replacement object IDs from the replacement MVs slice.
-        // Only these specific objects have their references left unsuffixed.
-        let replacement_object_ids: BTreeSet<ObjectId> = replacement_mvs
-            .iter()
-            .map(|(oid, _)| oid.clone())
-            .collect();
-
-        let mut success_count = 0;
-
-        // Deploy regular objects
-        for (idx, (object_id, typed_obj)) in objects.iter().enumerate() {
-            verbose!(
-                "Applying {}/{}: {}{} (to schema {}{})",
-                idx + 1,
-                objects.len(),
-                &object_id.object,
-                staging_suffix,
-                &object_id.schema,
-                staging_suffix
-            );
-
-            deploy_single_object(
-                &executor,
-                object_id,
-                typed_obj,
-                staging_suffix,
-                planned_project,
-                &objects_to_deploy_set,
-                &replacement_object_ids,
-                |stmt| stmt,
-            )
-            .await?;
-            success_count += 1;
-        }
-
-        // Deploy replacement MVs using CREATE REPLACEMENT MATERIALIZED VIEW ... FOR
-        for (idx, (object_id, typed_obj)) in replacement_mvs.iter().enumerate() {
-            verbose!(
-                "Applying replacement MV {}/{}: {} FOR {}.{}.{}",
-                idx + 1,
-                replacement_mvs.len(),
-                &object_id.object,
-                &object_id.database,
-                &object_id.schema,
-                &object_id.object
-            );
-
-            let production_target = object_id.to_unresolved_item_name();
-            deploy_single_object(
-                &executor,
-                object_id,
-                typed_obj,
-                staging_suffix,
-                planned_project,
-                &objects_to_deploy_set,
-                &replacement_object_ids,
-                |stmt| match stmt {
-                    Statement::CreateMaterializedView(mut mv) => {
-                        mv.replacement_for = Some(
-                            mz_sql_parser::ast::RawItemName::Name(production_target),
-                        );
-                        Statement::CreateMaterializedView(mv)
-                    }
-                    other => other,
-                },
-            )
-            .await?;
-            success_count += 1;
-        }
-
-        let deploy_duration = deploy_start.elapsed();
-        progress::stage_success(
-            &format!("Deployed {} view(s)/materialized view(s)", success_count),
-            deploy_duration,
-        );
-
-        // Return success count
-        Ok::<usize, CliError>(success_count)
+    let result = async {
+        create_databases_and_schemas(&executor, planned_project, schema_set, staging_suffix).await?;
+        create_staging_clusters(&executor, client, stage_name, cluster_set, staging_suffix).await?;
+        deploy_objects_to_staging(&executor, objects, replacement_mvs, planned_project, cluster_set, staging_suffix).await
     }
     .await;
 
-    // Handle result with rollback on failure (skip rollback in dry-run mode)
-    match create_result {
+    match result {
         Ok(count) => Ok(count),
-        Err(e) => {
-            if dry_run || no_rollback {
-                if !dry_run {
-                    progress::error(
-                        "Deployment failed (skipping rollback due to --no-rollback flag)",
-                    );
-                }
-                return Err(e);
+        Err(e) if dry_run || no_rollback => {
+            if !dry_run {
+                progress::error(
+                    "Deployment failed (skipping rollback due to --no-rollback flag)",
+                );
             }
-
+            Err(e)
+        }
+        Err(e) => {
             progress::error("Deployment failed, rolling back...");
             let (schemas, clusters) = rollback_staging_resources(client, stage_name).await;
 
@@ -966,6 +709,306 @@ async fn create_resources_with_rollback<'a>(
             Err(e)
         }
     }
+}
+
+/// Provision all database and schema infrastructure required for a staged deployment.
+///
+/// After this completes, both the suffixed staging schemas (where new objects will be
+/// created) and the production schemas (swap targets) are guaranteed to exist.
+async fn create_databases_and_schemas(
+    executor: &executor::DeploymentExecutor<'_>,
+    planned_project: &project::planned::Project,
+    schema_set: &BTreeSet<SchemaQualifier>,
+    staging_suffix: &str,
+) -> Result<(), CliError> {
+    // Create project databases that aren't in schema_set
+    // (schema_set databases will be created by prepare_databases_and_schemas)
+    progress::info("Creating project databases if not exists");
+    let schema_set_dbs: BTreeSet<&str> =
+        schema_set.iter().map(|sq| sq.database.as_str()).collect();
+    for db in &planned_project.databases {
+        if !schema_set_dbs.contains(db.name.as_str()) {
+            executor.ensure_database(&db.name).await?;
+            verbose!("  Ensured database {} exists", db.name);
+        }
+    }
+
+    // Create staging schemas + apply mod_statements
+    progress::stage_start("Creating staging schemas and applying setup statements");
+    let schema_start = Instant::now();
+    executor
+        .prepare_databases_and_schemas(planned_project, schema_set, Some(staging_suffix))
+        .await?;
+    let schema_duration = schema_start.elapsed();
+    progress::stage_success(
+        &format!(
+            "Created {} staging schema(s) with setup statements",
+            schema_set.len()
+        ),
+        schema_duration,
+    );
+
+    // Create production schemas for swap
+    if !executor.is_dry_run() {
+        progress::info("Creating production schemas if not exists");
+        for sq in schema_set {
+            executor.ensure_schema(&sq.database, &sq.schema).await?;
+            verbose!("  Ensured schema {}.{} exists", sq.database, sq.schema);
+        }
+    }
+
+    Ok(())
+}
+
+/// Provision staging clusters that mirror the size and configuration of their
+/// production counterparts.
+///
+/// Clusters that already exist are skipped. Cluster names are recorded for rollback
+/// tracking before any cluster is created, so partial failures can be cleaned up.
+async fn create_staging_clusters(
+    executor: &executor::DeploymentExecutor<'_>,
+    client: &Client,
+    stage_name: &str,
+    cluster_set: &BTreeSet<String>,
+    staging_suffix: &str,
+) -> Result<(), CliError> {
+    // Write cluster mappings BEFORE creating clusters so abort can clean up on failure
+    let cluster_names: Vec<String> = cluster_set.iter().cloned().collect();
+    executor
+        .record_deployment_clusters(stage_name, &cluster_names)
+        .await?;
+
+    progress::stage_start("Creating staging clusters");
+    let cluster_start = Instant::now();
+    let mut created_clusters = 0;
+
+    // Batch check which staging clusters already exist (skip in dry-run mode)
+    let existing_staging_clusters = if !executor.is_dry_run() {
+        let staging_cluster_names: Vec<String> = cluster_set
+            .iter()
+            .map(|name| format!("{}{}", name, staging_suffix))
+            .collect();
+        client
+            .introspection()
+            .check_clusters_exist(&staging_cluster_names)
+            .await?
+    } else {
+        BTreeSet::new()
+    };
+
+    for prod_cluster in cluster_set {
+        let staging_cluster = format!("{}{}", prod_cluster, staging_suffix);
+
+        if executor.is_dry_run() {
+            // Config is unused in dry-run mode; provide a placeholder.
+            let placeholder = ClusterConfig::Managed {
+                options: ClusterOptions {
+                    size: String::new(),
+                    replication_factor: 1,
+                },
+                grants: Vec::new(),
+            };
+            executor
+                .create_cluster(&staging_cluster, prod_cluster, &placeholder)
+                .await?;
+            created_clusters += 1;
+            continue;
+        }
+
+        // Check if staging cluster already exists using batch result
+        if existing_staging_clusters.contains(&staging_cluster) {
+            verbose!("  Cluster '{}' already exists, skipping", staging_cluster);
+            continue;
+        }
+
+        // Get production cluster configuration (handles both managed and unmanaged)
+        let config = client
+            .introspection()
+            .get_cluster_config(prod_cluster)
+            .await?;
+
+        let config = match config {
+            Some(config) => config,
+            None => {
+                return Err(CliError::ClusterNotFound {
+                    name: prod_cluster.clone(),
+                });
+            }
+        };
+
+        executor
+            .create_cluster(&staging_cluster, prod_cluster, &config)
+            .await?;
+        created_clusters += 1;
+
+        log_cluster_creation(&staging_cluster, prod_cluster, &config);
+    }
+
+    let cluster_duration = cluster_start.elapsed();
+    progress::stage_success(
+        &format!("Created {} cluster(s)", created_clusters),
+        cluster_duration,
+    );
+
+    Ok(())
+}
+
+/// Log verbose details about a newly created staging cluster.
+fn log_cluster_creation(staging_cluster: &str, prod_cluster: &str, config: &ClusterConfig) {
+    match config {
+        ClusterConfig::Managed { options, grants } => {
+            verbose!(
+                "  Created managed cluster '{}' (size: {}, replication_factor: {}, {} grant(s), cloned from '{}')",
+                staging_cluster,
+                options.size,
+                options.replication_factor,
+                grants.len(),
+                prod_cluster
+            );
+        }
+        ClusterConfig::Unmanaged { replicas, grants } => {
+            verbose!(
+                "  Created unmanaged cluster '{}' with {} replica(s), {} grant(s) (cloned from '{}')",
+                staging_cluster,
+                replicas.len(),
+                grants.len(),
+                prod_cluster
+            );
+            for replica in replicas {
+                verbose!(
+                    "    - {} (size: {}{})",
+                    replica.name,
+                    replica.size,
+                    replica
+                        .availability_zone
+                        .as_ref()
+                        .map(|az| format!(", az: {}", az))
+                        .unwrap_or_default()
+                );
+            }
+        }
+    }
+}
+
+/// Execute all object definitions (views, materialized views, indexes) into the
+/// staging schemas.
+///
+/// Regular objects are created with suffixed names; replacement materialized views
+/// are linked to their production targets via `CREATE REPLACEMENT MATERIALIZED VIEW
+/// ... FOR`. Returns the total number of successfully deployed objects.
+async fn deploy_objects_to_staging<'a>(
+    executor: &executor::DeploymentExecutor<'_>,
+    objects: &'a [(ObjectId, &'a project::typed::DatabaseObject)],
+    replacement_mvs: &'a [(ObjectId, &'a project::typed::DatabaseObject)],
+    planned_project: &'a project::planned::Project,
+    cluster_set: &BTreeSet<String>,
+    staging_suffix: &str,
+) -> Result<usize, CliError> {
+    progress::stage_start("Deploying objects to staging");
+    let deploy_start = Instant::now();
+
+    // Collect ObjectIds from objects being deployed for the staging transformer
+    // Include both regular objects and replacement MVs
+    let objects_to_deploy_set: BTreeSet<_> = objects
+        .iter()
+        .chain(replacement_mvs.iter())
+        .map(|(oid, _)| oid.clone())
+        .collect();
+
+    // Deploy external indexes
+    let mut external_indexes: Vec<_> = planned_project
+        .iter_objects()
+        .filter(|object| !objects_to_deploy_set.contains(&object.id))
+        .flat_map(extract_external_indexes)
+        .filter_map(|(cluster, index)| cluster_set.contains(&cluster.name).then_some(index))
+        .collect();
+
+    // Transform cluster names in external indexes for staging
+    crate::project::normalize::transform_cluster_names_for_staging(
+        &mut external_indexes,
+        staging_suffix,
+    );
+    for index in external_indexes {
+        verbose!("Creating external index {}", index);
+        executor.execute_sql(&index).await?;
+    }
+
+    // Build the set of replacement object IDs from the replacement MVs slice.
+    // Only these specific objects have their references left unsuffixed.
+    let replacement_object_ids: BTreeSet<ObjectId> = replacement_mvs
+        .iter()
+        .map(|(oid, _)| oid.clone())
+        .collect();
+
+    let mut success_count = 0;
+
+    // Deploy regular objects
+    for (idx, (object_id, typed_obj)) in objects.iter().enumerate() {
+        verbose!(
+            "Applying {}/{}: {}{} (to schema {}{})",
+            idx + 1,
+            objects.len(),
+            &object_id.object,
+            staging_suffix,
+            &object_id.schema,
+            staging_suffix
+        );
+
+        deploy_single_object(
+            executor,
+            object_id,
+            typed_obj,
+            staging_suffix,
+            planned_project,
+            &objects_to_deploy_set,
+            &replacement_object_ids,
+            |stmt| stmt,
+        )
+        .await?;
+        success_count += 1;
+    }
+
+    // Deploy replacement MVs using CREATE REPLACEMENT MATERIALIZED VIEW ... FOR
+    for (idx, (object_id, typed_obj)) in replacement_mvs.iter().enumerate() {
+        verbose!(
+            "Applying replacement MV {}/{}: {} FOR {}.{}.{}",
+            idx + 1,
+            replacement_mvs.len(),
+            &object_id.object,
+            &object_id.database,
+            &object_id.schema,
+            &object_id.object
+        );
+
+        let production_target = object_id.to_unresolved_item_name();
+        deploy_single_object(
+            executor,
+            object_id,
+            typed_obj,
+            staging_suffix,
+            planned_project,
+            &objects_to_deploy_set,
+            &replacement_object_ids,
+            |stmt| match stmt {
+                Statement::CreateMaterializedView(mut mv) => {
+                    mv.replacement_for =
+                        Some(mz_sql_parser::ast::RawItemName::Name(production_target));
+                    Statement::CreateMaterializedView(mv)
+                }
+                other => other,
+            },
+        )
+        .await?;
+        success_count += 1;
+    }
+
+    let deploy_duration = deploy_start.elapsed();
+    progress::stage_success(
+        &format!("Deployed {} view(s)/materialized view(s)", success_count),
+        deploy_duration,
+    );
+
+    Ok(success_count)
 }
 
 /// Rollback staging resources on deployment failure.
