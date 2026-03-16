@@ -9,7 +9,7 @@ menu:
     weight: 160
 disable_list: true
 aliases:
-  - /reference/system-catalog/
+  - /sql/system-catalog/
 ---
 
 Materialize exposes a system catalog that contains metadata about the running

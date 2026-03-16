@@ -6,7 +6,7 @@ menu:
     parent: 'system-catalog'
     weight: 1
 aliases:
-  - /reference/system-catalog/mz_catalog/
+  - /sql/system-catalog/mz_catalog/
 ---
 
 The following sections describe the available relations in the `mz_catalog`
