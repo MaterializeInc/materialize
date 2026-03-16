@@ -31,7 +31,7 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use prost::Message;
 
-use super::{ConsensusProposal, ConsensusProposalSchema};
+use super::{Proposal, ProposalSchema};
 use crate::actor::metrics::AcceptorMetrics;
 use crate::traits::{AcceptorConfig, AcceptorError};
 
@@ -43,7 +43,7 @@ pub enum PersistAcceptorCommand {
     /// (in the handle's `append()` method), so encoding is parallelized
     /// across callers rather than serialized in the acceptor's flush loop.
     Append {
-        proposal: ConsensusProposal,
+        proposal: Proposal,
         encoded_len: usize,
         reply: oneshot::Sender<Result<ProtoAppendResponse, String>>,
     },
@@ -83,7 +83,7 @@ impl crate::traits::Acceptor for PersistAcceptorHandle {
         // task, so that encoding is parallelized across all writers rather than
         // serialized in the acceptor's single-threaded flush loop.
         let encoded_len = proposal.encoded_len();
-        let encoded = ConsensusProposal {
+        let encoded = Proposal {
             encoded: Bytes::from(proposal.encode_to_vec()),
         };
         let (reply_tx, reply_rx) = oneshot::channel();
@@ -104,7 +104,7 @@ impl crate::traits::Acceptor for PersistAcceptorHandle {
 
 /// A pending proposal waiting for the next flush.
 struct PendingAppend {
-    proposal: ConsensusProposal,
+    proposal: Proposal,
     encoded_len: usize,
     reply: oneshot::Sender<Result<ProtoAppendResponse, String>>,
     received_at: std::time::Instant,
@@ -116,7 +116,7 @@ struct PendingAppend {
 /// `compare_and_append`. The persist shard upper frontier serves as the batch
 /// number — batch number derives from upper, not the other way around.
 pub struct PersistAcceptor {
-    write: WriteHandle<ConsensusProposal, (), u64, i64>,
+    write: WriteHandle<Proposal, (), u64, i64>,
     pending: Vec<PendingAppend>,
     flush_interval: Interval,
     rx: mpsc::Receiver<PersistAcceptorCommand>,
@@ -130,7 +130,7 @@ impl PersistAcceptor {
     /// number — no explicit `set_batch_number` needed.
     pub fn new(
         config: AcceptorConfig,
-        write: WriteHandle<ConsensusProposal, (), u64, i64>,
+        write: WriteHandle<Proposal, (), u64, i64>,
         metrics: AcceptorMetrics,
     ) -> (Self, PersistAcceptorHandle) {
         let mut flush_interval =
@@ -225,7 +225,7 @@ impl PersistAcceptor {
         }
 
         // Split proposals from reply senders. Proposals are already pre-encoded
-        // as ConsensusProposal (Bytes) by the caller.
+        // as Proposal (Bytes) by the caller.
         let mut proposals = Vec::with_capacity(num_proposals);
         let mut batch_bytes: usize = 0;
         let mut replies = Vec::with_capacity(num_proposals);
@@ -362,9 +362,9 @@ impl PersistAcceptor {
         metrics: AcceptorMetrics,
     ) -> (PersistAcceptorHandle, mz_ore::task::JoinHandle<()>) {
         let write = client
-            .open_writer::<ConsensusProposal, (), u64, i64>(
+            .open_writer::<Proposal, (), u64, i64>(
                 shard_id,
-                Arc::new(ConsensusProposalSchema),
+                Arc::new(ProposalSchema),
                 Arc::new(UnitSchema),
                 Diagnostics::from_purpose("persist-shared-log-acceptor"),
             )

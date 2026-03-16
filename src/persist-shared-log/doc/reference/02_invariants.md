@@ -79,8 +79,10 @@ that shard.
 
 ### Truncate Properties
 
-Truncate is a learner-side operation applied directly to the materialized
-client shard state; it does not go through the log.
+Truncate is a log operation: truncate proposals are appended to the log by
+the acceptor and evaluated by the learner during playback, following the
+same write path as CAS proposals. This ensures all learners apply the same
+truncates in the same order, preserving deterministic evaluation (C1).
 
 **T1. Truncate removes old entries.**
 After a truncate with `seqno = s`, the client shard contains no entries

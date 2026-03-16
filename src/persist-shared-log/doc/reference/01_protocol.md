@@ -11,20 +11,21 @@ A _proposal_ is a CAS operation submitted by a client. Proposals are
 appended to the log by the acceptor and evaluated later by learners.
 
 Each proposal is stored in the log shard as a persist update where the key
-encodes the operation metadata and the value carries the serialized data:
+carries the serialized proposal and the value is unused:
 
 ```
 Log shard schema:
-  Key (K):   (shard_id: ShardId, expected: Option<u64>, seqno: u64)
-  Value (V): bytes    -- serialized data (opaque to the log)
+  Key (K):   bytes    -- serialized ProtoLogProposal (opaque to persist)
+  Value (V): ()       -- unused
   Time (T):  u64      -- batch number
   Diff (D):  i64      -- always +1
 ```
 
-The `shard_id` identifies the client shard. The `expected` field is the CAS
-precondition (the seqno the client believes is current; `None` means the
-client expects no data to exist). The `seqno` field is the proposed new
-seqno.
+Each key is a serialized `ProtoLogProposal` containing either a CAS or
+truncate operation. The proposal is opaque to persist and to the acceptor;
+the learner deserializes it during evaluation. A CAS proposal contains
+`(shard_id, expected, new_seqno, data)`. A truncate proposal contains
+`(shard_id, seqno)`.
 
 ### Batches
 
@@ -73,6 +74,7 @@ ResultCache:
   results: Map<batch_number, Vec<ProposalResult>>
 
 ProposalResult = CasResult { committed: bool }
+               | TruncateResult { deleted: u64 | error }
 ```
 
 Results are retained for a configurable number of batches (default 10,000)
@@ -97,7 +99,7 @@ When flushed, the acceptor:
 1. Takes all pending proposals from the buffer.
 2. Reads the current `upper` from its `WriteHandle`; this is the next
    batch number.
-3. Creates persist updates: one `((shard_id, expected, seqno), data, batch_number, +1)`
+3. Creates persist updates: one `((serialized_proposal, ()), batch_number, +1)`
    per proposal.
 4. Calls `compare_and_append(updates, expected_upper, new_upper)` where
    `new_upper = batch_number + 1`.
@@ -182,7 +184,10 @@ scan(key, from, limit):
   1. Read from learner (linearized)
 
 truncate(key, seqno):
-  1. Applied directly by the learner to its materialized state
+  1. Construct Truncate proposal
+  2. Append via acceptor; receive receipt (batch_number, position)
+  3. AwaitTruncateResult(batch_number, position) from learner
+  4. Return TruncateResult
 
 list_keys():
   1. Read from learner (linearized)

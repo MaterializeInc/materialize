@@ -8,7 +8,7 @@ existing infrastructure.
 
 A single persist shard stores all proposals:
 
-- **K**: `ConsensusProposal` (serialized protobuf bytes)
+- **K**: `Proposal` (serialized protobuf bytes)
 - **V**: `()`
 - **T**: `u64` (incremented by 1 per batch, in lock-step with persist upper)
 - **D**: `i64` (always +1, proposals are append-only)

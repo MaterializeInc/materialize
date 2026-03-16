@@ -24,7 +24,7 @@ use mz_ore::metrics::MetricsRegistry;
 use crate::actor::metrics::{AcceptorMetrics, LearnerMetrics};
 use crate::persist_log::acceptor::{PersistAcceptor, PersistAcceptorHandle};
 use crate::persist_log::learner::{PersistLearner, PersistLearnerConfig, PersistLearnerHandle};
-use crate::persist_log::{ConsensusProposal, ConsensusProposalSchema};
+use crate::persist_log::{Proposal, ProposalSchema};
 use crate::traits::Acceptor as _;
 use crate::traits::AcceptorConfig;
 
@@ -47,14 +47,14 @@ impl PersistTestHarness {
     }
 
     async fn new_with_client(client: &PersistClient, shard_id: ShardId) -> Self {
-        let key_schema = Arc::new(ConsensusProposalSchema);
+        let key_schema = Arc::new(ProposalSchema);
         let val_schema = Arc::new(UnitSchema);
 
         // Open all handles before spawning tasks. Persist handle creation
         // involves consensus RPCs that can deadlock with a running acceptor
         // task on a current_thread tokio runtime.
         let write = client
-            .open_writer::<ConsensusProposal, (), u64, i64>(
+            .open_writer::<Proposal, (), u64, i64>(
                 shard_id,
                 Arc::clone(&key_schema),
                 Arc::clone(&val_schema),
@@ -64,7 +64,7 @@ impl PersistTestHarness {
             .expect("open acceptor writer");
 
         let (upper_handle, read) = client
-            .open::<ConsensusProposal, (), u64, i64>(
+            .open::<Proposal, (), u64, i64>(
                 shard_id,
                 key_schema,
                 val_schema,

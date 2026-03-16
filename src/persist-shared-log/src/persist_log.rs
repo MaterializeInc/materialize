@@ -14,7 +14,7 @@
 //! learner (CAS evaluation + reads). Data lives in differential format.
 //!
 //! A single persist shard stores all proposals:
-//! - K: `ConsensusProposal` (serialized protobuf bytes)
+//! - K: `Proposal` (serialized protobuf bytes)
 //! - V: `()`
 //! - T: `u64` (incremented by 1 per batch, in lock-step with persist upper)
 //! - D: `i64` (always +1, proposals are append-only)
@@ -42,7 +42,7 @@ use mz_persist_types::stats::NoneStats;
 /// Uses [`Bytes`] for the encoded payload so that cloning (e.g. on
 /// compare-and-append retries) is O(1) via refcount instead of a memcpy.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct ConsensusProposal {
+pub struct Proposal {
     /// Serialized ProtoLogProposal (protobuf bytes).
     pub encoded: Bytes,
 }
@@ -51,16 +51,16 @@ pub struct ConsensusProposal {
 // Codec
 // ---------------------------------------------------------------------------
 
-/// Stateless schema for [`ConsensusProposal`].
+/// Stateless schema for [`Proposal`].
 #[derive(Debug, PartialEq)]
-pub struct ConsensusProposalSchema;
+pub struct ProposalSchema;
 
-impl Codec for ConsensusProposal {
+impl Codec for Proposal {
     type Storage = ();
-    type Schema = ConsensusProposalSchema;
+    type Schema = ProposalSchema;
 
     fn codec_name() -> String {
-        "ConsensusProposal".into()
+        "Proposal".into()
     }
 
     fn encode<B>(&self, buf: &mut B)
@@ -70,8 +70,8 @@ impl Codec for ConsensusProposal {
         buf.put(self.encoded.as_ref());
     }
 
-    fn decode<'a>(buf: &'a [u8], _schema: &ConsensusProposalSchema) -> Result<Self, String> {
-        Ok(ConsensusProposal {
+    fn decode<'a>(buf: &'a [u8], _schema: &ProposalSchema) -> Result<Self, String> {
+        Ok(Proposal {
             encoded: Bytes::copy_from_slice(buf),
         })
     }
@@ -82,7 +82,7 @@ impl Codec for ConsensusProposal {
 
     fn decode_schema(buf: &Bytes) -> Self::Schema {
         assert_eq!(*buf, Bytes::new());
-        ConsensusProposalSchema
+        ProposalSchema
     }
 }
 
@@ -90,7 +90,7 @@ impl Codec for ConsensusProposal {
 // SimpleColumnarData (maps to BinaryBuilder / BinaryArray)
 // ---------------------------------------------------------------------------
 
-impl SimpleColumnarData for ConsensusProposal {
+impl SimpleColumnarData for Proposal {
     type ArrowBuilder = BinaryBuilder;
     type ArrowColumn = BinaryArray;
 
@@ -117,12 +117,12 @@ impl SimpleColumnarData for ConsensusProposal {
 // Schema
 // ---------------------------------------------------------------------------
 
-impl Schema<ConsensusProposal> for ConsensusProposalSchema {
+impl Schema<Proposal> for ProposalSchema {
     type ArrowColumn = BinaryArray;
     type Statistics = NoneStats;
 
-    type Decoder = SimpleColumnarDecoder<ConsensusProposal>;
-    type Encoder = SimpleColumnarEncoder<ConsensusProposal>;
+    type Decoder = SimpleColumnarDecoder<Proposal>;
+    type Encoder = SimpleColumnarEncoder<Proposal>;
 
     fn encoder(&self) -> Result<Self::Encoder, anyhow::Error> {
         Ok(SimpleColumnarEncoder::default())

@@ -43,7 +43,7 @@ use mz_ore::metrics::MetricsRegistry;
 use crate::actor::metrics::{AcceptorMetrics, LearnerMetrics};
 use crate::persist_log::acceptor::{PersistAcceptor, PersistAcceptorHandle};
 use crate::persist_log::learner::{PersistLearner, PersistLearnerConfig, PersistLearnerHandle};
-use crate::persist_log::{ConsensusProposal, ConsensusProposalSchema};
+use crate::persist_log::{Proposal, ProposalSchema};
 use crate::traits::Acceptor as _;
 use crate::traits::AcceptorConfig;
 
@@ -254,13 +254,13 @@ async fn spawn_persist_pair(
     mz_ore::task::AbortOnDropHandle<()>,
     mz_ore::task::AbortOnDropHandle<()>,
 ) {
-    let key_schema = Arc::new(ConsensusProposalSchema);
+    let key_schema = Arc::new(ProposalSchema);
     let val_schema = Arc::new(UnitSchema);
 
     // Open all handles before spawning tasks to avoid deadlocks on
     // current_thread tokio runtimes.
     let write = client
-        .open_writer::<ConsensusProposal, (), u64, i64>(
+        .open_writer::<Proposal, (), u64, i64>(
             shard_id,
             Arc::clone(&key_schema),
             Arc::clone(&val_schema),
@@ -270,7 +270,7 @@ async fn spawn_persist_pair(
         .expect("open acceptor writer");
 
     let (upper_handle, read) = client
-        .open::<ConsensusProposal, (), u64, i64>(
+        .open::<Proposal, (), u64, i64>(
             shard_id,
             key_schema,
             val_schema,
@@ -559,12 +559,12 @@ async fn persist_sim_multi_writer() {
         let client = PersistClient::new_for_tests().await;
         let shard_id = ShardId::new();
 
-        let key_schema = Arc::new(ConsensusProposalSchema);
+        let key_schema = Arc::new(ProposalSchema);
         let val_schema = Arc::new(UnitSchema);
 
         // Open all handles before spawning tasks.
         let write_a = client
-            .open_writer::<ConsensusProposal, (), u64, i64>(
+            .open_writer::<Proposal, (), u64, i64>(
                 shard_id,
                 Arc::clone(&key_schema),
                 Arc::clone(&val_schema),
@@ -574,7 +574,7 @@ async fn persist_sim_multi_writer() {
             .expect("open writer A");
 
         let write_b = client
-            .open_writer::<ConsensusProposal, (), u64, i64>(
+            .open_writer::<Proposal, (), u64, i64>(
                 shard_id,
                 Arc::clone(&key_schema),
                 Arc::clone(&val_schema),
@@ -584,7 +584,7 @@ async fn persist_sim_multi_writer() {
             .expect("open writer B");
 
         let (upper_handle, read) = client
-            .open::<ConsensusProposal, (), u64, i64>(
+            .open::<Proposal, (), u64, i64>(
                 shard_id,
                 key_schema,
                 val_schema,

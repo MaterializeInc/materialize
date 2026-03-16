@@ -24,10 +24,12 @@ use std::sync::Arc;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::location::Blob;
 use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
+use mz_dyncfg::ConfigUpdates;
 use mz_persist_client::cache::StateCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::metrics::Metrics;
 use mz_persist_client::rpc::PersistGrpcPubSubServer;
+use mz_persist_client::stats::STATS_COLLECTION_ENABLED;
 use mz_persist_client::PersistClient;
 
 use crate::LatencyProfile;
@@ -65,6 +67,13 @@ pub fn new_persist_client(config: PersistClientConfig) -> PersistClient {
             persist_cfg.isolated_runtime_worker_threads = n;
         }
     }
+    // The shared log's learner reads every update in order — there's no
+    // pushdown filtering, so stats are computed on writes and never consulted.
+    // Disable stats collection to avoid the overhead.
+    let mut updates = ConfigUpdates::default();
+    updates.add(&STATS_COLLECTION_ENABLED, false);
+    updates.apply(&persist_cfg);
+
     let metrics = Arc::new(Metrics::new(&persist_cfg, &registry));
 
     // In-process pubsub server — no network, no serde.

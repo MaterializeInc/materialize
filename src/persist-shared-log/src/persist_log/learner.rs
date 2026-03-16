@@ -49,7 +49,7 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 
-use super::{ConsensusProposal, ConsensusProposalSchema};
+use super::{Proposal, ProposalSchema};
 use crate::actor::metrics::LearnerMetrics;
 use crate::traits::LearnerError;
 use crate::{ShardState, VersionedEntry};
@@ -432,8 +432,8 @@ enum ResultWaiter {
 /// loop. The listen task runs each `fetch_next()` call to completion, so the
 /// listen frontier is always consistent with the data delivered.
 fn spawn_listen_task(
-    mut listen: Listen<ConsensusProposal, (), u64, i64>,
-    event_tx: mpsc::Sender<Vec<ListenEvent<u64, ((ConsensusProposal, ()), u64, i64)>>>,
+    mut listen: Listen<Proposal, (), u64, i64>,
+    event_tx: mpsc::Sender<Vec<ListenEvent<u64, ((Proposal, ()), u64, i64)>>>,
 ) -> mz_ore::task::JoinHandle<()> {
     mz_ore::task::spawn(|| "persist-listen", async move {
         loop {
@@ -474,11 +474,11 @@ pub struct PersistLearner {
     // --- Channels ---
     cmd_rx: mpsc::Receiver<PersistLearnerCommand>,
     /// Events from the dedicated listen task.
-    event_rx: mpsc::Receiver<Vec<ListenEvent<u64, ((ConsensusProposal, ()), u64, i64)>>>,
+    event_rx: mpsc::Receiver<Vec<ListenEvent<u64, ((Proposal, ()), u64, i64)>>>,
 
     // --- Persist handles ---
     /// Read-only WriteHandle used solely for `fetch_recent_upper()`.
-    upper_handle: WriteHandle<ConsensusProposal, (), u64, i64>,
+    upper_handle: WriteHandle<Proposal, (), u64, i64>,
     /// Handle to the dedicated listen task (kept alive for the actor's lifetime).
     _listen_task: mz_ore::task::JoinHandle<()>,
 
@@ -503,8 +503,8 @@ impl PersistLearner {
     /// directly in a `select!`.
     pub fn new(
         config: PersistLearnerConfig,
-        listen: Listen<ConsensusProposal, (), u64, i64>,
-        upper_handle: WriteHandle<ConsensusProposal, (), u64, i64>,
+        listen: Listen<Proposal, (), u64, i64>,
+        upper_handle: WriteHandle<Proposal, (), u64, i64>,
         metrics: LearnerMetrics,
     ) -> (Self, PersistLearnerHandle) {
         let (cmd_tx, cmd_rx) = mpsc::channel(config.queue_depth);
@@ -572,10 +572,10 @@ impl PersistLearner {
     /// Process a batch of listen events from the listen task channel.
     fn process_listen_events(
         &mut self,
-        events: Vec<ListenEvent<u64, ((ConsensusProposal, ()), u64, i64)>>,
+        events: Vec<ListenEvent<u64, ((Proposal, ()), u64, i64)>>,
     ) {
         // Collect updates grouped by timestamp (batch number).
-        let mut updates_by_ts: BTreeMap<u64, Vec<ConsensusProposal>> = BTreeMap::new();
+        let mut updates_by_ts: BTreeMap<u64, Vec<Proposal>> = BTreeMap::new();
         for event in events {
             match event {
                 ListenEvent::Updates(updates) => {
@@ -597,7 +597,7 @@ impl PersistLearner {
     }
 
     /// Apply a single batch of proposals at the given timestamp.
-    fn apply_batch(&mut self, batch_number: u64, proposals: Vec<ConsensusProposal>) {
+    fn apply_batch(&mut self, batch_number: u64, proposals: Vec<Proposal>) {
         let batch_start = std::time::Instant::now();
         let num_proposals = proposals.len();
         debug!(
@@ -900,11 +900,11 @@ impl PersistLearner {
         shard_id: ShardId,
         metrics: LearnerMetrics,
     ) -> (PersistLearnerHandle, mz_ore::task::JoinHandle<()>) {
-        let key_schema = Arc::new(ConsensusProposalSchema);
+        let key_schema = Arc::new(ProposalSchema);
         let val_schema = Arc::new(UnitSchema);
 
         let (upper_handle, read) = client
-            .open::<ConsensusProposal, (), u64, i64>(
+            .open::<Proposal, (), u64, i64>(
                 shard_id,
                 key_schema,
                 val_schema,
