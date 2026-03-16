@@ -8,11 +8,13 @@ menu:
     identifier: 'explain-plan-operators'
     weight: 140
 disable_list: true
+aliases:
+  - /sql/explain-plan-operators/
 ---
 
 Materialize offers several output formats for [`EXPLAIN
 PLAN`](/sql/explain-plan/) and debugging. LIR plans as rendered in
-[`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping)
+[`mz_introspection.mz_lir_mapping`](../../reference/system-catalog/mz_introspection/#mz_lir_mapping)
 are deliberately succinct, while the plans in other formats give more detail.
 
 The decorrelated and optimized plans from `EXPLAIN DECORRELATED PLAN

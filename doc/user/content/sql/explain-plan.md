@@ -157,7 +157,7 @@ Plan Stage | Description
 **DECORRELATED PLAN** | Display the decorrelated but not-yet-optimized plan.
 **LOCALLY OPTIMIZED** | Display the locally optimized plan (before view inlining and access path selection). This is the final stage for regular `CREATE VIEW` optimization.
 **OPTIMIZED PLAN** | Display the optimized plan.
-**PHYSICAL PLAN** |  Display the physical plan; this corresponds to the operators shown in [`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping). _(Default)_
+**PHYSICAL PLAN** |  Display the physical plan; this corresponds to the operators shown in [`mz_introspection.mz_lir_mapping`](../../reference/system-catalog/mz_introspection/#mz_lir_mapping). _(Default)_
 
 ### Output modifiers
 
@@ -359,7 +359,7 @@ Below the plan, a "Used indexes" section indicates which indexes will be used by
 
 Materialize offers several output formats for `EXPLAIN` and debugging.
 LIR plans as rendered in
-[`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping)
+[`mz_introspection.mz_lir_mapping`](../../reference/system-catalog/mz_introspection/#mz_lir_mapping)
 are deliberately succinct, while the plans in other formats give more
 detail.
 

@@ -5,7 +5,7 @@ disable_list: true
 menu:
   main:
     identifier: "commands"
-    parent: "reference"
+    parent: "sql"
     weight: 100
 aliases:
   - /sql/alter-owner/

@@ -279,7 +279,7 @@ in the [Materialize console](/console/). You can filter
 and sort statements by type, duration, and other dimensions.
 
 This data is also available via the
-[mz_internal.mz_recent_activity_log](/sql/system-catalog/mz_internal/#mz_recent_activity_log)
+[mz_internal.mz_recent_activity_log](/reference/system-catalog/mz_internal/#mz_recent_activity_log)
 catalog table.
 
 It's important to note that the default (and max) sample rate for most
@@ -287,6 +287,6 @@ Materialize organizations is 99%, which means that not all statements will be
 captured in the log. The sampling rate is not user-configurable, and may change
 at any time.
 
-If you're looking for a complete audit history, use the [mz_audit_events](/sql/system-catalog/mz_catalog/#mz_audit_events)
+If you're looking for a complete audit history, use the [mz_audit_events](/reference/system-catalog/mz_catalog/#mz_audit_events)
 catalog table, which records all DDL commands issued against your Materialize
 region.
