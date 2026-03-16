@@ -549,8 +549,11 @@ impl Backend {
 
             // If there is at least one error the parser will return Err.
             Err(err_parsing) => {
-                let error_position = err_parsing.error.pos;
-                let start = offset_to_position(error_position, &rope).unwrap();
+                let error_position = rope
+                    .try_byte_to_char(err_parsing.error.pos)
+                    .unwrap_or_else(|_| rope.len_chars());
+                let start = offset_to_position(error_position, &rope)
+                    .unwrap_or_else(|| Position::new(0, 0));
                 let end = start;
                 let range = Range { start, end };
 
