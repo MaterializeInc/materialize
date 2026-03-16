@@ -10,7 +10,11 @@
 
 from dataclasses import dataclass
 
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mcp import Mcp
 
@@ -42,6 +46,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("-s", action="store_true", help="don't suppress output")
     args = parser.parse_args()
 
+    c.up(Service("mcp", idle=True))
+
     for test_case in test_cases:
         if args.filter in test_case.name:
             print(f"> Running test case {test_case.name}")
@@ -54,8 +60,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     "default_cluster_replication_factor": "1"
                 },
             )
-            # TODO: Remove -vvv again when database-issues#9927 is fixed
-            test_args = ["tests/", "-vvv"]
+            test_args = ["tests/"]
             if args.k:
                 test_args.append(f"-k {args.k}")
             if args.s:
