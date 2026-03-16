@@ -14,7 +14,7 @@ anyhow = "1.0.101"
 async-trait = "0.1.89"
 differential-dataflow = "0.20.0"
 futures = "0.3.31"
-lgalloc = "0.6.0"
+lgalloc = "0.7"
 mz-cluster-client = { path = "../cluster-client" }
 mz-ore = { path = "../ore", features = ["async", "process", "tracing"] }
 mz-service = { path = "../service" }

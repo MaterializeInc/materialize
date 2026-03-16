@@ -69,11 +69,11 @@ pub const LGALLOC_BACKGROUND_INTERVAL: Config<Duration> = Config::new(
     "Scheduling interval for lgalloc's background worker.",
 );
 
-/// Enable lgalloc's eager memory return/reclamation feature.
-pub const LGALLOC_FILE_GROWTH_DAMPENER: Config<usize> = Config::new(
-    "lgalloc_file_growth_dampener",
+/// Lgalloc's growth dampener parameter.
+pub const LGALLOC_GROWTH_DAMPENER: Config<usize> = Config::new(
+    "lgalloc_growth_dampener",
     2,
-    "Lgalloc's file growth dampener parameter.",
+    "Lgalloc's growth dampener parameter.",
 );
 
 /// Enable lgalloc's eager memory return/reclamation feature.
@@ -344,7 +344,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_LGALLOC)
         .add(&LGALLOC_BACKGROUND_INTERVAL)
-        .add(&LGALLOC_FILE_GROWTH_DAMPENER)
+        .add(&LGALLOC_GROWTH_DAMPENER)
         .add(&LGALLOC_LOCAL_BUFFER_BYTES)
         .add(&LGALLOC_SLOW_CLEAR_BYTES)
         .add(&MEMORY_LIMITER_INTERVAL)

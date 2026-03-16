@@ -23,7 +23,7 @@ custom-labels = "0.4.5"
 differential-dataflow = "0.20.0"
 either = "1"
 futures-util = "0.3.31"
-lgalloc = "0.6"
+lgalloc = "0.7"
 mz-ore = { path = "../ore", default-features = false, features = ["async", "process", "tracing", "test", "num-traits", "region", "differential-dataflow", "overflowing"] }
 num-traits = "0.2"
 serde = { version = "1.0.219", features = ["derive"] }
