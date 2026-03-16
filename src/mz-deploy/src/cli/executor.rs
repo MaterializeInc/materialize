@@ -7,6 +7,7 @@
 use crate::cli::CliError;
 use crate::cli::git::get_git_commit;
 use crate::client::{Client, ClusterConfig, quote_identifier};
+use crate::config::Settings;
 use crate::project::{self, typed};
 use crate::verbose;
 use owo_colors::OwoColorize;
@@ -14,7 +15,9 @@ use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fmt;
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 
 /// What happened when applying a single object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -296,6 +299,35 @@ pub fn generate_random_env_name() -> String {
         "{:07x}",
         u32::from_le_bytes([hash[0], hash[1], hash[2], hash[3]]) & 0xFFFFFFF
     )
+}
+
+/// Run a standalone `apply <phase>` subcommand.
+///
+/// Connects, plans with dry-run executor, optionally executes.
+/// Used by infrastructure phases (clusters, roles, network_policies)
+/// that don't need a compiled project.
+pub async fn run_single_phase<F>(
+    settings: &Settings,
+    dry_run: bool,
+    plan_fn: F,
+) -> Result<ApplyPlan, CliError>
+where
+    F: for<'a> FnOnce(
+        &'a Settings,
+        &'a Client,
+        &'a DeploymentExecutor<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<ApplyResult, CliError>> + 'a>>,
+{
+    let client = Client::connect_with_profile(settings.connection().clone())
+        .await
+        .map_err(CliError::Connection)?;
+    let mut plan = ApplyPlan::new();
+    let executor = DeploymentExecutor::new_dry_run(&client);
+    plan.add_phase(plan_fn(settings, &client, &executor).await?);
+    if !dry_run {
+        plan.execute(&client).await?;
+    }
+    Ok(plan)
 }
 
 /// Helper for executing database object deployments.

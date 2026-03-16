@@ -778,51 +778,32 @@ async fn run(args: Args) -> Result<(), CliError> {
             skip_secrets,
             dry_run,
             subcommand,
-        }) => match subcommand {
-            Some(ApplyCommand::Clusters) => {
-                let plan = cli::commands::clusters::run(&settings, dry_run).await?;
-                log::output(&plan);
-                Ok(())
-            }
-            Some(ApplyCommand::Roles) => {
-                let plan = cli::commands::roles::run(&settings, dry_run).await?;
-                log::output(&plan);
-                Ok(())
-            }
-            Some(ApplyCommand::NetworkPolicies) => {
-                let plan = cli::commands::apply_network_policies::run(&settings, dry_run).await?;
-                log::output(&plan);
-                Ok(())
-            }
-            Some(ApplyCommand::Secrets) => {
-                let plan = cli::commands::apply_secrets::run(&settings, dry_run).await?;
-                log::output(&plan);
-                Ok(())
-            }
-            Some(ApplyCommand::Connections) => {
-                let plan = cli::commands::apply_connections::run(&settings, dry_run).await?;
-                log::output(&plan);
-                Ok(())
-            }
-            Some(ApplyCommand::Sources) => {
-                let plan = cli::commands::apply_sources::run(&settings, dry_run).await?;
-                log::output(&plan);
-                Ok(())
-            }
-            Some(ApplyCommand::Tables) => {
-                let plan = cli::commands::apply_tables::run(&settings, dry_run).await?;
-                if !dry_run {
-                    cli::commands::lock::run(&settings).await?;
+        }) => {
+            let plan = match subcommand {
+                Some(ApplyCommand::Clusters) => {
+                    cli::commands::clusters::run(&settings, dry_run).await?
                 }
-                log::output(&plan);
-                Ok(())
-            }
-            None => {
-                let plan = cli::commands::apply_all::run(&settings, skip_secrets, dry_run).await?;
-                log::output(&plan);
-                Ok(())
-            }
-        },
+                Some(ApplyCommand::Roles) => cli::commands::roles::run(&settings, dry_run).await?,
+                Some(ApplyCommand::NetworkPolicies) => {
+                    cli::commands::apply_network_policies::run(&settings, dry_run).await?
+                }
+                Some(ApplyCommand::Secrets) => {
+                    cli::commands::apply_secrets::run(&settings, dry_run).await?
+                }
+                Some(ApplyCommand::Connections) => {
+                    cli::commands::apply_connections::run(&settings, dry_run).await?
+                }
+                Some(ApplyCommand::Sources) => {
+                    cli::commands::apply_sources::run(&settings, dry_run).await?
+                }
+                Some(ApplyCommand::Tables) => {
+                    cli::commands::apply_tables::run(&settings, dry_run).await?
+                }
+                None => cli::commands::apply_all::run(&settings, skip_secrets, dry_run).await?,
+            };
+            log::output(&plan);
+            Ok(())
+        }
         Some(Command::Promote {
             deploy_id,
             force,

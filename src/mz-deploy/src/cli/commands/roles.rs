@@ -61,19 +61,10 @@ pub async fn plan(
 
 /// Run the `roles apply` command: plan, render, optionally execute.
 pub async fn run(settings: &Settings, dry_run: bool) -> Result<ApplyPlan, CliError> {
-    let client = Client::connect_with_profile(settings.connection().clone())
-        .await
-        .map_err(CliError::Connection)?;
-
-    let mut plan = ApplyPlan::new();
-    let executor = DeploymentExecutor::new_dry_run(&client);
-    plan.add_phase(self::plan(settings, &client, &executor).await?);
-
-    if !dry_run {
-        plan.execute(&client).await?;
-    }
-
-    Ok(plan)
+    crate::cli::executor::run_single_phase(settings, dry_run, |s, c, e| {
+        Box::pin(self::plan(s, c, e))
+    })
+    .await
 }
 
 /// Create a role if it doesn't already exist.

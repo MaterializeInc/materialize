@@ -1,7 +1,7 @@
 //! Apply tables command - create tables that don't exist in the database.
 
 use crate::cli::CliError;
-use crate::cli::commands::apply_objects::{self, DatabaseObjectPhase};
+use crate::cli::commands::apply_objects;
 use crate::cli::commands::grants;
 use crate::cli::executor::{ApplyPlan, ApplyResult, DeploymentExecutor};
 use crate::client::Client;
@@ -9,38 +9,71 @@ use crate::config::Settings;
 use crate::project;
 use crate::project::ast::Statement;
 
-pub struct Tables;
+const PHASE_NAME: &str = "tables";
+const GRANT_KIND: grants::GrantObjectKind = grants::GrantObjectKind::Table;
 
-impl DatabaseObjectPhase for Tables {
-    const PHASE_NAME: &'static str = "tables";
-    const GRANT_KIND: grants::GrantObjectKind = grants::GrantObjectKind::Table;
-
-    fn new(_settings: &Settings) -> Result<Self, CliError> {
-        Ok(Tables)
-    }
-
-    fn matches(stmt: &Statement) -> bool {
-        matches!(
-            stmt,
-            Statement::CreateTable(_) | Statement::CreateTableFromSource(_)
-        )
-    }
-    // Uses default handle_existing (reconcile grants → "up_to_date")
-    // Uses default handle_new (execute stmt + indexes + grants + comments → "created")
+fn matches(stmt: &Statement) -> bool {
+    matches!(
+        stmt,
+        Statement::CreateTable(_) | Statement::CreateTableFromSource(_)
+    )
 }
 
 /// Plan only table objects (no deployment tracking, no execution).
 pub async fn plan(
-    settings: &Settings,
+    _settings: &Settings,
     client: &Client,
     executor: &DeploymentExecutor<'_>,
     planned_project: &project::planned::Project,
     apply_plan: &mut ApplyPlan,
 ) -> Result<ApplyResult, CliError> {
-    apply_objects::plan::<Tables>(settings, client, executor, planned_project, apply_plan).await
+    let input = apply_objects::prepare_phase(
+        &GRANT_KIND,
+        matches,
+        client,
+        executor,
+        planned_project,
+        apply_plan,
+    )
+    .await?;
+
+    let mut results = Vec::new();
+
+    for (obj_id, typed_obj) in &input.existing_objects {
+        executor.take_statements();
+        let hr = apply_objects::default_handle_existing(
+            client,
+            executor,
+            obj_id,
+            typed_obj,
+            &GRANT_KIND,
+        )
+        .await?;
+        results.push(apply_objects::to_object_result(obj_id, executor, hr));
+    }
+
+    for (obj_id, typed_obj) in &input.to_create {
+        executor.take_statements();
+        let hr =
+            apply_objects::default_handle_new(client, executor, obj_id, typed_obj, &GRANT_KIND)
+                .await?;
+        results.push(apply_objects::to_object_result(obj_id, executor, hr));
+    }
+
+    Ok(ApplyResult {
+        phase: PHASE_NAME.to_string(),
+        results,
+    })
 }
 
-/// Run the `apply tables` command: compile, plan, optionally execute.
+/// Run the `apply tables` command: compile, plan, optionally execute, then lock.
 pub async fn run(settings: &Settings, dry_run: bool) -> Result<ApplyPlan, CliError> {
-    apply_objects::run::<Tables>(settings, dry_run).await
+    let plan = apply_objects::run_compiled_phase(settings, dry_run, |s, c, e, pp, ap| {
+        Box::pin(self::plan(s, c, e, pp, ap))
+    })
+    .await?;
+    if !dry_run {
+        super::lock::run(settings).await?;
+    }
+    Ok(plan)
 }

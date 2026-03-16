@@ -1,9 +1,7 @@
 //! Apply secrets command - create missing secrets and update existing ones.
 
 use crate::cli::CliError;
-use crate::cli::commands::apply_objects::{
-    self, DatabaseObjectPhase, HandleResult, reconcile_grants_and_comments,
-};
+use crate::cli::commands::apply_objects::{self, HandleResult};
 use crate::cli::commands::grants;
 use crate::cli::executor::ObjectAction;
 use crate::cli::executor::{ApplyPlan, ApplyResult, DeploymentExecutor};
@@ -16,22 +14,22 @@ use crate::project::typed;
 use crate::secret_resolver::SecretResolver;
 use mz_sql_parser::ast::{AlterSecretStatement, Raw};
 
-pub struct Secrets {
+const PHASE_NAME: &str = "secrets";
+const GRANT_KIND: grants::GrantObjectKind = grants::GrantObjectKind::Secret;
+
+fn matches(stmt: &Statement) -> bool {
+    matches!(stmt, Statement::CreateSecret(_))
+}
+
+struct Secrets {
     resolver: SecretResolver,
 }
 
-impl DatabaseObjectPhase for Secrets {
-    const PHASE_NAME: &'static str = "secrets";
-    const GRANT_KIND: grants::GrantObjectKind = grants::GrantObjectKind::Secret;
-
+impl Secrets {
     fn new(settings: &Settings) -> Result<Self, CliError> {
         Ok(Secrets {
             resolver: SecretResolver::new(&settings.profile_config.security),
         })
-    }
-
-    fn matches(stmt: &Statement) -> bool {
-        matches!(stmt, Statement::CreateSecret(_))
     }
 
     async fn handle_existing(
@@ -52,7 +50,14 @@ impl DatabaseObjectPhase for Secrets {
         };
         let redacted_statements = vec![alter_stmt.to_string()];
 
-        reconcile_grants_and_comments::<Self>(client, executor, obj_id, typed_obj).await?;
+        apply_objects::reconcile_grants_and_comments(
+            client,
+            executor,
+            obj_id,
+            typed_obj,
+            &GRANT_KIND,
+        )
+        .await?;
 
         Ok(HandleResult {
             action: ObjectAction::Altered,
@@ -73,7 +78,14 @@ impl DatabaseObjectPhase for Secrets {
         let resolved_stmt = self.resolver.resolve_secret_for_cli(create_stmt).await?;
         let redacted_statements = vec![resolved_stmt.to_string()];
 
-        reconcile_grants_and_comments::<Self>(client, executor, obj_id, typed_obj).await?;
+        apply_objects::reconcile_grants_and_comments(
+            client,
+            executor,
+            obj_id,
+            typed_obj,
+            &GRANT_KIND,
+        )
+        .await?;
 
         Ok(HandleResult {
             action: ObjectAction::Created,
@@ -90,10 +102,45 @@ pub async fn plan(
     planned_project: &project::planned::Project,
     apply_plan: &mut ApplyPlan,
 ) -> Result<ApplyResult, CliError> {
-    apply_objects::plan::<Secrets>(settings, client, executor, planned_project, apply_plan).await
+    let secrets = Secrets::new(settings)?;
+    let input = apply_objects::prepare_phase(
+        &GRANT_KIND,
+        matches,
+        client,
+        executor,
+        planned_project,
+        apply_plan,
+    )
+    .await?;
+
+    let mut results = Vec::new();
+
+    for (obj_id, typed_obj) in &input.existing_objects {
+        executor.take_statements();
+        let hr = secrets
+            .handle_existing(client, executor, obj_id, typed_obj)
+            .await?;
+        results.push(apply_objects::to_object_result(obj_id, executor, hr));
+    }
+
+    for (obj_id, typed_obj) in &input.to_create {
+        executor.take_statements();
+        let hr = secrets
+            .handle_new(client, executor, obj_id, typed_obj)
+            .await?;
+        results.push(apply_objects::to_object_result(obj_id, executor, hr));
+    }
+
+    Ok(ApplyResult {
+        phase: PHASE_NAME.to_string(),
+        results,
+    })
 }
 
 /// Run the `apply secrets` command: plan, render, optionally execute.
 pub async fn run(settings: &Settings, dry_run: bool) -> Result<ApplyPlan, CliError> {
-    apply_objects::run::<Secrets>(settings, dry_run).await
+    apply_objects::run_compiled_phase(settings, dry_run, |s, c, e, pp, ap| {
+        Box::pin(self::plan(s, c, e, pp, ap))
+    })
+    .await
 }

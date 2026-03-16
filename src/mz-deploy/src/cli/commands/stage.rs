@@ -3,7 +3,9 @@
 use super::ObjectRef;
 use crate::cli::{CliError, executor};
 use crate::cli::{git, progress};
-use crate::client::{Client, ClusterConfig, ClusterOptions, DeploymentKind, PendingStatement, ReplacementMvRecord};
+use crate::client::{
+    Client, ClusterConfig, ClusterOptions, DeploymentKind, PendingStatement, ReplacementMvRecord,
+};
 use crate::config::Settings;
 use crate::log;
 use crate::project::SchemaQualifier;
@@ -679,9 +681,18 @@ async fn create_resources_with_rollback<'a>(
     let executor = executor::DeploymentExecutor::with_dry_run(client, dry_run);
 
     let result = async {
-        create_databases_and_schemas(&executor, planned_project, schema_set, staging_suffix).await?;
+        create_databases_and_schemas(&executor, planned_project, schema_set, staging_suffix)
+            .await?;
         create_staging_clusters(&executor, client, stage_name, cluster_set, staging_suffix).await?;
-        deploy_objects_to_staging(&executor, objects, replacement_mvs, planned_project, cluster_set, staging_suffix).await
+        deploy_objects_to_staging(
+            &executor,
+            objects,
+            replacement_mvs,
+            planned_project,
+            cluster_set,
+            staging_suffix,
+        )
+        .await
     }
     .await;
 
@@ -689,9 +700,7 @@ async fn create_resources_with_rollback<'a>(
         Ok(count) => Ok(count),
         Err(e) if dry_run || no_rollback => {
             if !dry_run {
-                progress::error(
-                    "Deployment failed (skipping rollback due to --no-rollback flag)",
-                );
+                progress::error("Deployment failed (skipping rollback due to --no-rollback flag)");
             }
             Err(e)
         }
@@ -724,8 +733,7 @@ async fn create_databases_and_schemas(
     // Create project databases that aren't in schema_set
     // (schema_set databases will be created by prepare_databases_and_schemas)
     progress::info("Creating project databases if not exists");
-    let schema_set_dbs: BTreeSet<&str> =
-        schema_set.iter().map(|sq| sq.database.as_str()).collect();
+    let schema_set_dbs: BTreeSet<&str> = schema_set.iter().map(|sq| sq.database.as_str()).collect();
     for db in &planned_project.databases {
         if !schema_set_dbs.contains(db.name.as_str()) {
             executor.ensure_database(&db.name).await?;
@@ -935,10 +943,8 @@ async fn deploy_objects_to_staging<'a>(
 
     // Build the set of replacement object IDs from the replacement MVs slice.
     // Only these specific objects have their references left unsuffixed.
-    let replacement_object_ids: BTreeSet<ObjectId> = replacement_mvs
-        .iter()
-        .map(|(oid, _)| oid.clone())
-        .collect();
+    let replacement_object_ids: BTreeSet<ObjectId> =
+        replacement_mvs.iter().map(|(oid, _)| oid.clone()).collect();
 
     let mut success_count = 0;
 

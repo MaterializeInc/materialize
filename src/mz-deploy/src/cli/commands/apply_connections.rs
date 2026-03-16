@@ -1,9 +1,7 @@
 //! Apply connections command - create missing connections and reconcile drifted ones.
 
 use crate::cli::CliError;
-use crate::cli::commands::apply_objects::{
-    self, DatabaseObjectPhase, HandleResult, reconcile_grants_and_comments,
-};
+use crate::cli::commands::apply_objects::{self, HandleResult};
 use crate::cli::commands::grants;
 use crate::cli::executor::ObjectAction;
 use crate::cli::executor::{ApplyPlan, ApplyResult, DeploymentExecutor};
@@ -21,22 +19,22 @@ use mz_sql_parser::ast::{
 use mz_sql_parser::parser::parse_statements;
 use std::collections::BTreeMap;
 
-pub struct Connections {
+const PHASE_NAME: &str = "connections";
+const GRANT_KIND: grants::GrantObjectKind = grants::GrantObjectKind::Connection;
+
+fn matches(stmt: &Statement) -> bool {
+    matches!(stmt, Statement::CreateConnection(_))
+}
+
+struct Connections {
     resolver: SecretResolver,
 }
 
-impl DatabaseObjectPhase for Connections {
-    const PHASE_NAME: &'static str = "connections";
-    const GRANT_KIND: grants::GrantObjectKind = grants::GrantObjectKind::Connection;
-
+impl Connections {
     fn new(settings: &Settings) -> Result<Self, CliError> {
         Ok(Connections {
             resolver: SecretResolver::new(&settings.profile_config.security),
         })
-    }
-
-    fn matches(stmt: &Statement) -> bool {
-        matches!(stmt, Statement::CreateConnection(_))
     }
 
     async fn handle_existing(
@@ -98,7 +96,14 @@ impl DatabaseObjectPhase for Connections {
             }
         };
 
-        reconcile_grants_and_comments::<Self>(client, executor, obj_id, typed_obj).await?;
+        apply_objects::reconcile_grants_and_comments(
+            client,
+            executor,
+            obj_id,
+            typed_obj,
+            &GRANT_KIND,
+        )
+        .await?;
 
         Ok(HandleResult {
             action,
@@ -124,7 +129,14 @@ impl DatabaseObjectPhase for Connections {
 
         executor.execute_sql(&resolved_stmt).await?;
 
-        reconcile_grants_and_comments::<Self>(client, executor, obj_id, typed_obj).await?;
+        apply_objects::reconcile_grants_and_comments(
+            client,
+            executor,
+            obj_id,
+            typed_obj,
+            &GRANT_KIND,
+        )
+        .await?;
 
         Ok(HandleResult {
             action: ObjectAction::Created,
@@ -141,13 +153,47 @@ pub async fn plan(
     planned_project: &project::planned::Project,
     apply_plan: &mut ApplyPlan,
 ) -> Result<ApplyResult, CliError> {
-    apply_objects::plan::<Connections>(settings, client, executor, planned_project, apply_plan)
-        .await
+    let connections = Connections::new(settings)?;
+    let input = apply_objects::prepare_phase(
+        &GRANT_KIND,
+        matches,
+        client,
+        executor,
+        planned_project,
+        apply_plan,
+    )
+    .await?;
+
+    let mut results = Vec::new();
+
+    for (obj_id, typed_obj) in &input.existing_objects {
+        executor.take_statements();
+        let hr = connections
+            .handle_existing(client, executor, obj_id, typed_obj)
+            .await?;
+        results.push(apply_objects::to_object_result(obj_id, executor, hr));
+    }
+
+    for (obj_id, typed_obj) in &input.to_create {
+        executor.take_statements();
+        let hr = connections
+            .handle_new(client, executor, obj_id, typed_obj)
+            .await?;
+        results.push(apply_objects::to_object_result(obj_id, executor, hr));
+    }
+
+    Ok(ApplyResult {
+        phase: PHASE_NAME.to_string(),
+        results,
+    })
 }
 
 /// Run the `apply connections` command: plan, render, optionally execute.
 pub async fn run(settings: &Settings, dry_run: bool) -> Result<ApplyPlan, CliError> {
-    apply_objects::run::<Connections>(settings, dry_run).await
+    apply_objects::run_compiled_phase(settings, dry_run, |s, c, e, pp, ap| {
+        Box::pin(self::plan(s, c, e, pp, ap))
+    })
+    .await
 }
 
 /// Parse a `CREATE CONNECTION` SQL string back into its AST statement.
