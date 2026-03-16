@@ -888,8 +888,8 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                     for dpp in path_plans {
                         if !first {
                             write!(f, " ")?;
-                            first = false;
                         }
+                        first = false;
                         write!(f, "[%{}", dpp.source_relation)?;
 
                         for dsp in &dpp.stage_plans {
