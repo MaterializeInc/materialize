@@ -194,6 +194,21 @@ The next session picks up where the previous one left off.
 | `persist-cli` | done |
 | `pgrepr` | done |
 | `avro` | done |
+| `environmentd` | done |
+| `mz` | done |
+| `storage-operators` | done |
+| `persist-types` | done |
+| `compute-client` | done |
+| `sql-parser` | done |
+| `persist` | done |
+| `compute-types` | done |
+| `timely-util` | done |
+| `frontegg-mock` | done |
+| `persist-client` | done |
+| `storage-types` | done |
+| `catalog` | done |
+| `compute` | done |
+| `repr` | done |
 
 ## Tracking files
 

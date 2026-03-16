@@ -394,3 +394,376 @@ Format: `timestamp | crate | file | action`
 2026-03-16 | mz-avro | src/avro/src/writer.rs | written → doc/developer/generated/avro/writer.md
 2026-03-16 | mz-avro | src/avro/src/lib.rs | written → doc/developer/generated/avro/lib.md
 2026-03-16 | mz-avro | (crate synthesis) | written → doc/developer/generated/avro/_crate.md
+2026-03-16 | mz-storage-operators | src/storage-operators/src/metrics.rs | written → doc/developer/generated/storage-operators/metrics.md
+2026-03-16 | mz-storage-operators | src/storage-operators/src/stats.rs | written → doc/developer/generated/storage-operators/stats.md
+2026-03-16 | mz-storage-operators | src/storage-operators/src/persist_source.rs | written → doc/developer/generated/storage-operators/persist_source.md
+2026-03-16 | mz-storage-operators | src/storage-operators/src/oneshot_source/util.rs | written → doc/developer/generated/storage-operators/oneshot_source/util.md
+2026-03-16 | mz-storage-operators | src/storage-operators/src/oneshot_source/aws_source.rs | written → doc/developer/generated/storage-operators/oneshot_source/aws_source.md
+2026-03-16 | mz-storage-operators | src/storage-operators/src/oneshot_source/http_source.rs | written → doc/developer/generated/storage-operators/oneshot_source/http_source.md
+2026-03-16 | mz-storage-operators | src/storage-operators/src/oneshot_source/csv.rs | written → doc/developer/generated/storage-operators/oneshot_source/csv.md
+2026-03-16 | mz-storage-operators | src/storage-operators/src/oneshot_source/parquet.rs | written → doc/developer/generated/storage-operators/oneshot_source/parquet.md
+2026-03-16 | mz-storage-operators | src/storage-operators/src/oneshot_source.rs (module) | written → doc/developer/generated/storage-operators/oneshot_source/_module.md
+2026-03-16 | mz-storage-operators | src/storage-operators/src/s3_oneshot_sink/parquet.rs | written → doc/developer/generated/storage-operators/s3_oneshot_sink/parquet.md
+2026-03-16 | mz-storage-operators | src/storage-operators/src/s3_oneshot_sink/pgcopy.rs | written → doc/developer/generated/storage-operators/s3_oneshot_sink/pgcopy.md
+2026-03-16 | mz-storage-operators | src/storage-operators/src/s3_oneshot_sink.rs (module) | written → doc/developer/generated/storage-operators/s3_oneshot_sink/_module.md
+2026-03-16 | mz-storage-operators | src/storage-operators/src/lib.rs (crate root) | written → doc/developer/generated/storage-operators/_crate.md
+2026-03-16 | mz-persist-types | src/persist-types/src/arrow.rs | written → doc/developer/generated/persist-types/arrow.md
+2026-03-16 | mz-persist-types | src/persist-types/src/codec_impls.rs | written → doc/developer/generated/persist-types/codec_impls.md
+2026-03-16 | mz-persist-types | src/persist-types/src/columnar.rs | written → doc/developer/generated/persist-types/columnar.md
+2026-03-16 | mz-persist-types | src/persist-types/src/parquet.rs | written → doc/developer/generated/persist-types/parquet.md
+2026-03-16 | mz-persist-types | src/persist-types/src/part.rs | written → doc/developer/generated/persist-types/part.md
+2026-03-16 | mz-persist-types | src/persist-types/src/schema.rs | written → doc/developer/generated/persist-types/schema.md
+2026-03-16 | mz-persist-types | src/persist-types/src/timestamp.rs | written → doc/developer/generated/persist-types/timestamp.md
+2026-03-16 | mz-persist-types | src/persist-types/src/txn.rs | written → doc/developer/generated/persist-types/txn.md
+2026-03-16 | mz-persist-types | src/persist-types/src/stats/bytes.rs | written → doc/developer/generated/persist-types/stats/bytes.md
+2026-03-16 | mz-persist-types | src/persist-types/src/stats/json.rs | written → doc/developer/generated/persist-types/stats/json.md
+2026-03-16 | mz-persist-types | src/persist-types/src/stats/primitive.rs | written → doc/developer/generated/persist-types/stats/primitive.md
+2026-03-16 | mz-persist-types | src/persist-types/src/stats/structured.rs | written → doc/developer/generated/persist-types/stats/structured.md
+2026-03-16 | mz-persist-types | src/persist-types/src/stats.rs (module) | written → doc/developer/generated/persist-types/stats/_module.md
+2026-03-16 | mz-persist-types | src/persist-types/src/lib.rs (crate root) | written → doc/developer/generated/persist-types/_crate.md
+2026-03-16 | mz-compute-client | src/compute-client/src/as_of_selection.rs | written → doc/developer/generated/compute-client/as_of_selection.md
+2026-03-16 | mz-compute-client | src/compute-client/src/logging.rs | written → doc/developer/generated/compute-client/logging.md
+2026-03-16 | mz-compute-client | src/compute-client/src/metrics.rs | written → doc/developer/generated/compute-client/metrics.md
+2026-03-16 | mz-compute-client | src/compute-client/src/service.rs | written → doc/developer/generated/compute-client/service.md
+2026-03-16 | mz-compute-client | src/compute-client/src/protocol/command.rs | written → doc/developer/generated/compute-client/protocol/command.md
+2026-03-16 | mz-compute-client | src/compute-client/src/protocol/response.rs | written → doc/developer/generated/compute-client/protocol/response.md
+2026-03-16 | mz-compute-client | src/compute-client/src/protocol/history.rs | written → doc/developer/generated/compute-client/protocol/history.md
+2026-03-16 | mz-compute-client | src/compute-client/src/protocol.rs (module) | written → doc/developer/generated/compute-client/protocol/_module.md
+2026-03-16 | mz-compute-client | src/compute-client/src/controller/error.rs | written → doc/developer/generated/compute-client/controller/error.md
+2026-03-16 | mz-compute-client | src/compute-client/src/controller/instance.rs | written → doc/developer/generated/compute-client/controller/instance.md
+2026-03-16 | mz-compute-client | src/compute-client/src/controller/instance_client.rs | written → doc/developer/generated/compute-client/controller/instance_client.md
+2026-03-16 | mz-compute-client | src/compute-client/src/controller/introspection.rs | written → doc/developer/generated/compute-client/controller/introspection.md
+2026-03-16 | mz-compute-client | src/compute-client/src/controller/replica.rs | written → doc/developer/generated/compute-client/controller/replica.md
+2026-03-16 | mz-compute-client | src/compute-client/src/controller/sequential_hydration.rs | written → doc/developer/generated/compute-client/controller/sequential_hydration.md
+2026-03-16 | mz-compute-client | src/compute-client/src/controller.rs (module) | written → doc/developer/generated/compute-client/controller/_module.md
+2026-03-16 | mz-compute-client | src/compute-client/src/lib.rs (crate root) | written → doc/developer/generated/compute-client/_crate.md
+2026-03-16 | mz-sql-parser | src/sql-parser/src/ast/defs/name.rs | written → doc/developer/generated/sql-parser/ast/defs/name.md
+2026-03-16 | mz-sql-parser | src/sql-parser/src/ast/defs/value.rs | written → doc/developer/generated/sql-parser/ast/defs/value.md
+2026-03-16 | mz-sql-parser | src/sql-parser/src/ast/defs/expr.rs | written → doc/developer/generated/sql-parser/ast/defs/expr.md
+2026-03-16 | mz-sql-parser | src/sql-parser/src/ast/defs/query.rs | written → doc/developer/generated/sql-parser/ast/defs/query.md
+2026-03-16 | mz-sql-parser | src/sql-parser/src/ast/defs/statement.rs | written → doc/developer/generated/sql-parser/ast/defs/statement.md
+2026-03-16 | mz-sql-parser | src/sql-parser/src/ast/defs/ddl.rs | written → doc/developer/generated/sql-parser/ast/defs/ddl.md
+2026-03-16 | mz-sql-parser | src/sql-parser/src/ast/defs.rs (module) | written → doc/developer/generated/sql-parser/ast/defs/_module.md
+2026-03-16 | mz-sql-parser | src/sql-parser/src/ast/display.rs | written → doc/developer/generated/sql-parser/ast/display.md
+2026-03-16 | mz-sql-parser | src/sql-parser/src/ast/fold.rs | written → doc/developer/generated/sql-parser/ast/fold.md
+2026-03-16 | mz-sql-parser | src/sql-parser/src/ast/metadata.rs | written → doc/developer/generated/sql-parser/ast/metadata.md
+2026-03-16 | mz-sql-parser | src/sql-parser/src/ast/visit.rs | written → doc/developer/generated/sql-parser/ast/visit.md
+2026-03-16 | mz-sql-parser | src/sql-parser/src/ast/visit_mut.rs | written → doc/developer/generated/sql-parser/ast/visit_mut.md
+2026-03-16 | mz-sql-parser | src/sql-parser/src/ast.rs (module) | written → doc/developer/generated/sql-parser/ast/_module.md
+2026-03-16 | mz-sql-parser | src/sql-parser/src/parser.rs | written → doc/developer/generated/sql-parser/parser.md
+2026-03-16 | mz-sql-parser | src/sql-parser/src/ident.rs | written → doc/developer/generated/sql-parser/ident.md
+2026-03-16 | mz-sql-parser | src/sql-parser/src/lib.rs (crate root) | written → doc/developer/generated/sql-parser/_crate.md
+2026-03-16 | mz-persist | src/persist/src/location.rs | written → doc/developer/generated/persist/location.md
+2026-03-16 | mz-persist | src/persist/src/error.rs | written → doc/developer/generated/persist/error.md
+2026-03-16 | mz-persist | src/persist/src/cfg.rs | written → doc/developer/generated/persist/cfg.md
+2026-03-16 | mz-persist | src/persist/src/azure.rs | written → doc/developer/generated/persist/azure.md
+2026-03-16 | mz-persist | src/persist/src/file.rs | written → doc/developer/generated/persist/file.md
+2026-03-16 | mz-persist | src/persist/src/mem.rs | written → doc/developer/generated/persist/mem.md
+2026-03-16 | mz-persist | src/persist/src/s3.rs | written → doc/developer/generated/persist/s3.md
+2026-03-16 | mz-persist | src/persist/src/postgres.rs | written → doc/developer/generated/persist/postgres.md
+2026-03-16 | mz-persist | src/persist/src/foundationdb.rs | written → doc/developer/generated/persist/foundationdb.md
+2026-03-16 | mz-persist | src/persist/src/metrics.rs | written → doc/developer/generated/persist/metrics.md
+2026-03-16 | mz-persist | src/persist/src/retry.rs | written → doc/developer/generated/persist/retry.md
+2026-03-16 | mz-persist | src/persist/src/intercept.rs | written → doc/developer/generated/persist/intercept.md
+2026-03-16 | mz-persist | src/persist/src/unreliable.rs | written → doc/developer/generated/persist/unreliable.md
+2026-03-16 | mz-persist | src/persist/src/workload.rs | written → doc/developer/generated/persist/workload.md
+2026-03-16 | mz-persist | src/persist/src/generated.rs | written → doc/developer/generated/persist/generated.md
+2026-03-16 | mz-persist | src/persist/src/indexed/columnar/arrow.rs | written → doc/developer/generated/persist/indexed/columnar/arrow.md
+2026-03-16 | mz-persist | src/persist/src/indexed/columnar/parquet.rs | written → doc/developer/generated/persist/indexed/columnar/parquet.md
+2026-03-16 | mz-persist | src/persist/src/indexed/columnar.rs | written → doc/developer/generated/persist/indexed/columnar/_module.md
+2026-03-16 | mz-persist | src/persist/src/indexed/encoding.rs | written → doc/developer/generated/persist/indexed/encoding.md
+2026-03-16 | mz-persist | src/persist/src/indexed.rs | written → doc/developer/generated/persist/indexed/_module.md
+2026-03-16 | mz-persist | src/persist/src/turmoil.rs | written → doc/developer/generated/persist/turmoil.md
+2026-03-16 | mz-persist | src/persist/src/lib.rs (crate root) | written → doc/developer/generated/persist/_crate.md
+2026-03-16 | mz-compute-types | src/compute-types/src/config.rs | written → doc/developer/generated/compute-types/config.md
+2026-03-16 | mz-compute-types | src/compute-types/src/dataflows.rs | written → doc/developer/generated/compute-types/dataflows.md
+2026-03-16 | mz-compute-types | src/compute-types/src/dyncfgs.rs | written → doc/developer/generated/compute-types/dyncfgs.md
+2026-03-16 | mz-compute-types | src/compute-types/src/sources.rs | written → doc/developer/generated/compute-types/sources.md
+2026-03-16 | mz-compute-types | src/compute-types/src/sinks.rs | written → doc/developer/generated/compute-types/sinks.md
+2026-03-16 | mz-compute-types | src/compute-types/src/explain.rs | written → doc/developer/generated/compute-types/explain.md
+2026-03-16 | mz-compute-types | src/compute-types/src/explain/text.rs | written → doc/developer/generated/compute-types/explain/text.md
+2026-03-16 | mz-compute-types | src/compute-types/src/plan/join/delta_join.rs | written → doc/developer/generated/compute-types/plan/join/delta_join.md
+2026-03-16 | mz-compute-types | src/compute-types/src/plan/join/linear_join.rs | written → doc/developer/generated/compute-types/plan/join/linear_join.md
+2026-03-16 | mz-compute-types | src/compute-types/src/plan/join.rs | written → doc/developer/generated/compute-types/plan/join/_module.md
+2026-03-16 | mz-compute-types | src/compute-types/src/plan/reduce.rs | written → doc/developer/generated/compute-types/plan/reduce.md
+2026-03-16 | mz-compute-types | src/compute-types/src/plan/threshold.rs | written → doc/developer/generated/compute-types/plan/threshold.md
+2026-03-16 | mz-compute-types | src/compute-types/src/plan/top_k.rs | written → doc/developer/generated/compute-types/plan/top_k.md
+2026-03-16 | mz-compute-types | src/compute-types/src/plan/interpret/api.rs | written → doc/developer/generated/compute-types/plan/interpret/api.md
+2026-03-16 | mz-compute-types | src/compute-types/src/plan/interpret/physically_monotonic.rs | written → doc/developer/generated/compute-types/plan/interpret/physically_monotonic.md
+2026-03-16 | mz-compute-types | src/compute-types/src/plan/interpret.rs | written → doc/developer/generated/compute-types/plan/interpret/_module.md
+2026-03-16 | mz-compute-types | src/compute-types/src/plan/transform/api.rs | written → doc/developer/generated/compute-types/plan/transform/api.md
+2026-03-16 | mz-compute-types | src/compute-types/src/plan/transform/relax_must_consolidate.rs | written → doc/developer/generated/compute-types/plan/transform/relax_must_consolidate.md
+2026-03-16 | mz-compute-types | src/compute-types/src/plan/transform.rs | written → doc/developer/generated/compute-types/plan/transform/_module.md
+2026-03-16 | mz-compute-types | src/compute-types/src/plan/render_plan.rs | written → doc/developer/generated/compute-types/plan/render_plan.md
+2026-03-16 | mz-compute-types | src/compute-types/src/plan/lowering.rs | written → doc/developer/generated/compute-types/plan/lowering.md
+2026-03-16 | mz-compute-types | src/compute-types/src/plan.rs | written → doc/developer/generated/compute-types/plan/_module.md
+2026-03-16 | mz-compute-types | src/compute-types/src/lib.rs (crate root) | written → doc/developer/generated/compute-types/_crate.md
+2026-03-16 | mz-environmentd | src/environmentd/src/deployment/preflight.rs | written → doc/developer/generated/environmentd/deployment/preflight.md
+2026-03-16 | mz-environmentd | src/environmentd/src/deployment/state.rs | written → doc/developer/generated/environmentd/deployment/state.md
+2026-03-16 | mz-environmentd | src/environmentd/src/deployment.rs | written → doc/developer/generated/environmentd/deployment/_module.md
+2026-03-16 | mz-environmentd | src/environmentd/src/environmentd/sys.rs | written → doc/developer/generated/environmentd/environmentd/sys.md
+2026-03-16 | mz-environmentd | src/environmentd/src/environmentd/main.rs | written → doc/developer/generated/environmentd/environmentd/main.md
+2026-03-16 | mz-environmentd | src/environmentd/src/environmentd.rs | written → doc/developer/generated/environmentd/environmentd/_module.md
+2026-03-16 | mz-environmentd | src/environmentd/src/http/catalog.rs | written → doc/developer/generated/environmentd/http/catalog.md
+2026-03-16 | mz-environmentd | src/environmentd/src/http/cluster.rs | written → doc/developer/generated/environmentd/http/cluster.md
+2026-03-16 | mz-environmentd | src/environmentd/src/http/console.rs | written → doc/developer/generated/environmentd/http/console.md
+2026-03-16 | mz-environmentd | src/environmentd/src/http/mcp.rs | written → doc/developer/generated/environmentd/http/mcp.md
+2026-03-16 | mz-environmentd | src/environmentd/src/http/memory.rs | written → doc/developer/generated/environmentd/http/memory.md
+2026-03-16 | mz-environmentd | src/environmentd/src/http/metrics.rs | written → doc/developer/generated/environmentd/http/metrics.md
+2026-03-16 | mz-environmentd | src/environmentd/src/http/metrics_viz.rs | written → doc/developer/generated/environmentd/http/metrics_viz.md
+2026-03-16 | mz-environmentd | src/environmentd/src/http/probe.rs | written → doc/developer/generated/environmentd/http/probe.md
+2026-03-16 | mz-environmentd | src/environmentd/src/http/prometheus.rs | written → doc/developer/generated/environmentd/http/prometheus.md
+2026-03-16 | mz-environmentd | src/environmentd/src/http/root.rs | written → doc/developer/generated/environmentd/http/root.md
+2026-03-16 | mz-environmentd | src/environmentd/src/http/sql.rs | written → doc/developer/generated/environmentd/http/sql.md
+2026-03-16 | mz-environmentd | src/environmentd/src/http/webhook.rs | written → doc/developer/generated/environmentd/http/webhook.md
+2026-03-16 | mz-environmentd | src/environmentd/src/http.rs | written → doc/developer/generated/environmentd/http/_module.md
+2026-03-16 | mz-environmentd | src/environmentd/src/telemetry.rs | written → doc/developer/generated/environmentd/telemetry.md
+2026-03-16 | mz-environmentd | src/environmentd/src/test_util.rs | written → doc/developer/generated/environmentd/test_util.md
+2026-03-16 | mz-environmentd | src/environmentd/src/lib.rs (crate root) | written → doc/developer/generated/environmentd/_crate.md
+2026-03-16 | mz | src/mz/src/command/app_password.rs | written → doc/developer/generated/mz/command/app_password.md
+2026-03-16 | mz | src/mz/src/command/config.rs | written → doc/developer/generated/mz/command/config.md
+2026-03-16 | mz | src/mz/src/command/profile.rs | written → doc/developer/generated/mz/command/profile.md
+2026-03-16 | mz | src/mz/src/command/region.rs | written → doc/developer/generated/mz/command/region.md
+2026-03-16 | mz | src/mz/src/command/secret.rs | written → doc/developer/generated/mz/command/secret.md
+2026-03-16 | mz | src/mz/src/command/sql.rs | written → doc/developer/generated/mz/command/sql.md
+2026-03-16 | mz | src/mz/src/command/user.rs | written → doc/developer/generated/mz/command/user.md
+2026-03-16 | mz | src/mz/src/command.rs | written → doc/developer/generated/mz/command/_module.md
+2026-03-16 | mz | src/mz/src/config_file.rs | written → doc/developer/generated/mz/config_file.md
+2026-03-16 | mz | src/mz/src/context.rs | written → doc/developer/generated/mz/context.md
+2026-03-16 | mz | src/mz/src/error.rs | written → doc/developer/generated/mz/error.md
+2026-03-16 | mz | src/mz/src/server.rs | written → doc/developer/generated/mz/server.md
+2026-03-16 | mz | src/mz/src/sql_client.rs | written → doc/developer/generated/mz/sql_client.md
+2026-03-16 | mz | src/mz/src/ui.rs | written → doc/developer/generated/mz/ui.md
+2026-03-16 | mz | src/mz/src/bin/mz/command/app_password.rs | written → doc/developer/generated/mz/bin/mz/command/app_password.md
+2026-03-16 | mz | src/mz/src/bin/mz/command/config.rs | written → doc/developer/generated/mz/bin/mz/command/config.md
+2026-03-16 | mz | src/mz/src/bin/mz/command/profile.rs | written → doc/developer/generated/mz/bin/mz/command/profile.md
+2026-03-16 | mz | src/mz/src/bin/mz/command/region.rs | written → doc/developer/generated/mz/bin/mz/command/region.md
+2026-03-16 | mz | src/mz/src/bin/mz/command/secret.rs | written → doc/developer/generated/mz/bin/mz/command/secret.md
+2026-03-16 | mz | src/mz/src/bin/mz/command/sql.rs | written → doc/developer/generated/mz/bin/mz/command/sql.md
+2026-03-16 | mz | src/mz/src/bin/mz/command/user.rs | written → doc/developer/generated/mz/bin/mz/command/user.md
+2026-03-16 | mz | src/mz/src/bin/mz/command.rs | written → doc/developer/generated/mz/bin/mz/command/_module.md
+2026-03-16 | mz | src/mz/src/bin/mz/mixin.rs | written → doc/developer/generated/mz/bin/mz/mixin.md
+2026-03-16 | mz | src/mz/src/bin/mz/upgrader.rs | written → doc/developer/generated/mz/bin/mz/upgrader.md
+2026-03-16 | mz | src/mz/src/bin/mz/main.rs | written → doc/developer/generated/mz/bin/mz/main.md
+2026-03-16 | mz | src/mz/src/lib.rs (crate root) | written → doc/developer/generated/mz/_crate.md
+2026-03-16 | mz-timely-util | src/timely-util/src/activator.rs | written → doc/developer/generated/timely-util/activator.md
+2026-03-16 | mz-timely-util | src/timely-util/src/antichain.rs | written → doc/developer/generated/timely-util/antichain.md
+2026-03-16 | mz-timely-util | src/timely-util/src/builder_async.rs | written → doc/developer/generated/timely-util/builder_async.md
+2026-03-16 | mz-timely-util | src/timely-util/src/capture.rs | written → doc/developer/generated/timely-util/capture.md
+2026-03-16 | mz-timely-util | src/timely-util/src/columnar/batcher.rs | written → doc/developer/generated/timely-util/columnar/batcher.md
+2026-03-16 | mz-timely-util | src/timely-util/src/columnar/builder.rs | written → doc/developer/generated/timely-util/columnar/builder.md
+2026-03-16 | mz-timely-util | src/timely-util/src/columnar.rs (module) | written → doc/developer/generated/timely-util/columnar/_module.md
+2026-03-16 | mz-timely-util | src/timely-util/src/containers/stack.rs | written → doc/developer/generated/timely-util/containers/stack.md
+2026-03-16 | mz-timely-util | src/timely-util/src/containers.rs (module) | written → doc/developer/generated/timely-util/containers/_module.md
+2026-03-16 | mz-timely-util | src/timely-util/src/operator.rs | written → doc/developer/generated/timely-util/operator.md
+2026-03-16 | mz-timely-util | src/timely-util/src/order.rs | written → doc/developer/generated/timely-util/order.md
+2026-03-16 | mz-timely-util | src/timely-util/src/pact.rs | written → doc/developer/generated/timely-util/pact.md
+2026-03-16 | mz-timely-util | src/timely-util/src/panic.rs | written → doc/developer/generated/timely-util/panic.md
+2026-03-16 | mz-timely-util | src/timely-util/src/probe.rs | written → doc/developer/generated/timely-util/probe.md
+2026-03-16 | mz-timely-util | src/timely-util/src/reclock.rs | written → doc/developer/generated/timely-util/reclock.md
+2026-03-16 | mz-timely-util | src/timely-util/src/replay.rs | written → doc/developer/generated/timely-util/replay.md
+2026-03-16 | mz-timely-util | src/timely-util/src/scope_label.rs | written → doc/developer/generated/timely-util/scope_label.md
+2026-03-16 | mz-timely-util | src/timely-util/src/temporal.rs | written → doc/developer/generated/timely-util/temporal.md
+2026-03-16 | mz-timely-util | src/timely-util/src/lib.rs (crate root) | written → doc/developer/generated/timely-util/_crate.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/models/token.rs | written → doc/developer/generated/frontegg-mock/models/token.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/models/user.rs | written → doc/developer/generated/frontegg-mock/models/user.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/models/group.rs | written → doc/developer/generated/frontegg-mock/models/group.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/models/scim.rs | written → doc/developer/generated/frontegg-mock/models/scim.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/models/sso.rs | written → doc/developer/generated/frontegg-mock/models/sso.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/models/utils.rs | written → doc/developer/generated/frontegg-mock/models/utils.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/models.rs (module) | written → doc/developer/generated/frontegg-mock/models/_module.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/handlers/auth.rs | written → doc/developer/generated/frontegg-mock/handlers/auth.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/handlers/user.rs | written → doc/developer/generated/frontegg-mock/handlers/user.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/handlers/group.rs | written → doc/developer/generated/frontegg-mock/handlers/group.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/handlers/scim.rs | written → doc/developer/generated/frontegg-mock/handlers/scim.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/handlers/sso.rs | written → doc/developer/generated/frontegg-mock/handlers/sso.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/handlers.rs (module) | written → doc/developer/generated/frontegg-mock/handlers/_module.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/middleware/latency.rs | written → doc/developer/generated/frontegg-mock/middleware/latency.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/middleware/logging.rs | written → doc/developer/generated/frontegg-mock/middleware/logging.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/middleware/role_update.rs | written → doc/developer/generated/frontegg-mock/middleware/role_update.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/middleware.rs (module) | written → doc/developer/generated/frontegg-mock/middleware/_module.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/utils.rs | written → doc/developer/generated/frontegg-mock/utils.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/server.rs | written → doc/developer/generated/frontegg-mock/server.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/main.rs | written → doc/developer/generated/frontegg-mock/main.md
+2026-03-16 | mz-frontegg-mock | src/frontegg-mock/src/lib.rs (crate root) | written → doc/developer/generated/frontegg-mock/_crate.md
+2026-03-16 | mz-persist-client | src/persist-client/src/async_runtime.rs | written → doc/developer/generated/persist-client/async_runtime.md
+2026-03-16 | mz-persist-client | src/persist-client/src/batch.rs | written → doc/developer/generated/persist-client/batch.md
+2026-03-16 | mz-persist-client | src/persist-client/src/cache.rs | written → doc/developer/generated/persist-client/cache.md
+2026-03-16 | mz-persist-client | src/persist-client/src/cfg.rs | written → doc/developer/generated/persist-client/cfg.md
+2026-03-16 | mz-persist-client | src/persist-client/src/critical.rs | written → doc/developer/generated/persist-client/critical.md
+2026-03-16 | mz-persist-client | src/persist-client/src/error.rs | written → doc/developer/generated/persist-client/error.md
+2026-03-16 | mz-persist-client | src/persist-client/src/fetch.rs | written → doc/developer/generated/persist-client/fetch.md
+2026-03-16 | mz-persist-client | src/persist-client/src/iter.rs | written → doc/developer/generated/persist-client/iter.md
+2026-03-16 | mz-persist-client | src/persist-client/src/read.rs | written → doc/developer/generated/persist-client/read.md
+2026-03-16 | mz-persist-client | src/persist-client/src/rpc.rs | written → doc/developer/generated/persist-client/rpc.md
+2026-03-16 | mz-persist-client | src/persist-client/src/schema.rs | written → doc/developer/generated/persist-client/schema.md
+2026-03-16 | mz-persist-client | src/persist-client/src/stats.rs | written → doc/developer/generated/persist-client/stats.md
+2026-03-16 | mz-persist-client | src/persist-client/src/usage.rs | written → doc/developer/generated/persist-client/usage.md
+2026-03-16 | mz-persist-client | src/persist-client/src/write.rs | written → doc/developer/generated/persist-client/write.md
+2026-03-16 | mz-persist-client | src/persist-client/src/internals_bench.rs | written → doc/developer/generated/persist-client/internals_bench.md
+2026-03-16 | mz-persist-client | src/persist-client/src/operators/shard_source.rs | written → doc/developer/generated/persist-client/operators/shard_source.md
+2026-03-16 | mz-persist-client | src/persist-client/src/operators/ | written → doc/developer/generated/persist-client/operators/_module.md
+2026-03-16 | mz-persist-client | src/persist-client/src/cli/args.rs | written → doc/developer/generated/persist-client/cli/args.md
+2026-03-16 | mz-persist-client | src/persist-client/src/cli/admin.rs | written → doc/developer/generated/persist-client/cli/admin.md
+2026-03-16 | mz-persist-client | src/persist-client/src/cli/bench.rs | written → doc/developer/generated/persist-client/cli/bench.md
+2026-03-16 | mz-persist-client | src/persist-client/src/cli/inspect.rs | written → doc/developer/generated/persist-client/cli/inspect.md
+2026-03-16 | mz-persist-client | src/persist-client/src/cli/ | written → doc/developer/generated/persist-client/cli/_module.md
+2026-03-16 | mz-persist-client | src/persist-client/src/internal/apply.rs | written → doc/developer/generated/persist-client/internal/apply.md
+2026-03-16 | mz-persist-client | src/persist-client/src/internal/cache.rs | written → doc/developer/generated/persist-client/internal/cache.md
+2026-03-16 | mz-persist-client | src/persist-client/src/internal/compact.rs | written → doc/developer/generated/persist-client/internal/compact.md
+2026-03-16 | mz-persist-client | src/persist-client/src/internal/datadriven.rs | written → doc/developer/generated/persist-client/internal/datadriven.md
+2026-03-16 | mz-persist-client | src/persist-client/src/internal/encoding.rs | written → doc/developer/generated/persist-client/internal/encoding.md
+2026-03-16 | mz-persist-client | src/persist-client/src/internal/gc.rs | written → doc/developer/generated/persist-client/internal/gc.md
+2026-03-16 | mz-persist-client | src/persist-client/src/internal/machine.rs | written → doc/developer/generated/persist-client/internal/machine.md
+2026-03-16 | mz-persist-client | src/persist-client/src/internal/maintenance.rs | written → doc/developer/generated/persist-client/internal/maintenance.md
+2026-03-16 | mz-persist-client | src/persist-client/src/internal/merge.rs | written → doc/developer/generated/persist-client/internal/merge.md
+2026-03-16 | mz-persist-client | src/persist-client/src/internal/metrics.rs | written → doc/developer/generated/persist-client/internal/metrics.md
+2026-03-16 | mz-persist-client | src/persist-client/src/internal/paths.rs | written → doc/developer/generated/persist-client/internal/paths.md
+2026-03-16 | mz-persist-client | src/persist-client/src/internal/restore.rs | written → doc/developer/generated/persist-client/internal/restore.md
+2026-03-16 | mz-persist-client | src/persist-client/src/internal/service.rs | written → doc/developer/generated/persist-client/internal/service.md
+2026-03-16 | mz-persist-client | src/persist-client/src/internal/state.rs | written → doc/developer/generated/persist-client/internal/state.md
+2026-03-16 | mz-persist-client | src/persist-client/src/internal/state_diff.rs | written → doc/developer/generated/persist-client/internal/state_diff.md
+2026-03-16 | mz-persist-client | src/persist-client/src/internal/state_versions.rs | written → doc/developer/generated/persist-client/internal/state_versions.md
+2026-03-16 | mz-persist-client | src/persist-client/src/internal/trace.rs | written → doc/developer/generated/persist-client/internal/trace.md
+2026-03-16 | mz-persist-client | src/persist-client/src/internal/watch.rs | written → doc/developer/generated/persist-client/internal/watch.md
+2026-03-16 | mz-persist-client | src/persist-client/src/internal/ | written → doc/developer/generated/persist-client/internal/_module.md
+2026-03-16 | mz-persist-client | src/persist-client/src/lib.rs (crate root) | written → doc/developer/generated/persist-client/_crate.md
+2026-03-16 | mz-storage-types | src/storage-types/src/configuration.rs | written → doc/developer/generated/storage-types/configuration.md
+2026-03-16 | mz-storage-types | src/storage-types/src/connections/string_or_secret.rs | written → doc/developer/generated/storage-types/connections/string_or_secret.md
+2026-03-16 | mz-storage-types | src/storage-types/src/connections/inline.rs | written → doc/developer/generated/storage-types/connections/inline.md
+2026-03-16 | mz-storage-types | src/storage-types/src/connections/aws.rs | written → doc/developer/generated/storage-types/connections/aws.md
+2026-03-16 | mz-storage-types | src/storage-types/src/connections.rs (module) | written → doc/developer/generated/storage-types/connections/_module.md
+2026-03-16 | mz-storage-types | src/storage-types/src/controller.rs | written → doc/developer/generated/storage-types/controller.md
+2026-03-16 | mz-storage-types | src/storage-types/src/dyncfgs.rs | written → doc/developer/generated/storage-types/dyncfgs.md
+2026-03-16 | mz-storage-types | src/storage-types/src/errors.rs | written → doc/developer/generated/storage-types/errors.md
+2026-03-16 | mz-storage-types | src/storage-types/src/instances.rs | written → doc/developer/generated/storage-types/instances.md
+2026-03-16 | mz-storage-types | src/storage-types/src/oneshot_sources.rs | written → doc/developer/generated/storage-types/oneshot_sources.md
+2026-03-16 | mz-storage-types | src/storage-types/src/parameters.rs | written → doc/developer/generated/storage-types/parameters.md
+2026-03-16 | mz-storage-types | src/storage-types/src/read_holds.rs | written → doc/developer/generated/storage-types/read_holds.md
+2026-03-16 | mz-storage-types | src/storage-types/src/read_policy.rs | written → doc/developer/generated/storage-types/read_policy.md
+2026-03-16 | mz-storage-types | src/storage-types/src/sinks/s3_oneshot_sink.rs | written → doc/developer/generated/storage-types/sinks/s3_oneshot_sink.md
+2026-03-16 | mz-storage-types | src/storage-types/src/sinks.rs (module) | written → doc/developer/generated/storage-types/sinks/_module.md
+2026-03-16 | mz-storage-types | src/storage-types/src/sources/encoding.rs | written → doc/developer/generated/storage-types/sources/encoding.md
+2026-03-16 | mz-storage-types | src/storage-types/src/sources/envelope.rs | written → doc/developer/generated/storage-types/sources/envelope.md
+2026-03-16 | mz-storage-types | src/storage-types/src/sources/kafka.rs | written → doc/developer/generated/storage-types/sources/kafka.md
+2026-03-16 | mz-storage-types | src/storage-types/src/sources/load_generator.rs | written → doc/developer/generated/storage-types/sources/load_generator.md
+2026-03-16 | mz-storage-types | src/storage-types/src/sources/mysql.rs | written → doc/developer/generated/storage-types/sources/mysql.md
+2026-03-16 | mz-storage-types | src/storage-types/src/sources/postgres.rs | written → doc/developer/generated/storage-types/sources/postgres.md
+2026-03-16 | mz-storage-types | src/storage-types/src/sources/sql_server.rs | written → doc/developer/generated/storage-types/sources/sql_server.md
+2026-03-16 | mz-storage-types | src/storage-types/src/sources.rs (module) | written → doc/developer/generated/storage-types/sources/_module.md
+2026-03-16 | mz-storage-types | src/storage-types/src/stats.rs | written → doc/developer/generated/storage-types/stats.md
+2026-03-16 | mz-storage-types | src/storage-types/src/time_dependence.rs | written → doc/developer/generated/storage-types/time_dependence.md
+2026-03-16 | mz-storage-types | src/storage-types/src/lib.rs (crate root) | written → doc/developer/generated/storage-types/_crate.md
+2026-03-16 | mz-catalog | src/catalog/src/builtin/notice.rs | written → doc/developer/generated/catalog/builtin/notice.md
+2026-03-16 | mz-catalog | src/catalog/src/builtin.rs (module) | written → doc/developer/generated/catalog/builtin/_module.md
+2026-03-16 | mz-catalog | src/catalog/src/config.rs | written → doc/developer/generated/catalog/config.md
+2026-03-16 | mz-catalog | src/catalog/src/expr_cache.rs | written → doc/developer/generated/catalog/expr_cache.md
+2026-03-16 | mz-catalog | src/catalog/src/durable/debug.rs | written → doc/developer/generated/catalog/durable/debug.md
+2026-03-16 | mz-catalog | src/catalog/src/durable/error.rs | written → doc/developer/generated/catalog/durable/error.md
+2026-03-16 | mz-catalog | src/catalog/src/durable/initialize.rs | written → doc/developer/generated/catalog/durable/initialize.md
+2026-03-16 | mz-catalog | src/catalog/src/durable/metrics.rs | written → doc/developer/generated/catalog/durable/metrics.md
+2026-03-16 | mz-catalog | src/catalog/src/durable/objects/serialization.rs | written → doc/developer/generated/catalog/durable/objects/serialization.md
+2026-03-16 | mz-catalog | src/catalog/src/durable/objects/state_update.rs | written → doc/developer/generated/catalog/durable/objects/state_update.md
+2026-03-16 | mz-catalog | src/catalog/src/durable/objects.rs (module) | written → doc/developer/generated/catalog/durable/objects/_module.md
+2026-03-16 | mz-catalog | src/catalog/src/durable/persist.rs | written → doc/developer/generated/catalog/durable/persist.md
+2026-03-16 | mz-catalog | src/catalog/src/durable/traits.rs | written → doc/developer/generated/catalog/durable/traits.md
+2026-03-16 | mz-catalog | src/catalog/src/durable/transaction.rs | written → doc/developer/generated/catalog/durable/transaction.md
+2026-03-16 | mz-catalog | src/catalog/src/durable/upgrade/json_compatible.rs | written → doc/developer/generated/catalog/durable/upgrade/json_compatible.md
+2026-03-16 | mz-catalog | src/catalog/src/durable/upgrade/v74_to_v75.rs | written → doc/developer/generated/catalog/durable/upgrade/v74_to_v75.md
+2026-03-16 | mz-catalog | src/catalog/src/durable/upgrade/v75_to_v76.rs | written → doc/developer/generated/catalog/durable/upgrade/v75_to_v76.md
+2026-03-16 | mz-catalog | src/catalog/src/durable/upgrade/v76_to_v77.rs | written → doc/developer/generated/catalog/durable/upgrade/v76_to_v77.md
+2026-03-16 | mz-catalog | src/catalog/src/durable/upgrade/v77_to_v78.rs | written → doc/developer/generated/catalog/durable/upgrade/v77_to_v78.md
+2026-03-16 | mz-catalog | src/catalog/src/durable/upgrade/v78_to_v79.rs | written → doc/developer/generated/catalog/durable/upgrade/v78_to_v79.md
+2026-03-16 | mz-catalog | src/catalog/src/durable/upgrade/v79_to_v80.rs | written → doc/developer/generated/catalog/durable/upgrade/v79_to_v80.md
+2026-03-16 | mz-catalog | src/catalog/src/durable/upgrade.rs (module) | written → doc/developer/generated/catalog/durable/upgrade/_module.md
+2026-03-16 | mz-catalog | src/catalog/src/durable.rs (module) | written → doc/developer/generated/catalog/durable/_module.md
+2026-03-16 | mz-catalog | src/catalog/src/memory/error.rs | written → doc/developer/generated/catalog/memory/error.md
+2026-03-16 | mz-catalog | src/catalog/src/memory/objects.rs | written → doc/developer/generated/catalog/memory/objects.md
+2026-03-16 | mz-catalog | src/catalog/src/memory.rs (module) | written → doc/developer/generated/catalog/memory/_module.md
+2026-03-16 | mz-catalog | src/catalog/src/lib.rs (crate root) | written → doc/developer/generated/catalog/_crate.md
+2026-03-16 | mz-compute | src/compute/src/typedefs.rs | written → doc/developer/generated/compute/typedefs.md
+2026-03-16 | mz-compute | src/compute/src/row_spine.rs | written → doc/developer/generated/compute/row_spine.md
+2026-03-16 | mz-compute | src/compute/src/memory_limiter.rs | written → doc/developer/generated/compute/memory_limiter.md
+2026-03-16 | mz-compute | src/compute/src/metrics.rs | written → doc/developer/generated/compute/metrics.md
+2026-03-16 | mz-compute | src/compute/src/command_channel.rs | written → doc/developer/generated/compute/command_channel.md
+2026-03-16 | mz-compute | src/compute/src/server.rs | written → doc/developer/generated/compute/server.md
+2026-03-16 | mz-compute | src/compute/src/arrangement.rs | written → doc/developer/generated/compute/arrangement.md
+2026-03-16 | mz-compute | src/compute/src/arrangement/manager.rs | written → doc/developer/generated/compute/arrangement/manager.md
+2026-03-16 | mz-compute | src/compute/src/arrangement (module) | written → doc/developer/generated/compute/arrangement/_module.md
+2026-03-16 | mz-compute | src/compute/src/compute_state.rs | written → doc/developer/generated/compute/compute_state/_module.md
+2026-03-16 | mz-compute | src/compute/src/compute_state/peek_result_iterator.rs | written → doc/developer/generated/compute/compute_state/peek_result_iterator.md
+2026-03-16 | mz-compute | src/compute/src/compute_state/peek_stash.rs | written → doc/developer/generated/compute/compute_state/peek_stash.md
+2026-03-16 | mz-compute | src/compute/src/extensions.rs | written → doc/developer/generated/compute/extensions/_module.md
+2026-03-16 | mz-compute | src/compute/src/extensions/arrange.rs | written → doc/developer/generated/compute/extensions/arrange.md
+2026-03-16 | mz-compute | src/compute/src/extensions/reduce.rs | written → doc/developer/generated/compute/extensions/reduce.md
+2026-03-16 | mz-compute | src/compute/src/extensions/temporal_bucket.rs | written → doc/developer/generated/compute/extensions/temporal_bucket.md
+2026-03-16 | mz-compute | src/compute/src/logging.rs | written → doc/developer/generated/compute/logging/_module.md
+2026-03-16 | mz-compute | src/compute/src/logging/compute.rs | written → doc/developer/generated/compute/logging/compute.md
+2026-03-16 | mz-compute | src/compute/src/logging/differential.rs | written → doc/developer/generated/compute/logging/differential.md
+2026-03-16 | mz-compute | src/compute/src/logging/initialize.rs | written → doc/developer/generated/compute/logging/initialize.md
+2026-03-16 | mz-compute | src/compute/src/logging/reachability.rs | written → doc/developer/generated/compute/logging/reachability.md
+2026-03-16 | mz-compute | src/compute/src/logging/timely.rs | written → doc/developer/generated/compute/logging/timely.md
+2026-03-16 | mz-compute | src/compute/src/render.rs | written → doc/developer/generated/compute/render/_module.md
+2026-03-16 | mz-compute | src/compute/src/render/context.rs | written → doc/developer/generated/compute/render/context.md
+2026-03-16 | mz-compute | src/compute/src/render/continual_task.rs | written → doc/developer/generated/compute/render/continual_task.md
+2026-03-16 | mz-compute | src/compute/src/render/errors.rs | written → doc/developer/generated/compute/render/errors.md
+2026-03-16 | mz-compute | src/compute/src/render/flat_map.rs | written → doc/developer/generated/compute/render/flat_map.md
+2026-03-16 | mz-compute | src/compute/src/render/join.rs | written → doc/developer/generated/compute/render/join/_module.md
+2026-03-16 | mz-compute | src/compute/src/render/join/delta_join.rs | written → doc/developer/generated/compute/render/join/delta_join.md
+2026-03-16 | mz-compute | src/compute/src/render/join/linear_join.rs | written → doc/developer/generated/compute/render/join/linear_join.md
+2026-03-16 | mz-compute | src/compute/src/render/join/mz_join_core.rs | written → doc/developer/generated/compute/render/join/mz_join_core.md
+2026-03-16 | mz-compute | src/compute/src/render/reduce.rs | written → doc/developer/generated/compute/render/reduce.md
+2026-03-16 | mz-compute | src/compute/src/render/sinks.rs | written → doc/developer/generated/compute/render/sinks.md
+2026-03-16 | mz-compute | src/compute/src/render/threshold.rs | written → doc/developer/generated/compute/render/threshold.md
+2026-03-16 | mz-compute | src/compute/src/render/top_k.rs | written → doc/developer/generated/compute/render/top_k.md
+2026-03-16 | mz-compute | src/compute/src/sink.rs | written → doc/developer/generated/compute/sink/_module.md
+2026-03-16 | mz-compute | src/compute/src/sink/copy_to_s3_oneshot.rs | written → doc/developer/generated/compute/sink/copy_to_s3_oneshot.md
+2026-03-16 | mz-compute | src/compute/src/sink/correction.rs | written → doc/developer/generated/compute/sink/correction.md
+2026-03-16 | mz-compute | src/compute/src/sink/correction_v2.rs | written → doc/developer/generated/compute/sink/correction_v2.md
+2026-03-16 | mz-compute | src/compute/src/sink/materialized_view.rs | written → doc/developer/generated/compute/sink/materialized_view.md
+2026-03-16 | mz-compute | src/compute/src/sink/refresh.rs | written → doc/developer/generated/compute/sink/refresh.md
+2026-03-16 | mz-compute | src/compute/src/sink/subscribe.rs | written → doc/developer/generated/compute/sink/subscribe.md
+2026-03-16 | mz-compute | src/compute/src/lib.rs (crate root) | written → doc/developer/generated/compute/_crate.md
+2026-03-16 | mz-repr | src/repr/src/adt/array.rs | written → doc/developer/generated/repr/adt/array.md
+2026-03-16 | mz-repr | src/repr/src/adt/char.rs | written → doc/developer/generated/repr/adt/char.md
+2026-03-16 | mz-repr | src/repr/src/adt/date.rs | written → doc/developer/generated/repr/adt/date.md
+2026-03-16 | mz-repr | src/repr/src/adt/datetime.rs | written → doc/developer/generated/repr/adt/datetime.md
+2026-03-16 | mz-repr | src/repr/src/adt/interval.rs | written → doc/developer/generated/repr/adt/interval.md
+2026-03-16 | mz-repr | src/repr/src/adt/jsonb.rs | written → doc/developer/generated/repr/adt/jsonb.md
+2026-03-16 | mz-repr | src/repr/src/adt/mz_acl_item.rs | written → doc/developer/generated/repr/adt/mz_acl_item.md
+2026-03-16 | mz-repr | src/repr/src/adt/numeric.rs | written → doc/developer/generated/repr/adt/numeric.md
+2026-03-16 | mz-repr | src/repr/src/adt/pg_legacy_name.rs | written → doc/developer/generated/repr/adt/pg_legacy_name.md
+2026-03-16 | mz-repr | src/repr/src/adt/range.rs | written → doc/developer/generated/repr/adt/range.md
+2026-03-16 | mz-repr | src/repr/src/adt/regex.rs | written → doc/developer/generated/repr/adt/regex.md
+2026-03-16 | mz-repr | src/repr/src/adt/system.rs | written → doc/developer/generated/repr/adt/system.md
+2026-03-16 | mz-repr | src/repr/src/adt/timestamp.rs | written → doc/developer/generated/repr/adt/timestamp.md
+2026-03-16 | mz-repr | src/repr/src/adt/varchar.rs | written → doc/developer/generated/repr/adt/varchar.md
+2026-03-16 | mz-repr | src/repr/src/adt.rs (module) | written → doc/developer/generated/repr/adt/_module.md
+2026-03-16 | mz-repr | src/repr/src/row/encode.rs | written → doc/developer/generated/repr/row/encode.md
+2026-03-16 | mz-repr | src/repr/src/row/iter.rs | written → doc/developer/generated/repr/row/iter.md
+2026-03-16 | mz-repr | src/repr/src/row.rs (module) | written → doc/developer/generated/repr/row/_module.md
+2026-03-16 | mz-repr | src/repr/src/explain/dot.rs | written → doc/developer/generated/repr/explain/dot.md
+2026-03-16 | mz-repr | src/repr/src/explain/json.rs | written → doc/developer/generated/repr/explain/json.md
+2026-03-16 | mz-repr | src/repr/src/explain/text.rs | written → doc/developer/generated/repr/explain/text.md
+2026-03-16 | mz-repr | src/repr/src/explain/tracing.rs | written → doc/developer/generated/repr/explain/tracing.md
+2026-03-16 | mz-repr | src/repr/src/explain.rs (module) | written → doc/developer/generated/repr/explain/_module.md
+2026-03-16 | mz-repr | src/repr/src/scalar.rs | written → doc/developer/generated/repr/scalar.md
+2026-03-16 | mz-repr | src/repr/src/relation.rs | written → doc/developer/generated/repr/relation.md
+2026-03-16 | mz-repr | src/repr/src/relation_and_scalar.rs | written → doc/developer/generated/repr/relation_and_scalar.md
+2026-03-16 | mz-repr | src/repr/src/timestamp.rs | written → doc/developer/generated/repr/timestamp.md
+2026-03-16 | mz-repr | src/repr/src/diff.rs | written → doc/developer/generated/repr/diff.md
+2026-03-16 | mz-repr | src/repr/src/datum_vec.rs | written → doc/developer/generated/repr/datum_vec.md
+2026-03-16 | mz-repr | src/repr/src/global_id.rs | written → doc/developer/generated/repr/global_id.md
+2026-03-16 | mz-repr | src/repr/src/catalog_item_id.rs | written → doc/developer/generated/repr/catalog_item_id.md
+2026-03-16 | mz-repr | src/repr/src/role_id.rs | written → doc/developer/generated/repr/role_id.md
+2026-03-16 | mz-repr | src/repr/src/network_policy_id.rs | written → doc/developer/generated/repr/network_policy_id.md
+2026-03-16 | mz-repr | src/repr/src/namespaces.rs | written → doc/developer/generated/repr/namespaces.md
+2026-03-16 | mz-repr | src/repr/src/bytes.rs | written → doc/developer/generated/repr/bytes.md
+2026-03-16 | mz-repr | src/repr/src/strconv.rs | written → doc/developer/generated/repr/strconv.md
+2026-03-16 | mz-repr | src/repr/src/stats.rs | written → doc/developer/generated/repr/stats.md
+2026-03-16 | mz-repr | src/repr/src/fixed_length.rs | written → doc/developer/generated/repr/fixed_length.md
+2026-03-16 | mz-repr | src/repr/src/optimize.rs | written → doc/developer/generated/repr/optimize.md
+2026-03-16 | mz-repr | src/repr/src/refresh_schedule.rs | written → doc/developer/generated/repr/refresh_schedule.md
+2026-03-16 | mz-repr | src/repr/src/user.rs | written → doc/developer/generated/repr/user.md
+2026-03-16 | mz-repr | src/repr/src/lib.rs (crate root) | written → doc/developer/generated/repr/_crate.md
+2026-03-16 | progress | prompt.md | marked compute and repr as done in progress table
