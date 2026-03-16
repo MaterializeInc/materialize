@@ -1,6 +1,5 @@
 ---
 source: src/catalog/tests/open.rs
-assertion_line: 518
 expression: test_snapshot
 ---
 Snapshot {
@@ -431,6 +430,7 @@ Snapshot {
                 login: Some(
                     true,
                 ),
+                auto_provision_source: None,
             },
             membership: RoleMembership {
                 map: [],
@@ -450,6 +450,7 @@ Snapshot {
                 inherit: true,
                 superuser: None,
                 login: None,
+                auto_provision_source: None,
             },
             membership: RoleMembership {
                 map: [],
@@ -469,6 +470,7 @@ Snapshot {
                 inherit: true,
                 superuser: None,
                 login: None,
+                auto_provision_source: None,
             },
             membership: RoleMembership {
                 map: [],
@@ -486,6 +488,7 @@ Snapshot {
                 inherit: true,
                 superuser: None,
                 login: None,
+                auto_provision_source: None,
             },
             membership: RoleMembership {
                 map: [],
@@ -505,6 +508,7 @@ Snapshot {
                 inherit: true,
                 superuser: None,
                 login: None,
+                auto_provision_source: None,
             },
             membership: RoleMembership {
                 map: [],
@@ -524,6 +528,7 @@ Snapshot {
                 inherit: true,
                 superuser: None,
                 login: None,
+                auto_provision_source: None,
             },
             membership: RoleMembership {
                 map: [],
