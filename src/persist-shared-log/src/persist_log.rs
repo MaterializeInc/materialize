@@ -38,10 +38,13 @@ use mz_persist_types::stats::NoneStats;
 ///
 /// Wraps serialized `ProtoLogProposal` protobuf bytes. Each proposal is stored
 /// as a single row in the persist shard at timestamp T (the batch number).
+///
+/// Uses [`Bytes`] for the encoded payload so that cloning (e.g. on
+/// compare-and-append retries) is O(1) via refcount instead of a memcpy.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ConsensusProposal {
     /// Serialized ProtoLogProposal (protobuf bytes).
-    pub encoded: Vec<u8>,
+    pub encoded: Bytes,
 }
 
 // ---------------------------------------------------------------------------
@@ -64,12 +67,12 @@ impl Codec for ConsensusProposal {
     where
         B: BufMut,
     {
-        buf.put(self.encoded.as_slice());
+        buf.put(self.encoded.as_ref());
     }
 
     fn decode<'a>(buf: &'a [u8], _schema: &ConsensusProposalSchema) -> Result<Self, String> {
         Ok(ConsensusProposal {
-            encoded: buf.to_vec(),
+            encoded: Bytes::copy_from_slice(buf),
         })
     }
 
@@ -96,7 +99,7 @@ impl SimpleColumnarData for ConsensusProposal {
     }
 
     fn push(&self, builder: &mut Self::ArrowBuilder) {
-        builder.append_value(self.encoded.as_slice());
+        builder.append_value(self.encoded.as_ref());
     }
 
     fn push_null(builder: &mut Self::ArrowBuilder) {
@@ -104,8 +107,9 @@ impl SimpleColumnarData for ConsensusProposal {
     }
 
     fn read(&mut self, idx: usize, column: &Self::ArrowColumn) {
-        self.encoded.clear();
-        self.encoded.extend(column.value(idx));
+        // Allocates a fresh Bytes per proposal. This is on the learner's listen
+        // path (one allocation per proposal per batch), which is acceptable.
+        self.encoded = Bytes::copy_from_slice(column.value(idx));
     }
 }
 

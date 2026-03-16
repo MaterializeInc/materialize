@@ -38,6 +38,10 @@ pub struct LatencyBlob {
     /// Counter-based selection for p50/p99, matching the actor LatencyStorage
     /// pattern (avoids pulling in rand as a non-dev dependency).
     counter: AtomicU64,
+    /// Total set() calls (for diagnosing blob I/O per flush).
+    pub sets: AtomicU64,
+    /// Total get() calls.
+    pub gets: AtomicU64,
 }
 
 impl LatencyBlob {
@@ -47,6 +51,8 @@ impl LatencyBlob {
             inner,
             profile,
             counter: AtomicU64::new(0),
+            sets: AtomicU64::new(0),
+            gets: AtomicU64::new(0),
         }
     }
 
@@ -73,6 +79,7 @@ impl LatencyBlob {
 #[async_trait]
 impl Blob for LatencyBlob {
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
+        self.gets.fetch_add(1, Ordering::Relaxed);
         self.inject_latency().await;
         self.inner.get(key).await
     }
@@ -86,6 +93,7 @@ impl Blob for LatencyBlob {
     }
 
     async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
+        self.sets.fetch_add(1, Ordering::Relaxed);
         self.inject_latency().await;
         self.inner.set(key, value).await
     }
@@ -96,5 +104,18 @@ impl Blob for LatencyBlob {
 
     async fn restore(&self, key: &str) -> Result<(), ExternalError> {
         self.inner.restore(key).await
+    }
+}
+
+impl Drop for LatencyBlob {
+    fn drop(&mut self) {
+        let sets = self.sets.load(Ordering::Relaxed);
+        let gets = self.gets.load(Ordering::Relaxed);
+        eprintln!(
+            "LatencyBlob stats: sets={}, gets={}, total={}",
+            sets,
+            gets,
+            sets + gets,
+        );
     }
 }

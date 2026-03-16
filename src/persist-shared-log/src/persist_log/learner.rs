@@ -84,12 +84,19 @@ impl Default for PersistLearnerConfig {
 /// converge to the same state.
 struct StateMachine {
     shards: BTreeMap<String, ShardState>,
+    /// Running total of entries across all shards, maintained incrementally.
+    total_entries: usize,
+    /// Running total of approximate bytes across all shards, maintained
+    /// incrementally. Avoids an O(total_entries) traversal on every batch.
+    approx_bytes: usize,
 }
 
 impl StateMachine {
     fn new() -> Self {
         StateMachine {
             shards: BTreeMap::new(),
+            total_entries: 0,
+            approx_bytes: 0,
         }
     }
 
@@ -106,11 +113,14 @@ impl StateMachine {
         let committed = current_seqno == cas.expected;
 
         if committed {
+            let data_len = cas.data.len();
             let entry = VersionedEntry {
                 seqno: cas.new_seqno,
                 data: Bytes::from(cas.data),
             };
             self.shards.entry(cas.key).or_default().entries.push(entry);
+            self.total_entries += 1;
+            self.approx_bytes += data_len;
         }
 
         ProtoCompareAndSetResponse { committed }
@@ -138,7 +148,14 @@ impl StateMachine {
 
         let shard = self.shards.get_mut(&trunc.key).unwrap();
         let keep_from = shard.entries.partition_point(|e| e.seqno < trunc.seqno);
+        // Update incremental counters before draining.
+        let removed_bytes: usize = shard.entries[..keep_from]
+            .iter()
+            .map(|e| e.data.len())
+            .sum();
         shard.entries.drain(..keep_from);
+        self.total_entries -= keep_from;
+        self.approx_bytes -= removed_bytes;
 
         Ok(ProtoTruncateResponse {
             deleted: Some(u64::cast_from(keep_from)),
@@ -592,7 +609,7 @@ impl PersistLearner {
         let mut batch_results = Vec::with_capacity(num_proposals);
 
         for proposal_data in proposals {
-            match ProtoLogProposal::decode(proposal_data.encoded.as_slice()) {
+            match ProtoLogProposal::decode(proposal_data.encoded.as_ref()) {
                 Ok(proposal) => match proposal.op {
                     Some(proto_log_proposal::Op::Cas(cas)) => {
                         let result = self.state.apply_cas(cas);
@@ -630,24 +647,16 @@ impl PersistLearner {
             .batch_materialize_latency_seconds
             .observe(batch_start.elapsed().as_secs_f64());
 
-        // Update state gauges.
-        let total_entries: usize = self.state.shards.values().map(|s| s.entries.len()).sum();
-        let approx_bytes: usize = self
-            .state
-            .shards
-            .values()
-            .flat_map(|s| s.entries.iter())
-            .map(|e| e.data.len())
-            .sum();
+        // Update state gauges from incrementally maintained counters (O(1)).
         self.metrics
             .active_shards
             .set(i64::try_from(self.state.shards.len()).expect("shard count"));
         self.metrics
             .total_entries
-            .set(i64::try_from(total_entries).expect("entry count"));
+            .set(i64::try_from(self.state.total_entries).expect("entry count"));
         self.metrics
             .approx_bytes
-            .set(i64::try_from(approx_bytes).expect("byte count"));
+            .set(i64::try_from(self.state.approx_bytes).expect("byte count"));
 
         self.wake_result_waiters(batch_number);
         self.prune_old_results();

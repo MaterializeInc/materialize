@@ -57,7 +57,14 @@ impl Default for PersistClientConfig {
 /// inserted to simulate storage round-trip times.
 pub fn new_persist_client(config: PersistClientConfig) -> PersistClient {
     let registry = MetricsRegistry::new();
-    let persist_cfg = PersistConfig::new_for_tests();
+    let mut persist_cfg = PersistConfig::new_for_tests();
+    // Honor PERSIST_ISOLATED_RUNTIME_THREADS if set, so benchmarks can
+    // constrain total thread usage (e.g. to simulate 2-core deployments).
+    if let Ok(val) = std::env::var("PERSIST_ISOLATED_RUNTIME_THREADS") {
+        if let Ok(n) = val.parse::<usize>() {
+            persist_cfg.isolated_runtime_worker_threads = n;
+        }
+    }
     let metrics = Arc::new(Metrics::new(&persist_cfg, &registry));
 
     // In-process pubsub server — no network, no serde.

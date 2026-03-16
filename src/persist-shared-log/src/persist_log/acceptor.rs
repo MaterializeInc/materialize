@@ -22,6 +22,7 @@ use tokio::time::Interval;
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
 
+use bytes::Bytes;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::retry::Retry;
 use mz_persist::generated::consensus_service::{ProtoAppendResponse, ProtoLogProposal};
@@ -36,9 +37,14 @@ use crate::traits::{AcceptorConfig, AcceptorError};
 
 /// Commands dispatched to the persist-backed acceptor.
 pub enum PersistAcceptorCommand {
-    /// Append a proposal. Reply after the next flush.
+    /// Append a pre-encoded proposal. Reply after the next flush.
+    ///
+    /// The proposal is already serialized to protobuf bytes by the caller
+    /// (in the handle's `append()` method), so encoding is parallelized
+    /// across callers rather than serialized in the acceptor's flush loop.
     Append {
-        proposal: ProtoLogProposal,
+        proposal: ConsensusProposal,
+        encoded_len: usize,
         reply: oneshot::Sender<Result<ProtoAppendResponse, String>>,
     },
     /// Explicitly trigger a flush. Used in tests.
@@ -73,10 +79,18 @@ impl crate::traits::Acceptor for PersistAcceptorHandle {
         &self,
         proposal: ProtoLogProposal,
     ) -> Result<ProtoAppendResponse, AcceptorError> {
+        // Pre-encode the proposal into protobuf bytes here, in the caller's
+        // task, so that encoding is parallelized across all writers rather than
+        // serialized in the acceptor's single-threaded flush loop.
+        let encoded_len = proposal.encoded_len();
+        let encoded = ConsensusProposal {
+            encoded: Bytes::from(proposal.encode_to_vec()),
+        };
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(PersistAcceptorCommand::Append {
-                proposal,
+                proposal: encoded,
+                encoded_len,
                 reply: reply_tx,
             })
             .await
@@ -89,9 +103,9 @@ impl crate::traits::Acceptor for PersistAcceptorHandle {
 }
 
 /// A pending proposal waiting for the next flush.
-#[allow(dead_code)]
 struct PendingAppend {
-    proposal: ProtoLogProposal,
+    proposal: ConsensusProposal,
+    encoded_len: usize,
     reply: oneshot::Sender<Result<ProtoAppendResponse, String>>,
     received_at: std::time::Instant,
 }
@@ -148,9 +162,10 @@ impl PersistAcceptor {
                 biased;
                 // cancel-safety: per tokio docs
                 cmd = self.rx.recv() => match cmd {
-                    Some(PersistAcceptorCommand::Append { proposal, reply }) => {
+                    Some(PersistAcceptorCommand::Append { proposal, encoded_len, reply }) => {
                         self.pending.push(PendingAppend {
                             proposal,
+                            encoded_len,
                             reply,
                             received_at: std::time::Instant::now(),
                         });
@@ -209,9 +224,16 @@ impl PersistAcceptor {
                 .observe((flush_start - p.received_at).as_secs_f64());
         }
 
-        // Split proposals from reply senders.
-        let (proposals, replies): (Vec<_>, Vec<_>) =
-            pending.into_iter().map(|p| (p.proposal, p.reply)).unzip();
+        // Split proposals from reply senders. Proposals are already pre-encoded
+        // as ConsensusProposal (Bytes) by the caller.
+        let mut proposals = Vec::with_capacity(num_proposals);
+        let mut batch_bytes: usize = 0;
+        let mut replies = Vec::with_capacity(num_proposals);
+        for p in pending {
+            batch_bytes += p.encoded_len;
+            proposals.push(p.proposal);
+            replies.push(p.reply);
+        }
 
         let retry = Retry::default()
             .initial_backoff(Duration::from_millis(1))
@@ -240,15 +262,11 @@ impl PersistAcceptor {
                 "persist acceptor flush"
             );
 
-            // Build updates at the current batch_number.
+            // Build updates at the current batch_number. Proposals are already
+            // pre-encoded; clone() is O(1) thanks to Bytes refcounting.
             let updates: Vec<_> = proposals
                 .iter()
-                .map(|p| {
-                    let key = ConsensusProposal {
-                        encoded: p.encode_to_vec(),
-                    };
-                    ((key, ()), batch_number, 1i64)
-                })
+                .map(|p| ((p.clone(), ()), batch_number, 1i64))
                 .collect();
 
             let new_upper = Antichain::from_elem(batch_number + 1);
@@ -267,8 +285,6 @@ impl PersistAcceptor {
                         }));
                     }
 
-                    // Compute bytes written (sum of encoded proposal sizes).
-                    let batch_bytes: usize = proposals.iter().map(|p| p.encoded_len()).sum();
                     self.metrics.flush_count.inc();
                     self.metrics
                         .flush_proposals_per_batch
