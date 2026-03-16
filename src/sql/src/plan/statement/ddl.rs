@@ -4259,11 +4259,22 @@ pub fn plan_create_index(
         Some(kp) => kp.to_vec(),
         None => {
             // `key_parts` is None if we're creating a "default" index.
+            // Precompute which column names are unambiguous in a single pass,
+            // avoiding the O(n * k) cost of calling get_unambiguous_name per
+            // key column.
+            let mut name_counts = BTreeMap::new();
+            for name in on_desc.iter_names() {
+                *name_counts.entry(name).or_insert(0usize) += 1;
+            }
             let key = on_desc.typ().default_key();
             key.iter()
-                .map(|i| match on_desc.get_unambiguous_name(*i) {
-                    Some(n) => Expr::Identifier(vec![n.clone().into()]),
-                    _ => Expr::Value(Value::Number((i + 1).to_string())),
+                .map(|i| {
+                    let name = on_desc.get_name(*i);
+                    if name_counts.get(name).copied() == Some(1) {
+                        Expr::Identifier(vec![name.clone().into()])
+                    } else {
+                        Expr::Value(Value::Number((i + 1).to_string()))
+                    }
                 })
                 .collect()
         }

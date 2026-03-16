@@ -1401,17 +1401,17 @@ pub fn plan_index_exprs<'a>(
         allow_parameters: false,
         allow_windows: false,
     };
+    let repr_col_types: Vec<ReprColumnType> = on_desc
+        .typ()
+        .column_types
+        .iter()
+        .map(ReprColumnType::from)
+        .collect();
     let mut out = vec![];
     for mut expr in exprs {
         transform_ast::transform(scx, &mut expr)?;
         let expr = plan_expr_or_col_index(ecx, &expr)?;
         let mut expr = expr.lower_uncorrelated(scx.catalog.system_vars())?;
-        let repr_col_types: Vec<ReprColumnType> = on_desc
-            .typ()
-            .column_types
-            .iter()
-            .map(ReprColumnType::from)
-            .collect();
         expr.reduce(&repr_col_types);
         out.push(expr);
     }
