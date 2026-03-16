@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""
+Waits for a Buildkite build to produce a Docker image, then deploys it
+to the staging environment and waits for the region to accept connections.
+
+See doc/developer/staging-deploy.md for additional detail.
+
+Prerequisites: push your changes to the PR branch first (e.g. with jj).
+
+Usage:
+    bin/staging-deploy                    # wait for HEAD build, deploy
+    bin/staging-deploy --commit <sha>     # wait for a specific commit
+"""
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+BK = ["bk", "--org", "materialize"]
+BK_PIPELINE = "test"
+MZ = [str(REPO_ROOT / "bin" / "mz"), "--profile", "staging"]
+
+
+def notify(msg: str) -> None:
+    print(f"==> {msg}")
+    try:
+        subprocess.run(
+            ["osascript", "-e", f'display notification "{msg}" with title "Staging Test"'],
+            capture_output=True,
+        )
+    except FileNotFoundError:
+        pass
+
+
+def get_commit_sha() -> str:
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+
+
+def wait_for_build(commit_sha: str) -> str:
+    """Wait for the Buildkite build and return the docker_tag."""
+    print(f"==> Waiting for Buildkite build for {commit_sha}...")
+
+    # Wait for build to appear
+    build_number = None
+    while build_number is None:
+        result = subprocess.run(
+            [*BK, "build", "list", "--commit", commit_sha, "--pipeline", BK_PIPELINE, "--limit", "1", "--json"],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            builds = json.loads(result.stdout)
+            if builds:
+                build_number = builds[0]["number"]
+                break
+        print("    Build not yet created, waiting 30s...")
+        time.sleep(30)
+
+    print(f"    Found build #{build_number}")
+
+    # Watch build until it finishes
+    print(f"==> Watching build #{build_number}...")
+    subprocess.run(
+        [*BK, "build", "watch", str(build_number), "--pipeline", BK_PIPELINE],
+    )
+
+    # Check final state
+    result = subprocess.run(
+        ["bk", "build", "list", "--commit", commit_sha, "--pipeline", BK_PIPELINE, "--limit", "1", "--json"],
+        capture_output=True, text=True, check=True,
+    )
+    state = json.loads(result.stdout)[0]["state"]
+    print(f"    Build state: {state}")
+
+    # Get Docker tag from annotations
+    print("==> Fetching Docker tag from annotations...")
+    result = subprocess.run(
+        [*BK, "api", f"/pipelines/{BK_PIPELINE}/builds/{build_number}/annotations"],
+        capture_output=True, text=True, check=True,
+    )
+    annotations = json.loads(result.stdout)
+    for annotation in annotations:
+        m = re.match(r"build-tags-(v.+)", annotation.get("context", ""))
+        if m:
+            return m.group(1)
+
+    notify("ERROR: No Docker tag found in build annotations")
+    print(f"    Build may have failed before pushing images. State: {state}")
+    sys.exit(1)
+
+
+def cycle_staging(docker_tag: str) -> None:
+    print("==> Disabling staging region...")
+    subprocess.run([*MZ, "region", "disable"])
+
+    print(f"==> Enabling staging region with version {docker_tag}...")
+    subprocess.run([*MZ, "region", "enable", "--version", docker_tag], check=True)
+
+
+def wait_for_staging_ready() -> None:
+    """Wait for the staging region to accept connections."""
+    print("==> Waiting for staging to accept connections...")
+    cmd = [*MZ, "sql", "--", "-c", "SELECT 1"]
+    max_attempts = 10
+    for attempt in range(1, max_attempts + 1):
+        result = subprocess.run(cmd, capture_output=True)
+        if result.returncode == 0:
+            print("    Connected.")
+            return
+        if attempt < max_attempts:
+            print(f"    Not ready, retrying in 15s (attempt {attempt}/{max_attempts})...")
+            time.sleep(15)
+    print("ERROR: Staging region did not become ready.", file=sys.stderr)
+    sys.exit(1)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--commit", help="Commit SHA to look up (default: HEAD)")
+    args = parser.parse_args()
+
+    commit_sha = args.commit or get_commit_sha()
+    print(f"==> Commit: {commit_sha}")
+
+    # Step 1: Wait for build and get Docker tag
+    docker_tag = wait_for_build(commit_sha)
+    print(f"==> Docker tag: {docker_tag}")
+
+    # Step 2: Deploy to staging
+    cycle_staging(docker_tag)
+
+    # Step 3: Wait for staging to be reachable
+    wait_for_staging_ready()
+    notify("Staging is ready")
+
+
+if __name__ == "__main__":
+    main()
