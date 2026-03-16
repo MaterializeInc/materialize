@@ -19,12 +19,12 @@ This section contains various resources for managing Materialize.
 | [Disaster Recovery](/manage/disaster-recovery/) | Disaster recovery strategies for Materialize Cloud |
 
 
-## Manage via dbt/Terraform
+## Infrastructure as code
 
 | Guide | Description |
 |-------|-------------|
-| [Using dbt to manage Materialize](/manage/dbt/) | Guides for using dbt to manage Materialize |
-| [Using Terraform to manage Materialize](/manage/terraform/) | Guides for using Terraform to manage Materialize |
+| [Using dbt to manage Materialize](/manage/dbt/) | Version control and orchestrate the creation of views, materialized views, and indexes |
+| [Using Terraform to manage Materialize](/manage/terraform/) | Manage infrastructure, clusters, and configuration |
 
 ## Usage and billing
 
