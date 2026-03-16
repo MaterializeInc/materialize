@@ -240,6 +240,7 @@ Inspect
 Instance
 Int
 Integer
+Intent
 Internal
 Intersect
 Interval
@@ -374,6 +375,7 @@ Range
 Rate
 Raw
 Read
+Readonly
 Ready
 Real
 Reassign

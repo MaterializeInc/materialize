@@ -1034,7 +1034,12 @@ async fn purify_create_source(
 
             let restore_history_id =
                 mz_sql_server_util::inspect::get_latest_restore_history_id(&mut client).await?;
-            let details = SqlServerSourceExtras { restore_history_id };
+            let is_primary_replica =
+                mz_sql_server_util::inspect::get_is_primary_replica(&mut client).await?;
+            let details = SqlServerSourceExtras {
+                restore_history_id,
+                is_primary_replica,
+            };
 
             options.retain(|SqlServerConfigOption { name, .. }| {
                 name != &SqlServerConfigOptionName::Details

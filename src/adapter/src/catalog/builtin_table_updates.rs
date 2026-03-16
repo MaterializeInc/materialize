@@ -27,9 +27,9 @@ use mz_catalog::builtin::{
     MZ_OPERATORS, MZ_PENDING_CLUSTER_REPLICAS, MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES,
     MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS, MZ_ROLES,
     MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SOURCES,
-    MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
-    MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS,
-    MZ_WEBHOOKS_SOURCES,
+    MZ_SQL_SERVER_SOURCE_TABLES, MZ_SQL_SERVER_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS,
+    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES,
+    MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
@@ -78,6 +78,7 @@ use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use mz_storage_types::sinks::{IcebergSinkConnection, KafkaSinkConnection, StorageSinkConnection};
 use mz_storage_types::sources::{
     GenericSourceConnection, KafkaSourceConnection, PostgresSourceConnection, SourceConnection,
+    SqlServerSourceConnection,
 };
 use smallvec::smallvec;
 
@@ -731,6 +732,9 @@ impl CatalogState {
                         GenericSourceConnection::Kafka(kafka) => {
                             self.pack_kafka_source_update(id, source.global_id(), kafka, diff)
                         }
+                        GenericSourceConnection::SqlServer(sql_server) => {
+                            self.pack_sql_server_source_update(id, sql_server, diff)
+                        }
                         _ => vec![],
                     },
                     DataSourceDesc::IngestionExport {
@@ -1132,6 +1136,22 @@ impl CatalogState {
                 Datum::String(&id.to_string()),
                 Datum::String(schema_name),
                 Datum::String(table_name),
+            ]),
+            diff,
+        )]
+    }
+
+    fn pack_sql_server_source_update(
+        &self,
+        id: CatalogItemId,
+        sql_server: &SqlServerSourceConnection<ReferencedConnection>,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        vec![BuiltinTableUpdate::row(
+            &*MZ_SQL_SERVER_SOURCES,
+            Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::from(sql_server.extras.is_primary_replica),
             ]),
             diff,
         )]

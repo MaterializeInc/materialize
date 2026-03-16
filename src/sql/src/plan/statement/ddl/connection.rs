@@ -66,6 +66,7 @@ generate_extracted_config!(
     (ProgressTopicReplicationFactor, i32),
     (PublicKey1, String),
     (PublicKey2, String),
+    (ReadOnlyIntent, bool),
     (Region, String),
     (SaslMechanisms, String),
     (SaslPassword, with_options::Secret),
@@ -176,6 +177,7 @@ pub(super) fn validate_options_per_connection_type(
             Host,
             Password,
             Port,
+            ReadOnlyIntent,
             SshTunnel,
             SslCertificate,
             SslCertificateAuthority,
@@ -615,6 +617,7 @@ impl ConnectionOptionExtracted {
                     encryption,
                     certificate_validation_policy,
                     tls_root_cert: self.ssl_certificate_authority,
+                    read_only_intent: self.read_only_intent.unwrap_or(false),
                 })
             }
             CreateConnectionType::IcebergCatalog => {

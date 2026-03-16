@@ -10,7 +10,9 @@
 
 from materialize import MZ_ROOT
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.service import Service
+from materialize.mzcompose.service import Service, ServiceConfig
+
+AG_CONF_PATH = MZ_ROOT / "test" / "sql-server-cdc" / "hadr-mssconfig.conf"
 
 
 class SqlServer(Service):
@@ -26,28 +28,37 @@ class SqlServer(Service):
         environment_extra: list[str] = [],
         volumes_extra: list[str] = [],
         enable_agent: bool = True,
+        # Enable HADR (High Availability Disaster Recovery) for AG support.
+        hadr_enabled: bool = False,
+        # Set explicit hostname (required for AG replica names to match @@SERVERNAME).
+        hostname: str | None = None,
     ) -> None:
-        super().__init__(
-            name=name,
-            config={
-                "mzbuild": "mssql-server",
-                "ports": [1433],
-                "volumes": volumes_extra,
-                "environment": [
-                    "ACCEPT_EULA=Y",
-                    "MSSQL_PID=Developer",
-                    f"MSSQL_AGENT_ENABLED={enable_agent}",
-                    f"SA_PASSWORD={sa_password}",
-                    *environment_extra,
-                ],
-                "healthcheck": {
-                    "test": f"/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P '{sa_password}' -Q 'SELECT 1'",
-                    "interval": "1s",
-                    # Recovering can take a while
-                    "start_period": "300s",
-                },
+        volumes = list(volumes_extra)
+        if hadr_enabled:
+            volumes.append(f"{AG_CONF_PATH}:/var/opt/mssql/mssql.conf")
+
+        config: ServiceConfig = {
+            "mzbuild": "mssql-server",
+            "ports": [1433],
+            "volumes": volumes,
+            "environment": [
+                "ACCEPT_EULA=Y",
+                "MSSQL_PID=Developer",
+                f"MSSQL_AGENT_ENABLED={enable_agent}",
+                f"SA_PASSWORD={sa_password}",
+                *environment_extra,
+            ],
+            "healthcheck": {
+                "test": f"/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P '{sa_password}' -Q 'SELECT 1'",
+                "interval": "1s",
+                # Recovering can take a while
+                "start_period": "300s",
             },
-        )
+        }
+        if hostname:
+            config["hostname"] = hostname
+
+        super().__init__(name=name, config=config)
         self.sa_password = sa_password
 
 

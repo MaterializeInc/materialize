@@ -209,6 +209,9 @@ pub struct SqlServerSourceExtras {
     /// value indicates the upstream SQL server has been restored.
     /// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/restorehistory-transact-sql?view=sql-server-ver17>
     pub restore_history_id: Option<i32>,
+    /// Whether the connected database is on a primary replica in an Availability Group.
+    /// `Some(true)` = primary, `Some(false)` = secondary, `None` = not in an AG.
+    pub is_primary_replica: Option<bool>,
 }
 
 impl AlterCompatible for SqlServerSourceExtras {
@@ -217,6 +220,7 @@ impl AlterCompatible for SqlServerSourceExtras {
             tracing::warn!(?self, ?other, "SqlServerSourceExtras incompatible");
             return Err(AlterError { id });
         }
+        // is_primary_replica is informational and does not affect compatibility.
         Ok(())
     }
 }
@@ -225,12 +229,14 @@ impl RustType<ProtoSqlServerSourceExtras> for SqlServerSourceExtras {
     fn into_proto(&self) -> ProtoSqlServerSourceExtras {
         ProtoSqlServerSourceExtras {
             restore_history_id: self.restore_history_id.clone(),
+            is_primary_replica: self.is_primary_replica,
         }
     }
 
     fn from_proto(proto: ProtoSqlServerSourceExtras) -> Result<Self, mz_proto::TryFromProtoError> {
         Ok(SqlServerSourceExtras {
             restore_history_id: proto.restore_history_id,
+            is_primary_replica: proto.is_primary_replica,
         })
     }
 }

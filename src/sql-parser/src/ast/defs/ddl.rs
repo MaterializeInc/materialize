@@ -814,6 +814,7 @@ pub enum ConnectionOptionName {
     ProgressTopicReplicationFactor,
     PublicKey1,
     PublicKey2,
+    ReadOnlyIntent,
     Region,
     SaslMechanisms,
     SaslPassword,
@@ -858,6 +859,7 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::Region => "REGION",
             ConnectionOptionName::AssumeRoleArn => "ASSUME ROLE ARN",
             ConnectionOptionName::AssumeRoleSessionName => "ASSUME ROLE SESSION NAME",
+            ConnectionOptionName::ReadOnlyIntent => "READONLY INTENT",
             ConnectionOptionName::SaslMechanisms => "SASL MECHANISMS",
             ConnectionOptionName::SaslPassword => "SASL PASSWORD",
             ConnectionOptionName::SaslUsername => "SASL USERNAME",
@@ -904,6 +906,7 @@ impl WithOptionName for ConnectionOptionName {
             | ConnectionOptionName::ProgressTopicReplicationFactor
             | ConnectionOptionName::PublicKey1
             | ConnectionOptionName::PublicKey2
+            | ConnectionOptionName::ReadOnlyIntent
             | ConnectionOptionName::Region
             | ConnectionOptionName::AssumeRoleArn
             | ConnectionOptionName::AssumeRoleSessionName

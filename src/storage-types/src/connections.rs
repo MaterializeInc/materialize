@@ -2236,6 +2236,9 @@ pub struct SqlServerConnectionDetails<C: ConnectionAccess = InlinedConnection> {
     pub certificate_validation_policy: mz_sql_server_util::config::CertificateValidationPolicy,
     /// TLS CA Certifiecate in PEM format
     pub tls_root_cert: Option<StringOrSecret>,
+    /// Whether to pass the `ReadOnlyIntent` application intent
+    #[serde(default)]
+    pub read_only_intent: bool,
 }
 
 impl<C: ConnectionAccess> SqlServerConnectionDetails<C> {
@@ -2312,6 +2315,7 @@ impl SqlServerConnectionDetails<InlinedConnection> {
         inner_config.port(self.port);
         inner_config.database(self.database.clone());
         inner_config.encryption(self.encryption.into());
+        inner_config.readonly(self.read_only_intent);
         match self.certificate_validation_policy {
             mz_sql_server_util::config::CertificateValidationPolicy::TrustAll => {
                 inner_config.trust_cert()
@@ -2443,6 +2447,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<SqlServerConnectionDetails, R>
             encryption,
             certificate_validation_policy,
             tls_root_cert,
+            read_only_intent,
         } = self;
 
         SqlServerConnectionDetails {
@@ -2455,6 +2460,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<SqlServerConnectionDetails, R>
             encryption,
             certificate_validation_policy,
             tls_root_cert,
+            read_only_intent,
         }
     }
 }
@@ -2476,6 +2482,7 @@ impl<C: ConnectionAccess> AlterCompatible for SqlServerConnectionDetails<C> {
             encryption: _,
             certificate_validation_policy: _,
             tls_root_cert: _,
+            read_only_intent: _,
         } = self;
 
         let compatibility_checks = [(tunnel.alter_compatible(id, &other.tunnel).is_ok(), "tunnel")];
