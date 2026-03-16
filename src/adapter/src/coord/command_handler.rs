@@ -13,8 +13,10 @@
 use base64::prelude::*;
 use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
+use mz_auth::AuthenticatorKind;
 use mz_auth::password::Password;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
+use mz_sql::catalog::AutoProvisionSource;
 use mz_sql::session::metadata::SessionMetadata;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
@@ -793,7 +795,23 @@ impl Coordinator {
             // This includes preventing any user, except a pre-defined set of system users, from
             // connecting to an internal port. Therefore it's ok to always create a new role for the
             // user.
-            let attributes = RoleAttributesRaw::new();
+            let mut attributes = RoleAttributesRaw::new();
+            // When auto-provisioning, we store the authenticator that was used to provision the role.
+            // This is useful for determining how a role was created and allows us to differentiate a role
+            // from a user without the LOGIN attribute.
+            attributes.auto_provision_source = match user.authenticator_kind {
+                Some(AuthenticatorKind::Oidc) => Some(AutoProvisionSource::Oidc),
+                Some(AuthenticatorKind::Frontegg) => Some(AutoProvisionSource::Frontegg),
+                Some(AuthenticatorKind::None) => Some(AutoProvisionSource::None),
+                _ => {
+                    warn!(
+                        "auto-provisioning role with unexpected authenticator kind: {:?}",
+                        user.authenticator_kind
+                    );
+                    None
+                }
+            };
+
             let plan = CreateRolePlan {
                 name: user.name.to_string(),
                 attributes,
