@@ -744,6 +744,103 @@ class TestLagTolerance:
         assert len(result) > 0 and result[0].status == "success"
 
 
+class TestMultiClusterAwait:
+    """Tests that deploy_await correctly handles multiple clusters in a
+    single consolidated polling loop, reducing catalog server load."""
+
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "vars": {
+                "deployment": {
+                    "default": {
+                        "clusters": ["prod", "analytics"],
+                        "schemas": ["prod", "analytics"],
+                    }
+                },
+            }
+        }
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self, project):
+        project.run_sql("DROP CLUSTER IF EXISTS prod CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS prod_dbt_deploy CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS analytics CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS analytics_dbt_deploy CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS prod CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS prod_dbt_deploy CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS analytics CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS analytics_dbt_deploy CASCADE")
+
+    def test_multi_cluster_await(self, project):
+        """Verify that deploy_await succeeds with multiple clusters,
+        checking all clusters in a single consolidated query."""
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE CLUSTER analytics SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA analytics")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        # Verify both deployment clusters were created
+        result = project.run_sql(
+            "SELECT count(*) FROM mz_clusters WHERE name IN ('prod_dbt_deploy', 'analytics_dbt_deploy')",
+            fetch="one",
+        )
+        assert int(result[0]) == 2
+
+        # Run deploy_await — should check both clusters in one query
+        result = run_dbt(
+            [
+                "run-operation",
+                "deploy_await",
+                "--args",
+                "{poll_interval: 5, lag_threshold: '5s'}",
+            ]
+        )
+        assert len(result) > 0 and result[0].status == "success"
+
+    def test_multi_cluster_promote_with_wait(self, project):
+        """Verify that deploy_promote with wait=true works for multiple
+        clusters using the consolidated readiness check."""
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE CLUSTER analytics SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA analytics")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        before_clusters = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_clusters WHERE name IN ('prod', 'prod_dbt_deploy', 'analytics', 'analytics_dbt_deploy')",
+                fetch="all",
+            )
+        )
+
+        result = run_dbt(
+            [
+                "run-operation",
+                "deploy_promote",
+                "--args",
+                "{wait: true, poll_interval: 5, lag_threshold: '5s'}",
+            ]
+        )
+        assert len(result) > 0 and result[0].status == "success"
+
+        after_clusters = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_clusters WHERE name IN ('prod', 'prod_dbt_deploy', 'analytics', 'analytics_dbt_deploy')",
+                fetch="all",
+            )
+        )
+
+        # Verify swap happened for both clusters
+        assert before_clusters["prod"] == after_clusters["prod_dbt_deploy"]
+        assert before_clusters["prod_dbt_deploy"] == after_clusters["prod"]
+        assert before_clusters["analytics"] == after_clusters["analytics_dbt_deploy"]
+        assert before_clusters["analytics_dbt_deploy"] == after_clusters["analytics"]
+
+
 class TestEndToEndDeployment:
     @pytest.fixture(scope="class")
     def dbt_profile_target(self):
