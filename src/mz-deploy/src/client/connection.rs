@@ -11,6 +11,7 @@
 
 use crate::client::errors::ConnectionError;
 use crate::config::Profile;
+use crate::info;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use postgres_openssl::MakeTlsConnector;
 use tokio_postgres::types::ToSql;
@@ -108,7 +109,7 @@ impl Client {
             // Spawn the connection handler
             mz_ore::task::spawn(|| "mz-deploy-connection", async move {
                 if let Err(e) = connection.await {
-                    eprintln!("connection error: {}", e);
+                    info!("connection error: {}", e);
                 }
             });
 
@@ -163,7 +164,7 @@ impl Client {
             // Spawn the connection handler
             mz_ore::task::spawn(|| "mz-deploy-connection", async move {
                 if let Err(e) = connection.await {
-                    eprintln!("connection error: {}", e);
+                    info!("connection error: {}", e);
                 }
             });
 

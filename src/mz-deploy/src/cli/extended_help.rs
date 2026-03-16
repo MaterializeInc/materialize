@@ -91,6 +91,7 @@ pub fn all_help() -> String {
 }
 
 /// Print an error message for an unknown command, listing valid commands.
+#[allow(clippy::print_stderr)]
 pub fn print_unknown_command(name: &str) {
     use owo_colors::OwoColorize;
 

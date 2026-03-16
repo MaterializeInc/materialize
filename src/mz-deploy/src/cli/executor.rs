@@ -9,7 +9,7 @@ use crate::cli::git::get_git_commit;
 use crate::client::{Client, ClusterConfig, quote_identifier};
 use crate::config::Settings;
 use crate::project::{self, typed};
-use crate::verbose;
+use crate::{info, verbose};
 use owo_colors::OwoColorize;
 use serde::Serialize;
 use std::cell::RefCell;
@@ -263,7 +263,7 @@ pub async fn collect_deployment_metadata(
         .get_current_user()
         .await
         .unwrap_or_else(|e| {
-            eprintln!("warning: failed to get current user: {}", e);
+            info!("warning: failed to get current user: {}", e);
             "unknown".to_string()
         });
 

@@ -6,6 +6,7 @@
 use crate::cli::CliError;
 use crate::cli::commands::new_project::{self, ScaffoldOpts};
 use crate::cli::progress;
+use crate::info;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -124,16 +125,16 @@ pub fn run(name: &str, init_git: bool) -> Result<(), CliError> {
         }
     }
 
-    eprintln!();
+    info!();
     progress::success(&format!(
         "The realm of `{}` is prepared. Your quest awaits, Lorekeeper.",
         name
     ));
-    eprintln!();
+    info!();
     progress::info("To begin the walkthrough, open the project in Claude Code:");
-    eprintln!("      cd {name}");
-    eprintln!("      claude");
-    eprintln!("    Then type: /walkthrough");
+    info!("      cd {name}");
+    info!("      claude");
+    info!("    Then type: /walkthrough");
 
     Ok(())
 }

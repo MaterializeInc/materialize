@@ -393,7 +393,7 @@ async fn run_single_test(
     };
 
     if let Err(e) = client.batch_execute("DISCARD ALL").await {
-        eprintln!("warning: failed to execute DISCARD ALL: {}", e);
+        info!("warning: failed to execute DISCARD ALL: {}", e);
     }
     Ok(outcome)
 }
@@ -443,7 +443,9 @@ fn print_test_outcome(name: &str, outcome: &TestOutcome) {
             );
             match failure {
                 ValidationFailure::UnitTest(e) => print_test_validation_error(e),
-                ValidationFailure::AtTime(e) => eprintln!("{}", e),
+                ValidationFailure::AtTime(e) => {
+                    info!("{}", e)
+                }
             }
         }
         TestOutcome::Failed(failure) => {
@@ -454,9 +456,11 @@ fn print_test_outcome(name: &str, outcome: &TestOutcome) {
                 "FAILED".red().bold()
             );
             match failure {
-                ExecutionFailure::AssertionFailed { display, .. } => eprint!("{}", display),
+                ExecutionFailure::AssertionFailed { display, .. } => {
+                    info_nonl!("{}", display)
+                }
                 ExecutionFailure::Error(msg) => {
-                    eprintln!("  {}: {}", "error".red().bold(), msg)
+                    info!("  {}: {}", "error".red().bold(), msg)
                 }
             }
         }
@@ -466,12 +470,20 @@ fn print_test_outcome(name: &str, outcome: &TestOutcome) {
 /// Renders validation failures with the same detail shape as legacy test output.
 fn print_test_validation_error(error: &unit_test::TestValidationError) {
     match error {
-        unit_test::TestValidationError::UnmockedDependency(inner) => eprintln!("{}", inner),
-        unit_test::TestValidationError::MockSchemaMismatch(inner) => eprintln!("{}", inner),
-        unit_test::TestValidationError::ExpectedSchemaMismatch(inner) => eprintln!("{}", inner),
-        unit_test::TestValidationError::InvalidAtTime(inner) => eprintln!("{}", inner),
+        unit_test::TestValidationError::UnmockedDependency(inner) => {
+            info!("{}", inner)
+        }
+        unit_test::TestValidationError::MockSchemaMismatch(inner) => {
+            info!("{}", inner)
+        }
+        unit_test::TestValidationError::ExpectedSchemaMismatch(inner) => {
+            info!("{}", inner)
+        }
+        unit_test::TestValidationError::InvalidAtTime(inner) => {
+            info!("{}", inner)
+        }
         unit_test::TestValidationError::TypesCacheUnavailable { reason } => {
-            eprintln!(
+            info!(
                 "{}: types cache unavailable: {}",
                 "error".bright_red().bold(),
                 reason
@@ -656,12 +668,12 @@ async fn load_or_generate_types_cache(
         Err(TypeCheckError::ContainerStartFailed(e)) => {
             // Docker not available - warn and return empty types
             // Tests will still run but validation will be limited
-            eprintln!(
+            info!(
                 "{}: Docker not available for type checking: {}",
                 "warning".yellow().bold(),
                 e
             );
-            eprintln!(
+            info!(
                 "{}",
                 "Test validation will be limited without types.cache".yellow()
             );

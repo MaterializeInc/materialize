@@ -2887,7 +2887,9 @@ fn test_active_variant_resolution_falls_back_to_default() {
         "should fall back to default variant: {:?}",
         result.err()
     );
-    let obj = result.unwrap().expect("should fall back to default variant");
+    let obj = result
+        .unwrap()
+        .expect("should fall back to default variant");
     let stmt_str = format!("{}", obj.stmt);
     assert!(
         stmt_str.contains("default_val"),

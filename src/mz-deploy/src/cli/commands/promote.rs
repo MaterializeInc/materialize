@@ -9,7 +9,7 @@ use crate::config::Settings;
 use crate::log;
 use crate::project::SchemaQualifier;
 use crate::project::object_id::ObjectId;
-use crate::{project, verbose};
+use crate::{info, project, verbose};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 use std::collections::BTreeSet;
@@ -583,17 +583,17 @@ async fn gather_resources_and_check_conflicts(
     if !conflicts.is_empty() {
         if force {
             // With --force, show warning but continue
-            eprintln!(
+            info!(
                 "\n{}: deployment conflicts detected, but continuing due to --force flag",
                 "warning".yellow().bold()
             );
             for conflict in &conflicts {
-                eprintln!(
+                info!(
                     "  - {}.{} (last promoted by '{}' deployment)",
                     conflict.database, conflict.schema, conflict.deploy_id
                 );
             }
-            eprintln!();
+            info!();
         } else {
             // Without --force, return error
             return Err(CliError::DeploymentConflict { conflicts });
@@ -651,7 +651,7 @@ async fn gather_resources_and_check_conflicts(
         if existing_schemas.contains(&pair) {
             staging_schemas.insert(SchemaQualifier::new(pair.0, pair.1));
         } else {
-            eprintln!("Warning: Staging schema {}.{} not found", pair.0, pair.1);
+            info!("Warning: Staging schema {}.{} not found", pair.0, pair.1);
         }
     }
 
@@ -681,7 +681,7 @@ async fn gather_resources_and_check_conflicts(
         if existing_clusters.contains(&staging_cluster) {
             staging_clusters.insert(cluster_name);
         } else {
-            eprintln!("Warning: Staging cluster {} not found", staging_cluster);
+            info!("Warning: Staging cluster {} not found", staging_cluster);
         }
     }
 
@@ -861,7 +861,7 @@ async fn execute_pending_sinks(client: &Client, plan: &DeploymentPlan) -> Result
 
         // Execute the sink creation statement
         if let Err(e) = client.execute(&stmt.statement_sql, &[]).await {
-            eprintln!(
+            info!(
                 "Error creating sink {}.{}.{}: {}",
                 stmt.database, stmt.schema, stmt.object, e
             );
@@ -914,7 +914,7 @@ async fn apply_replacement_mvs(client: &Client, plan: &DeploymentPlan) -> Result
 
         verbose!("  {}", alter_sql);
         if let Err(e) = client.execute(&alter_sql, &[]).await {
-            eprintln!(
+            info!(
                 "Error applying replacement for {}.{}.{}: {}",
                 record.target_database, record.target_schema, record.target_name, e
             );
@@ -940,7 +940,7 @@ async fn apply_replacement_mvs(client: &Client, plan: &DeploymentPlan) -> Result
         );
         verbose!("  {}", drop_sql);
         if let Err(e) = client.execute(&drop_sql, &[]).await {
-            eprintln!(
+            info!(
                 "warning: failed to drop replacement schema {}.{}: {}",
                 sq.database, sq.schema, e
             );
@@ -1084,7 +1084,7 @@ async fn drop_old_resources(client: &Client, plan: &DeploymentPlan) {
 
         verbose!("  {}", drop_sql);
         if let Err(e) = client.execute(&drop_sql, &[]).await {
-            eprintln!(
+            info!(
                 "warning: failed to drop old schema {}.{}: {}",
                 sq.database, old_schema, e
             );
@@ -1098,7 +1098,7 @@ async fn drop_old_resources(client: &Client, plan: &DeploymentPlan) {
 
         verbose!("  {}", drop_sql);
         if let Err(e) = client.execute(&drop_sql, &[]).await {
-            eprintln!("warning: failed to drop old cluster {}: {}", old_cluster, e);
+            info!("warning: failed to drop old cluster {}: {}", old_cluster, e);
         }
     }
 }

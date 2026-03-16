@@ -14,6 +14,7 @@ use std::time::Duration;
 /// stage_start("Parsing SQL files");
 /// // Output: → Parsing SQL files...
 /// ```
+#[allow(clippy::print_stderr)]
 pub fn stage_start(name: &str) {
     eprintln!("\n{} {}...", "→".yellow(), name);
 }
@@ -25,6 +26,7 @@ pub fn stage_start(name: &str) {
 /// stage_success("15 objects parsed", Duration::from_millis(100));
 /// // Output:   ✓ 15 objects parsed (0.1s)
 /// ```
+#[allow(clippy::print_stderr)]
 pub fn stage_success(message: &str, duration: Duration) {
     let seconds = duration.as_secs_f64();
     eprintln!(
@@ -42,6 +44,7 @@ pub fn stage_success(message: &str, duration: Duration) {
 /// info("3 external dependencies detected");
 /// // Output:   ℹ 3 external dependencies detected
 /// ```
+#[allow(clippy::print_stderr)]
 pub fn info(message: &str) {
     eprintln!("  {} {}", "ℹ".blue(), message);
 }
@@ -53,11 +56,13 @@ pub fn info(message: &str) {
 /// success("All objects validated");
 /// // Output:   ✓ All objects validated
 /// ```
+#[allow(clippy::print_stderr)]
 pub fn success(message: &str) {
     eprintln!("  {} {}", "✓".green(), message);
 }
 
 /// Print a warning message with yellow exclamation symbol.
+#[allow(clippy::print_stderr)]
 pub fn warn(message: &str) {
     eprintln!("  {} {}", "⚠".yellow(), message);
 }
@@ -69,6 +74,7 @@ pub fn warn(message: &str) {
 /// error("Type checking failed");
 /// // Output:   ✗ Type checking failed
 /// ```
+#[allow(clippy::print_stderr)]
 pub fn error(message: &str) {
     eprintln!("  {} {}", "✗".red(), message);
 }
@@ -80,6 +86,7 @@ pub fn error(message: &str) {
 /// summary("Project successfully compiled", Duration::from_secs(3));
 /// // Output: ✓ Project successfully compiled in 3.0s
 /// ```
+#[allow(clippy::print_stderr)]
 pub fn summary(message: &str, duration: Duration) {
     let seconds = duration.as_secs_f64();
     eprintln!(

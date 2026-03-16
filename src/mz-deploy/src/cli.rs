@@ -40,6 +40,7 @@ pub enum TypeCheckMode {
 ///
 /// Formats the error using colored output with rustc-style formatting,
 /// including any hints provided by the error's `hint()` method.
+#[allow(clippy::print_stderr)]
 pub fn display_error(error: &CliError) {
     use owo_colors::OwoColorize;
 

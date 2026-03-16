@@ -203,7 +203,7 @@ fn escape_toml_string(s: &str) -> String {
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
             c if c.is_control() => {
-                out.push_str(&format!("\\u{:04X}", c as u32));
+                out.push_str(&format!("\\u{:04X}", u32::from(c)));
             }
             c => out.push(c),
         }
@@ -324,8 +324,8 @@ pub fn load_types_cache(directory: &Path) -> Result<Types, TypesError> {
         source,
     })?;
 
-    let lock: TypesLock =
-        toml::from_str(&contents).map_err(|source| TypesError::CacheParseFailed { path, source })?;
+    let lock: TypesLock = toml::from_str(&contents)
+        .map_err(|source| TypesError::CacheParseFailed { path, source })?;
     Ok(lock.into())
 }
 

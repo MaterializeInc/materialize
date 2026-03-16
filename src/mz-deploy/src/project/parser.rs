@@ -6,6 +6,7 @@
 
 use super::error::ParseError;
 use super::variables::VariableError;
+use crate::info;
 use mz_sql_parser::ast::{Raw, Statement};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -59,9 +60,8 @@ pub fn parse_statements_with_context(
                 .iter()
                 .map(|v| format!(":{}", v))
                 .collect();
-            eprintln!(
-                "{}: unresolved variables in {}: {}",
-                "\x1b[33mwarning\x1b[0m",
+            info!(
+                "\x1b[33mwarning\x1b[0m: unresolved variables in {}: {}",
                 path.display(),
                 formatted.join(", ")
             );
