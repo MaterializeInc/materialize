@@ -79,7 +79,7 @@ used during test execution:
 1. Compiles the project and discovers all `EXECUTE UNIT TEST` statements.
 2. Starts a Materialize Docker container (or reuses a running one).
 3. Loads type information from `types.lock` (external dependencies) and
-   `.mz-deploy/types.cache` (internal types, regenerated if stale).
+   `target/types.cache` (internal types, regenerated if stale).
 4. For each test:
    - **Validates** mock columns match the actual schema (no missing or
      extra columns, types must be compatible). Validates expected columns
@@ -156,7 +156,7 @@ annotations and trend tracking.
   the mock data and view logic.
 - **UNEXPECTED rows** — The view produced rows not in `EXPECTED`. Either
   add them to `EXPECTED` or fix the view logic.
-- **Types cache stale** — Delete `.mz-deploy/types.cache` and re-run, or
+- **Types cache stale** — Delete `target/types.cache` and re-run, or
   run `mz-deploy lock` to refresh `types.lock`.
 
 ## Exit Codes

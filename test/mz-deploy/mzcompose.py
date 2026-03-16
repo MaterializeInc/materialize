@@ -750,3 +750,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
         dry_run = parse_dry_run_json(result)
         assert count_actions(dry_run["phases"], "created") == 0
+
+    with c.test_case("mz-deploy-undefined-var"):
+        result = run_mz_deploy(c, "undefined-var/v1", "compile", check=False)
+        assert result.returncode != 0, (
+            f"Expected compile to fail for undefined variable, got rc={result.returncode}"
+        )
+        combined = result.stdout + result.stderr
+        assert "undefined_var" in combined, (
+            f"Expected error to mention 'undefined_var', got: {combined}"
+        )

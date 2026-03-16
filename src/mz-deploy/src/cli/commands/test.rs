@@ -635,7 +635,7 @@ async fn load_or_generate_types_cache(
         if let Ok(cached) = types::load_types_cache(directory) {
             info!(
                 "{}",
-                "Using cached types from .mz-deploy/types.cache".dimmed()
+                format!("Using cached types from {}/types.cache", types::BUILD_DIR).dimmed()
             );
             return Ok(cached);
         }

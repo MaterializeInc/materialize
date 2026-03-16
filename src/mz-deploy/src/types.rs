@@ -43,6 +43,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+/// Directory name for mz-deploy build artifacts (types.cache, etc.).
+pub const BUILD_DIR: &str = "target";
+
 #[derive(Error, Debug)]
 pub enum TypesError {
     #[error("failed to read types.lock at {path}")]
@@ -67,12 +70,7 @@ pub enum TypesError {
     CacheParseFailed {
         path: PathBuf,
         #[source]
-        source: serde_json::Error,
-    },
-    #[error("failed to serialize types.cache")]
-    CacheSerializeFailed {
-        #[source]
-        source: serde_json::Error,
+        source: toml::de::Error,
     },
     #[error("failed to create directory {path}")]
     DirectoryCreationFailed {
@@ -274,14 +272,14 @@ impl Types {
         fs::write(&path, contents).map_err(|source| TypesError::FileWriteFailed { path, source })
     }
 
-    /// Write the types.cache file to the .mz-deploy directory.
+    /// Write the types.cache file to the target directory.
     ///
     /// This cache stores the column types of internal project views after type checking.
     /// It is used by the test command to validate unit tests without re-typechecking.
     pub fn write_types_cache(&self, directory: &Path) -> Result<(), TypesError> {
-        let cache_dir = directory.join(".mz-deploy");
+        let cache_dir = directory.join(BUILD_DIR);
 
-        // Create .mz-deploy directory if it doesn't exist
+        // Create target directory if it doesn't exist
         if !cache_dir.exists() {
             fs::create_dir_all(&cache_dir).map_err(|source| {
                 TypesError::DirectoryCreationFailed {
@@ -292,8 +290,8 @@ impl Types {
         }
 
         let path = cache_dir.join("types.cache");
-        let contents = serde_json::to_string_pretty(self)
-            .map_err(|source| TypesError::CacheSerializeFailed { source })?;
+        let lock = TypesLock::from(self);
+        let contents = write_toml(&lock);
 
         fs::write(&path, contents).map_err(|source| TypesError::FileWriteFailed { path, source })
     }
@@ -314,26 +312,28 @@ impl Types {
     }
 }
 
-/// Load the types.cache file from the .mz-deploy directory.
+/// Load the types.cache file from the target directory.
 ///
 /// This cache contains column types for internal project views, generated during type checking.
 /// Returns an error if the file doesn't exist or cannot be parsed.
 pub fn load_types_cache(directory: &Path) -> Result<Types, TypesError> {
-    let path = directory.join(".mz-deploy").join("types.cache");
+    let path = directory.join(BUILD_DIR).join("types.cache");
 
     let contents = fs::read_to_string(&path).map_err(|source| TypesError::FileReadFailed {
         path: path.clone(),
         source,
     })?;
 
-    serde_json::from_str(&contents).map_err(|source| TypesError::CacheParseFailed { path, source })
+    let lock: TypesLock =
+        toml::from_str(&contents).map_err(|source| TypesError::CacheParseFailed { path, source })?;
+    Ok(lock.into())
 }
 
 /// Check if the types.cache is stale compared to the project source files.
 ///
 /// Returns true if any SQL file in the project directory is newer than the cache file.
 pub fn is_types_cache_stale(directory: &Path) -> bool {
-    let cache_path = directory.join(".mz-deploy").join("types.cache");
+    let cache_path = directory.join(BUILD_DIR).join("types.cache");
 
     // If cache doesn't exist, it's considered stale
     let cache_metadata = match fs::metadata(&cache_path) {
@@ -360,11 +360,11 @@ fn check_files_newer_than(dir: &Path, threshold: std::time::SystemTime) -> bool 
     for entry in entries.flatten() {
         let path = entry.path();
 
-        // Skip hidden directories and files
+        // Skip hidden directories/files and build artifact directory
         if path
             .file_name()
             .and_then(|n| n.to_str())
-            .is_some_and(|n| n.starts_with('.'))
+            .is_some_and(|n| n.starts_with('.') || n == BUILD_DIR)
         {
             continue;
         }

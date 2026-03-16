@@ -17,7 +17,7 @@ derived from the current directory name.
     - `roles/` — Role definitions
 3. Writes boilerplate files:
     - `project.toml` — Project configuration
-    - `.gitignore` — Ignores `.mz-deploy/` cache directory
+    - `.gitignore` — Ignores `target/` build artifact directory
     - `README.md` — Getting-started documentation
     - `.agents/skills/mz-deploy/SKILL.md` — LLM agent skill file
     - `.claude/skills/mz-deploy/` — Symlink (auto-loaded by Claude Code)
