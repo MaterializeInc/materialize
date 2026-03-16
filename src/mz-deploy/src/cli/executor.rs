@@ -15,9 +15,7 @@ use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fmt;
-use std::future::Future;
 use std::path::Path;
-use std::pin::Pin;
 
 /// What happened when applying a single object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -277,6 +275,24 @@ pub async fn collect_deployment_metadata(
     }
 }
 
+/// Connect a planning client for apply commands.
+pub async fn connect_apply_client(settings: &Settings) -> Result<Client, CliError> {
+    Client::connect_with_profile(settings.connection().clone())
+        .await
+        .map_err(CliError::Connection)
+}
+
+/// Compile the project and connect a planning client for database-object apply commands.
+pub async fn compile_apply_project_and_connect(
+    settings: &Settings,
+) -> Result<(project::planned::Project, Client), CliError> {
+    let planned_project =
+        crate::cli::commands::compile::run(settings, true, !crate::log::json_output_enabled())
+            .await?;
+    let client = connect_apply_client(settings).await?;
+    Ok((planned_project, client))
+}
+
 /// Generate a random 7-character hex environment name.
 ///
 /// Uses SHA256 hash of current timestamp to generate a unique identifier
@@ -299,35 +315,6 @@ pub fn generate_random_env_name() -> String {
         "{:07x}",
         u32::from_le_bytes([hash[0], hash[1], hash[2], hash[3]]) & 0xFFFFFFF
     )
-}
-
-/// Run a standalone `apply <phase>` subcommand.
-///
-/// Connects, plans with dry-run executor, optionally executes.
-/// Used by infrastructure phases (clusters, roles, network_policies)
-/// that don't need a compiled project.
-pub async fn run_single_phase<F>(
-    settings: &Settings,
-    dry_run: bool,
-    plan_fn: F,
-) -> Result<ApplyPlan, CliError>
-where
-    F: for<'a> FnOnce(
-        &'a Settings,
-        &'a Client,
-        &'a DeploymentExecutor<'a>,
-    ) -> Pin<Box<dyn Future<Output = Result<ApplyResult, CliError>> + 'a>>,
-{
-    let client = Client::connect_with_profile(settings.connection().clone())
-        .await
-        .map_err(CliError::Connection)?;
-    let mut plan = ApplyPlan::new();
-    let executor = DeploymentExecutor::new_dry_run(&client);
-    plan.add_phase(plan_fn(settings, &client, &executor).await?);
-    if !dry_run {
-        plan.execute(&client).await?;
-    }
-    Ok(plan)
 }
 
 /// Helper for executing database object deployments.

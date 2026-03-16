@@ -3,7 +3,7 @@
 use crate::cli::CliError;
 use crate::cli::commands::grants;
 use crate::cli::executor::{
-    ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult,
+    ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult, connect_apply_client,
 };
 use crate::client::Client;
 use crate::config::Settings;
@@ -43,10 +43,17 @@ pub async fn plan(
 
 /// Run the `network-policies apply` command: plan, render, optionally execute.
 pub async fn run(settings: &Settings, dry_run: bool) -> Result<ApplyPlan, CliError> {
-    crate::cli::executor::run_single_phase(settings, dry_run, |s, c, e| {
-        Box::pin(self::plan(s, c, e))
-    })
-    .await
+    let client = connect_apply_client(settings).await?;
+    let executor = DeploymentExecutor::new_dry_run(&client);
+    let mut plan_result = ApplyPlan::new();
+    let phase = self::plan(settings, &client, &executor).await?;
+    plan_result.add_phase(phase);
+
+    if !dry_run {
+        plan_result.execute(&client).await?;
+    }
+
+    Ok(plan_result)
 }
 
 /// Plan a single network policy definition: create if missing, alter if exists,

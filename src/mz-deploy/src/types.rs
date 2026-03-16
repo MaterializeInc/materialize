@@ -437,10 +437,7 @@ mod tests {
         );
         tables.insert("app.ingest.users".to_string(), user_cols);
 
-        let types = Types {
-            version: 1,
-            tables,
-        };
+        let types = Types { version: 1, tables };
 
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         types

@@ -1,10 +1,12 @@
 //! Apply secrets command - create missing secrets and update existing ones.
 
 use crate::cli::CliError;
-use crate::cli::commands::apply_objects::{self, HandleResult};
+use crate::cli::commands::apply_objects;
 use crate::cli::commands::grants;
 use crate::cli::executor::ObjectAction;
-use crate::cli::executor::{ApplyPlan, ApplyResult, DeploymentExecutor};
+use crate::cli::executor::{
+    ApplyPlan, ApplyResult, DeploymentExecutor, ObjectResult, compile_apply_project_and_connect,
+};
 use crate::client::Client;
 use crate::config::Settings;
 use crate::project;
@@ -13,6 +15,7 @@ use crate::project::object_id::ObjectId;
 use crate::project::typed;
 use crate::secret_resolver::SecretResolver;
 use mz_sql_parser::ast::{AlterSecretStatement, Raw};
+use std::collections::BTreeSet;
 
 const PHASE_NAME: &str = "secrets";
 const GRANT_KIND: grants::GrantObjectKind = grants::GrantObjectKind::Secret;
@@ -38,7 +41,7 @@ impl Secrets {
         executor: &DeploymentExecutor<'_>,
         obj_id: &ObjectId,
         typed_obj: &typed::DatabaseObject,
-    ) -> Result<HandleResult, CliError> {
+    ) -> Result<(ObjectAction, Vec<String>), CliError> {
         let Statement::CreateSecret(ref create_stmt) = typed_obj.stmt else {
             unreachable!("filtered for CreateSecret");
         };
@@ -59,10 +62,7 @@ impl Secrets {
         )
         .await?;
 
-        Ok(HandleResult {
-            action: ObjectAction::Altered,
-            redacted_statements,
-        })
+        Ok((ObjectAction::Altered, redacted_statements))
     }
 
     async fn handle_new(
@@ -71,7 +71,7 @@ impl Secrets {
         executor: &DeploymentExecutor<'_>,
         obj_id: &ObjectId,
         typed_obj: &typed::DatabaseObject,
-    ) -> Result<HandleResult, CliError> {
+    ) -> Result<(ObjectAction, Vec<String>), CliError> {
         let Statement::CreateSecret(ref create_stmt) = typed_obj.stmt else {
             unreachable!("filtered for CreateSecret");
         };
@@ -87,10 +87,7 @@ impl Secrets {
         )
         .await?;
 
-        Ok(HandleResult {
-            action: ObjectAction::Created,
-            redacted_statements,
-        })
+        Ok((ObjectAction::Created, redacted_statements))
     }
 }
 
@@ -103,32 +100,57 @@ pub async fn plan(
     apply_plan: &mut ApplyPlan,
 ) -> Result<ApplyResult, CliError> {
     let secrets = Secrets::new(settings)?;
-    let input = apply_objects::prepare_phase(
-        &GRANT_KIND,
-        matches,
-        client,
-        executor,
-        planned_project,
-        apply_plan,
-    )
-    .await?;
+    let mut target_ids = BTreeSet::new();
+    for obj in planned_project.iter_objects() {
+        if matches(&obj.typed_object.stmt) {
+            target_ids.insert(obj.id.clone());
+        }
+    }
+
+    if target_ids.is_empty() {
+        return Ok(ApplyResult {
+            phase: PHASE_NAME.to_string(),
+            results: vec![],
+        });
+    }
+
+    let target_objects = planned_project.get_sorted_objects_filtered(&target_ids)?;
+    let existing = client
+        .introspection()
+        .check_catalog_objects_exist(&target_ids, GRANT_KIND.catalog_table())
+        .await
+        .map_err(CliError::Connection)?;
+
+    let schemas: BTreeSet<_> = target_objects
+        .iter()
+        .filter(|(obj_id, _)| !existing.contains(obj_id))
+        .map(|(obj_id, _)| {
+            project::SchemaQualifier::new(obj_id.database.clone(), obj_id.schema.clone())
+        })
+        .collect();
+    apply_plan
+        .prepare_schemas(executor, planned_project, &schemas)
+        .await?;
 
     let mut results = Vec::new();
 
-    for (obj_id, typed_obj) in &input.existing_objects {
+    for (obj_id, typed_obj) in target_objects {
         executor.take_statements();
-        let hr = secrets
-            .handle_existing(client, executor, obj_id, typed_obj)
-            .await?;
-        results.push(apply_objects::to_object_result(obj_id, executor, hr));
-    }
-
-    for (obj_id, typed_obj) in &input.to_create {
-        executor.take_statements();
-        let hr = secrets
-            .handle_new(client, executor, obj_id, typed_obj)
-            .await?;
-        results.push(apply_objects::to_object_result(obj_id, executor, hr));
+        let (action, redacted_statements) = if existing.contains(&obj_id) {
+            secrets
+                .handle_existing(client, executor, &obj_id, typed_obj)
+                .await?
+        } else {
+            secrets
+                .handle_new(client, executor, &obj_id, typed_obj)
+                .await?
+        };
+        results.push(ObjectResult {
+            object: obj_id.to_string(),
+            action,
+            statements: executor.take_statements(),
+            redacted_statements,
+        });
     }
 
     Ok(ApplyResult {
@@ -139,8 +161,22 @@ pub async fn plan(
 
 /// Run the `apply secrets` command: plan, render, optionally execute.
 pub async fn run(settings: &Settings, dry_run: bool) -> Result<ApplyPlan, CliError> {
-    apply_objects::run_compiled_phase(settings, dry_run, |s, c, e, pp, ap| {
-        Box::pin(self::plan(s, c, e, pp, ap))
-    })
-    .await
+    let (planned_project, client) = compile_apply_project_and_connect(settings).await?;
+    let mut apply_plan = ApplyPlan::new();
+    let executor = DeploymentExecutor::new_dry_run(&client);
+    let phase = self::plan(
+        settings,
+        &client,
+        &executor,
+        &planned_project,
+        &mut apply_plan,
+    )
+    .await?;
+    apply_plan.add_phase(phase);
+
+    if !dry_run {
+        apply_plan.execute(&client).await?;
+    }
+
+    Ok(apply_plan)
 }

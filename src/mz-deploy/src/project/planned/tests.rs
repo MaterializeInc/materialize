@@ -2263,7 +2263,7 @@ fn test_extract_dependencies_connection_with_ssh_tunnel() {
 
     if let mz_sql_parser::ast::Statement::CreateConnection(conn_stmt) = &parsed[0].ast {
         let stmt = Statement::CreateConnection(conn_stmt.clone());
-        let (deps, clusters) = extract_dependencies(&stmt, "db", "public");
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
 
         assert_eq!(deps.len(), 1);
         assert!(deps.contains(&ObjectId::new(
@@ -2283,7 +2283,7 @@ fn test_extract_dependencies_connection_with_aws_privatelink() {
 
     if let mz_sql_parser::ast::Statement::CreateConnection(conn_stmt) = &parsed[0].ast {
         let stmt = Statement::CreateConnection(conn_stmt.clone());
-        let (deps, clusters) = extract_dependencies(&stmt, "db", "public");
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
 
         assert_eq!(deps.len(), 1);
         assert!(deps.contains(&ObjectId::new(

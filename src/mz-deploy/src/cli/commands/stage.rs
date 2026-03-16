@@ -1199,10 +1199,6 @@ async fn deploy_single_object(
 
 /// Check that no new replacement objects are being added to schemas that already
 /// have production objects.
-///
-/// New objects in brand-new schemas (no prior production objects) are fine — they
-/// deploy via normal blue-green swap. Only schemas with existing production objects
-/// are affected by the deployment kind mismatch bug.
 fn validate_no_new_objects_in_existing_stable_schemas(
     change_set: &ChangeSet,
     production_snapshot: &project::deployment_snapshot::DeploymentSnapshot,
