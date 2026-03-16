@@ -391,29 +391,15 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         updates: Vec<(S, Diff)>,
         commit_ts: Timestamp,
     ) -> Result<Timestamp, CompareAndAppendError> {
-        assert_eq!(self.mode, Mode::Writable);
-        assert!(
-            commit_ts >= self.upper,
-            "expected commit ts, {}, to be greater than or equal to upper, {}",
-            commit_ts,
-            self.upper
-        );
-
-        // This awkward code allows us to perform an expensive soft assert that requires cloning
-        // `updates` twice, after `updates` has been consumed.
+        // The fencing check is expensive, so run it only with soft assertions enabled.
         let contains_fence = if mz_ore::assert::soft_assertions_enabled() {
-            let updates: Vec<_> = updates.clone();
             let parsed_updates: Vec<_> = updates
                 .clone()
                 .into_iter()
-                .map(|(update, diff)| {
-                    let update: StateUpdateKindJson = update.into();
-                    (update, diff)
-                })
                 .filter_map(|(update, diff)| {
-                    <StateUpdateKindJson as TryIntoStateUpdateKind>::try_into(update)
-                        .ok()
-                        .map(|update| (update, diff))
+                    let update: StateUpdateKindJson = update.into();
+                    let update = TryIntoStateUpdateKind::try_into(update).ok()?;
+                    Some((update, diff))
                 })
                 .collect();
             let contains_retraction = parsed_updates.iter().any(|(update, diff)| {
@@ -422,10 +408,9 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             let contains_addition = parsed_updates.iter().any(|(update, diff)| {
                 matches!(update, StateUpdateKind::FenceToken(..)) && *diff == Diff::ONE
             });
-            let contains_fence = contains_retraction && contains_addition;
-            Some((contains_fence, updates))
+            contains_retraction && contains_addition
         } else {
-            None
+            false
         };
 
         let updates = updates.into_iter().map(|(kind, diff)| {
@@ -437,6 +422,44 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             )
         });
         let next_upper = commit_ts.step_forward();
+        self.compare_and_append_inner(updates, next_upper)
+            .await
+            .inspect_err(|e| {
+                // A compare-and-append failure means someone else must have written to the
+                // catalog. We expect to have been fenced out, since writing to the catalog without
+                // fencing other catalogs should be impossible. The one exception is if we are
+                // trying to fence other catalogs with this write.
+                soft_assert_or_log!(
+                    matches!(e, CompareAndAppendError::Fence(_)) || contains_fence,
+                    "encountered an upper mismatch on a non-fencing write"
+                );
+            })?;
+
+        self.sync(next_upper).await?;
+        Ok(next_upper)
+    }
+
+    /// Compare-and-append `updates` to the catalog shard, advancing the upper to `next_upper`.
+    ///
+    /// On success, updating `self.upper` is left to the caller. The caller can thus decide whether
+    /// or not it needs to sync the catalog.
+    ///
+    /// # Panics
+    ///
+    /// Panics if not in `Writable` mode.
+    /// Panics if `next_upper` is not greater than `self.upper`.
+    async fn compare_and_append_inner(
+        &mut self,
+        updates: impl IntoIterator<Item = ((SourceData, ()), Timestamp, StorageDiff)>,
+        next_upper: Timestamp,
+    ) -> Result<(), CompareAndAppendError> {
+        assert_eq!(self.mode, Mode::Writable);
+        assert!(
+            next_upper > self.upper,
+            "next_upper ({next_upper}) not greater than current upper ({})",
+            self.upper,
+        );
+
         let res = self
             .write_handle
             .compare_and_append(
@@ -447,18 +470,10 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             .await
             .expect("invalid usage");
 
-        // There was an upper mismatch which means something else must have written to the catalog.
-        // Syncing to the current upper should result in a fence error since writing to the catalog
-        // without fencing other catalogs should be impossible. The one exception is if we are
-        // trying to fence other catalogs with this write, in which case we won't see a fence error.
         if let Err(e @ UpperMismatch { .. }) = res {
+            // Most likely we were fenced out.
+            // Sync to the current upper to detect that.
             self.sync_to_current_upper().await?;
-            if let Some((contains_fence, updates)) = contains_fence {
-                assert!(
-                    contains_fence,
-                    "updates were neither fenced nor fencing and encountered an upper mismatch: {updates:#?}"
-                )
-            }
             return Err(e.into());
         }
 
@@ -483,8 +498,8 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                 "updated bound should match expected"
             ),
         }
-        self.sync(next_upper).await?;
-        Ok(next_upper)
+
+        Ok(())
     }
 
     /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
@@ -1791,12 +1806,39 @@ impl DurableCatalogState for PersistCatalogState {
     }
 
     #[mz_ore::instrument(level = "debug")]
-    async fn confirm_leadership(&mut self) -> Result<(), CatalogError> {
-        // Read only catalog does not care about leadership.
-        if self.is_read_only() {
+    async fn advance_upper(&mut self, new_upper: Timestamp) -> Result<(), CatalogError> {
+        if self.upper >= new_upper {
+            // We don't expect a no-op advancement, but if we are wrong we'd crash the process.
+            // Seems safer to only soft-assert and return gracefully in production. If we get here
+            // that means we tried to make the catalog shard readable at a time it was already
+            // readable, which likely means we are violating linearizability. That's not great, but
+            // crashing (or even crash-looping) is worse.
+            //
+            // TODO: Consider removing this once we have built some confidence.
+            soft_panic_or_log!(
+                "new_upper ({new_upper}) not greater than current upper ({})",
+                self.upper
+            );
             return Ok(());
         }
-        self.sync_to_current_upper().await?;
+
+        match self.mode {
+            Mode::Writable => self
+                .compare_and_append_inner([], new_upper)
+                .await
+                .map_err(|e| e.unwrap_fence_error())?,
+            Mode::Savepoint => (),
+            Mode::Readonly => {
+                return Err(DurableCatalogError::NotWritable(
+                    "cannot advance upper of a read-only catalog".into(),
+                )
+                .into());
+            }
+        }
+
+        self.upper = new_upper;
+        // No sync needed since no data was written.
+
         Ok(())
     }
 

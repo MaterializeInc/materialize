@@ -180,7 +180,7 @@ IGNORE_RE = re.compile(
     # For tests we purposely trigger this error
     | skip-version-upgrade-materialized.* \| .* incompatible\ persist\ version\ \d+\.\d+\.\d+(-dev)?,\ current:\ \d+\.\d+\.\d+(-dev\.\d+)?,\ make\ sure\ to\ upgrade\ the\ catalog\ one\ version\ forward\ at\ a\ time
     # For 0dt upgrades
-    | halting\ process:\ (unable\ to\ confirm\ leadership|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out|dependency\ since\ frontier\ is\ empty\ while\ dependent\ upper\ is\ not\ empty|code\ at\ version\ .*\ cannot\ read\ data\ with\ version)
+    | halting\ process:\ (unable\ to\ advance\ catalog\ upper|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out|dependency\ since\ frontier\ is\ empty\ while\ dependent\ upper\ is\ not\ empty|code\ at\ version\ .*\ cannot\ read\ data\ with\ version)
     | zippy-materialized.* \| .* halting\ process:\ Server\ started\ with\ requested\ generation
     | there\ have\ been\ DDL\ that\ we\ need\ to\ react\ to;\ rebooting\ in\ read-only\ mode
     # Don't care for ssh problems
@@ -188,12 +188,12 @@ IGNORE_RE = re.compile(
     # Expected in Terraform tests if something else failed during the setup
     | mz-debug:\ fatal:\ failed\ to\ read\ kubeconfig
     # Fences without incrementing deploy generation
-    | txn-wal-fencing-mz_first-.* \| .* unable\ to\ confirm\ leadership
+    | txn-wal-fencing-mz_first-.* \| .* unable\ to\ advance\ catalog\ upper
     | txn-wal-fencing-mz_first-.* \| .* fenced\ by\ envd
     # 0dt platform-checks have two envds running in parallel, thus high load, tests still succeed, so ignore noise
     | platform-checks-mz_.* \| .* was\ expired\ due\ to\ inactivity\.\ Did\ the\ machine\ go\ to\ sleep\?
     # This can happen in "K8s recovery: envd on failing node", but the test still succeeds, old environmentd will just be crashed, see database-issues#8749
-    | \[pod/environmentd-0/environmentd\]\ .*\ (unable\ to\ confirm\ leadership|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out)
+    | \[pod/environmentd-0/environmentd\]\ .*\ (unable\ to\ advance\ catalog\ upper|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out)
     | cannot\ load\ unknown\ system\ parameter
     # Occurs in Orchestratord test when restarting
     | comm="containerd"\ exe="/usr/local/bin/containerd"\ sig=11
