@@ -159,7 +159,7 @@ If the `status` for a source shows `paused`:
 |--|--|
 | **Symptoms** | Extremely high wallclock lag (days or more) on a single source and all downstream objects. Other sources are unaffected. |
 | **Diagnosis** | The source has 0 replica. A paused source has no `error`. |
-| **Resolution** | If the source was paused intentionally, no resolution is needed.<br>If the source should be active, resume it by adding a replica to its cluster ([`ALTER CLUSTER`](/sql/alter-replica/)). | 
+| **Resolution** | If the source was paused intentionally, no resolution is needed.<br>If the source should be active, resume it by adding a replica to its cluster ([`ALTER CLUSTER`](/sql/alter-cluster/)). |
 
 {{< tip >}}
 When measuring aggregate freshness, exclude intentionally paused sources to
