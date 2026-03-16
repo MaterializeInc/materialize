@@ -26,7 +26,7 @@ This release includes various improvements and bug fixes.
 - **Improved memory efficiency for joins on `varchar` and `text` columns**:
   Previously, joining on these columns required creating a new arrangement,
   effectively doubling memory usage. Materialize can now reuse existing
-  arrangements on these columns, resulting in up to 25% memory reduction
+  arrangements on these columns. We've seen memory improvements by as much as 25%
   in some cases involving `varchar` indexes.
 - Added support for setting `cpu_request` independently of `cpu_limit`
   in cluster replica sizes for Self-Managed deployments.
