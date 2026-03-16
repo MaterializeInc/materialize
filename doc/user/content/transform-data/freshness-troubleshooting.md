@@ -47,8 +47,9 @@ following:
 
 ### Check wallclock lag
 
-Wallclock lag is used to indicate issue with the source.
-Query [`mz_internal.mz_wallclock_global_lag`](/sql/system-catalog/mz_internal/#mz_wallclock_global_lag) to see the current lag for all user objects:
+Wallclock lag is used to indicate issue with the source. Query
+[`mz_internal.mz_wallclock_global_lag`](/sql/system-catalog/mz_internal/#mz_wallclock_global_lag)
+to see the current lag for user objects:
 
 ```mzsql
 SELECT o.id, o.name, o.type, wl.lag
@@ -59,9 +60,12 @@ ORDER BY wl.lag DESC NULLS LAST
 LIMIT 20;
 ```
 
-Lag of a few seconds are typical for healthy systems.
-Larger lag values (minutes or hours) indicate a problem, but some objects report high lag without representing a real issue (e.g., paused sources, zero-replica clusters).
-See [Filtering noise](#filtering-noise) for how to exclude these.
+- Lag of a few seconds are typical for healthy systems.
+- Larger lag values (minutes or hours) indicate a problem, with the following
+  exception:
+  - Some objects may report high lag without representing a real issue (e.g.,
+paused sources, zero-replica clusters). To exclude these, see [Filtering
+noise](#filtering-noise).
 
 For historical trends, query [`mz_internal.mz_wallclock_global_lag_recent_history`](/sql/system-catalog/mz_internal/#mz_wallclock_global_lag_recent_history), replacing `<object_id>` with the ID of the object from the previous query:
 
@@ -116,67 +120,63 @@ paused source.
 
 ### Check source health
 
-If the slowest root input is a source or subsource, check its status:
+To check if a source or its associated subsource/table is unhealthy, query the
+`mz_internal.mz_source_statuses` table:
 
 ```mzsql
-SELECT s.id, o.name, s.status, s.error
+SELECT s.id, o.name, s.type, s.status, s.error
 FROM mz_internal.mz_source_statuses s
 JOIN mz_catalog.mz_objects o ON s.id = o.id
 WHERE o.id LIKE 'u%'
   AND s.status <> 'running';
 ```
 
-A source with status `stalled` or `starting` will hold back all downstream objects.
-A source that is restart-looping may briefly show `running` between restarts; check `mz_internal.mz_source_status_history` for repeated transitions to confirm.
-For PostgreSQL sources, the subsources share replication state with the parent source; if one subsource lags, all subsources of that source typically lag together.
+A source (or its associated subsource/table) with status
+[`stalled`](#stalled-or-disconnected-source), `starting`, `paused` will hold
+back all downstream objects.
 
-Check the frontier of a specific source against wall-clock time:
+{{< tip >}}
+A source that is in a restart loop may briefly show `running` between
+restarts; check `mz_internal.mz_source_status_history` for repeated transitions
+to confirm.
+{{< /tip >}}
 
-```mzsql
-SELECT
-    o.name,
-    to_timestamp(f.write_frontier::text::double / 1000) AS frontier_time,
-    now() - to_timestamp(f.write_frontier::text::double / 1000) AS behind_wallclock
-FROM mz_internal.mz_frontiers f
-JOIN mz_catalog.mz_objects o ON f.object_id = o.id
-WHERE o.id = '<source_id>';
-```
+#### Stalled or disconnected source
 
-### Common patterns
+If the `status` for a source shows `stalled`:
 
-#### Disconnected or stalled source
-
-**Symptoms**: Extremely high wallclock lag (hours or days) on the source and all downstream objects.
-All subsources of the same parent source show identical lag.
-
-**Diagnosis**: Check `mz_internal.mz_source_statuses` for errors.
-Common causes include network partitions, credential expiration, and upstream database restarts.
-
-**Resolution**: Fix the connectivity issue.
-Once the source reconnects, downstream objects catch up automatically.
+| | |
+|--|--|
+| **Symptoms** | Extremely high wallclock lag (hours or days) on the source and all downstream objects. All subsources/tables of the same parent source show identical lag. |
+| **Diagnosis** | Check the returned `error` field. Common causes include network partitions, credential expiration, and upstream database restarts. |
+| **Resolution** | Address the specified `error`. Once the source reconnects, downstream objects catch up automatically. |
 
 #### Paused source
 
-**Symptoms**: Extremely high wallclock lag (days or more) on a single source and all downstream objects.
-Other sources are unaffected.
+If the `status` for a source shows `paused`:
 
-**Diagnosis**: The source is intentionally paused.
-Check `mz_internal.mz_source_statuses` — a status of `paused` confirms this.
-Unlike a stalled source, a paused source has no error and was deliberately stopped.
+| | |
+|--|--|
+| **Symptoms** | Extremely high wallclock lag (days or more) on a single source and all downstream objects. Other sources are unaffected. |
+| **Diagnosis** | The source has 0 replica. A paused source has no `error`. |
+| **Resolution** | If the source was paused intentionally, no resolution is needed.<br>If the source should be active, resume it by adding a replica to its cluster ([`ALTER CLUSTER`](/sql/alter-replica/)). | 
 
-**Resolution**: If the source was paused intentionally, this is expected behavior.
-If the source should be active, resume it by adding a replica to its cluster.
-When measuring aggregate freshness, exclude paused sources to avoid skewing metrics.
+{{< tip >}}
+When measuring aggregate freshness, exclude intentionally paused sources to
+avoid skewing metrics.
+{{< /tip >}}
 
 #### Correlated subsource lag
 
-**Symptoms**: Multiple subsources of a PostgreSQL source all show similar wallclock lag.
+For PostgreSQL sources, the associated subsources/tables share replication state
+with the parent source. As such, if one subsource/table lags, all
+subsources/tables of that source typically lag together.
 
-**Diagnosis**: PostgreSQL sources use a single replication stream for all subsources.
-If one subsource slows down (e.g., due to a large transaction), all subsources are affected.
-
-**Resolution**: This is expected behavior.
-Check the parent source's status and the replication slot lag on the upstream PostgreSQL database.
+| | |
+|--|--|
+| **Symptoms** | Multiple subsources of a PostgreSQL source all show similar wallclock lag. |
+| **Diagnosis** | PostgreSQL sources use a single replication stream for all its subsources/tables. If one subsource/table slows down (e.g., due to a large transaction), all subsources/tables for that source are affected. |
+| **Resolution** | To verify, check: <ul><li>The parent source's status in Materialize to ensure it is running. <li> The replication slot lag on the upstream PostgreSQL database.</ul> |
 
 ## Cluster CPU or memory pressure
 
