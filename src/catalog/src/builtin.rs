@@ -2202,6 +2202,28 @@ pub static MZ_MYSQL_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| Bui
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
+pub static MZ_SQL_SERVER_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_sql_server_sources",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_SQL_SERVER_SOURCES_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::String.nullable(false))
+        .with_column("is_primary_replica", SqlScalarType::Bool.nullable(true))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "id",
+            "The ID of the source. Corresponds to `mz_catalog.mz_sources.id`.",
+        ),
+        (
+            "is_primary_replica",
+            "Whether the source is connected to a primary replica in a SQL Server Availability Group. \
+             True if primary, false if secondary, NULL if not in an AG.",
+        ),
+    ]),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
 pub static MZ_SQL_SERVER_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_sql_server_source_tables",
     schema: MZ_INTERNAL_SCHEMA,
@@ -13976,6 +13998,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_POSTGRES_SOURCES),
         Builtin::Table(&MZ_POSTGRES_SOURCE_TABLES),
         Builtin::Table(&MZ_MYSQL_SOURCE_TABLES),
+        Builtin::Table(&MZ_SQL_SERVER_SOURCES),
         Builtin::Table(&MZ_SQL_SERVER_SOURCE_TABLES),
         Builtin::Table(&MZ_KAFKA_SOURCE_TABLES),
         Builtin::Table(&MZ_SINKS),

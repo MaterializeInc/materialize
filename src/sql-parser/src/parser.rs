@@ -2727,6 +2727,7 @@ impl<'a> Parser<'a> {
                 USER,
                 USERNAME,
                 WAREHOUSE,
+                READONLY,
             ])? {
                 ACCESS => {
                     self.expect_keywords(&[KEY, ID])?;
@@ -2782,6 +2783,10 @@ impl<'a> Parser<'a> {
                 SECURITY => {
                     self.expect_keyword(PROTOCOL)?;
                     ConnectionOptionName::SecurityProtocol
+                }
+                READONLY => {
+                    self.expect_keyword(INTENT)?;
+                    ConnectionOptionName::ReadOnlyIntent
                 }
                 REGION => ConnectionOptionName::Region,
                 SASL => match self.expect_one_of_keywords(&[MECHANISMS, PASSWORD, USERNAME])? {

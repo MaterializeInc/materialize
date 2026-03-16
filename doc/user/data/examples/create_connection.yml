@@ -501,7 +501,8 @@
         USER '<username>',
         PASSWORD SECRET <secret_name>,
         SSL MODE = { 'disabled' | 'required' | 'verify_ca' | 'verify' },
-        SSL CERTIFICATE AUTHORITY = { '<pem>' | SECRET <secret_name> }
+        SSL CERTIFICATE AUTHORITY = { '<pem>' | SECRET <secret_name> },
+        READONLY INTENT = { true | false }
     )
     [WITH (<with_options>)];
   syntax_elements:
@@ -554,6 +555,17 @@
         *Value:* secret or `text`
 
         One or more client SSL certificates in PEM format.
+    - name: "`READONLY INTENT`"
+      description: |
+        *Value:* `boolean`
+
+        If `true`, sets the TDS `ApplicationIntent=ReadOnly` flag on the
+        connection. When connecting through a SQL Server
+        [Availability Group](https://learn.microsoft.com/en-us/sql/database-engine/availability-groups/windows/overview-of-always-on-availability-groups-sql-server)
+        listener, this causes the listener to route the connection to a
+        read-only secondary replica.
+
+        Default: `false`.
     - name: "`WITH (<with_options>)`"
       description: |
         The following `<with_options>` are supported:

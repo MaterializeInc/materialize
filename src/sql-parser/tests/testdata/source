@@ -27,6 +27,20 @@ CREATE CONNECTION my_connection TO SQL SERVER (HOST = 'no_such_address.mtrlz.com
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("my_connection")]), connection_type: SqlServer, if_not_exists: false, values: [ConnectionOption { name: Host, value: Some(Value(String("no_such_address.mtrlz.com"))) }, ConnectionOption { name: Port, value: Some(Value(Number("5433"))) }, ConnectionOption { name: Database, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("sql_server")]))) }, ConnectionOption { name: User, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("sql_server")]))) }, ConnectionOption { name: Password, value: Some(Secret(Name(UnresolvedItemName([Ident("sql_server_pass")])))) }], with_options: [] })
 
 parse-statement
+CREATE CONNECTION my_readonly_connection TO SQL SERVER (
+    HOST 'no_such_address.mtrlz.com',
+    PORT 5433,
+    DATABASE sql_server,
+    USER sql_server,
+    PASSWORD SECRET sql_server_pass,
+    READONLY INTENT = true
+)
+----
+CREATE CONNECTION my_readonly_connection TO SQL SERVER (HOST = 'no_such_address.mtrlz.com', PORT = 5433, DATABASE = sql_server, USER = sql_server, PASSWORD = SECRET sql_server_pass, READONLY INTENT = true)
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("my_readonly_connection")]), connection_type: SqlServer, if_not_exists: false, values: [ConnectionOption { name: Host, value: Some(Value(String("no_such_address.mtrlz.com"))) }, ConnectionOption { name: Port, value: Some(Value(Number("5433"))) }, ConnectionOption { name: Database, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("sql_server")]))) }, ConnectionOption { name: User, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("sql_server")]))) }, ConnectionOption { name: Password, value: Some(Secret(Name(UnresolvedItemName([Ident("sql_server_pass")])))) }, ConnectionOption { name: ReadOnlyIntent, value: Some(Value(Boolean(true))) }], with_options: [] })
+
+parse-statement
 CREATE SOURCE "no_such_table"
   IN CLUSTER cdc_cluster
   FROM SQL SERVER CONNECTION sql_server;

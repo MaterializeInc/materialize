@@ -608,6 +608,25 @@ pub async fn get_latest_restore_history_id(
     }
 }
 
+/// Returns whether the current database is on a primary replica in an Availability Group.
+///
+/// - Returns `Some(true)` if the database is on a primary replica.
+/// - Returns `Some(false)` if the database is on a secondary (read-only) replica.
+/// - Returns `None` if the database is not part of an Availability Group.
+///
+/// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-functions/sys-fn-hadr-is-primary-replica-transact-sql>
+pub async fn get_is_primary_replica(client: &mut Client) -> Result<Option<bool>, SqlServerError> {
+    static IS_PRIMARY_QUERY: &str = "SELECT sys.fn_hadr_is_primary_replica(DB_NAME());";
+    let result = client.simple_query(IS_PRIMARY_QUERY).await?;
+
+    match &result[..] {
+        [row] => Ok(row.try_get::<bool, _>(0)?),
+        other => Err(SqlServerError::InvariantViolated(format!(
+            "expected one row from fn_hadr_is_primary_replica, got {other:?}"
+        ))),
+    }
+}
+
 /// A DDL event collected from the `cdc.ddl_history` table.
 #[derive(Debug)]
 pub struct DDLEvent {

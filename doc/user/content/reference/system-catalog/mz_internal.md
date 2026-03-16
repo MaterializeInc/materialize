@@ -699,6 +699,17 @@ subsource or table and the corresponding upstream MySQL table being ingested.
 | `schema_name`       | [`text`]         | The schema ([or, database](https://dev.mysql.com/doc/refman/8.0/en/glossary.html#glos_schema)) of the upstream table being ingested. |
 | `table_name`        | [`text`]         | The name of the upstream table being ingested. |
 
+## `mz_sql_server_sources`
+
+The `mz_sql_server_sources` table contains a row for each SQL Server source in the
+system.
+
+<!-- RELATION_SPEC mz_internal.mz_sql_server_sources -->
+| Field                 | Type             | Meaning                                                                                                        |
+| --------------------- | ---------------- | --------                                                                                                       |
+| `id`                  | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
+| `is_primary_replica`  | [`boolean`]      | Whether the source is connected to a primary replica in a SQL Server [Availability Group](https://learn.microsoft.com/en-us/sql/database-engine/availability-groups/windows/overview-of-always-on-availability-groups-sql-server). `true` if primary, `false` if secondary, `NULL` if not in an AG. |
+
 ## `mz_sql_server_source_tables`
 
 The `mz_sql_server_source_tables` table contains the mapping between each Materialize
