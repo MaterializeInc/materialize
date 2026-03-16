@@ -9,9 +9,11 @@
 
 //! Console Impersonation HTTP endpoint.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::Extension;
+use axum::Json;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -22,6 +24,9 @@ use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
+use mz_adapter_types::dyncfgs::{CONSOLE_OIDC_CLIENT_ID, CONSOLE_OIDC_SCOPES, OIDC_ISSUER};
+
+use crate::http::Delayed;
 
 pub(crate) struct ConsoleProxyConfig {
     /// Hyper http client, supports https.
@@ -46,6 +51,41 @@ impl ConsoleProxyConfig {
             route_prefix,
         }
     }
+}
+
+/// Returns system variable values the web console needs from
+/// environmentd. This endpoint requires no authentication.
+pub async fn handle_console_config(
+    Extension(adapter_client_rx): Extension<Delayed<mz_adapter::Client>>,
+) -> Result<Response, (StatusCode, String)> {
+    let adapter_client = adapter_client_rx.await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Adapter client unavailable".to_string(),
+        )
+    })?;
+
+    let system_vars = adapter_client.get_system_vars().await;
+
+    let var_names = [
+        // OIDC configuration values needed by the Console to initiate OIDC
+        // login.
+        OIDC_ISSUER.name(),
+        CONSOLE_OIDC_CLIENT_ID.name(),
+        CONSOLE_OIDC_SCOPES.name(),
+    ];
+    let mut config: BTreeMap<&str, String> = BTreeMap::new();
+    for var_name in var_names {
+        let value = system_vars.get(var_name).map(|v| v.value()).map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Unable to get system var {var_name}"),
+            )
+        })?;
+        config.insert(var_name, value);
+    }
+
+    Ok((StatusCode::OK, Json(config)).into_response())
 }
 
 /// The User Impersonation feature uses a Teleport proxy in front of the
