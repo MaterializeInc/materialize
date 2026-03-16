@@ -1,6 +1,5 @@
 ---
 source: src/catalog/tests/debug.rs
-assertion_line: 233
 expression: test_trace
 ---
 Trace {
@@ -929,6 +928,7 @@ Trace {
                             login: Some(
                                 true,
                             ),
+                            auto_provision_source: None,
                         },
                         membership: RoleMembership {
                             map: [],
@@ -957,6 +957,7 @@ Trace {
                             inherit: true,
                             superuser: None,
                             login: None,
+                            auto_provision_source: None,
                         },
                         membership: RoleMembership {
                             map: [],
@@ -985,6 +986,7 @@ Trace {
                             inherit: true,
                             superuser: None,
                             login: None,
+                            auto_provision_source: None,
                         },
                         membership: RoleMembership {
                             map: [],
@@ -1011,6 +1013,7 @@ Trace {
                             inherit: true,
                             superuser: None,
                             login: None,
+                            auto_provision_source: None,
                         },
                         membership: RoleMembership {
                             map: [],
@@ -1039,6 +1042,7 @@ Trace {
                             inherit: true,
                             superuser: None,
                             login: None,
+                            auto_provision_source: None,
                         },
                         membership: RoleMembership {
                             map: [],
@@ -1067,6 +1071,7 @@ Trace {
                             inherit: true,
                             superuser: None,
                             login: None,
+                            auto_provision_source: None,
                         },
                         membership: RoleMembership {
                             map: [],
