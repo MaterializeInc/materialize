@@ -7,7 +7,6 @@ use async_trait::async_trait;
 use aws_config::meta::region::ProvideRegion;
 use aws_credential_types::Credentials;
 use aws_sdk_dynamodb::operation::create_table::CreateTableError;
-use aws_sdk_dynamodb::operation::delete_item::builders::DeleteItemFluentBuilder;
 use aws_sdk_dynamodb::operation::get_item::GetItemError;
 use aws_sdk_dynamodb::operation::get_item::builders::GetItemFluentBuilder;
 use aws_sdk_dynamodb::operation::put_item::PutItemError;
@@ -18,35 +17,28 @@ use aws_sdk_dynamodb::operation::scan::builders::ScanFluentBuilder;
 use aws_sdk_dynamodb::operation::update_item::UpdateItemError;
 use aws_sdk_dynamodb::operation::update_item::builders::UpdateItemFluentBuilder;
 use aws_sdk_dynamodb::types::{
-    AttributeDefinition, AttributeValue, ConsumedCapacity, KeySchemaElement, KeyType,
-    ProvisionedThroughput, ReturnValue, ReturnValuesOnConditionCheckFailure, ScalarAttributeType,
+    AttributeDefinition, AttributeValue, BillingMode, ConsumedCapacity, DeleteRequest,
+    KeySchemaElement, KeyType, ReturnValue, ReturnValuesOnConditionCheckFailure,
+    ScalarAttributeType, WriteRequest,
 };
 use aws_sdk_s3::error::SdkError;
 use aws_types::region::Region;
 use bytes::Bytes;
-use futures_util::{Stream, StreamExt};
+use futures_util::Stream;
+use mz_ore::task::AbortOnDropHandle;
 use mz_ore::url::SensitiveUrl;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::pin::pin;
+use std::collections::{BTreeMap, HashMap};
+use std::ops::Range;
 use std::sync::{Arc, Mutex};
+use tracing::warn;
 
 type AttrMap = HashMap<String, AttributeValue>;
 
-#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Debug, Default)]
+#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Debug)]
 enum Offset {
-    #[default]
-    Init,
+    State,
     Entry(SeqNo),
-}
-
-impl Offset {
-    fn next_entry(self) -> SeqNo {
-        match self {
-            Offset::Init => SeqNo(0),
-            Offset::Entry(n) => n.next(),
-        }
-    }
 }
 
 const KEY: &str = "k";
@@ -65,18 +57,10 @@ fn format_key(v: &str) -> AttributeValue {
 
 fn format_offset(value: Offset) -> AttributeValue {
     let value = match value {
-        Offset::Init => "-1".to_string(),
+        Offset::State => "-1".to_string(),
         Offset::Entry(seqno) => seqno.0.to_string(),
     };
     AttributeValue::N(value)
-}
-
-fn parse_offset(v: &AttributeValue) -> anyhow::Result<Offset> {
-    if v.as_n().is_ok_and(|s| s == "-1") {
-        Ok(Offset::Init)
-    } else {
-        parse_seqno(v).map(Offset::Entry)
-    }
 }
 
 fn parse_seqno(v: &AttributeValue) -> anyhow::Result<SeqNo> {
@@ -209,12 +193,21 @@ pub struct DynamoConsensus {
     client: aws_sdk_dynamodb::Client,
     table_name: String,
     pointers: Arc<Mutex<BTreeMap<String, State>>>,
+    delete_tx: tokio::sync::mpsc::Sender<(String, Range<SeqNo>)>,
+    _delete_handle: AbortOnDropHandle<()>,
+}
+
+#[derive(Debug)]
+struct UpdateResult<T> {
+    cas_result: CaSResult,
+    previous_state: T,
 }
 
 impl DynamoConsensus {
     /// Opens the given location for non-exclusive read-write access.
     pub async fn open(url: SensitiveUrl) -> Result<Self, ExternalError> {
         let mut loader = mz_aws_util::defaults();
+
         if let Some(host) = url.host_str() {
             loader = loader.endpoint_url(format!(
                 "http://{host}:{port}",
@@ -229,6 +222,20 @@ impl DynamoConsensus {
                 .region(region);
         };
 
+        for (key, val) in url.query_pairs() {
+            match &*key {
+                "region" => {
+                    let region: Box<dyn ProvideRegion> = Box::new(Region::new(val.into_owned()));
+                    loader = loader.region(region);
+                }
+                other => {
+                    return Err(ExternalError::Determinate(
+                        anyhow!("unexpected query param: {other}").into(),
+                    ));
+                }
+            }
+        }
+
         let config = loader.load().await;
         let client = aws_sdk_dynamodb::Client::new(&config);
         let table_name = url
@@ -236,10 +243,62 @@ impl DynamoConsensus {
             .strip_prefix('/')
             .expect("path validation")
             .to_string();
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<(String, Range<SeqNo>)>(16);
+
+        let handle = mz_ore::task::spawn(|| "", {
+            let client = client.clone();
+            let table_name = table_name.clone();
+            async move {
+                let mut events = vec![];
+
+                let mut batch_delete: HashMap<String, Vec<WriteRequest>> = Default::default();
+                let mut delete_count = 0;
+                while rx.recv_many(&mut events, 25).await > 0 {
+                    for (key, range) in events.drain(..) {
+                        for seqno in range.start.0..range.end.0 {
+                            let deletes = batch_delete.entry(table_name.clone()).or_default();
+                            deletes.push(
+                                WriteRequest::builder()
+                                    .delete_request(
+                                        DeleteRequest::builder()
+                                            .key(KEY, format_key(&key))
+                                            .key(OFFSET, format_offset(Offset::Entry(SeqNo(seqno))))
+                                            .build()
+                                            .expect("required params specified"),
+                                    )
+                                    .build(),
+                            );
+                            delete_count += 1;
+                            if delete_count == 25 {
+                                let result = client
+                                    .batch_write_item()
+                                    .set_request_items(Some(std::mem::take(&mut batch_delete)))
+                                    .send()
+                                    .await;
+                                match result {
+                                    Ok(data) => {
+                                        if let Some(unprocessed) = data.unprocessed_items {
+                                            batch_delete = unprocessed;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("ignoring batch_write_item failure: {}", e);
+                                    }
+                                }
+                                delete_count = 0;
+                            }
+                        }
+                    }
+                }
+            }
+        });
         let this = Self {
             client,
             table_name,
             pointers: Arc::new(Mutex::new(BTreeMap::new())),
+            delete_tx: tx,
+            _delete_handle: handle.abort_on_drop(),
         };
 
         let result = this
@@ -274,13 +333,7 @@ impl DynamoConsensus {
                     .build()
                     .unwrap(),
             )
-            .provisioned_throughput(
-                ProvisionedThroughput::builder()
-                    .read_capacity_units(1000)
-                    .write_capacity_units(1000)
-                    .build()
-                    .unwrap(),
-            )
+            .billing_mode(BillingMode::PayPerRequest)
             .send()
             .await;
 
@@ -292,7 +345,9 @@ impl DynamoConsensus {
         }
     }
 
-    fn consumed_capacity(&self, cap: Option<ConsumedCapacity>) {}
+    fn consumed_capacity(&self, _cap: Option<ConsumedCapacity>) {
+        // TODO: capacity metrics!
+    }
 
     fn cached_state(&self, key: &str) -> Option<State> {
         self.pointers.lock().unwrap().get(key).copied()
@@ -363,13 +418,13 @@ impl DynamoConsensus {
         key: &str,
         offset: Offset,
         mut builder: impl FnMut(UpdateItemFluentBuilder) -> UpdateItemFluentBuilder,
-    ) -> anyhow::Result<Option<AttrMap>> {
+    ) -> anyhow::Result<UpdateResult<Option<AttrMap>>> {
         let put = self.client.update_item();
         let put = builder(put)
             .table_name(&self.table_name)
             .key(KEY, format_key(key))
             .key(OFFSET, format_offset(offset))
-            .return_values(ReturnValue::AllNew)
+            .return_values(ReturnValue::AllOld)
             .return_values_on_condition_check_failure(ReturnValuesOnConditionCheckFailure::AllOld)
             .send()
             .await;
@@ -377,46 +432,24 @@ impl DynamoConsensus {
         match put {
             Ok(out) => {
                 self.consumed_capacity(out.consumed_capacity);
-                Ok(out.attributes)
+                Ok(UpdateResult {
+                    cas_result: CaSResult::Committed,
+                    previous_state: out.attributes,
+                })
             }
             Err(SdkError::ServiceError(s)) => match s.into_err() {
-                UpdateItemError::ConditionalCheckFailedException(e) => dbg!(Ok(e.item)),
+                UpdateItemError::ConditionalCheckFailedException(e) => Ok(UpdateResult {
+                    cas_result: CaSResult::ExpectationMismatch,
+                    previous_state: e.item,
+                }),
                 e => Err(e.into()),
             },
             Err(e) => Err(e.into()),
         }
     }
 
-    async fn delete(
-        &self,
-        key: &str,
-        offset: Offset,
-        mut builder: impl FnMut(DeleteItemFluentBuilder) -> DeleteItemFluentBuilder,
-    ) -> anyhow::Result<Option<AttrMap>> {
-        let delete = self.client.delete_item();
-        let delete = builder(delete)
-            .table_name(&self.table_name)
-            .key(KEY, format_key(key))
-            .key(OFFSET, format_offset(offset))
-            .return_values(ReturnValue::AllNew)
-            .send()
-            .await;
-
-        let delete = match delete {
-            Ok(result) => result,
-            Err(SdkError::ServiceError(s)) if s.err().is_conditional_check_failed_exception() => {
-                return Ok(None);
-            }
-            Err(e) => return Err(e.into()),
-        };
-
-        self.consumed_capacity(delete.consumed_capacity);
-
-        Ok(delete.attributes)
-    }
-
     async fn get_state(&self, key: &str) -> Result<Option<State>, ExternalError> {
-        let attrs = self.get(key, Offset::Init, |b| b).await?;
+        let attrs = self.get(key, Offset::State, |b| b).await?;
         let state = parse_state(&attrs)?;
         self.update_cached_state(key, state);
         Ok(state)
@@ -424,7 +457,7 @@ impl DynamoConsensus {
 
     async fn update_head(&self, key: &str, new: SeqNo) -> anyhow::Result<Option<State>> {
         let updated = self
-            .update(key, Offset::Init, |b| match new.previous() {
+            .update(key, Offset::State, |b| match new.previous() {
                 None => b
                     .condition_expression(format!(
                         "attribute_not_exists({HEAD}) AND attribute_not_exists({TAIL})"
@@ -439,23 +472,43 @@ impl DynamoConsensus {
             })
             .await?;
 
-        let state = parse_state(&updated)?;
-        self.update_cached_state(key, state);
-        Ok(state)
+        let previous_state = parse_state(&updated.previous_state)?;
+        let current_state = if updated.cas_result == CaSResult::Committed {
+            match previous_state {
+                None => Some(State {
+                    head: new,
+                    tail: new,
+                }),
+                Some(prev) => Some(State { head: new, ..prev }),
+            }
+        } else {
+            previous_state
+        };
+
+        self.update_cached_state(key, current_state);
+        Ok(previous_state)
     }
 
     async fn update_tail(&self, key: &str, new: SeqNo) -> anyhow::Result<Option<State>> {
         let attrs = self
-            .update(key, Offset::Init, |b| {
+            .update(key, Offset::State, |b| {
                 b.condition_expression(format!("{HEAD} >= :t AND {TAIL} < :t"))
                     .update_expression(format!("SET {TAIL}=:t"))
                     .expression_attribute_values(":t", format_seqno(new))
             })
             .await?;
 
-        let state = parse_state(&attrs)?;
-        self.update_cached_state(key, state);
-        Ok(state)
+        let previous_state = parse_state(&attrs.previous_state)?;
+        let current_state = if attrs.cas_result == CaSResult::Committed {
+            match previous_state {
+                None => None,
+                Some(prev) => Some(State { tail: new, ..prev }),
+            }
+        } else {
+            previous_state
+        };
+        self.update_cached_state(key, current_state);
+        Ok(previous_state)
     }
 
     fn scan(
@@ -481,39 +534,15 @@ impl DynamoConsensus {
             }
         }
     }
-
-    fn query(
-        &self,
-        mut builder: impl FnMut(QueryFluentBuilder) -> QueryFluentBuilder,
-    ) -> impl Stream<Item = anyhow::Result<Vec<HashMap<String, AttributeValue>>>> {
-        async_stream::try_stream! {
-            let mut last_key = None;
-            loop {
-                let query = self
-                    .client
-                    .query();
-                let query = builder(query)
-                    .table_name(&self.table_name)
-                    .set_exclusive_start_key(last_key.take())
-                    .consistent_read(true); // TODO: consider lower consistency for some ops
-                let result = query.send().await?;
-                yield result.items.unwrap_or_default();
-                if result.last_evaluated_key.is_none() {
-                    break;
-                }
-                last_key = result.last_evaluated_key;
-            }
-        }
-    }
 }
 
 #[async_trait]
 impl Consensus for DynamoConsensus {
     fn list_keys(&self) -> ResultStream<'_, String> {
         let scan = self.scan(|b| {
-            b.projection_expression(format!("{}", KEY))
+            b.projection_expression(KEY)
                 .filter_expression(format!("{OFFSET} = :{OFFSET}"))
-                .expression_attribute_values(format!(":{OFFSET}"), format_offset(Offset::Init))
+                .expression_attribute_values(format!(":{OFFSET}"), format_offset(Offset::State))
         });
 
         Box::pin(async_stream::try_stream! {
@@ -601,16 +630,22 @@ impl Consensus for DynamoConsensus {
             })
             .await?;
 
-        let state_result = self.update_head(key, new.seqno).await?;
+        let previous_state = self.update_head(key, new.seqno).await?;
 
         if data_result == CaSResult::ExpectationMismatch {
             return Ok(CaSResult::ExpectationMismatch);
         }
 
-        match state_result {
-            None => Err(anyhow!("just-incremented state should not be none").into()),
+        match previous_state {
+            None => Ok(CaSResult::Committed),
             Some(state) => {
                 if new.seqno < state.tail {
+                    if let Err(e) = self
+                        .delete_tx
+                        .try_send((key.to_string(), new.seqno..new.seqno.next()))
+                    {
+                        warn!("failed to clean up data: {}", e);
+                    }
                     Err(anyhow!("truncated past the inserted record: must retry").into())
                 } else {
                     Ok(CaSResult::Committed)
@@ -693,11 +728,18 @@ impl Consensus for DynamoConsensus {
 
         match state {
             None => Err(anyhow!("attempted to truncate an empty state").into()),
-            Some(state) => {
-                if state.head < seqno {
+            Some(previous) => {
+                if previous.head < seqno {
                     Err(anyhow!("attempted to truncate past the head").into())
                 } else {
-                    // TODO: actually truncate away data.
+                    if previous.tail < seqno {
+                        if let Err(e) = self
+                            .delete_tx
+                            .try_send((key.to_string(), previous.tail..seqno))
+                        {
+                            warn!("failed to clean up data: {}", e);
+                        }
+                    }
                     Ok(None)
                 }
             }
@@ -711,10 +753,16 @@ mod tests {
     use crate::location::tests::consensus_impl_test;
     use url::Url;
 
+    /// The dynamodb url to use in tests. For example, if running `dynamodb-local` on the default
+    /// port locally, you might choose `dynamodb://key:secret@localhost:8000/table_name?region=local`.
+    const TEST_URL_ENV: &'static str = "MZ_PERSIST_EXTERNAL_STORAGE_TEST_DYNAMO_URL";
+
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     async fn test_dynamo_consensus() {
-        let url =
-            SensitiveUrl(Url::parse("dynamodb://key:secret@localhost:8000/table_name").unwrap());
+        let Ok(url_string) = std::env::var(TEST_URL_ENV) else {
+            return;
+        };
+        let url = SensitiveUrl(Url::parse(&url_string).unwrap());
         consensus_impl_test(|| DynamoConsensus::open(url.clone()))
             .await
             .unwrap();
