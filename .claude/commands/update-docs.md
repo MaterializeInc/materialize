@@ -20,7 +20,7 @@ Collect the full list of stale files.
 ### 2. Detect deleted sources
 
 For each `.md` file, check whether the `source` path still exists on disk.
-If the source file was deleted, the doc is **orphaned** — delete the `.md` file and remove its `log.md` entry.
+If the source file was deleted, the doc is **orphaned** — delete the `.md` file.
 
 ### 3. Detect new sources
 
@@ -34,16 +34,23 @@ For each stale doc:
 
 1. Re-read the source file.
 2. Rewrite the `.md` with updated content and a new `revision` from `git log -1 --format=%h -- <source>`.
-3. Append an update entry to `log.md`.
 
 ### 5. Create docs for new files
 
-Follow the same bottom-up process from `prompt.md`:
+Follow the structure in `doc/developer/generated/`:
 
 1. Document new leaf files first.
 2. If a new directory module appeared, create `_module.md`.
 3. If a new crate appeared, create all its docs including `_crate.md`.
-4. Update `prompt.md` progress table for new crates.
+
+Each `.md` file must include YAML front-matter:
+
+```yaml
+---
+source: src/<crate>/src/<path>.rs
+revision: <short SHA>
+---
+```
 
 ### 6. Update parent docs if children changed
 
