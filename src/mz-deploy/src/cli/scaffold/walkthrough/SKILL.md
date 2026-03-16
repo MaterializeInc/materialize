@@ -535,16 +535,16 @@ COMMENT ON VIEW orders IS 'Orders enriched with customer name, filtered to activ
 EXECUTE UNIT TEST test_enriches_with_customer_name
 FOR materialize.public.orders
 MOCK materialize.public.customers(id bigint, name text, email text, created_at timestamptz) AS (
-    SELECT * FROM VALUES
-        (1, 'alice', 'alice@example.com', '2024-01-01T00:00:00Z'::timestamptz)
+    SELECT * FROM (VALUES
+        (1, 'alice', 'alice@example.com', '2024-01-01T00:00:00Z'::timestamptz))
 ),
 MOCK materialize.raw.orders(id bigint, customer_id bigint, product_id bigint, quantity int, status text, created_at timestamptz) AS (
-    SELECT * FROM VALUES
-        (100, 1, 10, 2, 'pending', '2024-01-15T00:00:00Z'::timestamptz)
+    SELECT * FROM (VALUES
+        (100, 1, 10, 2, 'pending', '2024-01-15T00:00:00Z'::timestamptz))
 ),
 EXPECTED(id bigint, customer_id bigint, customer_name text, product_id bigint, quantity int, status text, created_at timestamptz) AS (
-    SELECT * FROM VALUES
-        (100, 1, 'alice', 10, 2, 'pending', '2024-01-15T00:00:00Z'::timestamptz)
+    SELECT * FROM (VALUES
+        (100, 1, 'alice', 10, 2, 'pending', '2024-01-15T00:00:00Z'::timestamptz))
 );
 ```
 
@@ -595,13 +595,13 @@ IF ISSUES: Show the correct test syntax and help debug. The expected solution is
 EXECUTE UNIT TEST test_filters_out_of_stock
 FOR materialize.public.products
 MOCK materialize.raw.products(id bigint, name text, description text, price numeric, inventory int) AS (
-    SELECT * FROM VALUES
+    SELECT * FROM (VALUES
         (1, 'Widget', 'A useful widget', 9.99, 10),
-        (2, 'Gadget', 'A cool gadget', 19.99, 0)
+        (2, 'Gadget', 'A cool gadget', 19.99, 0))
 ),
 EXPECTED(id bigint, name text, description text, price numeric, inventory int) AS (
-    SELECT * FROM VALUES
-        (1, 'Widget', 'A useful widget', 9.99, 10)
+    SELECT * FROM (VALUES
+        (1, 'Widget', 'A useful widget', 9.99, 10))
 );
 ```
 Common mistakes: forgetting the FOR clause, wrong column types, missing commas between MOCK/EXPECTED.
@@ -612,9 +612,9 @@ Edit the EXPECTED in `customers.sql` test to deliberately include bob (who shoul
 
 ```sql
 EXPECTED(id bigint, name text, email text, created_at timestamptz) AS (
-    SELECT * FROM VALUES
+    SELECT * FROM (VALUES
         (1, 'alice', 'alice@example.com', '2024-01-01T00:00:00Z'::timestamptz),
-        (2, 'bob', 'bob@example.com', '2024-01-01T00:00:00Z'::timestamptz)
+        (2, 'bob', 'bob@example.com', '2024-01-01T00:00:00Z'::timestamptz))
 );
 ```
 
@@ -719,7 +719,7 @@ Say: "Now, the real forging begins:
 mz-deploy stage
 ```
 
-This creates staging schemas alongside production, each with a deploy ID suffix. Note the **deploy ID** in the output — you'll need it for the next steps. What's your deploy ID?"
+This creates staging schemas alongside production, each with a deploy ID suffix. By default, the deploy ID is the first 7 characters of your current **git commit SHA** — so it's already deterministic and tied to your code. Note the **deploy ID** in the output — you'll need it for the next steps. What's your deploy ID?"
 
 WAIT FOR: User reports the deploy ID.
 
@@ -1153,17 +1153,11 @@ mz-deploy apply
 
 WAIT FOR: User confirms apply of the new cluster.
 
-Say: "Now stage and deploy:
-
-```
-mz-deploy stage --dry-run
-```
-
-Notice: only the **new and changed** objects are staged. The existing ontology objects are untouched. If the dry-run looks right, run the full cycle:
-
 ```
 mz-deploy stage
 ```
+
+Say: Notice: only the **new and changed** objects are staged. The existing ontology objects are untouched. If the dry-run looks right, run the full cycle:
 
 Note the deploy ID, then:
 
@@ -1202,36 +1196,9 @@ STEP 56: Introduce CI/CD patterns.
 
 Say: "**Module 9: The Watchtower** — You've been deploying by hand. That works for learning, but production needs automation.
 
-This module covers the mz-deploy flags and patterns for CI/CD: deterministic deploy IDs, machine-readable output, exit codes, a pipeline skeleton, and rollback."
+This module covers the mz-deploy flags and patterns for CI/CD: machine-readable output, exit codes, a pipeline skeleton, and rollback."
 
-STEP 57: Teach `--deploy-id`.
-
-Say: "When you ran `mz-deploy stage` earlier, it generated a random deploy ID. That's fine for interactive use, but in CI you want **deterministic IDs** tied to the commit being deployed:
-
-```
-mz-deploy stage --deploy-id $(git rev-parse --short HEAD)
-```
-
-This uses the short git SHA as the deploy ID. Every subsequent command references the same ID:
-
-```
-mz-deploy wait $(git rev-parse --short HEAD)
-mz-deploy promote $(git rev-parse --short HEAD)
-```
-
-No guessing, no copy-paste — the pipeline always knows which deployment it's working with.
-
-Try it now — in your second terminal, run:
-
-```
-git rev-parse --short HEAD
-```
-
-to see what your deploy ID would be."
-
-WAIT FOR: User confirms they see the short SHA.
-
-STEP 58: Teach `--output json` for pipeline integration.
+STEP 57: Teach `--output json` for pipeline integration.
 
 Say: "For machine-readable output, most mz-deploy commands support `--output json`. Three patterns you'll use in CI:
 
@@ -1257,7 +1224,7 @@ Try running `mz-deploy list --output json` in your terminal to see the JSON outp
 
 WAIT FOR: User confirms they see the JSON output.
 
-STEP 59: Teach exit codes.
+STEP 58: Teach exit codes.
 
 Say: "Every mz-deploy command exits **0 on success, 1 on failure**. Your CI pipeline gates on this — if any step fails, the pipeline stops.
 
@@ -1278,7 +1245,7 @@ GitHub Actions, Jenkins, and other CI tools parse this format to show test resul
 
 ## SESSION COMPLETION: "The Quest is Complete"
 
-STEP 60: Summary and celebration.
+STEP 59: Summary and celebration.
 
 Say: "**The Quest is Complete, Lorekeeper.**
 
@@ -1292,7 +1259,7 @@ Let's look back at the journey:
 6. **The Great Forging** — You deployed to production with `stage -> wait -> promote`
 7. **Raising the Citadel** — You built the stable API pattern with `SET api = stable` and converted an MV yourself
 8. **The Kingdom of Fulfillment** — You built an application on top of the ontology
-9. **The Watchtower** — You learned CI/CD patterns: `--deploy-id`, `--output json`, exit codes, pipeline design, and rollback
+9. **The Watchtower** — You learned CI/CD patterns: `--output json`, exit codes, pipeline design, and rollback
 
 **Next steps for your realm:**
 - Add more ontology entities (payments, shipments, inventory events)

@@ -94,13 +94,28 @@ pub async fn plan(
             ObjectAction::Created
         };
 
+        let txn_group = if action == ObjectAction::Created {
+            if let Statement::CreateTableFromSource(s) = &typed_obj.stmt {
+                Some(s.source.to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         results.push(ObjectResult {
             object: obj_id.to_string(),
             action,
             statements: executor.take_statements(),
             redacted_statements: vec![],
+            transaction_group: txn_group,
         });
     }
+
+    // Reorder: non-grouped objects first, then grouped objects sorted by group key.
+    // stable_sort_by preserves topological order within each group.
+    results.sort_by(|a, b| a.transaction_group.cmp(&b.transaction_group));
 
     Ok(ApplyResult {
         phase: PHASE_NAME.to_string(),

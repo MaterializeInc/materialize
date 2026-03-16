@@ -15,6 +15,9 @@ while [ $ELAPSED -lt $TIMEOUT ]; do
     if docker compose -f "$SCRIPT_DIR/docker-compose.yml" --project-name "$PROJECT_NAME" \
         ps materialized --format '{{.Health}}' 2>/dev/null | grep -q "healthy"; then
         echo "Materialize is healthy!"
+        echo "Transferring schema ownership..."
+        docker compose -f "$SCRIPT_DIR/docker-compose.yml" --project-name "$PROJECT_NAME" \
+            exec -T materialized psql -U mz_system -p 6877 -c "ALTER SCHEMA public OWNER TO materialize;"
         exit 0
     fi
     sleep 5

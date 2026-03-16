@@ -533,7 +533,7 @@ pub async fn get_deployment_objects(
 ) -> Result<DeploymentSnapshot, ConnectionError> {
     let query = if deploy_id.is_none() {
         r#"
-            SELECT o.database, o.schema, o.object, o.hash
+            SELECT o.database, o.schema, o.object, o.hash, p.kind
             FROM _mz_deploy.public.objects o
             JOIN _mz_deploy.public.production p
               ON o.database = p.database AND o.schema = p.schema
@@ -541,9 +541,13 @@ pub async fn get_deployment_objects(
         "#
     } else {
         r#"
-            SELECT database, schema, object, hash
-            FROM _mz_deploy.public.objects
-            WHERE deploy_id = $1
+            SELECT o.database, o.schema, o.object, o.hash, d.kind
+            FROM _mz_deploy.public.objects o
+            JOIN _mz_deploy.public.deployments d
+              ON o.deploy_id = d.deploy_id
+                AND o.database = d.database
+                AND o.schema = d.schema
+            WHERE o.deploy_id = $1
         "#
     };
 
@@ -561,16 +565,20 @@ pub async fn get_deployment_objects(
         let object: String = row.get("object");
         let object_hash: String = row.get("hash");
 
+        let kind_str: String = row.get("kind");
+        let kind = kind_str.parse().map_err(|e| {
+            ConnectionError::Message(format!("Failed to parse deployment kind: {}", e))
+        })?;
+
         let object_id = ObjectId {
             database: database.clone(),
             schema: schema.clone(),
             object,
         };
         objects.insert(object_id, object_hash);
-        // Default to Objects kind for snapshots loaded from DB (used for comparison only)
         schemas
             .entry(SchemaQualifier::new(database, schema))
-            .or_insert(DeploymentKind::Objects);
+            .or_insert(kind);
     }
 
     Ok(DeploymentSnapshot { objects, schemas })

@@ -96,6 +96,7 @@ pub async fn plan(
             action,
             statements: executor.take_statements(),
             redacted_statements: vec![],
+            transaction_group: None,
         });
     }
 

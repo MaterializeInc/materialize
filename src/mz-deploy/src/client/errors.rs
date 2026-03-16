@@ -133,6 +133,14 @@ pub enum DatabaseValidationError {
         missing_database_usage: Vec<String>,
         missing_createcluster: bool,
     },
+    SchemaOwnershipMismatch {
+        unowned_schemas: Vec<SchemaQualifier>,
+        current_user: String,
+    },
+    ClusterOwnershipMismatch {
+        unowned_clusters: Vec<String>,
+        current_user: String,
+    },
     MissingSources(Vec<ObjectId>),
     MissingConnections(Vec<ObjectId>),
     MissingTableDependencies {
@@ -290,6 +298,66 @@ impl fmt::Display for DatabaseValidationError {
                     writeln!(f, "    GRANT CREATECLUSTER ON SYSTEM TO <user>;")?;
                 }
 
+                Ok(())
+            }
+            DatabaseValidationError::SchemaOwnershipMismatch {
+                unowned_schemas,
+                current_user,
+            } => {
+                writeln!(
+                    f,
+                    "{}: current role '{}' does not own the following production schemas",
+                    "error".bright_red().bold(),
+                    current_user
+                )?;
+                writeln!(f)?;
+                for sq in unowned_schemas {
+                    writeln!(f, "    - {}.{}", sq.database, sq.schema)?;
+                }
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "  {} Grant ownership of the schemas to the current role:",
+                    "help:".bright_cyan().bold()
+                )?;
+                writeln!(f)?;
+                for sq in unowned_schemas {
+                    writeln!(
+                        f,
+                        "    ALTER SCHEMA {}.{} OWNER TO {};",
+                        sq.database, sq.schema, current_user
+                    )?;
+                }
+                Ok(())
+            }
+            DatabaseValidationError::ClusterOwnershipMismatch {
+                unowned_clusters,
+                current_user,
+            } => {
+                writeln!(
+                    f,
+                    "{}: current role '{}' does not own the following production clusters",
+                    "error".bright_red().bold(),
+                    current_user
+                )?;
+                writeln!(f)?;
+                for cluster in unowned_clusters {
+                    writeln!(f, "    - {}", cluster)?;
+                }
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "  {} Grant ownership of the clusters to the current role:",
+                    "help:".bright_cyan().bold()
+                )?;
+                writeln!(f)?;
+                for cluster in unowned_clusters {
+                    writeln!(
+                        f,
+                        "    ALTER CLUSTER {} OWNER TO {};",
+                        cluster, current_user
+                    )?;
+                }
                 Ok(())
             }
             DatabaseValidationError::MissingSources(sources) => {

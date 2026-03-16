@@ -108,5 +108,6 @@ async fn plan_network_policy(
         action,
         statements: executor.take_statements(),
         redacted_statements: vec![],
+        transaction_group: None,
     })
 }

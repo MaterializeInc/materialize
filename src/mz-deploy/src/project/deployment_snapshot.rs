@@ -14,6 +14,7 @@ use std::hash::{Hash, Hasher};
 use chrono::{DateTime, Utc};
 
 use crate::project::SchemaQualifier;
+use crate::project::ast::Statement;
 use sha2::{Digest, Sha256};
 
 use crate::client::{
@@ -174,16 +175,30 @@ pub fn build_snapshot_from_planned(
     // Compute hash for each object and collect schemas
     // Default to Objects kind - callers can override for specific schemas
     for (object_id, typed_obj) in sorted_objects {
+        // Skip apply-managed objects — they are never recorded by record_stage_metadata
+        // and should not participate in snapshot-based change detection.
+        match &typed_obj.stmt {
+            Statement::CreateTable(_)
+            | Statement::CreateTableFromSource(_)
+            | Statement::CreateSource(_)
+            | Statement::CreateSecret(_)
+            | Statement::CreateConnection(_) => continue,
+            _ => {}
+        }
+
         let hash = compute_typed_hash(typed_obj);
         objects.insert(object_id.clone(), hash);
 
-        // Track which schema this object belongs to (default to Objects kind)
-        schemas
-            .entry(SchemaQualifier::new(
-                object_id.database.clone(),
-                object_id.schema.clone(),
-            ))
-            .or_insert(DeploymentKind::Objects);
+        // Track which schema this object belongs to.
+        // Schemas marked as replacement in the project config get Replacement kind;
+        // all others default to Objects.
+        let sq = SchemaQualifier::new(object_id.database.clone(), object_id.schema.clone());
+        let kind = if planned_project.replacement_schemas.contains(&sq) {
+            DeploymentKind::Replacement
+        } else {
+            DeploymentKind::Objects
+        };
+        schemas.entry(sq).or_insert(kind);
     }
 
     Ok(DeploymentSnapshot { objects, schemas })
@@ -285,6 +300,7 @@ pub async fn write_to_database(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     #[test]
     fn test_empty_snapshot() {
@@ -292,5 +308,123 @@ mod tests {
         assert!(snapshot.objects.is_empty());
     }
 
-    // TODO: Add more tests for hash computation with actual HIR objects
+    /// Parse a single SQL statement into a typed::DatabaseObject.
+    fn make_typed_object(sql: &str) -> typed::DatabaseObject {
+        let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+        let stmt = match parsed.into_iter().next().unwrap().ast {
+            mz_sql_parser::ast::Statement::CreateView(s) => Statement::CreateView(s),
+            mz_sql_parser::ast::Statement::CreateMaterializedView(s) => {
+                Statement::CreateMaterializedView(s)
+            }
+            mz_sql_parser::ast::Statement::CreateTable(s) => Statement::CreateTable(s),
+            mz_sql_parser::ast::Statement::CreateSource(s) => Statement::CreateSource(s),
+            mz_sql_parser::ast::Statement::CreateConnection(s) => Statement::CreateConnection(s),
+            mz_sql_parser::ast::Statement::CreateSecret(s) => Statement::CreateSecret(s),
+            mz_sql_parser::ast::Statement::CreateSink(s) => Statement::CreateSink(s),
+            other => panic!("Unexpected statement type: {:?}", other),
+        };
+        typed::DatabaseObject {
+            stmt,
+            indexes: vec![],
+            grants: vec![],
+            comments: vec![],
+            tests: vec![],
+        }
+    }
+
+    /// Build a planned::Project from (database, schema, name, typed_obj) tuples.
+    fn make_planned_project(
+        objects: Vec<(&str, &str, &str, typed::DatabaseObject)>,
+    ) -> planned::Project {
+        let mut db_map: BTreeMap<String, BTreeMap<String, Vec<typed::DatabaseObject>>> =
+            BTreeMap::new();
+        for (database, schema, _name, typed_obj) in objects {
+            db_map
+                .entry(database.to_string())
+                .or_default()
+                .entry(schema.to_string())
+                .or_default()
+                .push(typed_obj);
+        }
+        let databases: Vec<typed::Database> = db_map
+            .into_iter()
+            .map(|(db_name, schemas)| typed::Database {
+                name: db_name,
+                schemas: schemas
+                    .into_iter()
+                    .map(|(schema_name, objs)| typed::Schema {
+                        name: schema_name,
+                        objects: objs,
+                        mod_statements: None,
+                    })
+                    .collect(),
+                mod_statements: None,
+            })
+            .collect();
+        let typed_project = typed::Project {
+            databases,
+            replacement_schemas: BTreeSet::new(),
+        };
+        planned::Project::from(typed_project)
+    }
+
+    #[test]
+    fn test_apply_managed_objects_excluded_from_snapshot() {
+        let view_obj = make_typed_object("CREATE VIEW my_view AS SELECT 1");
+        let mv_obj = make_typed_object("CREATE MATERIALIZED VIEW my_mv IN CLUSTER c AS SELECT 1");
+        let table_obj = make_typed_object("CREATE TABLE my_table (id INT)");
+        let source_obj = make_typed_object(
+            "CREATE SOURCE my_source IN CLUSTER source_cluster FROM LOAD GENERATOR COUNTER",
+        );
+        let conn_obj =
+            make_typed_object("CREATE CONNECTION my_conn TO KAFKA (BROKER 'localhost:9092')");
+        let secret_obj = make_typed_object("CREATE SECRET my_secret AS 'hunter2'");
+
+        let planned_project = make_planned_project(vec![
+            ("db", "public", "my_view", view_obj),
+            ("db", "public", "my_mv", mv_obj),
+            ("db", "storage", "my_table", table_obj),
+            ("db", "storage", "my_source", source_obj),
+            ("db", "storage", "my_conn", conn_obj),
+            ("db", "storage", "my_secret", secret_obj),
+        ]);
+
+        let snapshot = build_snapshot_from_planned(&planned_project).unwrap();
+
+        // Only the view and MV should be in the snapshot
+        let object_names: Vec<&str> = snapshot
+            .objects
+            .keys()
+            .map(|id| id.object.as_str())
+            .collect();
+        assert_eq!(
+            object_names,
+            vec!["my_mv", "my_view"],
+            "Only views and MVs should appear in snapshot, got: {:?}",
+            object_names
+        );
+
+        // Apply-managed objects should NOT be present
+        for name in &["my_table", "my_source", "my_conn", "my_secret"] {
+            assert!(
+                !snapshot.objects.keys().any(|id| id.object == *name),
+                "{} should not be in the snapshot",
+                name
+            );
+        }
+
+        // Schema tracking should still include the public schema (has view/MV)
+        assert!(
+            snapshot
+                .schemas
+                .contains_key(&SchemaQualifier::new("db".into(), "public".into()))
+        );
+        // Storage schema should NOT be tracked (all its objects are apply-managed)
+        assert!(
+            !snapshot
+                .schemas
+                .contains_key(&SchemaQualifier::new("db".into(), "storage".into())),
+            "Schema with only apply-managed objects should not appear in snapshot"
+        );
+    }
 }

@@ -8,6 +8,7 @@ use crate::client::Client;
 use crate::client::quote_identifier;
 use crate::config::Settings;
 use crate::project::roles::{self, RoleDefinition};
+use itertools::Itertools;
 use mz_sql_parser::ast::AlterRoleOption;
 use mz_sql_parser::ast::SetRoleVar;
 use std::collections::BTreeSet;
@@ -40,7 +41,7 @@ pub async fn plan(
 
     // Pass 2: Configure each role (ALTER, GRANT, COMMENT, reconcile).
     let mut object_results = Vec::new();
-    for (def, (action, create_stmts)) in definitions.iter().zip(actions) {
+    for (def, (action, create_stmts)) in definitions.iter().zip_eq(actions) {
         executor.take_statements();
         configure_role(client, executor, def).await?;
         let mut statements = create_stmts;
@@ -50,6 +51,7 @@ pub async fn plan(
             action,
             statements,
             redacted_statements: vec![],
+            transaction_group: None,
         });
     }
 

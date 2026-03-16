@@ -6,6 +6,7 @@
 use crate::client::connection::{Client, ValidationClient};
 use crate::client::errors::DatabaseValidationError;
 use crate::client::sql_placeholders;
+use crate::project::SchemaQualifier;
 use crate::project::ast::Statement;
 use crate::project::object_id::ObjectId;
 use crate::project::planned;
@@ -429,6 +430,22 @@ impl ValidationClient<'_> {
         validate_sink_connections_exist_impl(self.client, planned_project).await
     }
 
+    /// Validate that the current role owns all production schemas that will be swapped.
+    pub async fn validate_schema_ownership(
+        &self,
+        schema_set: &BTreeSet<SchemaQualifier>,
+    ) -> Result<(), DatabaseValidationError> {
+        validate_schema_ownership_impl(self.client, schema_set).await
+    }
+
+    /// Validate that the current role owns all production clusters that will be swapped.
+    pub async fn validate_cluster_ownership(
+        &self,
+        cluster_set: &BTreeSet<String>,
+    ) -> Result<(), DatabaseValidationError> {
+        validate_cluster_ownership_impl(self.client, cluster_set).await
+    }
+
     /// Validate that all tables referenced by objects to be deployed exist in the database.
     pub async fn validate_table_dependencies(
         &self,
@@ -437,6 +454,125 @@ impl ValidationClient<'_> {
     ) -> Result<(), DatabaseValidationError> {
         validate_table_dependencies_impl(self.client, planned_project, objects_to_deploy).await
     }
+}
+
+/// Internal implementation of validate_schema_ownership.
+pub(crate) async fn validate_schema_ownership_impl(
+    client: &Client,
+    schema_set: &BTreeSet<SchemaQualifier>,
+) -> Result<(), DatabaseValidationError> {
+    if schema_set.is_empty() {
+        return Ok(());
+    }
+
+    let fqn_to_schema: BTreeMap<String, &SchemaQualifier> = schema_set
+        .iter()
+        .map(|sq| (format!("{}.{}", sq.database, sq.schema), sq))
+        .collect();
+    let fqns: Vec<String> = fqn_to_schema.keys().cloned().collect();
+
+    let mut unowned_schemas = Vec::new();
+    let mut current_user = String::new();
+
+    for chunk in fqns.chunks(LOOKUP_BATCH_SIZE) {
+        let placeholders = sql_placeholders(chunk.len());
+        let query = format!(
+            r#"
+            SELECT d.name || '.' || s.name AS fqn, current_user() AS current_user
+            FROM mz_schemas s
+            JOIN mz_databases d ON s.database_id = d.id
+            JOIN mz_roles r ON s.owner_id = r.id
+            WHERE d.name || '.' || s.name IN ({placeholders})
+              AND r.name != current_user()
+            "#,
+        );
+
+        #[allow(clippy::as_conversions)]
+        let params: Vec<&(dyn ToSql + Sync)> =
+            chunk.iter().map(|fqn| fqn as &(dyn ToSql + Sync)).collect();
+
+        let rows = client
+            .query(&query, &params)
+            .await
+            .map_err(DatabaseValidationError::QueryError)?;
+
+        for row in rows {
+            let fqn: String = row.get("fqn");
+            if let Some(sq) = fqn_to_schema.get(&fqn) {
+                unowned_schemas.push((*sq).clone());
+            }
+            if current_user.is_empty() {
+                current_user = row.get("current_user");
+            }
+        }
+    }
+
+    if !unowned_schemas.is_empty() {
+        unowned_schemas.sort();
+        return Err(DatabaseValidationError::SchemaOwnershipMismatch {
+            unowned_schemas,
+            current_user,
+        });
+    }
+
+    Ok(())
+}
+
+/// Internal implementation of validate_cluster_ownership.
+pub(crate) async fn validate_cluster_ownership_impl(
+    client: &Client,
+    cluster_set: &BTreeSet<String>,
+) -> Result<(), DatabaseValidationError> {
+    if cluster_set.is_empty() {
+        return Ok(());
+    }
+
+    let cluster_names: Vec<String> = cluster_set.iter().cloned().collect();
+
+    let mut unowned_clusters = Vec::new();
+    let mut current_user = String::new();
+
+    for chunk in cluster_names.chunks(LOOKUP_BATCH_SIZE) {
+        let placeholders = sql_placeholders(chunk.len());
+        let query = format!(
+            r#"
+            SELECT c.name AS cluster_name, current_user() AS current_user
+            FROM mz_clusters c
+            JOIN mz_roles r ON c.owner_id = r.id
+            WHERE c.name IN ({placeholders})
+              AND r.name != current_user()
+            "#,
+        );
+
+        #[allow(clippy::as_conversions)]
+        let params: Vec<&(dyn ToSql + Sync)> = chunk
+            .iter()
+            .map(|name| name as &(dyn ToSql + Sync))
+            .collect();
+
+        let rows = client
+            .query(&query, &params)
+            .await
+            .map_err(DatabaseValidationError::QueryError)?;
+
+        for row in rows {
+            let cluster_name: String = row.get("cluster_name");
+            unowned_clusters.push(cluster_name);
+            if current_user.is_empty() {
+                current_user = row.get("current_user");
+            }
+        }
+    }
+
+    if !unowned_clusters.is_empty() {
+        unowned_clusters.sort();
+        return Err(DatabaseValidationError::ClusterOwnershipMismatch {
+            unowned_clusters,
+            current_user,
+        });
+    }
+
+    Ok(())
 }
 
 /// Internal implementation of validate_cluster_isolation.

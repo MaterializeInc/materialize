@@ -146,5 +146,6 @@ async fn plan_cluster(
         action,
         statements: executor.take_statements(),
         redacted_statements: vec![],
+        transaction_group: None,
     })
 }

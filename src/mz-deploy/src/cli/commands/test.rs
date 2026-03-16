@@ -8,7 +8,7 @@ use crate::project::{self, typed};
 use crate::types::docker_runtime::DockerRuntime;
 use crate::types::{self, TypeCheckError, Types};
 use crate::unit_test;
-use crate::{info, info_nonl};
+use crate::{info, info_nonl, verbose};
 use mz_sql_parser::ast::Ident;
 use owo_colors::OwoColorize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -358,11 +358,22 @@ async fn run_single_test(
     let sql_statements =
         unit_test::desugar_unit_test(test, &target_obj.typed_object.stmt, &typed_fqn);
 
-    for sql in &sql_statements[..sql_statements.len() - 1] {
+    for (i, sql) in sql_statements[..sql_statements.len() - 1]
+        .iter()
+        .enumerate()
+    {
+        verbose!("executing: {}", sql);
         if let Err(e) = client.batch_execute(sql).await {
+            let source = if i < test.mocks.len() {
+                format!("MOCK {}", test.mocks[i].fqn)
+            } else if i == test.mocks.len() {
+                "EXPECTED".to_string()
+            } else {
+                format!("target view '{}'", test.target_view)
+            };
             return Ok(TestOutcome::Failed(ExecutionFailure::Error(format!(
-                "failed to execute SQL: {:?}\n  statement: {}",
-                e, sql
+                "failed to execute {}: {}",
+                source, e
             ))));
         }
     }

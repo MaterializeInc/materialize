@@ -150,6 +150,7 @@ pub async fn plan(
             action,
             statements: executor.take_statements(),
             redacted_statements,
+            transaction_group: None,
         });
     }
 

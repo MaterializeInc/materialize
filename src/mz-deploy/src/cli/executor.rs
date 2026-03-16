@@ -51,6 +51,10 @@ pub struct ObjectResult {
     /// (e.g. CREATE SECRET, ALTER SECRET). These are never serialized or displayed.
     #[serde(skip)]
     pub redacted_statements: Vec<String>,
+    /// Optional transaction group key. Objects with the same group key are
+    /// executed inside a single BEGIN/COMMIT transaction block.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transaction_group: Option<String>,
 }
 
 impl fmt::Display for ObjectResult {
@@ -160,6 +164,14 @@ pub struct ApplyPlan {
     prepared_schemas: BTreeSet<project::SchemaQualifier>,
 }
 
+/// A batch of objects to execute together, optionally inside a transaction.
+struct ExecutionBatch<'a> {
+    /// If Some, these objects are wrapped in BEGIN/COMMIT.
+    transaction_group: Option<&'a str>,
+    /// The objects in this batch.
+    objects: Vec<&'a ObjectResult>,
+}
+
 impl ApplyPlan {
     pub fn new() -> Self {
         Self {
@@ -198,7 +210,12 @@ impl ApplyPlan {
     }
 
     /// Execute: run global setup, then each phase's per-object SQL.
+    ///
+    /// Objects that share a `transaction_group` key are wrapped in a single
+    /// BEGIN/COMMIT block. On error inside a transaction, ROLLBACK is issued
+    /// before returning the error.
     pub async fn execute(&self, client: &Client) -> Result<(), CliError> {
+        // Phase 1: setup statements
         for sql in &self.setup_statements {
             client
                 .execute(sql, &[])
@@ -208,26 +225,68 @@ impl ApplyPlan {
                     source,
                 })?;
         }
+
+        // Phase 2: Group objects into execution batches
+        let mut batches: Vec<ExecutionBatch<'_>> = Vec::new();
         for phase in &self.phases {
             for obj in &phase.results {
-                for sql in &obj.redacted_statements {
-                    client.execute(sql, &[]).await.map_err(|source| {
-                        CliError::SqlExecutionFailed {
-                            statement: "[REDACTED — contains secret value]".to_string(),
-                            source,
-                        }
-                    })?;
-                }
-                for sql in &obj.statements {
-                    client.execute(sql, &[]).await.map_err(|source| {
-                        CliError::SqlExecutionFailed {
-                            statement: sql.clone(),
-                            source,
-                        }
-                    })?;
+                let obj_txn = obj.transaction_group.as_deref();
+                match batches.last_mut() {
+                    Some(batch) if batch.transaction_group == obj_txn && obj_txn.is_some() => {
+                        // Same transaction group — append to current batch
+                        batch.objects.push(obj);
+                    }
+                    _ => {
+                        // New batch (different group, no group, or first object)
+                        batches.push(ExecutionBatch {
+                            transaction_group: obj_txn,
+                            objects: vec![obj],
+                        });
+                    }
                 }
             }
         }
+
+        // Phase 3: Execute batches
+        for batch in &batches {
+            let in_txn = batch.transaction_group.is_some();
+            if in_txn {
+                client.execute("BEGIN", &[]).await.map_err(|source| {
+                    CliError::SqlExecutionFailed {
+                        statement: "BEGIN".to_string(),
+                        source,
+                    }
+                })?;
+            }
+
+            for obj in &batch.objects {
+                for sql in obj.redacted_statements.iter().chain(&obj.statements) {
+                    if let Err(e) = client.execute(sql, &[]).await {
+                        if in_txn {
+                            let _ = client.execute("ROLLBACK", &[]).await;
+                        }
+                        return Err(CliError::SqlExecutionFailed {
+                            statement: if obj.redacted_statements.contains(sql) {
+                                "[REDACTED — contains secret value]".to_string()
+                            } else {
+                                sql.clone()
+                            },
+                            source: e,
+                        });
+                    }
+                }
+            }
+
+            if in_txn {
+                client.execute("COMMIT", &[]).await.map_err(|source| {
+                    CliError::SqlExecutionFailed {
+                        statement: "COMMIT".to_string(),
+                        source,
+                    }
+                })?;
+            }
+        }
+
         Ok(())
     }
 }

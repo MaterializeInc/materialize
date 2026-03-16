@@ -76,7 +76,7 @@ See 'mz-deploy help <command>' for detailed usage guides.";
 {after-help}")]
 struct Args {
     /// Path to the project root directory containing database schemas
-    #[arg(short, long, default_value = ".", global = true)]
+    #[arg(short, long, default_value = ".", global = true, value_hint = clap::ValueHint::DirPath)]
     directory: PathBuf,
 
     /// Enable verbose output for debugging
@@ -96,7 +96,8 @@ struct Args {
         long,
         value_name = "DIR",
         global = true,
-        env = "MZ_DEPLOY_PROFILES_DIR"
+        env = "MZ_DEPLOY_PROFILES_DIR",
+        value_hint = clap::ValueHint::DirPath,
     )]
     profiles_dir: Option<PathBuf>,
 
@@ -310,7 +311,7 @@ enum Command {
         /// Filter which tests to run (e.g. "db.schema.object#test_name", supports trailing *)
         filter: Option<String>,
         /// Write test results to a JUnit XML file
-        #[arg(long, value_name = "FILE")]
+        #[arg(long, value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
         junit_xml: Option<PathBuf>,
     },
 
@@ -537,6 +538,13 @@ enum Command {
         subcommand: DeleteCommand,
     },
 
+    /// Generate shell completions
+    #[command(hide = true)]
+    Completions {
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
+
     /// Show detailed usage guide for a command. Useful for LLM coding agents
     ///
     /// Prints extended documentation including behavior notes, examples,
@@ -693,6 +701,17 @@ async fn main() {
 }
 
 async fn run(args: Args) -> Result<(), CliError> {
+    // Handle completions before anything else
+    if let Some(Command::Completions { shell }) = &args.command {
+        clap_complete::generate(
+            *shell,
+            &mut Args::command(),
+            "mz-deploy",
+            &mut std::io::stdout(),
+        );
+        return Ok(());
+    }
+
     // Handle commands that don't require an existing project
     if let Some(Command::Help { command, all }) = &args.command {
         if *all {
@@ -876,6 +895,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             };
             delete::run(&settings, kind, &name, yes).await
         }
+        Some(Command::Completions { .. }) => unreachable!("handled above"),
         Some(Command::Help { .. }) => unreachable!("handled above"),
         Some(Command::New { .. }) => unreachable!("handled above"),
         Some(Command::Init { .. }) => unreachable!("handled above"),
@@ -899,7 +919,7 @@ mod tests {
             // "help" is intentionally omitted from the grouped listing since
             // the footer line ("See 'mz-deploy help <command>'") already
             // tells users about it.
-            if name == "help" {
+            if name == "help" || name == "completions" {
                 continue;
             }
 

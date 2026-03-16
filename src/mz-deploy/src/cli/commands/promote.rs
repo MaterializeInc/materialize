@@ -569,6 +569,8 @@ async fn cleanup_apply_state(client: &Client, deploy_id: &str) -> Result<(), Cli
 /// Gather staging resources and check for deployment conflicts.
 ///
 /// Returns the staging schemas, clusters, and suffix for the swap operation.
+/// Loads the production snapshot to determine which Replacement schemas need
+/// swapping (first Replacement deployment) vs. skipping (steady state).
 async fn gather_resources_and_check_conflicts(
     client: &Client,
     deploy_id: &str,
@@ -613,7 +615,14 @@ async fn gather_resources_and_check_conflicts(
         .get_schema_deployments(Some(deploy_id))
         .await?;
 
-    // Build list of (database, staging_schema) pairs to check, filtering out Sinks and Replacement
+    // Load production snapshot to check which schemas are already Replacement.
+    // This distinguishes Objects→Replacement transitions (need swap) from
+    // steady-state Replacement deploys (skip swap, use APPLY REPLACEMENT).
+    let production_snapshot =
+        project::deployment_snapshot::load_from_database(client, None).await?;
+
+    // Build list of (database, staging_schema) pairs to check, filtering out Sinks
+    // and steady-state Replacement schemas (already Replacement in production).
     let schemas_to_check: Vec<(String, String)> = deployment_records
         .iter()
         .filter(|record| {
@@ -625,12 +634,24 @@ async fn gather_resources_and_check_conflicts(
                 );
                 false
             } else if record.kind == DeploymentKind::Replacement {
-                verbose!(
-                    "Skipping replacement schema {}.{} (will be dropped after apply)",
-                    record.database,
-                    record.schema
-                );
-                false
+                let sq = SchemaQualifier::new(record.database.clone(), record.schema.clone());
+                let already_replacement = production_snapshot.schemas.get(&sq).copied()
+                    == Some(DeploymentKind::Replacement);
+                if already_replacement {
+                    verbose!(
+                        "Skipping replacement schema {}.{} (already Replacement in production)",
+                        record.database,
+                        record.schema
+                    );
+                    false
+                } else {
+                    verbose!(
+                        "Including replacement schema {}.{} in swap (first Replacement deployment)",
+                        record.database,
+                        record.schema
+                    );
+                    true
+                }
             } else {
                 true
             }

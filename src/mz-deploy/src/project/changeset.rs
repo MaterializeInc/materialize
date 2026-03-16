@@ -53,6 +53,8 @@ pub use types::ChangeSet;
 
 use super::deployment_snapshot::DeploymentSnapshot;
 use super::planned::Project;
+use crate::client::DeploymentKind;
+use crate::project::SchemaQualifier;
 use crate::project::object_id::ObjectId;
 use std::collections::BTreeSet;
 
@@ -84,13 +86,25 @@ impl ChangeSet {
         // Step 2: Extract base facts from project
         let base_facts = extract_base_facts(project);
 
-        // Step 2b: Identify changed replacement objects (exist in old snapshot)
+        // Step 2b: Identify changed replacement objects (exist in old snapshot AND old schema was Replacement)
         // These use the in-place replacement protocol, so dirtiness should NOT propagate
         // through them to downstream objects.
+        // Objects transitioning from a non-replacement schema (e.g., Objects) to Replacement
+        // must go through blue/green swap, not CREATE REPLACEMENT.
         let changed_replacements: BTreeSet<ObjectId> = base_facts
             .is_replacement
             .iter()
-            .filter(|obj| old_snapshot.objects.contains_key(*obj))
+            .filter(|obj| {
+                old_snapshot.objects.contains_key(*obj)
+                    && old_snapshot
+                        .schemas
+                        .get(&SchemaQualifier::new(
+                            obj.database.clone(),
+                            obj.schema.clone(),
+                        ))
+                        .copied()
+                        == Some(DeploymentKind::Replacement)
+            })
             .cloned()
             .collect();
 
@@ -99,13 +113,25 @@ impl ChangeSet {
             compute_dirty_datalog(&changed_objects, &base_facts, &changed_replacements);
 
         // Step 4: Separate replacement objects into new vs changed
-        // - New: in replacement schemas but NOT in old snapshot (first deployment, use blue-green)
-        // - Changed: in replacement schemas AND in old snapshot (update, use CREATE REPLACEMENT)
+        // - New: use blue-green swap. Includes objects not in old snapshot OR objects whose
+        //   old schema was not Replacement (e.g., transitioning from Objects to Replacement)
+        // - Changed: use CREATE REPLACEMENT. Only for objects that existed in old snapshot
+        //   AND whose old schema was already Replacement kind.
         let (new_replacement_objects, changed_replacement_objects) = dirty_stmts
             .iter()
             .filter(|obj| base_facts.is_replacement.contains(*obj))
             .cloned()
-            .partition(|obj| !old_snapshot.objects.contains_key(obj));
+            .partition(|obj| {
+                !old_snapshot.objects.contains_key(obj)
+                    || old_snapshot
+                        .schemas
+                        .get(&SchemaQualifier::new(
+                            obj.database.clone(),
+                            obj.schema.clone(),
+                        ))
+                        .copied()
+                        != Some(DeploymentKind::Replacement)
+            });
 
         ChangeSet {
             changed_objects: changed_objects.into_iter().collect(),
@@ -121,11 +147,16 @@ impl ChangeSet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::DeploymentKind;
     use crate::project::SchemaQualifier;
+    use crate::project::ast::Statement;
+    use crate::project::deployment_snapshot::DeploymentSnapshot;
     use crate::project::object_id::ObjectId;
+    use crate::project::planned::{Database, DatabaseObject, Project, Schema, SchemaType};
+    use crate::project::typed;
     use base_facts::BaseFacts;
     use datalog::compute_dirty_datalog;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     #[test]
     fn test_parse_object_file_path() {
@@ -1076,6 +1107,174 @@ mod tests {
                 "analytics".to_string()
             )),
             "analytics schema should NOT be dirty - only replacement MVs are there"
+        );
+    }
+
+    // =========================================================================
+    // Schema kind transition tests (Objects -> Replacement)
+    // =========================================================================
+
+    /// Helper to parse a CREATE MATERIALIZED VIEW statement.
+    fn parse_materialized_view(sql: &str) -> Statement {
+        let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+        if let mz_sql_parser::ast::Statement::CreateMaterializedView(s) = &parsed[0].ast {
+            Statement::CreateMaterializedView(s.clone())
+        } else {
+            panic!("Expected CreateMaterializedView");
+        }
+    }
+
+    /// Build a minimal Project containing a single schema with given objects.
+    fn build_project(
+        db: &str,
+        schema: &str,
+        objects: Vec<(ObjectId, Statement)>,
+        is_replacement: bool,
+    ) -> Project {
+        let db_objects: Vec<DatabaseObject> = objects
+            .into_iter()
+            .map(|(id, stmt)| DatabaseObject {
+                id,
+                typed_object: typed::DatabaseObject {
+                    stmt,
+                    indexes: vec![],
+                    grants: vec![],
+                    comments: vec![],
+                    tests: vec![],
+                },
+                dependencies: BTreeSet::new(),
+            })
+            .collect();
+
+        let mut replacement_schemas = BTreeSet::new();
+        if is_replacement {
+            replacement_schemas.insert(SchemaQualifier::new(db.to_string(), schema.to_string()));
+        }
+
+        Project {
+            databases: vec![Database {
+                name: db.to_string(),
+                schemas: vec![Schema {
+                    name: schema.to_string(),
+                    objects: db_objects,
+                    mod_statements: None,
+                    schema_type: SchemaType::Compute,
+                }],
+                mod_statements: None,
+            }],
+            dependency_graph: BTreeMap::new(),
+            external_dependencies: BTreeSet::new(),
+            cluster_dependencies: BTreeSet::new(),
+            tests: vec![],
+            replacement_schemas,
+        }
+    }
+
+    #[test]
+    fn test_schema_transition_objects_to_replacement_routes_to_new_replacement() {
+        // When a schema transitions from Objects kind to Replacement kind,
+        // existing objects should go through blue/green swap (new_replacement_objects),
+        // NOT CREATE REPLACEMENT (changed_replacement_objects).
+
+        let obj_id = ObjectId::new(
+            "db".to_string(),
+            "analytics".to_string(),
+            "my_mv".to_string(),
+        );
+
+        // Old snapshot: object existed in a schema with Objects kind
+        let old_snapshot = DeploymentSnapshot {
+            objects: BTreeMap::from([(obj_id.clone(), "hash_old".to_string())]),
+            schemas: BTreeMap::from([(
+                SchemaQualifier::new("db".to_string(), "analytics".to_string()),
+                DeploymentKind::Objects,
+            )]),
+        };
+
+        // New snapshot: object changed (different hash)
+        let new_snapshot = DeploymentSnapshot {
+            objects: BTreeMap::from([(obj_id.clone(), "hash_new".to_string())]),
+            schemas: BTreeMap::from([(
+                SchemaQualifier::new("db".to_string(), "analytics".to_string()),
+                DeploymentKind::Replacement,
+            )]),
+        };
+
+        // Project now treats the schema as replacement
+        let project = build_project(
+            "db",
+            "analytics",
+            vec![(
+                obj_id.clone(),
+                parse_materialized_view("CREATE MATERIALIZED VIEW my_mv IN CLUSTER c1 AS SELECT 1"),
+            )],
+            true, // is_replacement
+        );
+
+        let changeset =
+            ChangeSet::from_deployment_snapshot_comparison(&old_snapshot, &new_snapshot, &project);
+
+        // Object should be in new_replacement_objects (blue/green), NOT changed_replacement_objects
+        assert!(
+            changeset.new_replacement_objects.contains(&obj_id),
+            "Object transitioning from Objects->Replacement schema should use blue/green swap"
+        );
+        assert!(
+            !changeset.changed_replacement_objects.contains(&obj_id),
+            "Object transitioning from Objects->Replacement schema should NOT use CREATE REPLACEMENT"
+        );
+    }
+
+    #[test]
+    fn test_steady_state_replacement_routes_to_changed_replacement() {
+        // When a schema was already Replacement kind and stays Replacement,
+        // existing objects should use CREATE REPLACEMENT (changed_replacement_objects).
+
+        let obj_id = ObjectId::new(
+            "db".to_string(),
+            "analytics".to_string(),
+            "my_mv".to_string(),
+        );
+
+        // Old snapshot: object existed in a schema already with Replacement kind
+        let old_snapshot = DeploymentSnapshot {
+            objects: BTreeMap::from([(obj_id.clone(), "hash_old".to_string())]),
+            schemas: BTreeMap::from([(
+                SchemaQualifier::new("db".to_string(), "analytics".to_string()),
+                DeploymentKind::Replacement,
+            )]),
+        };
+
+        // New snapshot: object changed
+        let new_snapshot = DeploymentSnapshot {
+            objects: BTreeMap::from([(obj_id.clone(), "hash_new".to_string())]),
+            schemas: BTreeMap::from([(
+                SchemaQualifier::new("db".to_string(), "analytics".to_string()),
+                DeploymentKind::Replacement,
+            )]),
+        };
+
+        let project = build_project(
+            "db",
+            "analytics",
+            vec![(
+                obj_id.clone(),
+                parse_materialized_view("CREATE MATERIALIZED VIEW my_mv IN CLUSTER c1 AS SELECT 1"),
+            )],
+            true,
+        );
+
+        let changeset =
+            ChangeSet::from_deployment_snapshot_comparison(&old_snapshot, &new_snapshot, &project);
+
+        // Object should be in changed_replacement_objects (CREATE REPLACEMENT)
+        assert!(
+            changeset.changed_replacement_objects.contains(&obj_id),
+            "Object in steady-state Replacement schema should use CREATE REPLACEMENT"
+        );
+        assert!(
+            !changeset.new_replacement_objects.contains(&obj_id),
+            "Object in steady-state Replacement schema should NOT use blue/green swap"
         );
     }
 }

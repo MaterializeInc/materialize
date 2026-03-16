@@ -210,7 +210,14 @@ pub async fn run(
         return Ok(());
     };
 
-    validate_project_for_stage(&client, &planned_project, directory).await?;
+    validate_project_for_stage(
+        &client,
+        &planned_project,
+        directory,
+        &analysis.schema_set,
+        &analysis.cluster_set,
+    )
+    .await?;
 
     if !dry_run {
         record_stage_metadata(
@@ -221,6 +228,7 @@ pub async fn run(
             &analysis.objects,
             &analysis.sinks,
             &analysis.replacement_mvs,
+            &planned_project.replacement_schemas,
         )
         .await?;
     }
@@ -517,6 +525,8 @@ async fn validate_project_for_stage(
     client: &Client,
     planned_project: &project::planned::Project,
     directory: &Path,
+    schema_set: &BTreeSet<SchemaQualifier>,
+    cluster_set: &BTreeSet<String>,
 ) -> Result<(), CliError> {
     progress::stage_start("Validating project");
     let validate_start = Instant::now();
@@ -531,6 +541,14 @@ async fn validate_project_for_stage(
     client
         .validation()
         .validate_privileges(planned_project)
+        .await?;
+    client
+        .validation()
+        .validate_schema_ownership(schema_set)
+        .await?;
+    client
+        .validation()
+        .validate_cluster_ownership(cluster_set)
         .await?;
     client
         .validation()
@@ -553,6 +571,7 @@ async fn record_stage_metadata(
     objects: &[ObjectRef<'_>],
     sinks: &[ObjectRef<'_>],
     replacement_mvs: &[ObjectRef<'_>],
+    replacement_schemas: &BTreeSet<SchemaQualifier>,
 ) -> Result<(), CliError> {
     progress::stage_start("Recording deployment metadata");
     let metadata_start = Instant::now();
@@ -588,6 +607,18 @@ async fn record_stage_metadata(
             SchemaQualifier::new(object_id.database.clone(), object_id.schema.clone()),
             DeploymentKind::Replacement,
         );
+    }
+
+    // Ensure replacement schemas record the correct kind.
+    // During Objects→Replacement transitions, MVs go through the regular objects
+    // path (for blue-green swap), but the metadata must reflect the final kind
+    // so future deploys know to use CREATE REPLACEMENT.
+    for sq in replacement_schemas {
+        if staging_snapshot.schemas.contains_key(sq) {
+            staging_snapshot
+                .schemas
+                .insert(sq.clone(), DeploymentKind::Replacement);
+        }
     }
 
     project::deployment_snapshot::write_to_database(
@@ -1207,10 +1238,11 @@ fn validate_no_new_objects_in_existing_stable_schemas(
         .new_replacement_objects
         .iter()
         .filter(|obj| {
-            production_snapshot
-                .objects
-                .keys()
-                .any(|prod| prod.database == obj.database && prod.schema == obj.schema)
+            !production_snapshot.objects.contains_key(obj)
+                && production_snapshot
+                    .objects
+                    .keys()
+                    .any(|prod| prod.database == obj.database && prod.schema == obj.schema)
         })
         .collect();
 
@@ -1772,5 +1804,251 @@ mod tests {
 
         // Should pass: the new object is in a schema with no production objects
         assert!(validate_no_new_objects_in_existing_stable_schemas(&cs, &snapshot).is_ok());
+    }
+
+    #[test]
+    fn test_validate_transitioning_objects_in_existing_schema_allowed() {
+        let mut cs = make_empty_change_set();
+        // Object transitioning from Objects→Replacement lands in new_replacement_objects
+        cs.new_replacement_objects.insert(ObjectId::new(
+            "db".into(),
+            "analytics".into(),
+            "existing_mv".into(),
+        ));
+
+        // The same object already exists in production (it's transitioning, not new)
+        let mut snapshot = project::deployment_snapshot::DeploymentSnapshot::default();
+        snapshot.objects.insert(
+            ObjectId::new("db".into(), "analytics".into(), "existing_mv".into()),
+            "hash1".into(),
+        );
+
+        // Should pass: the object already exists in production, it's just changing schema kind
+        assert!(validate_no_new_objects_in_existing_stable_schemas(&cs, &snapshot).is_ok());
+    }
+
+    // =========================================================================
+    // Helper: make_planned_project with replacement_schemas
+    // =========================================================================
+
+    fn make_planned_project_with_replacement_schemas(
+        objects: Vec<(&str, &str, &str, typed::DatabaseObject)>,
+        replacement_schemas: BTreeSet<SchemaQualifier>,
+    ) -> project::planned::Project {
+        let mut db_map: BTreeMap<String, BTreeMap<String, Vec<typed::DatabaseObject>>> =
+            BTreeMap::new();
+
+        for (database, schema, _name, typed_obj) in objects {
+            db_map
+                .entry(database.to_string())
+                .or_default()
+                .entry(schema.to_string())
+                .or_default()
+                .push(typed_obj);
+        }
+
+        let databases: Vec<typed::Database> = db_map
+            .into_iter()
+            .map(|(db_name, schemas)| typed::Database {
+                name: db_name,
+                schemas: schemas
+                    .into_iter()
+                    .map(|(schema_name, objs)| typed::Schema {
+                        name: schema_name,
+                        objects: objs,
+                        mod_statements: None,
+                    })
+                    .collect(),
+                mod_statements: None,
+            })
+            .collect();
+
+        let typed_project = typed::Project {
+            databases,
+            replacement_schemas,
+        };
+
+        project::planned::Project::from(typed_project)
+    }
+
+    // =========================================================================
+    // Test: build_snapshot_from_planned assigns correct kind for replacement schemas
+    // =========================================================================
+
+    #[test]
+    fn test_build_snapshot_replacement_schema_kind() {
+        let mv_obj =
+            make_typed_object(&["CREATE MATERIALIZED VIEW my_mv IN CLUSTER compute AS SELECT 1"]);
+        let view_obj = make_typed_object(&["CREATE VIEW my_view AS SELECT 1"]);
+
+        let mut replacement_schemas = BTreeSet::new();
+        replacement_schemas.insert(SchemaQualifier::new("db".into(), "stable".into()));
+
+        let planned_project = make_planned_project_with_replacement_schemas(
+            vec![
+                ("db", "stable", "my_mv", mv_obj),
+                ("db", "regular", "my_view", view_obj),
+            ],
+            replacement_schemas,
+        );
+
+        let snapshot = build_snapshot_from_planned(&planned_project).unwrap();
+
+        // The stable schema should be Replacement
+        assert_eq!(
+            snapshot
+                .schemas
+                .get(&SchemaQualifier::new("db".into(), "stable".into())),
+            Some(&DeploymentKind::Replacement),
+            "Replacement schema should have Replacement kind in snapshot"
+        );
+
+        // The regular schema should be Objects
+        assert_eq!(
+            snapshot
+                .schemas
+                .get(&SchemaQualifier::new("db".into(), "regular".into())),
+            Some(&DeploymentKind::Objects),
+            "Regular schema should have Objects kind in snapshot"
+        );
+    }
+
+    #[test]
+    fn test_build_snapshot_no_replacement_schemas_all_objects() {
+        let mv_obj =
+            make_typed_object(&["CREATE MATERIALIZED VIEW my_mv IN CLUSTER compute AS SELECT 1"]);
+        let view_obj = make_typed_object(&["CREATE VIEW my_view AS SELECT 1"]);
+
+        let planned_project = make_planned_project(vec![
+            ("db", "stable", "my_mv", mv_obj),
+            ("db", "regular", "my_view", view_obj),
+        ]);
+
+        let snapshot = build_snapshot_from_planned(&planned_project).unwrap();
+
+        // Both should be Objects when no replacement_schemas configured
+        assert_eq!(
+            snapshot
+                .schemas
+                .get(&SchemaQualifier::new("db".into(), "stable".into())),
+            Some(&DeploymentKind::Objects),
+        );
+        assert_eq!(
+            snapshot
+                .schemas
+                .get(&SchemaQualifier::new("db".into(), "regular".into())),
+            Some(&DeploymentKind::Objects),
+        );
+    }
+
+    // =========================================================================
+    // Test: record_stage_metadata overrides kind for replacement schemas
+    // during Objects→Replacement transition
+    // =========================================================================
+
+    #[test]
+    fn test_record_stage_metadata_transition_override() {
+        // During an Objects→Replacement transition, MVs go through the regular
+        // objects path (not replacement_mvs), but the metadata must still record
+        // the schema as Replacement.
+        let mv_obj =
+            make_typed_object(&["CREATE MATERIALIZED VIEW my_mv IN CLUSTER compute AS SELECT 1"]);
+
+        // Objects path (transition — MV is NOT in replacement_mvs)
+        let objects: Vec<ObjectRef> = vec![(
+            ObjectId::new("db".into(), "stable".into(), "my_mv".into()),
+            &mv_obj,
+        )];
+        let sinks: Vec<ObjectRef> = vec![];
+        let replacement_mvs: Vec<ObjectRef> = vec![];
+
+        // The project declares "stable" as a replacement schema
+        let mut replacement_schemas = BTreeSet::new();
+        replacement_schemas.insert(SchemaQualifier::new("db".into(), "stable".into()));
+
+        // Simulate what record_stage_metadata does (without DB calls)
+        let mut staging_snapshot = project::deployment_snapshot::DeploymentSnapshot::default();
+
+        for (object_id, typed_obj) in &objects {
+            let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
+            staging_snapshot.objects.insert(object_id.clone(), hash);
+            staging_snapshot.schemas.insert(
+                SchemaQualifier::new(object_id.database.clone(), object_id.schema.clone()),
+                DeploymentKind::Objects,
+            );
+        }
+
+        for (object_id, typed_obj) in &sinks {
+            let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
+            staging_snapshot.objects.insert(object_id.clone(), hash);
+            staging_snapshot
+                .schemas
+                .entry(SchemaQualifier::new(
+                    object_id.database.clone(),
+                    object_id.schema.clone(),
+                ))
+                .or_insert(DeploymentKind::Sinks);
+        }
+
+        for (object_id, typed_obj) in &replacement_mvs {
+            let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
+            staging_snapshot.objects.insert(object_id.clone(), hash);
+            staging_snapshot.schemas.insert(
+                SchemaQualifier::new(object_id.database.clone(), object_id.schema.clone()),
+                DeploymentKind::Replacement,
+            );
+        }
+
+        // Before the fix, the schema would remain Objects here.
+        assert_eq!(
+            staging_snapshot
+                .schemas
+                .get(&SchemaQualifier::new("db".into(), "stable".into())),
+            Some(&DeploymentKind::Objects),
+            "Before override, schema should be Objects (from regular objects path)"
+        );
+
+        // Apply the replacement_schemas override (the fix)
+        for sq in &replacement_schemas {
+            if staging_snapshot.schemas.contains_key(sq) {
+                staging_snapshot
+                    .schemas
+                    .insert(sq.clone(), DeploymentKind::Replacement);
+            }
+        }
+
+        // After the fix, the schema should be Replacement
+        assert_eq!(
+            staging_snapshot
+                .schemas
+                .get(&SchemaQualifier::new("db".into(), "stable".into())),
+            Some(&DeploymentKind::Replacement),
+            "After override, schema should be Replacement"
+        );
+    }
+
+    #[test]
+    fn test_record_stage_metadata_override_only_applies_to_existing_schemas() {
+        // The override should NOT create new schema entries — it only applies to
+        // schemas that already have objects in the staging snapshot.
+        let replacement_schemas =
+            BTreeSet::from([SchemaQualifier::new("db".into(), "nonexistent".into())]);
+
+        let mut staging_snapshot = project::deployment_snapshot::DeploymentSnapshot::default();
+
+        // Apply the replacement_schemas override
+        for sq in &replacement_schemas {
+            if staging_snapshot.schemas.contains_key(sq) {
+                staging_snapshot
+                    .schemas
+                    .insert(sq.clone(), DeploymentKind::Replacement);
+            }
+        }
+
+        // Should NOT have created a new entry
+        assert!(
+            staging_snapshot.schemas.is_empty(),
+            "Override should not create entries for schemas with no objects"
+        );
     }
 }
