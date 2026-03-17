@@ -23,8 +23,7 @@ use mz_persist::generated::consensus_service::{
     ProtoScanResponse, ProtoTruncateRequest, ProtoTruncateResponse, proto_log_proposal,
 };
 
-use crate::traits;
-use crate::traits::{AcceptorError, LearnerError};
+use crate::{AcceptorError, LearnerError};
 
 // ---------------------------------------------------------------------------
 // Error conversions
@@ -55,13 +54,13 @@ impl From<LearnerError> for tonic::Status {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug)]
-pub struct PersistSharedLogGrpcService<A: traits::Acceptor, L: traits::Learner> {
+pub struct PersistSharedLogGrpcService<A: crate::Acceptor, L: crate::Learner> {
     pub acceptor: A,
     pub learner: L,
 }
 
 #[tonic::async_trait]
-impl<A: traits::Acceptor, L: traits::Learner> PersistSharedLog
+impl<A: crate::Acceptor, L: crate::Learner> PersistSharedLog
     for PersistSharedLogGrpcService<A, L>
 {
     async fn head(

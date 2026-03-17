@@ -37,7 +37,7 @@ use prost::Message;
 
 use super::{Proposal, ProposalSchema};
 use crate::metrics::AcceptorMetrics;
-use crate::traits::{AcceptorConfig, AcceptorError};
+use crate::{AcceptorConfig, AcceptorError};
 
 /// Commands dispatched to the persist-backed acceptor.
 pub enum PersistAcceptorCommand {
@@ -78,7 +78,7 @@ impl PersistAcceptorHandle {
 }
 
 #[async_trait::async_trait]
-impl crate::traits::Acceptor for PersistAcceptorHandle {
+impl crate::Acceptor for PersistAcceptorHandle {
     async fn append(
         &self,
         proposal: ProtoLogProposal,

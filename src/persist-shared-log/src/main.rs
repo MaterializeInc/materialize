@@ -20,8 +20,7 @@ use mz_persist_shared_log::metrics::{AcceptorMetrics, LearnerMetrics};
 use mz_persist_shared_log::persist_log::acceptor::PersistAcceptor;
 use mz_persist_shared_log::persist_log::learner::{PersistLearner, PersistLearnerConfig};
 use mz_persist_shared_log::service::PersistSharedLogGrpcService;
-use mz_persist_shared_log::traits;
-use mz_persist_shared_log::traits::AcceptorConfig;
+use mz_persist_shared_log::{Acceptor, AcceptorConfig, Learner};
 
 /// CLI arguments for the consensus service.
 #[derive(Parser, Debug)]
@@ -69,7 +68,7 @@ fn main() {
 }
 
 /// Start the gRPC server with the given acceptor and learner handles.
-async fn serve_grpc<A: traits::Acceptor, L: traits::Learner>(
+async fn serve_grpc<A: Acceptor, L: Learner>(
     acceptor: A,
     learner: L,
     listen_addr: SocketAddr,

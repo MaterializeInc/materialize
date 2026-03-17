@@ -25,8 +25,8 @@ use crate::metrics::{AcceptorMetrics, LearnerMetrics};
 use crate::persist_log::acceptor::{PersistAcceptor, PersistAcceptorHandle};
 use crate::persist_log::learner::{PersistLearner, PersistLearnerConfig, PersistLearnerHandle};
 use crate::persist_log::{Proposal, ProposalSchema};
-use crate::traits::Acceptor as _;
-use crate::traits::AcceptorConfig;
+use crate::Acceptor as _;
+use crate::AcceptorConfig;
 
 // ---------------------------------------------------------------------------
 // Test harness

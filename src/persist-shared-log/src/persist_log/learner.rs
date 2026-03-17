@@ -51,7 +51,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 
 use super::{Proposal, ProposalSchema};
 use crate::metrics::LearnerMetrics;
-use crate::traits::LearnerError;
+use crate::LearnerError;
 
 /// Per-shard committed state.
 #[derive(Debug, Clone, Default)]
@@ -376,7 +376,7 @@ impl PersistLearnerHandle {
 }
 
 #[async_trait::async_trait]
-impl crate::traits::Learner for PersistLearnerHandle {
+impl crate::Learner for PersistLearnerHandle {
     async fn head(&self, key: String) -> Result<ProtoHeadResponse, LearnerError> {
         self.head(key).await
     }

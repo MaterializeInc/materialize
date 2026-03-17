@@ -40,8 +40,8 @@ use mz_persist_shared_log::persist_log::latency_blob::LatencyProfile;
 use mz_persist_shared_log::metrics::{AcceptorMetrics, LearnerMetrics};
 use mz_persist_shared_log::persist_log::acceptor::PersistAcceptor;
 use mz_persist_shared_log::persist_log::learner::{PersistLearner, PersistLearnerConfig};
-use mz_persist_shared_log::traits::Acceptor as _;
-use mz_persist_shared_log::traits::AcceptorConfig;
+use mz_persist_shared_log::Acceptor as _;
+use mz_persist_shared_log::AcceptorConfig;
 
 // ---------------------------------------------------------------------------
 // Configuration
