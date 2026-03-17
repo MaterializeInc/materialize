@@ -49,6 +49,7 @@ use differential_dataflow::lattice::Lattice;
 use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::builder_async::{PressOnDropButton, button};
 use timely::PartialOrder;
@@ -89,11 +90,7 @@ pub(crate) fn shard_source<'g, K, V, T, D, DT, G, C>(
     desc_transformer: Option<DT>,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-    filter_fn: impl FnMut(
-        &mz_persist_types::stats::PartStats,
-        AntichainRef<G::Timestamp>,
-    ) -> FilterResult
-    + 'static,
+    filter_fn: impl FnMut(&PartStats, AntichainRef<G::Timestamp>) -> FilterResult + 'static,
     listen_sleep: Option<impl Fn() -> RetryParameters + Send + 'static>,
     start_signal: impl Future<Output = ()> + Send + 'static,
     error_handler: ErrorHandler,
@@ -328,11 +325,7 @@ fn shard_source_descs<K, V, D, G>(
     chosen_worker: usize,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-    mut filter_fn: impl FnMut(
-        &mz_persist_types::stats::PartStats,
-        AntichainRef<G::Timestamp>,
-    ) -> FilterResult
-    + 'static,
+    mut filter_fn: impl FnMut(&PartStats, AntichainRef<G::Timestamp>) -> FilterResult + 'static,
     listen_sleep: Option<impl Fn() -> RetryParameters + Send + 'static>,
     start_signal: impl Future<Output = ()> + Send + 'static,
     error_handler: ErrorHandler,
@@ -766,7 +759,7 @@ where
 fn apply_stats_filter<T: Timestamp + Codec64>(
     cfg: &PersistConfig,
     metrics: &Metrics,
-    filter_fn: &mut impl FnMut(&mz_persist_types::stats::PartStats, AntichainRef<T>) -> FilterResult,
+    filter_fn: &mut impl FnMut(&PartStats, AntichainRef<T>) -> FilterResult,
     current_frontier: &Antichain<T>,
     audit_budget_bytes: &mut u64,
     part_desc: &mut LeasedBatchPart<T>,
