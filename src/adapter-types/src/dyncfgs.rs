@@ -160,6 +160,15 @@ pub const ENABLE_MCP_AGENTS: Config<bool> = Config::new(
     "Whether the MCP agents HTTP endpoint is enabled. When false, requests to /api/mcp/agents return 503 Service Unavailable.",
 );
 
+/// Whether the MCP agents query tool is enabled.
+/// When false, the `query` tool is hidden from tools/list and calls to it return an error.
+/// Agents can still use `get_data_products` and `get_data_product_details`.
+pub const ENABLE_MCP_AGENTS_QUERY_TOOL: Config<bool> = Config::new(
+    "enable_mcp_agents_query_tool",
+    false,
+    "Whether the MCP agents query tool is enabled. When false, the query tool is not advertised and calls to it are rejected. Agents can still discover and inspect data products.",
+);
+
 /// Whether the MCP observatory endpoint is enabled.
 pub const ENABLE_MCP_OBSERVATORY: Config<bool> = Config::new(
     "enable_mcp_observatory",
@@ -199,6 +208,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PERSIST_FAST_PATH_ORDER)
         .add(&ENABLE_S3_TABLES_REGION_CHECK)
         .add(&ENABLE_MCP_AGENTS)
+        .add(&ENABLE_MCP_AGENTS_QUERY_TOOL)
         .add(&ENABLE_MCP_OBSERVATORY)
         .add(&USER_ID_POOL_BATCH_SIZE)
 }
