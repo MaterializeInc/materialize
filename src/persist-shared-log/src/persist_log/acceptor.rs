@@ -190,7 +190,7 @@ impl PersistAcceptor {
         // Drain any remaining pending items before shutting down.
         if !self.pending.is_empty() {
             let pending = std::mem::take(&mut self.pending);
-            flush(&mut write, pending, &self.metrics).await;
+            let _ = flush(&mut write, pending, &self.metrics).await;
         }
     }
 
@@ -228,7 +228,7 @@ impl PersistAcceptor {
         tokio::pin!(flush_fut);
 
         let mut channel_closed = false;
-        let success = loop {
+        let result = loop {
             tokio::select! {
                 biased;
                 cmd = self.rx.recv() => match cmd {
@@ -238,11 +238,11 @@ impl PersistAcceptor {
                         break flush_fut.await;
                     }
                 },
-                success = &mut flush_fut => break success,
+                result = &mut flush_fut => break result,
             }
         };
 
-        if !success || channel_closed {
+        if result.is_err() || channel_closed {
             LoopAction::Stop
         } else {
             LoopAction::Continue
@@ -261,15 +261,15 @@ enum LoopAction {
 
 /// Flush pending items via `compare_and_append`.
 ///
-/// Returns `true` on success, `false` on fatal error. Proposal reply oneshots
-/// and flush barrier oneshots are resolved inside this function.
+/// Proposal reply oneshots and flush barrier oneshots are resolved inside this
+/// function. Returns `Err` on fatal error (InvalidUsage or retries exhausted).
 async fn flush(
     write: &mut WriteHandle<Proposal, (), u64, i64>,
     pending: Vec<PendingItem>,
     metrics: &AcceptorMetrics,
-) -> bool {
+) -> Result<(), String> {
     if pending.is_empty() {
-        return true;
+        return Ok(());
     }
 
     let flush_start = std::time::Instant::now();
@@ -299,7 +299,7 @@ async fn flush(
         for barrier in barriers {
             let _ = barrier.send(());
         }
-        return true;
+        return Ok(());
     }
 
     let num_proposals = proposals.len();
@@ -373,7 +373,7 @@ async fn flush(
                     proposals = num_proposals,
                     "persist acceptor flush committed"
                 );
-                return true;
+                return Ok(());
             }
             Ok(Err(upper_mismatch)) => {
                 // Another writer advanced the upper — retryable.
@@ -394,29 +394,26 @@ async fn flush(
             }
             Err(invalid_usage) => {
                 // InvalidUsage is a programming error — fatal.
-                error!("persist compare_and_append InvalidUsage: {}", invalid_usage);
                 let msg = format!("persist internal error: {}", invalid_usage);
+                error!("{}", msg);
                 for reply in replies {
                     let _ = reply.send(Err(msg.clone()));
                 }
                 // Don't resolve barriers on fatal error — callers get DroppedReply.
-                return false;
+                return Err(msg);
             }
         }
     }
 
     // Retries exhausted — error all pending replies.
-    error!(
-        proposals = num_proposals,
-        "persist acceptor flush failed: retries exhausted after repeated upper mismatch"
-    );
     let msg =
         "persist acceptor flush failed: retries exhausted after repeated upper mismatch"
             .to_string();
+    error!("{}", msg);
     for reply in replies {
         let _ = reply.send(Err(msg.clone()));
     }
-    false
+    Err(msg)
 }
 
 // ---------------------------------------------------------------------------
