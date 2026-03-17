@@ -282,8 +282,11 @@ mod mint {
 
                     // We only emit strictly increasing `lower`s, so we can let our output frontier
                     // advance beyond the current `lower`.
-                    let next = lower_ts.step_forward();
-                    cap_set.downgrade([&next]);
+                    cap_set.downgrade([lower_ts.step_forward()]);
+                } else {
+                    // The next emitted `lower` will be at least the `persist` frontier, so we can
+                    // advance our output frontier as far.
+                    let _ = cap_set.try_downgrade(state.persist_frontier.iter());
                 }
             }
         });
@@ -308,7 +311,7 @@ mod mint {
         next_append_worker: usize,
         /// The last `lower` we have emitted in a batch description, if any. Whenever the
         /// `persist_frontier` advances past this, we can mint a new batch description.
-        last_lower: Option<Timestamp>,
+        last_lower: Option<Antichain<Timestamp>>,
         /// Whether this operator is currently in read-only mode.
         read_only: bool,
     }
@@ -404,45 +407,30 @@ mod mint {
         }
 
         fn maybe_mint_batch_description(&mut self) -> Option<BatchDescription> {
-            if self.read_only {
-                return None;
-            }
-
             let desired_frontier = self.desired_frontiers.frontier();
-            let Some(&desired_ts) = desired_frontier.as_option() else {
-                return None;
-            };
+            let persist_frontier = &self.persist_frontier;
 
-            // To avoid writing empty batches, wait until we have all data before the
-            // `upper` before writing a batch.
-            let upper = Antichain::from_elem(desired_ts.step_forward());
-            if !PartialOrder::less_equal(&upper, desired_frontier) {
-                return None;
-            }
+            // We only mint new batch descriptions when:
+            //  1. We are _not_ in read-only mode.
+            //  2. The `desired` frontier is ahead of the `persist` frontier.
+            //  3. The `persist` frontier advanced since we last emitted a batch description.
+            let desired_ahead = PartialOrder::less_than(persist_frontier, desired_frontier);
+            let persist_advanced = self.last_lower.as_ref().map_or(true, |lower| {
+                PartialOrder::less_than(lower, persist_frontier)
+            });
 
-            // Check if the persist frontier has advanced past the last lower.
-            let lower_ts = match self.last_lower {
-                Some(last_lower) if !self.persist_frontier.less_equal(&last_lower) => *self
-                    .persist_frontier
-                    .as_option()
-                    .expect("not the empty frontier"),
-                Some(_) => return None,
-                None => *self
-                    .persist_frontier
-                    .as_option()
-                    .expect("not the empty frontier"),
-            };
-
-            let lower = Antichain::from_elem(lower_ts);
-            if !PartialOrder::less_than(&lower, &upper) {
+            if self.read_only || !desired_ahead || !persist_advanced {
                 return None;
             }
 
+            let lower = persist_frontier.clone();
+            let upper = desired_frontier.clone();
             let append_worker = self.next_append_worker;
-            self.next_append_worker = (self.next_append_worker + 1) % self.worker_count;
-            self.last_lower = Some(lower_ts);
-
             let desc = BatchDescription::new(lower, upper, append_worker);
+
+            self.next_append_worker = (append_worker + 1) % self.worker_count;
+            self.last_lower = Some(desc.lower.clone());
+
             self.trace(format!("minted batch description: {desc:?}"));
             Some(desc)
         }
