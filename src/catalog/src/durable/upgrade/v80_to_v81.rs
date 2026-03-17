@@ -90,3 +90,137 @@ pub fn upgrade(
     }
     migrations
 }
+
+#[cfg(test)]
+mod tests {
+    use super::upgrade;
+    use crate::durable::upgrade::MigrationAction;
+    use crate::durable::upgrade::objects_v80 as v80;
+    use crate::durable::upgrade::objects_v81 as v81;
+
+    fn make_mz_system_cluster(replication_factor: u32) -> v80::StateUpdateKind {
+        v80::StateUpdateKind::Cluster(v80::Cluster {
+            key: v80::ClusterKey {
+                id: v80::ClusterId::System(1),
+            },
+            value: v80::ClusterValue {
+                name: "mz_system".to_string(),
+                owner_id: v80::RoleId::System(1),
+                privileges: vec![],
+                config: v80::ClusterConfig {
+                    workload_class: None,
+                    variant: v80::ClusterVariant::Managed(v80::ManagedCluster {
+                        size: "1".to_string(),
+                        replication_factor,
+                        availability_zones: vec![],
+                        logging: v80::ReplicaLogging {
+                            log_logging: false,
+                            interval: None,
+                        },
+                        optimizer_feature_overrides: vec![],
+                        schedule: v80::ClusterSchedule::Manual,
+                    }),
+                },
+            },
+        })
+    }
+
+    fn make_role(id: u64, name: &str) -> v80::StateUpdateKind {
+        v80::StateUpdateKind::Role(v80::Role {
+            key: v80::RoleKey {
+                id: v80::RoleId::User(id),
+            },
+            value: v80::RoleValue {
+                name: name.to_string(),
+                attributes: v80::RoleAttributes {
+                    inherit: true,
+                    superuser: None,
+                    login: None,
+                },
+                membership: v80::RoleMembership { map: vec![] },
+                vars: v80::RoleVars { entries: vec![] },
+                oid: id as u32,
+            },
+        })
+    }
+
+    #[mz_ore::test]
+    fn test_self_managed_returns_no_migrations() {
+        // Self-managed: mz_system replication_factor = 0 → no migrations regardless of roles.
+        let snapshot = vec![make_mz_system_cluster(0), make_role(1, "user@example.com")];
+        let migrations = upgrade(snapshot);
+        assert!(migrations.is_empty());
+    }
+
+    #[mz_ore::test]
+    fn test_cloud_email_role_gets_frontegg() {
+        // Cloud + email-like name → auto_provision_source = Frontegg.
+        let snapshot = vec![make_mz_system_cluster(1), make_role(1, "user@example.com")];
+        let migrations = upgrade(snapshot);
+        assert_eq!(migrations.len(), 1);
+        let MigrationAction::Update(_, new) = &migrations[0] else {
+            panic!("expected Update action");
+        };
+        let v81::StateUpdateKind::Role(role) = new else {
+            panic!("expected Role update");
+        };
+        assert_eq!(
+            role.value.attributes.auto_provision_source,
+            Some(v81::AutoProvisionSource::Frontegg)
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_cloud_non_email_role_gets_none() {
+        // Cloud + non-email name → auto_provision_source = None.
+        let snapshot = vec![make_mz_system_cluster(1), make_role(1, "admin")];
+        let migrations = upgrade(snapshot);
+        assert_eq!(migrations.len(), 1);
+        let MigrationAction::Update(_, new) = &migrations[0] else {
+            panic!("expected Update action");
+        };
+        let v81::StateUpdateKind::Role(role) = new else {
+            panic!("expected Role update");
+        };
+        assert_eq!(role.value.attributes.auto_provision_source, None);
+    }
+
+    #[mz_ore::test]
+    fn test_cloud_mixed_roles() {
+        // Cloud + one email + one non-email → two updates with correct sources.
+        let snapshot = vec![
+            make_mz_system_cluster(1),
+            make_role(1, "user@example.com"),
+            make_role(2, "admin"),
+        ];
+        let migrations = upgrade(snapshot);
+        assert_eq!(migrations.len(), 2);
+
+        let MigrationAction::Update(_, new1) = &migrations[0] else {
+            panic!();
+        };
+        let v81::StateUpdateKind::Role(role1) = new1 else {
+            panic!();
+        };
+        assert_eq!(
+            role1.value.attributes.auto_provision_source,
+            Some(v81::AutoProvisionSource::Frontegg)
+        );
+
+        let MigrationAction::Update(_, new2) = &migrations[1] else {
+            panic!();
+        };
+        let v81::StateUpdateKind::Role(role2) = new2 else {
+            panic!();
+        };
+        assert_eq!(role2.value.attributes.auto_provision_source, None);
+    }
+
+    #[mz_ore::test]
+    fn test_non_role_updates_ignored() {
+        // Cloud env with no roles → no migration actions.
+        let snapshot = vec![make_mz_system_cluster(1)];
+        let migrations = upgrade(snapshot);
+        assert!(migrations.is_empty());
+    }
+}
