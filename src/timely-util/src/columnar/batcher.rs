@@ -37,11 +37,24 @@ use differential_dataflow::trace::implementations::ord_neu::val_batch::{
 use differential_dataflow::trace::implementations::ord_neu::{Upds, Vals};
 use differential_dataflow::trace::implementations::{BatchContainer, Layout};
 use differential_dataflow::trace::{Builder, Description};
+use mz_ore::cast::CastFrom;
 use timely::container::PushInto;
 use timely::progress::Timestamp;
 use timely::progress::frontier::{Antichain, AntichainRef};
 
 use crate::columnar::Column;
+
+/// Cast a `usize` length to `u64` using infallible `CastFrom`.
+#[inline(always)]
+fn len_to_u64(len: usize) -> u64 {
+    u64::cast_from(len)
+}
+
+/// Cast a `u64` to `usize` using infallible `CastFrom`.
+#[inline(always)]
+fn idx(val: u64) -> usize {
+    usize::cast_from(val)
+}
 
 // ======================== ValStorage ========================
 
@@ -123,7 +136,7 @@ impl<K: Columnar, V: Columnar, T: Columnar, R: Columnar> ValStorage<K, V, T, R> 
                 // Check if val changed (or key changed).
                 let vals_len = output.vals.values.len();
                 if differs {
-                    output.vals.bounds.push(vals_len as u64);
+                    output.vals.bounds.push(u64::cast_from(vals_len));
                 }
                 differs |= ContainerOf::<V>::reborrow_ref(val)
                     != output.vals.values.borrow().get(vals_len - 1);
@@ -133,14 +146,20 @@ impl<K: Columnar, V: Columnar, T: Columnar, R: Columnar> ValStorage<K, V, T, R> 
                 // Always push updates.
                 let upds_len = output.upds.values.0.len();
                 if differs {
-                    output.upds.bounds.push(upds_len as u64);
+                    output.upds.bounds.push(u64::cast_from(upds_len));
                 }
                 output.upds.values.0.push(T::into_owned(time));
                 output.upds.values.1.push(R::into_owned(diff));
             }
 
-            output.vals.bounds.push(output.vals.values.len() as u64);
-            output.upds.bounds.push(output.upds.values.0.len() as u64);
+            output
+                .vals
+                .bounds
+                .push(len_to_u64(output.vals.values.len()));
+            output
+                .upds
+                .bounds
+                .push(len_to_u64(output.upds.values.0.len()));
         }
 
         debug_assert_eq!(output.keys.len(), output.vals.len());
@@ -155,9 +174,9 @@ impl<K: Columnar, V: Columnar, T: Columnar, R: Columnar> ValStorage<K, V, T, R> 
             let lower = if range.start == 0 {
                 0
             } else {
-                Index::get(self.vals.bounds.borrow(), range.start - 1) as usize
+                idx(Index::get(self.vals.bounds.borrow(), range.start - 1))
             };
-            let upper = Index::get(self.vals.bounds.borrow(), range.end - 1) as usize;
+            let upper = idx(Index::get(self.vals.bounds.borrow(), range.end - 1));
             lower..upper
         } else {
             range
@@ -170,9 +189,9 @@ impl<K: Columnar, V: Columnar, T: Columnar, R: Columnar> ValStorage<K, V, T, R> 
             let lower = if range.start == 0 {
                 0
             } else {
-                Index::get(self.upds.bounds.borrow(), range.start - 1) as usize
+                idx(Index::get(self.upds.bounds.borrow(), range.start - 1))
             };
-            let upper = Index::get(self.upds.bounds.borrow(), range.end - 1) as usize;
+            let upper = idx(Index::get(self.upds.bounds.borrow(), range.end - 1));
             lower..upper
         } else {
             range
@@ -203,7 +222,7 @@ impl<K: Columnar, V: Columnar, T: Columnar, R: Columnar> timely::Accountable
 {
     #[inline]
     fn record_count(&self) -> i64 {
-        self.upds.values.0.len() as i64
+        self.upds.values.0.len().try_into().expect("must fit")
     }
 }
 
@@ -271,13 +290,16 @@ impl<K: Columnar, T: Columnar, R: Columnar> KeyStorage<K, T, R> {
                 }
                 let upds_len = output.upds.values.0.len();
                 if differs {
-                    output.upds.bounds.push(upds_len as u64);
+                    output.upds.bounds.push(u64::cast_from(upds_len));
                 }
                 output.upds.values.0.push(T::into_owned(time));
                 output.upds.values.1.push(R::into_owned(diff));
             }
 
-            output.upds.bounds.push(output.upds.values.0.len() as u64);
+            output
+                .upds
+                .bounds
+                .push(len_to_u64(output.upds.values.0.len()));
         }
 
         debug_assert_eq!(output.keys.len(), output.upds.len());
@@ -291,9 +313,9 @@ impl<K: Columnar, T: Columnar, R: Columnar> KeyStorage<K, T, R> {
             let lower = if range.start == 0 {
                 0
             } else {
-                Index::get(self.upds.bounds.borrow(), range.start - 1) as usize
+                idx(Index::get(self.upds.bounds.borrow(), range.start - 1))
             };
-            let upper = Index::get(self.upds.bounds.borrow(), range.end - 1) as usize;
+            let upper = idx(Index::get(self.upds.bounds.borrow(), range.end - 1));
             lower..upper
         } else {
             range
@@ -311,7 +333,7 @@ impl<K: Columnar, T: Columnar, R: Columnar> KeyStorage<K, T, R> {
 impl<K: Columnar, T: Columnar, R: Columnar> timely::Accountable for KeyStorage<K, T, R> {
     #[inline]
     fn record_count(&self) -> i64 {
-        self.upds.values.0.len() as i64
+        self.upds.values.0.len().try_into().expect("must fit")
     }
 }
 
@@ -468,7 +490,10 @@ where
                                     .extend_from_self(that.upds.values.1.borrow(), that_upd_range);
                                 // Seal updates and push val if any updates remain.
                                 if merged.upds.values.0.len() > updates_len {
-                                    merged.upds.bounds.push(merged.upds.values.0.len() as u64);
+                                    merged
+                                        .upds
+                                        .bounds
+                                        .push(len_to_u64(merged.upds.values.0.len()));
                                     merged.vals.values.extend_from_self(
                                         this.vals.values.borrow(),
                                         this_val_range.start..this_val_range.start + 1,
@@ -491,7 +516,10 @@ where
                     merged.extend_from_vals(&that, that_val_range);
                     // Seal vals and push key if any vals remain.
                     if merged.vals.values.len() > values_len {
-                        merged.vals.bounds.push(merged.vals.values.len() as u64);
+                        merged
+                            .vals
+                            .bounds
+                            .push(len_to_u64(merged.vals.values.len()));
                         merged.keys.extend_from_self(
                             this.keys.borrow(),
                             this_key_range.start..this_key_range.start + 1,
@@ -550,25 +578,25 @@ where
                     }
                 }
                 if keep.upds.values.0.len() > keep_upds_len {
-                    keep.upds.bounds.push(keep.upds.values.0.len() as u64);
+                    keep.upds.bounds.push(len_to_u64(keep.upds.values.0.len()));
                     keep.vals
                         .values
                         .extend_from_self(self.vals.values.borrow(), val_idx..val_idx + 1);
                 }
                 if ship.upds.values.0.len() > ship_upds_len {
-                    ship.upds.bounds.push(ship.upds.values.0.len() as u64);
+                    ship.upds.bounds.push(len_to_u64(ship.upds.values.0.len()));
                     ship.vals
                         .values
                         .extend_from_self(self.vals.values.borrow(), val_idx..val_idx + 1);
                 }
             }
             if keep.vals.values.len() > keep_vals_len {
-                keep.vals.bounds.push(keep.vals.values.len() as u64);
+                keep.vals.bounds.push(len_to_u64(keep.vals.values.len()));
                 keep.keys
                     .extend_from_self(self.keys.borrow(), key_idx..key_idx + 1);
             }
             if ship.vals.values.len() > ship_vals_len {
-                ship.vals.bounds.push(ship.vals.values.len() as u64);
+                ship.vals.bounds.push(len_to_u64(ship.vals.values.len()));
                 ship.keys
                     .extend_from_self(self.keys.borrow(), key_idx..key_idx + 1);
             }
@@ -708,7 +736,10 @@ where
                         .extend_from_self(that.upds.values.1.borrow(), that_upd_range);
                     // Seal updates and push key.
                     if merged.upds.values.0.len() > updates_len {
-                        merged.upds.bounds.push(merged.upds.values.0.len() as u64);
+                        merged
+                            .upds
+                            .bounds
+                            .push(len_to_u64(merged.upds.values.0.len()));
                         merged.keys.extend_from_self(
                             this.keys.borrow(),
                             this_key_range.start..this_key_range.start + 1,
@@ -764,12 +795,12 @@ where
                 }
             }
             if keep.upds.values.0.len() > keep_upds_len {
-                keep.upds.bounds.push(keep.upds.values.0.len() as u64);
+                keep.upds.bounds.push(len_to_u64(keep.upds.values.0.len()));
                 keep.keys
                     .extend_from_self(self.keys.borrow(), key_idx..key_idx + 1);
             }
             if ship.upds.values.0.len() > ship_upds_len {
-                ship.upds.bounds.push(ship.upds.values.0.len() as u64);
+                ship.upds.bounds.push(len_to_u64(ship.upds.values.0.len()));
                 ship.keys
                     .extend_from_self(self.keys.borrow(), key_idx..key_idx + 1);
             }
