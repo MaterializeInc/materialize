@@ -51,6 +51,10 @@ See also the following integration guides for BI tools:
 - [MCP Server](/integrations/llm/)
 - [Coding Agent Skills](/integrations/coding-agent-skills/)
 
+## Infrastructure as Code
+
+- [Infrastructure as Code](/integrations/infrastructure-as-code/)
+
 ## Foreign data wrapper
 
 - [Foreign data wrapper](/integrations/fdw/)

@@ -1,0 +1,10 @@
+columns:
+  - column: "Tool"
+  - column: "Description"
+rows:
+  - "Tool": "[**dbt**](/manage/dbt/)"
+    Description: |
+      Version control and orchestrate the creation of views, materialized views, and indexes.
+  - "Tool": "[**Terraform**](/manage/terraform/)"
+    Description: |
+      Manage infrastructure, clusters, and configuration.
