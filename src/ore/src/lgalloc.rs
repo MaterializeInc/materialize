@@ -28,9 +28,14 @@
 use std::collections::BTreeMap;
 use std::ptr::NonNull;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 pub use lgalloc::AllocError;
+
+/// Controls whether lgalloc heap profiling (backtrace capture) is enabled.
+/// When `false`, allocations are still tracked for live bytes/count metrics,
+/// but no backtraces are captured and `heap_profile()` returns empty results.
+pub static ENABLE_HEAP_PROFILING: AtomicBool = AtomicBool::new(true);
 
 /// Total bytes currently allocated via lgalloc.
 static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
@@ -197,27 +202,29 @@ impl std::fmt::Debug for Handle {
 
 /// Allocate memory via lgalloc, tracking the allocation in global profiling counters.
 ///
-/// Captures a backtrace at the call site for heap profiling.
-// TODO: Add a feature flag to enable/disable backtrace capture at runtime,
-// so that the profiling overhead can be avoided when not needed.
+/// When [`ENABLE_HEAP_PROFILING`] is `true`, captures a backtrace at the call site.
+/// When `false`, the allocation is still tracked for live bytes/count metrics, but
+/// no backtrace is captured and the allocation won't appear in `heap_profile()`.
 pub fn allocate<T>(capacity: usize) -> Result<(NonNull<T>, usize, Handle), AllocError> {
     #[allow(clippy::disallowed_methods)]
     let (ptr, actual_capacity, handle) = lgalloc::allocate::<T>(capacity)?;
     let bytes = actual_capacity * std::mem::size_of::<T>();
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
 
-    // Capture backtrace for heap profiling. `backtrace::trace` walks leaf-to-root,
-    // but the trie stores root-to-leaf, so we reverse.
-    let mut addrs = Vec::new();
-    backtrace::trace(|frame| {
-        addrs.push(frame.ip().addr());
-        true
-    });
-    addrs.reverse();
-
     LIVE_BYTES.fetch_add(bytes, Ordering::Relaxed);
     LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
-    STATE.lock().expect("poisoned").insert(id, &addrs, bytes);
+
+    if ENABLE_HEAP_PROFILING.load(Ordering::Relaxed) {
+        // Capture backtrace for heap profiling. `backtrace::trace` walks leaf-to-root,
+        // but the trie stores root-to-leaf, so we reverse.
+        let mut addrs = Vec::new();
+        backtrace::trace(|frame| {
+            addrs.push(frame.ip().addr());
+            true
+        });
+        addrs.reverse();
+        STATE.lock().expect("poisoned").insert(id, &addrs, bytes);
+    }
 
     Ok((
         ptr,
@@ -234,6 +241,7 @@ pub fn allocate<T>(capacity: usize) -> Result<(NonNull<T>, usize, Handle), Alloc
 pub fn deallocate(handle: Handle) {
     LIVE_BYTES.fetch_sub(handle.capacity_bytes, Ordering::Relaxed);
     LIVE_COUNT.fetch_sub(1, Ordering::Relaxed);
+    // Remove is a no-op if the allocation was never inserted (profiling disabled).
     STATE.lock().expect("poisoned").remove(handle.id);
     #[allow(clippy::disallowed_methods)]
     lgalloc::deallocate(handle.inner);

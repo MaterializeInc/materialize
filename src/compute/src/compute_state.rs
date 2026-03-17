@@ -278,6 +278,11 @@ impl ComputeState {
         let enable_columnar_lgalloc = ENABLE_COLUMNAR_LGALLOC.get(config);
         mz_timely_util::containers::set_enable_columnar_lgalloc(enable_columnar_lgalloc);
 
+        mz_ore::lgalloc::ENABLE_HEAP_PROFILING.store(
+            ENABLE_LGALLOC_HEAP_PROFILING.get(config),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
         // Remember the maintenance interval locally to avoid reading it from the config set on
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);

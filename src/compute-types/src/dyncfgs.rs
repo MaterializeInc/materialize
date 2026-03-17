@@ -125,6 +125,13 @@ pub const ENABLE_COLUMNAR_LGALLOC: Config<bool> = Config::new(
     "Enable allocating aligned regions in columnar from lgalloc.",
 );
 
+/// Enable lgalloc heap profiling (backtrace capture on allocations).
+pub const ENABLE_LGALLOC_HEAP_PROFILING: Config<bool> = Config::new(
+    "enable_lgalloc_heap_profiling",
+    true,
+    "Enable capturing backtraces on lgalloc allocations for heap profiling.",
+);
+
 /// The interval at which the compute server performs maintenance tasks.
 pub const COMPUTE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
     "compute_server_maintenance_interval",
@@ -353,6 +360,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
         .add(&ENABLE_COLUMNATION_LGALLOC)
         .add(&ENABLE_COLUMNAR_LGALLOC)
+        .add(&ENABLE_LGALLOC_HEAP_PROFILING)
         .add(&COMPUTE_SERVER_MAINTENANCE_INTERVAL)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES_CC)
