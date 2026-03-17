@@ -468,6 +468,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "lgalloc_growth_dampener",
     "lgalloc_local_buffer_bytes",
     "lgalloc_slow_clear_bytes",
+    "enable_lgalloc_heap_profiling",
     "memory_limiter_interval",
     "memory_limiter_usage_bias",
     "memory_limiter_burst_factor",

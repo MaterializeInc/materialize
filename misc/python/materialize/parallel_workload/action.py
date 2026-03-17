@@ -1585,6 +1585,7 @@ class FlipFlagsAction(Action):
             "memory_limiter_burst_factor",
             "enable_columnation_lgalloc",
             "enable_columnar_lgalloc",
+            "enable_lgalloc_heap_profiling",
             "compute_server_maintenance_interval",
             "compute_dataflow_max_inflight_bytes",
             "compute_dataflow_max_inflight_bytes_cc",
