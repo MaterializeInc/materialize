@@ -116,15 +116,18 @@
 
 use std::any::Any;
 use std::cell::RefCell;
+use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
+use futures::StreamExt;
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::metrics::SinkMetrics;
 use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient};
@@ -135,24 +138,24 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::PressOnDropButton;
+use mz_timely_util::builder_async::{Event, OperatorBuilder};
 use mz_timely_util::probe::{Handle, ProbeNotify};
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::generic::OutputBuilder;
-use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::vec::Broadcast;
 use timely::dataflow::operators::{Capability, CapabilitySet, probe};
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
-use timely::progress::frontier::AntichainRef;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 use tracing::trace;
 
 use crate::compute_state::ComputeState;
 use crate::render::StartSignal;
 use crate::render::sinks::SinkRender;
 use crate::sink::correction::{ChannelLogging, Correction, CorrectionLogger};
+use crate::sink::materialized_view_v2;
 use crate::sink::refresh::apply_refresh;
 
 impl<G> SinkRender<G> for MaterializedViewSinkConnection<CollectionMetadata>
@@ -212,21 +215,21 @@ where
 }
 
 /// Type of the `desired` stream, split into `Ok` and `Err` streams.
-type DesiredStreams<S> =
+pub(super) type DesiredStreams<S> =
     OkErr<StreamVec<S, (Row, Timestamp, Diff)>, StreamVec<S, (DataflowError, Timestamp, Diff)>>;
 
 /// Type of the `persist` stream, split into `Ok` and `Err` streams.
-type PersistStreams<S> =
+pub(super) type PersistStreams<S> =
     OkErr<StreamVec<S, (Row, Timestamp, Diff)>, StreamVec<S, (DataflowError, Timestamp, Diff)>>;
 
 /// Type of the `descs` stream.
-type DescsStream<S> = StreamVec<S, BatchDescription>;
+pub(super) type DescsStream<S> = StreamVec<S, BatchDescription>;
 
 /// Type of the `batches` stream.
-type BatchesStream<S> = StreamVec<S, (BatchDescription, ProtoBatch)>;
+pub(super) type BatchesStream<S> = StreamVec<S, (BatchDescription, ProtoBatch)>;
 
 /// Type of the shared sink write frontier.
-type SharedSinkFrontier = Rc<RefCell<Antichain<Timestamp>>>;
+pub(super) type SharedSinkFrontier = Rc<RefCell<Antichain<Timestamp>>>;
 
 /// Renders an MV sink writing the given desired collection into the `target` persist collection.
 pub(super) fn persist_sink<S>(
@@ -242,6 +245,19 @@ pub(super) fn persist_sink<S>(
 where
     S: Scope<Timestamp = Timestamp>,
 {
+    if mz_compute_types::dyncfgs::ENABLE_SYNC_MV_SINK.get(&compute_state.worker_config) {
+        return materialized_view_v2::persist_sink(
+            sink_id,
+            target,
+            ok_collection,
+            err_collection,
+            as_of,
+            compute_state,
+            start_signal,
+            read_only_rx,
+        );
+    }
+
     let mut scope = ok_collection.scope();
     let desired = OkErr::new(ok_collection.inner, err_collection.inner);
 
@@ -261,7 +277,7 @@ where
         purpose: format!("MV sink {sink_id}"),
     };
 
-    let (desired, descs, sink_frontier) = mint::render(
+    let (desired, descs, sink_frontier, mint_token) = mint::render(
         sink_id,
         persist_api.clone(),
         as_of.clone(),
@@ -269,9 +285,7 @@ where
         desired,
     );
 
-    let descs = descs.broadcast();
-
-    let batches = write::render(
+    let (batches, write_token) = write::render(
         sink_id,
         persist_api.clone(),
         as_of,
@@ -281,30 +295,30 @@ where
         Rc::clone(&compute_state.worker_config),
     );
 
-    append::render(sink_id, persist_api, descs, batches);
+    let append_token = append::render(sink_id, persist_api, descs, batches);
 
     // Report sink frontier updates to the `ComputeState`.
     let collection = compute_state.expect_collection_mut(sink_id);
     collection.sink_write_frontier = Some(sink_frontier);
 
-    Rc::new(persist_token)
+    Rc::new((persist_token, mint_token, write_token, append_token))
 }
 
 /// Generic wrapper around ok/err pairs (e.g. streams, frontiers), to simplify code dealing with
 /// such pairs.
-struct OkErr<O, E> {
-    ok: O,
-    err: E,
+pub(super) struct OkErr<O, E> {
+    pub(super) ok: O,
+    pub(super) err: E,
 }
 
 impl<O, E> OkErr<O, E> {
-    fn new(ok: O, err: E) -> Self {
+    pub(super) fn new(ok: O, err: E) -> Self {
         Self { ok, err }
     }
 }
 
 impl OkErr<Antichain<Timestamp>, Antichain<Timestamp>> {
-    fn new_frontiers() -> Self {
+    pub(super) fn new_frontiers() -> Self {
         Self {
             ok: Antichain::from_elem(Timestamp::MIN),
             err: Antichain::from_elem(Timestamp::MIN),
@@ -312,7 +326,7 @@ impl OkErr<Antichain<Timestamp>, Antichain<Timestamp>> {
     }
 
     /// Return the overall frontier, i.e., the minimum of `ok` and `err`.
-    fn frontier(&self) -> &Antichain<Timestamp> {
+    pub(super) fn frontier(&self) -> &Antichain<Timestamp> {
         if PartialOrder::less_equal(&self.ok, &self.err) {
             &self.ok
         } else {
@@ -324,7 +338,10 @@ impl OkErr<Antichain<Timestamp>, Antichain<Timestamp>> {
 /// Advance the given `frontier` to `new`, if the latter one is greater.
 ///
 /// Returns whether `frontier` was advanced.
-fn advance(frontier: &mut Antichain<Timestamp>, new: AntichainRef<'_, Timestamp>) -> bool {
+pub(super) fn advance(
+    frontier: &mut Antichain<Timestamp>,
+    new: timely::progress::frontier::AntichainRef<'_, Timestamp>,
+) -> bool {
     if PartialOrder::less_than(&frontier.borrow(), &new) {
         frontier.clear();
         frontier.extend(new.iter().cloned());
@@ -336,22 +353,22 @@ fn advance(frontier: &mut Antichain<Timestamp>, new: AntichainRef<'_, Timestamp>
 
 /// A persist API specialized to a single collection.
 #[derive(Clone)]
-struct PersistApi {
-    persist_clients: Arc<PersistClientCache>,
-    collection: CollectionMetadata,
-    shard_name: String,
-    purpose: String,
+pub(super) struct PersistApi {
+    pub(super) persist_clients: Arc<PersistClientCache>,
+    pub(super) collection: CollectionMetadata,
+    pub(super) shard_name: String,
+    pub(super) purpose: String,
 }
 
 impl PersistApi {
-    async fn open_client(&self) -> PersistClient {
+    pub(super) async fn open_client(&self) -> PersistClient {
         self.persist_clients
             .open(self.collection.persist_location.clone())
             .await
             .unwrap_or_else(|error| panic!("error opening persist client: {error}"))
     }
 
-    async fn open_writer(&self) -> WriteHandle<SourceData, (), Timestamp, StorageDiff> {
+    pub(super) async fn open_writer(&self) -> WriteHandle<SourceData, (), Timestamp, StorageDiff> {
         self.open_client()
             .await
             .open_writer(
@@ -366,10 +383,15 @@ impl PersistApi {
             .await
             .unwrap_or_else(|error| panic!("error opening persist writer: {error}"))
     }
+
+    async fn open_metrics(&self) -> SinkMetrics {
+        let client = self.open_client().await;
+        client.metrics().sink.clone()
+    }
 }
 
 /// Instantiate a persist source reading back the `target` collection.
-fn persist_source<S>(
+pub(super) fn persist_source<S>(
     scope: &mut S,
     sink_id: GlobalId,
     target: CollectionMetadata,
@@ -422,14 +444,18 @@ where
 /// Each batch description also contains the index of its "append worker", i.e. the worker that is
 /// responsible for appending the written batches to the output shard.
 #[derive(Clone, Serialize, Deserialize)]
-struct BatchDescription {
-    lower: Antichain<Timestamp>,
-    upper: Antichain<Timestamp>,
-    append_worker: usize,
+pub(super) struct BatchDescription {
+    pub(super) lower: Antichain<Timestamp>,
+    pub(super) upper: Antichain<Timestamp>,
+    pub(super) append_worker: usize,
 }
 
 impl BatchDescription {
-    fn new(lower: Antichain<Timestamp>, upper: Antichain<Timestamp>, append_worker: usize) -> Self {
+    pub(super) fn new(
+        lower: Antichain<Timestamp>,
+        upper: Antichain<Timestamp>,
+        append_worker: usize,
+    ) -> Self {
         assert!(PartialOrder::less_than(&lower, &upper));
         Self {
             lower,
@@ -452,14 +478,13 @@ impl std::fmt::Debug for BatchDescription {
 }
 
 /// Construct a name for the given sub-operator.
-fn operator_name(sink_id: GlobalId, sub_operator: &str) -> String {
+pub(super) fn operator_name(sink_id: GlobalId, sub_operator: &str) -> String {
     format!("mv_sink({sink_id})::{sub_operator}")
 }
 
 /// Implementation of the `mint` operator.
 mod mint {
     use super::*;
-    use timely::progress::frontier::AntichainRef;
 
     /// Render the `mint` operator.
     ///
@@ -475,7 +500,12 @@ mod mint {
         as_of: Antichain<Timestamp>,
         mut read_only_rx: watch::Receiver<bool>,
         desired: DesiredStreams<S>,
-    ) -> (DesiredStreams<S>, DescsStream<S>, SharedSinkFrontier)
+    ) -> (
+        DesiredStreams<S>,
+        DescsStream<S>,
+        SharedSinkFrontier,
+        PressOnDropButton,
+    )
     where
         S: Scope<Timestamp = Timestamp>,
     {
@@ -490,145 +520,117 @@ mod mint {
         let shared_frontier = Rc::clone(&sink_frontier);
 
         let name = operator_name(sink_id, "mint");
-        let mut builder = OperatorBuilderRc::new(name, scope.clone());
-        let info = builder.operator_info();
+        let mut op = OperatorBuilder::new(name, scope);
 
-        // Create outputs (before inputs, so no input connections yet).
-        let (ok_output, ok_stream) = builder.new_output();
-        let (err_output, err_stream) = builder.new_output();
-        let (desc_output, desc_stream) = builder.new_output();
+        let (ok_output, ok_stream) = op.new_output::<CapacityContainerBuilder<_>>();
+        let (err_output, err_stream) = op.new_output::<CapacityContainerBuilder<_>>();
+        let desired_outputs = OkErr::new(ok_output, err_output);
+        let desired_output_streams = OkErr::new(ok_stream, err_stream);
 
-        let mut ok_output = OutputBuilder::from(ok_output);
-        let mut err_output = OutputBuilder::from(err_output);
-        let mut desc_output = OutputBuilder::from(desc_output);
+        let (desc_output, desc_output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
 
-        // desired_ok -> output 0 (ok passthrough)
-        let mut desired_ok_input = builder.new_input_connection(
-            desired.ok,
-            Pipeline,
-            [(0, Antichain::from_elem(Default::default()))],
-        );
-        // desired_err -> output 1 (err passthrough)
-        let mut desired_err_input = builder.new_input_connection(
-            desired.err,
-            Pipeline,
-            [(1, Antichain::from_elem(Default::default()))],
-        );
+        let mut desired_inputs = OkErr {
+            ok: op.new_input_for(desired.ok, Pipeline, &desired_outputs.ok),
+            err: op.new_input_for(desired.err, Pipeline, &desired_outputs.err),
+        };
 
-        // Set up background tasks and state for the active worker only.
-        let mut task_handles = Vec::new();
-        let read_only = *read_only_rx.borrow_and_update();
-        let mut state = None;
-        if worker_id == active_worker_id {
-            // Spawn a Tokio task to watch the persist shard's upper frontier.
-            //
-            // We collect the persist frontier from a write handle directly, rather than
-            // inspecting the `persist` stream, because the latter has two annoying glitches:
-            //  (a) It starts at the shard's read frontier, not its write frontier.
-            //  (b) It can lag behind if there are spikes in ingested data.
-            //
-            // The task sends the empty frontier as its final message before exiting. The
-            // operator drops `persist_rx` once it receives the empty frontier.
-            let (persist_tx, persist_rx) = mpsc::unbounded_channel();
-            let sync_activator = scope.sync_activator_for(info.address.to_vec());
-            let handle = mz_ore::task::spawn(
-                || operator_name(sink_id, "mint::persist_watch"),
-                async move {
-                    let mut writer = persist_api.open_writer().await;
-                    let mut frontier = Antichain::from_elem(Timestamp::MIN);
-                    loop {
-                        writer.wait_for_upper_past(&frontier).await;
-                        frontier = writer.upper().clone();
-                        if persist_tx.send(frontier.clone()).is_err() {
-                            return;
-                        }
-                        if sync_activator.activate().is_err() {
-                            return;
-                        }
-                        if frontier.is_empty() {
-                            return;
-                        }
-                    }
-                },
-            );
-            task_handles.push(handle.abort_on_drop());
-
-            // Spawn a Tokio task to wake the operator when read-only mode changes.
-            if read_only {
-                let sync_activator = scope.sync_activator_for(info.address.to_vec());
-                let mut rx = read_only_rx.clone();
-                let handle = mz_ore::task::spawn(
-                    || format!("mv_sink({sink_id})::mint::read_only_watch"),
-                    async move {
-                        let _ = rx.changed().await;
-                        let _ = sync_activator.activate();
-                    },
-                );
-                task_handles.push(handle.abort_on_drop());
-            }
-
-            state = Some(State::new(
-                sink_id,
-                worker_count,
-                as_of,
-                read_only,
-                persist_rx,
-            ));
-        }
-
-        builder.build(move |capabilities| {
+        let button = op.build(move |capabilities| async move {
             // Passing through the `desired` streams only requires data capabilities, so we can
             // immediately drop their initial capabilities here.
             let [_, _, desc_cap]: [_; 3] =
                 capabilities.try_into().expect("one capability per output");
 
-            let mut cap_set = if state.is_some() {
-                Some(CapabilitySet::from_elem(desc_cap))
-            } else {
+            // Non-active workers just pass the `desired` and `persist` data through.
+            if worker_id != active_worker_id {
                 drop(desc_cap);
                 shared_frontier.borrow_mut().clear();
-                None
-            };
 
-            move |frontiers| {
-                // Keep task handles alive so they are aborted when the operator is dropped.
-                let _ = &task_handles;
-
-                // Pass through desired data.
-                let mut ok_out = ok_output.activate();
-                desired_ok_input.for_each(|cap, data| {
-                    ok_out.session(&cap).give_container(data);
-                });
-                let mut err_out = err_output.activate();
-                desired_err_input.for_each(|cap, data| {
-                    err_out.session(&cap).give_container(data);
-                });
-
-                let Some(state) = &mut state else {
-                    // Non-active worker: just pass through data.
-                    return;
-                };
-                let cap_set = cap_set.as_mut().unwrap();
-
-                // Track desired frontiers.
-                state.advance_desired_ok_frontier(frontiers[0].frontier());
-                state.advance_desired_err_frontier(frontiers[1].frontier());
-
-                state.drain_persist_rx(&shared_frontier);
-
-                // Check read-only mode.
-                if state.read_only && read_only_rx.has_changed().unwrap_or(false) {
-                    if !*read_only_rx.borrow_and_update() {
-                        state.allow_writes();
+                loop {
+                    tokio::select! {
+                        Some(event) = desired_inputs.ok.next() => {
+                            if let Event::Data(cap, mut data) = event {
+                                desired_outputs.ok.give_container(&cap, &mut data);
+                            }
+                        }
+                        Some(event) = desired_inputs.err.next() => {
+                            if let Event::Data(cap, mut data) = event {
+                                desired_outputs.err.give_container(&cap, &mut data);
+                            }
+                        }
+                        // All inputs are exhausted, so we can shut down.
+                        else => return,
                     }
                 }
+            }
 
-                // Try to mint a batch description.
-                let mut desc_out = desc_output.activate();
-                if let Some(desc) = state.maybe_mint_batch_description() {
+            let mut cap_set = CapabilitySet::from_elem(desc_cap);
+
+            let read_only = *read_only_rx.borrow_and_update();
+            let mut state = State::new(sink_id, worker_count, as_of, read_only);
+
+            // Create a stream that reports advancements of the target shard's frontier and updates
+            // the shared sink frontier.
+            //
+            // We collect the persist frontier from a write handle directly, rather than inspecting
+            // the `persist` stream, because the latter has two annoying glitches:
+            //  (a) It starts at the shard's read frontier, not its write frontier.
+            //  (b) It can lag behind if there are spikes in ingested data.
+            let mut persist_frontiers = pin!(async_stream::stream! {
+                let mut writer = persist_api.open_writer().await;
+                let mut frontier = Antichain::from_elem(Timestamp::MIN);
+                while !frontier.is_empty() {
+                    writer.wait_for_upper_past(&frontier).await;
+                    frontier = writer.upper().clone();
+                    shared_frontier.borrow_mut().clone_from(&frontier);
+                    yield frontier.clone();
+                }
+            });
+
+            loop {
+                // Read from the inputs, pass through all data to the respective outputs, and keep
+                // track of the input frontiers. When a frontier advances we might have to mint a
+                // new batch description.
+                let maybe_desc = tokio::select! {
+                    Some(event) = desired_inputs.ok.next() => {
+                        match event {
+                            Event::Data(cap, mut data) => {
+                                desired_outputs.ok.give_container(&cap, &mut data);
+                                None
+                            }
+                            Event::Progress(frontier) => {
+                                state.advance_desired_ok_frontier(frontier);
+                                state.maybe_mint_batch_description()
+                            }
+                        }
+                    }
+                    Some(event) = desired_inputs.err.next() => {
+                        match event {
+                            Event::Data(cap, mut data) => {
+                                desired_outputs.err.give_container(&cap, &mut data);
+                                None
+                            }
+                            Event::Progress(frontier) => {
+                                state.advance_desired_err_frontier(frontier);
+                                state.maybe_mint_batch_description()
+                            }
+                        }
+                    }
+                    Some(frontier) = persist_frontiers.next() => {
+                        state.advance_persist_frontier(frontier);
+                        state.maybe_mint_batch_description()
+                    }
+                    Ok(()) = read_only_rx.changed(), if read_only => {
+                        state.allow_writes();
+                        state.maybe_mint_batch_description()
+                    }
+                    // All inputs are exhausted, so we can shut down.
+                    else => return,
+                };
+
+                if let Some(desc) = maybe_desc {
                     let lower_ts = *desc.lower.as_option().expect("not empty");
                     let cap = cap_set.delayed(&lower_ts);
-                    desc_out.session(&cap).give(desc);
+                    desc_output.give(&cap, desc);
 
                     // We only emit strictly increasing `lower`s, so we can let our output frontier
                     // advance beyond the current `lower`.
@@ -641,8 +643,12 @@ mod mint {
             }
         });
 
-        let desired_output_streams = OkErr::new(ok_stream, err_stream);
-        (desired_output_streams, desc_stream, sink_frontier)
+        (
+            desired_output_streams,
+            desc_output_stream,
+            sink_frontier,
+            button.press_on_drop(),
+        )
     }
 
     /// State maintained by the `mint` operator.
@@ -654,10 +660,6 @@ mod mint {
         desired_frontiers: OkErr<Antichain<Timestamp>, Antichain<Timestamp>>,
         /// The frontier of the target persist shard.
         persist_frontier: Antichain<Timestamp>,
-        /// Receiver for persist frontier updates from the Tokio persist_watch task.
-        ///
-        /// Dropped once the empty frontier is received (the task's shutdown signal).
-        persist_rx: Option<mpsc::UnboundedReceiver<Antichain<Timestamp>>>,
         /// The append worker for the next batch description, chosen in round-robin fashion.
         next_append_worker: usize,
         /// The last `lower` we have emitted in a batch description, if any. Whenever the
@@ -675,7 +677,6 @@ mod mint {
             worker_count: usize,
             as_of: Antichain<Timestamp>,
             read_only: bool,
-            persist_rx: mpsc::UnboundedReceiver<Antichain<Timestamp>>,
         ) -> Self {
             // Initializing `persist_frontier` to the `as_of` ensures that the first minted batch
             // description will have a `lower` of `as_of` or beyond, and thus that we don't spend
@@ -687,7 +688,6 @@ mod mint {
                 worker_count,
                 desired_frontiers: OkErr::new_frontiers(),
                 persist_frontier,
-                persist_rx: Some(persist_rx),
                 next_append_worker: 0,
                 last_lower: None,
                 read_only,
@@ -705,50 +705,21 @@ mod mint {
             );
         }
 
-        fn advance_desired_ok_frontier(&mut self, frontier: AntichainRef<Timestamp>) {
-            if advance(&mut self.desired_frontiers.ok, frontier) {
+        fn advance_desired_ok_frontier(&mut self, frontier: Antichain<Timestamp>) {
+            if advance(&mut self.desired_frontiers.ok, frontier.borrow()) {
                 self.trace("advanced `desired` ok frontier");
             }
         }
 
-        fn advance_desired_err_frontier(&mut self, frontier: AntichainRef<Timestamp>) {
-            if advance(&mut self.desired_frontiers.err, frontier) {
+        fn advance_desired_err_frontier(&mut self, frontier: Antichain<Timestamp>) {
+            if advance(&mut self.desired_frontiers.err, frontier.borrow()) {
                 self.trace("advanced `desired` err frontier");
             }
         }
 
-        fn advance_persist_frontier(&mut self, frontier: AntichainRef<Timestamp>) {
-            if advance(&mut self.persist_frontier, frontier) {
+        fn advance_persist_frontier(&mut self, frontier: Antichain<Timestamp>) {
+            if advance(&mut self.persist_frontier, frontier.borrow()) {
                 self.trace("advanced `persist` frontier");
-            }
-        }
-
-        /// Drain persist frontier updates from the Tokio task.
-        ///
-        /// The task sends the empty frontier as its final message before exiting. Once
-        /// received, we drop the receiver.
-        fn drain_persist_rx(&mut self, shared_frontier: &RefCell<Antichain<Timestamp>>) {
-            let Some(mut rx) = self.persist_rx.take() else {
-                return;
-            };
-            loop {
-                match rx.try_recv() {
-                    Ok(frontier) => {
-                        shared_frontier.borrow_mut().clone_from(&frontier);
-                        let done = frontier.is_empty();
-                        self.advance_persist_frontier(frontier.borrow());
-                        if done {
-                            return;
-                        }
-                    }
-                    Err(mpsc::error::TryRecvError::Empty) => {
-                        self.persist_rx = Some(rx);
-                        return;
-                    }
-                    Err(mpsc::error::TryRecvError::Disconnected) => {
-                        panic!("mint persist_watch task unexpectedly gone");
-                    }
-                }
             }
         }
 
@@ -794,29 +765,6 @@ mod mint {
 mod write {
     use super::*;
 
-    use mz_timely_util::activator::ArcActivator;
-
-    /// Commands sent from the Timely operator to the Tokio write task.
-    enum WriteCommand {
-        /// Forward desired updates to the corrections buffer.
-        Desired(Result<Vec<(Row, Timestamp, Diff)>, Vec<(DataflowError, Timestamp, Diff)>>),
-        /// Forward persist updates (negated) to the corrections buffer.
-        Persist(Result<Vec<(Row, Timestamp, Diff)>, Vec<(DataflowError, Timestamp, Diff)>>),
-        /// The persist frontier advanced. Used for `advance_since` and consolidation.
-        PersistFrontier(Antichain<Timestamp>),
-        /// Force a consolidation of the corrections buffer.
-        ForceConsolidation,
-        /// Write a batch with the given description. The task drains corrections and writes
-        /// them to persist.
-        WriteBatch(BatchDescription),
-    }
-
-    /// A response from the Tokio write task back to the Timely operator.
-    struct WriteResponse {
-        /// The written batch, or `None` if the corrections buffer had no updates.
-        batch: Option<ProtoBatch>,
-    }
-
     /// Render the `write` operator.
     ///
     /// The parameters passed in are:
@@ -825,7 +773,7 @@ mod write {
     ///  * `as_of`: The first time for which the sink may produce output.
     ///  * `desired`: The ok/err streams that should be sinked to persist.
     ///  * `persist`: The ok/err streams read back from the output persist shard.
-    ///  * `descs`: The stream of batch descriptions produced by the `mint` operator (must be broadcast).
+    ///  * `descs`: The stream of batch descriptions produced by the `mint` operator.
     pub fn render<S>(
         sink_id: GlobalId,
         persist_api: PersistApi,
@@ -834,7 +782,7 @@ mod write {
         persist: PersistStreams<S>,
         descs: DescsStream<S>,
         worker_config: Rc<ConfigSet>,
-    ) -> BatchesStream<S>
+    ) -> (BatchesStream<S>, PressOnDropButton)
     where
         S: Scope<Timestamp = Timestamp>,
     {
@@ -842,20 +790,16 @@ mod write {
         let worker_id = scope.index();
 
         let name = operator_name(sink_id, "write");
-        let mut builder = OperatorBuilderRc::new(name, scope.clone());
-        let info = builder.operator_info();
+        let mut op = OperatorBuilder::new(name, scope.clone());
 
-        // Set up correction buffer logging. CorrectionLogger is not Send (uses timely
-        // loggers), so the Tokio task uses ChannelLogging to send events back to the
-        // Timely thread for application by the CorrectionLogger.
         let mut channel_logging = None;
         let mut correction_logger = None;
         if let (Some(compute_logger), Some(differential_logger)) = (
             scope.logger_for("materialize/compute"),
             scope.logger_for("differential/arrange"),
         ) {
-            let operator_info = builder.operator_info();
-            let (tx, rx) = mpsc::unbounded_channel();
+            let operator_info = op.operator_info();
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
             channel_logging = Some(ChannelLogging::new(tx));
             correction_logger = Some(CorrectionLogger::new(
                 compute_logger,
@@ -866,245 +810,134 @@ mod write {
             ));
         }
 
+        let (batches_output, batches_output_stream) =
+            op.new_output::<CapacityContainerBuilder<_>>();
+
         // It is important that we exchange the `desired` and `persist` data the same way, so
         // updates that cancel each other out end up on the same worker.
         let exchange_ok = |(d, _, _): &(Row, Timestamp, Diff)| d.hashed();
         let exchange_err = |(d, _, _): &(DataflowError, Timestamp, Diff)| d.hashed();
 
-        // Data inputs are created before the output, so they are not connected to it.
-        let mut desired_ok_input = builder.new_input(desired.ok, Exchange::new(exchange_ok));
-        let mut desired_err_input = builder.new_input(desired.err, Exchange::new(exchange_err));
-        let mut persist_ok_input = builder.new_input(persist.ok, Exchange::new(exchange_ok));
-        let mut persist_err_input = builder.new_input(persist.err, Exchange::new(exchange_err));
-        let mut descs_input = builder.new_input(descs, Pipeline);
-
-        // Only descs (input 4) is connected to the batches output.
-        let (batches_output, batches_output_stream) =
-            builder.new_output_connection([(4, Antichain::from_elem(Default::default()))]);
-        let mut batches_output = OutputBuilder::from(batches_output);
-
-        // Obtain SinkMetrics synchronously from the persist client cache, rather than through
-        // a WriteHandle, to avoid async I/O on the Timely thread.
-        let sink_metrics = persist_api.persist_clients.metrics().sink.clone();
-
-        // Construct corrections on the Timely thread (reads ConfigSet), then move to the
-        // Tokio task. The ChannelLogging sends events back to the Timely thread.
-        let worker_metrics = sink_metrics.for_worker(worker_id);
-        let mut corrections: OkErr<Correction<Row>, Correction<DataflowError>> = OkErr::new(
-            Correction::new(
-                sink_metrics.clone(),
-                worker_metrics.clone(),
-                channel_logging.clone(),
-                &worker_config,
-            ),
-            Correction::new(
-                sink_metrics.clone(),
-                worker_metrics,
-                channel_logging,
-                &worker_config,
-            ),
+        let mut desired_inputs = OkErr::new(
+            op.new_disconnected_input(desired.ok, Exchange::new(exchange_ok)),
+            op.new_disconnected_input(desired.err, Exchange::new(exchange_err)),
         );
+        let mut persist_inputs = OkErr::new(
+            op.new_disconnected_input(persist.ok, Exchange::new(exchange_ok)),
+            op.new_disconnected_input(persist.err, Exchange::new(exchange_err)),
+        );
+        let mut descs_input = op.new_input_for(descs.broadcast(), Pipeline, &batches_output);
 
-        // Channels for commands and responses.
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<WriteCommand>();
-        let (resp_tx, mut resp_rx) = mpsc::unbounded_channel::<WriteResponse>();
-
-        // Spawn Tokio task that owns the WriteHandle and corrections buffer.
-        let (activator, activation_ack) = ArcActivator::new(&scope, &info);
-        let write_task_handle = {
-            mz_ore::task::spawn(
-                || operator_name(sink_id, "write::batch_writer"),
-                async move {
-                    let mut writer = persist_api.open_writer().await;
-
-                    while let Some(cmd) = cmd_rx.recv().await {
-                        apply_command(&mut corrections, &mut writer, cmd, &resp_tx).await;
-                        // Activate the operator to drain logging events and process batch responses.
-                        // ArcActivator suppresses redundant activations, so this is cheap.
-                        activator.activate();
-                    }
-                },
-            )
-            .abort_on_drop()
-        };
-
-        builder.build(move |capabilities| {
+        let button = op.build(move |capabilities| async move {
             // We will use the data capabilities from the `descs` input to produce output, so no
             // need to hold onto the initial capabilities.
             drop(capabilities);
 
-            let mut state = State::new(sink_id, worker_id, as_of);
-
-            // Whether a batch write is currently in flight in the Tokio task.
-            let mut batch_in_flight: Option<(BatchDescription, Capability<Timestamp>)> = None;
-
-            // CorrectionLogger lives on the Timely thread and drains events from
-            // the channel each activation. On drop, it drains remaining events and
-            // retracts all logged state.
+            let writer = persist_api.open_writer().await;
+            let sink_metrics = persist_api.open_metrics().await;
+            let mut state = State::new(
+                sink_id,
+                worker_id,
+                writer,
+                sink_metrics,
+                channel_logging,
+                as_of,
+                &worker_config,
+            );
             let mut correction_logger = correction_logger;
 
-            move |frontiers| {
-                // Keep task handle alive so it is aborted when the operator is dropped.
-                let _ = &write_task_handle;
-
-                // Acknowledge activation so the Tokio task can activate us again.
-                activation_ack.ack();
-
-                // Drain logging events from the Tokio task's ChannelLogging.
+            loop {
+                // Drain correction logging events from the channel.
                 if let Some(logger) = &mut correction_logger {
                     logger.apply_events();
                 }
-                // Drain all inputs and forward data to the Tokio task.
-                desired_ok_input.for_each(|_cap, data| {
-                    cmd_tx
-                        .send(WriteCommand::Desired(Ok(std::mem::take(data))))
-                        .expect("write task unexpectedly gone");
-                });
-                desired_err_input.for_each(|_cap, data| {
-                    cmd_tx
-                        .send(WriteCommand::Desired(Err(std::mem::take(data))))
-                        .expect("write task unexpectedly gone");
-                });
-                persist_ok_input.for_each(|_cap, data| {
-                    cmd_tx
-                        .send(WriteCommand::Persist(Ok(std::mem::take(data))))
-                        .expect("write task unexpectedly gone");
-                });
-                persist_err_input.for_each(|_cap, data| {
-                    cmd_tx
-                        .send(WriteCommand::Persist(Err(std::mem::take(data))))
-                        .expect("write task unexpectedly gone");
-                });
 
-                // Accept batch descriptions.
-                descs_input.for_each(|cap, data| {
-                    let cap = cap.retain(0);
-                    for desc in data.drain(..) {
-                        state.absorb_batch_description(desc, cap.clone());
-                    }
-                });
-
-                // Track frontiers. Send persist frontier to Tokio task for advance_since.
-                state.advance_desired_ok_frontier(frontiers[0].frontier());
-                state.advance_desired_err_frontier(frontiers[1].frontier());
-                if state.advance_persist_ok_frontier(frontiers[2].frontier())
-                    | state.advance_persist_err_frontier(frontiers[3].frontier())
-                {
-                    cmd_tx
-                        .send(WriteCommand::PersistFrontier(
-                            state.persist_frontiers.frontier().to_owned(),
-                        ))
-                        .expect("write task unexpectedly gone");
-                }
-                if state.should_force_consolidation() {
-                    cmd_tx
-                        .send(WriteCommand::ForceConsolidation)
-                        .expect("write task unexpectedly gone");
-                }
-
-                // Try to receive batch results from the Tokio task.
-                loop {
-                    match resp_rx.try_recv() {
-                        Ok(resp) => {
-                            if let Some((desc, cap)) = batch_in_flight.take() {
-                                if let Some(batch) = resp.batch {
-                                    let mut out = batches_output.activate();
-                                    out.session(&cap).give((desc, batch));
-                                    state.trace("wrote a batch");
-                                } else {
-                                    state.trace("skipping empty batch");
-                                }
+                // Read from the inputs, extract `desired` updates as positive contributions to
+                // `correction` and `persist` updates as negative contributions. If either the
+                // `desired` or `persist` frontier advances, or if we receive a new batch description,
+                // we might have to write a new batch.
+                let maybe_batch = tokio::select! {
+                    Some(event) = desired_inputs.ok.next() => {
+                        match event {
+                            Event::Data(_cap, mut data) => {
+                                state.corrections.ok.insert(&mut data);
+                                None
+                            }
+                            Event::Progress(frontier) => {
+                                state.advance_desired_ok_frontier(frontier);
+                                state.maybe_write_batch().await
                             }
                         }
-                        Err(mpsc::error::TryRecvError::Empty) => break,
-                        Err(mpsc::error::TryRecvError::Disconnected) => {
-                            panic!("write task unexpectedly gone");
+                    }
+                    Some(event) = desired_inputs.err.next() => {
+                        match event {
+                            Event::Data(_cap, mut data) => {
+                                state.corrections.err.insert(&mut data);
+                                None
+                            }
+                            Event::Progress(frontier) => {
+                                state.advance_desired_err_frontier(frontier);
+                                state.maybe_write_batch().await
+                            }
                         }
                     }
-                }
-
-                // If no batch in flight, try to write a new batch.
-                if batch_in_flight.is_none() {
-                    if let Some((desc, cap)) = state.maybe_start_batch(&cmd_tx) {
-                        batch_in_flight = Some((desc, cap));
+                    Some(event) = persist_inputs.ok.next() => {
+                        match event {
+                            Event::Data(_cap, mut data) => {
+                                state.corrections.ok.insert_negated(&mut data);
+                                None
+                            }
+                            Event::Progress(frontier) => {
+                                state.advance_persist_ok_frontier(frontier);
+                                state.maybe_write_batch().await
+                            }
+                        }
                     }
+                    Some(event) = persist_inputs.err.next() => {
+                        match event {
+                            Event::Data(_cap, mut data) => {
+                                state.corrections.err.insert_negated(&mut data);
+                                None
+                            }
+                            Event::Progress(frontier) => {
+                                state.advance_persist_err_frontier(frontier);
+                                state.maybe_write_batch().await
+                            }
+                        }
+                    }
+                    Some(event) = descs_input.next() => {
+                        match event {
+                            Event::Data(cap, data) => {
+                                for desc in data {
+                                    state.absorb_batch_description(desc, cap.clone());
+                                }
+                                state.maybe_write_batch().await
+                            }
+                            Event::Progress(_frontier) => None,
+                        }
+                    }
+                    // All inputs are exhausted, so we can shut down.
+                    else => return,
+                };
+
+                if let Some((index, batch, cap)) = maybe_batch {
+                    batches_output.give(&cap, (index, batch));
                 }
             }
         });
 
-        batches_output_stream
+        (batches_output_stream, button.press_on_drop())
     }
 
-    /// Apply a single command to the task state.
-    async fn apply_command(
-        corrections: &mut OkErr<Correction<Row>, Correction<DataflowError>>,
-        writer: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
-        cmd: WriteCommand,
-        resp_tx: &mpsc::UnboundedSender<WriteResponse>,
-    ) {
-        match cmd {
-            WriteCommand::Desired(Ok(mut updates)) => {
-                corrections.ok.insert(&mut updates);
-            }
-            WriteCommand::Desired(Err(mut updates)) => {
-                corrections.err.insert(&mut updates);
-            }
-            WriteCommand::Persist(Ok(mut updates)) => {
-                corrections.ok.insert_negated(&mut updates);
-            }
-            WriteCommand::Persist(Err(mut updates)) => {
-                corrections.err.insert_negated(&mut updates);
-            }
-            WriteCommand::PersistFrontier(frontier) => {
-                corrections.ok.advance_since(frontier.clone());
-                corrections.err.advance_since(frontier);
-            }
-            WriteCommand::ForceConsolidation => {
-                corrections.ok.consolidate_at_since();
-                corrections.err.consolidate_at_since();
-            }
-            WriteCommand::WriteBatch(desc) => {
-                // Chain ok and err correction iterators directly, avoiding an
-                // intermediate Vec allocation.
-                let oks = corrections
-                    .ok
-                    .updates_before(&desc.upper)
-                    .map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r.into_inner()));
-                let errs = corrections
-                    .err
-                    .updates_before(&desc.upper)
-                    .map(|(d, t, r)| ((SourceData(Err(d)), ()), t, r.into_inner()));
-                let mut updates = oks.chain(errs).peekable();
-
-                if updates.peek().is_none() {
-                    // No corrections to write.
-                    let _ = resp_tx.send(WriteResponse { batch: None });
-                    return;
-                }
-
-                let batch = writer
-                    .batch(updates, desc.lower, desc.upper)
-                    .await
-                    .expect("valid usage");
-                let proto_batch = batch.into_transmittable_batch();
-                if let Err(err) = resp_tx.send(WriteResponse {
-                    batch: Some(proto_batch),
-                }) {
-                    let batch =
-                        writer.batch_from_transmittable_batch(err.0.batch.expect("just sent"));
-                    batch.delete().await;
-                }
-            }
-        }
-    }
-
-    /// State maintained by the `write` operator on the Timely thread.
-    ///
-    /// The corrections buffer and batch writing logic live on the Tokio task. This state
-    /// only tracks what's needed for frontier management and batch description handling.
+    /// State maintained by the `write` operator.
     struct State {
         sink_id: GlobalId,
         worker_id: usize,
+        persist_writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+        /// Contains `desired - persist`, reflecting the updates we would like to commit to
+        /// `persist` in order to "correct" it to track `desired`. This collection is only modified
+        /// by updates received from either the `desired` or `persist` inputs.
+        corrections: OkErr<Correction<Row>, Correction<DataflowError>>,
         /// The frontiers of the `desired` inputs.
         desired_frontiers: OkErr<Antichain<Timestamp>, Antichain<Timestamp>>,
         /// The frontiers of the `persist` inputs.
@@ -1118,7 +951,7 @@ mod write {
         persist_frontiers: OkErr<Antichain<Timestamp>, Antichain<Timestamp>>,
         /// The current valid batch description and associated output capability, if any.
         batch_description: Option<(BatchDescription, Capability<Timestamp>)>,
-        /// A request to force a consolidation of corrections once both `desired_frontiers` and
+        /// A request to force a consolidation of `corrections` once both `desired_frontiers` and
         /// `persist_frontiers` become greater than the given frontier.
         ///
         /// Normally we force a consolidation whenever we write a batch, but there are periods
@@ -1129,14 +962,34 @@ mod write {
     }
 
     impl State {
-        fn new(sink_id: GlobalId, worker_id: usize, as_of: Antichain<Timestamp>) -> Self {
-            // Force a consolidation of corrections after the snapshot updates have been fully
+        fn new(
+            sink_id: GlobalId,
+            worker_id: usize,
+            persist_writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+            metrics: SinkMetrics,
+            logging: Option<ChannelLogging>,
+            as_of: Antichain<Timestamp>,
+            worker_config: &ConfigSet,
+        ) -> Self {
+            let worker_metrics = metrics.for_worker(worker_id);
+
+            // Force a consolidation of `corrections` after the snapshot updates have been fully
             // processed, to ensure we get rid of those as quickly as possible.
             let force_consolidation_after = Some(as_of);
 
             Self {
                 sink_id,
                 worker_id,
+                persist_writer,
+                corrections: OkErr::new(
+                    Correction::new(
+                        metrics.clone(),
+                        worker_metrics.clone(),
+                        logging.clone(),
+                        worker_config,
+                    ),
+                    Correction::new(metrics, worker_metrics, logging, worker_config),
+                ),
                 desired_frontiers: OkErr::new_frontiers(),
                 persist_frontiers: OkErr::new_frontiers(),
                 batch_description: None,
@@ -1156,45 +1009,55 @@ mod write {
             );
         }
 
-        fn advance_desired_ok_frontier(&mut self, frontier: AntichainRef<Timestamp>) {
-            if advance(&mut self.desired_frontiers.ok, frontier) {
+        fn advance_desired_ok_frontier(&mut self, frontier: Antichain<Timestamp>) {
+            if advance(&mut self.desired_frontiers.ok, frontier.borrow()) {
+                self.apply_desired_frontier_advancement();
                 self.trace("advanced `desired` ok frontier");
             }
         }
 
-        fn advance_desired_err_frontier(&mut self, frontier: AntichainRef<Timestamp>) {
-            if advance(&mut self.desired_frontiers.err, frontier) {
+        fn advance_desired_err_frontier(&mut self, frontier: Antichain<Timestamp>) {
+            if advance(&mut self.desired_frontiers.err, frontier.borrow()) {
+                self.apply_desired_frontier_advancement();
                 self.trace("advanced `desired` err frontier");
             }
         }
 
-        /// Returns true if the persist frontier advanced.
-        fn advance_persist_ok_frontier(&mut self, frontier: AntichainRef<Timestamp>) -> bool {
-            if advance(&mut self.persist_frontiers.ok, frontier) {
+        fn advance_persist_ok_frontier(&mut self, frontier: Antichain<Timestamp>) {
+            if advance(&mut self.persist_frontiers.ok, frontier.borrow()) {
+                self.apply_persist_frontier_advancement();
                 self.trace("advanced `persist` ok frontier");
-                true
-            } else {
-                false
             }
         }
 
-        /// Returns true if the persist frontier advanced.
-        fn advance_persist_err_frontier(&mut self, frontier: AntichainRef<Timestamp>) -> bool {
-            if advance(&mut self.persist_frontiers.err, frontier) {
+        fn advance_persist_err_frontier(&mut self, frontier: Antichain<Timestamp>) {
+            if advance(&mut self.persist_frontiers.err, frontier.borrow()) {
+                self.apply_persist_frontier_advancement();
                 self.trace("advanced `persist` err frontier");
-                true
-            } else {
-                false
             }
         }
 
-        /// Check if a forced consolidation should be triggered.
-        ///
-        /// Returns true (once) when both desired and persist frontiers have advanced past the
-        /// consolidation request frontier.
-        fn should_force_consolidation(&mut self) -> bool {
+        /// Apply the effects of a previous `desired` frontier advancement.
+        fn apply_desired_frontier_advancement(&mut self) {
+            self.maybe_force_consolidation();
+        }
+
+        /// Apply the effects of a previous `persist` frontier advancement.
+        fn apply_persist_frontier_advancement(&mut self) {
+            let frontier = self.persist_frontiers.frontier();
+
+            // We will only emit times at or after the `persist` frontier, so now is a good time to
+            // advance the times of stashed updates.
+            self.corrections.ok.advance_since(frontier.clone());
+            self.corrections.err.advance_since(frontier.clone());
+
+            self.maybe_force_consolidation();
+        }
+
+        /// If the current consolidation request has become applicable, apply it.
+        fn maybe_force_consolidation(&mut self) {
             let Some(request) = &self.force_consolidation_after else {
-                return false;
+                return;
             };
 
             let desired_frontier = self.desired_frontiers.frontier();
@@ -1202,11 +1065,12 @@ mod write {
             if PartialOrder::less_than(request, desired_frontier)
                 && PartialOrder::less_than(request, persist_frontier)
             {
-                self.trace("requesting correction consolidation");
+                self.trace("forcing correction consolidation");
+                self.corrections.ok.consolidate_at_since();
+                self.corrections.err.consolidate_at_since();
+
+                // Remove the consolidation request, now that we have fulfilled it.
                 self.force_consolidation_after = None;
-                true
-            } else {
-                false
             }
         }
 
@@ -1229,13 +1093,9 @@ mod write {
             self.trace("set batch description");
         }
 
-        /// Check if a batch can be written and send a write command to the Tokio task if so.
-        ///
-        /// Returns `(desc, cap)` if a batch write was initiated.
-        fn maybe_start_batch(
+        async fn maybe_write_batch(
             &mut self,
-            cmd_tx: &mpsc::UnboundedSender<WriteCommand>,
-        ) -> Option<(BatchDescription, Capability<Timestamp>)> {
+        ) -> Option<(BatchDescription, ProtoBatch, Capability<Timestamp>)> {
             let (desc, _cap) = self.batch_description.as_ref()?;
 
             // We can write a new batch if we have seen all `persist` updates before `lower` and
@@ -1248,12 +1108,31 @@ mod write {
                 return None;
             }
 
-            self.trace("write batch description");
             let (desc, cap) = self.batch_description.take()?;
-            cmd_tx
-                .send(WriteCommand::WriteBatch(desc.clone()))
-                .expect("write task unexpectedly gone");
-            Some((desc, cap))
+
+            let ok_updates = self.corrections.ok.updates_before(&desc.upper);
+            let err_updates = self.corrections.err.updates_before(&desc.upper);
+
+            let oks = ok_updates.map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r.into_inner()));
+            let errs = err_updates.map(|(d, t, r)| ((SourceData(Err(d)), ()), t, r.into_inner()));
+            let mut updates = oks.chain(errs).peekable();
+
+            // Don't write empty batches.
+            if updates.peek().is_none() {
+                drop(updates);
+                self.trace("skipping empty batch");
+                return None;
+            }
+
+            let batch = self
+                .persist_writer
+                .batch(updates, desc.lower.clone(), desc.upper.clone())
+                .await
+                .expect("valid usage")
+                .into_transmittable_batch();
+
+            self.trace("wrote a batch");
+            Some((desc, batch, cap))
         }
     }
 }
@@ -1262,111 +1141,81 @@ mod write {
 mod append {
     use super::*;
 
-    /// Commands sent from the Timely operator to the Tokio append task.
-    enum AppendCommand {
-        /// A new batch description has been received.
-        Description(BatchDescription),
-        /// A written batch has been received.
-        Batch(ProtoBatch),
-        /// The batches frontier has advanced.
-        BatchesFrontier(Antichain<Timestamp>),
-    }
-
     /// Render the `append` operator.
     ///
     /// The parameters passed in are:
     ///  * `sink_id`: The `GlobalId` of the sink export.
     ///  * `persist_api`: An object providing access to the output persist shard.
-    ///  * `descs`: The stream of batch descriptions produced by the `mint` operator (must be broadcast).
+    ///  * `descs`: The stream of batch descriptions produced by the `mint` operator.
     ///  * `batches`: The stream of written batches produced by the `write` operator.
     pub fn render<S>(
         sink_id: GlobalId,
         persist_api: PersistApi,
         descs: DescsStream<S>,
         batches: BatchesStream<S>,
-    ) where
+    ) -> PressOnDropButton
+    where
         S: Scope<Timestamp = Timestamp>,
     {
         let scope = descs.scope();
         let worker_id = scope.index();
 
         let name = operator_name(sink_id, "append");
-        let mut builder = OperatorBuilderRc::new(name, scope.clone());
-        let mut descs_input = builder.new_input(descs, Pipeline);
-        let batch_exchange =
-            Exchange::new(|(desc, _): &(BatchDescription, _)| u64::cast_from(desc.append_worker));
-        let mut batches_input = builder.new_input(batches, batch_exchange);
+        let mut op = OperatorBuilder::new(name, scope);
 
-        // Channel for commands to the Tokio append task.
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<AppendCommand>();
+        // Broadcast batch descriptions to all workers, regardless of whether or not they are
+        // responsible for the append, to give them a chance to clean up any outdated state they
+        // might still hold.
+        let mut descs_input = op.new_disconnected_input(descs.broadcast(), Pipeline);
+        let mut batches_input = op.new_disconnected_input(
+            batches,
+            Exchange::new(move |(desc, _): &(BatchDescription, _)| {
+                u64::cast_from(desc.append_worker)
+            }),
+        );
 
-        // Spawn Tokio task that owns the append state machine.
-        let append_task_handle =
-            mz_ore::task::spawn(|| operator_name(sink_id, "append"), async move {
-                let writer = persist_api.open_writer().await;
-                let mut state = State::new(sink_id, worker_id, writer);
+        let button = op.build(move |_capabilities| async move {
+            let writer = persist_api.open_writer().await;
+            let mut state = State::new(sink_id, worker_id, writer);
 
-                while let Some(cmd) = cmd_rx.recv().await {
-                    match cmd {
-                        AppendCommand::Description(desc) => {
-                            state.absorb_batch_description(desc).await;
-                            state.maybe_append_batches().await;
-                        }
-                        AppendCommand::Batch(batch) => {
-                            state.absorb_batch(batch).await;
-                        }
-                        AppendCommand::BatchesFrontier(frontier) => {
-                            state.advance_batches_frontier(frontier.borrow());
-                            state.maybe_append_batches().await;
+            loop {
+                // Read from the inputs, absorb batch descriptions and batches. If the `batches`
+                // frontier advances, or if we receive a new batch description, we might have to
+                // append a new batch.
+                tokio::select! {
+                    Some(event) = descs_input.next() => {
+                        if let Event::Data(_cap, data) = event {
+                            for desc in data {
+                                state.absorb_batch_description(desc).await;
+                                state.maybe_append_batches().await;
+                            }
                         }
                     }
-                }
-            })
-            .abort_on_drop();
-
-        builder.build(move |_capabilities| {
-            let mut prev_batches_frontier = Antichain::from_elem(Timestamp::MIN);
-
-            move |frontiers| {
-                // Keep task handle alive so it is aborted when the operator is dropped.
-                let _ = &append_task_handle;
-
-                // Forward batch descriptions to the Tokio task.
-                descs_input.for_each(|_cap, data| {
-                    for desc in data.drain(..) {
-                        cmd_tx
-                            .send(AppendCommand::Description(desc))
-                            .expect("append task unexpectedly gone");
+                    Some(event) = batches_input.next() => {
+                        match event {
+                            Event::Data(_cap, data) => {
+                                // The batch description is only used for routing and we ignore it
+                                // here since we already get one from `descs_input`.
+                                for (_desc, batch) in data {
+                                    state.absorb_batch(batch).await;
+                                }
+                            }
+                            Event::Progress(frontier) => {
+                                state.advance_batches_frontier(frontier);
+                                state.maybe_append_batches().await;
+                            }
+                        }
                     }
-                });
-
-                // Forward batches to the Tokio task.
-                batches_input.for_each(|_cap, data| {
-                    for (_desc, batch) in data.drain(..) {
-                        // The batch description is only used for routing and we ignore it
-                        // here since we already get one from `descs_input`.
-                        cmd_tx
-                            .send(AppendCommand::Batch(batch))
-                            .expect("append task unexpectedly gone");
-                    }
-                });
-
-                // Forward batches frontier advancements.
-                let new_batches_frontier = frontiers[1].frontier();
-                if PartialOrder::less_than(&prev_batches_frontier.borrow(), &new_batches_frontier) {
-                    prev_batches_frontier.clear();
-                    prev_batches_frontier.extend(new_batches_frontier.iter().cloned());
-                    cmd_tx
-                        .send(AppendCommand::BatchesFrontier(
-                            new_batches_frontier.to_owned(),
-                        ))
-                        .expect("append task unexpectedly gone");
+                    // All inputs are exhausted, so we can shut down.
+                    else => return,
                 }
             }
         });
+
+        button.press_on_drop()
     }
 
-    /// State maintained by the `append` Tokio task.
+    /// State maintained by the `append` operator.
     struct State {
         sink_id: GlobalId,
         worker_id: usize,
@@ -1410,8 +1259,8 @@ mod append {
             );
         }
 
-        fn advance_batches_frontier(&mut self, frontier: AntichainRef<Timestamp>) {
-            if advance(&mut self.batches_frontier, frontier) {
+        fn advance_batches_frontier(&mut self, frontier: Antichain<Timestamp>) {
+            if advance(&mut self.batches_frontier, frontier.borrow()) {
                 self.trace("advanced `batches` frontier");
             }
         }
