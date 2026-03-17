@@ -59,6 +59,7 @@ use rand::RngCore;
 use rdkafka::ClientConfig;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka_sys::RDKafkaErrorCode;
+use regex::Regex;
 use reqwest::blocking::Client;
 use reqwest::header::{CONTENT_ENCODING, CONTENT_TYPE};
 use reqwest::{StatusCode, Url};
@@ -1034,14 +1035,22 @@ fn test_http_sql() {
     // optional "rows=N" argument can be given in the directive to produce
     // datadriven output after N rows. Any directive with rows=N should be the
     // final directive in a file, since it leaves the websocket in a
-    // mid-statement state. A "fixtimestamp=true" argument can be given to
-    // replace timestamps with "<TIMESTAMP>".
+    // mid-statement state.
+    // A "fixtimestamp=true" argument can be given to replace timestamps with "<TIMESTAMP>".
+    // A "fixid=true" argument can be given to replace IDs with "<ID>".
     //
     // Datadriven directive for HTTP POST is "http". Input and output are the
     // documented JSON formats.
 
-    let fixtimestamp_re = regex::Regex::new("\\d{13}(\\.0)?").unwrap();
-    let fixtimestamp_replace = "<TIMESTAMP>";
+    let fixtimestamp_replacements = [(Regex::new(r#"\d{13}(\.0)?"#).unwrap(), "<TIMESTAMP>")];
+    let fixid_replacements = [
+        (
+            Regex::new(r#"\\"(User|System|Transient)\\": \d+"#).unwrap(),
+            "<ID>",
+        ),
+        (Regex::new(r#"\b[ust]\d+\b"#).unwrap(), "<ID>"),
+        (Regex::new(r#"\\n[ust]\d+\b"#).unwrap(), "\\n<ID>"),
+    ];
 
     datadriven::walk("tests/testdata/http", |f| {
         let server = test_util::TestHarness::default().start_blocking();
@@ -1125,19 +1134,23 @@ fn test_http_sql() {
                 .get("rows")
                 .map(|rows| rows.get(0).map(|row| row.parse::<usize>().unwrap()))
                 .flatten();
-            let fixtimestamp = tc.args.contains_key("fixtimestamp");
+
+            let mut replacements = Vec::new();
+            if tc.args.contains_key("fixtimestamp") {
+                replacements.extend_from_slice(&fixtimestamp_replacements);
+            }
+            if tc.args.contains_key("fixid") {
+                replacements.extend_from_slice(&fixid_replacements);
+            }
+
             ws.send(msg).unwrap();
             let mut responses = String::new();
             loop {
                 let resp = ws.read().unwrap();
                 match resp {
                     Message::Text(mut msg) => {
-                        if fixtimestamp {
-                            msg = Utf8Bytes::from(
-                                fixtimestamp_re
-                                    .replace_all(&msg, fixtimestamp_replace)
-                                    .into_owned(),
-                            );
+                        for (re, replace) in &replacements {
+                            msg = Utf8Bytes::from(re.replace_all(&msg, *replace).into_owned());
                         }
                         let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
                         write!(&mut responses, "{}\n", serde_json::to_string(&msg).unwrap())
