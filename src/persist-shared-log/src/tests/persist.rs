@@ -83,9 +83,9 @@ impl PersistTestHarness {
         let acceptor_metrics = AcceptorMetrics::register(&registry);
         let learner_metrics = LearnerMetrics::register(&registry);
 
-        let (acceptor, acceptor_handle) = PersistAcceptor::new(acceptor_config, write, acceptor_metrics);
+        let (acceptor, write, acceptor_handle) = PersistAcceptor::new(acceptor_config, write, acceptor_metrics);
         let acceptor_task =
-            mz_ore::task::spawn(|| "test-persist-acceptor", acceptor.run()).abort_on_drop();
+            mz_ore::task::spawn(|| "test-persist-acceptor", acceptor.run(write)).abort_on_drop();
 
         let learner_config = PersistLearnerConfig {
             result_retention_batches: 1_000_000,

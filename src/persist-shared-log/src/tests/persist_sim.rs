@@ -282,10 +282,10 @@ async fn spawn_persist_pair(
 
     let (acceptor_metrics, learner_metrics) = test_metrics();
 
-    let (acceptor, acceptor_handle) =
+    let (acceptor, write, acceptor_handle) =
         PersistAcceptor::new(test_acceptor_config(), write, acceptor_metrics);
     let acceptor_task =
-        mz_ore::task::spawn(|| "persist-sim-acceptor", acceptor.run()).abort_on_drop();
+        mz_ore::task::spawn(|| "persist-sim-acceptor", acceptor.run(write)).abort_on_drop();
 
     let learner_config = PersistLearnerConfig {
         result_retention_batches: 1_000_000,
@@ -596,15 +596,15 @@ async fn persist_sim_multi_writer() {
         let (acceptor_metrics_a, learner_metrics) = test_metrics();
         let (acceptor_metrics_b, _) = test_metrics();
 
-        let (acceptor_a, handle_a) =
+        let (acceptor_a, write_a, handle_a) =
             PersistAcceptor::new(test_acceptor_config(), write_a, acceptor_metrics_a);
         let _task_a =
-            mz_ore::task::spawn(|| "persist-sim-acceptor-a", acceptor_a.run()).abort_on_drop();
+            mz_ore::task::spawn(|| "persist-sim-acceptor-a", acceptor_a.run(write_a)).abort_on_drop();
 
-        let (acceptor_b, handle_b) =
+        let (acceptor_b, write_b, handle_b) =
             PersistAcceptor::new(test_acceptor_config(), write_b, acceptor_metrics_b);
         let _task_b =
-            mz_ore::task::spawn(|| "persist-sim-acceptor-b", acceptor_b.run()).abort_on_drop();
+            mz_ore::task::spawn(|| "persist-sim-acceptor-b", acceptor_b.run(write_b)).abort_on_drop();
 
         let learner_config = PersistLearnerConfig {
             result_retention_batches: 1_000_000,

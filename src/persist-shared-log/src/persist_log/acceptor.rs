@@ -12,9 +12,9 @@
 //! Proposals are appended unconditionally via `compare_and_append`.
 //!
 //! Uses an open-loop, pipelined design: at most one batch is in flight
-//! (`compare_and_append` running in a spawned task) while the next batch
-//! accumulates in memory. As soon as the in-flight batch completes and there
-//! are pending proposals, the next flush starts immediately — no timer delay.
+//! (`compare_and_append`) while the next batch accumulates in memory. As soon
+//! as the in-flight batch completes and there are pending proposals, the next
+//! flush starts immediately — no timer delay.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,7 +37,7 @@ use super::{Proposal, ProposalSchema};
 use crate::metrics::AcceptorMetrics;
 use crate::{AcceptorConfig, AcceptorError};
 
-/// Commands dispatched to the persist-backed acceptor.
+/// Commands dispatched to the acceptor.
 pub enum PersistAcceptorCommand {
     /// Append a pre-encoded proposal. Reply after the next flush.
     ///
@@ -54,7 +54,7 @@ pub enum PersistAcceptorCommand {
     Flush { reply: oneshot::Sender<()> },
 }
 
-/// A typed handle to the persist-backed acceptor's command channel.
+/// A typed handle to the acceptor's command channel.
 #[derive(Debug, Clone)]
 pub struct PersistAcceptorHandle {
     tx: mpsc::Sender<PersistAcceptorCommand>,
@@ -83,7 +83,7 @@ impl crate::Acceptor for PersistAcceptorHandle {
     ) -> Result<ProtoAppendResponse, AcceptorError> {
         // Pre-encode the proposal into protobuf bytes here, in the caller's
         // task, so that encoding is parallelized across all writers rather than
-        // serialized in the acceptor's single-threaded flush loop.
+        // serialized in the acceptor's flush loop.
         let encoded_len = proposal.encoded_len();
         let encoded = Proposal {
             encoded: Bytes::from(proposal.encode_to_vec()),
@@ -112,42 +112,23 @@ struct PendingAppend {
     received_at: std::time::Instant,
 }
 
-/// Result returned from a spawned flush task back to the acceptor loop.
-struct FlushResult {
-    write: WriteHandle<Proposal, (), u64, i64>,
-    outcome: FlushOutcome,
-}
-
-/// Outcome of a flush attempt.
-enum FlushOutcome {
-    /// Flush succeeded. Reply oneshots were resolved inside the task.
-    Success,
-    /// Fatal error (InvalidUsage or retries exhausted). Acceptor should shut down.
-    Fatal,
-}
-
-/// The persist-shard-backed acceptor.
+/// The acceptor.
 ///
 /// Owns a `WriteHandle` and performs blind group commits via
 /// `compare_and_append`. The persist shard upper frontier serves as the batch
 /// number — batch number derives from upper, not the other way around.
 ///
-/// Uses open-loop pipelining: at most one flush is in flight (running in a
-/// spawned task) while the next batch of proposals accumulates in `pending`.
-/// As soon as the in-flight flush completes, the next flush starts immediately
-/// if there are pending proposals.
+/// Uses open-loop pipelining: while a `compare_and_append` is in flight, the
+/// select loop continues draining proposals into `pending`. When the flush
+/// completes, the next one starts immediately if there are pending proposals.
 pub struct PersistAcceptor {
-    /// The persist write handle. `None` while an in-flight flush task owns it.
-    write: Option<WriteHandle<Proposal, (), u64, i64>>,
     pending: Vec<PendingAppend>,
     rx: mpsc::Receiver<PersistAcceptorCommand>,
     metrics: AcceptorMetrics,
-    /// Receives the result (including the write handle) from the spawned flush task.
-    in_flight: Option<oneshot::Receiver<FlushResult>>,
 }
 
 impl PersistAcceptor {
-    /// Creates a new persist-backed acceptor and returns a handle.
+    /// Creates a new acceptor and returns a handle.
     ///
     /// The `WriteHandle`'s current `upper()` determines the starting batch
     /// number — no explicit `set_batch_number` needed.
@@ -155,194 +136,148 @@ impl PersistAcceptor {
         config: AcceptorConfig,
         write: WriteHandle<Proposal, (), u64, i64>,
         metrics: AcceptorMetrics,
-    ) -> (Self, PersistAcceptorHandle) {
+    ) -> (Self, WriteHandle<Proposal, (), u64, i64>, PersistAcceptorHandle) {
         let (tx, rx) = mpsc::channel(config.queue_depth);
 
         let acceptor = PersistAcceptor {
-            write: Some(write),
             pending: Vec::new(),
             rx,
             metrics,
-            in_flight: None,
         };
         let handle = PersistAcceptorHandle::new(tx);
-        (acceptor, handle)
+        (acceptor, write, handle)
     }
 
     /// Runs the acceptor loop until the channel closes or a fatal error occurs.
     ///
-    /// The loop is open-loop and pipelined:
-    /// - At the top of each iteration, `maybe_start_flush()` spawns a flush
-    ///   task if there are pending proposals and no flush is in flight.
-    /// - The `select!` then either receives new commands (accumulating into
-    ///   `pending`) or completes an in-flight flush (recovering the write
-    ///   handle so the next flush can start).
-    pub async fn run(mut self) {
+    /// The loop is open-loop and pipelined: while `compare_and_append` is
+    /// awaited, the select loop also drains incoming commands into `pending`.
+    /// When the flush completes and there are pending proposals, the next flush
+    /// starts immediately.
+    pub async fn run(mut self, mut write: WriteHandle<Proposal, (), u64, i64>) {
         info!("persist acceptor starting");
         loop {
-            // Eagerly start a flush if conditions are met: pending proposals,
-            // no flush in flight, and we own the write handle.
-            self.maybe_start_flush();
+            // If we have pending proposals, flush while continuing to accept
+            // new ones. This is the pipelining: one batch on the wire, one
+            // building in memory.
+            if !self.pending.is_empty() {
+                if !self.flush_while_receiving(&mut write).await {
+                    return; // fatal
+                }
+                continue;
+            }
 
-            tokio::select! {
-                biased;
-                // Prioritize draining commands over completing flushes. When both
-                // are ready, pulling in more proposals before processing the flush
-                // completion maximizes batching for the next flush.
-                //
-                // cancel-safety: per tokio docs, mpsc::Receiver::recv is cancel-safe.
-                cmd = self.rx.recv() => match cmd {
-                    Some(PersistAcceptorCommand::Append { proposal, encoded_len, reply }) => {
-                        self.pending.push(PendingAppend {
-                            proposal,
-                            encoded_len,
-                            reply,
-                            received_at: std::time::Instant::now(),
-                        });
-                    }
-                    Some(PersistAcceptorCommand::Flush { reply }) => {
-                        self.handle_explicit_flush(reply).await;
-                    }
-                    None => {
-                        self.drain_and_shutdown().await;
-                        return;
-                    }
-                },
-                // Complete an in-flight flush. The spawned task returns the write
-                // handle so we can start the next flush.
-                //
-                // cancel-safety: oneshot::Receiver is cancel-safe — if we cancel,
-                // the spawned task still runs to completion (resolving reply
-                // oneshots), and the write handle is dropped.
-                result = async {
-                    match self.in_flight.as_mut() {
-                        Some(rx) => rx.await,
-                        None => std::future::pending().await,
-                    }
-                } => {
-                    self.in_flight = None;
-                    match result {
-                        Ok(FlushResult { write, outcome: FlushOutcome::Success }) => {
-                            self.write = Some(write);
-                            // Loop back to maybe_start_flush() for immediate pipeline.
-                        }
-                        Ok(FlushResult { write: _, outcome: FlushOutcome::Fatal }) => {
-                            // Fatal error. Replies already sent with errors by the task.
-                            // Remaining pending proposals are dropped (their reply
-                            // oneshots drop, causing RecvError on the caller side).
-                            return;
-                        }
-                        Err(_) => {
-                            // The flush task panicked or was cancelled.
-                            error!("persist acceptor: flush task dropped without sending result");
-                            return;
-                        }
-                    }
-                },
+            // Nothing pending — just wait for commands.
+            match self.rx.recv().await {
+                Some(cmd) => self.handle_command(cmd, &mut write).await,
+                None => return, // channel closed
             }
         }
     }
 
-    /// If there are pending proposals, no flush in flight, and we own the write
-    /// handle, spawn a flush task.
-    fn maybe_start_flush(&mut self) {
-        if self.pending.is_empty() || self.in_flight.is_some() || self.write.is_none() {
-            return;
-        }
-        self.start_flush();
-    }
-
-    /// Spawn a flush task that takes ownership of the write handle and pending
-    /// proposals. The task runs `do_flush`, resolves reply oneshots, and sends
-    /// the write handle back via a oneshot.
-    fn start_flush(&mut self) {
-        let pending = std::mem::take(&mut self.pending);
-        let write = self.write.take().expect("start_flush called without write handle");
-        let metrics = self.metrics.clone();
-        let (result_tx, result_rx) = oneshot::channel();
-
-        mz_ore::task::spawn(|| "persist-acceptor-flush", async move {
-            let mut write = write;
-            let outcome = do_flush(&mut write, pending, &metrics).await;
-            // If the receiver is dropped (acceptor shut down), that's fine —
-            // the write handle is simply dropped.
-            let _ = result_tx.send(FlushResult { write, outcome });
-        });
-
-        self.in_flight = Some(result_rx);
-    }
-
-    /// Handle an explicit Flush command (used in tests).
+    /// Flush pending proposals while continuing to receive new ones.
     ///
-    /// Waits for any in-flight flush to complete, then synchronously flushes
-    /// any remaining pending proposals before replying.
-    async fn handle_explicit_flush(&mut self, reply: oneshot::Sender<()>) {
-        self.metrics.flush_explicit_triggered.inc();
+    /// Returns `true` on success, `false` on fatal error or channel close.
+    async fn flush_while_receiving(
+        &mut self,
+        write: &mut WriteHandle<Proposal, (), u64, i64>,
+    ) -> bool {
+        let pending = std::mem::take(&mut self.pending);
 
-        // Wait for in-flight flush to complete, recovering the write handle.
-        if let Some(in_flight_rx) = self.in_flight.take() {
-            match in_flight_rx.await {
-                Ok(FlushResult {
-                    write,
-                    outcome: FlushOutcome::Success,
-                }) => {
-                    self.write = Some(write);
-                }
-                Ok(FlushResult {
-                    write: _,
-                    outcome: FlushOutcome::Fatal,
-                }) => {
-                    // Fatal: don't reply; caller gets DroppedReply.
-                    return;
-                }
-                Err(_) => {
-                    error!("persist acceptor: flush task panicked during explicit flush");
-                    return;
+        // Stashed intent from a command received during flush.
+        let mut explicit_flush: Option<oneshot::Sender<()>> = None;
+        let mut channel_closed = false;
+
+        // Phase 1: flush while draining commands into self.pending.
+        let success = {
+            let flush_fut = flush(write, pending, &self.metrics);
+            tokio::pin!(flush_fut);
+
+            loop {
+                tokio::select! {
+                    biased;
+                    cmd = self.rx.recv() => {
+                        match cmd {
+                            Some(PersistAcceptorCommand::Append { proposal, encoded_len, reply }) => {
+                                self.pending.push(PendingAppend {
+                                    proposal,
+                                    encoded_len,
+                                    reply,
+                                    received_at: std::time::Instant::now(),
+                                });
+                            }
+                            Some(PersistAcceptorCommand::Flush { reply }) => {
+                                // Stash and wait for current flush to finish.
+                                explicit_flush = Some(reply);
+                                break flush_fut.await;
+                            }
+                            None => {
+                                channel_closed = true;
+                                break flush_fut.await;
+                            }
+                        }
+                    }
+                    success = &mut flush_fut => {
+                        break success;
+                    }
                 }
             }
-        }
+        };
+        // flush_fut is dropped here, releasing &mut write.
 
-        // Synchronously flush any remaining pending proposals.
-        if !self.pending.is_empty() {
-            let pending = std::mem::take(&mut self.pending);
-            let write = self
-                .write
-                .as_mut()
-                .expect("write handle must be available after awaiting in-flight");
-            if matches!(
-                do_flush(write, pending, &self.metrics).await,
-                FlushOutcome::Fatal
-            ) {
-                return;
+        // Phase 2: handle stashed intent now that write is free.
+        if let Some(reply) = explicit_flush {
+            if !success {
+                return false;
             }
+            if !self.pending.is_empty() {
+                let pending = std::mem::take(&mut self.pending);
+                if !flush(write, pending, &self.metrics).await {
+                    return false;
+                }
+            }
+            let _ = reply.send(());
+            return true;
         }
 
-        let _ = reply.send(());
+        if channel_closed {
+            // Drain remaining pending before shutting down.
+            if !self.pending.is_empty() {
+                let pending = std::mem::take(&mut self.pending);
+                flush(write, pending, &self.metrics).await;
+            }
+            return false;
+        }
+
+        success
     }
 
-    /// Graceful shutdown: wait for in-flight flush, then flush remaining pending.
-    async fn drain_and_shutdown(&mut self) {
-        // Wait for in-flight flush to complete.
-        if let Some(in_flight_rx) = self.in_flight.take() {
-            match in_flight_rx.await {
-                Ok(FlushResult {
-                    write,
-                    outcome: FlushOutcome::Success,
-                }) => {
-                    self.write = Some(write);
-                }
-                _ => {
-                    // Fatal or panic — nothing more we can do.
-                    return;
-                }
+    /// Handle a single command when no flush is in progress.
+    async fn handle_command(
+        &mut self,
+        cmd: PersistAcceptorCommand,
+        write: &mut WriteHandle<Proposal, (), u64, i64>,
+    ) {
+        match cmd {
+            PersistAcceptorCommand::Append {
+                proposal,
+                encoded_len,
+                reply,
+            } => {
+                self.pending.push(PendingAppend {
+                    proposal,
+                    encoded_len,
+                    reply,
+                    received_at: std::time::Instant::now(),
+                });
             }
-        }
-
-        // Flush any remaining pending proposals.
-        if !self.pending.is_empty() {
-            let pending = std::mem::take(&mut self.pending);
-            if let Some(write) = self.write.as_mut() {
-                let _ = do_flush(write, pending, &self.metrics).await;
+            PersistAcceptorCommand::Flush { reply } => {
+                self.metrics.flush_explicit_triggered.inc();
+                if !self.pending.is_empty() {
+                    let pending = std::mem::take(&mut self.pending);
+                    flush(write, pending, &self.metrics).await;
+                }
+                let _ = reply.send(());
             }
         }
     }
@@ -350,22 +285,15 @@ impl PersistAcceptor {
 
 /// Flush pending proposals via `compare_and_append`.
 ///
-/// Returns `FlushOutcome::Success` on success, `FlushOutcome::Fatal` on a
-/// fatal error (e.g. `InvalidUsage` or retries exhausted after repeated
-/// `UpperMismatch`).
-///
-/// Reply oneshots are resolved inside this function: `Ok(ProtoAppendResponse)`
-/// on success, `Err(msg)` on fatal error.
-///
-/// This is a free function (not a method) so it can be called both from the
-/// spawned flush task and from synchronous paths (explicit flush, shutdown).
-async fn do_flush(
+/// Returns `true` on success, `false` on fatal error. Reply oneshots are
+/// resolved inside this function.
+async fn flush(
     write: &mut WriteHandle<Proposal, (), u64, i64>,
     pending: Vec<PendingAppend>,
     metrics: &AcceptorMetrics,
-) -> FlushOutcome {
+) -> bool {
     if pending.is_empty() {
-        return FlushOutcome::Success;
+        return true;
     }
 
     let flush_start = std::time::Instant::now();
@@ -455,7 +383,7 @@ async fn do_flush(
                     proposals = num_proposals,
                     "persist acceptor flush committed"
                 );
-                return FlushOutcome::Success;
+                return true;
             }
             Ok(Err(upper_mismatch)) => {
                 // Another writer advanced the upper — retryable.
@@ -481,7 +409,7 @@ async fn do_flush(
                 for reply in replies {
                     let _ = reply.send(Err(msg.clone()));
                 }
-                return FlushOutcome::Fatal;
+                return false;
             }
         }
     }
@@ -497,7 +425,7 @@ async fn do_flush(
     for reply in replies {
         let _ = reply.send(Err(msg.clone()));
     }
-    FlushOutcome::Fatal
+    false
 }
 
 impl PersistAcceptor {
@@ -521,8 +449,8 @@ impl PersistAcceptor {
             .await
             .expect("failed to open persist shard for acceptor");
 
-        let (acceptor, handle) = Self::new(config, write, metrics);
-        let task = mz_ore::task::spawn(|| "persist-acceptor", acceptor.run());
+        let (acceptor, write, handle) = Self::new(config, write, metrics);
+        let task = mz_ore::task::spawn(|| "persist-acceptor", acceptor.run(write));
         (handle, task)
     }
 }
