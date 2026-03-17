@@ -31,6 +31,13 @@ pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
      linear joins.",
 );
 
+/// Use sync Timely operators with Tokio tasks for the MV sink.
+pub const ENABLE_SYNC_MV_SINK: Config<bool> = Config::new(
+    "enable_compute_sync_mv_sink",
+    false,
+    "Use sync Timely operators with Tokio tasks for the MV sink.",
+);
+
 /// Whether rendering should use the new MV sink correction buffer implementation.
 pub const ENABLE_CORRECTION_V2: Config<bool> = Config::new(
     "enable_compute_correction_v2",
@@ -381,6 +388,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ENABLE_HALF_JOIN2)
         .add(&ENABLE_MZ_JOIN_CORE)
+        .add(&ENABLE_SYNC_MV_SINK)
         .add(&ENABLE_CORRECTION_V2)
         .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)
         .add(&CORRECTION_V2_CHUNK_SIZE)
