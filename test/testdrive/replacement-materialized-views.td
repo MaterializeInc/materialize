@@ -206,3 +206,24 @@ $ kafka-verify-data format=avro sort-messages=true sink=materialize.public.mv_si
 
 $ kafka-verify-data format=avro sort-messages=true sink=materialize.public.mv_sink
 {"before": null, "after": {"row": {"a": 70, "b": 8}}}
+
+> DROP MATERIALIZED VIEW mv CASCADE
+
+
+# Test: attempting to replace constant MVs gives a helpful error
+
+> CREATE MATERIALIZED VIEW mv AS SELECT 1
+
+> CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT 2
+
+# Wait until we observe the replacement advancing to the empty frontier.
+> SELECT write_frontier
+  FROM mz_internal.mz_frontiers f
+  JOIN mz_materialized_views m ON f.object_id = m.id
+  WHERE m.name = 'rp'
+<null>
+
+! ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+contains:materialized view mv is sealed and thus cannot be replaced
+
+> DROP MATERIALIZED VIEW mv CASCADE
