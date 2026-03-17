@@ -274,27 +274,36 @@ where
                         ?persist_upper,
                         "ingesting persist snapshot chunk");
 
-                    // Log any keys in this batch that have a suspicious net diff,
-                    // to help diagnose how diff_sum corruption enters the system.
-                    // We project to (key, diff) and consolidate to get the net
-                    // diff per key.
+                    // Log any (key, ts) pairs in this batch that have a suspicious
+                    // net diff, to help diagnose how diff_sum corruption enters the
+                    // system.
+                    //
+                    // Consolidating by key alone is too noisy during hydration,
+                    // because a single batch can legitimately contain multiple
+                    // timestamps for the same key. The suspicious shape for this
+                    // bug is multiple net updates for the same key at one logical
+                    // timestamp.
                     {
-                        let mut key_diffs: Vec<(UpsertKey, mz_repr::Diff)> = persist_stash
+                        let mut key_ts_diffs: Vec<(
+                            (UpsertKey, G::Timestamp),
+                            mz_repr::Diff
+                        )> = persist_stash
                             .iter()
-                            .map(|(key, _val, _ts, diff)| (*key, *diff))
+                            .map(|(key, _val, ts, diff)| ((*key, ts.clone()), *diff))
                             .collect();
-                        differential_dataflow::consolidation::consolidate(&mut key_diffs);
-                        for (key, net_diff) in &key_diffs {
+                        differential_dataflow::consolidation::consolidate(&mut key_ts_diffs);
+                        for ((key, ts), net_diff) in &key_ts_diffs {
                             if net_diff.into_inner() > 1 || net_diff.into_inner() < -1 {
                                 tracing::warn!(
                                     worker_id = %source_config.worker_id,
                                     source_id = %source_config.id,
                                     ?key,
+                                    ?ts,
                                     net_diff = net_diff.into_inner(),
                                     %hydrating,
                                     ?persist_upper,
-                                    "persist feedback batch has key with suspicious net diff \
-                                    (expected -1, 0, or 1)"
+                                    "persist feedback batch has (key, ts) with suspicious net diff \
+                                    (expected -1, 0, or 1 after per-(key, ts) consolidation)"
                                 );
                             }
                         }
