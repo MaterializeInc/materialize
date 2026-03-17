@@ -20,14 +20,15 @@
 //! how much memory the application currently holds via lgalloc, including
 //! stack traces at each allocation site for heap profiling.
 //!
-//! Stack traces are interned: allocations from the same call site share a
-//! single copy of the trace, identified by a `StackId`.
+//! Stack traces are stored in a trie (prefix tree) inspired by
+//! [heaptrack](https://github.com/KDE/heaptrack). Common stack prefixes share
+//! tree nodes, so memory usage is proportional to the number of unique stack
+//! *frames* rather than unique stack *traces*.
 
+use std::collections::BTreeMap;
 use std::ptr::NonNull;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-
-use std::collections::BTreeMap;
 
 pub use lgalloc::AllocError;
 
@@ -41,74 +42,102 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 /// All profiling state, protected by a single mutex.
 static STATE: Mutex<ProfileState> = Mutex::new(ProfileState::new());
 
-/// Interned stack trace identifier.
-type StackId = u64;
+/// A trie node index. Index 0 is the root sentinel.
+type NodeId = usize;
 
-struct ProfileState {
-    /// Interned stack traces: stack ID -> (addresses, refcount).
-    stacks: BTreeMap<StackId, InternedStack>,
-    /// Map from stack trace content to its ID, for deduplication.
-    stack_index: BTreeMap<Vec<usize>, StackId>,
-    /// Live allocations: allocation ID -> (stack ID, capacity bytes).
-    allocations: BTreeMap<u64, (StackId, usize)>,
-    /// Next stack ID.
-    next_stack_id: StackId,
+/// A node in the stack trace trie.
+struct TraceNode {
+    /// Instruction pointer address for this frame.
+    ip: usize,
+    /// Parent node index (0 for the root's children).
+    parent: NodeId,
+    /// Children sorted by instruction pointer for binary search.
+    children: Vec<(usize, NodeId)>,
 }
 
-struct InternedStack {
-    addrs: Vec<usize>,
-    refcount: usize,
+/// A trie that compresses stack traces by sharing common prefixes.
+///
+/// Traces are inserted root-to-leaf. Each unique path from root to a leaf
+/// represents a unique stack trace. The leaf's `NodeId` identifies the trace.
+struct TraceTree {
+    /// All nodes. Index 0 is the root sentinel.
+    nodes: Vec<TraceNode>,
+}
+
+impl TraceTree {
+    const fn new() -> Self {
+        Self { nodes: Vec::new() }
+    }
+
+    /// Ensure the root node exists.
+    fn ensure_root(&mut self) {
+        if self.nodes.is_empty() {
+            self.nodes.push(TraceNode {
+                ip: 0,
+                parent: 0,
+                children: Vec::new(),
+            });
+        }
+    }
+
+    /// Insert a stack trace (root-to-leaf order) and return the leaf node ID.
+    fn insert(&mut self, addrs: &[usize]) -> NodeId {
+        self.ensure_root();
+        let mut current = 0; // start at root
+        for &ip in addrs {
+            let children = &self.nodes[current].children;
+            current = match children.binary_search_by_key(&ip, |&(ip, _)| ip) {
+                Ok(pos) => children[pos].1,
+                Err(pos) => {
+                    let new_id = self.nodes.len();
+                    self.nodes.push(TraceNode {
+                        ip,
+                        parent: current,
+                        children: Vec::new(),
+                    });
+                    self.nodes[current].children.insert(pos, (ip, new_id));
+                    new_id
+                }
+            };
+        }
+        current
+    }
+
+    /// Resolve a node ID back to a full stack trace (root-to-leaf order).
+    fn resolve(&self, node_id: NodeId) -> Vec<usize> {
+        let mut addrs = Vec::new();
+        let mut current = node_id;
+        while current != 0 {
+            addrs.push(self.nodes[current].ip);
+            current = self.nodes[current].parent;
+        }
+        addrs.reverse();
+        addrs
+    }
+}
+
+struct ProfileState {
+    /// Trie of stack traces.
+    traces: TraceTree,
+    /// Live allocations: allocation ID -> (trace node ID, capacity bytes).
+    allocations: BTreeMap<u64, (NodeId, usize)>,
 }
 
 impl ProfileState {
     const fn new() -> Self {
         Self {
-            stacks: BTreeMap::new(),
-            stack_index: BTreeMap::new(),
+            traces: TraceTree::new(),
             allocations: BTreeMap::new(),
-            next_stack_id: 0,
         }
     }
 
-    /// Intern a stack trace, returning its ID. Increments the refcount if
-    /// already interned.
-    fn intern_stack(&mut self, addrs: Vec<usize>) -> StackId {
-        if let Some(&id) = self.stack_index.get(&addrs) {
-            self.stacks.get_mut(&id).expect("consistent").refcount += 1;
-            return id;
-        }
-        let id = self.next_stack_id;
-        self.next_stack_id += 1;
-        self.stack_index.insert(addrs.clone(), id);
-        self.stacks.insert(
-            id,
-            InternedStack {
-                addrs,
-                refcount: 1,
-            },
-        );
-        id
-    }
-
-    /// Decrement refcount for a stack trace, removing it if no longer referenced.
-    fn release_stack(&mut self, stack_id: StackId) {
-        let entry = self.stacks.get_mut(&stack_id).expect("consistent");
-        entry.refcount -= 1;
-        if entry.refcount == 0 {
-            let removed = self.stacks.remove(&stack_id).expect("consistent");
-            self.stack_index.remove(&removed.addrs);
-        }
-    }
-
-    fn insert(&mut self, alloc_id: u64, addrs: Vec<usize>, capacity_bytes: usize) {
-        let stack_id = self.intern_stack(addrs);
-        self.allocations.insert(alloc_id, (stack_id, capacity_bytes));
+    fn insert(&mut self, alloc_id: u64, addrs: &[usize], capacity_bytes: usize) {
+        let node_id = self.traces.insert(addrs);
+        self.allocations.insert(alloc_id, (node_id, capacity_bytes));
     }
 
     fn remove(&mut self, alloc_id: u64) {
-        if let Some((stack_id, _)) = self.allocations.remove(&alloc_id) {
-            self.release_stack(stack_id);
-        }
+        self.allocations.remove(&alloc_id);
     }
 }
 
@@ -135,18 +164,15 @@ pub fn stats() -> LgAllocStats {
 /// Allocations sharing the same stack trace are grouped together with their byte counts summed.
 pub fn heap_profile() -> Vec<(Vec<usize>, usize)> {
     let state = STATE.lock().expect("poisoned");
-    // Aggregate bytes per stack ID.
-    let mut by_stack: BTreeMap<StackId, usize> = BTreeMap::new();
-    for &(stack_id, capacity_bytes) in state.allocations.values() {
-        *by_stack.entry(stack_id).or_default() += capacity_bytes;
+    // Aggregate bytes per trace node ID.
+    let mut by_node: BTreeMap<NodeId, usize> = BTreeMap::new();
+    for &(node_id, capacity_bytes) in state.allocations.values() {
+        *by_node.entry(node_id).or_default() += capacity_bytes;
     }
-    // Resolve stack IDs to addresses.
-    by_stack
+    // Resolve node IDs to full stack traces.
+    by_node
         .into_iter()
-        .map(|(stack_id, bytes)| {
-            let addrs = &state.stacks.get(&stack_id).expect("consistent").addrs;
-            (addrs.clone(), bytes)
-        })
+        .map(|(node_id, bytes)| (state.traces.resolve(node_id), bytes))
         .collect()
 }
 
@@ -181,7 +207,7 @@ pub fn allocate<T>(capacity: usize) -> Result<(NonNull<T>, usize, Handle), Alloc
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
 
     // Capture backtrace for heap profiling. `backtrace::trace` walks leaf-to-root,
-    // but pprof expects root-to-leaf order, so we reverse.
+    // but the trie stores root-to-leaf, so we reverse.
     let mut addrs = Vec::new();
     backtrace::trace(|frame| {
         addrs.push(frame.ip().addr());
@@ -191,7 +217,7 @@ pub fn allocate<T>(capacity: usize) -> Result<(NonNull<T>, usize, Handle), Alloc
 
     LIVE_BYTES.fetch_add(bytes, Ordering::Relaxed);
     LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
-    STATE.lock().expect("poisoned").insert(id, addrs, bytes);
+    STATE.lock().expect("poisoned").insert(id, &addrs, bytes);
 
     Ok((
         ptr,
