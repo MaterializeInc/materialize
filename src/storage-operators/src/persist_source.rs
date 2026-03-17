@@ -382,6 +382,7 @@ where
         listen_sleep,
         start_signal,
         error_handler,
+        &*cfg.configs,
     );
     let rows = decode_and_mfp(cfg, fetched, &name, until, map_filter_project);
     (rows, token)

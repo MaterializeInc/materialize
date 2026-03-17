@@ -349,6 +349,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::internal::state::GC_MAX_VERSIONS)
         .add(&crate::internal::state::ROLLUP_FALLBACK_THRESHOLD_MS)
         .add(&crate::internal::state::ENABLE_INCREMENTAL_COMPACTION)
+        .add(&crate::cfg::PERSIST_SHARD_SOURCE_SYNC)
         .add(&crate::operators::STORAGE_SOURCE_DECODE_FUEL)
         .add(&crate::read::READER_LEASE_DURATION)
         .add(&crate::rpc::PUBSUB_CLIENT_ENABLED)
@@ -494,6 +495,13 @@ pub const USE_CRITICAL_SINCE_SNAPSHOT: Config<bool> = Config::new(
     "persist_use_critical_since_snapshot",
     false,
     "Use the critical since (instead of the overall since) when taking snapshots in the controller or in fast-path peeks.",
+);
+
+/// Use sync Timely operators with Tokio tasks for shard_source.
+pub const PERSIST_SHARD_SOURCE_SYNC: Config<bool> = Config::new(
+    "persist_shard_source_sync",
+    false,
+    "Use sync Timely operators with Tokio tasks for shard_source.",
 );
 
 /// The maximum number of parts (s3 blobs) that [crate::batch::BatchBuilder]
