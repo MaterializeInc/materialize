@@ -9,6 +9,7 @@
 
 import random
 import threading
+import uuid
 from collections.abc import Iterator
 from enum import Enum
 
@@ -503,6 +504,7 @@ class IcebergSink(DBObject):
     base_object: DBObject
     mode: str
     key: str
+    table_name: str
 
     def __init__(
         self,
@@ -525,6 +527,7 @@ class IcebergSink(DBObject):
         ]
         key_col_names = [column.name(True) for column in key_cols]
         self.key = f"KEY ({', '.join(key_col_names)}) NOT ENFORCED"
+        self.table_name = f"icesink_topic{self.sink_id}_{uuid.uuid4().hex[:8]}"
         self.rename = 0
 
     def name(self) -> str:
@@ -536,8 +539,7 @@ class IcebergSink(DBObject):
         return f"{self.schema}.{identifier(self.name())}"
 
     def create(self, exe: Executor) -> None:
-        table_name = f"icesink_topic{self.sink_id}"
-        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO ICEBERG CATALOG CONNECTION polaris_conn (NAMESPACE 'default_namespace', TABLE '{table_name}') USING AWS CONNECTION aws_conn {self.key} MODE UPSERT WITH (COMMIT INTERVAL '1s')"
+        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO ICEBERG CATALOG CONNECTION polaris_conn (NAMESPACE 'default_namespace', TABLE '{self.table_name}') USING AWS CONNECTION aws_conn {self.key} MODE UPSERT WITH (COMMIT INTERVAL '1s')"
         exe.execute(query)
 
 
