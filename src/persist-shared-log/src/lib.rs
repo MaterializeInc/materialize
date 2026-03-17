@@ -12,26 +12,28 @@
 //! Architecture follows Balakrishnan's shared log decomposition:
 //!
 //! - **Acceptor**: blind group commit. Receives proposals, batches them, flushes
-//!   to the log. Returns receipts. Stateless w.r.t. shard data.
-//! - **Learner**: state machine. Tails the log, evaluates CAS during playback,
-//!   maintains materialized state, serves reads and result queries.
+//!   to a persist shard via `compare_and_append`. Returns receipts. Stateless
+//!   w.r.t. shard data.
+//! - **Learner**: state machine. Tails the persist shard, evaluates CAS during
+//!   playback, maintains materialized state, serves reads and result queries.
 //!
-//! Batches independent cross-shard proposals into a single durable object store
-//! PUT per flush interval, making cost O(1/batch_window) instead of O(shards).
+//! Batches independent cross-shard proposals into a single durable persist
+//! `compare_and_append` per flush, making cost O(1/batch_window) instead of
+//! O(shards).
 
 use std::time::Duration;
 
 use bytes::Bytes;
 
-pub mod actor;
 pub mod ctp;
+pub mod metrics;
 pub mod persist_log;
 pub mod service;
 pub mod traits;
 
-/// Latency profile for benchmarking storage backends. Used by both the actor
-/// backend ([`LatencyStorage`](actor::storage::LatencyStorage)) and the persist
-/// backend ([`LatencyBlob`](persist_log::latency_blob::LatencyBlob)).
+/// Latency profile for benchmarking storage backends. Used by the
+/// [`LatencyBlob`](persist_log::latency_blob::LatencyBlob) wrapper to inject
+/// simulated storage latency in the specsheet benchmark.
 #[derive(Debug, Clone)]
 pub enum LatencyProfile {
     /// Return immediately (no added latency).

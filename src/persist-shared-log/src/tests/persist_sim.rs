@@ -40,7 +40,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 
 use mz_ore::metrics::MetricsRegistry;
 
-use crate::actor::metrics::{AcceptorMetrics, LearnerMetrics};
+use crate::metrics::{AcceptorMetrics, LearnerMetrics};
 use crate::persist_log::acceptor::{PersistAcceptor, PersistAcceptorHandle};
 use crate::persist_log::learner::{PersistLearner, PersistLearnerConfig, PersistLearnerHandle};
 use crate::persist_log::{Proposal, ProposalSchema};
@@ -230,10 +230,7 @@ impl LinearizabilityChecker {
 // ---------------------------------------------------------------------------
 
 fn test_acceptor_config() -> AcceptorConfig {
-    AcceptorConfig {
-        flush_interval_ms: 1,
-        ..Default::default()
-    }
+    AcceptorConfig::default()
 }
 
 fn test_metrics() -> (AcceptorMetrics, LearnerMetrics) {

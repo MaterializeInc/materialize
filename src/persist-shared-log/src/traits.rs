@@ -7,8 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Traits for the acceptor and learner, enabling alternative implementations
-//! (e.g. a persist-shard-backed variant) to be slotted in.
+//! Traits for the acceptor and learner.
 
 use mz_persist::generated::consensus_service::{
     ProtoAppendResponse, ProtoCompareAndSetResponse, ProtoHeadResponse, ProtoLogProposal,
@@ -20,19 +19,11 @@ use mz_persist::generated::consensus_service::{
 pub struct AcceptorConfig {
     /// Depth of the command channel (mpsc queue).
     pub queue_depth: usize,
-    /// How often to flush pending proposals to the log, in milliseconds.
-    ///
-    /// Only used by the log-backed [`ActorAcceptor`](crate::actor::acceptor::ActorAcceptor).
-    /// The persist-backed acceptor uses open-loop flushing and ignores this.
-    pub flush_interval_ms: u64,
 }
 
 impl Default for AcceptorConfig {
     fn default() -> Self {
-        AcceptorConfig {
-            queue_depth: 4096,
-            flush_interval_ms: 5,
-        }
+        AcceptorConfig { queue_depth: 4096 }
     }
 }
 

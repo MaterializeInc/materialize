@@ -21,9 +21,7 @@ scan_limit: 10
 truncate_to: 500
 
 write_rate_per_second: 10.0
-flush_interval_ms: 1
-
-wal_latency: "zero"
+blob_latency: "zero"
 
 duration: 5
 warmup: 2

@@ -36,7 +36,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 use prost::Message;
 
 use super::{Proposal, ProposalSchema};
-use crate::actor::metrics::AcceptorMetrics;
+use crate::metrics::AcceptorMetrics;
 use crate::traits::{AcceptorConfig, AcceptorError};
 
 /// Commands dispatched to the persist-backed acceptor.

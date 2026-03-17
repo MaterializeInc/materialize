@@ -31,28 +31,15 @@ use mz_ore::cast::{CastFrom, CastLossy};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::Deserialize;
-use tokio::sync::mpsc;
-use tonic::transport::Server;
-
 use mz_ore::metrics::MetricsRegistry;
-use mz_persist::generated::consensus_service::consensus_acceptor_client::ConsensusAcceptorClient;
-use mz_persist::generated::consensus_service::consensus_acceptor_server::ConsensusAcceptorServer;
-use mz_persist::generated::consensus_service::consensus_learner_client::ConsensusLearnerClient;
-use mz_persist::generated::consensus_service::consensus_learner_server::ConsensusLearnerServer;
 use mz_persist::generated::consensus_service::{
-    ProtoAppendRequest, ProtoAwaitResultRequest, ProtoCasProposal, ProtoHeadRequest,
-    ProtoLogProposal, ProtoScanRequest, ProtoTruncateProposal, proto_log_proposal,
+    ProtoCasProposal, ProtoLogProposal, ProtoTruncateProposal, proto_log_proposal,
 };
 use mz_persist_client::ShardId;
-use mz_persist_shared_log::actor::acceptor::ActorAcceptor;
-use mz_persist_shared_log::actor::learner::{ActorLearner, LearnerConfig};
-use mz_persist_shared_log::actor::metrics::{AcceptorMetrics, LearnerMetrics};
 use mz_persist_shared_log::LatencyProfile;
-use mz_persist_shared_log::actor::storage::LatencyStorage;
-use mz_persist_shared_log::ctp;
+use mz_persist_shared_log::metrics::{AcceptorMetrics, LearnerMetrics};
 use mz_persist_shared_log::persist_log::acceptor::PersistAcceptor;
 use mz_persist_shared_log::persist_log::learner::{PersistLearner, PersistLearnerConfig};
-use mz_persist_shared_log::service::{AcceptorGrpcService, LearnerGrpcService};
 use mz_persist_shared_log::traits::Acceptor as _;
 use mz_persist_shared_log::traits::AcceptorConfig;
 
@@ -60,12 +47,13 @@ use mz_persist_shared_log::traits::AcceptorConfig;
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// Simulated log latency profile. Each variant is a named preset with baked-in
-/// latency parameters.
+/// Simulated blob latency profile. Each variant is a named preset with baked-in
+/// latency parameters. Injected via LatencyBlob around the in-memory persist
+/// blob to model real storage backends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
-enum LogLatency {
-    /// Instant flushes. Isolates actor CPU cost.
+enum BlobLatency {
+    /// Instant operations. Isolates CPU cost.
     Zero,
     /// Every flush takes exactly 5ms.
     #[serde(rename = "fixed-5ms")]
@@ -85,17 +73,17 @@ enum LogLatency {
     S3Standard,
 }
 
-impl LogLatency {
+impl BlobLatency {
     fn to_latency_profile(self) -> LatencyProfile {
         match self {
-            LogLatency::Zero => LatencyProfile::Zero,
-            LogLatency::Fixed5ms => LatencyProfile::Fixed(Duration::from_millis(5)),
-            LogLatency::Fixed10ms => LatencyProfile::Fixed(Duration::from_millis(10)),
-            LogLatency::S3Express => LatencyProfile::P50P99 {
+            BlobLatency::Zero => LatencyProfile::Zero,
+            BlobLatency::Fixed5ms => LatencyProfile::Fixed(Duration::from_millis(5)),
+            BlobLatency::Fixed10ms => LatencyProfile::Fixed(Duration::from_millis(10)),
+            BlobLatency::S3Express => LatencyProfile::P50P99 {
                 p50: Duration::from_millis(5),
                 p99: Duration::from_millis(50),
             },
-            LogLatency::S3Standard => LatencyProfile::P50P99 {
+            BlobLatency::S3Standard => LatencyProfile::P50P99 {
                 p50: Duration::from_millis(20),
                 p99: Duration::from_millis(500),
             },
@@ -103,61 +91,14 @@ impl LogLatency {
     }
 }
 
-impl std::fmt::Display for LogLatency {
+impl std::fmt::Display for BlobLatency {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LogLatency::Zero => write!(f, "zero"),
-            LogLatency::Fixed5ms => write!(f, "fixed-5ms"),
-            LogLatency::Fixed10ms => write!(f, "fixed-10ms"),
-            LogLatency::S3Express => write!(f, "s3-express"),
-            LogLatency::S3Standard => write!(f, "s3-standard"),
-        }
-    }
-}
-
-/// Transport mode for driving the workload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, clap::ValueEnum)]
-#[serde(rename_all = "kebab-case")]
-enum TransportMode {
-    /// Direct handles to the acceptor and learner (no serialization overhead).
-    Direct,
-    /// gRPC client through a loopback tonic server (full stack).
-    Grpc,
-    /// Custom TCP Protocol — length-prefixed bincode over raw TCP.
-    Ctp,
-}
-
-impl std::fmt::Display for TransportMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TransportMode::Direct => write!(f, "direct"),
-            TransportMode::Grpc => write!(f, "grpc (loopback)"),
-            TransportMode::Ctp => write!(f, "ctp (loopback)"),
-        }
-    }
-}
-
-/// Backend storage mode for the acceptor + learner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, clap::ValueEnum)]
-#[serde(rename_all = "kebab-case")]
-enum BackendMode {
-    /// Log + object storage (the original implementation).
-    Log,
-    /// Persist shard (WriteHandle for acceptor, Listen for learner).
-    Persist,
-}
-
-impl Default for BackendMode {
-    fn default() -> Self {
-        BackendMode::Persist
-    }
-}
-
-impl std::fmt::Display for BackendMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BackendMode::Log => write!(f, "log"),
-            BackendMode::Persist => write!(f, "persist"),
+            BlobLatency::Zero => write!(f, "zero"),
+            BlobLatency::Fixed5ms => write!(f, "fixed-5ms"),
+            BlobLatency::Fixed10ms => write!(f, "fixed-10ms"),
+            BlobLatency::S3Express => write!(f, "s3-express"),
+            BlobLatency::S3Standard => write!(f, "s3-standard"),
         }
     }
 }
@@ -197,24 +138,11 @@ struct Cli {
     write_rate_per_second: Option<f64>,
 
     #[arg(long)]
-    flush_interval_ms: Option<u64>,
-    #[arg(long)]
     queue_depth: Option<usize>,
-    #[arg(long)]
-    snapshot_interval: Option<u64>,
 
-    /// Log latency profile.
+    /// Blob latency profile (simulated storage latency).
     #[arg(long, value_enum)]
-    log_latency: Option<LogLatency>,
-
-    /// Transport mode: direct (handles) or grpc (loopback server).
-    #[arg(long, value_enum)]
-    transport: Option<TransportMode>,
-
-    /// Backend storage mode: log (log+S3) or persist (persist shard).
-    /// Persist backend currently only works with direct transport.
-    #[arg(long, value_enum)]
-    backend: Option<BackendMode>,
+    blob_latency: Option<BlobLatency>,
 
     #[arg(long)]
     duration: Option<u64>,
@@ -253,13 +181,10 @@ struct WorkloadConfig {
     scan_limit: u64,
     truncate_to: u64,
     write_rate_per_second: f64,
-    flush_interval_ms: u64,
     queue_depth: usize,
-    snapshot_interval: u64,
     grpc_connections: u64,
-    log_latency: LogLatency,
-    transport: TransportMode,
-    backend: BackendMode,
+    #[serde(alias = "wal_latency")]
+    blob_latency: BlobLatency,
     duration: u64,
     warmup: u64,
     // Not in YAML — CLI-only flags.
@@ -284,13 +209,9 @@ impl Default for WorkloadConfig {
             scan_limit: 10,
             truncate_to: 500,
             write_rate_per_second: 1.0,
-            flush_interval_ms: 5,
             queue_depth: 4096,
-            snapshot_interval: u64::MAX,
             grpc_connections: 1,
-            log_latency: LogLatency::Zero,
-            transport: TransportMode::Direct,
-            backend: BackendMode::Log,
+            blob_latency: BlobLatency::Zero,
             duration: 60,
             warmup: 10,
             json: false,
@@ -341,12 +262,8 @@ impl WorkloadConfig {
             scan_limit,
             truncate_to,
             write_rate_per_second,
-            flush_interval_ms,
             queue_depth,
-            snapshot_interval,
-            log_latency,
-            transport,
-            backend,
+            blob_latency,
             duration,
             warmup,
             grpc_connections,
@@ -375,17 +292,10 @@ impl WorkloadConfig {
             self.truncate_to,
             self.max_entries,
         );
-        if self.backend == BackendMode::Persist {
-            assert_eq!(
-                self.transport,
-                TransportMode::Direct,
-                "persist backend currently only supports direct transport"
-            );
-        }
     }
 
     fn latency_profile(&self) -> LatencyProfile {
-        self.log_latency.to_latency_profile()
+        self.blob_latency.to_latency_profile()
     }
 }
 
@@ -403,21 +313,9 @@ impl WorkloadConfig {
 enum Transport {
     /// Direct handles to the acceptor and learner (no serialization overhead).
     Direct {
-        acceptor: mz_persist_shared_log::actor::acceptor::AcceptorHandle,
-        learner: mz_persist_shared_log::actor::learner::LearnerHandle,
-    },
-    /// Direct handles to the persist-backed acceptor and learner.
-    PersistDirect {
         acceptor: mz_persist_shared_log::persist_log::acceptor::PersistAcceptorHandle,
         learner: mz_persist_shared_log::persist_log::learner::PersistLearnerHandle,
     },
-    /// gRPC clients connected to a loopback tonic server.
-    Grpc {
-        acceptor: ConsensusAcceptorClient<tonic::transport::Channel>,
-        learner: ConsensusLearnerClient<tonic::transport::Channel>,
-    },
-    /// Multiplexed CTP client — many callers share one connection.
-    Ctp { client: ctp::CtpClient },
 }
 
 enum CasResult {
@@ -457,78 +355,6 @@ impl Transport {
                     Err(_) => CasResult::Shutdown,
                 }
             }
-            Transport::PersistDirect { acceptor, learner } => {
-                let proposal = ProtoLogProposal {
-                    op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
-                        key: key.to_string(),
-                        expected,
-                        new_seqno: seqno,
-                        data: data.clone(),
-                    })),
-                };
-                let receipt = match acceptor.append(proposal).await {
-                    Ok(r) => r,
-                    Err(_) => return CasResult::Shutdown,
-                };
-                match learner
-                    .await_cas_result(receipt.batch_number, receipt.position)
-                    .await
-                {
-                    Ok(resp) if resp.committed => CasResult::Committed,
-                    Ok(_) => CasResult::Rejected,
-                    Err(_) => CasResult::Shutdown,
-                }
-            }
-            Transport::Grpc { acceptor, learner } => {
-                let proposal = ProtoLogProposal {
-                    op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
-                        key: key.to_string(),
-                        expected,
-                        new_seqno: seqno,
-                        data: data.clone(),
-                    })),
-                };
-                let receipt = match acceptor
-                    .append(ProtoAppendRequest {
-                        proposal: Some(proposal),
-                    })
-                    .await
-                {
-                    Ok(r) => r.into_inner(),
-                    Err(_) => return CasResult::Shutdown,
-                };
-                match learner
-                    .await_cas_result(ProtoAwaitResultRequest {
-                        batch_number: receipt.batch_number,
-                        position: receipt.position,
-                    })
-                    .await
-                {
-                    Ok(r) => {
-                        if r.into_inner().committed {
-                            CasResult::Committed
-                        } else {
-                            CasResult::Rejected
-                        }
-                    }
-                    Err(_) => CasResult::Shutdown,
-                }
-            }
-            Transport::Ctp { client } => {
-                match client
-                    .cas(ctp::CasProposal {
-                        key: key.to_string(),
-                        expected,
-                        new_seqno: seqno,
-                        data,
-                    })
-                    .await
-                {
-                    Ok(r) if r.committed => CasResult::Committed,
-                    Ok(_) => CasResult::Rejected,
-                    Err(_) => CasResult::Shutdown,
-                }
-            }
         }
     }
 
@@ -538,28 +364,6 @@ impl Transport {
                 let resp = learner.head(key.to_string()).await.ok()?;
                 resp.data.map(|d| (d.seqno, d.data.len()))
             }
-            Transport::PersistDirect { learner, .. } => {
-                let resp = learner.head(key.to_string()).await.ok()?;
-                resp.data.map(|d| (d.seqno, d.data.len()))
-            }
-            Transport::Grpc { learner, .. } => {
-                let resp = learner
-                    .head(ProtoHeadRequest {
-                        key: key.to_string(),
-                    })
-                    .await
-                    .ok()?;
-                resp.into_inner().data.map(|d| (d.seqno, d.data.len()))
-            }
-            Transport::Ctp { client } => {
-                let resp = client
-                    .head(ctp::HeadRequest {
-                        key: key.to_string(),
-                    })
-                    .await
-                    .ok()?;
-                resp.seqno.map(|s| (s, resp.data_len))
-            }
         }
     }
 
@@ -568,25 +372,6 @@ impl Transport {
             Transport::Direct { learner, .. } => {
                 learner.scan(key.to_string(), from, limit).await.is_ok()
             }
-            Transport::PersistDirect { learner, .. } => {
-                learner.scan(key.to_string(), from, limit).await.is_ok()
-            }
-            Transport::Grpc { learner, .. } => learner
-                .scan(ProtoScanRequest {
-                    key: key.to_string(),
-                    from,
-                    limit,
-                })
-                .await
-                .is_ok(),
-            Transport::Ctp { client } => client
-                .scan(ctp::ScanRequest {
-                    key: key.to_string(),
-                    from,
-                    limit,
-                })
-                .await
-                .is_ok(),
         }
     }
 
@@ -608,53 +393,6 @@ impl Transport {
                     .await
                     .is_ok()
             }
-            Transport::PersistDirect { acceptor, learner } => {
-                let proposal = ProtoLogProposal {
-                    op: Some(proto_log_proposal::Op::Truncate(ProtoTruncateProposal {
-                        key: key.to_string(),
-                        seqno,
-                    })),
-                };
-                let receipt = match acceptor.append(proposal).await {
-                    Ok(r) => r,
-                    Err(_) => return false,
-                };
-                learner
-                    .await_truncate_result(receipt.batch_number, receipt.position)
-                    .await
-                    .is_ok()
-            }
-            Transport::Grpc { acceptor, learner } => {
-                let proposal = ProtoLogProposal {
-                    op: Some(proto_log_proposal::Op::Truncate(ProtoTruncateProposal {
-                        key: key.to_string(),
-                        seqno,
-                    })),
-                };
-                let receipt = match acceptor
-                    .append(ProtoAppendRequest {
-                        proposal: Some(proposal),
-                    })
-                    .await
-                {
-                    Ok(r) => r.into_inner(),
-                    Err(_) => return false,
-                };
-                learner
-                    .await_truncate_result(ProtoAwaitResultRequest {
-                        batch_number: receipt.batch_number,
-                        position: receipt.position,
-                    })
-                    .await
-                    .is_ok()
-            }
-            Transport::Ctp { client } => client
-                .truncate(ctp::TruncateProposal {
-                    key: key.to_string(),
-                    seqno,
-                })
-                .await
-                .is_ok(),
         }
     }
 }
@@ -979,13 +717,10 @@ fn print_report(
         format_bytes(i64::try_from(cfg.value_size).expect("value_size fits in i64")),
         format_count(u64::cast_lossy(target_writes_per_sec)),
     );
+    println!("Blob latency: {}", cfg.blob_latency);
     println!(
-        "Transport: {}, log latency: {}",
-        cfg.transport, cfg.log_latency
-    );
-    println!(
-        "Duration: {}s ({}s warmup), flush interval: {}ms",
-        cfg.duration, cfg.warmup, cfg.flush_interval_ms,
+        "Duration: {}s ({}s warmup)",
+        cfg.duration, cfg.warmup,
     );
     println!(
         "Op mix: {}% CAS / {}% scan / {}% head / {}% truncate",
@@ -1352,9 +1087,7 @@ fn print_json(
             "value_size": cfg.value_size,
             "duration": cfg.duration,
             "warmup": cfg.warmup,
-            "flush_interval_ms": cfg.flush_interval_ms,
-            "log_latency": cfg.log_latency.to_string(),
-            "transport": cfg.transport.to_string(),
+            "blob_latency": cfg.blob_latency.to_string(),
         },
         "latencies": latencies,
         "acceptor_latencies": {
@@ -1415,19 +1148,17 @@ async fn main() {
         * cfg.write_rate_per_second;
     if !json {
         eprintln!(
-            "specsheet: {} shards, {} writers/shard, {} values, {} target writes/s, {}s run + {}s warmup, backend: {}, transport: {}",
+            "specsheet: {} shards, {} writers/shard, {} values, {} target writes/s, {}s run + {}s warmup",
             cfg.num_shards,
             cfg.writers_per_shard,
             format_bytes(i64::try_from(cfg.value_size).expect("value_size fits in i64")),
             format_count(u64::cast_lossy(target_writes_per_sec)),
             cfg.duration,
             cfg.warmup,
-            cfg.backend,
-            cfg.transport,
         );
     }
 
-    // --- Metrics (shared by both backends) ---
+    // --- Metrics ---
     let registry = MetricsRegistry::new();
     let acceptor_metrics = AcceptorMetrics::register(&registry);
     let learner_metrics = LearnerMetrics::register(&registry);
@@ -1439,191 +1170,33 @@ async fn main() {
         .max(usize::cast_from(cfg.num_shards * cfg.writers_per_shard) + 1024);
     let num_clients = cfg.num_shards * cfg.writers_per_shard;
 
-    // Background task/thread handles for cleanup after the run.
-    let mut grpc_server_handle: Option<(
-        std::net::SocketAddr,
-        mz_ore::task::AbortOnDropHandle<()>,
-    )> = None;
-    let mut ctp_server_handle: Option<(std::net::SocketAddr, mz_ore::task::AbortOnDropHandle<()>)> =
-        None;
-    let mut log_learner_thread: Option<std::thread::JoinHandle<()>> = None;
-    let mut persist_acceptor_task: Option<mz_ore::task::JoinHandle<()>> = None;
-    let mut persist_learner_task: Option<mz_ore::task::JoinHandle<()>> = None;
+    // --- Backend setup ---
+    use mz_persist_shared_log::persist_log::client::{self, PersistClientConfig};
 
-    // --- Backend + transport setup ---
-    let transports: Vec<Transport> = match cfg.backend {
-        BackendMode::Log => {
-            let latency_profile = cfg.latency_profile();
-            let log_storage = Arc::new(LatencyStorage::new(latency_profile));
-
-            // Batch push channel: acceptor pushes batches to the learner.
-            let (batch_tx, batch_rx) = mpsc::channel(256);
-
-            let acceptor_config = AcceptorConfig {
-                queue_depth,
-                flush_interval_ms: cfg.flush_interval_ms,
-            };
-            // Spawn acceptor on a dedicated OS thread with its own single-threaded
-            // tokio runtime, matching the production layout in main.rs. Isolates
-            // flush timer precision from learner CPU work.
-            let acceptor_storage = Arc::clone(&log_storage);
-            let acceptor_handle = {
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                let _thread = std::thread::Builder::new()
-                    .name("acceptor".to_string())
-                    .spawn(move || {
-                        let rt = tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()
-                            .expect("failed to build acceptor runtime");
-                        rt.block_on(async {
-                            let (handle, _task) = ActorAcceptor::spawn(
-                                acceptor_config,
-                                acceptor_storage,
-                                Some(batch_tx),
-                                acceptor_metrics,
-                            );
-                            let _ = tx.send(handle.clone());
-                            _task.await;
-                        });
-                    })
-                    .expect("failed to spawn acceptor thread");
-                rx.await.expect("acceptor thread failed to send handle")
-            };
-
-            let learner_config = LearnerConfig {
-                queue_depth,
-                snapshot_interval: cfg.snapshot_interval,
-                ..Default::default()
-            };
-            let (learner_handle, thread) = ActorLearner::spawn_threaded(
-                learner_config,
-                log_storage,
-                batch_rx,
-                acceptor_handle.clone(),
-                learner_metrics,
-            );
-            log_learner_thread = Some(thread);
-
-            // Create transport based on transport mode.
-            let transports = if cfg.transport == TransportMode::Ctp {
-                let server = ctp::CtpServer::bind(
-                    "127.0.0.1:0",
-                    acceptor_handle.clone(),
-                    learner_handle.clone(),
-                )
-                .await
-                .expect("failed to bind CTP server");
-                let addr = server.local_addr().unwrap();
-                let handle =
-                    mz_ore::task::spawn(|| "specsheet-ctp-server", server.serve()).abort_on_drop();
-                ctp_server_handle = Some((addr, handle));
-
-                let n = usize::try_from(cfg.grpc_connections.max(1)).unwrap();
-                if !json {
-                    eprintln!("specsheet: opening {} CTP connections...", n);
-                }
-                let mut clients = Vec::with_capacity(n);
-                for _ in 0..n {
-                    let client = ctp::CtpClient::connect(addr)
-                        .await
-                        .expect("failed to connect CTP client");
-                    clients.push(client);
-                }
-                let num = usize::try_from(num_clients).unwrap();
-                let mut pool = Vec::with_capacity(num);
-                for i in 0..num {
-                    pool.push(Transport::Ctp {
-                        client: clients[i % n].clone(),
-                    });
-                }
-                pool
-            } else if cfg.transport == TransportMode::Grpc {
-                let acceptor_svc = AcceptorGrpcService {
-                    handle: acceptor_handle.clone(),
-                };
-                let learner_svc = LearnerGrpcService {
-                    learner_handle: learner_handle.clone(),
-                };
-                let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-                    .await
-                    .expect("failed to bind loopback listener");
-                let addr = listener.local_addr().unwrap();
-                let handle = mz_ore::task::spawn(|| "specsheet-grpc-server", async move {
-                    Server::builder()
-                        .add_service(ConsensusAcceptorServer::new(acceptor_svc))
-                        .add_service(ConsensusLearnerServer::new(learner_svc))
-                        .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(
-                            listener,
-                        ))
-                        .await
-                        .unwrap();
-                })
-                .abort_on_drop();
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                grpc_server_handle = Some((addr, handle));
-
-                let addr_str = format!("http://{}", addr);
-                let n_conns = usize::try_from(cfg.grpc_connections.max(1)).unwrap();
-                let mut pool = Vec::with_capacity(n_conns);
-                for _ in 0..n_conns {
-                    let acceptor = ConsensusAcceptorClient::connect(addr_str.clone())
-                        .await
-                        .expect("failed to connect acceptor gRPC client");
-                    let learner = ConsensusLearnerClient::connect(addr_str.clone())
-                        .await
-                        .expect("failed to connect learner gRPC client");
-                    pool.push(Transport::Grpc { acceptor, learner });
-                }
-                pool
-            } else {
-                vec![Transport::Direct {
-                    acceptor: acceptor_handle.clone(),
-                    learner: learner_handle.clone(),
-                }]
-            };
-
-            // Drop our handle clones so the service shuts down when all
-            // transports (held by client tasks) are dropped.
-            drop(acceptor_handle);
-            drop(learner_handle);
-            transports
-        }
-        BackendMode::Persist => {
-            use mz_persist_shared_log::persist_log::client::{self, PersistClientConfig};
-
-            let persist_client_config = PersistClientConfig {
-                latency_profile: cfg.latency_profile(),
-            };
-            let persist_client = client::new_persist_client(persist_client_config);
-            let shard_id = ShardId::new();
-
-            let acceptor_config = AcceptorConfig {
-                queue_depth,
-                flush_interval_ms: cfg.flush_interval_ms,
-            };
-            let (acceptor_handle, acc_task) =
-                PersistAcceptor::spawn(acceptor_config, &persist_client, shard_id, acceptor_metrics.clone()).await;
-            persist_acceptor_task = Some(acc_task);
-
-            let learner_config = PersistLearnerConfig {
-                queue_depth,
-                ..Default::default()
-            };
-            let (learner_handle, lrn_task) =
-                PersistLearner::spawn(learner_config, &persist_client, shard_id, learner_metrics.clone()).await;
-            persist_learner_task = Some(lrn_task);
-
-            let transports = vec![Transport::PersistDirect {
-                acceptor: acceptor_handle.clone(),
-                learner: learner_handle.clone(),
-            }];
-
-            drop(acceptor_handle);
-            drop(learner_handle);
-            transports
-        }
+    let persist_client_config = PersistClientConfig {
+        latency_profile: cfg.latency_profile(),
     };
+    let persist_client = client::new_persist_client(persist_client_config);
+    let shard_id = ShardId::new();
+
+    let acceptor_config = AcceptorConfig { queue_depth };
+    let (acceptor_handle, _acceptor_task) =
+        PersistAcceptor::spawn(acceptor_config, &persist_client, shard_id, acceptor_metrics.clone()).await;
+
+    let learner_config = PersistLearnerConfig {
+        queue_depth,
+        ..Default::default()
+    };
+    let (learner_handle, _learner_task) =
+        PersistLearner::spawn(learner_config, &persist_client, shard_id, learner_metrics.clone()).await;
+
+    let transports = vec![Transport::Direct {
+        acceptor: acceptor_handle.clone(),
+        learner: learner_handle.clone(),
+    }];
+
+    drop(acceptor_handle);
+    drop(learner_handle);
 
     // --- Timing ---
     let warmup_dur = Duration::from_secs(cfg.warmup);
@@ -1696,21 +1269,9 @@ async fn main() {
         }
     }
 
-    // Shut down network servers (which hold handle clones) so the
-    // actors can drain and exit.
-    drop(grpc_server_handle);
-    drop(ctp_server_handle);
-
     // Wait for backend actors to finish.
-    if let Some(thread) = log_learner_thread {
-        let _ = thread.join();
-    }
-    if let Some(task) = persist_learner_task {
-        let _ = task.await;
-    }
-    if let Some(task) = persist_acceptor_task {
-        let _ = task.await;
-    }
+    let _ = _learner_task.await;
+    let _ = _acceptor_task.await;
 
     let measurement_elapsed = Duration::from_secs(cfg.duration);
 

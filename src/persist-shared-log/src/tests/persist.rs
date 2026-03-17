@@ -21,7 +21,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 
 use mz_ore::metrics::MetricsRegistry;
 
-use crate::actor::metrics::{AcceptorMetrics, LearnerMetrics};
+use crate::metrics::{AcceptorMetrics, LearnerMetrics};
 use crate::persist_log::acceptor::{PersistAcceptor, PersistAcceptorHandle};
 use crate::persist_log::learner::{PersistLearner, PersistLearnerConfig, PersistLearnerHandle};
 use crate::persist_log::{Proposal, ProposalSchema};
@@ -78,10 +78,7 @@ impl PersistTestHarness {
         let listen = read.listen(since).await.expect("listen");
 
         // Now spawn tasks.
-        let acceptor_config = AcceptorConfig {
-            flush_interval_ms: 1,
-            ..Default::default()
-        };
+        let acceptor_config = AcceptorConfig::default();
         let registry = MetricsRegistry::new();
         let acceptor_metrics = AcceptorMetrics::register(&registry);
         let learner_metrics = LearnerMetrics::register(&registry);

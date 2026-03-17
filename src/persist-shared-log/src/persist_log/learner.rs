@@ -50,7 +50,7 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 
 use super::{Proposal, ProposalSchema};
-use crate::actor::metrics::LearnerMetrics;
+use crate::metrics::LearnerMetrics;
 use crate::traits::LearnerError;
 use crate::{ShardState, VersionedEntry};
 

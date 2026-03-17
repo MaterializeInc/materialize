@@ -19,7 +19,7 @@ use prometheus::Histogram;
 /// needing HDR histograms. Fine for singleton metrics (one acceptor, one
 /// learner per process).
 fn latency_buckets() -> Vec<f64> {
-    let mut b: Vec<f64> = (1..=200).map(|ms| ms as f64 / 1000.0).collect();
+    let mut b: Vec<f64> = (1..=200).map(|ms| f64::from(ms) / 1000.0).collect();
     b.extend_from_slice(&[0.25, 0.3, 0.4, 0.5, 0.75, 1.0, 2.0, 5.0, 10.0]);
     b
 }
@@ -29,8 +29,6 @@ fn latency_buckets() -> Vec<f64> {
 pub struct AcceptorMetrics {
     // --- Flush metrics ---
     pub flush_count: IntCounter,
-    pub flush_timer_triggered: IntCounter,
-    pub flush_timer_ticked: IntCounter,
     pub flush_explicit_triggered: IntCounter,
     pub flush_latency_seconds: Histogram,
     pub flush_proposals_per_batch: Histogram,
@@ -40,12 +38,11 @@ pub struct AcceptorMetrics {
     /// containing it begins. Measures queuing delay in the pending buffer.
     pub proposal_queue_seconds: Histogram,
 
-    // --- Object store log write metrics ---
+    // --- Persist write metrics ---
     pub object_store_log_writes: IntCounter,
     pub object_store_log_write_bytes: IntCounter,
     pub object_store_log_write_latency_seconds: Histogram,
     pub object_store_write_retries: IntCounter,
-    pub object_store_write_retry_already_exists: IntCounter,
 }
 
 impl AcceptorMetrics {
@@ -55,14 +52,6 @@ impl AcceptorMetrics {
             flush_count: registry.register(metric!(
                 name: "mz_consensus_svc_acceptor_flush_count_total",
                 help: "Total flush operations.",
-            )),
-            flush_timer_triggered: registry.register(metric!(
-                name: "mz_consensus_svc_acceptor_flush_timer_triggered_total",
-                help: "Flushes triggered by the periodic flush interval timer.",
-            )),
-            flush_timer_ticked: registry.register(metric!(
-                name: "mz_consensus_svc_acceptor_flush_timer_ticked_total",
-                help: "Total timer ticks (including empty ones with no pending proposals).",
             )),
             flush_explicit_triggered: registry.register(metric!(
                 name: "mz_consensus_svc_acceptor_flush_explicit_triggered_total",
@@ -100,10 +89,6 @@ impl AcceptorMetrics {
                 name: "mz_consensus_svc_object_store_write_retries_total",
                 help: "Total object store write retries attempted.",
             )),
-            object_store_write_retry_already_exists: registry.register(metric!(
-                name: "mz_consensus_svc_object_store_write_retry_already_exists_total",
-                help: "Object store write retries where object already existed (original write landed).",
-            )),
         }
     }
 }
@@ -122,11 +107,6 @@ pub struct LearnerMetrics {
     // --- Materialization ---
     pub batches_materialized: IntCounter,
     pub batch_materialize_latency_seconds: Histogram,
-
-    // --- Snapshot metrics ---
-    pub object_store_snapshot_writes: IntCounter,
-    pub object_store_snapshot_write_bytes: IntCounter,
-    pub object_store_snapshot_write_latency_seconds: Histogram,
 
     // --- Server-side operation latencies ---
     /// Time from command send to actor processing (mpsc channel + select delay).
@@ -206,19 +186,6 @@ impl LearnerMetrics {
             truncate_result_seconds: registry.register(metric!(
                 name: "mz_consensus_svc_learner_truncate_result_seconds",
                 help: "Server-side truncate result latency including materialization wait.",
-                buckets: latency_buckets(),
-            )),
-            object_store_snapshot_writes: registry.register(metric!(
-                name: "mz_consensus_svc_object_store_snapshot_writes_total",
-                help: "Total snapshots written to object storage.",
-            )),
-            object_store_snapshot_write_bytes: registry.register(metric!(
-                name: "mz_consensus_svc_object_store_snapshot_write_bytes_total",
-                help: "Total bytes written to object storage for snapshots.",
-            )),
-            object_store_snapshot_write_latency_seconds: registry.register(metric!(
-                name: "mz_consensus_svc_object_store_snapshot_write_latency_seconds",
-                help: "Histogram of object store snapshot PUT latency in seconds.",
                 buckets: latency_buckets(),
             )),
             active_shards: registry.register(metric!(
