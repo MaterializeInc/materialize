@@ -1745,6 +1745,7 @@ class FlipFlagsAction(Action):
             "enable_password_auth",
             "persist_fast_path_order",
             "enable_mcp_agents",
+            "enable_mcp_agents_query_tool",
             "enable_mcp_observatory",
             "mz_metrics_lgalloc_map_refresh_interval",
             "mz_metrics_lgalloc_refresh_interval",
