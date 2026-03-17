@@ -500,7 +500,7 @@ pub const USE_CRITICAL_SINCE_SNAPSHOT: Config<bool> = Config::new(
 /// Use sync Timely operators with Tokio tasks for shard_source.
 pub const PERSIST_SHARD_SOURCE_SYNC: Config<bool> = Config::new(
     "persist_shard_source_sync",
-    false,
+    true,
     "Use sync Timely operators with Tokio tasks for shard_source.",
 );
 
