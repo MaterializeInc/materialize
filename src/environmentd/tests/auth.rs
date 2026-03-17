@@ -5037,3 +5037,225 @@ async fn test_session_auth_does_not_override_credentials() {
     )
     .await;
 }
+
+/// Tests that auto-provisioning a role via Frontegg authentication records
+/// `autoprovisionsource = 'frontegg'` in `mz_roles`
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_auth_autoprovision_frontegg() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let metrics_registry = MetricsRegistry::new();
+
+    let tenant_id = Uuid::new_v4();
+    let email = "user@autoprovision.com".to_string();
+    let password = Uuid::new_v4().to_string();
+    let client_id = Uuid::new_v4();
+    let secret = Uuid::new_v4();
+    let users = BTreeMap::from([(
+        email.clone(),
+        UserConfig {
+            id: Uuid::new_v4(),
+            email,
+            password,
+            tenant_id,
+            initial_api_tokens: vec![ApiToken {
+                client_id: client_id.clone(),
+                secret: secret.clone(),
+                description: None,
+                created_at: Utc::now(),
+            }],
+            roles: Vec::new(),
+            auth_provider: None,
+            verified: None,
+            metadata: None,
+        },
+    )]);
+
+    let issuer = "frontegg-mock".to_owned();
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+
+    let frontegg_server = FronteggMockServer::start(
+        None,
+        issuer,
+        encoding_key,
+        decoding_key,
+        users,
+        BTreeMap::new(),
+        None,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id: Some(tenant_id),
+            now: SYSTEM_TIME.clone(),
+            admin_role: "mzadmin".to_string(),
+            refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+            refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
+        },
+        mz_frontegg_auth::Client::default(),
+        &metrics_registry,
+    );
+
+    let frontegg_user = "user@autoprovision.com";
+    let frontegg_password = &format!("mzp_{client_id}{secret}");
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_frontegg_auth(&frontegg_auth)
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+
+    // Connect as the Frontegg user to trigger auto-provisioning.
+    let _pg_client = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(frontegg_user)
+        .password(frontegg_password)
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })))
+        .await
+        .unwrap();
+
+    // Create a role manually for comparison.
+    let admin_client = server.connect().internal().await.unwrap();
+    admin_client
+        .batch_execute("CREATE ROLE manual_role_frontegg")
+        .await
+        .unwrap();
+
+    // Verify autoprovisionsource values.
+    let rows = admin_client
+        .query(
+            "SELECT name, autoprovisionsource \
+             FROM mz_roles \
+             WHERE name IN ('user@autoprovision.com', 'manual_role_frontegg') \
+             ORDER BY name",
+            &[],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(rows.len(), 2);
+    // manual_role_frontegg — created explicitly, not auto-provisioned.
+    assert_eq!(rows[0].get::<_, String>("name"), "manual_role_frontegg");
+    assert!(
+        rows[0]
+            .get::<_, Option<String>>("autoprovisionsource")
+            .is_none(),
+        "manually created role should have NULL autoprovisionsource"
+    );
+    // user@autoprovision.com — auto-provisioned via Frontegg.
+    assert_eq!(rows[1].get::<_, String>("name"), "user@autoprovision.com");
+    assert_eq!(
+        rows[1]
+            .get::<_, Option<String>>("autoprovisionsource")
+            .as_deref(),
+        Some("frontegg"),
+        "Frontegg auto-provisioned role should have autoprovisionsource = 'frontegg'"
+    );
+}
+
+/// Tests that auto-provisioning a role via OIDC authentication records
+/// `autoprovisionsource = 'oidc'` in `mz_roles`
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_auth_autoprovision_oidc() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_user = "user@autoprovision-oidc.example.com";
+    let jwt_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            ..Default::default()
+        },
+    );
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(Some(oidc_server.issuer), Some("sub".to_string()), None)
+        .start()
+        .await;
+
+    // Connect as the OIDC user to trigger auto-provisioning.
+    let _pg_client = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(oidc_user)
+        .password(&jwt_token)
+        .options("--oidc_auth_enabled=true")
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })))
+        .await
+        .unwrap();
+
+    // Create a role manually for comparison.
+    let admin_client = server.connect().internal().await.unwrap();
+    admin_client
+        .batch_execute("CREATE ROLE manual_role_oidc")
+        .await
+        .unwrap();
+
+    // Verify autoprovisionsource values.
+    let rows = admin_client
+        .query(
+            "SELECT name, autoprovisionsource \
+             FROM mz_roles \
+             WHERE name IN ('user@autoprovision-oidc.example.com', 'manual_role_oidc') \
+             ORDER BY name",
+            &[],
+        )
+        .await
+        .unwrap();
+
+    // manual_role_oidc — created explicitly, not auto-provisioned.
+    assert_eq!(rows[0].get::<_, String>("name"), "manual_role_oidc");
+    assert!(
+        rows[0]
+            .get::<_, Option<String>>("autoprovisionsource")
+            .is_none(),
+        "manually created role should have NULL autoprovisionsource"
+    );
+    // user@autoprovision-oidc.example.com — auto-provisioned via OIDC.
+    assert_eq!(
+        rows[1].get::<_, String>("name"),
+        "user@autoprovision-oidc.example.com"
+    );
+    assert_eq!(
+        rows[1]
+            .get::<_, Option<String>>("autoprovisionsource")
+            .as_deref(),
+        Some("oidc"),
+        "OIDC auto-provisioned role should have autoprovisionsource = 'oidc'"
+    );
+}
