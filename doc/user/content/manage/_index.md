@@ -23,8 +23,8 @@ This section contains various resources for managing Materialize.
 
 | Guide | Description |
 |-------|-------------|
-| [Using dbt to manage Materialize](/manage/dbt/) | Manage views, materialized views, and indexes |
-| [Using Terraform to manage Materialize](/manage/terraform/) | Manage infrastructure, clusters, and configuration |
+| [Using dbt with Materialize](/manage/dbt/) | Manage views, materialized views, and indexes |
+| [Using Terraform with Materialize](/manage/terraform/) | Manage infrastructure, clusters, and configuration |
 
 ## Usage and billing
 
