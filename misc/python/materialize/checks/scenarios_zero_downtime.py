@@ -145,9 +145,10 @@ class ZeroDowntimeUpgradeEntireMzOnce(Scenario):
                 system_parameter_defaults=system_parameter_defaults,
             ),
             Manipulate(self, phase=1, mz_service="mz_1"),
-            *wait_ready_and_promote("mz_2"),
+            # Set to a lower timeout since we'd like this scenario to fail fast
+            WaitReadyMz(mz_service="mz_2", timeout=30),
+            PromoteMz(mz_service="mz_2"),
             Manipulate(self, phase=2, mz_service="mz_2"),
-            Validate(self, mz_service="mz_2"),
             Validate(self, mz_service="mz_2"),
         ]
 
