@@ -36,7 +36,7 @@ use crate::logging::{
     DifferentialLog, EventQueue, LogCollection, LogVariant, SharedLoggingState,
     consolidate_and_pack,
 };
-use crate::row_spine::RowRowBuilder;
+use crate::row_spine::RowRowSealBuilder;
 use crate::typedefs::{KeyBatcher, RowRowSpine};
 
 /// The return type of [`construct`].
@@ -182,7 +182,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                     .mz_arrange_core::<
                         _,
                         Col2ValBatcher<_, _, _, _>,
-                        RowRowBuilder<_, _>,
+                        RowRowSealBuilder<_, _>,
                         RowRowSpine<_, _>,
                     >(exchange, &format!("Arrange {variant:?}"))
                     .trace;

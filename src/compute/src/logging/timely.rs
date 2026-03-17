@@ -41,7 +41,7 @@ use crate::logging::{
     Update,
 };
 use crate::logging::{LogCollection, SharedLoggingState, consolidate_and_pack};
-use crate::row_spine::RowRowBuilder;
+use crate::row_spine::RowRowSealBuilder;
 use crate::typedefs::{KeyBatcher, KeyValBatcher, RowRowSpine};
 
 /// The return type of [`construct`].
@@ -356,7 +356,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             if config.index_logs.contains_key(&variant) {
                 // Extract types to make rustfmt happy.
                 type Batcher<K, V, T, R> = Col2ValBatcher<K, V, T, R>;
-                type Builder<T, R> = RowRowBuilder<T, R>;
+                type Builder<T, R> = RowRowSealBuilder<T, R>;
                 let trace = collection
                     .mz_arrange_core::<_, Batcher<_, _, _, _>, Builder<_, _>, RowRowSpine<_, _>>(
                         ExchangeCore::<ColumnBuilder<_>, _>::new_core(

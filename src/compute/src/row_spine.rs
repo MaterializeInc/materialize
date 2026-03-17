@@ -11,8 +11,8 @@ pub use self::container::DatumContainer;
 pub use self::container::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{
-    RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowSpine, RowSpine, RowValBatcher,
-    RowValBuilder, RowValSpine,
+    RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowSealBuilder, RowRowSpine, RowSpine,
+    RowValBatcher, RowValBuilder, RowValSpine,
 };
 use differential_dataflow::trace::implementations::OffsetList;
 
@@ -36,6 +36,17 @@ mod spines {
     pub type RowRowBatcher<T, R> = KeyValBatcher<Row, Row, T, R>;
     pub type RowRowBuilder<T, R> =
         RcBuilder<OrdValBuilder<RowRowLayout<((Row, Row), T, R)>, TimelyStack<((Row, Row), T, R)>>>;
+    /// Builder for the Col2/columnar path that converts `ValStorage<Row,Row,T,R>` into
+    /// `OrdValBatch<RowRowLayout<...>>`.
+    pub type RowRowSealBuilder<T, R> = RcBuilder<
+        mz_timely_util::columnar::batcher::ValSealBuilder<
+            Row,
+            Row,
+            T,
+            R,
+            RowRowLayout<((Row, Row), T, R)>,
+        >,
+    >;
 
     pub type RowValSpine<V, T, R> = Spine<Rc<OrdValBatch<RowValLayout<((Row, V), T, R)>>>>;
     pub type RowValBatcher<V, T, R> = KeyValBatcher<Row, V, T, R>;
@@ -112,6 +123,14 @@ mod container {
     /// in return provides a `DatumSeq` view of the bytes which can be decoded as `Datum`s.
     pub struct DatumContainer {
         bytes: BytesContainer,
+    }
+
+    impl Default for DatumContainer {
+        fn default() -> Self {
+            Self {
+                bytes: Default::default(),
+            }
+        }
     }
 
     impl DatumContainer {
@@ -374,6 +393,15 @@ mod bytes_container {
         batches: Vec<BytesBatch>,
     }
 
+    impl Default for BytesContainer {
+        fn default() -> Self {
+            Self {
+                length: 0,
+                batches: Vec::new(),
+            }
+        }
+    }
+
     impl BytesContainer {
         /// Visit contained allocations to determine their size and capacity.
         #[inline]
@@ -615,6 +643,15 @@ mod offset_opt {
     pub struct OffsetOptimized {
         strided: OffsetStride,
         spilled: OffsetList,
+    }
+
+    impl Default for OffsetOptimized {
+        fn default() -> Self {
+            Self {
+                strided: OffsetStride::Empty,
+                spilled: OffsetList::with_capacity(0),
+            }
+        }
     }
 
     impl BatchContainer for OffsetOptimized {
