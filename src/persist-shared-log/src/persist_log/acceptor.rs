@@ -176,22 +176,21 @@ impl PersistAcceptor {
             if !self.pending.is_empty() {
                 match self.flush_while_receiving(&mut write).await {
                     LoopAction::Continue => continue,
-                    LoopAction::Stop => {
-                        // Channel closed or fatal error. Drain remaining.
-                        if !self.pending.is_empty() {
-                            let pending = std::mem::take(&mut self.pending);
-                            flush(&mut write, pending, &self.metrics).await;
-                        }
-                        return;
-                    }
+                    LoopAction::Stop => break,
                 }
             }
 
             // Nothing pending — wait for a command.
             match self.rx.recv().await {
                 Some(cmd) => self.handle_command(cmd),
-                None => return,
+                None => break,
             }
+        }
+
+        // Drain any remaining pending items before shutting down.
+        if !self.pending.is_empty() {
+            let pending = std::mem::take(&mut self.pending);
+            flush(&mut write, pending, &self.metrics).await;
         }
     }
 
