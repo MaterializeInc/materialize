@@ -15,15 +15,11 @@ use clap::Parser;
 use tonic::transport::Server;
 use tracing::info;
 
-use mz_persist::generated::consensus_service::consensus_acceptor_server::ConsensusAcceptorServer;
-use mz_persist::generated::consensus_service::consensus_learner_server::ConsensusLearnerServer;
 use mz_persist::generated::consensus_service::persist_shared_log_server::PersistSharedLogServer;
 use mz_persist_shared_log::metrics::{AcceptorMetrics, LearnerMetrics};
 use mz_persist_shared_log::persist_log::acceptor::PersistAcceptor;
 use mz_persist_shared_log::persist_log::learner::{PersistLearner, PersistLearnerConfig};
-use mz_persist_shared_log::service::{
-    AcceptorGrpcService, LearnerGrpcService, PersistSharedLogGrpcService,
-};
+use mz_persist_shared_log::service::PersistSharedLogGrpcService;
 use mz_persist_shared_log::traits;
 use mz_persist_shared_log::traits::AcceptorConfig;
 
@@ -78,23 +74,12 @@ async fn serve_grpc<A: traits::Acceptor, L: traits::Learner>(
     learner: L,
     listen_addr: SocketAddr,
 ) {
-    let acceptor_service = AcceptorGrpcService {
-        handle: acceptor.clone(),
-    };
-    let learner_service = LearnerGrpcService {
-        learner_handle: learner.clone(),
-    };
-    let persist_shared_log_service = PersistSharedLogGrpcService {
-        acceptor: acceptor.clone(),
-        learner: learner.clone(),
-    };
+    let service = PersistSharedLogGrpcService { acceptor, learner };
 
     info!(addr = %listen_addr, "starting gRPC server");
 
     Server::builder()
-        .add_service(ConsensusAcceptorServer::new(acceptor_service))
-        .add_service(ConsensusLearnerServer::new(learner_service))
-        .add_service(PersistSharedLogServer::new(persist_shared_log_service))
+        .add_service(PersistSharedLogServer::new(service))
         .serve(listen_addr)
         .await
         .expect("gRPC server failed");
