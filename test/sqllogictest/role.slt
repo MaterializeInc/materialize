@@ -629,3 +629,32 @@ simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_password_auth TO false;
 ----
 COMPLETE 0
+
+# Test to ensure that the authenticator used during auto-provisioning of a role is correctly tracked
+
+# Running any command on a role should autoprovision it and set auto_provision_source to None
+simple conn=r1,user=user1
+SELECT 1;
+----
+1
+COMPLETE 1
+
+# Create a role manually
+simple conn=mz_system,user=mz_system
+CREATE ROLE role1;
+----
+COMPLETE 0
+
+# Assert that we track the authenticator used when autoprovisioning a role
+# The manually created role should have autoprovisionsource as NULL since it was created manually
+query TT
+SELECT name, autoprovisionsource FROM mz_roles WHERE name in ('role1', 'user1') ORDER BY name
+----
+role1 NULL
+user1 none
+
+# Drop the role
+simple conn=mz_system,user=mz_system
+DROP ROLE role1;
+----
+COMPLETE 0
