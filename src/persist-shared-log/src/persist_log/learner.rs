@@ -52,7 +52,20 @@ use mz_persist_types::codec_impls::UnitSchema;
 use super::{Proposal, ProposalSchema};
 use crate::metrics::LearnerMetrics;
 use crate::traits::LearnerError;
-use crate::{ShardState, VersionedEntry};
+
+/// Per-shard committed state.
+#[derive(Debug, Clone, Default)]
+struct ShardState {
+    /// Committed entries, ordered by seqno.
+    entries: Vec<VersionedEntry>,
+}
+
+/// A versioned data entry.
+#[derive(Debug, Clone)]
+struct VersionedEntry {
+    seqno: u64,
+    data: Bytes,
+}
 
 /// Configuration for the persist-backed learner.
 #[derive(Debug, Clone)]

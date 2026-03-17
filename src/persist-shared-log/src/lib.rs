@@ -21,44 +21,10 @@
 //! `compare_and_append` per flush, making cost O(1/batch_window) instead of
 //! O(shards).
 
-use std::time::Duration;
-
-use bytes::Bytes;
-
-pub mod ctp;
 pub mod metrics;
 pub mod persist_log;
 pub mod service;
 pub mod traits;
 
-/// Latency profile for benchmarking storage backends. Used by the
-/// [`LatencyBlob`](persist_log::latency_blob::LatencyBlob) wrapper to inject
-/// simulated storage latency in the specsheet benchmark.
-#[derive(Debug, Clone)]
-pub enum LatencyProfile {
-    /// Return immediately (no added latency).
-    Zero,
-    /// Fixed latency for every operation.
-    Fixed(Duration),
-    /// Sample from a distribution: p50 latency with occasional p99 spikes.
-    /// Roughly 95% of operations take `p50`, 5% take `p99`.
-    P50P99 { p50: Duration, p99: Duration },
-}
-
 #[cfg(test)]
 mod tests;
-
-/// Per-shard committed state. Shared between the learner (which owns it) and
-/// the snapshot serialization layer.
-#[derive(Debug, Clone, Default)]
-pub struct ShardState {
-    /// Committed entries, ordered by seqno.
-    pub entries: Vec<VersionedEntry>,
-}
-
-/// A versioned data entry (mirrors persist's VersionedData but owned here).
-#[derive(Debug, Clone)]
-pub struct VersionedEntry {
-    pub seqno: u64,
-    pub data: Bytes,
-}

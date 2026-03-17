@@ -7,16 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A [`Blob`] wrapper that injects artificial latency on write operations.
-//!
-//! Analogous to the actor backend's `LatencyStorage`, this enables benchmarking
-//! the persist backend under realistic storage latency profiles (S3 Express,
-//! S3 Standard, etc.) without touching real object storage.
+//! A [`Blob`] wrapper that injects artificial latency, enabling benchmarking
+//! under realistic storage latency profiles (S3 Express, S3 Standard, etc.)
+//! without touching real object storage.
 //!
 //! Latency is injected on `set()` (the blob write path used by
 //! `compare_and_append`) and `get()` (the blob read path used by `listen`).
-//! This gives the closest analog to adding latency to the S3 RPCs that
-//! persist performs under the hood.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -27,7 +23,17 @@ use mz_ore::bytes::SegmentedBytes;
 
 use mz_persist::location::{Blob, BlobMetadata, ExternalError};
 
-use crate::LatencyProfile;
+/// Latency profile for benchmarking storage backends.
+#[derive(Debug, Clone)]
+pub enum LatencyProfile {
+    /// Return immediately (no added latency).
+    Zero,
+    /// Fixed latency for every operation.
+    Fixed(Duration),
+    /// Sample from a distribution: p50 latency with occasional p99 spikes.
+    /// Roughly 95% of operations take `p50`, 5% take `p99`.
+    P50P99 { p50: Duration, p99: Duration },
+}
 
 /// A [`Blob`] wrapper that adds configurable latency to `set()` and `get()`
 /// calls, simulating storage round-trip times.

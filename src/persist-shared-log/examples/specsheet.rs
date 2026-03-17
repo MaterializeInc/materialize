@@ -36,7 +36,7 @@ use mz_persist::generated::consensus_service::{
     ProtoCasProposal, ProtoLogProposal, ProtoTruncateProposal, proto_log_proposal,
 };
 use mz_persist_client::ShardId;
-use mz_persist_shared_log::LatencyProfile;
+use mz_persist_shared_log::persist_log::latency_blob::LatencyProfile;
 use mz_persist_shared_log::metrics::{AcceptorMetrics, LearnerMetrics};
 use mz_persist_shared_log::persist_log::acceptor::PersistAcceptor;
 use mz_persist_shared_log::persist_log::learner::{PersistLearner, PersistLearnerConfig};
