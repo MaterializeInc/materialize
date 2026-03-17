@@ -30,6 +30,39 @@ cfg_if! {
     }
 }
 
+/// Appends lgalloc heap profile data to an existing `StackProfile`.
+///
+/// Each lgalloc stack is annotated with `"lgalloc"` so it can be distinguished
+/// from jemalloc allocations when viewing the unified profile.
+fn append_lgalloc_heap_profile(profile: &mut StackProfile) {
+    use pprof_util::WeightedStack;
+
+    for (addrs, bytes) in mz_ore::lgalloc::heap_profile() {
+        #[allow(clippy::as_conversions)]
+        let weight = bytes as f64;
+        profile.push_stack(WeightedStack { addrs, weight }, Some("lgalloc"));
+    }
+}
+
+/// Returns the current lgalloc heap profile in pprof format.
+///
+/// Unlike jemalloc heap profiling which uses sampling, this captures every lgalloc
+/// allocation (which are large, infrequent region-level allocations) with full
+/// stack traces.
+#[allow(clippy::unused_async)]
+async fn handle_get_heap_lgalloc() -> impl IntoResponse {
+    use mappings::MAPPINGS;
+
+    let mut profile = StackProfile::default();
+    append_lgalloc_heap_profile(&mut profile);
+    if let Some(mappings) = MAPPINGS.as_deref() {
+        for mapping in mappings {
+            profile.push_mapping(mapping.clone());
+        }
+    }
+    profile.to_pprof(("inuse_space", "bytes"), ("space", "bytes"), None)
+}
+
 static EXECUTABLE: LazyLock<String> = LazyLock::new(|| {
     {
         env::current_exe()
@@ -60,6 +93,7 @@ pub fn router(build_info: &'static BuildInfo) -> Router {
             routing::post(move |form| handle_post(form, build_info)),
         )
         .route("/heap", routing::get(handle_get_heap))
+        .route("/heap/lgalloc", routing::get(handle_get_heap_lgalloc))
         .route("/static/{*path}", routing::get(handle_static))
 }
 
@@ -343,8 +377,9 @@ mod enabled {
                     .dump()
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 let r = BufReader::new(f);
-                let stacks = parse_jeheap(r, MAPPINGS.as_deref())
+                let mut stacks = parse_jeheap(r, MAPPINGS.as_deref())
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                super::append_lgalloc_heap_profile(&mut stacks);
                 let stats = borrow
                     .stats()
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -371,8 +406,9 @@ mod enabled {
                     .dump()
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 let r = BufReader::new(f);
-                let stacks = parse_jeheap(r, MAPPINGS.as_deref())
+                let mut stacks = parse_jeheap(r, MAPPINGS.as_deref())
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                super::append_lgalloc_heap_profile(&mut stacks);
                 let stats = borrow
                     .stats()
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -451,8 +487,11 @@ mod enabled {
             .dump()
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         let dump_reader = BufReader::new(dump_file);
-        let profile = parse_jeheap(dump_reader, MAPPINGS.as_deref())
+        let mut profile = parse_jeheap(dump_reader, MAPPINGS.as_deref())
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        // Append lgalloc heap profile data so we get a unified view of both
+        // jemalloc-tracked and lgalloc-tracked memory.
+        super::append_lgalloc_heap_profile(&mut profile);
         let pprof = profile.to_pprof(("inuse_space", "bytes"), ("space", "bytes"), None);
         Ok(pprof)
     }

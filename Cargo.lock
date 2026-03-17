@@ -6061,7 +6061,6 @@ dependencies = [
  "async-trait",
  "differential-dataflow",
  "futures",
- "lgalloc",
  "mz-cluster-client",
  "mz-ore",
  "mz-service",
@@ -7183,6 +7182,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "backtrace",
  "bytemuck",
  "bytes",
  "chrono",

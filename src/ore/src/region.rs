@@ -183,7 +183,7 @@ pub struct MMapRegion<T> {
     /// Vector-representation of the underlying memory. Must not be dropped.
     inner: ManuallyDrop<Vec<T>>,
     /// Opaque handle to lgalloc.
-    handle: Option<lgalloc::Handle>,
+    handle: Option<crate::lgalloc::Handle>,
 }
 
 impl<T> MMapRegion<T> {
@@ -236,8 +236,8 @@ impl<T> Region<T> {
     ///
     /// Returns an error if the memory allocation fails.
     #[inline(always)]
-    pub fn new_mmap(capacity: usize) -> Result<Region<T>, lgalloc::AllocError> {
-        lgalloc::allocate(capacity).map(|(ptr, capacity, handle)| {
+    pub fn new_mmap(capacity: usize) -> Result<Region<T>, crate::lgalloc::AllocError> {
+        crate::lgalloc::allocate(capacity).map(|(ptr, capacity, handle)| {
             // SAFETY: `ptr` points to suitable memory.
             // It is UB to call `from_raw_parts` with a pointer not allocated from the global
             // allocator, but we accept this here because we promise never to reallocate the vector.
@@ -258,8 +258,8 @@ impl<T> Region<T> {
         if ENABLE_LGALLOC_REGION.load(std::sync::atomic::Ordering::Relaxed) {
             match Region::new_mmap(capacity) {
                 Ok(r) => return r,
-                Err(lgalloc::AllocError::Disabled)
-                | Err(lgalloc::AllocError::InvalidSizeClass(_)) => {}
+                Err(crate::lgalloc::AllocError::Disabled)
+                | Err(crate::lgalloc::AllocError::InvalidSizeClass(_)) => {}
                 Err(e) => {
                     eprintln!("lgalloc error: {e}, falling back to heap");
                 }
@@ -357,8 +357,8 @@ impl<T: bytemuck::AnyBitPattern> Region<T> {
     ///
     /// Returns an error if the memory allocation fails.
     #[inline(always)]
-    pub fn new_mmap_zeroed(capacity: usize) -> Result<Self, lgalloc::AllocError> {
-        let (ptr, capacity, handle) = lgalloc::allocate::<T>(capacity)?;
+    pub fn new_mmap_zeroed(capacity: usize) -> Result<Self, crate::lgalloc::AllocError> {
+        let (ptr, capacity, handle) = crate::lgalloc::allocate::<T>(capacity)?;
         // SAFETY: `allocate` returns a valid memory block, and `T` supports a null-bit pattern.
         unsafe { ptr.as_ptr().write_bytes(0, capacity) }
         // SAFETY: `ptr` points to suitable memory.
@@ -381,8 +381,8 @@ impl<T: bytemuck::AnyBitPattern> Region<T> {
         if ENABLE_LGALLOC_REGION.load(std::sync::atomic::Ordering::Relaxed) {
             match Region::new_mmap_zeroed(capacity) {
                 Ok(r) => return r,
-                Err(lgalloc::AllocError::Disabled)
-                | Err(lgalloc::AllocError::InvalidSizeClass(_)) => {}
+                Err(crate::lgalloc::AllocError::Disabled)
+                | Err(crate::lgalloc::AllocError::InvalidSizeClass(_)) => {}
                 Err(e) => {
                     eprintln!("lgalloc error: {e}, falling back to heap");
                 }
@@ -440,6 +440,6 @@ impl<T> Drop for Region<T> {
 impl<T> Drop for MMapRegion<T> {
     fn drop(&mut self) {
         // Similar to dropping Region: Drop the allocation, don't drop the `inner` vector.
-        lgalloc::deallocate(self.handle.take().unwrap());
+        crate::lgalloc::deallocate(self.handle.take().unwrap());
     }
 }

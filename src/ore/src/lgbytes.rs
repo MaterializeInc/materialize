@@ -18,8 +18,8 @@
 use std::fmt::Debug;
 use std::time::Instant;
 
+use crate::lgalloc::AllocError;
 use bytes::Bytes;
-use lgalloc::AllocError;
 use prometheus::{Counter, CounterVec, Histogram, IntCounter, IntCounterVec};
 use tracing::debug;
 

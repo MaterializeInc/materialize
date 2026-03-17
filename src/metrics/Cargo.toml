@@ -13,7 +13,7 @@ workspace = true
 lgalloc = "0.7"
 libc = "0.2.181"
 mz-dyncfg = { path = "../dyncfg" }
-mz-ore = { path = "../ore", features = ["metrics"] }
+mz-ore = { path = "../ore", features = ["lgalloc", "metrics"] }
 paste = "1.0"
 prometheus = { version = "0.14.0", default-features = false }
 tokio = { version = "1.49.0", features = ["sync", "time"] }

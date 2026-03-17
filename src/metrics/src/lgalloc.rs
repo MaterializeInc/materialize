@@ -20,6 +20,8 @@ macro_rules! metrics_size_class {
             pub(crate) struct LgMetrics {
                 size_class: BTreeMap<usize, LgMetricsSC>,
                 $($metric: raw::UIntGaugeVec,)*
+                live_bytes: GenericGauge<AtomicU64>,
+                live_count: GenericGauge<AtomicU64>,
             }
             struct LgMetricsSC {
                 $($metric: GenericGauge<AtomicU64>,)*
@@ -33,6 +35,14 @@ macro_rules! metrics_size_class {
                             help: $desc,
                             var_labels: ["size_class"],
                         )),)*
+                        live_bytes: registry.register(mz_ore::metric!(
+                            name: "mz_metrics_lgalloc_live_bytes",
+                            help: "Total bytes currently allocated via lgalloc",
+                        )),
+                        live_count: registry.register(mz_ore::metric!(
+                            name: "mz_metrics_lgalloc_live_count",
+                            help: "Number of live lgalloc allocations",
+                        )),
                     }
                 }
                 fn get_size_class(&mut self, size_class: usize) -> &LgMetricsSC {
@@ -49,6 +59,9 @@ macro_rules! metrics_size_class {
                         let sc_stats = self.get_size_class(*size_class);
                         $(sc_stats.$metric.set(($conv)(u64::cast_from(sc.$name), *size_class));)*
                     }
+                    let profile_stats = mz_ore::lgalloc::stats();
+                    self.live_bytes.set(u64::cast_from(profile_stats.live_bytes));
+                    self.live_count.set(u64::cast_from(profile_stats.live_count));
                 }
             }
         }
