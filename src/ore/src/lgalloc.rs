@@ -238,3 +238,136 @@ pub fn deallocate(handle: Handle) {
     #[allow(clippy::disallowed_methods)]
     lgalloc::deallocate(handle.inner);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[crate::test]
+    fn trace_tree_empty_trace() {
+        let mut tree = TraceTree::new();
+        let id = tree.insert(&[]);
+        assert_eq!(id, 0, "empty trace should return root");
+        assert_eq!(tree.resolve(id), Vec::<usize>::new());
+    }
+
+    #[crate::test]
+    fn trace_tree_single_frame() {
+        let mut tree = TraceTree::new();
+        let id = tree.insert(&[42]);
+        assert_ne!(id, 0);
+        assert_eq!(tree.resolve(id), vec![42]);
+    }
+
+    #[crate::test]
+    fn trace_tree_roundtrip() {
+        let mut tree = TraceTree::new();
+        let trace = vec![10, 20, 30, 40];
+        let id = tree.insert(&trace);
+        assert_eq!(tree.resolve(id), trace);
+    }
+
+    #[crate::test]
+    fn trace_tree_shared_prefix() {
+        let mut tree = TraceTree::new();
+        let id_a = tree.insert(&[1, 2, 3]);
+        let id_b = tree.insert(&[1, 2, 4]);
+
+        assert_ne!(id_a, id_b);
+        assert_eq!(tree.resolve(id_a), vec![1, 2, 3]);
+        assert_eq!(tree.resolve(id_b), vec![1, 2, 4]);
+
+        // Shared prefix [1, 2] means only 4 nodes: root, 1, 2, 3, 4 = 5 total.
+        assert_eq!(tree.nodes.len(), 5);
+    }
+
+    #[crate::test]
+    fn trace_tree_duplicate_returns_same_id() {
+        let mut tree = TraceTree::new();
+        let id1 = tree.insert(&[10, 20, 30]);
+        let id2 = tree.insert(&[10, 20, 30]);
+        assert_eq!(id1, id2);
+    }
+
+    #[crate::test]
+    fn trace_tree_prefix_is_different_from_full() {
+        let mut tree = TraceTree::new();
+        let id_full = tree.insert(&[1, 2, 3]);
+        let id_prefix = tree.insert(&[1, 2]);
+
+        assert_ne!(id_full, id_prefix);
+        assert_eq!(tree.resolve(id_full), vec![1, 2, 3]);
+        assert_eq!(tree.resolve(id_prefix), vec![1, 2]);
+    }
+
+    #[crate::test]
+    fn trace_tree_disjoint_traces() {
+        let mut tree = TraceTree::new();
+        let id_a = tree.insert(&[100, 200]);
+        let id_b = tree.insert(&[300, 400]);
+
+        assert_eq!(tree.resolve(id_a), vec![100, 200]);
+        assert_eq!(tree.resolve(id_b), vec![300, 400]);
+    }
+
+    #[crate::test]
+    #[cfg(feature = "proptest")]
+    fn trace_tree_roundtrip_proptest() {
+        use proptest::prelude::*;
+
+        // Generate 1-10 traces, each with 1-20 frames.
+        let trace_strategy =
+            proptest::collection::vec(proptest::collection::vec(any::<usize>(), 1..20), 1..10);
+
+        proptest!(|(traces in trace_strategy)| {
+            let mut tree = TraceTree::new();
+            let ids: Vec<_> = traces.iter().map(|t| tree.insert(t)).collect();
+            for (trace, &id) in itertools::Itertools::zip_eq(traces.iter(), &ids) {
+                prop_assert_eq!(&tree.resolve(id), trace);
+            }
+        });
+    }
+
+    #[crate::test]
+    #[cfg(feature = "proptest")]
+    fn trace_tree_dedup_proptest() {
+        use proptest::prelude::*;
+
+        let trace_strategy = proptest::collection::vec(any::<usize>(), 1..20);
+
+        proptest!(|(trace in trace_strategy)| {
+            let mut tree = TraceTree::new();
+            let id1 = tree.insert(&trace);
+            let id2 = tree.insert(&trace);
+            prop_assert_eq!(id1, id2, "duplicate traces must return same ID");
+        });
+    }
+
+    #[crate::test]
+    #[cfg(feature = "proptest")]
+    fn trace_tree_prefix_sharing_proptest() {
+        use proptest::prelude::*;
+
+        let strategy = (
+            proptest::collection::vec(any::<usize>(), 1..10),
+            proptest::collection::vec(any::<usize>(), 1..10),
+        );
+
+        proptest!(|(prefix_and_suffix in strategy)| {
+            let (prefix, suffix) = prefix_and_suffix;
+            let mut full = prefix.clone();
+            full.extend_from_slice(&suffix);
+
+            let mut tree = TraceTree::new();
+            let id_full = tree.insert(&full);
+            let id_prefix = tree.insert(&prefix);
+
+            prop_assert_eq!(&tree.resolve(id_full), &full);
+            prop_assert_eq!(&tree.resolve(id_prefix), &prefix);
+
+            if !suffix.is_empty() {
+                prop_assert_ne!(id_full, id_prefix);
+            }
+        });
+    }
+}
