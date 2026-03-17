@@ -31,6 +31,7 @@ cfg_if! {
 }
 
 /// Annotates all unannotated stacks in a profile with the given label.
+#[cfg(all(feature = "jemalloc", not(miri)))]
 fn annotate_unannotated(profile: &mut StackProfile, annotation: &str) {
     let anno_idx = profile
         .annotations
