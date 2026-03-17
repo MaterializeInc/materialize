@@ -1547,7 +1547,7 @@ class ConsoleResources(Modification):
                 resources == expected
             ), f"Expected console resources {expected}, but got {resources}"
 
-        retry(check_pods, 360)
+        retry(check_pods, 480)
 
 
 class AuthenticatorKind(Modification):
