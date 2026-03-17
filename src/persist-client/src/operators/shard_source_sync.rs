@@ -348,9 +348,19 @@ where
     // Both operators run on the same Timely thread, so Rc sharing is safe.
     let leases: Rc<RefCell<Option<LeaseManager<G::Timestamp>>>> = Rc::new(RefCell::new(None));
 
+    // Shared task handle: the Tokio task owns the listen handle (and its SeqNo lease).
+    // Both the descs operator and the descs_return operator hold an Rc to this handle,
+    // ensuring the task (and the listen handle it owns) stays alive until both operators
+    // exit. The descs_return operator exits only after all fetches complete (its input
+    // frontier reaches the empty antichain), guaranteeing that leased parts are not GC'd
+    // while fetches are in flight.
+    let shared_task_handle: Rc<RefCell<Option<mz_ore::task::AbortOnDropHandle<()>>>> =
+        Rc::new(RefCell::new(None));
+
     // -- descs_return operator (sync): advances lease manager based on completed fetches --
     {
         let leases = Rc::clone(&leases);
+        let return_task_handle = Rc::clone(&shared_task_handle);
         let mut builder = OperatorBuilderRc::new(
             format!("shard_source_descs_return({})", name),
             scope.clone(),
@@ -362,6 +372,8 @@ where
             builder.new_input_connection(completed_fetches_stream, Pipeline, vec![]);
         builder.build(move |_capabilities| {
             move |frontiers| {
+                // Keep the task handle alive until this operator exits.
+                let _ = &return_task_handle;
                 // Must drain input every activation.
                 completed_fetches.for_each(|_cap, _data| {});
                 if let Some(mgr) = leases.borrow_mut().as_mut() {
@@ -408,7 +420,9 @@ where
         )
         .abort_on_drop();
 
-        task_state = Some((event_rx, task_handle));
+        // Store in the shared handle so descs_return also keeps the task alive.
+        *shared_task_handle.borrow_mut() = Some(task_handle);
+        task_state = Some(event_rx);
     }
 
     builder.build(move |capabilities| {
@@ -419,12 +433,9 @@ where
             cap_set = CapabilitySet::new();
         }
 
-        // Chosen worker state. Destructure task_state for ownership.
-        let (mut event_rx, task_handle) = match task_state {
-            Some((rx, handle)) => (Some(rx), Some(handle)),
-            None => (None, None),
-        };
+        let mut event_rx = task_state;
         let leases = leases; // Move the shared Rc into the schedule closure.
+        let shared_task_handle = shared_task_handle; // Move into schedule closure.
         let mut cfg: Option<PersistConfig> = None;
         let mut metrics: Option<Arc<Metrics>> = None;
         let mut current_frontier = Antichain::from_elem(G::Timestamp::minimum());
@@ -432,7 +443,7 @@ where
 
         move |_frontiers| {
             // Keep the task handle alive for the lifetime of this closure.
-            let _ = &task_handle;
+            let _ = &shared_task_handle;
 
             // If the shutdown button was pressed, drop the event receiver to signal the
             // task to exit, and drop capabilities.
