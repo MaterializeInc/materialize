@@ -119,13 +119,13 @@ const MIGRATIONS: &[MigrationStep] = &[
         mechanism: Mechanism::Replacement,
     },
     MigrationStep {
-        version: Version::new(26, 16, 0),
+        version: Version::new(26, 17, 0),
         object: Object {
             type_: CatalogItemType::Table,
             schema: MZ_CATALOG_SCHEMA,
             name: "mz_roles",
         },
-        mechanism: Mechanism::Replacement,
+        mechanism: Mechanism::Evolution,
     },
 ];
 
