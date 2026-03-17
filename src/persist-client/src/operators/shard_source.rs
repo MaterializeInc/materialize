@@ -48,8 +48,7 @@ use tracing::{debug, trace};
 
 use crate::batch::BLOB_TARGET_SIZE;
 use crate::cfg::{PERSIST_SHARD_SOURCE_SYNC, RetryParameters, USE_CRITICAL_SINCE_SOURCE};
-use crate::fetch::{ExchangeableBatchPart, FetchedBlob, Lease, LeasedBatchPart};
-use crate::internal::metrics::Metrics;
+use crate::fetch::{ExchangeableBatchPart, FetchedBlob, Lease};
 use crate::internal::state::BatchPart;
 use crate::operators::shard_source_sync;
 use crate::stats::{STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
@@ -708,75 +707,6 @@ where
         completed_fetches_stream,
         shutdown_button.press_on_drop(),
     )
-}
-
-/// Apply stats-based filtering to a part descriptor.
-///
-/// Returns `true` if the part should be emitted, `false` if it was filtered out.
-pub(crate) fn apply_stats_filter<T: Timestamp + Codec64>(
-    cfg: &crate::cfg::PersistConfig,
-    metrics: &Metrics,
-    filter_fn: &mut impl FnMut(&PartStats, AntichainRef<T>) -> FilterResult,
-    current_frontier: &Antichain<T>,
-    audit_budget_bytes: &mut u64,
-    part_desc: &mut LeasedBatchPart<T>,
-) -> bool {
-    if !STATS_FILTER_ENABLED.get(cfg) {
-        return true;
-    }
-
-    let filter_result = match &part_desc.part {
-        BatchPart::Hollow(x) => x.stats.as_ref().map_or(FilterResult::Keep, |stats| {
-            filter_fn(&stats.decode(), current_frontier.borrow())
-        }),
-        BatchPart::Inline { .. } => FilterResult::Keep,
-    };
-
-    let bytes = u64::cast_from(part_desc.encoded_size_bytes());
-    match filter_result {
-        FilterResult::Keep => {
-            *audit_budget_bytes = audit_budget_bytes.saturating_add(bytes);
-        }
-        FilterResult::Discard => {
-            metrics.pushdown.parts_filtered_count.inc();
-            metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
-            let should_audit = match &part_desc.part {
-                BatchPart::Hollow(x) => {
-                    let mut h = DefaultHasher::new();
-                    x.key.hash(&mut h);
-                    usize::cast_from(h.finish()) % 100 < STATS_AUDIT_PERCENT.get(cfg)
-                }
-                BatchPart::Inline { .. } => false,
-            };
-            if should_audit && bytes < *audit_budget_bytes {
-                *audit_budget_bytes -= bytes;
-                metrics.pushdown.parts_audited_count.inc();
-                metrics.pushdown.parts_audited_bytes.inc_by(bytes);
-                part_desc.request_filter_pushdown_audit();
-            } else {
-                debug!(
-                    "skipping part because of stats filter {:?}",
-                    part_desc.part.stats()
-                );
-                return false;
-            }
-        }
-        FilterResult::ReplaceWith { key, val } => {
-            part_desc.maybe_optimize(cfg, key, val);
-            *audit_budget_bytes = audit_budget_bytes.saturating_add(bytes);
-        }
-    }
-
-    let bytes = u64::cast_from(part_desc.encoded_size_bytes());
-    if part_desc.part.is_inline() {
-        metrics.pushdown.parts_inline_count.inc();
-        metrics.pushdown.parts_inline_bytes.inc_by(bytes);
-    } else {
-        metrics.pushdown.parts_fetched_count.inc();
-        metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
-    }
-
-    true
 }
 
 #[cfg(test)]
