@@ -19,11 +19,15 @@
 //! instead of calling the `lgalloc` crate directly. This allows us to track
 //! how much memory the application currently holds via lgalloc, including
 //! stack traces at each allocation site for heap profiling.
+//!
+//! Stack traces are interned: allocations from the same call site share a
+//! single copy of the trace, identified by a `StackId`.
 
-use std::collections::BTreeMap;
 use std::ptr::NonNull;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+use std::collections::BTreeMap;
 
 pub use lgalloc::AllocError;
 
@@ -33,15 +37,79 @@ static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
 static LIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Monotonically increasing allocation ID.
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-/// Live allocations with their stack traces for heap profiling.
-static LIVE_ALLOCATIONS: Mutex<BTreeMap<u64, AllocationRecord>> = Mutex::new(BTreeMap::new());
 
-/// A record of a live lgalloc allocation.
-struct AllocationRecord {
-    /// Stack trace at the time of allocation (instruction pointer addresses).
-    backtrace: Vec<usize>,
-    /// Size of the allocation in bytes.
-    capacity_bytes: usize,
+/// All profiling state, protected by a single mutex.
+static STATE: Mutex<ProfileState> = Mutex::new(ProfileState::new());
+
+/// Interned stack trace identifier.
+type StackId = u64;
+
+struct ProfileState {
+    /// Interned stack traces: stack ID -> (addresses, refcount).
+    stacks: BTreeMap<StackId, InternedStack>,
+    /// Map from stack trace content to its ID, for deduplication.
+    stack_index: BTreeMap<Vec<usize>, StackId>,
+    /// Live allocations: allocation ID -> (stack ID, capacity bytes).
+    allocations: BTreeMap<u64, (StackId, usize)>,
+    /// Next stack ID.
+    next_stack_id: StackId,
+}
+
+struct InternedStack {
+    addrs: Vec<usize>,
+    refcount: usize,
+}
+
+impl ProfileState {
+    const fn new() -> Self {
+        Self {
+            stacks: BTreeMap::new(),
+            stack_index: BTreeMap::new(),
+            allocations: BTreeMap::new(),
+            next_stack_id: 0,
+        }
+    }
+
+    /// Intern a stack trace, returning its ID. Increments the refcount if
+    /// already interned.
+    fn intern_stack(&mut self, addrs: Vec<usize>) -> StackId {
+        if let Some(&id) = self.stack_index.get(&addrs) {
+            self.stacks.get_mut(&id).expect("consistent").refcount += 1;
+            return id;
+        }
+        let id = self.next_stack_id;
+        self.next_stack_id += 1;
+        self.stack_index.insert(addrs.clone(), id);
+        self.stacks.insert(
+            id,
+            InternedStack {
+                addrs,
+                refcount: 1,
+            },
+        );
+        id
+    }
+
+    /// Decrement refcount for a stack trace, removing it if no longer referenced.
+    fn release_stack(&mut self, stack_id: StackId) {
+        let entry = self.stacks.get_mut(&stack_id).expect("consistent");
+        entry.refcount -= 1;
+        if entry.refcount == 0 {
+            let removed = self.stacks.remove(&stack_id).expect("consistent");
+            self.stack_index.remove(&removed.addrs);
+        }
+    }
+
+    fn insert(&mut self, alloc_id: u64, addrs: Vec<usize>, capacity_bytes: usize) {
+        let stack_id = self.intern_stack(addrs);
+        self.allocations.insert(alloc_id, (stack_id, capacity_bytes));
+    }
+
+    fn remove(&mut self, alloc_id: u64) {
+        if let Some((stack_id, _)) = self.allocations.remove(&alloc_id) {
+            self.release_stack(stack_id);
+        }
+    }
 }
 
 /// Application-level lgalloc memory stats, tracking live allocations made
@@ -66,14 +134,19 @@ pub fn stats() -> LgAllocStats {
 ///
 /// Allocations sharing the same stack trace are grouped together with their byte counts summed.
 pub fn heap_profile() -> Vec<(Vec<usize>, usize)> {
-    let allocs = LIVE_ALLOCATIONS.lock().expect("poisoned");
-    let mut by_stack: BTreeMap<&[usize], usize> = BTreeMap::new();
-    for record in allocs.values() {
-        *by_stack.entry(&record.backtrace).or_default() += record.capacity_bytes;
+    let state = STATE.lock().expect("poisoned");
+    // Aggregate bytes per stack ID.
+    let mut by_stack: BTreeMap<StackId, usize> = BTreeMap::new();
+    for &(stack_id, capacity_bytes) in state.allocations.values() {
+        *by_stack.entry(stack_id).or_default() += capacity_bytes;
     }
+    // Resolve stack IDs to addresses.
     by_stack
         .into_iter()
-        .map(|(addrs, bytes)| (addrs.to_vec(), bytes))
+        .map(|(stack_id, bytes)| {
+            let addrs = &state.stacks.get(&stack_id).expect("consistent").addrs;
+            (addrs.clone(), bytes)
+        })
         .collect()
 }
 
@@ -116,13 +189,7 @@ pub fn allocate<T>(capacity: usize) -> Result<(NonNull<T>, usize, Handle), Alloc
 
     LIVE_BYTES.fetch_add(bytes, Ordering::Relaxed);
     LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
-    LIVE_ALLOCATIONS.lock().expect("poisoned").insert(
-        id,
-        AllocationRecord {
-            backtrace: addrs,
-            capacity_bytes: bytes,
-        },
-    );
+    STATE.lock().expect("poisoned").insert(id, addrs, bytes);
 
     Ok((
         ptr,
@@ -139,10 +206,7 @@ pub fn allocate<T>(capacity: usize) -> Result<(NonNull<T>, usize, Handle), Alloc
 pub fn deallocate(handle: Handle) {
     LIVE_BYTES.fetch_sub(handle.capacity_bytes, Ordering::Relaxed);
     LIVE_COUNT.fetch_sub(1, Ordering::Relaxed);
-    LIVE_ALLOCATIONS
-        .lock()
-        .expect("poisoned")
-        .remove(&handle.id);
+    STATE.lock().expect("poisoned").remove(handle.id);
     #[allow(clippy::disallowed_methods)]
     lgalloc::deallocate(handle.inner);
 }
