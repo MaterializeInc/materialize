@@ -180,12 +180,14 @@ pub fn allocate<T>(capacity: usize) -> Result<(NonNull<T>, usize, Handle), Alloc
     let bytes = actual_capacity * std::mem::size_of::<T>();
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
 
-    // Capture backtrace for heap profiling.
+    // Capture backtrace for heap profiling. `backtrace::trace` walks leaf-to-root,
+    // but pprof expects root-to-leaf order, so we reverse.
     let mut addrs = Vec::new();
     backtrace::trace(|frame| {
         addrs.push(frame.ip().addr());
         true
     });
+    addrs.reverse();
 
     LIVE_BYTES.fetch_add(bytes, Ordering::Relaxed);
     LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
