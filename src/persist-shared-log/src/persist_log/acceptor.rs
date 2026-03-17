@@ -11,10 +11,19 @@
 //!
 //! Proposals are appended unconditionally via `compare_and_append`.
 //!
-//! Uses an open-loop, pipelined design: at most one batch is in flight
-//! (`compare_and_append`) while the next batch accumulates in memory. As soon
-//! as the in-flight batch completes and there are pending proposals, the next
-//! flush starts immediately — no timer delay.
+//! Uses an open-loop design: as soon as a flush completes, the next one starts
+//! immediately if there are pending proposals — no timer delay.
+//!
+//! # Future: pipelined batch building
+//!
+//! Currently `compare_and_append` does parquet encoding and blob upload
+//! internally, so we can't overlap encoding of batch N+1 with the write of
+//! batch N. Persist's `BatchBuilder` API allows splitting batch construction
+//! (parquet encode + blob upload) from the CAS (`compare_and_append_batch`).
+//! Using that split, we could optimistically build the next batch at timestamp
+//! T+1 while the current batch's CAS is in flight, and submit it immediately
+//! on success. On `UpperMismatch` (rare, only with multiple writers) the
+//! pre-built batch would need to be discarded and rebuilt.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -133,10 +142,6 @@ struct PendingAppend {
 /// Owns a `WriteHandle` and performs blind group commits via
 /// `compare_and_append`. The persist shard upper frontier serves as the batch
 /// number — batch number derives from upper, not the other way around.
-///
-/// Uses open-loop pipelining: while a `compare_and_append` is in flight, the
-/// select loop continues draining proposals into `pending`. When the flush
-/// completes, the next one starts immediately if there are pending proposals.
 pub struct PersistAcceptor {
     pending: Vec<PendingItem>,
     rx: mpsc::Receiver<PersistAcceptorCommand>,
@@ -166,18 +171,23 @@ impl PersistAcceptor {
 
     /// Runs the acceptor loop until the channel closes or a fatal error occurs.
     ///
-    /// The loop is open-loop and pipelined: while `compare_and_append` is
-    /// awaited, the select loop also drains incoming commands into `pending`.
-    /// When the flush completes and there are pending proposals, the next flush
-    /// starts immediately.
+    /// Open-loop: when there are pending proposals, flush immediately. When the
+    /// flush completes, drain any commands that arrived during the flush, then
+    /// flush again if there's more work.
     pub async fn run(mut self, mut write: WriteHandle<Proposal, (), u64, i64>) {
         info!("persist acceptor starting");
         loop {
+            // Flush if we have pending work.
             if !self.pending.is_empty() {
-                match self.flush_while_receiving(&mut write).await {
-                    LoopAction::Continue => continue,
-                    LoopAction::Stop => break,
+                let pending = std::mem::take(&mut self.pending);
+                if let Err(e) = flush(&mut write, pending, &self.metrics).await {
+                    error!("acceptor shutting down: {}", e);
+                    break;
                 }
+                // Drain any commands that arrived during the flush before
+                // looping back to check pending again.
+                self.drain_ready_commands();
+                continue;
             }
 
             // Nothing pending — wait for a command.
@@ -216,43 +226,13 @@ impl PersistAcceptor {
         }
     }
 
-    /// Flush pending items while continuing to receive new ones.
-    async fn flush_while_receiving(
-        &mut self,
-        write: &mut WriteHandle<Proposal, (), u64, i64>,
-    ) -> LoopAction {
-        let pending = std::mem::take(&mut self.pending);
-        let metrics = self.metrics.clone();
-
-        let flush_fut = flush(write, pending, &metrics);
-        tokio::pin!(flush_fut);
-
-        let mut channel_closed = false;
-        let result = loop {
-            tokio::select! {
-                biased;
-                cmd = self.rx.recv() => match cmd {
-                    Some(cmd) => self.handle_command(cmd),
-                    None => {
-                        channel_closed = true;
-                        break flush_fut.await;
-                    }
-                },
-                result = &mut flush_fut => break result,
-            }
-        };
-
-        if result.is_err() || channel_closed {
-            LoopAction::Stop
-        } else {
-            LoopAction::Continue
+    /// Drain all immediately-available commands from the channel without
+    /// blocking. Maximizes batching after a flush completes.
+    fn drain_ready_commands(&mut self) {
+        while let Ok(cmd) = self.rx.try_recv() {
+            self.handle_command(cmd);
         }
     }
-}
-
-enum LoopAction {
-    Continue,
-    Stop,
 }
 
 // ---------------------------------------------------------------------------
@@ -393,19 +373,16 @@ async fn flush(
                 continue;
             }
             Err(invalid_usage) => {
-                // InvalidUsage is a programming error — fatal.
                 let msg = format!("persist internal error: {}", invalid_usage);
                 error!("{}", msg);
                 for reply in replies {
                     let _ = reply.send(Err(msg.clone()));
                 }
-                // Don't resolve barriers on fatal error — callers get DroppedReply.
                 return Err(msg);
             }
         }
     }
 
-    // Retries exhausted — error all pending replies.
     let msg =
         "persist acceptor flush failed: retries exhausted after repeated upper mismatch"
             .to_string();
