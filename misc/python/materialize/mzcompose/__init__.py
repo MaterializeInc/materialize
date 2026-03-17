@@ -193,7 +193,7 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "enable_compute_sync_mv_sink",
-            "false",
+            "true",
             ["true", "false"],
         ),
         VariableSystemParameter(

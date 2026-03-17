@@ -24,7 +24,7 @@ pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
 /// Use sync Timely operators with Tokio tasks for the MV sink.
 pub const ENABLE_SYNC_MV_SINK: Config<bool> = Config::new(
     "enable_compute_sync_mv_sink",
-    false,
+    true,
     "Use sync Timely operators with Tokio tasks for the MV sink.",
 );
 
