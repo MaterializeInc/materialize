@@ -193,7 +193,7 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "persist_shard_source_sync",
-            "false",
+            "true",
             ["true", "false"],
         ),
         VariableSystemParameter(
