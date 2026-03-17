@@ -15,12 +15,15 @@ use mz_persist::generated::consensus_service::{
     ProtoScanResponse, ProtoTruncateResponse,
 };
 
-/// Configuration for the [`ActorAcceptor`](crate::actor::acceptor::ActorAcceptor).
+/// Configuration for the acceptor.
 #[derive(Debug, Clone)]
 pub struct AcceptorConfig {
     /// Depth of the command channel (mpsc queue).
     pub queue_depth: usize,
     /// How often to flush pending proposals to the log, in milliseconds.
+    ///
+    /// Only used by the log-backed [`ActorAcceptor`](crate::actor::acceptor::ActorAcceptor).
+    /// The persist-backed acceptor uses open-loop flushing and ignores this.
     pub flush_interval_ms: u64,
 }
 

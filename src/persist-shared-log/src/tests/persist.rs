@@ -293,14 +293,7 @@ async fn test_persist_batch_grouping() {
     let r1 = r1.unwrap();
     let r2 = r2.unwrap();
 
-    // All should be in the same batch.
-    assert_eq!(r0.batch_number, r1.batch_number);
-    assert_eq!(r1.batch_number, r2.batch_number);
-    assert_eq!(r0.position, 0);
-    assert_eq!(r1.position, 1);
-    assert_eq!(r2.position, 2);
-
-    // Check results.
+    // Check results — all three should commit regardless of batch placement.
     let c0 = h
         .learner_handle
         .await_cas_result(r0.batch_number, r0.position)
@@ -325,7 +318,7 @@ async fn test_persist_batch_grouping() {
 async fn test_persist_intra_batch_cas_chaining() {
     let h = PersistTestHarness::new().await;
 
-    // Two CAS proposals in the same batch for the same shard.
+    // Two CAS proposals for the same shard — the second chains off the first.
     let (r0, r1) = tokio::join!(
         h.acceptor_handle.append(ProtoLogProposal {
             op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
@@ -346,8 +339,6 @@ async fn test_persist_intra_batch_cas_chaining() {
     );
     let r0 = r0.unwrap();
     let r1 = r1.unwrap();
-    assert_eq!(r0.batch_number, r1.batch_number);
-
     let c0 = h
         .learner_handle
         .await_cas_result(r0.batch_number, r0.position)

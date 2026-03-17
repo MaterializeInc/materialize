@@ -13,6 +13,17 @@ use mz_ore::metric;
 use mz_ore::metrics::{IntCounter, IntGauge, MetricsRegistry};
 use prometheus::Histogram;
 
+/// 1ms-granular buckets from 1ms to 200ms, then coarser up to 10s.
+///
+/// Gives accurate percentile reporting from prometheus histograms without
+/// needing HDR histograms. Fine for singleton metrics (one acceptor, one
+/// learner per process).
+fn latency_buckets() -> Vec<f64> {
+    let mut b: Vec<f64> = (1..=200).map(|ms| ms as f64 / 1000.0).collect();
+    b.extend_from_slice(&[0.25, 0.3, 0.4, 0.5, 0.75, 1.0, 2.0, 5.0, 10.0]);
+    b
+}
+
 /// Metrics for the acceptor (blind group commit).
 #[derive(Debug, Clone)]
 pub struct AcceptorMetrics {
@@ -60,7 +71,7 @@ impl AcceptorMetrics {
             flush_latency_seconds: registry.register(metric!(
                 name: "mz_consensus_svc_acceptor_flush_latency_seconds",
                 help: "Histogram of flush latency in seconds.",
-                buckets: vec![0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1.0],
+                buckets: latency_buckets(),
             )),
             flush_proposals_per_batch: registry.register(metric!(
                 name: "mz_consensus_svc_acceptor_flush_proposals_per_batch",
@@ -70,10 +81,7 @@ impl AcceptorMetrics {
             proposal_queue_seconds: registry.register(metric!(
                 name: "mz_consensus_svc_acceptor_proposal_queue_seconds",
                 help: "Time from proposal arrival to flush start (queuing delay).",
-                buckets: vec![
-                    0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.003, 0.004, 0.005,
-                    0.006, 0.008, 0.01, 0.015, 0.02, 0.03, 0.05, 0.1, 0.25, 0.5, 1.0,
-                ],
+                buckets: latency_buckets(),
             )),
             object_store_log_writes: registry.register(metric!(
                 name: "mz_consensus_svc_object_store_log_writes_total",
@@ -86,10 +94,7 @@ impl AcceptorMetrics {
             object_store_log_write_latency_seconds: registry.register(metric!(
                 name: "mz_consensus_svc_object_store_log_write_latency_seconds",
                 help: "Histogram of object store log PUT latency in seconds.",
-                buckets: vec![
-                    0.001, 0.002, 0.004, 0.008, 0.016, 0.032, 0.064,
-                    0.128, 0.256, 0.512, 1.0, 2.0, 5.0,
-                ],
+                buckets: latency_buckets(),
             )),
             object_store_write_retries: registry.register(metric!(
                 name: "mz_consensus_svc_object_store_write_retries_total",
@@ -176,49 +181,32 @@ impl LearnerMetrics {
             batch_materialize_latency_seconds: registry.register(metric!(
                 name: "mz_consensus_svc_learner_batch_materialize_latency_seconds",
                 help: "Histogram of per-batch materialization latency in seconds.",
-                buckets: vec![
-                    0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0,
-                ],
+                buckets: latency_buckets(),
             )),
             cmd_queue_seconds: registry.register(metric!(
                 name: "mz_consensus_svc_learner_cmd_queue_seconds",
                 help: "Time from command send to learner actor processing.",
-                buckets: vec![
-                    0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01,
-                    0.02, 0.05, 0.1, 0.25, 0.5, 1.0,
-                ],
+                buckets: latency_buckets(),
             )),
             head_seconds: registry.register(metric!(
                 name: "mz_consensus_svc_learner_head_seconds",
                 help: "Server-side head latency including linearization wait.",
-                buckets: vec![
-                    0.0001, 0.0005, 0.001, 0.002, 0.005, 0.008, 0.01, 0.015,
-                    0.02, 0.03, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1.0,
-                ],
+                buckets: latency_buckets(),
             )),
             scan_seconds: registry.register(metric!(
                 name: "mz_consensus_svc_learner_scan_seconds",
                 help: "Server-side scan latency including linearization wait.",
-                buckets: vec![
-                    0.0001, 0.0005, 0.001, 0.002, 0.005, 0.008, 0.01, 0.015,
-                    0.02, 0.03, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1.0,
-                ],
+                buckets: latency_buckets(),
             )),
             cas_result_seconds: registry.register(metric!(
                 name: "mz_consensus_svc_learner_cas_result_seconds",
                 help: "Server-side CAS result latency including materialization wait.",
-                buckets: vec![
-                    0.0001, 0.0005, 0.001, 0.002, 0.005, 0.008, 0.01, 0.015,
-                    0.02, 0.03, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1.0,
-                ],
+                buckets: latency_buckets(),
             )),
             truncate_result_seconds: registry.register(metric!(
                 name: "mz_consensus_svc_learner_truncate_result_seconds",
                 help: "Server-side truncate result latency including materialization wait.",
-                buckets: vec![
-                    0.0001, 0.0005, 0.001, 0.002, 0.005, 0.008, 0.01, 0.015,
-                    0.02, 0.03, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1.0,
-                ],
+                buckets: latency_buckets(),
             )),
             object_store_snapshot_writes: registry.register(metric!(
                 name: "mz_consensus_svc_object_store_snapshot_writes_total",
@@ -231,10 +219,7 @@ impl LearnerMetrics {
             object_store_snapshot_write_latency_seconds: registry.register(metric!(
                 name: "mz_consensus_svc_object_store_snapshot_write_latency_seconds",
                 help: "Histogram of object store snapshot PUT latency in seconds.",
-                buckets: vec![
-                    0.002, 0.004, 0.008, 0.016, 0.032, 0.064,
-                    0.128, 0.256, 0.512, 1.0, 2.0, 5.0,
-                ],
+                buckets: latency_buckets(),
             )),
             active_shards: registry.register(metric!(
                 name: "mz_consensus_svc_learner_active_shards",
