@@ -24,6 +24,7 @@ use mz_repr::namespaces::is_system_schema;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{
     ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeStatement, Plan, SubscribeFrom,
+    SubscribePlan,
 };
 use smallvec::SmallVec;
 
@@ -41,6 +42,16 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
     session: &'s Session,
     plan: &'p Plan,
 ) -> TargetCluster {
+    let inspect_subscribe = |plan: &SubscribePlan| {
+        (
+            plan.from.depends_on(),
+            match &plan.from {
+                SubscribeFrom::Id(_) => false,
+                SubscribeFrom::Query { expr, desc: _ } => expr.could_run_expensive_function(),
+            },
+        )
+    };
+
     let (depends_on, could_run_expensive_function) = match plan {
         Plan::Select(plan) => (
             plan.source.depends_on(),
@@ -50,13 +61,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
             plan.select_plan.source.depends_on(),
             plan.select_plan.source.could_run_expensive_function(),
         ),
-        Plan::Subscribe(plan) => (
-            plan.from.depends_on(),
-            match &plan.from {
-                SubscribeFrom::Id(_) => false,
-                SubscribeFrom::Query { expr, desc: _ } => expr.could_run_expensive_function(),
-            },
-        ),
+        Plan::Subscribe(plan) => inspect_subscribe(plan),
         Plan::ExplainPlan(ExplainPlanPlan {
             explainee: Explainee::Statement(ExplaineeStatement::Select { plan, .. }),
             ..
@@ -64,6 +69,10 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
             plan.source.depends_on(),
             plan.source.could_run_expensive_function(),
         ),
+        Plan::ExplainPlan(ExplainPlanPlan {
+            explainee: Explainee::Statement(ExplaineeStatement::Subscribe { plan, .. }),
+            ..
+        }) => inspect_subscribe(plan),
         Plan::ExplainTimestamp(ExplainTimestampPlan { raw_plan, .. }) => (
             raw_plan.depends_on(),
             raw_plan.could_run_expensive_function(),
@@ -103,7 +112,18 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::AbortTransaction(_)
         | Plan::CopyFrom(_)
         | Plan::CopyTo(_)
-        | Plan::ExplainPlan(_)
+        | Plan::ExplainPlan(ExplainPlanPlan {
+            explainee:
+                Explainee::Statement(
+                    // Explicitly list all enum variants, to avoid bugs when somebody
+                    // adds a new variant (e.g., for `Plan::Execute`).
+                    ExplaineeStatement::CreateView { .. }
+                    | ExplaineeStatement::CreateMaterializedView { .. }
+                    | ExplaineeStatement::CreateIndex { .. },
+                ),
+            ..
+        })
+        | Plan::ExplainPlan(ExplainPlanPlan { explainee: _, .. })
         | Plan::ExplainPushdown(_)
         | Plan::ExplainSinkSchema(_)
         | Plan::Insert(_)

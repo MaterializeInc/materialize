@@ -27,6 +27,18 @@ EOF
 
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SUBSCRIBE (SELECT 1)
+----
+Explained Query:
+  Constant
+    - (1)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT 1 / 1
 ----
 Explained Query (fast path):
