@@ -110,6 +110,12 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_databases",
         ),
+        MigrationStep::replacement(
+            "26.18.0-dev.0",
+            CatalogItemType::Table,
+            MZ_CATALOG_SCHEMA,
+            "mz_roles",
+        ),
     ]
 });
 

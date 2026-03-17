@@ -3211,6 +3211,7 @@ pub static MZ_ROLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .with_column("inherit", SqlScalarType::Bool.nullable(false))
         .with_column("rolcanlogin", SqlScalarType::Bool.nullable(true))
         .with_column("rolsuper", SqlScalarType::Bool.nullable(true))
+        .with_column("autoprovisionsource", SqlScalarType::String.nullable(true))
         .with_key(vec![0])
         .with_key(vec![1])
         .finish(),
@@ -3224,6 +3225,10 @@ pub static MZ_ROLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         ),
         ("rolcanlogin", "Indicates whether the role can log in."),
         ("rolsuper", "Indicates whether the role is a superuser."),
+        (
+            "autoprovisionsource",
+            "The authenticator that was used to auto-provision this role ('oidc', 'frontegg', or 'none').",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
