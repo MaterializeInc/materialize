@@ -1333,9 +1333,18 @@ pub mod tests {
         async fn list_merges_both_tiers() {
             let (tiered, _, _) = new_tiered();
 
-            tiered.set("shard/n001/part1", Bytes::from("a")).await.unwrap();
-            tiered.set("shard/f001/part2", Bytes::from("b")).await.unwrap();
-            tiered.set("shard/n002/part3", Bytes::from("c")).await.unwrap();
+            tiered
+                .set("shard/n001/part1", Bytes::from("a"))
+                .await
+                .unwrap();
+            tiered
+                .set("shard/f001/part2", Bytes::from("b"))
+                .await
+                .unwrap();
+            tiered
+                .set("shard/n002/part3", Bytes::from("c"))
+                .await
+                .unwrap();
 
             let mut keys = Vec::new();
             tiered

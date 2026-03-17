@@ -1806,7 +1806,7 @@ mod tests {
         use mz_ore::url::SensitiveUrl;
         use std::str::FromStr;
         // When a fast-tier blob URL is configured, BatchBuilderConfig uses FastTierVersion keys.
-        let mut cache = PersistClientCache::new_no_metrics();
+        let cache = PersistClientCache::new_no_metrics();
         cache.cfg.set_config(&BLOB_TARGET_SIZE, 0);
         cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
         cache.cfg.set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
@@ -1846,7 +1846,7 @@ mod tests {
         use mz_ore::url::SensitiveUrl;
         use std::str::FromStr;
         // When fast tier exists but writes are disabled, BatchBuilderConfig uses BaseTierVersion.
-        let mut cache = PersistClientCache::new_no_metrics();
+        let cache = PersistClientCache::new_no_metrics();
         cache.cfg.set_config(&FAST_TIER_WRITES_ENABLED, false);
         cache.cfg.set_config(&BLOB_TARGET_SIZE, 0);
         cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);

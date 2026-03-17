@@ -508,12 +508,21 @@ mod tests {
         let part = PartId::new();
 
         let base_key = PartialBatchKey::new(&WriterKey::for_base_tier(&v), &part);
-        assert_eq!(WriterKey::blob_tier(&base_key.complete(&shard)), BlobTier::Base);
+        assert_eq!(
+            WriterKey::blob_tier(&base_key.complete(&shard)),
+            BlobTier::Base
+        );
 
         let fast_key = PartialBatchKey::new(&WriterKey::for_fast_tier(&v), &part);
-        assert_eq!(WriterKey::blob_tier(&fast_key.complete(&shard)), BlobTier::Fast);
+        assert_eq!(
+            WriterKey::blob_tier(&fast_key.complete(&shard)),
+            BlobTier::Fast
+        );
 
         let id_key = PartialBatchKey::new(&WriterKey::Id(WriterId::new()), &part);
-        assert_eq!(WriterKey::blob_tier(&id_key.complete(&shard)), BlobTier::Base);
+        assert_eq!(
+            WriterKey::blob_tier(&id_key.complete(&shard)),
+            BlobTier::Base
+        );
     }
 }
