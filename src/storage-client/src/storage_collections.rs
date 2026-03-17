@@ -3275,6 +3275,7 @@ mod tests {
         let persist_location = PersistLocation {
             blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
             consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+            fast_tier_blob_uri: None,
         };
         let persist_client = PersistClientCache::new(
             PersistConfig::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),

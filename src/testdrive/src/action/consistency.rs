@@ -335,6 +335,7 @@ async fn check_shard_tombstone(state: &State, shard_id: &str) -> Result<(), anyh
     let location = PersistLocation {
         blob_uri: blob_uri.clone(),
         consensus_uri: consensus_uri.clone(),
+        fast_tier_blob_uri: None,
     };
     let client = state
         .persist_clients

@@ -401,6 +401,7 @@ impl State {
             let persist_location = PersistLocation {
                 blob_uri: persist_blob_url,
                 consensus_uri: persist_consensus_url,
+                fast_tier_blob_uri: None,
             };
             Ok(persist_clients.open(persist_location).await?)
         }

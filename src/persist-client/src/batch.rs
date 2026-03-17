@@ -352,7 +352,7 @@ pub enum Added {
 /// run of BatchBuilder.
 #[derive(Debug, Clone)]
 pub struct BatchBuilderConfig {
-    writer_key: WriterKey,
+    pub(crate) writer_key: WriterKey,
     pub(crate) blob_target_size: usize,
     pub(crate) batch_delete_enabled: bool,
     pub(crate) batch_builder_max_outstanding_parts: usize,
@@ -438,10 +438,22 @@ pub(crate) const INLINE_WRITES_TOTAL_MAX_BYTES: Config<usize> = Config::new(
     persist will backpressure them by flushing out to s3.",
 );
 
+pub(crate) const FAST_TIER_WRITES_ENABLED: Config<bool> = Config::new(
+    "persist_fast_tier_writes_enabled",
+    true,
+    "Whether to write to the fast tier blob when configured. \
+     Disable to drain fast tier data via compaction before removing the fast tier URL.",
+);
+
 impl BatchBuilderConfig {
     /// Initialize a batch builder config based on a snapshot of the Persist config.
     pub fn new(value: &PersistConfig, _shard_id: ShardId) -> Self {
-        let writer_key = WriterKey::for_version(&value.build_version);
+        let use_fast_tier = value.has_fast_tier_blob && FAST_TIER_WRITES_ENABLED.get(value);
+        let writer_key = if use_fast_tier {
+            WriterKey::for_fast_tier(&value.build_version)
+        } else {
+            WriterKey::for_base_tier(&value.build_version)
+        };
 
         let preferred_order = RunOrder::Structured;
 
@@ -1643,7 +1655,7 @@ mod tests {
             match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
                 Ok((shard, PartialBlobKey::Batch(writer, _))) => {
                     assert_eq!(shard.to_string(), shard_id.to_string());
-                    assert_eq!(writer, WriterKey::for_version(&cache.cfg.build_version));
+                    assert_eq!(writer, WriterKey::for_base_tier(&cache.cfg.build_version));
                 }
                 _ => panic!("unparseable blob key"),
             }
@@ -1786,5 +1798,87 @@ mod tests {
         };
         // Verifies that the structured key lower is stored and decoded.
         assert!(part.structured_key_lower().is_some());
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn fast_tier_writer_key() {
+        use mz_ore::url::SensitiveUrl;
+        use std::str::FromStr;
+        // When a fast-tier blob URL is configured, BatchBuilderConfig uses FastTierVersion keys.
+        let mut cache = PersistClientCache::new_no_metrics();
+        cache.cfg.set_config(&BLOB_TARGET_SIZE, 0);
+        cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        cache.cfg.set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
+        let location = PersistLocation {
+            blob_uri: SensitiveUrl::from_str("mem://base").expect("valid"),
+            consensus_uri: SensitiveUrl::from_str("mem://consensus").expect("valid"),
+            fast_tier_blob_uri: Some(SensitiveUrl::from_str("mem://fast").expect("valid")),
+        };
+        let client = cache
+            .open(location)
+            .await
+            .expect("client construction failed");
+        let shard_id = ShardId::new();
+        let (mut write, _) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+
+        let batch = write
+            .expect_batch(&[(("k".into(), "v".into()), 1, 1)], 0, 2)
+            .await;
+
+        assert_eq!(batch.batch.part_count(), 1);
+        for part in &batch.batch.parts {
+            let part = part.expect_hollow_part();
+            match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
+                Ok((_shard, PartialBlobKey::Batch(writer, _))) => {
+                    assert_eq!(writer, WriterKey::for_fast_tier(&cache.cfg.build_version));
+                }
+                _ => panic!("unparseable blob key"),
+            }
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn fast_tier_disabled_by_dyncfg() {
+        use mz_ore::url::SensitiveUrl;
+        use std::str::FromStr;
+        // When fast tier exists but writes are disabled, BatchBuilderConfig uses BaseTierVersion.
+        let mut cache = PersistClientCache::new_no_metrics();
+        cache.cfg.set_config(&FAST_TIER_WRITES_ENABLED, false);
+        cache.cfg.set_config(&BLOB_TARGET_SIZE, 0);
+        cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        cache.cfg.set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
+        let location = PersistLocation {
+            blob_uri: SensitiveUrl::from_str("mem://base").expect("valid"),
+            consensus_uri: SensitiveUrl::from_str("mem://consensus").expect("valid"),
+            fast_tier_blob_uri: Some(SensitiveUrl::from_str("mem://fast").expect("valid")),
+        };
+        let client = cache
+            .open(location)
+            .await
+            .expect("client construction failed");
+        let shard_id = ShardId::new();
+        let (mut write, _) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+
+        let batch = write
+            .expect_batch(&[(("k".into(), "v".into()), 1, 1)], 0, 2)
+            .await;
+
+        assert_eq!(batch.batch.part_count(), 1);
+        for part in &batch.batch.parts {
+            let part = part.expect_hollow_part();
+            match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
+                Ok((_shard, PartialBlobKey::Batch(writer, _))) => {
+                    // Even though has_fast_tier_blob is true, the dyncfg overrides to base tier.
+                    assert_eq!(writer, WriterKey::for_base_tier(&cache.cfg.build_version));
+                }
+                _ => panic!("unparseable blob key"),
+            }
+        }
     }
 }

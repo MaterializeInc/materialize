@@ -203,6 +203,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let persist_location = PersistLocation {
         blob_uri: args.persist_blob_url.clone(),
         consensus_uri: args.persist_consensus_url.clone(),
+        fast_tier_blob_uri: None,
     };
     let persist_client = persist_clients.open(persist_location).await?;
     let organization_id = args.environment_id.organization_id();

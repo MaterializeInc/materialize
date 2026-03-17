@@ -626,7 +626,7 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
     let mut unreferenced_blobs = UnreferencedBlobs::default();
     // In the future, this is likely to include a "grace period" so recent but non-current
     // versions are also considered live
-    let minimum_version = WriterKey::for_version(&state_versions.cfg.build_version);
+    let minimum_version = WriterKey::for_base_tier(&state_versions.cfg.build_version);
     for (part, writer) in all_parts {
         let is_unreferenced = writer < minimum_version;
         if is_unreferenced && !known_parts.contains(&part) {

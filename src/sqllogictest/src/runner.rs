@@ -1159,6 +1159,7 @@ impl<'a> RunnerInner<'a> {
                     .parse()
                     .expect("invalid blob URI"),
                     consensus_uri,
+                    fast_tier_blob_uri: None,
                 },
                 persist_clients,
                 now: SYSTEM_TIME.clone(),

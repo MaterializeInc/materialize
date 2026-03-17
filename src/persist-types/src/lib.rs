@@ -185,6 +185,12 @@ pub struct PersistLocation {
 
     /// Uri string that identifies the consensus system.
     pub consensus_uri: SensitiveUrl,
+
+    /// Optional fast-tier blob storage for latency-sensitive writes.
+    /// When set, latency-sensitive writes go to this blob while
+    /// background work stays on the standard [Self::blob_uri].
+    #[serde(default)]
+    pub fast_tier_blob_uri: Option<SensitiveUrl>,
 }
 
 impl PersistLocation {
@@ -193,6 +199,7 @@ impl PersistLocation {
         PersistLocation {
             blob_uri: "mem://".parse().unwrap(),
             consensus_uri: "mem://".parse().unwrap(),
+            fast_tier_blob_uri: None,
         }
     }
 }
