@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A two-tier shared log consensus service for Materialize persist.
+//! A shared log for Materialize persist consensus.
 //!
 //! Architecture follows Balakrishnan's shared log decomposition:
 //!

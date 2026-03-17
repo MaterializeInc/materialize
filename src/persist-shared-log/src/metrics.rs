@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Prometheus metrics for the consensus service.
+//! Prometheus metrics for the persist shared log.
 
 use mz_ore::metric;
 use mz_ore::metrics::{IntCounter, IntGauge, MetricsRegistry};
@@ -109,7 +109,7 @@ pub struct LearnerMetrics {
     pub batch_materialize_latency_seconds: Histogram,
 
     // --- Server-side operation latencies ---
-    /// Time from command send to actor processing (mpsc channel + select delay).
+    /// Time from command send to learner processing (mpsc channel + select delay).
     pub cmd_queue_seconds: Histogram,
     /// Total server-side head latency (including linearization wait).
     pub head_seconds: Histogram,
@@ -165,7 +165,7 @@ impl LearnerMetrics {
             )),
             cmd_queue_seconds: registry.register(metric!(
                 name: "mz_consensus_svc_learner_cmd_queue_seconds",
-                help: "Time from command send to learner actor processing.",
+                help: "Time from command send to learner processing.",
                 buckets: latency_buckets(),
             )),
             head_seconds: registry.register(metric!(

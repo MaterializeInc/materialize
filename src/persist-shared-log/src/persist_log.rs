@@ -7,11 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Persist-shard-backed acceptor and learner.
+//! Acceptor and learner implementation backed by a persist shard.
 //!
-//! Replaces the log+S3 storage layer with a persist shard. The `WriteHandle`
-//! drives the acceptor (blind writes); the `ReadHandle`/`Subscribe` drives the
-//! learner (CAS evaluation + reads). Data lives in differential format.
+//! The `WriteHandle` drives the acceptor (blind writes); the
+//! `ReadHandle`/`Subscribe` drives the learner (CAS evaluation + reads).
+//! Data lives in differential format.
 //!
 //! A single persist shard stores all proposals:
 //! - K: `Proposal` (serialized protobuf bytes)

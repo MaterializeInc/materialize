@@ -7,11 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Persist-shard-backed acceptor: blind group commit via `WriteHandle`.
+//! Acceptor: blind group commit via persist `WriteHandle`.
 //!
-//! Identical semantics to the log-backed acceptor — proposals are appended
-//! unconditionally. The persist shard's `compare_and_append` replaces the
-//! conditional PUT to object storage.
+//! Proposals are appended unconditionally via `compare_and_append`.
 //!
 //! Uses an open-loop, pipelined design: at most one batch is in flight
 //! (`compare_and_append` running in a spawned task) while the next batch
@@ -171,7 +169,7 @@ impl PersistAcceptor {
         (acceptor, handle)
     }
 
-    /// Runs the acceptor loop until the channel closes or the actor is fenced.
+    /// Runs the acceptor loop until the channel closes or a fatal error occurs.
     ///
     /// The loop is open-loop and pipelined:
     /// - At the top of each iteration, `maybe_start_flush()` spawns a flush

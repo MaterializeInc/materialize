@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Persist-shard-backed learner: tails a persist shard subscription.
+//! Learner: tails a persist shard subscription, materializes state, serves reads.
 //!
 //! Receives proposals via a channel from a dedicated listen task, applies them
 //! to a [`StateMachine`], and serves reads and result queries. Recovery is
@@ -441,7 +441,7 @@ enum ResultWaiter {
 /// Spawns a dedicated task that runs `Listen::fetch_next()` in a loop, sending
 /// events through a channel.
 ///
-/// This isolates the non-cancel-safe `fetch_next()` from the actor's select
+/// This isolates the non-cancel-safe `fetch_next()` from the learner's select
 /// loop. The listen task runs each `fetch_next()` call to completion, so the
 /// listen frontier is always consistent with the data delivered.
 fn spawn_listen_task(
@@ -452,7 +452,7 @@ fn spawn_listen_task(
         loop {
             let events = listen.fetch_next().await;
             if event_tx.send(events).await.is_err() {
-                // Actor dropped the receiver — shut down.
+                // Learner dropped the receiver — shut down.
                 break;
             }
         }
@@ -460,10 +460,10 @@ fn spawn_listen_task(
 }
 
 // ---------------------------------------------------------------------------
-// Actor
+// Learner
 // ---------------------------------------------------------------------------
 
-/// The persist-shard-backed learner actor.
+/// The learner.
 ///
 /// Tails a persist shard via a dedicated listen task, applies proposals to a
 /// [`StateMachine`], and serves reads and result queries.
@@ -492,7 +492,7 @@ pub struct PersistLearner {
     // --- Persist handles ---
     /// Read-only WriteHandle used solely for `fetch_recent_upper()`.
     upper_handle: WriteHandle<Proposal, (), u64, i64>,
-    /// Handle to the dedicated listen task (kept alive for the actor's lifetime).
+    /// Handle to the dedicated listen task (kept alive for the learner's lifetime).
     _listen_task: mz_ore::task::JoinHandle<()>,
 
     // --- Listen frontier tracking ---

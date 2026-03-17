@@ -7,14 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Deterministic simulation tests for the persist-shard-backed acceptor + learner.
+//! Deterministic simulation tests for the acceptor + learner.
 //!
-//! Unlike the actor-based DST in `sim.rs`, the persist backend handles retries
-//! and storage internally, so we can't inject storage faults. Instead we test:
+//! Persist handles retries and storage internally, so we can't inject storage
+//! faults. Instead we test:
 //!
 //! - **Consistency**: every value observed via Head/Scan was committed by a CAS.
 //! - **Linearizability**: Head reads never go backwards for a given shard.
-//! - **Crash recovery**: drop actors, reopen with the same `(PersistClient, ShardId)`,
+//! - **Crash recovery**: drop and reopen with the same `(PersistClient, ShardId)`,
 //!   and verify the learner replays all history.
 //! - **Multi-writer**: two acceptors on the same shard coexist (UpperMismatch
 //!   retries succeed, no fencing).
@@ -71,7 +71,7 @@ enum SimOp {
         shard: String,
         seqno: u64,
     },
-    /// Extra CAS to exercise the write path (replaces InjectFault from actor DST).
+    /// Extra CAS to exercise the write path.
     ExtraCas,
     CrashAndRecover,
 }
@@ -102,7 +102,7 @@ impl OpGenerator {
         } else if r < 0.65 {
             self.gen_truncate()
         } else if r < 0.85 {
-            // Extra CAS replaces flush + fault injection from actor sim.
+            // Extra CAS to exercise the write path under contention.
             SimOp::ExtraCas
         } else if r < 0.95 {
             SimOp::CrashAndRecover
@@ -546,9 +546,8 @@ async fn persist_sim_single() {
     }
 }
 
-/// Tests multi-writer behavior on the persist backend. Unlike the actor-based
-/// fencing model (where the loser shuts down), both persist writers coexist —
-/// `UpperMismatch` triggers a retry, not a fence. Verify all committed proposals
+/// Tests multi-writer behavior. Both writers coexist — `UpperMismatch`
+/// triggers a retry, not a fence. Verify all committed proposals
 /// from both writers are consistent and the learner sees a total order.
 #[mz_ore::test(tokio::test)]
 async fn persist_sim_multi_writer() {

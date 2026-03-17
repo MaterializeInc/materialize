@@ -1,8 +1,6 @@
-# persist_log — Persist-shard-backed acceptor and learner
+# persist_log — Acceptor and learner
 
-The primary implementation of the shared log consensus service. Uses a persist
-shard as the durable storage layer, replacing the log+S3 design with persist's
-existing infrastructure.
+Uses a persist shard as the durable storage layer.
 
 ## Architecture
 
@@ -16,8 +14,8 @@ A single persist shard stores all proposals:
 ### Acceptor (`acceptor.rs`)
 
 Drives a `WriteHandle` for blind group commit. Collects proposals, flushes them
-as a batch by advancing the persist upper by 1. The flush interval controls
-batching — proposals arriving within the same window are written together.
+as a batch by advancing the persist upper by 1. Uses open-loop pipelining: one
+batch in flight while the next accumulates in memory.
 
 ### Learner (`learner.rs`)
 

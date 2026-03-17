@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Binary entry point for the group commit consensus service.
+//! Binary entry point for the persist shared log service.
 
 use std::net::SocketAddr;
 
@@ -22,7 +22,7 @@ use mz_persist_shared_log::persist_log::learner::{PersistLearner, PersistLearner
 use mz_persist_shared_log::service::PersistSharedLogGrpcService;
 use mz_persist_shared_log::{Acceptor, AcceptorConfig, Learner};
 
-/// CLI arguments for the consensus service.
+/// CLI arguments for the persist shared log service.
 #[derive(Parser, Debug)]
 #[command(name = "mz-persist-shared-log")]
 struct Args {

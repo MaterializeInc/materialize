@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Tests for the persist-shard-backed acceptor + learner.
+//! Tests for the acceptor + learner.
 
 use std::sync::Arc;
 
@@ -129,7 +129,7 @@ impl PersistTestHarness {
 }
 
 // ---------------------------------------------------------------------------
-// Tests (mirror the log-backed test suite)
+// Tests
 // ---------------------------------------------------------------------------
 
 #[mz_ore::test(tokio::test)]

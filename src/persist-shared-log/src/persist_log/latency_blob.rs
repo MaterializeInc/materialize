@@ -41,8 +41,8 @@ pub enum LatencyProfile {
 pub struct LatencyBlob {
     inner: Box<dyn Blob>,
     profile: LatencyProfile,
-    /// Counter-based selection for p50/p99, matching the actor LatencyStorage
-    /// pattern (avoids pulling in rand as a non-dev dependency).
+    /// Counter-based selection for p50/p99 (avoids pulling in rand as a
+    /// non-dev dependency).
     counter: AtomicU64,
     /// Total set() calls (for diagnosing blob I/O per flush).
     pub sets: AtomicU64,
