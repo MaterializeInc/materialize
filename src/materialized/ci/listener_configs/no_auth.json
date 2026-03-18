@@ -26,7 +26,8 @@
         "metrics": false,
         "profiling": false,
         "mcp_agents": true,
-        "mcp_observatory": true
+        "mcp_observatory": true,
+        "console_config": true
       }
     },
     "internal": {
@@ -41,7 +42,8 @@
         "metrics": true,
         "profiling": true,
         "mcp_agents": true,
-        "mcp_observatory": true
+        "mcp_observatory": true,
+        "console_config": false
       }
     }
   }

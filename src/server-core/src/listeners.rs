@@ -68,6 +68,9 @@ pub struct HttpRoutesEnabled {
     /// Include /api/mcp/observatory endpoint for system catalog queries via MCP.
     #[serde(default)]
     pub mcp_observatory: bool,
+    /// Include /api/console/config endpoint for unauthenticated console configuration.
+    #[serde(default)]
+    pub console_config: bool,
 }
 
 /// Configuration for network listeners.

@@ -184,6 +184,20 @@ pub const USER_ID_POOL_BATCH_SIZE: Config<u32> = Config::new(
     "Number of user IDs to pre-allocate in a batch for DDL operations.",
 );
 
+/// OIDC client ID for the web console.
+pub const CONSOLE_OIDC_CLIENT_ID: Config<&'static str> = Config::new(
+    "console_oidc_client_id",
+    "",
+    "OIDC client ID for the web console.",
+);
+
+/// Space-separated OIDC scopes requested by the web console.
+pub const CONSOLE_OIDC_SCOPES: Config<&'static str> = Config::new(
+    "console_oidc_scopes",
+    "",
+    "Space-separated OIDC scopes requested by the web console.",
+);
+
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -211,4 +225,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_MCP_AGENTS_QUERY_TOOL)
         .add(&ENABLE_MCP_OBSERVATORY)
         .add(&USER_ID_POOL_BATCH_SIZE)
+        .add(&CONSOLE_OIDC_CLIENT_ID)
+        .add(&CONSOLE_OIDC_SCOPES)
 }
