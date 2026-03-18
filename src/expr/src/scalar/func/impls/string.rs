@@ -658,7 +658,8 @@ impl EagerUnaryFunc for CastStringToChar {
     }
 
     fn is_eliminable_cast(&self) -> bool {
-        self.length.is_none()
+        // even when `length` is `None`, we'll trim whitespace at the end
+        false
     }
 }
 
