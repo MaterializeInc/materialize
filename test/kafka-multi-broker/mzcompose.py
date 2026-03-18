@@ -31,7 +31,7 @@ SERVICES = [
     ),
     Materialized(
         additional_system_parameter_defaults={
-            "log_filter": "mz_storage::sink::kafka=trace,info"
+            "log_filter": "mz_storage::sink::kafka=trace,librdkafka=debug,info"
         },
         default_replication_factor=2,
     ),
