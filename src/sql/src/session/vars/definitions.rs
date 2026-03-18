@@ -2326,6 +2326,7 @@ mod tests {
             enable_dequadratic_eqprop_map,
             enable_fast_path_plan_insights,
             enable_cast_elimination,
+            enable_case_literal_transform,
         } = false_features;
 
         let mut vars = SystemVars::new();
@@ -2354,6 +2355,7 @@ mod tests {
         set_var!(enable_dequadratic_eqprop_map);
         set_var!(enable_fast_path_plan_insights);
         set_var!(enable_cast_elimination);
+        set_var!(enable_case_literal_transform);
 
         // Enable for item parsing, then ensure we still get the same optimizer features.
         vars.enable_for_item_parsing();
