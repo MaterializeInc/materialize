@@ -59,11 +59,15 @@ def get_all_self_managed_versions() -> list[MzVersion]:
     return sorted([version.version for version in fetch_self_managed_versions()])
 
 
-def get_self_managed_versions() -> list[MzVersion]:
+def get_self_managed_versions(
+    max_version: MzVersion | None = None,
+) -> list[MzVersion]:
     prefixes = set()
     result = set()
     self_managed_versions = fetch_self_managed_versions()
     for version_info in self_managed_versions:
+        if max_version is not None and version_info.version >= max_version:
+            continue
         prefix = (version_info.version.major, version_info.version.minor)
         if (
             not version_info.version.prerelease
@@ -387,6 +391,7 @@ def get_published_minor_mz_versions(
     limit: int | None = None,
     include_filter: Callable[[MzVersion], bool] | None = None,
     exclude_current_minor_version: bool = False,
+    max_version: MzVersion | None = None,
 ) -> list[MzVersion]:
     """
     Get the latest patch version for every minor version.
@@ -407,6 +412,9 @@ def get_published_minor_mz_versions(
     for version in all_versions:
         if include_filter is not None and not include_filter(version):
             # this version shall not be included
+            continue
+
+        if max_version is not None and version >= max_version:
             continue
 
         minor_version = f"{version.major}.{version.minor}"
