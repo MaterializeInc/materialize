@@ -198,6 +198,9 @@ bar  mz_arrangement_records_raw  mz_arrangement_records_raw_u7_primary_idx  1  o
 bar  mz_arrangement_records_raw  mz_arrangement_records_raw_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_arrangement_sharing_raw  mz_arrangement_sharing_raw_u7_primary_idx  1  operator_id  NULL  false
 bar  mz_arrangement_sharing_raw  mz_arrangement_sharing_raw_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_cluster_prometheus_metrics  mz_cluster_prometheus_metrics_u7_primary_idx  1  process_id  NULL  false
+bar  mz_cluster_prometheus_metrics  mz_cluster_prometheus_metrics_u7_primary_idx  2  metric_name  NULL  false
+bar  mz_cluster_prometheus_metrics  mz_cluster_prometheus_metrics_u7_primary_idx  3  labels  NULL  false
 bar  mz_compute_dataflow_global_ids_per_worker  mz_compute_dataflow_global_ids_per_worker_u7_primary_idx  1  id  NULL  false
 bar  mz_compute_dataflow_global_ids_per_worker  mz_compute_dataflow_global_ids_per_worker_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_compute_error_counts_raw  mz_compute_error_counts_raw_u7_primary_idx  1  export_id  NULL  false
@@ -402,7 +405,7 @@ DROP CLUSTER foo, foo2, foo3, foo4 CASCADE
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id = 'u1';
 ----
-31
+32
 
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id <> 'u1' AND cluster_id NOT LIKE 's%';
@@ -415,7 +418,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE 'scale=1,workers=1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-290
+297
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -423,7 +426,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-259
+265
 
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER quickstart OWNER TO materialize

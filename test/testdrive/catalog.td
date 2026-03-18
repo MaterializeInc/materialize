@@ -735,6 +735,7 @@ mz_compute_import_frontiers_per_worker       log   <null>    ""
 mz_compute_lir_mapping_per_worker            log   <null>    ""
 mz_compute_operator_durations_histogram_raw  log   <null>    ""
 mz_compute_operator_hydration_statuses_per_worker log <null> ""
+mz_cluster_prometheus_metrics     log   <null>    ""
 mz_dataflow_addresses_per_worker             log   <null>    ""
 mz_dataflow_channels_per_worker              log   <null>    ""
 mz_dataflow_operator_reachability_raw        log   <null>    ""
@@ -810,7 +811,7 @@ test_table ""
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-259
+265
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

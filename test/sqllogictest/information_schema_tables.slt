@@ -861,6 +861,10 @@ mz_arrangement_sizes_per_worker
 VIEW
 materialize
 mz_introspection
+mz_cluster_prometheus_metrics
+SOURCE
+materialize
+mz_introspection
 mz_compute_dataflow_global_ids_per_worker
 SOURCE
 materialize
