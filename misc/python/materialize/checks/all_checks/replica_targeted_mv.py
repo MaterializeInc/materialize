@@ -9,11 +9,12 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, disabled
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 
 
+@disabled("https://github.com/MaterializeInc/database-issues/issues/11232")
 class ReplicaTargetedMaterializedViews(Check):
     def _can_run(self, e: Executor) -> bool:
         return self.base_version >= MzVersion.parse_mz("v26.16.0-dev")
