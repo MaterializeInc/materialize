@@ -24,7 +24,7 @@ use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::Overflowing;
 use mz_ore::cast::CastFrom;
-use mz_ore::str::StrExt;
+use mz_ore::str::{StrExt, separated};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
@@ -4813,6 +4813,45 @@ impl Ord for ReprScalarType {
                 ReprScalarType::Range { element_type: b },
             ) => a.cmp(b),
             _ => ReprScalarBaseType::from(self).cmp(&ReprScalarBaseType::from(other)),
+        }
+    }
+}
+
+impl std::fmt::Display for ReprScalarType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReprScalarType::Bool => write!(f, "r_bool"),
+            ReprScalarType::Int16 => write!(f, "r_int16"),
+            ReprScalarType::Int32 => write!(f, "r_int32"),
+            ReprScalarType::Int64 => write!(f, "r_int64"),
+            ReprScalarType::UInt8 => write!(f, "r_uint8"),
+            ReprScalarType::UInt16 => write!(f, "r_uint16"),
+            ReprScalarType::UInt32 => write!(f, "r_uint32"),
+            ReprScalarType::UInt64 => write!(f, "r_uint64"),
+            ReprScalarType::Float32 => write!(f, "r_float32"),
+            ReprScalarType::Float64 => write!(f, "r_float64"),
+            ReprScalarType::Numeric => write!(f, "r_numeric"),
+            ReprScalarType::Date => write!(f, "r_date"),
+            ReprScalarType::Time => write!(f, "r_time"),
+            ReprScalarType::Timestamp => write!(f, "r_timestamp"),
+            ReprScalarType::TimestampTz => write!(f, "r_timestamptz"),
+            ReprScalarType::MzTimestamp => write!(f, "r_mz_timestamp"),
+            ReprScalarType::Interval => write!(f, "r_interval"),
+            ReprScalarType::Bytes => write!(f, "r_bytes"),
+            ReprScalarType::Jsonb => write!(f, "r_jsonb"),
+            ReprScalarType::String => write!(f, "r_string"),
+            ReprScalarType::Uuid => write!(f, "r_uuid"),
+            ReprScalarType::Array(element_type) => write!(f, "r_array({element_type})"),
+            ReprScalarType::Int2Vector => write!(f, "r_int2vector"),
+            ReprScalarType::List { element_type } => write!(f, "r_list({element_type})"),
+            ReprScalarType::Record { fields } => {
+                let fields = separated(", ", fields.iter());
+                write!(f, "r_record({fields})")
+            }
+            ReprScalarType::Map { value_type } => write!(f, "r_map({value_type})"),
+            ReprScalarType::Range { element_type } => write!(f, "r_range({element_type})"),
+            ReprScalarType::MzAclItem => write!(f, "r_mz_acl_item"),
+            ReprScalarType::AclItem => write!(f, "r_acl_item"),
         }
     }
 }

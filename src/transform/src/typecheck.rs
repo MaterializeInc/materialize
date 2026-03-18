@@ -1693,7 +1693,7 @@ where
 
     let mut it = cols.iter().peekable();
     while let Some(col) = it.next() {
-        s.push_str(&humanizer.humanize_column_type(col, false));
+        s.push_str(&humanizer.humanize_column_type(col));
 
         if it.peek().is_some() {
             s.push_str(", ");
@@ -1747,14 +1747,14 @@ impl ReprColumnTypeDifference {
 
         match self {
             NotSubtype { sub, sup } => {
-                let sub = h.humanize_scalar_type(sub, false);
-                let sup = h.humanize_scalar_type(sup, false);
+                let sub = h.humanize_scalar_type(sub);
+                let sup = h.humanize_scalar_type(sup);
 
                 writeln!(f, "{sub} is a not a subtype of {sup}")
             }
             Nullability { sub, sup } => {
-                let sub = h.humanize_column_type(sub, false);
-                let sup = h.humanize_column_type(sup, false);
+                let sub = h.humanize_column_type(sub);
+                let sup = h.humanize_column_type(sup);
 
                 writeln!(f, "{sub} is nullable but {sup} is not")
             }
@@ -1799,7 +1799,7 @@ impl DatumTypeDifference {
 
         match self {
             DatumTypeDifference::Null { expected } => {
-                let expected = h.humanize_scalar_type(expected, false);
+                let expected = h.humanize_scalar_type(expected);
                 writeln!(
                     f,
                     "unexpected null, expected representation type {expected}"
@@ -1809,7 +1809,7 @@ impl DatumTypeDifference {
                 got_debug,
                 expected,
             } => {
-                let expected = h.humanize_scalar_type(expected, false);
+                let expected = h.humanize_scalar_type(expected);
                 // NB `got_debug` will be redacted as appropriate
                 writeln!(
                     f,
@@ -1923,8 +1923,8 @@ impl<'a> TypeError<'a> {
                 diffs,
                 message,
             } => {
-                let got = humanizer.humanize_column_type(got, false);
-                let expected = humanizer.humanize_column_type(expected, false);
+                let got = humanizer.humanize_column_type(got);
+                let expected = humanizer.humanize_column_type(expected);
                 writeln!(
                     f,
                     "mismatched column types: {message}\n      got {got}\nexpected {expected}"
