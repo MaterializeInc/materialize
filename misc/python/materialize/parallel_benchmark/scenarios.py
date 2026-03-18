@@ -509,6 +509,7 @@ class StatementLogging(Scenario):
         )
 
 
+@disabled("https://github.com/MaterializeInc/database-issues/issues/11253")
 class InsertWhereNotExists(Scenario):
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         self.init(

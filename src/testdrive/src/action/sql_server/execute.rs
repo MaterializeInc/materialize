@@ -15,42 +15,49 @@ use mz_ore::str::StrExt;
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
-/// Check if an error is a SQL Server deadlock (error code 1205).
-fn is_deadlock_error(err: &anyhow::Error) -> bool {
+/// Check if an error is a transient SQL Server error that should be retried.
+///
+/// Covers:
+/// - Deadlock victim (error 1205)
+/// - SQL Server Agent still starting (error 14258 inside 22836/22832) — the
+///   Agent is needed for CDC job creation and may not be ready even though the
+///   healthcheck (`SELECT 1`) already passes.
+/// - Database not yet available during startup (error 904)
+fn is_retryable_error(err: &anyhow::Error) -> bool {
     // Use alternate Display format `{:#}` to get the full anyhow error chain,
     // not just the outermost context message.
     let msg = format!("{:#}", err);
-    // SQL Server deadlock victim error code 1205 appears in the error chain.
-    msg.contains("1205") && msg.contains("deadlock")
+    (msg.contains("1205") && msg.contains("deadlock"))
+        || msg.contains("SQLServerAgent is starting")
+        || msg.contains("cannot be autostarted during server shutdown or startup")
 }
 
-/// Maximum number of retries for deadlock errors.
-const DEADLOCK_MAX_RETRIES: usize = 5;
+/// Maximum number of retries for transient errors.
+const MAX_RETRIES: usize = 20;
 
-/// Initial backoff duration between deadlock retries.
-const DEADLOCK_INITIAL_BACKOFF: Duration = Duration::from_millis(500);
+/// Fixed backoff duration between retries.
+const RETRY_BACKOFF: Duration = Duration::from_millis(100);
 
-async fn execute_with_deadlock_retry(
+async fn execute_with_retry(
     client: &mut mz_sql_server_util::Client,
     query: &str,
 ) -> Result<(), anyhow::Error> {
-    let mut backoff = DEADLOCK_INITIAL_BACKOFF;
-    for attempt in 0..=DEADLOCK_MAX_RETRIES {
+    for attempt in 0..=MAX_RETRIES {
         match client
             .simple_query(query.to_string())
             .await
             .context("executing SQL Server query")
         {
             Ok(_) => return Ok(()),
-            Err(err) if is_deadlock_error(&err) && attempt < DEADLOCK_MAX_RETRIES => {
+            Err(err) if is_retryable_error(&err) && attempt < MAX_RETRIES => {
                 println!(
-                    ">> deadlock detected (attempt {}/{}), retrying after {:?}",
+                    ">> transient error (attempt {}/{}), retrying after {:?}: {:#}",
                     attempt + 1,
-                    DEADLOCK_MAX_RETRIES,
-                    backoff,
+                    MAX_RETRIES,
+                    RETRY_BACKOFF,
+                    err,
                 );
-                tokio::time::sleep(backoff).await;
-                backoff *= 2;
+                tokio::time::sleep(RETRY_BACKOFF).await;
             }
             Err(err) => return Err(err),
         }
@@ -100,14 +107,14 @@ pub async fn run_execute(
         if split_lines {
             for query in &cmd.input {
                 println!(">> {}", query);
-                execute_with_deadlock_retry(client, query).await?;
+                execute_with_retry(client, query).await?;
             }
         } else {
             let query = cmd.input.join("\n");
             println!(">> {}", query);
             // execute uses prepared statements, which will fail for CREATE FUNCTION/PROCEDURE etc, see
             // https://github.com/prisma/tiberius/issues/236, so using simple_query instead
-            execute_with_deadlock_retry(client, &query).await?;
+            execute_with_retry(client, &query).await?;
         }
     }
 
