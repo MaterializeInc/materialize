@@ -20,7 +20,9 @@ use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::Datum;
 use crate::row::DatumList;
+use crate::scalar::SqlScalarType;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.array.rs"));
 
@@ -28,22 +30,29 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.array.rs"));
 pub const MAX_ARRAY_DIMENSIONS: u8 = 6;
 
 /// A variable-length multi-dimensional array.
+///
+/// The type parameter `T` represents the element type of the array. It is a
+/// phantom parameter propagated through the inner [`DatumList`] — the actual
+/// elements are stored as serialized bytes and `T` is not enforced at
+/// runtime. It is up to the caller to ensure `T` matches the actual element
+/// type. The default `T = Datum<'a>` means existing code that writes
+/// `Array<'a>` continues to work unchanged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct Array<'a> {
+pub struct Array<'a, T = Datum<'a>> {
     /// The elements in the array.
-    pub(crate) elements: DatumList<'a>,
+    pub(crate) elements: DatumList<'a, T>,
     /// The dimensions of the array.
     pub(crate) dims: ArrayDimensions<'a>,
 }
 
-impl<'a> Array<'a> {
+impl<'a, T> Array<'a, T> {
     /// Returns the dimensions of the array.
     pub fn dims(&self) -> ArrayDimensions<'a> {
         self.dims
     }
 
     /// Returns the elements of the array.
-    pub fn elements(&self) -> DatumList<'a> {
+    pub fn elements(&self) -> DatumList<'a, T> {
         self.elements
     }
 
@@ -52,6 +61,15 @@ impl<'a> Array<'a> {
     pub fn has_int2vector_dims(&self) -> bool {
         self.dims().len() == 1
             || (self.dims().len() == 0 && self.elements().iter().next().is_none())
+    }
+}
+
+impl<'a> crate::scalar::SqlContainerType for Array<'a, Datum<'a>> {
+    fn unwrap_element_type(container: &SqlScalarType) -> &SqlScalarType {
+        container.unwrap_array_element_type()
+    }
+    fn wrap_element_type(element: SqlScalarType) -> SqlScalarType {
+        SqlScalarType::Array(Box::new(element))
     }
 }
 

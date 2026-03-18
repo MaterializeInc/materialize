@@ -82,32 +82,23 @@ impl fmt::Display for CastRangeToString {
     }
 }
 
-#[sqlfunc(
-    sqlname = "rangelower",
-    is_monotone = true,
-    introduces_nulls = true,
-    output_type_expr = input_type.scalar_type.unwrap_range_element_type().clone().nullable(true)
-)]
-fn range_lower<'a>(a: Range<Datum<'a>>) -> Option<Datum<'a>> {
+#[sqlfunc(sqlname = "rangelower", is_monotone = true)]
+fn range_lower<T>(a: Range<T>) -> Option<T> {
     a.inner.map(|inner| inner.lower.bound).flatten()
 }
 
-#[sqlfunc(
-    sqlname = "rangeupper",
-    introduces_nulls = true,
-    output_type_expr = input_type.scalar_type.unwrap_range_element_type().clone().nullable(true)
-)]
-fn range_upper<'a>(a: Range<Datum<'a>>) -> Option<Datum<'a>> {
+#[sqlfunc(sqlname = "rangeupper")]
+fn range_upper<T>(a: Range<T>) -> Option<T> {
     a.inner.map(|inner| inner.upper.bound).flatten()
 }
 
 #[sqlfunc(sqlname = "range_empty")]
-fn range_empty<'a>(a: Range<Datum<'a>>) -> bool {
+fn range_empty<T>(a: Range<T>) -> bool {
     a.inner.is_none()
 }
 
 #[sqlfunc(sqlname = "range_lower_inc")]
-fn range_lower_inc<'a>(a: Range<Datum<'a>>) -> bool {
+fn range_lower_inc<T>(a: Range<T>) -> bool {
     match a.inner {
         None => false,
         Some(inner) => inner.lower.inclusive,
@@ -115,7 +106,7 @@ fn range_lower_inc<'a>(a: Range<Datum<'a>>) -> bool {
 }
 
 #[sqlfunc(sqlname = "range_upper_inc")]
-fn range_upper_inc<'a>(a: Range<Datum<'a>>) -> bool {
+fn range_upper_inc<T>(a: Range<T>) -> bool {
     match a.inner {
         None => false,
         Some(inner) => inner.upper.inclusive,
@@ -123,7 +114,7 @@ fn range_upper_inc<'a>(a: Range<Datum<'a>>) -> bool {
 }
 
 #[sqlfunc(sqlname = "range_lower_inf")]
-fn range_lower_inf<'a>(a: Range<Datum<'a>>) -> bool {
+fn range_lower_inf<T>(a: Range<T>) -> bool {
     match a.inner {
         None => false,
         Some(inner) => inner.lower.bound.is_none(),
@@ -131,7 +122,7 @@ fn range_lower_inf<'a>(a: Range<Datum<'a>>) -> bool {
 }
 
 #[sqlfunc(sqlname = "range_upper_inf")]
-fn range_upper_inf<'a>(a: Range<Datum<'a>>) -> bool {
+fn range_upper_inf<T>(a: Range<T>) -> bool {
     match a.inner {
         None => false,
         Some(inner) => inner.upper.bound.is_none(),
