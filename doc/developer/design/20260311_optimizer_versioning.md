@@ -30,6 +30,7 @@ Optimizer engineers will be able to deploy hotfixes to any active optimizer usin
 ## Out of Scope
 
 Mztrail---testing on customer workloads---would help us predict when optimizer changes will affect customers.
+(It would also help the most proactive customers, who could run tests themselves.)
 While pushing in this direction is good, important work, it's a bigger bite than what's proposed here.
 Moreover, it's not clear how to use mztrail in a self-managed context.
 
@@ -102,7 +103,7 @@ Cons:
 ## Solution Proposal
 
 We propose using **`optimizer-versions`**.
-We see it as superior to **`feature-flags`** because we can work more flexibly (change types!) with less uncertainy (known configs!). We
+We see it as superior to **`feature-flags`** because we can work more flexibly (change types!) with less uncertainy (known configs!).
 We see it as superior to **`plan-pinning`** because we don't need to stabilize new interfaces.
 We see it as superior to **`query-hints`** because we don't want to add query hints.
 
@@ -110,11 +111,16 @@ We see it as superior to **`query-hints`** because we don't want to add query hi
 This is overplanned: we should begin by having a stable branch and a 'future' branch, where we make more drastic changes.
 We can later adopt the Debian-like scheme, or the [fully versioned approach Spanner takes](https://docs.cloud.google.com/spanner/docs/query-optimizer/versions).
 
-TODO more detail here
+The changes proposed below center around breaking off the optimizer as its own subsystem, with an `optimizer` crate (of which we may have multiple versions).
+Treating the optimizer as its own system comes with its own benefits:
+
+  - Better tracing in the optimizer, which currently hacks things to get the right outputs.
+  - The possibility of process isolation for the optimizer.
+  - Clearer interfaces and a better testing surface.
 
 ## Minimal Viable Prototype
 
-This plan is taken from [the prior design doc in #30233](https://github.com/MaterializeInc/materialize/pull/30233).
+This plan is a revised version of the plan from [the prior design doc in #30233](https://github.com/MaterializeInc/materialize/pull/30233).
 
 ### Versioning the `optimizer` crate
 
@@ -139,7 +145,20 @@ The two bullets marked (\*) above are a tricky point in the interface. SQL will 
 ### Supporting qualification
 
 It would be good to link this work to the "representative workloads".
+It should be easy (for us) to test the same workload with different versions of the optimizer.
+We should use some kind of representative workloads to qualify making the future branch optimizer public.
+
+### Supporting observability
+
+Observability is how people---us and customers---know that something is working (or not).
+It should be easy (for us and for customers) to see what might change in existing plans if the optimizer were to switch.
 
 ## Open questions
 
-TODO more detail here
+What should the interface of the `optimizer` crate be?
+
+Where, precisely, should optimizer-version dispatch go? Is there an `optimizer-multiplexer` crate that picks the right version to invoke?
+
+At what point is the V1/future optimizer available, and how? A feature flag? GA?
+At what point is the V1/future optimizer the default?
+We do not need hard answers to these questions, but good answers should exist.
