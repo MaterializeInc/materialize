@@ -10,15 +10,19 @@
 import random
 import time
 from datetime import datetime, timedelta
-from threading import Thread, Event
+from threading import Thread
 
 import requests
 
 from materialize.mzcompose import get_default_system_parameters
-from materialize.mzcompose.composition import Composition, Service, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
+from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.minio import Minio, minio_blob_uri
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -32,21 +36,21 @@ SYSTEM_PARAMS = {
     "max_objects_per_schema": "10000",
     "storage_rocksdb_use_merge_operator": "true",
     "storage_upsert_prevent_snapshot_buffering": "true",
-    "storage_upsert_max_snapshot_batch_buffering": "1",
+    "storage_upsert_max_snapshot_batch_buffering": "10000",
     "storage_dataflow_max_inflight_bytes": "1048576",
     "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.001",
     "storage_dataflow_max_inflight_bytes_disk_only": "false",
 }
 
 MZ_ENV_EXTRA = [
-    "MZ_PERSIST_COMPACTION_DISABLED=true",
+    "MZ_PERSIST_COMPACTION_DISABLED=false",
 ]
 
 SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    CockroachOrPostgresMetadata(),
+    Cockroach(setup_materialize=True, in_memory=True),
     Minio(setup_materialize=True),
     Toxiproxy(),
     Materialized(
@@ -55,6 +59,7 @@ SERVICES = [
         # Route persist blob and consensus through toxiproxy for latency injection
         persist_blob_url=minio_blob_uri("toxiproxy"),
         external_metadata_store="toxiproxy",
+        metadata_store="cockroach",
         default_replication_factor=1,
         environment_extra=MZ_ENV_EXTRA,
     ),
@@ -69,7 +74,9 @@ SERVICES = [
 # Padding to make values ~500 bytes (closer to production 374-byte values)
 PAD = "x" * 400
 
-KEY_SCHEMA = '{"type": "record", "name": "Key", "fields": [{"name": "k", "type": "long"}]}'
+KEY_SCHEMA = (
+    '{"type": "record", "name": "Key", "fields": [{"name": "k", "type": "long"}]}'
+)
 VAL_SCHEMA = (
     '{"type": "record", "name": "Value", "fields": ['
     '{"name": "f_int", "type": "int"},'
@@ -78,7 +85,7 @@ VAL_SCHEMA = (
     '{"name": "f_double", "type": "double"},'
     '{"name": "f_bool", "type": "boolean"},'
     '{"name": "f_nullable", "type": ["null", "string"], "default": null}'
-    ']}'
+    "]}"
 )
 
 
@@ -88,21 +95,27 @@ def setup_toxiproxy_proxies(c):
     toxi_url = f"http://localhost:{port}"
 
     # Proxy for minio (persist blob storage) - listen on 9000
-    r = requests.post(f"{toxi_url}/proxies", json={
-        "name": "minio",
-        "listen": "0.0.0.0:9000",
-        "upstream": "minio:9000",
-        "enabled": True,
-    })
+    r = requests.post(
+        f"{toxi_url}/proxies",
+        json={
+            "name": "minio",
+            "listen": "0.0.0.0:9000",
+            "upstream": "minio:9000",
+            "enabled": True,
+        },
+    )
     assert r.status_code == 201, f"Failed to create minio proxy: {r.text}"
 
     # Proxy for postgres-metadata (persist consensus) - listen on 26257
-    r = requests.post(f"{toxi_url}/proxies", json={
-        "name": "consensus",
-        "listen": "0.0.0.0:26257",
-        "upstream": "postgres-metadata:26257",
-        "enabled": True,
-    })
+    r = requests.post(
+        f"{toxi_url}/proxies",
+        json={
+            "name": "consensus",
+            "listen": "0.0.0.0:26257",
+            "upstream": "cockroach:26257",
+            "enabled": True,
+        },
+    )
     assert r.status_code == 201, f"Failed to create consensus proxy: {r.text}"
     print("Toxiproxy proxies created (no latency yet)")
 
@@ -112,31 +125,32 @@ def add_toxiproxy_latency(c):
     port = c.default_port("toxiproxy")
     toxi_url = f"http://localhost:{port}"
 
-    # Add latency to blob storage (~1.5s + 500ms jitter)
-    r = requests.post(f"{toxi_url}/proxies/minio/toxics", json={
-        "name": "blob-latency",
-        "type": "latency",
-        "attributes": {"latency": 1500, "jitter": 500},
-    })
+    r = requests.post(
+        f"{toxi_url}/proxies/minio/toxics",
+        json={
+            "name": "blob-latency",
+            "type": "latency",
+            "attributes": {"latency": 100, "jitter": 0},
+        },
+    )
     assert r.status_code == 200, f"Failed to add blob latency: {r.text}"
 
-    # Add latency to consensus (~500ms + 200ms jitter)
-    r = requests.post(f"{toxi_url}/proxies/consensus/toxics", json={
-        "name": "consensus-latency",
-        "type": "latency",
-        "attributes": {"latency": 500, "jitter": 200},
-    })
+    r = requests.post(
+        f"{toxi_url}/proxies/consensus/toxics",
+        json={
+            "name": "consensus-latency",
+            "type": "latency",
+            "attributes": {"latency": 100, "jitter": 0},
+        },
+    )
     assert r.status_code == 200, f"Failed to add consensus latency: {r.text}"
-
-    print("Toxiproxy latency added: blob=1500ms±500ms, consensus=500ms±200ms")
-
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--runtime", type=int, default=900)
-    parser.add_argument("--num-sources", type=int, default=2)
-    parser.add_argument("--num-keys", type=int, default=1000)
-    parser.add_argument("--num-hot-keys", type=int, default=5)
+    parser.add_argument("--num-sources", type=int, default=10)
+    parser.add_argument("--num-keys", type=int, default=50000)
+    parser.add_argument("--num-hot-keys", type=int, default=100)
     parser.add_argument("--parallelism", type=int, default=25)
     parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
@@ -152,7 +166,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     partitions = [random.choice([1, 2, 4, 8, 16, 32]) for _ in range(n)]
     # Randomized cluster size
     workers = random.choice([4, 8, 16])
-    replication_factor = random.choice([1, 2])
+    replication_factor = 2
 
     print(f"Config: {n} sources, workers={workers}, rf={replication_factor}")
     print(f"Partition counts: {partitions}")
@@ -160,7 +174,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.down(destroy_volumes=True)
     # Start infrastructure first, then set up toxiproxy proxies (no latency),
     # then start materialized. Latency is added after sources are created.
-    c.up("zookeeper", "kafka", "schema-registry", "minio", "toxiproxy")
+    c.up("zookeeper", "kafka", "schema-registry", "cockroach", "minio", "toxiproxy")
     setup_toxiproxy_proxies(c)
     c.up("materialized", Service("testdrive", idle=True))
 
@@ -179,9 +193,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     print(f"Creating {n} topics...")
     for i in range(n):
-        c.testdrive(
-            f"$ kafka-create-topic topic=s-{i} partitions={partitions[i]}\n"
-        )
+        c.testdrive(f"$ kafka-create-topic topic=s-{i} partitions={partitions[i]}\n")
 
     print(f"Registering schemas on {n} topics...")
     for i in range(n):
@@ -198,7 +210,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     print(f"Creating {n} upsert sources...")
     for i in range(n):
         topic = f"testdrive-s-{i}-${{testdrive.seed}}"
-        c.testdrive(f"""\
+        c.testdrive(
+            f"""\
 > CREATE SOURCE s_{i}
   IN CLUSTER upsert_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC '{topic}')
@@ -207,7 +220,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 > CREATE TABLE s_{i}_tbl
   FROM SOURCE s_{i} (REFERENCE "{topic}");
-""")
+"""
+        )
     print(f"  {n}/{n}.")
 
     # Pre-populate all keys so the persist shard has meaningful size
@@ -244,14 +258,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         while datetime.now() < end_time:
             try:
                 src_id = random.randint(0, n - 1)
-                p = partitions[src_id]
+                partitions[src_id]
                 # 80% of writes target "hot" keys (first num_hot_keys)
                 # 20% target the full key range (for shard size)
                 if random.random() < 0.8:
                     nk = random.randint(1, args.num_hot_keys)
                 else:
                     nk = random.randint(args.num_hot_keys, min(args.num_keys, 500))
-                op = "tombstone-reinsert"
 
                 # Tombstone keys, then re-insert at multiple timestamps.
                 # With toxiproxy adding ~4s latency to persist, the

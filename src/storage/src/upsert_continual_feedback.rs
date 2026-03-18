@@ -1309,4 +1309,111 @@ mod test {
             handle.join().expect("threads completed successfully");
         }
     }
+
+    /// Reproduces panic `non 0/1 diff_sum: 2`
+    ///
+    /// When a tombstoned key (finalized=None) gets two AtTime drains at different timestamps T1 and
+    /// T2, `provisional_value_ref` falls back to finalized=None both times, emitting two +1
+    /// insertions without retractions. When those orphaned +1s are consolidated back via persist
+    /// feedback, diff_sum=2 and the next `ensure_decoded` panics.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_upsert_panic_repro() {
+        let source_id = GlobalId::User(0);
+        let registry = MetricsRegistry::new();
+        let upsert_metrics_defs = UpsertMetricDefs::register_with(&registry);
+        let upsert_metrics = UpsertMetrics::new(&upsert_metrics_defs, source_id, 0, None);
+        let upsert_shared = upsert_metrics_defs.shared(&source_id);
+
+        let registry = MetricsRegistry::new();
+        let stats_defs = SourceStatisticsMetricDefs::register_with(&registry);
+        let source_statistics = SourceStatistics::new(
+            source_id,
+            0,
+            &stats_defs,
+            source_id,
+            &ShardId::new(),
+            SourceEnvelope::Upsert(UpsertEnvelope {
+                source_arity: 2,
+                style: UpsertStyle::Default(KeyEnvelope::Flattened),
+                key_indices: vec![0],
+            }),
+            Antichain::from_elem(Timestamp::minimum()),
+        );
+
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let mut state = crate::upsert::types::UpsertState::new(
+                InMemoryHashMap::<u64, u64>::default(),
+                upsert_shared,
+                &upsert_metrics,
+                source_statistics,
+                0,
+            );
+
+            let key = UpsertKey::from([0u8; 32].as_slice());
+            let val_old: UpsertValue = Ok(Row::pack_slice(&[Datum::Int64(0), Datum::Int64(100)]));
+            let val_a: UpsertValue = Ok(Row::pack_slice(&[Datum::Int64(0), Datum::Int64(200)]));
+            let val_b: UpsertValue = Ok(Row::pack_slice(&[Datum::Int64(0), Datum::Int64(300)]));
+
+            // Step 1: Key K exists, then gets tombstoned via persist feedback.
+            state
+                .consolidate_chunk(vec![(key, val_old.clone(), Diff::ONE)].into_iter(), true)
+                .await
+                .unwrap();
+            state
+                .consolidate_chunk(vec![(key, val_old, Diff::MINUS_ONE)].into_iter(), false)
+                .await
+                .unwrap();
+
+            // Step 2: First AtTime drain at T1.
+            // multi_get returns None (key was deleted by consolidate_chunk).
+            // No existing state → no retraction, just +1 — orphaned insertion.
+            let mut r = [UpsertValueAndSize::default()];
+            state.multi_get(vec![key], r.iter_mut()).await.unwrap();
+            assert!(r[0].value.is_none()); // tombstoned = deleted from backend
+            let t1: u64 = 1000;
+            // drain_staged_input creates a new provisional (no existing state)
+            let new_sv = StateValue::<u64, u64>::new_provisional_value(val_a.clone(), t1, 1u64);
+            state
+                .multi_put(
+                    false,
+                    vec![(
+                        key,
+                        crate::upsert::types::PutValue {
+                            value: Some(new_sv.into_decoded()),
+                            previous_value_metadata: None,
+                        },
+                    )],
+                )
+                .await
+                .unwrap();
+
+            // Step 3: Second AtTime drain at T2 != T1.
+            // THE BUG: provisional_value_ref(T2) sees provisional at T1,
+            // falls back to finalized=None -> no retraction again.
+            let mut r = [UpsertValueAndSize::default()];
+            state.multi_get(vec![key], r.iter_mut()).await.unwrap();
+            let sv = r[0].value.as_ref().unwrap();
+            let t2: u64 = 2000;
+            assert!(sv.provisional_value_ref(&t2).is_none()); // THE BUG
+
+            // Step 4: Both orphaned +1s come back as persist feedback.
+            state
+                .consolidate_chunk(
+                    vec![(key, val_a, Diff::ONE), (key, val_b, Diff::ONE)].into_iter(),
+                    false,
+                )
+                .await
+                .unwrap();
+
+            // Step 5: Next read panics with diff_sum=2.
+            let mut r = [UpsertValueAndSize::default()];
+            state.multi_get(vec![key], r.iter_mut()).await.unwrap();
+            r[0].value.as_mut().unwrap().ensure_decoded(
+                upsert_bincode_opts(),
+                source_id,
+                Some(&key),
+            );
+        });
+    }
 }
