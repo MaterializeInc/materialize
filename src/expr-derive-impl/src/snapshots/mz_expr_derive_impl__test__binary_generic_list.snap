@@ -1,6 +1,6 @@
 ---
 source: src/expr-derive-impl/src/lib.rs
-expression: "#[sqlfunc(is_infix_op = true, sqlname = \"||\", propagates_nulls = false)]\nfn list_list_concat<'a, T>(\n    a: Option<DatumList<'a, T>>,\n    b: Option<DatumList<'a, T>>,\n    temp_storage: &'a RowArena,\n) -> Option<DatumList<'a, T>> {\n    unimplemented!()\n}\n"
+expression: "#[sqlfunc(\n    is_infix_op = true,\n    sqlname = \"||\",\n    propagates_nulls = false,\n    introduces_nulls = false,\n)]\nfn list_list_concat<'a, T>(\n    a: Option<DatumList<'a, T>>,\n    b: Option<DatumList<'a, T>>,\n    temp_storage: &'a RowArena,\n) -> Option<DatumList<'a, T>> {\n    unimplemented!()\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -34,19 +34,35 @@ impl crate::func::binary::EagerBinaryFunc for ListListConcat {
         input_types: &[mz_repr::SqlColumnType],
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <DatumList<
-            '_,
-            Datum<'_>,
-        > as mz_repr::SqlContainerType>::wrap_element_type(
-                <DatumList<
-                    '_,
-                    Datum<'_>,
-                > as mz_repr::SqlContainerType>::unwrap_element_type(
-                        &input_types[0].scalar_type,
-                    )
-                    .clone(),
-            )
-            .nullable(true);
+        let output = {
+            mz_ore::soft_assert_or_log!(
+                < DatumList < '_, Datum < '_ > > as mz_repr::SqlContainerType >
+                ::unwrap_element_type(& input_types[0].scalar_type).base_eq(< DatumList <
+                '_, Datum < '_ > > as mz_repr::SqlContainerType > ::unwrap_element_type(&
+                input_types[1].scalar_type)),
+                "auto-derived sqlfunc output type inference found inconsistent \
+                     SQL types for generic {} across inputs: {:?} vs {:?}; \
+                     this indicates a bug in polymorphic coercion, builtin \
+                     declaration, or sqlfunc inference",
+                "T", < DatumList < '_, Datum < '_ > > as mz_repr::SqlContainerType >
+                ::unwrap_element_type(& input_types[0].scalar_type), < DatumList < '_,
+                Datum < '_ > > as mz_repr::SqlContainerType > ::unwrap_element_type(&
+                input_types[1].scalar_type),
+            );
+            <DatumList<
+                '_,
+                Datum<'_>,
+            > as mz_repr::SqlContainerType>::wrap_element_type(
+                    <DatumList<
+                        '_,
+                        Datum<'_>,
+                    > as mz_repr::SqlContainerType>::unwrap_element_type(
+                            &input_types[0].scalar_type,
+                        )
+                        .clone(),
+                )
+                .nullable(true)
+        };
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -58,7 +74,7 @@ impl crate::func::binary::EagerBinaryFunc for ListListConcat {
         output.nullable(is_null)
     }
     fn introduces_nulls(&self) -> bool {
-        true
+        false
     }
     fn is_infix_op(&self) -> bool {
         true

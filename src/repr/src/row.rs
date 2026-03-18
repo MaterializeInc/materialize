@@ -754,6 +754,9 @@ pub struct RowPacker<'a> {
 /// raw `Datum`s. At runtime, `T` is always `Datum<'a>`, so the conversion
 /// is identity.
 ///
+/// See `doc/developer/design/20260311_sqlfunc_generic.md` for the design
+/// behind the generic type parameter and type erasure.
+///
 /// This trait is sealed and cannot be implemented outside of this crate.
 pub trait FromDatum<'a>:
     Sized + PartialEq + std::borrow::Borrow<Datum<'a>> + sealed::Sealed
@@ -820,6 +823,9 @@ pub struct RowArena {
 /// to the caller to ensure `T` matches the actual element type. The default
 /// `T = Datum<'a>` means existing code that writes `DatumList<'a>` continues
 /// to work unchanged.
+///
+/// See `doc/developer/design/20260311_sqlfunc_generic.md` for the design
+/// behind the generic type parameter.
 pub struct DatumList<'a, T = Datum<'a>> {
     /// Points at the serialized datums
     data: &'a [u8],
@@ -890,6 +896,9 @@ impl<T> PartialOrd for DatumList<'_, T> {
 /// `T` is not enforced at runtime. It is up to the caller to ensure `T`
 /// matches the actual value type. The default `T = Datum<'a>` means existing
 /// code that writes `DatumMap<'a>` continues to work unchanged.
+///
+/// See `doc/developer/design/20260311_sqlfunc_generic.md` for the design
+/// behind the generic type parameter.
 pub struct DatumMap<'a, T = Datum<'a>> {
     /// Points at the serialized datums, which should be sorted in key order
     data: &'a [u8],

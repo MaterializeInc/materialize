@@ -249,6 +249,7 @@ mod test {
             is_infix_op = true,
             sqlname = "||",
             propagates_nulls = false,
+            introduces_nulls = false,
         };
         let item = quote! {
             fn list_list_concat<'a, T>(

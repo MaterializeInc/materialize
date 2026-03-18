@@ -569,6 +569,42 @@ fn derive_output_type_for_generic(
         quote! { input_types[#pos_lit] }
     };
 
+    // For multi-input functions, generate soft assertions that all inputs
+    // carrying T agree on the SQL element type. This catches bugs in the
+    // planner's overload resolution or cast insertion.
+    let consistency_checks = if !is_unary {
+        let mut checks = Vec::new();
+        for (i, ty) in input_types.iter().enumerate() {
+            if i == pos {
+                continue;
+            }
+            let usage = classify_generic_usage(ty, generic_name);
+            if usage == GenericUsage::Absent {
+                continue;
+            }
+            let primary_elem = element_type_expr(&input_access, &source_usage);
+            let i_lit = syn::Index::from(i);
+            let other_access = quote! { input_types[#i_lit] };
+            let other_elem = element_type_expr(&other_access, &usage);
+            let generic_str = generic_name.to_string();
+            checks.push(quote! {
+                mz_ore::soft_assert_or_log!(
+                    #primary_elem.base_eq(#other_elem),
+                    "auto-derived sqlfunc output type inference found inconsistent \
+                     SQL types for generic {} across inputs: {:?} vs {:?}; \
+                     this indicates a bug in polymorphic coercion, builtin \
+                     declaration, or sqlfunc inference",
+                    #generic_str,
+                    #primary_elem,
+                    #other_elem,
+                );
+            });
+        }
+        quote! { #(#checks)* }
+    } else {
+        quote! {}
+    };
+
     // Now generate the output_type_expr based on the combination of
     // source container and output usage.
     let expr = match (&output_usage, &source_usage) {
@@ -576,14 +612,22 @@ fn derive_output_type_for_generic(
         (GenericUsage::Bare, GenericUsage::InContainer(in_container)) => {
             let in_c = elide_lifetimes(in_container);
             quote! {
-                <#in_c as mz_repr::SqlContainerType>::unwrap_element_type(
-                    &#input_access.scalar_type
-                ).clone().nullable(#nullable)
+                {
+                    #consistency_checks
+                    <#in_c as mz_repr::SqlContainerType>::unwrap_element_type(
+                        &#input_access.scalar_type
+                    ).clone().nullable(#nullable)
+                }
             }
         }
         // Output is bare T, source is bare T → forward input type directly.
         (GenericUsage::Bare, GenericUsage::Bare) => {
-            quote! { #input_access.scalar_type.clone().nullable(#nullable) }
+            quote! {
+                {
+                    #consistency_checks
+                    #input_access.scalar_type.clone().nullable(#nullable)
+                }
+            }
         }
         // Output is a container, source is a container (same or different) →
         // unwrap from input container, wrap into output container via traits.
@@ -591,11 +635,14 @@ fn derive_output_type_for_generic(
             let out_c = elide_lifetimes(out_container);
             let in_c = elide_lifetimes(in_container);
             quote! {
-                <#out_c as mz_repr::SqlContainerType>::wrap_element_type(
-                    <#in_c as mz_repr::SqlContainerType>::unwrap_element_type(
-                        &#input_access.scalar_type
-                    ).clone()
-                ).nullable(#nullable)
+                {
+                    #consistency_checks
+                    <#out_c as mz_repr::SqlContainerType>::wrap_element_type(
+                        <#in_c as mz_repr::SqlContainerType>::unwrap_element_type(
+                            &#input_access.scalar_type
+                        ).clone()
+                    ).nullable(#nullable)
+                }
             }
         }
         // Other cases — user must provide explicit output_type_expr.
@@ -609,6 +656,25 @@ fn derive_output_type_for_generic(
     };
 
     Ok(Some(expr))
+}
+
+/// Generates a token stream that extracts the T-level SQL type from an input
+/// access expression, based on how T is used in that input.
+fn element_type_expr(input_access: &TokenStream, usage: &GenericUsage) -> TokenStream {
+    match usage {
+        GenericUsage::Bare => {
+            quote! { &#input_access.scalar_type }
+        }
+        GenericUsage::InContainer(container) => {
+            let c = elide_lifetimes(container);
+            quote! {
+                <#c as mz_repr::SqlContainerType>::unwrap_element_type(
+                    &#input_access.scalar_type
+                )
+            }
+        }
+        GenericUsage::Absent => unreachable!("element_type_expr called with Absent usage"),
+    }
 }
 
 /// Replaces all lifetime parameters in a `syn::TypePath` with `'_`.
