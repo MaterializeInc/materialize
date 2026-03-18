@@ -31,7 +31,7 @@ SYSTEM_PARAMS = {
     "max_objects_per_schema": "10000",
     "storage_rocksdb_use_merge_operator": "true",
     "storage_upsert_prevent_snapshot_buffering": "true",
-    "storage_upsert_max_snapshot_batch_buffering": "10000",
+    "storage_upsert_max_snapshot_batch_buffering": "1",
     "storage_dataflow_max_inflight_bytes": "1048576",
     "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.001",
     "storage_dataflow_max_inflight_bytes_disk_only": "false",
@@ -39,7 +39,7 @@ SYSTEM_PARAMS = {
 
 MZ_ENV_EXTRA = [
     "MZ_PERSIST_COMPACTION_DISABLED=true",
-    "MZ_UPSERT_FORCE_ORPHAN_EXIT=true",
+    "FAILPOINTS=upsert_skip_retraction=return",
 ]
 
 SERVICES = [

@@ -405,19 +405,6 @@ impl<T: Eq, O> StateValue<T, O> {
         }
     }
 
-    /// Diagnostic: If there is a provisional value at a DIFFERENT timestamp than `ts`,
-    /// returns `Some((provisional_timestamp, has_finalized))`. Returns `None` if there is
-    /// no provisional or if the provisional is at `ts`.
-    pub fn provisional_diagnostic(&self, ts: &T) -> Option<(&T, bool)> {
-        match self {
-            Self::Value(value) => match &value.provisional {
-                Some(p) if &p.timestamp != ts => Some((&p.timestamp, value.finalized.is_some())),
-                _ => None,
-            },
-            Self::Consolidating(_) => None,
-        }
-    }
-
     /// Returns the order of a provisional value at the given timestamp, if any.
     pub fn provisional_order(&self, ts: &T) -> Option<&O> {
         match self {
