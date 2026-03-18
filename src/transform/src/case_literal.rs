@@ -435,10 +435,8 @@ mod tests {
     #[mz_ore::test]
     fn test_null_literal_skipped() {
         // If(Eq(#0, NULL::int64), 10, If(Eq(#0, 2), 20, If(Eq(#0, 3), 30, 0)))
-        // The NULL arm should break the chain, leaving us with the whole thing
-        // as an If since arm1 has NULL, so we get 0 valid arms before the break.
-        // Actually: extract_eq_literal skips NULL literals, so arm1 doesn't match,
-        // and we get 0 arms → no conversion.
+        // The NULL arm breaks the chain at the top level because
+        // peek_eq_literal skips NULL literals, so arm1 doesn't match.
         let null_lit = MirScalarExpr::literal(Ok(Datum::Null), ReprScalarType::Int64);
         let expr = MirScalarExpr::column(0)
             .call_binary(null_lit, Eq)
