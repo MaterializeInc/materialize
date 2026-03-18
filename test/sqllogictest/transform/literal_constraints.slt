@@ -1264,17 +1264,17 @@ WHERE (a,b,c) IN ((15, 16, 17), (25, 26, 111), (35, 36, 111));
 Explained Query:
   With
     cte l0 =
-      Reduce aggregates=[sum((((#0{a} * #1{b}) * #2{c}) * #3{d}))] // { arity: 1, types: "(bigint?)", keys: "([])" }
-        Project (#0{a}..=#3{d}) // { arity: 4, types: "(integer, integer, integer, integer?)", keys: "([1], [2])" }
-          ReadIndex on=materialize.public.t4 idx_t4_a_b_c=[lookup values=[(15, 16, 17); (25, 26, 111); (35, 36, 111)]] // { arity: 7, types: "(integer, integer, integer, integer?, integer, integer, integer)", keys: "([1], [2])" }
-  Return // { arity: 1, types: "(bigint?)", keys: "([])" }
-    Union // { arity: 1, types: "(bigint?)", keys: "([])" }
-      Get l0 // { arity: 1, types: "(bigint?)", keys: "([])" }
-      Map (null) // { arity: 1, types: "(bigint?)", keys: "()" }
+      Reduce aggregates=[sum((((#0{a} * #1{b}) * #2{c}) * #3{d}))] // { arity: 1, types: "(r_int64?)", keys: "([])" }
+        Project (#0{a}..=#3{d}) // { arity: 4, types: "(r_int32, r_int32, r_int32, r_int32?)", keys: "([1], [2])" }
+          ReadIndex on=materialize.public.t4 idx_t4_a_b_c=[lookup values=[(15, 16, 17); (25, 26, 111); (35, 36, 111)]] // { arity: 7, types: "(r_int32, r_int32, r_int32, r_int32?, r_int32, r_int32, r_int32)", keys: "([1], [2])" }
+  Return // { arity: 1, types: "(r_int64?)", keys: "([])" }
+    Union // { arity: 1, types: "(r_int64?)", keys: "([])" }
+      Get l0 // { arity: 1, types: "(r_int64?)", keys: "([])" }
+      Map (null) // { arity: 1, types: "(r_int64?)", keys: "()" }
         Union // { arity: 0, types: "()", keys: "()" }
           Negate // { arity: 0, types: "()", keys: "()" }
             Project () // { arity: 0, types: "()", keys: "([])" }
-              Get l0 // { arity: 1, types: "(bigint?)", keys: "([])" }
+              Get l0 // { arity: 1, types: "(r_int64?)", keys: "([])" }
           Constant // { arity: 0, types: "()", keys: "([])" }
             - ()
 

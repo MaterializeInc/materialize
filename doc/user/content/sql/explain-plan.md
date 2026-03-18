@@ -173,7 +173,7 @@ Modifier | Description
 **node identifiers** | Annotate each subplan in a `PHYSICAL PLAN` with its node ID.
 **redacted** | Anonymize literals in the output.
 **timing** | Annotate the output with the optimization time.
-**types** | Annotate each subplan with its inferred type.
+**types** | Annotate each subplan with its inferred type, as a _representation type_. These types, written with a `r_` prefix, reflect how the types in your SQL query are actually represented inside Materialize---don't be alarmed if you wrote `VARCHAR` or `CHAR` but see `r_string`.
 **humanized expressions** | _(on by default)_ Add human-readable column names to column references. For example, `#0{id}` refers to column 0, whose name is `id`. Note that SQL-level aliasing is not considered when inferring column names, which means that the displayed column names can be ambiguous.
 **filter pushdown** | _(on by default)_ For each source, include a `pushdown` field that explains which filters [can be pushed down to the storage layer](../../transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
 

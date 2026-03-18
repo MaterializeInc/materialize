@@ -521,6 +521,16 @@ pub struct ReprColumnType {
     pub nullable: bool,
 }
 
+impl std::fmt::Display for ReprColumnType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.scalar_type)?;
+        if self.nullable {
+            write!(f, "?")?;
+        }
+        Ok(())
+    }
+}
+
 impl ReprColumnType {
     /// Compute the least upper bound of two column types at the repr level.
     ///
