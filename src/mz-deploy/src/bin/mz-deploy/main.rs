@@ -43,6 +43,7 @@ Getting started:
 Develop:
   compile              Compile and validate SQL without connecting to database [aliases: build]
   test                 Run SQL unit tests defined in test files
+  explore              Generate interactive project documentation
 
 Infrastructure:
   lock                 Generate types.lock file with external dependency schemas
@@ -125,6 +126,29 @@ enum Command {
         /// Skip SQL type checking (faster but less thorough validation)
         #[arg(long)]
         skip_typecheck: bool,
+    },
+
+    /// Generate interactive project documentation
+    ///
+    /// Compiles the project and generates a self-contained HTML file with an
+    /// interactive DAG visualization, object detail pages, and search.
+    /// No database connection is required.
+    ///
+    /// Examples:
+    ///   mz-deploy explore                    # Generate and open in browser
+    ///   mz-deploy explore --no-open          # Generate without opening
+    #[command(
+        hide = true,
+        after_help = "Run 'mz-deploy help explore' for a detailed usage guide."
+    )]
+    Explore {
+        /// Do not open the generated documentation in your browser
+        #[arg(long)]
+        no_open: bool,
+
+        /// Output directory for generated documentation (default: target/docs/)
+        #[arg(long, value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
+        output_dir: Option<PathBuf>,
     },
 
     /// Apply infrastructure objects to Materialize (Terraform-like)
@@ -771,7 +795,7 @@ async fn run(args: Args) -> Result<(), CliError> {
 
     let needs_connection = !matches!(
         &args.command,
-        Some(Command::Compile { .. }) | Some(Command::Test { .. })
+        Some(Command::Compile { .. }) | Some(Command::Test { .. }) | Some(Command::Explore { .. })
     );
     let settings = Settings::load(
         args.directory,
@@ -792,6 +816,14 @@ async fn run(args: Args) -> Result<(), CliError> {
             cli::commands::compile::run(&settings, skip_typecheck, true)
                 .await
                 .map(|_| ())
+        }
+        Some(Command::Explore { no_open, output_dir }) => {
+            if log::json_output_enabled() {
+                return Err(CliError::Message(
+                    "--output json is not supported for the 'explore' command".to_string(),
+                ));
+            }
+            cli::commands::explore::run(&settings, output_dir, !no_open)
         }
         Some(Command::Apply {
             skip_secrets,

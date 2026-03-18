@@ -110,42 +110,56 @@ impl From<tokio_postgres::Error> for ConnectionError {
 /// Errors that can occur during project validation against the database.
 #[derive(Debug)]
 pub enum DatabaseValidationError {
+    /// One or more databases referenced by the project do not exist.
     MissingDatabases(Vec<String>),
+    /// One or more schemas referenced by the project do not exist.
     MissingSchemas(Vec<SchemaQualifier>),
+    /// One or more clusters referenced by the project do not exist.
     MissingClusters(Vec<String>),
+    /// A single object failed to compile due to missing external dependencies.
     CompilationFailed {
         file_path: PathBuf,
         object_name: ObjectId,
         missing_dependencies: Vec<ObjectId>,
     },
+    /// Aggregation of multiple validation failures detected in a single pass.
     Multiple {
         databases: Vec<String>,
         schemas: Vec<SchemaQualifier>,
         clusters: Vec<String>,
         compilation_errors: Vec<DatabaseValidationError>,
     },
+    /// A cluster contains both compute objects (indexes, materialized views) and
+    /// storage objects (sources, sinks), which is not supported.
     ClusterConflict {
         cluster_name: String,
         compute_objects: Vec<String>,
         storage_objects: Vec<String>,
     },
+    /// The connected role lacks privileges required for deployment.
     InsufficientPrivileges {
         missing_database_usage: Vec<String>,
         missing_createcluster: bool,
     },
+    /// The connected role does not own one or more production schemas it needs to manage.
     SchemaOwnershipMismatch {
         unowned_schemas: Vec<SchemaQualifier>,
         current_user: String,
     },
+    /// The connected role does not own one or more production clusters it needs to manage.
     ClusterOwnershipMismatch {
         unowned_clusters: Vec<String>,
         current_user: String,
     },
+    /// Sources referenced by the project do not exist in the database.
     MissingSources(Vec<ObjectId>),
+    /// Connections referenced by the project do not exist in the database.
     MissingConnections(Vec<ObjectId>),
+    /// Objects depend on tables that have not yet been created.
     MissingTableDependencies {
         objects_needing_tables: Vec<(ObjectId, Vec<ObjectId>)>,
     },
+    /// A database query failed during validation.
     QueryError(ConnectionError),
 }
 

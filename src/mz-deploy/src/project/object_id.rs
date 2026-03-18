@@ -45,7 +45,12 @@ impl ObjectId {
         &self.object
     }
 
-    /// Create from an UnresolvedItemName with default database and schema
+    /// Resolve an [`UnresolvedItemName`] into a fully qualified [`ObjectId`].
+    ///
+    /// Name parts are resolved based on how many components are present:
+    /// - 1-part (`object`) — uses both `default_database` and `default_schema`.
+    /// - 2-part (`schema.object`) — uses `default_database`.
+    /// - 3-part (`database.schema.object`) — used as-is.
     pub fn from_item_name(
         name: &UnresolvedItemName,
         default_database: &str,
@@ -73,7 +78,10 @@ impl ObjectId {
         }
     }
 
-    /// Create from a RawItemName with default database and schema
+    /// Resolve a [`RawItemName`] into a fully qualified [`ObjectId`].
+    ///
+    /// Unwraps the inner [`UnresolvedItemName`] and delegates to
+    /// [`from_item_name`](Self::from_item_name).
     pub fn from_raw_item_name(
         name: &RawItemName,
         default_database: &str,
@@ -83,7 +91,9 @@ impl ObjectId {
         Self::from_item_name(name.name(), default_database, default_schema)
     }
 
-    /// Convert to an `UnresolvedItemName` (the reverse of `from_item_name`).
+    /// Convert to an [`UnresolvedItemName`] (the reverse of [`from_item_name`](Self::from_item_name)).
+    ///
+    /// Always produces a fully qualified 3-part name (`database.schema.object`).
     pub fn to_unresolved_item_name(&self) -> UnresolvedItemName {
         UnresolvedItemName(vec![
             Ident::new(&self.database).expect("valid database"),

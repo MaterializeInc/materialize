@@ -352,10 +352,8 @@ pub async fn compile_apply_project_and_connect(
     Ok((planned_project, client))
 }
 
-/// Generate a random 7-character hex environment name.
-///
-/// Uses SHA256 hash of current timestamp to generate a unique identifier
-/// for deployments when no explicit name is provided.
+/// Generate a unique 7-character hex identifier for deployments when no
+/// explicit environment name is provided.
 pub fn generate_random_env_name() -> String {
     use sha2::{Digest, Sha256};
     use std::time::SystemTime;

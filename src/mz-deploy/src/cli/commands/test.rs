@@ -11,11 +11,58 @@ use crate::unit_test;
 use crate::{info, info_nonl, verbose};
 use mz_sql_parser::ast::Ident;
 use owo_colors::OwoColorize;
+use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::fs::File;
 use std::path::Path;
 use std::time::Instant;
+
+/// Top-level structure for the `test-results.json` file written after every test run.
+#[derive(Serialize)]
+struct TestResultsFile {
+    results: Vec<TestResultEntry>,
+    summary: TestSummary,
+}
+
+/// A single test result entry in the structured JSON output.
+#[derive(Serialize)]
+struct TestResultEntry {
+    name: String,
+    object_id: String,
+    file_path: String,
+    status: String,
+    elapsed_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure: Option<TestFailureJson>,
+}
+
+/// Structured failure detail, tagged by failure type.
+#[derive(Serialize)]
+#[serde(tag = "type")]
+enum TestFailureJson {
+    /// Assertion mismatch with missing/unexpected rows.
+    #[serde(rename = "assertion")]
+    Assertion {
+        columns: Vec<String>,
+        missing: Vec<BTreeMap<String, String>>,
+        unexpected: Vec<BTreeMap<String, String>>,
+    },
+    /// Test definition validation failure.
+    #[serde(rename = "validation")]
+    Validation { message: String },
+    /// Runtime or setup error.
+    #[serde(rename = "error")]
+    Error { message: String },
+}
+
+/// Aggregate pass/fail counts for the test run.
+#[derive(Serialize)]
+struct TestSummary {
+    passed: usize,
+    failed: usize,
+    validation_failed: usize,
+}
 
 /// Filter to select a subset of tests to run.
 ///
@@ -137,8 +184,15 @@ enum ValidationFailure {
 enum ExecutionFailure {
     /// Setup or query execution error.
     Error(String),
-    /// Test assertion mismatch with pre-formatted display and structured JUnit output.
-    AssertionFailed { display: String, junit: String },
+    /// Test assertion mismatch with pre-formatted display, structured JUnit output,
+    /// and raw row data for JSON reporting.
+    AssertionFailed {
+        display: String,
+        junit: String,
+        columns: Vec<String>,
+        missing: Vec<BTreeMap<String, String>>,
+        unexpected: Vec<BTreeMap<String, String>>,
+    },
 }
 
 impl TestOutcome {
@@ -174,6 +228,61 @@ impl TestOutcome {
             object_id.database, object_id.schema, object_id.object
         ));
         test_case
+    }
+
+    /// Build a structured JSON entry for this test outcome.
+    fn to_json_entry(
+        &self,
+        name: &str,
+        object_id: &project::object_id::ObjectId,
+        elapsed: time::Duration,
+    ) -> TestResultEntry {
+        let elapsed_ms = u64::try_from(elapsed.whole_milliseconds().max(0)).unwrap_or(0);
+        let (status, failure) = match self {
+            TestOutcome::Passed => ("passed".to_string(), None),
+            TestOutcome::Failed(f) => match f {
+                ExecutionFailure::AssertionFailed {
+                    columns,
+                    missing,
+                    unexpected,
+                    ..
+                } => (
+                    "failed".to_string(),
+                    Some(TestFailureJson::Assertion {
+                        columns: columns.clone(),
+                        missing: missing.clone(),
+                        unexpected: unexpected.clone(),
+                    }),
+                ),
+                ExecutionFailure::Error(msg) => (
+                    "failed".to_string(),
+                    Some(TestFailureJson::Error {
+                        message: msg.clone(),
+                    }),
+                ),
+            },
+            TestOutcome::ValidationFailed(f) => {
+                let message = match f {
+                    ValidationFailure::UnitTest(e) => e.to_string(),
+                    ValidationFailure::AtTime(e) => e.to_string(),
+                };
+                (
+                    "validation_failed".to_string(),
+                    Some(TestFailureJson::Validation { message }),
+                )
+            }
+        };
+        TestResultEntry {
+            name: name.to_string(),
+            object_id: object_id.to_string(),
+            file_path: format!(
+                "models/{}/{}/{}.sql",
+                object_id.database, object_id.schema, object_id.object
+            ),
+            status,
+            elapsed_ms,
+            failure,
+        }
     }
 }
 
@@ -252,6 +361,7 @@ pub async fn run(
 
     let mut junit_suites: BTreeMap<project::object_id::ObjectId, junit_report::TestSuite> =
         BTreeMap::new();
+    let mut json_results: Vec<TestResultEntry> = Vec::new();
     let (mut passed_tests, mut failed_tests, mut validation_failed) = (0, 0, 0);
     for (object_id, test) in &planned_project.tests {
         if let Some(ref f) = test_filter {
@@ -278,6 +388,7 @@ pub async fn run(
             .entry(object_id.clone())
             .or_insert_with(|| junit_report::TestSuite::new(&object_id.to_string()))
             .add_testcase(outcome.to_test_case(&test.name, object_id, elapsed));
+        json_results.push(outcome.to_json_entry(&test.name, object_id, elapsed));
 
         match &outcome {
             TestOutcome::Passed => passed_tests += 1,
@@ -292,6 +403,22 @@ pub async fn run(
             return Err(CliError::TestsFilterMissed { filter: f.into() });
         }
         return Ok(());
+    }
+
+    // Write structured JSON results unconditionally.
+    let results_file = TestResultsFile {
+        results: json_results,
+        summary: TestSummary {
+            passed: passed_tests,
+            failed: failed_tests,
+            validation_failed,
+        },
+    };
+    let target_dir = directory.join(crate::types::BUILD_DIR);
+    std::fs::create_dir_all(&target_dir).ok();
+    let json_path = target_dir.join("test-results.json");
+    if let Ok(file) = File::create(&json_path) {
+        let _ = serde_json::to_writer_pretty(file, &results_file);
     }
 
     if let Some(path) = junit_xml {
@@ -391,9 +518,13 @@ async fn run_single_test(
             if rows.is_empty() {
                 TestOutcome::Passed
             } else {
+                let (columns, missing, unexpected) = extract_assertion_data(&rows);
                 TestOutcome::Failed(ExecutionFailure::AssertionFailed {
                     display: format_assertion_rows(&rows),
                     junit: format_assertion_rows_for_junit(&rows),
+                    columns,
+                    missing,
+                    unexpected,
                 })
             }
         }
@@ -645,6 +776,48 @@ fn format_assertion_rows_for_junit(rows: &[tokio_postgres::SimpleQueryRow]) -> S
         }
     }
     out
+}
+
+/// Extracts structured assertion data from failing query rows.
+///
+/// Column 0 is the status (`MISSING` or `UNEXPECTED`); remaining columns are
+/// data columns. Returns `(column_names, missing_rows, unexpected_rows)`.
+fn extract_assertion_data(
+    rows: &[tokio_postgres::SimpleQueryRow],
+) -> (
+    Vec<String>,
+    Vec<BTreeMap<String, String>>,
+    Vec<BTreeMap<String, String>>,
+) {
+    if rows.is_empty() {
+        return (Vec::new(), Vec::new(), Vec::new());
+    }
+
+    let columns: Vec<String> = rows[0]
+        .columns()
+        .iter()
+        .skip(1)
+        .map(|col| col.name().to_string())
+        .collect();
+
+    let mut missing = Vec::new();
+    let mut unexpected = Vec::new();
+
+    for row in rows {
+        let status = row.get(0).unwrap_or("UNKNOWN");
+        let mut map = BTreeMap::new();
+        for (i, col_name) in columns.iter().enumerate() {
+            let value = row.get(i + 1).unwrap_or("<null>").to_string();
+            map.insert(col_name.clone(), value);
+        }
+        match status {
+            "MISSING" => missing.push(map),
+            "UNEXPECTED" => unexpected.push(map),
+            _ => unexpected.push(map),
+        }
+    }
+
+    (columns, missing, unexpected)
 }
 
 /// Load types.cache or generate it by running type checking if stale/missing.

@@ -17,6 +17,7 @@ use thiserror::Error;
 
 pub const DEFAULT_DOCKER_IMAGE: &str = "materialize/materialized:latest";
 
+/// Security-related settings for a profile (e.g., AWS credentials for secret resolution).
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct SecurityConfig {
     /// AWS profile name for loading secrets from AWS Secrets Manager.
@@ -29,6 +30,10 @@ impl SecurityConfig {
     }
 }
 
+/// Per-profile configuration from `project.toml`.
+///
+/// Each profile can specify a name suffix, security settings, and psql-style
+/// variables that are resolved in SQL files before parsing.
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct ProfileConfig {
     /// Optional suffix to append to database and cluster names for this profile.
@@ -45,6 +50,10 @@ pub struct ProfileConfig {
     pub variables: BTreeMap<String, String>,
 }
 
+/// Parsed contents of `project.toml`.
+///
+/// Specifies the default profile name, optional Materialize version override,
+/// and per-profile configuration sections.
 #[derive(Debug, Deserialize, Clone)]
 pub struct ProjectSettings {
     pub profile: String,
@@ -98,6 +107,8 @@ impl ProjectSettings {
     }
 }
 
+/// Errors that can occur when loading or resolving configuration from
+/// `profiles.toml` and `project.toml`.
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error(
@@ -122,6 +133,9 @@ pub enum ConfigError {
     EnvVarNotFound { var: String, profile: String },
 }
 
+/// Resolved connection details for a Materialize region.
+///
+/// Constructed from a `profiles.toml` entry after environment variable expansion.
 #[derive(Debug, Clone)]
 pub struct Profile {
     pub name: String,
@@ -145,6 +159,10 @@ fn default_port() -> u16 {
     6875
 }
 
+/// All connection profiles loaded from a `profiles.toml` file.
+///
+/// Provides lookup by profile name and environment variable expansion
+/// for password fields.
 #[derive(Debug)]
 pub struct ProfilesConfig {
     profiles: BTreeMap<String, Profile>,

@@ -16,7 +16,7 @@ const CONTAINER_NAME: &str = "mz-deploy-typecheck";
 /// Host port to bind for the persistent container
 const CONTAINER_PORT: u16 = 16875;
 
-/// Result of checking whether Docker is available on the system.
+/// Possible states of Docker availability on the host system.
 pub enum DockerStatus {
     /// Docker is installed and the daemon is running.
     Running,
@@ -26,7 +26,11 @@ pub enum DockerStatus {
     NotInstalled,
 }
 
-/// Docker runtime for managing a Materialize container
+/// Manages a temporary Materialize Docker container for type checking.
+///
+/// The runtime ensures a persistent container is running, connects to it,
+/// and stages external dependency schemas as temporary tables so that
+/// project views can be validated against a real Materialize instance.
 pub struct DockerRuntime {
     /// Materialize Docker image to use
     image: String,

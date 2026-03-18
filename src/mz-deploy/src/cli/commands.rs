@@ -57,6 +57,7 @@ pub mod compile;
 pub mod debug;
 pub mod delete;
 pub mod describe;
+pub mod explore;
 pub mod grants;
 pub mod list;
 pub mod lock;

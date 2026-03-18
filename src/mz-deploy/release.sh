@@ -92,6 +92,15 @@ for target in "${TARGETS[@]}"; do
     esac
 done
 
+# --- Generate shell completions (platform-independent) ---
+
+COMPLETIONS_DIR="${BUILD_DIR}/completions"
+mkdir -p "$COMPLETIONS_DIR"
+NATIVE_BINARY="$WORKSPACE_ROOT/target/aarch64-apple-darwin/release/mz-deploy"
+"$NATIVE_BINARY" completions bash > "$COMPLETIONS_DIR/mz-deploy.bash"
+"$NATIVE_BINARY" completions zsh  > "$COMPLETIONS_DIR/_mz-deploy"
+"$NATIVE_BINARY" completions fish > "$COMPLETIONS_DIR/mz-deploy.fish"
+
 # --- Package ---
 
 # Store SHA sums in files since bash 3.x lacks associative arrays
@@ -106,7 +115,12 @@ for target in "${TARGETS[@]}"; do
         exit 1
     fi
 
-    tar -czf "${BUILD_DIR}/${TARBALL}" -C "$(dirname "$BINARY")" mz-deploy
+    # Create staging dir with binary + completions
+    STAGE_DIR="${BUILD_DIR}/stage-${target}"
+    mkdir -p "$STAGE_DIR/completions"
+    cp "$BINARY" "$STAGE_DIR/"
+    cp "$COMPLETIONS_DIR"/* "$STAGE_DIR/completions/"
+    tar -czf "${BUILD_DIR}/${TARBALL}" -C "$STAGE_DIR" .
     SHA=$(shasum -a 256 "${BUILD_DIR}/${TARBALL}" | awk '{print $1}')
     echo "$SHA" > "${SHA_DIR}/${target}"
     echo "  ${TARBALL}: ${SHA}"
@@ -162,6 +176,9 @@ FORMULA="class MzDeploy < Formula
 
   def install
     bin.install \"mz-deploy\"
+    bash_completion.install \"completions/mz-deploy.bash\" => \"mz-deploy\"
+    zsh_completion.install \"completions/_mz-deploy\"
+    fish_completion.install \"completions/mz-deploy.fish\"
   end
 
   test do

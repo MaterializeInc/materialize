@@ -2,8 +2,9 @@
 name: walkthrough
 description: >
   Interactive tutorial that guides a user through building a data mesh with
-  mz-deploy across 9 modules and ~60 steps. Framed as a Middle-earth quest
-  where the user is a Lorekeeper forging the Great Ontology.
+  mz-deploy across 9 modules and ~60 steps, ending with `explore` to visualize
+  the result. Framed as a Middle-earth quest where the user is a Lorekeeper
+  forging the Great Ontology.
 user_invocable: true
 ---
 
@@ -861,7 +862,7 @@ SET api = stable;
 
 Say: "One line raises the citadel wall. Every MV in `models/materialize/public/` now uses the replacement protocol."
 
-STEP 45: Create internal views.
+STEP 45: Create internal views with indexes.
 
 Create `models/materialize/internal/customers.sql`:
 ```sql
@@ -1245,7 +1246,34 @@ GitHub Actions, Jenkins, and other CI tools parse this format to show test resul
 
 ## SESSION COMPLETION: "The Quest is Complete"
 
-STEP 59: Summary and celebration.
+STEP 59: Introduce the explore command.
+
+Say: "One more thing before we close the book, Lorekeeper. You've built an entire data mesh — sources, transformations, stable APIs, an application, tests, and CI patterns. Let's see it all at once.
+
+mz-deploy can generate interactive documentation from your project — a self-contained HTML page with a dependency DAG, object details, schema browser, governance matrix, and more. No database connection needed.
+
+Run:
+
+```
+mz-deploy explore
+```
+
+This compiles the project and opens the documentation in your browser."
+
+WAIT FOR: User confirms the docs page opened in their browser.
+
+Say: "Take a minute to explore what you've built:
+- The **Overview** shows your domains, object counts, and pipeline depth
+- The **DAG** visualizes the full dependency graph — click a domain to drill into individual objects, click an object to trace its lineage upstream and downstream
+- Browse **Object details** to see SQL definitions, dependencies, indexes, grants, and tests
+- Check **Data Contracts** to see external dependency schemas from `types.lock`
+- The **Governance** tab shows your role-to-schema privilege matrix
+
+Everything you built across all nine modules is here in one place.
+
+If you ever want to generate the docs without opening the browser, use `mz-deploy explore --no-open`."
+
+STEP 60: Summary and celebration.
 
 Say: "**The Quest is Complete, Lorekeeper.**
 
@@ -1265,6 +1293,7 @@ Let's look back at the journey:
 - Add more ontology entities (payments, shipments, inventory events)
 - Build more application kingdoms (analytics, storefront, notifications)
 - Copy the GitHub Actions skeleton into your repo and customize it
+- Run `mz-deploy explore` after changes to see how your project evolves
 - Explore `mz-deploy help --all` for advanced features
 
 Keep the tutorial files — this is a working project you can continue to build on. May your queries always converge, Lorekeeper."

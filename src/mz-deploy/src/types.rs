@@ -46,6 +46,8 @@ use thiserror::Error;
 /// Directory name for mz-deploy build artifacts (types.cache, etc.).
 pub const BUILD_DIR: &str = "target";
 
+/// Errors that can occur when reading, writing, or parsing `types.lock`
+/// and `types.cache` files.
 #[derive(Error, Debug)]
 pub enum TypesError {
     #[error("failed to read types.lock at {path}")]
@@ -80,12 +82,17 @@ pub enum TypesError {
     },
 }
 
+/// A single column's type name and nullability in a data contract.
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 pub struct ColumnType {
     pub r#type: String,
     pub nullable: bool,
 }
 
+/// In-memory representation of a `types.lock` or `types.cache` file.
+///
+/// Maps fully-qualified object names (`database.schema.object`) to their
+/// column schemas. Used for type-checking views against external dependencies.
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 pub struct Types {
     pub version: u8,

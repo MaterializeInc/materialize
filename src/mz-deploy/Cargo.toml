@@ -46,6 +46,5 @@ tempfile = "3.0"
 normal = ["workspace-hack"]
 
 [features]
-default = ["workspace-hack", "docker-typecheck"]
-docker-typecheck = []
+default = ["workspace-hack"]
 vendored-openssl = ["openssl/vendored"]
