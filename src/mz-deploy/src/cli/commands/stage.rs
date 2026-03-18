@@ -1307,6 +1307,7 @@ mod tests {
         typed::DatabaseObject {
             stmt: stmt.expect("Expected at least one CREATE statement"),
             indexes,
+            constraints: vec![],
             grants: vec![],
             comments: vec![],
             tests: vec![],

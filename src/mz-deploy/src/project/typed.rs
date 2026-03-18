@@ -44,6 +44,7 @@ mod validation;
 
 // Re-export all public types from types module
 pub use types::{Database, DatabaseObject, FullyQualifiedName, Project, Schema};
+pub use validation::{validate_constraint_columns, validate_constraint_fk_targets};
 
 #[cfg(test)]
 mod tests;

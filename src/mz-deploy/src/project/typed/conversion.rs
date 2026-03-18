@@ -7,7 +7,8 @@ use super::super::ast::Statement;
 use super::super::normalize::NormalizingVisitor;
 use super::types::{Database, DatabaseObject, FullyQualifiedName, Project, Schema};
 use super::validation::{
-    validate_comment_references, validate_database_mod_statements, validate_fqn_identifiers,
+    validate_comment_references, validate_constraint_clusters, validate_constraint_enforcement,
+    validate_constraint_references, validate_database_mod_statements, validate_fqn_identifiers,
     validate_grant_references, validate_ident, validate_index_clusters, validate_index_references,
     validate_mv_cluster, validate_no_storage_and_computation_in_schema,
     validate_schema_mod_statements, validate_sink_cluster, validate_source_cluster,
@@ -42,6 +43,7 @@ fn classify_variant_object_type(
             mz_sql_parser::ast::Statement::CreateSecret(_) => Some(ObjectType::Secret),
             mz_sql_parser::ast::Statement::CreateConnection(_) => Some(ObjectType::Connection),
             mz_sql_parser::ast::Statement::CreateIndex(_)
+            | mz_sql_parser::ast::Statement::CreateConstraint(_)
             | mz_sql_parser::ast::Statement::GrantPrivileges(_)
             | mz_sql_parser::ast::Statement::Comment(_)
             | mz_sql_parser::ast::Statement::ExecuteUnitTest(_) => None,
@@ -121,6 +123,7 @@ fn validate_single_variant(
     let mut main_stmt: Option<Statement> = None;
     let mut object_type: Option<ObjectType> = None;
     let mut indexes = Vec::new();
+    let mut constraints = Vec::new();
     let mut grants = Vec::new();
     let mut comments = Vec::new();
     let mut tests = Vec::new();
@@ -243,6 +246,9 @@ fn validate_single_variant(
             mz_sql_parser::ast::Statement::CreateIndex(s) => {
                 indexes.push(s);
             }
+            mz_sql_parser::ast::Statement::CreateConstraint(s) => {
+                constraints.push(s);
+            }
             mz_sql_parser::ast::Statement::GrantPrivileges(s) => {
                 grants.push(s);
             }
@@ -315,19 +321,23 @@ fn validate_single_variant(
     // Normalize statement name and dependencies
     let stmt = stmt.normalize_stmt(&fqn);
 
-    // Normalize index, grant, and comment references to be fully qualified
+    // Normalize index, constraint, grant, and comment references to be fully qualified
     let visitor = NormalizingVisitor::fully_qualifying(&fqn);
     visitor.normalize_index_references(&mut indexes);
+    visitor.normalize_constraint_references(&mut constraints);
     visitor.normalize_grant_references(&mut grants);
     visitor.normalize_comment_references(&mut comments);
 
     // Validate cluster requirements
     validate_index_clusters(&fqn, &indexes, &mut errors);
+    validate_constraint_clusters(&fqn, &constraints, &mut errors);
     validate_mv_cluster(&fqn, &stmt, &mut errors);
     validate_sink_cluster(&fqn, &stmt, &mut errors);
     validate_source_cluster(&fqn, &stmt, &mut errors);
 
     validate_index_references(&fqn, &indexes, &main_ident, &mut errors);
+    validate_constraint_references(&fqn, &constraints, &main_ident, &mut errors);
+    validate_constraint_enforcement(&fqn, &constraints, obj_type, &mut errors);
     validate_grant_references(&fqn, &grants, &main_ident, obj_type, &mut errors);
     validate_comment_references(&fqn, &comments, &main_ident, &obj_type, &mut errors);
 
@@ -338,6 +348,7 @@ fn validate_single_variant(
     Ok(DatabaseObject {
         stmt,
         indexes,
+        constraints,
         grants,
         comments,
         tests,

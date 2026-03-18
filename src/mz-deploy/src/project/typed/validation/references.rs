@@ -49,6 +49,32 @@ pub(in super::super) fn validate_index_references(
     }
 }
 
+/// Validates that all CREATE CONSTRAINT statements reference the main object.
+///
+/// Ensures that every constraint defined in the file is created on the object
+/// defined in the same file.
+pub(in super::super) fn validate_constraint_references(
+    fqn: &FullyQualifiedName,
+    constraints: &[CreateConstraintStatement<Raw>],
+    main_ident: &DatabaseIdent,
+    errors: &mut Vec<ValidationError>,
+) {
+    for constraint in constraints.iter() {
+        let on: DatabaseIdent = constraint.on_name.name().clone().into();
+        if !on.matches(main_ident) {
+            let constraint_sql = format!("{};", constraint);
+            errors.push(ValidationError::with_file_and_sql(
+                ValidationErrorKind::ConstraintReferenceMismatch {
+                    referenced: on.object,
+                    expected: main_ident.object.clone(),
+                },
+                fqn.path.clone(),
+                constraint_sql,
+            ));
+        }
+    }
+}
+
 /// Validates that all GRANT statements reference the main object with the correct type.
 ///
 /// Ensures that:

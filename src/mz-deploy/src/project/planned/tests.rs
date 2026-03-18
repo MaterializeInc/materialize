@@ -952,11 +952,13 @@ fn test_validate_cluster_isolation_separate_clusters() {
         typed_object: typed::DatabaseObject {
             stmt: mv_stmt,
             indexes: vec![],
+            constraints: vec![],
             grants: vec![],
             comments: vec![],
             tests: vec![],
         },
         dependencies: BTreeSet::new(),
+        is_constraint_mv: false,
     };
 
     let sink_obj = DatabaseObject {
@@ -964,11 +966,13 @@ fn test_validate_cluster_isolation_separate_clusters() {
         typed_object: typed::DatabaseObject {
             stmt: sink_stmt,
             indexes: vec![],
+            constraints: vec![],
             grants: vec![],
             comments: vec![],
             tests: vec![],
         },
         dependencies: BTreeSet::new(),
+        is_constraint_mv: false,
     };
 
     let project = Project {
@@ -1021,11 +1025,13 @@ fn test_validate_cluster_isolation_conflict_mv_and_source() {
         typed_object: typed::DatabaseObject {
             stmt: mv_stmt,
             indexes: vec![],
+            constraints: vec![],
             grants: vec![],
             comments: vec![],
             tests: vec![],
         },
         dependencies: BTreeSet::new(),
+        is_constraint_mv: false,
     };
 
     let project = Project {
@@ -1086,11 +1092,13 @@ fn test_validate_cluster_isolation_only_compute_objects() {
         typed_object: typed::DatabaseObject {
             stmt: mv_stmt,
             indexes: vec![],
+            constraints: vec![],
             grants: vec![],
             comments: vec![],
             tests: vec![],
         },
         dependencies: BTreeSet::new(),
+        is_constraint_mv: false,
     };
 
     let project = Project {
@@ -1138,11 +1146,13 @@ fn test_validate_cluster_isolation_only_storage_objects() {
         typed_object: typed::DatabaseObject {
             stmt: sink_stmt,
             indexes: vec![],
+            constraints: vec![],
             grants: vec![],
             comments: vec![],
             tests: vec![],
         },
         dependencies: BTreeSet::new(),
+        is_constraint_mv: false,
     };
 
     let project = Project {
@@ -2446,11 +2456,13 @@ fn test_lock_guard_no_tables_no_external_deps_skips() {
         typed_object: typed::DatabaseObject {
             stmt: view_stmt,
             indexes: vec![],
+            constraints: vec![],
             grants: vec![],
             comments: vec![],
             tests: vec![],
         },
         dependencies: BTreeSet::new(),
+        is_constraint_mv: false,
     };
 
     let project = Project {
@@ -2544,11 +2556,13 @@ fn test_lock_guard_external_deps_but_no_tables_proceeds() {
         typed_object: typed::DatabaseObject {
             stmt: view_stmt,
             indexes: vec![],
+            constraints: vec![],
             grants: vec![],
             comments: vec![],
             tests: vec![],
         },
         dependencies: BTreeSet::from([ext_dep.clone()]),
+        is_constraint_mv: false,
     };
 
     let project = Project {
@@ -2655,4 +2669,139 @@ fn test_lock_guard_table_from_source_counts_as_table() {
     let tables: Vec<_> = planned_project.get_tables().collect();
     assert_eq!(tables.len(), 1, "Should detect table from source");
     assert_eq!(tables[0].object, "events");
+}
+
+#[test]
+fn test_enforced_constraint_creates_companion_mv() {
+    use crate::project::raw;
+    use crate::project::typed;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let src_dir = temp_dir.path();
+
+    let db_path = src_dir.join("models").join("test_db");
+    let schema_path = db_path.join("public");
+    fs::create_dir_all(&schema_path).unwrap();
+
+    // Create a materialized view with an enforced PK constraint
+    fs::write(
+        schema_path.join("foo.sql"),
+        "CREATE MATERIALIZED VIEW foo IN CLUSTER c AS SELECT 1 AS id;\n\
+         CREATE PRIMARY KEY pk IN CLUSTER c ON foo (id);",
+    )
+    .unwrap();
+
+    let raw_project = raw::load_project(src_dir, "default", None, &BTreeMap::new()).unwrap();
+    let typed_project = typed::Project::try_from(raw_project).unwrap();
+    let planned_project = Project::from(typed_project);
+
+    // The planned project should contain both the original MV and the companion MV
+    let all_objects: Vec<_> = planned_project
+        .databases
+        .iter()
+        .flat_map(|db| db.schemas.iter())
+        .flat_map(|schema| schema.objects.iter())
+        .collect();
+
+    let object_names: Vec<&str> = all_objects.iter().map(|o| o.id.object.as_str()).collect();
+    assert!(
+        object_names.contains(&"foo"),
+        "should contain the original MV: {:?}",
+        object_names
+    );
+    assert!(
+        object_names.contains(&"pk"),
+        "should contain the companion MV 'pk': {:?}",
+        object_names
+    );
+
+    // The companion MV should be a CreateMaterializedView statement
+    let pk_obj = all_objects.iter().find(|o| o.id.object == "pk").unwrap();
+    assert!(
+        matches!(
+            &pk_obj.typed_object.stmt,
+            Statement::CreateMaterializedView(_)
+        ),
+        "companion MV should be a CreateMaterializedView"
+    );
+
+    // The companion MV should depend on the parent MV
+    let foo_id = ObjectId::new(
+        "test_db".to_string(),
+        "public".to_string(),
+        "foo".to_string(),
+    );
+    assert!(
+        pk_obj.dependencies.contains(&foo_id),
+        "companion MV should depend on parent MV"
+    );
+}
+
+#[test]
+fn test_enforced_fk_constraint_dependency_graph() {
+    use crate::project::raw;
+    use crate::project::typed;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let src_dir = temp_dir.path();
+
+    let db_path = src_dir.join("models").join("test_db");
+    let schema_path = db_path.join("public");
+    fs::create_dir_all(&schema_path).unwrap();
+
+    // Create parent MV
+    fs::write(
+        schema_path.join("customers.sql"),
+        "CREATE MATERIALIZED VIEW customers IN CLUSTER c AS SELECT 1 AS id;",
+    )
+    .unwrap();
+
+    // Create child MV with enforced FK constraint
+    fs::write(
+        schema_path.join("orders.sql"),
+        "CREATE MATERIALIZED VIEW orders IN CLUSTER c AS SELECT 1 AS customer_id;\n\
+         CREATE FOREIGN KEY fk IN CLUSTER c ON orders (customer_id) REFERENCES customers (id);",
+    )
+    .unwrap();
+
+    let raw_project = raw::load_project(src_dir, "default", None, &BTreeMap::new()).unwrap();
+    let typed_project = typed::Project::try_from(raw_project).unwrap();
+    let planned_project = Project::from(typed_project);
+
+    // Find the FK companion MV
+    let all_objects: Vec<_> = planned_project
+        .databases
+        .iter()
+        .flat_map(|db| db.schemas.iter())
+        .flat_map(|schema| schema.objects.iter())
+        .collect();
+
+    let fk_obj = all_objects
+        .iter()
+        .find(|o| o.id.object == "fk")
+        .expect("should have FK companion MV");
+
+    let orders_id = ObjectId::new(
+        "test_db".to_string(),
+        "public".to_string(),
+        "orders".to_string(),
+    );
+    let customers_id = ObjectId::new(
+        "test_db".to_string(),
+        "public".to_string(),
+        "customers".to_string(),
+    );
+
+    assert!(
+        fk_obj.dependencies.contains(&orders_id),
+        "FK companion MV should depend on parent MV (orders)"
+    );
+    assert!(
+        fk_obj.dependencies.contains(&customers_id),
+        "FK companion MV should depend on referenced MV (customers)"
+    );
 }

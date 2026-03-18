@@ -1138,11 +1138,13 @@ mod tests {
                 typed_object: typed::DatabaseObject {
                     stmt,
                     indexes: vec![],
+                    constraints: vec![],
                     grants: vec![],
                     comments: vec![],
                     tests: vec![],
                 },
                 dependencies: BTreeSet::new(),
+                is_constraint_mv: false,
             })
             .collect();
 

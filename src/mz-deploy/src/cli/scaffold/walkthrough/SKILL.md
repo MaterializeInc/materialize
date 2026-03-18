@@ -1292,7 +1292,6 @@ Let's look back at the journey:
 **Next steps for your realm:**
 - Add more ontology entities (payments, shipments, inventory events)
 - Build more application kingdoms (analytics, storefront, notifications)
-- Copy the GitHub Actions skeleton into your repo and customize it
 - Run `mz-deploy explore` after changes to see how your project evolves
 - Explore `mz-deploy help --all` for advanced features
 

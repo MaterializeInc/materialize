@@ -316,12 +316,63 @@ pub enum ValidationErrorKind {
         default_path: PathBuf,
         override_path: PathBuf,
     },
+    /// A constraint references a different object
+    ConstraintReferenceMismatch {
+        referenced: String,
+        expected: String,
+    },
+    /// Constraint on a table or table from source (not allowed)
+    ConstraintNotAllowedOnTable {
+        constraint_name: String,
+        object_type: String,
+    },
+    /// Enforced constraint on a view (not allowed)
+    EnforcedConstraintNotAllowed {
+        constraint_name: String,
+        object_type: String,
+    },
+    /// Enforced constraint missing required IN CLUSTER clause
+    EnforcedConstraintMissingCluster { constraint_name: String },
+    /// Not-enforced constraint has IN CLUSTER clause (not allowed)
+    NotEnforcedConstraintHasCluster { constraint_name: String },
+    /// Enforced foreign key references an object that isn't table/table-from-source/MV
+    EnforcedForeignKeyInvalidTarget {
+        constraint_name: String,
+        target: String,
+        target_type: String,
+    },
+    /// Enforced foreign key references an external object (not defined in the project)
+    EnforcedForeignKeyExternalTarget {
+        constraint_name: String,
+        target: String,
+    },
     /// Views and materialized views cannot have profile-specific overrides
     ProfileOverrideNotAllowed {
         object_name: String,
         object_type: String,
         override_profile: String,
         override_path: PathBuf,
+    },
+    /// Constraint column does not exist on its parent object
+    ConstraintColumnNotFound {
+        constraint_name: String,
+        column: String,
+        object: String,
+        available_columns: Vec<String>,
+    },
+    /// FK reference column does not exist on the referenced object
+    FkRefColumnNotFound {
+        constraint_name: String,
+        column: String,
+        ref_object: String,
+        available_columns: Vec<String>,
+    },
+    /// FK target object is an invalid type for the constraint's enforcement level
+    FkInvalidTargetType {
+        constraint_name: String,
+        ref_object: String,
+        ref_kind: String,
+        enforced: bool,
     },
 }
 
@@ -722,6 +773,64 @@ impl ValidationErrorKind {
                     policy_name, target
                 )
             }
+            Self::ConstraintReferenceMismatch {
+                referenced,
+                expected,
+            } => {
+                format!(
+                    "CONSTRAINT references wrong object: '{}' instead of '{}'",
+                    referenced, expected
+                )
+            }
+            Self::ConstraintNotAllowedOnTable {
+                constraint_name,
+                object_type,
+            } => {
+                format!(
+                    "constraint '{}' is not allowed on {}",
+                    constraint_name, object_type
+                )
+            }
+            Self::EnforcedConstraintNotAllowed {
+                constraint_name,
+                object_type,
+            } => {
+                format!(
+                    "enforced constraint '{}' is not allowed on {}",
+                    constraint_name, object_type
+                )
+            }
+            Self::EnforcedConstraintMissingCluster { constraint_name } => {
+                format!(
+                    "enforced constraint '{}' is missing required IN CLUSTER clause",
+                    constraint_name
+                )
+            }
+            Self::NotEnforcedConstraintHasCluster { constraint_name } => {
+                format!(
+                    "not-enforced constraint '{}' must not specify IN CLUSTER",
+                    constraint_name
+                )
+            }
+            Self::EnforcedForeignKeyInvalidTarget {
+                constraint_name,
+                target,
+                target_type,
+            } => {
+                format!(
+                    "enforced foreign key '{}' references '{}' which is a {} (must be table, table from source, or materialized view)",
+                    constraint_name, target, target_type
+                )
+            }
+            Self::EnforcedForeignKeyExternalTarget {
+                constraint_name,
+                target,
+            } => {
+                format!(
+                    "enforced foreign key '{}' references external object '{}' (not defined in this project)",
+                    constraint_name, target
+                )
+            }
             Self::ProfileObjectTypeMismatch {
                 object_name,
                 default_type,
@@ -743,6 +852,44 @@ impl ValidationErrorKind {
                 format!(
                     "{} '{}' cannot have profile-specific overrides (found '{}' override)",
                     object_type, object_name, override_profile
+                )
+            }
+            Self::ConstraintColumnNotFound {
+                constraint_name,
+                column,
+                object,
+                ..
+            } => {
+                format!(
+                    "constraint '{}': column \"{}\" does not exist on {}",
+                    constraint_name, column, object
+                )
+            }
+            Self::FkRefColumnNotFound {
+                constraint_name,
+                column,
+                ref_object,
+                ..
+            } => {
+                format!(
+                    "constraint '{}': column \"{}\" does not exist on referenced object {}",
+                    constraint_name, column, ref_object
+                )
+            }
+            Self::FkInvalidTargetType {
+                constraint_name,
+                ref_object,
+                ref_kind,
+                enforced,
+            } => {
+                let kind_desc = if *enforced {
+                    "enforced foreign key"
+                } else {
+                    "foreign key"
+                };
+                format!(
+                    "{} '{}' cannot reference {} ({})",
+                    kind_desc, constraint_name, ref_object, ref_kind
                 )
             }
         }
@@ -922,11 +1069,53 @@ impl ValidationErrorKind {
             Self::NetworkPolicyCommentTargetMismatch { .. } => {
                 Some("COMMENT statements in a network policy file must target the policy defined in that file".to_string())
             }
+            Self::ConstraintReferenceMismatch { .. } => {
+                Some("constraints must be defined in the same file as the object they're created on".to_string())
+            }
+            Self::ConstraintNotAllowedOnTable { .. } => {
+                Some("constraints can only be defined on views (NOT ENFORCED) and materialized views".to_string())
+            }
+            Self::EnforcedConstraintNotAllowed { .. } => {
+                Some("enforced constraints can only be created on materialized views".to_string())
+            }
+            Self::EnforcedConstraintMissingCluster { .. } => {
+                Some("add 'IN CLUSTER <cluster_name>' to your enforced constraint statement".to_string())
+            }
+            Self::NotEnforcedConstraintHasCluster { .. } => {
+                Some("remove the IN CLUSTER clause from your NOT ENFORCED constraint".to_string())
+            }
+            Self::EnforcedForeignKeyInvalidTarget { .. } => {
+                Some("enforced foreign keys can only reference tables, tables from source, or materialized views".to_string())
+            }
+            Self::EnforcedForeignKeyExternalTarget { .. } => {
+                Some("enforced foreign keys can only reference objects defined in this project".to_string())
+            }
             Self::ProfileObjectTypeMismatch { .. } => {
                 Some("all profile variants of an object must have the same primary statement type (e.g., all CREATE SECRET or all CREATE TABLE)".to_string())
             }
             Self::ProfileOverrideNotAllowed { .. } => {
                 Some("views and materialized views cannot have profile-specific overrides because their definitions should be consistent across environments".to_string())
+            }
+            Self::ConstraintColumnNotFound { available_columns, .. } => {
+                if available_columns.is_empty() {
+                    None
+                } else {
+                    Some(format!("available columns: {}", available_columns.join(", ")))
+                }
+            }
+            Self::FkRefColumnNotFound { available_columns, .. } => {
+                if available_columns.is_empty() {
+                    None
+                } else {
+                    Some(format!("available columns: {}", available_columns.join(", ")))
+                }
+            }
+            Self::FkInvalidTargetType { enforced, .. } => {
+                if *enforced {
+                    Some("enforced foreign keys can only reference tables, tables from source, or materialized views".to_string())
+                } else {
+                    Some("foreign keys can only reference tables, tables from source, materialized views, or views".to_string())
+                }
             }
         }
     }

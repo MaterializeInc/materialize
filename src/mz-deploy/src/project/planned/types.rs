@@ -16,6 +16,8 @@ pub struct DatabaseObject {
     pub typed_object: typed::DatabaseObject,
     /// Set of objects this object depends on
     pub dependencies: BTreeSet<ObjectId>,
+    /// True if this object was synthesized from an enforced constraint.
+    pub is_constraint_mv: bool,
 }
 
 /// A module-level statement with context about where it should be executed.

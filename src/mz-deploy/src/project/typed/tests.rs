@@ -2897,3 +2897,235 @@ fn test_active_variant_resolution_falls_back_to_default() {
         stmt_str
     );
 }
+
+// ===== Constraint Tests =====
+
+#[test]
+fn test_valid_table_with_not_enforced_constraint() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("materialize/public/foo.sql");
+
+    let sql = r#"
+        CREATE TABLE foo (id INT);
+        CREATE PRIMARY KEY NOT ENFORCED pk ON foo (id);
+    "#;
+
+    let raw = create_raw_object("foo", path, sql);
+    let result = DatabaseObject::validate(raw, "default");
+
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("constraint"));
+    assert!(err.to_string().contains("not allowed on table"));
+}
+
+#[test]
+fn test_valid_table_with_enforced_constraint() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("materialize/public/foo.sql");
+
+    let sql = r#"
+        CREATE TABLE foo (id INT);
+        CREATE UNIQUE CONSTRAINT uc IN CLUSTER c ON foo (id);
+    "#;
+
+    let raw = create_raw_object("foo", path, sql);
+    let result = DatabaseObject::validate(raw, "default");
+
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("constraint"));
+    assert!(err.to_string().contains("not allowed on table"));
+}
+
+#[test]
+fn test_valid_table_with_foreign_key() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("materialize/public/foo.sql");
+
+    let sql = r#"
+        CREATE TABLE foo (id INT, other_id INT);
+        CREATE FOREIGN KEY NOT ENFORCED fk ON foo (other_id) REFERENCES bar (id);
+    "#;
+
+    let raw = create_raw_object("foo", path, sql);
+    let result = DatabaseObject::validate(raw, "default");
+
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("constraint"));
+    assert!(err.to_string().contains("not allowed on table"));
+}
+
+#[test]
+fn test_valid_mv_with_enforced_constraint() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("materialize/public/my_mv.sql");
+
+    let sql = r#"
+        CREATE MATERIALIZED VIEW my_mv IN CLUSTER quickstart AS SELECT 1 AS id;
+        CREATE PRIMARY KEY pk IN CLUSTER c ON my_mv (id);
+    "#;
+
+    let raw = create_raw_object("my_mv", path, sql);
+    let result = DatabaseObject::validate(raw, "default");
+
+    assert!(result.is_ok());
+    let obj = result.unwrap().unwrap();
+    assert_eq!(obj.constraints.len(), 1);
+    assert!(obj.constraints[0].enforced);
+}
+
+#[test]
+fn test_valid_view_with_not_enforced_constraint() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("materialize/public/my_view.sql");
+
+    let sql = r#"
+        CREATE VIEW my_view AS SELECT 1 AS id;
+        CREATE PRIMARY KEY NOT ENFORCED pk ON my_view (id);
+    "#;
+
+    let raw = create_raw_object("my_view", path, sql);
+    let result = DatabaseObject::validate(raw, "default");
+
+    assert!(result.is_ok());
+    let obj = result.unwrap().unwrap();
+    assert_eq!(obj.constraints.len(), 1);
+    assert!(!obj.constraints[0].enforced);
+}
+
+#[test]
+fn test_constraint_normalization() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("materialize/public/foo.sql");
+
+    let sql = r#"
+        CREATE VIEW foo AS SELECT 1 AS id, 2 AS other_id;
+        CREATE PRIMARY KEY NOT ENFORCED pk ON foo (id);
+        CREATE FOREIGN KEY NOT ENFORCED fk ON foo (other_id) REFERENCES bar (id);
+    "#;
+
+    let raw = create_raw_object("foo", path, sql);
+    let result = DatabaseObject::validate(raw, "default");
+
+    assert!(result.is_ok());
+    let obj = result.unwrap().unwrap();
+    assert_eq!(obj.constraints.len(), 2);
+
+    // Verify on_name normalized to FQN for both
+    assert_eq!(
+        obj.constraints[0].on_name.to_string(),
+        "materialize.public.foo"
+    );
+    assert_eq!(
+        obj.constraints[1].on_name.to_string(),
+        "materialize.public.foo"
+    );
+
+    // Verify FK reference object is also normalized
+    let refs = obj.constraints[1].references.as_ref().unwrap();
+    assert_eq!(refs.object.to_string(), "materialize.public.bar");
+}
+
+#[test]
+fn test_valid_mv_with_indexes_grants_and_constraints() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("materialize/public/foo.sql");
+
+    let sql = r#"
+        CREATE MATERIALIZED VIEW foo IN CLUSTER quickstart AS SELECT 1 AS id;
+        CREATE INDEX idx_foo IN CLUSTER c ON foo (id);
+        CREATE PRIMARY KEY NOT ENFORCED pk ON foo (id);
+        GRANT SELECT ON foo TO user1;
+        COMMENT ON MATERIALIZED VIEW foo IS 'test mv';
+    "#;
+
+    let raw = create_raw_object("foo", path, sql);
+    let result = DatabaseObject::validate(raw, "default");
+
+    assert!(result.is_ok());
+    let obj = result.unwrap().unwrap();
+    assert_eq!(obj.indexes.len(), 1);
+    assert_eq!(obj.constraints.len(), 1);
+    assert_eq!(obj.grants.len(), 1);
+    assert_eq!(obj.comments.len(), 1);
+}
+
+#[test]
+fn test_invalid_constraint_on_different_object() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("materialize/public/foo.sql");
+
+    let sql = r#"
+        CREATE VIEW foo AS SELECT 1 AS id;
+        CREATE PRIMARY KEY NOT ENFORCED pk ON bar (id);
+    "#;
+
+    let raw = create_raw_object("foo", path, sql);
+    let result = DatabaseObject::validate(raw, "default");
+
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("CONSTRAINT"));
+    assert!(err.to_string().contains("bar"));
+    assert!(err.to_string().contains("foo"));
+}
+
+#[test]
+fn test_enforced_constraint_on_view_fails() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("materialize/public/my_view.sql");
+
+    let sql = r#"
+        CREATE VIEW my_view AS SELECT 1 AS id;
+        CREATE PRIMARY KEY pk IN CLUSTER c ON my_view (id);
+    "#;
+
+    let raw = create_raw_object("my_view", path, sql);
+    let result = DatabaseObject::validate(raw, "default");
+
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("enforced constraint"));
+    assert!(err.to_string().contains("not allowed"));
+    assert!(err.to_string().contains("view"));
+}
+
+#[test]
+fn test_enforced_constraint_missing_cluster_fails() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("materialize/public/foo.sql");
+
+    let sql = r#"
+        CREATE MATERIALIZED VIEW foo IN CLUSTER quickstart AS SELECT 1 AS id;
+        CREATE PRIMARY KEY pk ON foo (id);
+    "#;
+
+    let raw = create_raw_object("foo", path, sql);
+    let result = DatabaseObject::validate(raw, "default");
+
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("enforced constraint"));
+    assert!(err.to_string().contains("missing required IN CLUSTER"));
+}
+
+#[test]
+fn test_not_enforced_constraint_with_cluster_fails() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("materialize/public/foo.sql");
+
+    let sql = r#"
+        CREATE MATERIALIZED VIEW foo IN CLUSTER quickstart AS SELECT 1 AS id;
+        CREATE PRIMARY KEY NOT ENFORCED pk IN CLUSTER c ON foo (id);
+    "#;
+
+    let raw = create_raw_object("foo", path, sql);
+    let result = DatabaseObject::validate(raw, "default");
+
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("not-enforced constraint"));
+    assert!(err.to_string().contains("must not specify IN CLUSTER"));
+}

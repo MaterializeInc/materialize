@@ -39,9 +39,61 @@ pub use typechecker::{
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+
+/// The kind of database object recorded in a `types.lock` entry.
+///
+/// `TableFromSource` is treated as `Table` from a contract perspective — both
+/// represent row-producing relations that can serve as FK targets.
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ObjectKind {
+    Table,
+    View,
+    MaterializedView,
+    Source,
+    Sink,
+    Secret,
+    Connection,
+}
+
+impl Default for ObjectKind {
+    fn default() -> Self {
+        ObjectKind::Table
+    }
+}
+
+impl ObjectKind {
+    /// Returns the kebab-case string matching the serde serialization format.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ObjectKind::Table => "table",
+            ObjectKind::View => "view",
+            ObjectKind::MaterializedView => "materialized-view",
+            ObjectKind::Source => "source",
+            ObjectKind::Sink => "sink",
+            ObjectKind::Secret => "secret",
+            ObjectKind::Connection => "connection",
+        }
+    }
+}
+
+impl fmt::Display for ObjectKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ObjectKind::Table => write!(f, "table"),
+            ObjectKind::View => write!(f, "view"),
+            ObjectKind::MaterializedView => write!(f, "materialized view"),
+            ObjectKind::Source => write!(f, "source"),
+            ObjectKind::Sink => write!(f, "sink"),
+            ObjectKind::Secret => write!(f, "secret"),
+            ObjectKind::Connection => write!(f, "connection"),
+        }
+    }
+}
 
 /// Directory name for mz-deploy build artifacts (types.cache, etc.).
 pub const BUILD_DIR: &str = "target";
@@ -97,6 +149,9 @@ pub struct ColumnType {
 pub struct Types {
     pub version: u8,
     pub tables: BTreeMap<String, BTreeMap<String, ColumnType>>,
+    /// Object kind for each fully-qualified name. Missing entries default to `Table`.
+    #[serde(default, skip_serializing)]
+    pub kinds: BTreeMap<String, ObjectKind>,
 }
 
 impl Default for Types {
@@ -104,6 +159,7 @@ impl Default for Types {
         Types {
             version: 1,
             tables: BTreeMap::new(),
+            kinds: BTreeMap::new(),
         }
     }
 }
@@ -121,6 +177,8 @@ struct TableLock {
     database: String,
     schema: String,
     name: String,
+    #[serde(default)]
+    kind: ObjectKind,
     #[serde(default, alias = "column")]
     columns: Vec<ColumnLock>,
 }
@@ -156,10 +214,13 @@ impl From<&Types> for TypesLock {
                     .collect();
                 cols.sort_by(|a, b| a.name.cmp(&b.name));
 
+                let kind = types.kinds.get(fqn).copied().unwrap_or(ObjectKind::Table);
+
                 TableLock {
                     database,
                     schema,
                     name,
+                    kind,
                     columns: cols,
                 }
             })
@@ -178,6 +239,7 @@ impl From<&Types> for TypesLock {
 impl From<TypesLock> for Types {
     fn from(lock: TypesLock) -> Self {
         let mut tables = BTreeMap::new();
+        let mut kinds = BTreeMap::new();
         for obj in lock.table {
             let fqn = format!("{}.{}.{}", obj.database, obj.schema, obj.name);
             let mut columns = BTreeMap::new();
@@ -190,11 +252,13 @@ impl From<TypesLock> for Types {
                     },
                 );
             }
+            kinds.insert(fqn.clone(), obj.kind);
             tables.insert(fqn, columns);
         }
         Types {
             version: lock.version,
             tables,
+            kinds,
         }
     }
 }
@@ -237,6 +301,9 @@ fn write_toml(lock: &TypesLock) -> String {
             escape_toml_string(&obj.schema)
         ));
         out.push_str(&format!("name = \"{}\"\n", escape_toml_string(&obj.name)));
+        if obj.kind != ObjectKind::Table {
+            out.push_str(&format!("kind = \"{}\"\n", obj.kind.as_str()));
+        }
         out.push_str("columns = [\n");
         for col in &obj.columns {
             out.push_str(&format!(
@@ -311,11 +378,19 @@ impl Types {
         for (key, value) in &other.tables {
             self.tables.insert(key.clone(), value.clone());
         }
+        for (key, value) in &other.kinds {
+            self.kinds.insert(key.clone(), *value);
+        }
     }
 
     /// Get the column schema for an object by its fully qualified name.
     pub fn get_table(&self, fqn: &str) -> Option<&BTreeMap<String, ColumnType>> {
         self.tables.get(fqn)
+    }
+
+    /// Get the object kind for a fully-qualified name, defaulting to `Table`.
+    pub fn get_kind(&self, fqn: &str) -> ObjectKind {
+        self.kinds.get(fqn).copied().unwrap_or(ObjectKind::Table)
     }
 }
 
@@ -444,7 +519,15 @@ mod tests {
         );
         tables.insert("app.ingest.users".to_string(), user_cols);
 
-        let types = Types { version: 1, tables };
+        let mut kinds = BTreeMap::new();
+        kinds.insert("app.ingest.orders".to_string(), ObjectKind::Table);
+        kinds.insert("app.ingest.users".to_string(), ObjectKind::Table);
+
+        let types = Types {
+            version: 1,
+            tables,
+            kinds,
+        };
 
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         types
@@ -453,5 +536,59 @@ mod tests {
 
         let loaded = load_types_lock(dir.path()).expect("failed to load types.lock");
         assert_eq!(types, loaded);
+    }
+
+    #[test]
+    fn test_round_trip_with_kind() {
+        let mut tables = BTreeMap::new();
+        let mut cols = BTreeMap::new();
+        cols.insert(
+            "id".to_string(),
+            ColumnType {
+                r#type: "integer".to_string(),
+                nullable: false,
+            },
+        );
+        tables.insert("app.ingest.orders".to_string(), cols.clone());
+        tables.insert("app.ingest.order_summary".to_string(), cols);
+
+        let mut kinds = BTreeMap::new();
+        kinds.insert("app.ingest.orders".to_string(), ObjectKind::Table);
+        kinds.insert(
+            "app.ingest.order_summary".to_string(),
+            ObjectKind::MaterializedView,
+        );
+
+        let types = Types {
+            version: 1,
+            tables,
+            kinds,
+        };
+
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        types
+            .write_types_lock(dir.path())
+            .expect("failed to write types.lock");
+
+        let loaded = load_types_lock(dir.path()).expect("failed to load types.lock");
+        assert_eq!(types, loaded);
+    }
+
+    #[test]
+    fn test_old_lock_without_kind_defaults_to_table() {
+        let toml = r#"
+version = 1
+
+[[table]]
+database = "app"
+schema = "ingest"
+name = "orders"
+columns = [
+    { name = "id", type = "integer", nullable = false },
+]
+"#;
+        let lock: TypesLock = toml::from_str(toml).expect("parse TOML");
+        let types: Types = lock.into();
+        assert_eq!(types.get_kind("app.ingest.orders"), ObjectKind::Table);
     }
 }

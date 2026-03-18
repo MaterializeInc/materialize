@@ -817,7 +817,10 @@ async fn run(args: Args) -> Result<(), CliError> {
                 .await
                 .map(|_| ())
         }
-        Some(Command::Explore { no_open, output_dir }) => {
+        Some(Command::Explore {
+            no_open,
+            output_dir,
+        }) => {
             if log::json_output_enabled() {
                 return Err(CliError::Message(
                     "--output json is not supported for the 'explore' command".to_string(),

@@ -1934,6 +1934,15 @@ impl<'a> Parser<'a> {
                 self.parse_create_cluster()
                     .map_parser_err(StatementKind::CreateCluster)
             }
+        } else if self.peek_keywords(&[PRIMARY, KEY]) {
+            self.parse_create_constraint(ConstraintKind::PrimaryKey)
+                .map_parser_err(StatementKind::CreateConstraint)
+        } else if self.peek_keywords(&[UNIQUE, CONSTRAINT]) {
+            self.parse_create_constraint(ConstraintKind::Unique)
+                .map_parser_err(StatementKind::CreateConstraint)
+        } else if self.peek_keywords(&[FOREIGN, KEY]) {
+            self.parse_create_constraint(ConstraintKind::ForeignKey)
+                .map_parser_err(StatementKind::CreateConstraint)
         } else if self.peek_keyword(INDEX) || self.peek_keywords(&[DEFAULT, INDEX]) {
             self.parse_create_index()
                 .map_parser_err(StatementKind::CreateIndex)
@@ -2008,9 +2017,10 @@ impl<'a> Parser<'a> {
                     }
                     (false, true) => "TABLE, or VIEW after CREATE TEMPORARY",
                     (false, false) => {
-                        "DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, [TEMPORARY] TABLE, \
-                        SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW \
-                        after CREATE"
+                        "DATABASE, SCHEMA, ROLE, TYPE, INDEX, PRIMARY KEY, \
+                        UNIQUE CONSTRAINT, FOREIGN KEY, SINK, SOURCE, \
+                        [TEMPORARY] TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, \
+                        or [OR REPLACE] MATERIALIZED VIEW after CREATE"
                     }
                 };
                 self.expected(self.peek_pos(), expected_msg, self.peek_token())
@@ -4277,6 +4287,60 @@ impl<'a> Parser<'a> {
         let name = self.parse_continual_task_option_name()?;
         let value = self.parse_optional_option_value()?;
         Ok(ContinualTaskOption { name, value })
+    }
+
+    /// Parse a `CREATE { PRIMARY KEY | UNIQUE CONSTRAINT } NOT ENFORCED` statement,
+    /// assuming that the `CREATE` token has already been consumed.
+    fn parse_create_constraint(
+        &mut self,
+        kind: ConstraintKind,
+    ) -> Result<Statement<Raw>, ParserError> {
+        match &kind {
+            ConstraintKind::PrimaryKey => self.expect_keywords(&[PRIMARY, KEY])?,
+            ConstraintKind::Unique => self.expect_keywords(&[UNIQUE, CONSTRAINT])?,
+            ConstraintKind::ForeignKey => self.expect_keywords(&[FOREIGN, KEY])?,
+        }
+
+        let enforced = !self.parse_keywords(&[NOT, ENFORCED]);
+
+        // Optional constraint name: if the next token is not ON or IN, treat it as a name.
+        let name = if self.peek_keyword(ON) || self.peek_keyword(IN) {
+            None
+        } else {
+            Some(self.parse_identifier()?)
+        };
+
+        let in_cluster = self.parse_optional_in_cluster()?;
+
+        self.expect_keyword(ON)?;
+        let on_name = self.parse_raw_name()?;
+
+        self.expect_token(&Token::LParen)?;
+        let columns = self.parse_comma_separated(Parser::parse_identifier)?;
+        self.expect_token(&Token::RParen)?;
+
+        let references = if self.parse_keyword(REFERENCES) {
+            let ref_object = self.parse_raw_name()?;
+            self.expect_token(&Token::LParen)?;
+            let ref_columns = self.parse_comma_separated(Parser::parse_identifier)?;
+            self.expect_token(&Token::RParen)?;
+            Some(ConstraintReference {
+                object: ref_object,
+                columns: ref_columns,
+            })
+        } else {
+            None
+        };
+
+        Ok(Statement::CreateConstraint(CreateConstraintStatement {
+            kind,
+            enforced,
+            name,
+            in_cluster,
+            on_name,
+            columns,
+            references,
+        }))
     }
 
     fn parse_create_index(&mut self) -> Result<Statement<Raw>, ParserError> {

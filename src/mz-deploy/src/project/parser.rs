@@ -109,6 +109,7 @@ pub fn statement_type_name(stmt: &Statement<Raw>) -> &'static str {
         Statement::CreateSource(_) => "CREATE SOURCE",
         Statement::CreateSink(_) => "CREATE SINK",
         Statement::CreateIndex(_) => "CREATE INDEX",
+        Statement::CreateConstraint(_) => "CREATE CONSTRAINT",
         Statement::CreateCluster(_) => "CREATE CLUSTER",
         Statement::CreateConnection(_) => "CREATE CONNECTION",
         Statement::CreateSecret(_) => "CREATE SECRET",

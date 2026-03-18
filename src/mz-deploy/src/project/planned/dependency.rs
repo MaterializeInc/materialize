@@ -27,6 +27,7 @@
 //!   those dependencies would require function-signature analysis.
 
 use super::super::ast::{Cluster, Statement};
+use super::super::constraint;
 use super::super::typed;
 use super::types::{Database, DatabaseObject, Project, Schema, SchemaType};
 use crate::project::object_id::ObjectId;
@@ -90,6 +91,7 @@ impl From<typed::Project> for Project {
 
             for typed_schema in typed_db.schemas {
                 let mut objects = Vec::new();
+                let mut constraint_mvs = Vec::new();
 
                 for typed_obj in typed_schema.objects {
                     let object_id = ObjectId::new(
@@ -99,12 +101,48 @@ impl From<typed::Project> for Project {
                     );
 
                     // Extract dependencies from the statement
-                    let (dependencies, clusters) =
+                    let (mut dependencies, clusters) =
                         extract_dependencies(&typed_obj.stmt, &typed_db.name, &typed_schema.name);
 
                     // Track cluster dependencies
                     for cluster in clusters {
                         cluster_dependencies.insert(cluster);
+                    }
+
+                    // Extract dependencies from constraints (FK references)
+                    for c in &typed_obj.constraints {
+                        if let Some(ref refs) = c.references {
+                            let ref_id = ObjectId::from_raw_item_name(
+                                &refs.object,
+                                &typed_db.name,
+                                &typed_schema.name,
+                            );
+                            dependencies.insert(ref_id);
+                        }
+                    }
+
+                    // ── Constraint lowering ──────────────────────────────────────
+                    //
+                    // Enforced constraints are "lowered" into companion materialized
+                    // views. Each enforced constraint on this object produces a
+                    // synthetic typed::DatabaseObject (an MV) that is added to the
+                    // schema alongside regular objects. This makes constraint MVs
+                    // first-class participants in the dependency graph, change
+                    // detection, and deployment pipeline.
+                    //
+                    // Not-enforced constraints are skipped — they remain metadata-only.
+                    //
+                    // See `crate::project::constraint` for the lowering rules and
+                    // query generation logic.
+                    for c in &typed_obj.constraints {
+                        if let Some(mv_obj) = constraint::lower_to_materialized_view(
+                            c,
+                            &typed_obj.stmt.ident().object,
+                            &typed_db.name,
+                            &typed_schema.name,
+                        ) {
+                            constraint_mvs.push((object_id.clone(), c.clone(), mv_obj));
+                        }
                     }
 
                     // Check for external dependencies
@@ -127,6 +165,52 @@ impl From<typed::Project> for Project {
                         id: object_id,
                         typed_object: typed_obj,
                         dependencies,
+                        is_constraint_mv: false,
+                    });
+                }
+
+                // Process lowered constraint MVs as first-class planned objects.
+                for (parent_id, constraint_stmt, mv_obj) in constraint_mvs {
+                    let mv_id = ObjectId::new(
+                        typed_db.name.clone(),
+                        typed_schema.name.clone(),
+                        mv_obj.stmt.ident().object.clone(),
+                    );
+
+                    let (mut mv_deps, mv_clusters) =
+                        extract_dependencies(&mv_obj.stmt, &typed_db.name, &typed_schema.name);
+
+                    for cluster in mv_clusters {
+                        cluster_dependencies.insert(cluster);
+                    }
+
+                    // The MV depends on its parent object
+                    mv_deps.insert(parent_id.clone());
+
+                    // For FK constraints, it also depends on the referenced object
+                    if let Some(ref refs) = constraint_stmt.references {
+                        let ref_id = ObjectId::from_raw_item_name(
+                            &refs.object,
+                            &typed_db.name,
+                            &typed_schema.name,
+                        );
+                        mv_deps.insert(ref_id);
+                    }
+
+                    for dep in &mv_deps {
+                        if !defined_objects.contains(dep) {
+                            external_dependencies.insert(dep.clone());
+                        }
+                    }
+
+                    defined_objects.insert(mv_id.clone());
+                    dependency_graph.insert(mv_id.clone(), mv_deps.clone());
+
+                    objects.push(DatabaseObject {
+                        id: mv_id,
+                        typed_object: mv_obj,
+                        dependencies: mv_deps,
+                        is_constraint_mv: true,
                     });
                 }
 

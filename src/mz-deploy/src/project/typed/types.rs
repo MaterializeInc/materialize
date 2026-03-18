@@ -373,6 +373,18 @@ pub struct DatabaseObject {
     pub stmt: Statement,
     /// Indexes defined on this object
     pub indexes: Vec<CreateIndexStatement<Raw>>,
+    /// Constraints defined on this object.
+    ///
+    /// Constraints come in two flavors:
+    /// - **Not-enforced**: metadata-only, carried through for documentation
+    ///   and catalog purposes but never executed.
+    /// - **Enforced**: lowered into companion materialized views during the
+    ///   `typed → planned` conversion. See [`crate::project::constraint`] for
+    ///   the lowering rules.
+    ///
+    /// Both kinds are stored here after typed validation. The lowering step
+    /// reads enforced constraints from this vec to generate companion MVs.
+    pub constraints: Vec<CreateConstraintStatement<Raw>>,
     /// Grant statements for this object
     pub grants: Vec<GrantPrivilegesStatement<Raw>>,
     /// Comment statements for this object or its columns
@@ -401,6 +413,11 @@ impl DatabaseObject {
 
         for index in &self.indexes {
             if let Some(RawClusterName::Unresolved(cluster_name)) = &index.in_cluster {
+                cluster_set.insert(cluster_name.to_string());
+            }
+        }
+        for constraint in &self.constraints {
+            if let Some(RawClusterName::Unresolved(cluster_name)) = &constraint.in_cluster {
                 cluster_set.insert(cluster_name.to_string());
             }
         }
@@ -449,6 +466,11 @@ impl DatabaseObject {
         for index in &mut self.indexes {
             rewrite_in_cluster(&mut index.in_cluster, cluster_map);
         }
+
+        // Rewrite IN CLUSTER on constraints
+        for constraint in &mut self.constraints {
+            rewrite_in_cluster(&mut constraint.in_cluster, cluster_map);
+        }
     }
 
     /// Rewrite cross-database references using the given database name map.
@@ -469,6 +491,7 @@ impl DatabaseObject {
         self.stmt = self.stmt.clone().normalize_dependencies_with(&visitor);
 
         visitor.normalize_index_references(&mut self.indexes);
+        visitor.normalize_constraint_references(&mut self.constraints);
         visitor.normalize_grant_references(&mut self.grants);
         visitor.normalize_comment_references(&mut self.comments);
     }

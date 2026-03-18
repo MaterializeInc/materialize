@@ -1108,6 +1108,7 @@ mod tests {
         Types {
             version: 1,
             tables: objects,
+            kinds: BTreeMap::new(),
         }
     }
 

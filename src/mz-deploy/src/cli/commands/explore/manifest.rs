@@ -101,6 +101,8 @@ pub struct DocsObject {
     pub description: Option<String>,
     /// Indexes defined on this object.
     pub indexes: Vec<DocsIndex>,
+    /// Constraints defined on this object.
+    pub constraints: Vec<DocsConstraint>,
     /// Privilege grants on this object.
     pub grants: Vec<DocsGrant>,
     /// Raw COMMENT ON statements as SQL strings.
@@ -130,6 +132,18 @@ pub struct DocsIndex {
     pub name: String,
     pub cluster: Option<String>,
     pub columns: Vec<String>,
+}
+
+/// A constraint on an object.
+#[derive(Debug, Serialize)]
+pub struct DocsConstraint {
+    pub kind: String,
+    pub name: String,
+    pub columns: Vec<String>,
+    pub enforced: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub references: Option<String>,
+    pub cluster: Option<String>,
 }
 
 /// A column in an object's schema (from types.lock or types.cache).
@@ -346,6 +360,37 @@ fn index_to_docs(
     }
 }
 
+/// Extract constraint metadata from a CREATE CONSTRAINT statement.
+fn constraint_to_docs(
+    c: &mz_sql_parser::ast::CreateConstraintStatement<mz_sql_parser::ast::Raw>,
+) -> DocsConstraint {
+    let kind = format!("{}", c.kind);
+    let name = c.name.as_ref().map(|n| n.to_string()).unwrap_or_else(|| {
+        let parent_name = c
+            .on_name
+            .name()
+            .0
+            .last()
+            .map(|i| i.to_string())
+            .unwrap_or_default();
+        crate::project::constraint::default_constraint_name(&parent_name, &c.columns, &c.kind)
+    });
+    let columns: Vec<String> = c.columns.iter().map(|col| col.to_string()).collect();
+    let cluster = c.in_cluster.as_ref().and_then(|cl| match cl {
+        mz_sql_parser::ast::RawClusterName::Unresolved(ident) => Some(ident.to_string()),
+        _ => None,
+    });
+    let references = c.references.as_ref().map(|r| format!("{}", r.object));
+    DocsConstraint {
+        kind,
+        name,
+        columns,
+        enforced: c.enforced,
+        references,
+        cluster,
+    }
+}
+
 /// Convert grant statements into structured [`DocsGrant`] entries.
 ///
 /// Produces one entry per (privilege, role) pair. A single GRANT statement with
@@ -373,9 +418,7 @@ fn grants_to_docs(grants: &[mz_sql_parser::ast::GrantPrivilegesStatement<Raw>]) 
 }
 
 /// Format a `WithOptionValue<Raw>` into a display string and optional ref IDs.
-fn format_option_value(
-    value: &WithOptionValue<Raw>,
-) -> (String, Option<String>, Option<String>) {
+fn format_option_value(value: &WithOptionValue<Raw>) -> (String, Option<String>, Option<String>) {
     match value {
         WithOptionValue::Secret(name) => {
             let name_str = raw_item_name_to_string(name);
@@ -422,7 +465,10 @@ fn extract_connection_properties(
         .iter()
         .filter_map(|opt| {
             // Skip internal-only options that aren't useful for display.
-            if matches!(opt.name, ConnectionOptionName::PublicKey1 | ConnectionOptionName::PublicKey2) {
+            if matches!(
+                opt.name,
+                ConnectionOptionName::PublicKey1 | ConnectionOptionName::PublicKey2
+            ) {
                 return None;
             }
             let value = opt.value.as_ref()?;
@@ -526,10 +572,7 @@ fn extract_source_properties(
                 .collect();
             ("SQL Server".to_string(), Some(conn), props)
         }
-        CreateSourceConnection::LoadGenerator {
-            generator,
-            options,
-        } => {
+        CreateSourceConnection::LoadGenerator { generator, options } => {
             let props: Vec<DocsProperty> = options
                 .iter()
                 .filter_map(|opt| {
@@ -651,6 +694,16 @@ pub fn build_manifest(
     let reverse_deps = project.build_reverse_dependency_graph();
     let dag_depths = compute_dag_depths(&project.dependency_graph);
 
+    // Collect constraint MV IDs so we can exclude them from dependents and edges.
+    let constraint_mv_ids: BTreeSet<String> = project
+        .databases
+        .iter()
+        .flat_map(|db| &db.schemas)
+        .flat_map(|s| &s.objects)
+        .filter(|obj| obj.is_constraint_mv)
+        .map(|obj| obj.id.to_string())
+        .collect();
+
     let mut objects = Vec::new();
     let mut edges = Vec::new();
     let mut databases = Vec::new();
@@ -693,6 +746,9 @@ pub fn build_manifest(
                     ));
 
             for obj in &schema.objects {
+                if obj.is_constraint_mv {
+                    continue;
+                }
                 let id_str = obj.id.to_string();
                 schema_object_ids.push(id_str.clone());
                 stats.total_objects += 1;
@@ -748,7 +804,12 @@ pub fn build_manifest(
 
                 let dependents: Vec<String> = reverse_deps
                     .get(&obj.id)
-                    .map(|s| s.iter().map(|d| d.to_string()).collect())
+                    .map(|s| {
+                        s.iter()
+                            .map(|d| d.to_string())
+                            .filter(|d| !constraint_mv_ids.contains(d))
+                            .collect()
+                    })
                     .unwrap_or_default();
 
                 // Build column comment map from COMMENT ON COLUMN statements
@@ -783,6 +844,8 @@ pub fn build_manifest(
                 let description = extract_description(&typed.comments);
 
                 let doc_indexes: Vec<DocsIndex> = typed.indexes.iter().map(index_to_docs).collect();
+                let doc_constraints: Vec<DocsConstraint> =
+                    typed.constraints.iter().map(constraint_to_docs).collect();
 
                 let grants = grants_to_docs(&typed.grants);
                 let comments: Vec<String> =
@@ -811,6 +874,7 @@ pub fn build_manifest(
                     file_path,
                     description,
                     indexes: doc_indexes,
+                    constraints: doc_constraints,
                     grants,
                     comments,
                     columns,
@@ -871,7 +935,12 @@ pub fn build_manifest(
 
         let dependents: Vec<String> = reverse_deps
             .get(ext_id)
-            .map(|s| s.iter().map(|d| d.to_string()).collect())
+            .map(|s| {
+                s.iter()
+                    .map(|d| d.to_string())
+                    .filter(|d| !constraint_mv_ids.contains(d))
+                    .collect()
+            })
             .unwrap_or_default();
 
         objects.push(DocsObject {
@@ -886,6 +955,7 @@ pub fn build_manifest(
             file_path: None,
             description: None,
             indexes: Vec::new(),
+            constraints: Vec::new(),
             grants: Vec::new(),
             comments: Vec::new(),
             columns,
@@ -1010,7 +1080,11 @@ mod tests {
             },
         );
         tables.insert("app.ingest.orders".to_string(), cols);
-        let types = Types { version: 1, tables };
+        let types = Types {
+            version: 1,
+            tables,
+            kinds: std::collections::BTreeMap::new(),
+        };
 
         let manifest = build_manifest(&project, Some(&types), "test-project", &[], None);
 

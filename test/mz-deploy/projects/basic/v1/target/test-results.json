@@ -1,0 +1,85 @@
+{
+  "results": [
+    {
+      "name": "test_order_aggregation",
+      "object_id": "app.core.order_summary",
+      "file_path": "models/app/core/order_summary.sql",
+      "status": "passed",
+      "elapsed_ms": 224
+    },
+    {
+      "name": "test_user_activity_counts",
+      "object_id": "app.core.user_activity",
+      "file_path": "models/app/core/user_activity.sql",
+      "status": "passed",
+      "elapsed_ms": 198
+    },
+    {
+      "name": "test_user_activity_wrong_expectation",
+      "object_id": "app.core.user_activity",
+      "file_path": "models/app/core/user_activity.sql",
+      "status": "failed",
+      "elapsed_ms": 201,
+      "failure": {
+        "type": "assertion",
+        "columns": [
+          "user_id",
+          "name",
+          "order_count"
+        ],
+        "missing": [
+          {
+            "name": "Alice",
+            "order_count": "999",
+            "user_id": "1"
+          }
+        ],
+        "unexpected": [
+          {
+            "name": "Alice",
+            "order_count": "1",
+            "user_id": "1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "test_order_stats_wrong",
+      "object_id": "app.ops.order_stats",
+      "file_path": "models/app/ops/order_stats.sql",
+      "status": "failed",
+      "elapsed_ms": 162,
+      "failure": {
+        "type": "assertion",
+        "columns": [
+          "order_count",
+          "user_count"
+        ],
+        "missing": [
+          {
+            "order_count": "1",
+            "user_count": "99"
+          }
+        ],
+        "unexpected": [
+          {
+            "order_count": "1",
+            "user_count": "1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "test_top_spenders_filter",
+      "object_id": "app.ops.top_spenders",
+      "file_path": "models/app/ops/top_spenders.sql",
+      "status": "passed",
+      "elapsed_ms": 159
+    }
+  ],
+  "summary": {
+    "passed": 3,
+    "failed": 2,
+    "validation_failed": 0
+  }
+}

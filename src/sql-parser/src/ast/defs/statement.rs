@@ -59,6 +59,7 @@ pub enum Statement<T: AstInfo> {
     CreateTable(CreateTableStatement<T>),
     CreateTableFromSource(CreateTableFromSourceStatement<T>),
     CreateIndex(CreateIndexStatement<T>),
+    CreateConstraint(CreateConstraintStatement<T>),
     CreateType(CreateTypeStatement<T>),
     CreateRole(CreateRoleStatement),
     CreateCluster(CreateClusterStatement<T>),
@@ -139,6 +140,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateTable(stmt) => f.write_node(stmt),
             Statement::CreateTableFromSource(stmt) => f.write_node(stmt),
             Statement::CreateIndex(stmt) => f.write_node(stmt),
+            Statement::CreateConstraint(stmt) => f.write_node(stmt),
             Statement::CreateRole(stmt) => f.write_node(stmt),
             Statement::CreateSecret(stmt) => f.write_node(stmt),
             Statement::CreateType(stmt) => f.write_node(stmt),
@@ -222,6 +224,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateTable => "create_table",
         StatementKind::CreateTableFromSource => "create_table_from_source",
         StatementKind::CreateIndex => "create_index",
+        StatementKind::CreateConstraint => "create_constraint",
         StatementKind::CreateType => "create_type",
         StatementKind::CreateRole => "create_role",
         StatementKind::CreateCluster => "create_cluster",
@@ -1929,6 +1932,94 @@ pub struct IndexOption<T: AstInfo> {
     pub value: Option<WithOptionValue<T>>,
 }
 impl_display_for_with_option!(IndexOption);
+
+/// The kind of constraint.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ConstraintKind {
+    PrimaryKey,
+    Unique,
+    ForeignKey,
+}
+
+impl AstDisplay for ConstraintKind {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ConstraintKind::PrimaryKey => f.write_str("PRIMARY KEY"),
+            ConstraintKind::Unique => f.write_str("UNIQUE CONSTRAINT"),
+            ConstraintKind::ForeignKey => f.write_str("FOREIGN KEY"),
+        }
+    }
+}
+impl_display!(ConstraintKind);
+
+/// A foreign key reference clause: `REFERENCES <object> (<columns>)`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConstraintReference<T: AstInfo> {
+    /// The referenced object.
+    pub object: T::ItemName,
+    /// The referenced columns.
+    pub columns: Vec<Ident>,
+}
+
+impl<T: AstInfo> AstDisplay for ConstraintReference<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("REFERENCES ");
+        f.write_node(&self.object);
+        f.write_str(" (");
+        f.write_node(&display::comma_separated(&self.columns));
+        f.write_str(")");
+    }
+}
+impl_display_t!(ConstraintReference);
+
+/// `CREATE { PRIMARY KEY | UNIQUE CONSTRAINT | FOREIGN KEY } [NOT ENFORCED] [name] [IN CLUSTER cluster] ON object (columns) [REFERENCES object (columns)]`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateConstraintStatement<T: AstInfo> {
+    /// The kind of constraint (primary key, unique, or foreign key).
+    pub kind: ConstraintKind,
+    /// Whether the constraint is enforced.
+    pub enforced: bool,
+    /// Optional constraint name.
+    pub name: Option<Ident>,
+    /// Optional cluster to create the constraint in.
+    pub in_cluster: Option<T::ClusterName>,
+    /// The table, view, or materialized view to add the constraint to.
+    pub on_name: T::ItemName,
+    /// The columns that form the constraint.
+    pub columns: Vec<Ident>,
+    /// The referenced object and columns for foreign key constraints.
+    pub references: Option<ConstraintReference<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateConstraintStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE ");
+        f.write_node(&self.kind);
+        if !self.enforced {
+            f.write_str(" NOT ENFORCED");
+        }
+        f.write_str(" ");
+        if let Some(name) = &self.name {
+            f.write_node(name);
+            f.write_str(" ");
+        }
+        if let Some(cluster) = &self.in_cluster {
+            f.write_str("IN CLUSTER ");
+            f.write_node(cluster);
+            f.write_str(" ");
+        }
+        f.write_str("ON ");
+        f.write_node(&self.on_name);
+        f.write_str(" (");
+        f.write_node(&display::comma_separated(&self.columns));
+        f.write_str(")");
+        if let Some(references) = &self.references {
+            f.write_str(" ");
+            f.write_node(references);
+        }
+    }
+}
+impl_display_t!(CreateConstraintStatement);
 
 /// A `CREATE ROLE` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

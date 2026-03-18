@@ -135,6 +135,10 @@ pub async fn run(
         }
     }
 
+    // Pre-typecheck constraint validation (FK target types + partial column check)
+    let types_lock = crate::types::load_types_lock(directory).unwrap_or_default();
+    validate_constraints_with_types(&planned_project, &types_lock)?;
+
     // Type checking with Docker if enabled
     if let TypeCheckMode::Enabled { image } = &typecheck {
         let typecheck_duration =
@@ -143,6 +147,21 @@ pub async fn run(
         if show_progress {
             if let Some(duration) = typecheck_duration {
                 progress::stage_success(&format!("{} objects passed", object_count), duration);
+            }
+        }
+
+        // Post-typecheck column validation
+        if let Ok(types_cache) = crate::types::load_types_cache(directory) {
+            let mut full_types = types_lock.clone();
+            full_types.merge(&types_cache);
+            let column_map = build_column_map(&full_types);
+            let col_errors =
+                project::typed::validate_constraint_columns(&planned_project, &column_map);
+            if !col_errors.is_empty() {
+                return Err(project::error::ProjectError::from(
+                    project::error::ValidationErrors::new(col_errors),
+                )
+                .into());
             }
         }
     }
@@ -182,10 +201,7 @@ async fn typecheck_with_docker(
             progress::info("No types.lock found, assuming no external dependencies");
             progress::info("See SET api = stable for more information");
         }
-        crate::types::Types {
-            version: 1,
-            tables: std::collections::BTreeMap::new(),
-        }
+        crate::types::Types::default()
     });
 
     // Create Docker runtime
@@ -218,6 +234,49 @@ async fn typecheck_with_docker(
             Err(e.into())
         }
     }
+}
+
+/// Validate constraint FK target types and columns against types.lock.
+///
+/// This runs the pre-typecheck subset of constraint validation:
+/// FK target types are fully validated, columns are partially validated
+/// (only objects present in types.lock).
+fn validate_constraints_with_types(
+    planned_project: &project::planned::Project,
+    types: &crate::types::Types,
+) -> Result<(), CliError> {
+    let fk_errors = project::typed::validate_constraint_fk_targets(planned_project, types);
+    if !fk_errors.is_empty() {
+        return Err(crate::project::error::ProjectError::from(
+            crate::project::error::ValidationErrors::new(fk_errors),
+        )
+        .into());
+    }
+
+    let column_map = build_column_map(types);
+    let col_errors = project::typed::validate_constraint_columns(planned_project, &column_map);
+    if !col_errors.is_empty() {
+        return Err(crate::project::error::ProjectError::from(
+            crate::project::error::ValidationErrors::new(col_errors),
+        )
+        .into());
+    }
+
+    Ok(())
+}
+
+/// Build a column map from a Types object for constraint column validation.
+fn build_column_map(
+    types: &crate::types::Types,
+) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
+    types
+        .tables
+        .iter()
+        .map(|(fqn, columns)| {
+            let col_names = columns.keys().map(|c| c.to_lowercase()).collect();
+            (fqn.to_lowercase(), col_names)
+        })
+        .collect()
 }
 
 /// Print verbose details about the project (only shown with VERBOSE env var)

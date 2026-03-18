@@ -154,6 +154,42 @@ pub fn compute_typed_hash(db_obj: &typed::DatabaseObject) -> String {
         index.hash(&mut hasher);
     }
 
+    // Sort and hash constraints deterministically.
+    //
+    // Constraints contribute to the parent object's content hash so that
+    // adding, removing, or modifying a constraint triggers redeployment.
+    // Note: enforced constraints are also lowered into companion MVs (see
+    // `crate::project::constraint`), which have their own independent hashes.
+    // Both the parent hash and companion MV hash must change for a constraint
+    // change to be fully detected.
+    let mut constraints = db_obj.constraints.clone();
+    constraints.sort_by(|a, b| {
+        a.kind
+            .to_string()
+            .cmp(&b.kind.to_string())
+            .then(a.on_name.cmp(&b.on_name))
+            .then(a.name.cmp(&b.name))
+            .then_with(|| {
+                let cols_a = a
+                    .columns
+                    .iter()
+                    .map(|c| c.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let cols_b = b
+                    .columns
+                    .iter()
+                    .map(|c| c.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                cols_a.cmp(&cols_b)
+            })
+    });
+
+    for constraint in &constraints {
+        constraint.hash(&mut hasher);
+    }
+
     hasher.finalize()
 }
 
@@ -326,6 +362,7 @@ mod tests {
         typed::DatabaseObject {
             stmt,
             indexes: vec![],
+            constraints: vec![],
             grants: vec![],
             comments: vec![],
             tests: vec![],
@@ -425,6 +462,30 @@ mod tests {
                 .schemas
                 .contains_key(&SchemaQualifier::new("db".into(), "storage".into())),
             "Schema with only apply-managed objects should not appear in snapshot"
+        );
+    }
+
+    #[test]
+    fn test_constraint_changes_hash() {
+        let obj_without = make_typed_object("CREATE VIEW my_view AS SELECT 1 AS id");
+
+        let mut obj_with = make_typed_object("CREATE VIEW my_view AS SELECT 1 AS id");
+        // Parse and add a constraint
+        let constraint_sql = "CREATE PRIMARY KEY NOT ENFORCED pk ON my_view (id)";
+        let parsed = mz_sql_parser::parser::parse_statements(constraint_sql).unwrap();
+        match parsed.into_iter().next().unwrap().ast {
+            mz_sql_parser::ast::Statement::CreateConstraint(c) => {
+                obj_with.constraints.push(c);
+            }
+            other => panic!("Expected CreateConstraint, got {:?}", other),
+        }
+
+        let hash_without = compute_typed_hash(&obj_without);
+        let hash_with = compute_typed_hash(&obj_with);
+
+        assert_ne!(
+            hash_without, hash_with,
+            "Adding a constraint should change the hash"
         );
     }
 }

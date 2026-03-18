@@ -120,6 +120,21 @@ pub(super) fn extract_base_facts(project: &Project) -> BaseFacts {
                         index_uses_cluster.push((obj_id.clone(), index_name, cluster_str));
                     }
                 }
+
+                // IndexUsesCluster facts - extract from constraints (same semantics as indexes)
+                for constraint in &obj.typed_object.constraints {
+                    if let Some(cluster_name) = &constraint.in_cluster {
+                        let constraint_name = constraint
+                            .name
+                            .as_ref()
+                            .map(|n| n.to_string())
+                            .unwrap_or_else(|| "unnamed_constraint".to_string());
+
+                        let cluster_str = cluster_name.to_string();
+
+                        index_uses_cluster.push((obj_id.clone(), constraint_name, cluster_str));
+                    }
+                }
             }
         }
     }

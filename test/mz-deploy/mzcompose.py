@@ -760,3 +760,117 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert "undefined_var" in combined, (
             f"Expected error to mention 'undefined_var', got: {combined}"
         )
+
+    with c.test_case("mz-deploy-constraints"):
+        # ════════════════════════════════════════════════════════════
+        # Step 1: Apply the project (creates raw tables + cluster)
+        # ════════════════════════════════════════════════════════════
+        result = run_mz_deploy(c, "constraints/v1", "apply")
+        assert result.returncode == 0, f"apply failed: {result.stderr}"
+
+        # Verify raw tables created in ingest schema
+        for table_name in ["users_raw", "emails_raw", "orders_raw"]:
+            rows = c.sql_query(
+                f"SELECT t.name FROM mz_tables t "
+                f"JOIN mz_schemas sc ON t.schema_id = sc.id "
+                f"JOIN mz_databases db ON sc.database_id = db.id "
+                f"WHERE t.name = '{table_name}' AND sc.name = 'ingest' AND db.name = 'cdb'",
+                database="cdb",
+            )
+            assert len(rows) == 1, f"Expected table '{table_name}' in cdb.ingest, got {rows}"
+
+        # Verify cluster created
+        rows = c.sql_query(
+            "SELECT name FROM mz_clusters WHERE name = 'constraint_cluster'"
+        )
+        assert len(rows) == 1, f"Expected constraint_cluster cluster, got {rows}"
+
+        # ════════════════════════════════════════════════════════════
+        # Step 2: Stage + wait + promote (deploys MVs + constraint MVs)
+        # ════════════════════════════════════════════════════════════
+        result = run_mz_deploy(
+            c, "constraints/v1", "stage", "--deploy-id", "c1", "--allow-dirty"
+        )
+        assert result.returncode == 0, f"stage c1 failed: {result.stderr}"
+
+        result = run_mz_deploy(
+            c, "constraints/v1", "wait", "c1", "--timeout", "300", "--allowed-lag", "86400"
+        )
+        assert result.returncode == 0, f"wait c1 failed: {result.stderr}"
+
+        result = run_mz_deploy(
+            c, "constraints/v1", "promote", "c1", "--no-ready-check"
+        )
+        assert result.returncode == 0, f"promote c1 failed: {result.stderr}"
+
+        # ════════════════════════════════════════════════════════════
+        # Step 3: Verify MVs and enforced constraint MVs exist
+        # ════════════════════════════════════════════════════════════
+        for mv_name in ["users", "emails", "orders", "users_pk", "emails_unique", "orders_fk"]:
+            rows = c.sql_query(
+                f"SELECT mv.name FROM mz_materialized_views mv "
+                f"JOIN mz_schemas sc ON mv.schema_id = sc.id "
+                f"JOIN mz_databases db ON sc.database_id = db.id "
+                f"WHERE mv.name = '{mv_name}' AND sc.name = 'public' AND db.name = 'cdb'",
+                database="cdb",
+            )
+            assert len(rows) == 1, f"Expected MV '{mv_name}' in cdb.public, got {rows}"
+
+        # Verify view 'items' exists
+        rows = c.sql_query(
+            "SELECT v.name FROM mz_views v "
+            "JOIN mz_schemas sc ON v.schema_id = sc.id "
+            "JOIN mz_databases db ON sc.database_id = db.id "
+            "WHERE v.name = 'items' AND sc.name = 'public' AND db.name = 'cdb'",
+            database="cdb",
+        )
+        assert len(rows) == 1, f"Expected view 'items' in cdb.public, got {rows}"
+
+        # ════════════════════════════════════════════════════════════
+        # Step 4: Verify not-enforced constraint MV does NOT exist
+        # ════════════════════════════════════════════════════════════
+        rows = c.sql_query(
+            "SELECT mv.name FROM mz_materialized_views mv "
+            "JOIN mz_schemas sc ON mv.schema_id = sc.id "
+            "JOIN mz_databases db ON sc.database_id = db.id "
+            "WHERE mv.name = 'items_pk' AND sc.name = 'public' AND db.name = 'cdb'",
+            database="cdb",
+        )
+        assert len(rows) == 0, f"Expected no MV for not-enforced constraint 'items_pk', got {rows}"
+
+        # ════════════════════════════════════════════════════════════
+        # Step 5: Insert clean data into raw tables (no violations)
+        # ════════════════════════════════════════════════════════════
+        c.sql("INSERT INTO cdb.ingest.users_raw VALUES (1, 'Alice'), (2, 'Bob')", database="cdb")
+        c.sql("INSERT INTO cdb.ingest.emails_raw VALUES (1, 'alice@test.com'), (2, 'bob@test.com')", database="cdb")
+        c.sql("INSERT INTO cdb.ingest.orders_raw VALUES (100, 1), (101, 2)", database="cdb")
+
+        # ════════════════════════════════════════════════════════════
+        # Step 6: Verify no violations — all constraint MVs return 0 rows
+        # ════════════════════════════════════════════════════════════
+        for mv_name in ["users_pk", "emails_unique", "orders_fk"]:
+            rows = c.sql_query(
+                f"SELECT count(*) FROM cdb.public.{mv_name}",
+                database="cdb",
+            )
+            assert int(rows[0][0]) == 0, f"Expected 0 violations for '{mv_name}', got {rows[0][0]}"
+
+        # ════════════════════════════════════════════════════════════
+        # Step 7: Insert data that causes violations into raw tables
+        # ════════════════════════════════════════════════════════════
+        # PK violation: duplicate id
+        c.sql("INSERT INTO cdb.ingest.users_raw VALUES (1, 'Alice2')", database="cdb")
+        # UNIQUE violation: duplicate email
+        c.sql("INSERT INTO cdb.ingest.emails_raw VALUES (3, 'alice@test.com')", database="cdb")
+        # FK violation: orphaned reference
+        c.sql("INSERT INTO cdb.ingest.orders_raw VALUES (102, 999)", database="cdb")
+
+        # ════════════════════════════════════════════════════════════
+        # Step 8: Verify violations detected — constraint MVs return rows
+        # ════════════════════════════════════════════════════════════
+        for mv_name in ["users_pk", "emails_unique", "orders_fk"]:
+            rows = c.sql_query(
+                f"SELECT count(*) FROM cdb.public.{mv_name}",
+                database="cdb",
+            )
+            assert int(rows[0][0]) > 0, f"Expected violations for '{mv_name}', got {rows[0][0]}"

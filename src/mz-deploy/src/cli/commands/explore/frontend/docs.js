@@ -881,6 +881,28 @@ function renderIndexes(obj) {
 }
 
 /**
+ * Render the constraints section for an object.
+ *
+ * @param {Object} obj - The manifest object.
+ * @returns {string} HTML string.
+ */
+function renderConstraints(obj) {
+    if (!obj.constraints || obj.constraints.length === 0) return '';
+    let html = '<div class="section"><h2>Constraints (' + obj.constraints.length + ')</h2>';
+    html += '<table class="data-table"><thead><tr><th>Kind</th><th>Name</th><th>Columns</th><th>Enforced</th><th>References</th><th>Cluster</th></tr></thead><tbody>';
+    obj.constraints.forEach(c => {
+        html += '<tr><td>' + escapeHtml(c.kind) + '</td>';
+        html += '<td>' + escapeHtml(c.name || '\u2014') + '</td>';
+        html += '<td>' + (c.columns ? c.columns.map(escapeHtml).join(', ') : '') + '</td>';
+        html += '<td>' + (c.enforced ? 'Yes' : 'No') + '</td>';
+        html += '<td>' + escapeHtml(c.references || '\u2014') + '</td>';
+        html += '<td>' + escapeHtml(c.cluster || '\u2014') + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+    return html;
+}
+
+/**
  * Render the per-object test results table.
  *
  * @param {Object} obj - The manifest object.
@@ -1011,6 +1033,7 @@ function renderTableFromSourceDetail(obj) {
     html += renderColumns(obj);
     html += renderDepsTable(obj.dependents, 'Dependents');
     html += renderIndexes(obj);
+    html += renderConstraints(obj);
     html += renderGrants(obj);
     html += renderObjectTests(obj);
     html += renderFilePath(obj);
@@ -1034,6 +1057,7 @@ function renderDefaultDetail(obj) {
     html += renderDepsTable(obj.dependencies, 'Dependencies');
     html += renderDepsTable(obj.dependents, 'Dependents');
     html += renderIndexes(obj);
+    html += renderConstraints(obj);
     html += renderGrants(obj);
     html += renderObjectTests(obj);
     html += renderFilePath(obj);

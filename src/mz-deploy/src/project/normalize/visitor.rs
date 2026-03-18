@@ -435,6 +435,36 @@ impl<T: NameTransformer> NormalizingVisitor<T> {
         }
     }
 
+    /// Normalize constraint references.
+    ///
+    /// Constraints reference the table/view they're created on via `on_name`,
+    /// and foreign keys reference another object via `references.object`.
+    /// Both need to be normalized.
+    pub fn normalize_constraint_references(
+        &self,
+        constraints: &mut [CreateConstraintStatement<Raw>],
+    ) {
+        for constraint in constraints {
+            self.normalize_raw_item_name(&mut constraint.on_name);
+            if let Some(ref mut refs) = constraint.references {
+                self.normalize_raw_item_name(&mut refs.object);
+            }
+        }
+    }
+
+    /// Normalize cluster references in constraints.
+    ///
+    /// Constraints can specify an IN CLUSTER clause, and these cluster references
+    /// need to be normalized for staging environments.
+    pub fn normalize_constraint_clusters(&self, constraints: &mut [CreateConstraintStatement<Raw>])
+    where
+        T: ClusterTransformer,
+    {
+        for constraint in constraints {
+            self.normalize_cluster_name(&mut constraint.in_cluster);
+        }
+    }
+
     /// Normalize grant target references.
     ///
     /// GRANT statements reference the object they grant permissions on, and these
