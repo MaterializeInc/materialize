@@ -1528,6 +1528,11 @@ class FlipFlagsAction(Action):
             "'1s'",
             "'10s'",
         ]
+        self.flags_with_values["compute_prometheus_introspection_scrape_interval"] = [
+            "'0s'",
+            "'1s'",
+            "'10s'",
+        ]
         # Note: it's not safe to re-enable this flag after writing with `persist_validate_part_bounds_on_write`,
         # since those new-style parts may fail our old-style validation.
         self.flags_with_values["persist_validate_part_bounds_on_read"] = ["FALSE"]
@@ -1594,6 +1599,7 @@ class FlipFlagsAction(Action):
             "copy_to_s3_parquet_row_group_file_ratio",
             "copy_to_s3_arrow_builder_buffer_ratio",
             "copy_to_s3_multipart_part_size_bytes",
+            "enable_compute_prometheus_metrics",
             "enable_compute_replica_expiration",
             "compute_replica_expiration_offset",
             "enable_compute_render_fueled_as_specific_collection",
