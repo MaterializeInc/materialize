@@ -18,8 +18,8 @@ describe("buildUsersListQuery", () => {
     await testdrive(`
       $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
       DROP ROLE IF EXISTS ul_user_1, ul_user_2, "ul_user_1@test.com", "ul_user_2@test.com", ul_admin, ul_reader;
-      CREATE ROLE "ul_user_1@test.com";
-      CREATE ROLE "ul_user_2@test.com";
+      CREATE ROLE "ul_user_1@test.com" WITH LOGIN;
+      CREATE ROLE "ul_user_2@test.com" WITH LOGIN;
       CREATE ROLE ul_admin;
       CREATE ROLE ul_reader;
       GRANT ul_admin TO "ul_user_1@test.com";

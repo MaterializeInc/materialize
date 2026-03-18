@@ -5259,3 +5259,92 @@ async fn test_auth_autoprovision_oidc() {
         "OIDC auto-provisioned role should have autoprovisionsource = 'oidc'"
     );
 }
+
+/// Tests that OIDC authentication is rejected for a role without the LOGIN
+/// attribute, and succeeds after granting LOGIN.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_auth_oidc_non_login_role() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+    let jwt_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            ..Default::default()
+        },
+    );
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(Some(oidc_server.issuer), Some("sub".to_string()), None)
+        .start()
+        .await;
+
+    // Pre-create the role without LOGIN so auto-provisioning is bypassed.
+    let admin_client = server.connect().internal().await.unwrap();
+    admin_client
+        .batch_execute(&format!("CREATE ROLE \"{}\" NOLOGIN", oidc_user))
+        .await
+        .unwrap();
+
+    // 1. Login should fail: role exists but has no LOGIN attribute.
+    run_tests(
+        "OIDC Non-Login Role - login rejected",
+        &server,
+        &[TestCase::Pgwire {
+            user_to_auth_as: oidc_user,
+            user_reported_by_system: oidc_user,
+            password: Some(Cow::Borrowed(&jwt_token)),
+            ssl_mode: SslMode::Require,
+            options: Some("--oidc_auth_enabled=true"),
+            configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+            assert: Assert::DbErr(Box::new(|err| {
+                assert_eq!(err.message(), "role is not allowed to login");
+                assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
+                assert_eq!(
+                    err.detail(),
+                    Some("The role does not have the LOGIN attribute.")
+                );
+            })),
+        }],
+    )
+    .await;
+
+    // Grant LOGIN to the role.
+    admin_client
+        .batch_execute(&format!("ALTER ROLE \"{}\" LOGIN", oidc_user))
+        .await
+        .unwrap();
+
+    // 2. Login should now succeed.
+    run_tests(
+        "OIDC Non-Login Role - login succeeds after granting LOGIN",
+        &server,
+        &[TestCase::Pgwire {
+            user_to_auth_as: oidc_user,
+            user_reported_by_system: oidc_user,
+            password: Some(Cow::Borrowed(&jwt_token)),
+            ssl_mode: SslMode::Require,
+            options: Some("--oidc_auth_enabled=true"),
+            configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+            assert: Assert::Success,
+        }],
+    )
+    .await;
+}

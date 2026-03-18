@@ -26,7 +26,9 @@ use futures::FutureExt;
 use futures::future::LocalBoxFuture;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source, Table, TableDataSource};
+use mz_catalog::memory::objects::{
+    CatalogItem, DataSourceDesc, Role, Source, Table, TableDataSource,
+};
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, soft_panic_or_log};
@@ -85,6 +87,27 @@ use crate::webhook::{
 use crate::{AppendWebhookError, ExecuteContext, catalog, metrics};
 
 use super::ExecuteContextGuard;
+
+/// The login status of a role, used by authentication handlers to check role
+/// existence and login permission before proceeding to credential verification.
+enum RoleLoginStatus {
+    /// The role does not exist in the catalog.
+    NotFound,
+    /// The role exists and has the LOGIN attribute.
+    CanLogin,
+    /// The role exists but does not have the LOGIN attribute.
+    NonLogin,
+}
+
+fn role_login_status(role: Option<&Role>) -> RoleLoginStatus {
+    match role {
+        None => RoleLoginStatus::NotFound,
+        Some(role) => match role.attributes.login {
+            Some(login) if login => RoleLoginStatus::CanLogin,
+            _ => RoleLoginStatus::NonLogin,
+        },
+    }
+}
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 58KB. This would
@@ -153,6 +176,10 @@ impl Coordinator {
                         auth_message,
                         mock_hash,
                     );
+                }
+
+                Command::RoleCanLogin { tx, role_name } => {
+                    self.handle_role_can_login(tx, role_name);
                 }
 
                 Command::Execute {
@@ -497,6 +524,24 @@ impl Coordinator {
         .boxed_local()
     }
 
+    fn handle_role_can_login(
+        &self,
+        tx: oneshot::Sender<Result<(), AdapterError>>,
+        role_name: String,
+    ) {
+        let result =
+            match role_login_status(self.catalog().try_get_role_by_name(role_name.as_str())) {
+                RoleLoginStatus::NotFound => Err(AdapterError::AuthenticationError(
+                    AuthenticationError::RoleNotFound,
+                )),
+                RoleLoginStatus::NonLogin => Err(AdapterError::AuthenticationError(
+                    AuthenticationError::NonLogin,
+                )),
+                RoleLoginStatus::CanLogin => Ok(()),
+            };
+        let _ = tx.send(result);
+    }
+
     fn handle_authenticate_verify_sasl_proof(
         &self,
         tx: oneshot::Sender<Result<SASLVerifyProofResponse, AdapterError>>,
@@ -506,34 +551,24 @@ impl Coordinator {
         mock_hash: String,
     ) {
         let role = self.catalog().try_get_role_by_name(role_name.as_str());
+        let login_status = role_login_status(role);
         let role_auth = role.and_then(|r| self.catalog().try_get_role_auth_by_id(&r.id));
-
-        let login = role
-            .as_ref()
-            .map(|r| r.attributes.login.unwrap_or(false))
-            .unwrap_or(false);
-
         let real_hash = role_auth
             .as_ref()
             .and_then(|auth| auth.password_hash.as_ref());
         let hash_ref = real_hash.map(|s| s.as_str()).unwrap_or(&mock_hash);
 
-        let role_present = role.is_some();
-        let make_auth_err = |role_present: bool, login: bool| {
-            AdapterError::AuthenticationError(if role_present && !login {
-                AuthenticationError::NonLogin
-            } else {
-                AuthenticationError::InvalidCredentials
-            })
-        };
-
         match mz_auth::hash::sasl_verify(hash_ref, &proof, &auth_message) {
             Ok(verifier) => {
                 // Success only if role exists, allows login, and a real password hash was used.
-                if login && real_hash.is_some() {
+                if matches!(login_status, RoleLoginStatus::CanLogin) && real_hash.is_some() {
                     let _ = tx.send(Ok(SASLVerifyProofResponse { verifier }));
                 } else {
-                    let _ = tx.send(Err(make_auth_err(role_present, login)));
+                    let _ = tx.send(Err(AdapterError::AuthenticationError(match login_status {
+                        RoleLoginStatus::NonLogin => AuthenticationError::NonLogin,
+                        RoleLoginStatus::NotFound => AuthenticationError::RoleNotFound,
+                        _ => AuthenticationError::InvalidCredentials,
+                    })));
                 }
             }
             Err(_) => {
@@ -635,42 +670,47 @@ impl Coordinator {
             )));
             return;
         };
+        let role = self.catalog().try_get_role_by_name(role_name.as_str());
 
-        if let Some(role) = self.catalog().try_get_role_by_name(role_name.as_str()) {
-            if !role.attributes.login.unwrap_or(false) {
-                // The user is not allowed to login.
+        match role_login_status(role) {
+            RoleLoginStatus::NotFound => {
+                let _ = tx.send(Err(AdapterError::AuthenticationError(
+                    AuthenticationError::RoleNotFound,
+                )));
+                return;
+            }
+            RoleLoginStatus::NonLogin => {
                 let _ = tx.send(Err(AdapterError::AuthenticationError(
                     AuthenticationError::NonLogin,
                 )));
                 return;
             }
-            if let Some(auth) = self.catalog().try_get_role_auth_by_id(&role.id) {
-                if let Some(hash) = &auth.password_hash {
-                    let hash = hash.clone();
-                    task::spawn_blocking(
-                        || "auth-check-hash",
-                        move || {
-                            let _ = match mz_auth::hash::scram256_verify(&password, &hash) {
-                                Ok(_) => tx.send(Ok(())),
-                                Err(_) => tx.send(Err(AdapterError::AuthenticationError(
-                                    AuthenticationError::InvalidCredentials,
-                                ))),
-                            };
-                        },
-                    );
-                    return;
-                }
-            }
-            // Authentication failed due to incorrect password or missing password hash.
-            let _ = tx.send(Err(AdapterError::AuthenticationError(
-                AuthenticationError::InvalidCredentials,
-            )));
-        } else {
-            // The user does not exist.
-            let _ = tx.send(Err(AdapterError::AuthenticationError(
-                AuthenticationError::RoleNotFound,
-            )));
+            RoleLoginStatus::CanLogin => {}
         }
+
+        let role_auth = role.and_then(|r| self.catalog().try_get_role_auth_by_id(&r.id));
+
+        if let Some(auth) = role_auth {
+            if let Some(hash) = &auth.password_hash {
+                let hash = hash.clone();
+                task::spawn_blocking(
+                    || "auth-check-hash",
+                    move || {
+                        let _ = match mz_auth::hash::scram256_verify(&password, &hash) {
+                            Ok(_) => tx.send(Ok(())),
+                            Err(_) => tx.send(Err(AdapterError::AuthenticationError(
+                                AuthenticationError::InvalidCredentials,
+                            ))),
+                        };
+                    },
+                );
+                return;
+            }
+        }
+        // Authentication failed due to missing password hash.
+        let _ = tx.send(Err(AdapterError::AuthenticationError(
+            AuthenticationError::InvalidCredentials,
+        )));
     }
 
     #[mz_ore::instrument(level = "debug")]

@@ -156,7 +156,8 @@ impl Client {
         Session::new(self.build_info, config, self.metrics().session_metrics())
     }
 
-    /// Verifies the provided user's password against the
+    /// Used by [mz_auth::AuthenticatorKind::Password]
+    /// to verify the provided user's password against the
     /// stored credentials in the catalog.
     pub async fn authenticate(
         &self,
@@ -173,6 +174,8 @@ impl Client {
         Ok(Authenticated)
     }
 
+    /// Used by [mz_auth::AuthenticatorKind::Sasl] for SASL-SCRAM authentication.
+    /// This is used prior to [Client::verify_sasl_proof].
     pub async fn generate_sasl_challenge(
         &self,
         user: &String,
@@ -188,6 +191,8 @@ impl Client {
         Ok(response)
     }
 
+    /// Used by [mz_auth::AuthenticatorKind::Sasl] for SASL-SCRAM authentication.
+    /// This is used after [Client::generate_sasl_challenge].
     pub async fn verify_sasl_proof(
         &self,
         user: &String,
@@ -205,6 +210,26 @@ impl Client {
         });
         let response = rx.await.expect("sender dropped")?;
         Ok((response, Authenticated))
+    }
+
+    /// Used by [mz_auth::AuthenticatorKind::Oidc] to check if a role exists and
+    /// has the `LOGIN` attribute.
+    /// We do not use it for [mz_auth::AuthenticatorKind::Password] and
+    /// [mz_auth::AuthenticatorKind::Sasl] because these authenticators do the same check
+    /// in their respective coordinator calls.
+    /// We do not use it for [mz_auth::AuthenticatorKind::Frontegg] and
+    /// [mz_auth::AuthenticatorKind::None] because these authenticators predate the
+    /// `LOGIN` attribute. To explain further, `LOGIN` is None for user roles created
+    /// with these authenticators and we can't deterministically migrate the `LOGIN`
+    /// attribute for them from None to True. This is not the case for user roles
+    /// created with other authenticators.
+    pub async fn role_can_login(&self, role_name: &str) -> Result<(), AdapterError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::RoleCanLogin {
+            role_name: role_name.to_string(),
+            tx,
+        });
+        rx.await.expect("sender dropped")
     }
 
     /// Upgrades this client to a session client.
@@ -1031,6 +1056,7 @@ impl SessionClient {
                 | Command::AuthenticatePassword { .. }
                 | Command::AuthenticateGetSASLChallenge { .. }
                 | Command::AuthenticateVerifySASLProof { .. }
+                | Command::RoleCanLogin { .. }
                 | Command::CatalogSnapshot { .. }
                 | Command::Commit { .. }
                 | Command::CancelRequest { .. }

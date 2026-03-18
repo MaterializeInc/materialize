@@ -119,6 +119,11 @@ pub enum Command {
         mock_hash: String,
     },
 
+    RoleCanLogin {
+        tx: oneshot::Sender<Result<(), AdapterError>>,
+        role_name: String,
+    },
+
     Execute {
         portal_name: String,
         session: Session,
@@ -337,6 +342,7 @@ impl Command {
             | Command::AuthenticatePassword { .. }
             | Command::AuthenticateGetSASLChallenge { .. }
             | Command::AuthenticateVerifySASLProof { .. }
+            | Command::RoleCanLogin { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::GetWebhook { .. }
@@ -372,6 +378,7 @@ impl Command {
             | Command::AuthenticatePassword { .. }
             | Command::AuthenticateGetSASLChallenge { .. }
             | Command::AuthenticateVerifySASLProof { .. }
+            | Command::RoleCanLogin { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::GetWebhook { .. }
