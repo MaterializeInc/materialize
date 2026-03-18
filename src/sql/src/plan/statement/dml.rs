@@ -650,6 +650,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_eq_classes_withholding_errors: Default::default(),
                 enable_fast_path_plan_insights: Default::default(),
                 enable_cast_elimination: Default::default(),
+                enable_case_literal_transform: Default::default(),
             },
         })
     }

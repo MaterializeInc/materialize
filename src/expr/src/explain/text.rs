@@ -1315,26 +1315,42 @@ where
             }
             CallVariadic { func, exprs } => {
                 use crate::VariadicFunc::*;
-                let exprs = exprs.iter().map(|expr| self.child(expr));
                 match func {
+                    CaseLiteral(cl) => {
+                        let input = self.child::<MirScalarExpr>(&exprs[0]);
+                        write!(f, "case_lookup {}", input)?;
+                        for (literal_row, &idx) in &cl.lookup {
+                            let result = self.child::<MirScalarExpr>(&exprs[idx]);
+                            write!(f, " when ")?;
+                            self.mode.humanize_datum(literal_row.unpack_first(), f)?;
+                            write!(f, " then {}", result)?;
+                        }
+                        let els = self.child::<MirScalarExpr>(exprs.last().unwrap());
+                        write!(f, " else {} end", els)
+                    }
                     ArrayCreate(..) => {
+                        let exprs = exprs.iter().map(|expr| self.child(expr));
                         let exprs = separated(", ", exprs);
                         write!(f, "array[{}]", exprs)
                     }
                     ListCreate(..) => {
+                        let exprs = exprs.iter().map(|expr| self.child(expr));
                         let exprs = separated(", ", exprs);
                         write!(f, "list[{}]", exprs)
                     }
                     RecordCreate(..) => {
+                        let exprs = exprs.iter().map(|expr| self.child(expr));
                         let exprs = separated(", ", exprs);
                         write!(f, "row({})", exprs)
                     }
                     func if func.is_infix_op() && exprs.len() > 1 => {
+                        let exprs = exprs.iter().map(|expr| self.child(expr));
                         let func = format!(" {} ", func);
                         let exprs = separated(&func, exprs);
                         write!(f, "({})", exprs)
                     }
                     func => {
+                        let exprs = exprs.iter().map(|expr| self.child(expr));
                         let exprs = separated(", ", exprs);
                         write!(f, "{}({})", func, exprs)
                     }
