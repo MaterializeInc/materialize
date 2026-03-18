@@ -636,6 +636,14 @@ impl TestHarness {
         self
     }
 
+    pub fn with_mcp_routes(mut self, agents: bool, observatory: bool) -> Self {
+        for config in self.listeners_config.http.values_mut() {
+            config.routes.mcp_agents = agents;
+            config.routes.mcp_observatory = observatory;
+        }
+        self
+    }
+
     pub fn with_internal_console_redirect_url(
         mut self,
         internal_console_redirect_url: Option<String>,
