@@ -1002,6 +1002,7 @@ Arrange Differential(BatcherCapacity)
 Arrange Differential(BatcherRecords)
 Arrange Differential(BatcherSize)
 Arrange Differential(Sharing)
+Arrange PrometheusMetrics
 Arrange Timely(Addresses)
 Arrange Timely(BatchesReceived)
 Arrange Timely(BatchesSent)
