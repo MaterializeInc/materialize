@@ -2352,7 +2352,7 @@ mod tests {
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
     use mz_repr::role_id::RoleId;
     use mz_repr::{
-        CatalogItemId, Datum, GlobalId, RelationVersionSelector, RowArena, SqlRelationType,
+        CatalogItemId, Datum, GlobalId, RelationVersionSelector, Row, RowArena, SqlRelationType,
         SqlScalarType, Timestamp,
     };
     use mz_sql::catalog::{BuiltinsConfig, CatalogSchema, CatalogType, SessionCatalog};
@@ -2362,8 +2362,8 @@ mod tests {
         ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
     };
     use mz_sql::plan::{
-        CoercibleScalarExpr, ExprContext, HirScalarExpr, PlanContext, QueryContext, QueryLifetime,
-        Scope, StatementContext,
+        CoercibleScalarExpr, ExprContext, HirScalarExpr, HirToMirConfig, PlanContext, QueryContext,
+        QueryLifetime, Scope, StatementContext,
     };
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
     use mz_sql::session::vars::{SystemVars, VarInput};
@@ -3427,6 +3427,31 @@ mod tests {
         // otherwise ignoring eval errors. We also do various other checks.
         let res = (op.0)(&ecx, scalars, &imp.params, vec![]);
         if let Ok(hir) = res {
+            let uneliminated_result_row = {
+                if let HirScalarExpr::CallUnary { func, .. } = &hir
+                    && func.is_eliminable_cast()
+                {
+                    let mut uneliminated_mir = hir
+                        .clone()
+                        .lower_uncorrelated(HirToMirConfig {
+                            enable_cast_elimination: false,
+                            ..catalog.system_config().into()
+                        })
+                        .expect("lowering eliminable cast should always succeed");
+                    prep_style
+                        .prep_scalar_expr(&mut uneliminated_mir)
+                        .expect("must succeed");
+
+                    // Pack the row, to avoid lifetime issues with the MIR we lowered here
+                    uneliminated_mir
+                        .eval(&[], &arena)
+                        .ok()
+                        .map(|datum| Row::pack([datum]))
+                } else {
+                    None
+                }
+            };
+
             if let Ok(mut mir) = hir.lower_uncorrelated(catalog.system_config()) {
                 // Populate unmaterialized functions.
                 prep_style.prep_scalar_expr(&mut mir).expect("must succeed");
@@ -3447,6 +3472,14 @@ mod tests {
                         if !eval_result_datum.is_instance_of(&mir_typ) {
                             panic!(
                                 "{call_name}: expected return type of {return_styp:?}, got {eval_result_datum}"
+                            );
+                        }
+                        // Check the consistency of `is_eliminable_cast`---we should get the same datum either way.
+                        if let Some(row) = uneliminated_result_row {
+                            let uneliminated_result_datum = row.unpack_first();
+                            assert_eq!(
+                                uneliminated_result_datum, eval_result_datum,
+                                "datums should not change if cast is eliminable"
                             );
                         }
                         // Check the consistency of `introduces_nulls` and
