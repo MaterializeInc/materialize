@@ -824,10 +824,8 @@ where
         match value {
             Some(value) => {
                 if let Some(old_value) = existing_state_cell.as_ref() {
-                    if !fail::eval("upsert_skip_retraction", |_| true).unwrap_or(false) {
-                        if let Some(old_value) = old_value.provisional_value_ref(&ts) {
-                            output_updates.push((old_value.clone(), ts.clone(), Diff::MINUS_ONE));
-                        }
+                    if let Some(old_value) = old_value.provisional_value_ref(&ts) {
+                        output_updates.push((old_value.clone(), ts.clone(), Diff::MINUS_ONE));
                     }
                 }
 

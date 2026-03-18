@@ -12,16 +12,17 @@ import time
 from datetime import datetime, timedelta
 from threading import Thread, Event
 
+import requests
+
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition, Service, WorkflowArgumentParser
 from materialize.mzcompose.services.kafka import Kafka
-from materialize.mzcompose.services.materialized import (
-    DeploymentStatus,
-    Materialized,
-)
+from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
+from materialize.mzcompose.services.minio import Minio, minio_blob_uri
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SYSTEM_PARAMS = {
@@ -39,7 +40,6 @@ SYSTEM_PARAMS = {
 
 MZ_ENV_EXTRA = [
     "MZ_PERSIST_COMPACTION_DISABLED=true",
-    "FAILPOINTS=upsert_skip_retraction=return",
 ]
 
 SERVICES = [
@@ -47,29 +47,18 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     CockroachOrPostgresMetadata(),
+    Minio(setup_materialize=True),
+    Toxiproxy(),
     Materialized(
-        name="mz_old",
         sanity_restart=False,
-        deploy_generation=0,
         system_parameter_defaults=SYSTEM_PARAMS,
-        external_metadata_store=True,
+        # Route persist blob and consensus through toxiproxy for latency injection
+        persist_blob_url=minio_blob_uri("toxiproxy"),
+        external_metadata_store="toxiproxy",
         default_replication_factor=1,
         environment_extra=MZ_ENV_EXTRA,
     ),
-    Materialized(
-        name="mz_new",
-        sanity_restart=False,
-        deploy_generation=1,
-        system_parameter_defaults=SYSTEM_PARAMS,
-        restart="on-failure",
-        external_metadata_store=True,
-        default_replication_factor=2,
-        environment_extra=MZ_ENV_EXTRA,
-    ),
     Testdrive(
-        materialize_url="postgres://materialize@mz_old:6875",
-        materialize_url_internal="postgres://materialize@mz_old:6877",
-        mz_service="mz_old",
         no_consistency_checks=True,
         no_reset=True,
         seed=1,
@@ -79,13 +68,6 @@ SERVICES = [
 
 # Padding to make values ~500 bytes (closer to production 374-byte values)
 PAD = "x" * 400
-
-# Dedicated key range for targeted tombstone injection.
-# These keys are ONLY used by targeted_inject(), not by the random data pump.
-# Must be within [0, num_keys) to be pre-populated, and above the data pump's
-# key range (0..500) to avoid interference.
-TARGETED_KEY_START = 40000
-TARGETED_KEY_COUNT = 50
 
 KEY_SCHEMA = '{"type": "record", "name": "Key", "fields": [{"name": "k", "type": "long"}]}'
 VAL_SCHEMA = (
@@ -100,76 +82,62 @@ VAL_SCHEMA = (
 )
 
 
-def _targeted_body_tombstone():
-    """Generate kafka-ingest body for tombstoning targeted keys (key-only, no value)."""
-    lines = []
-    for j in range(TARGETED_KEY_COUNT):
-        lines.append(f'{{"k": {TARGETED_KEY_START + j}}}')
-    return "\n".join(lines) + "\n"
+def setup_toxiproxy_proxies(c):
+    """Create toxiproxy proxies for minio and postgres (no latency yet)."""
+    port = c.default_port("toxiproxy")
+    toxi_url = f"http://localhost:{port}"
+
+    # Proxy for minio (persist blob storage) - listen on 9000
+    r = requests.post(f"{toxi_url}/proxies", json={
+        "name": "minio",
+        "listen": "0.0.0.0:9000",
+        "upstream": "minio:9000",
+        "enabled": True,
+    })
+    assert r.status_code == 201, f"Failed to create minio proxy: {r.text}"
+
+    # Proxy for postgres-metadata (persist consensus) - listen on 26257
+    r = requests.post(f"{toxi_url}/proxies", json={
+        "name": "consensus",
+        "listen": "0.0.0.0:26257",
+        "upstream": "postgres-metadata:26257",
+        "enabled": True,
+    })
+    assert r.status_code == 201, f"Failed to create consensus proxy: {r.text}"
+    print("Toxiproxy proxies created (no latency yet)")
 
 
-def _targeted_body_insert(round_num):
-    """Generate kafka-ingest body for inserting values into targeted keys."""
-    lines = []
-    for j in range(TARGETED_KEY_COUNT):
-        key = TARGETED_KEY_START + j
-        lines.append(
-            f'{{"k": {key}}} '
-            f'{{"f_int": {j}, '
-            f'"f_long": {round_num * 1000 + j}, '
-            f'"f_str": "tgt-r{round_num}k{j}{PAD}", '
-            f'"f_double": {round_num * 0.001:.6f}, '
-            f'"f_bool": true, '
-            f'"f_nullable": null}}'
-        )
-    return "\n".join(lines) + "\n"
+def add_toxiproxy_latency(c):
+    """Add latency to persist storage after materialized is healthy."""
+    port = c.default_port("toxiproxy")
+    toxi_url = f"http://localhost:{port}"
 
+    # Add latency to blob storage (~1.5s + 500ms jitter)
+    r = requests.post(f"{toxi_url}/proxies/minio/toxics", json={
+        "name": "blob-latency",
+        "type": "latency",
+        "attributes": {"latency": 1500, "jitter": 500},
+    })
+    assert r.status_code == 200, f"Failed to add blob latency: {r.text}"
 
-def targeted_tombstone_only(c, n, label):
-    """Tombstone targeted keys and wait for tombstones to be persisted."""
-    tombstone_body = _targeted_body_tombstone()
-    print(f"  [{label}] Tombstoning {TARGETED_KEY_COUNT} keys...")
-    for i in range(n):
-        c.testdrive(
-            f"$ kafka-ingest format=avro topic=s-{i}"
-            f" key-format=avro key-schema={KEY_SCHEMA}"
-            f" schema={VAL_SCHEMA}\n"
-            + tombstone_body,
-        )
-    print(f"  [{label}] Waiting for tombstones to reach persist...")
-    time.sleep(8)
+    # Add latency to consensus (~500ms + 200ms jitter)
+    r = requests.post(f"{toxi_url}/proxies/consensus/toxics", json={
+        "name": "consensus-latency",
+        "type": "latency",
+        "attributes": {"latency": 500, "jitter": 200},
+    })
+    assert r.status_code == 200, f"Failed to add consensus latency: {r.text}"
 
+    print("Toxiproxy latency added: blob=1500ms±500ms, consensus=500ms±200ms")
 
-def targeted_inject_data(c, n, label, rounds=40, delay=0.05):
-    """Inject re-insertion data for targeted keys at many timestamps.
-
-    Each round is a separate kafka-ingest → different Kafka CreateTime →
-    different MZ timestamp after reclocking. This creates data for
-    tombstoned keys at ROUNDS distinct timestamps.
-    """
-    print(f"  [{label}] Injecting {rounds} rounds of data for targeted keys...")
-    for r in range(rounds):
-        body = _targeted_body_insert(r)
-        for i in range(n):
-            try:
-                c.testdrive(
-                    f"$ kafka-ingest format=avro topic=s-{i}"
-                    f" key-format=avro key-schema={KEY_SCHEMA}"
-                    f" schema={VAL_SCHEMA}\n"
-                    + body,
-                )
-            except Exception:
-                pass
-        time.sleep(delay)
-    print(f"  [{label}] Data injection done ({rounds} rounds).")
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--runtime", type=int, default=900)
     parser.add_argument("--num-sources", type=int, default=2)
-    parser.add_argument("--num-keys", type=int, default=50000)
-    parser.add_argument("--num-hot-keys", type=int, default=30)
-    parser.add_argument("--parallelism", type=int, default=15)
+    parser.add_argument("--num-keys", type=int, default=1000)
+    parser.add_argument("--num-hot-keys", type=int, default=5)
+    parser.add_argument("--parallelism", type=int, default=25)
     parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
 
@@ -185,15 +153,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # Randomized cluster size
     workers = random.choice([4, 8, 16])
     replication_factor = random.choice([1, 2])
-    deploy_interval = 99999  # Keep instance alive for steady-state reproduction
 
-    print(f"Config: {n} sources, workers={workers}, rf={replication_factor}, "
-          f"deploy_interval={deploy_interval}s")
+    print(f"Config: {n} sources, workers={workers}, rf={replication_factor}")
     print(f"Partition counts: {partitions}")
 
     c.down(destroy_volumes=True)
-    c.up("zookeeper", "kafka", "schema-registry", "mz_old",
-         Service("testdrive", idle=True))
+    # Start infrastructure first, then set up toxiproxy proxies (no latency),
+    # then start materialized. Latency is added after sources are created.
+    c.up("zookeeper", "kafka", "schema-registry", "minio", "toxiproxy")
+    setup_toxiproxy_proxies(c)
+    c.up("materialized", Service("testdrive", idle=True))
 
     c.testdrive(
         f"""\
@@ -263,6 +232,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     time.sleep(30)
     print("Pre-population done.")
 
+    # Now add latency to persist storage to slow down the feedback loop.
+    # This creates a window where two AtTime drains at different timestamps
+    # can fire for the same tombstoned key before feedback arrives.
+    add_toxiproxy_latency(c)
+
     errors = []
 
     def data_pump(thread_id):
@@ -277,31 +251,23 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     nk = random.randint(1, args.num_hot_keys)
                 else:
                     nk = random.randint(args.num_hot_keys, min(args.num_keys, 500))
-                op = random.choice(
-                    ["cross-partition", "fill",
-                     "tombstone-reinsert", "tombstone-reinsert",
-                     "tombstone-reinsert", "tombstone-reinsert",
-                     "tombstone-reinsert", "tombstone-reinsert"]
+                op = "tombstone-reinsert"
+
+                # Tombstone keys, then re-insert at multiple timestamps.
+                # With toxiproxy adding ~4s latency to persist, the
+                # feedback loop takes ~8-10s. Re-inserts 1.5s apart get
+                # different MZ timestamps and can both emit +1 without
+                # retraction if the key is tombstoned (finalized=None).
+                c.testdrive(
+                    f"$ kafka-ingest format=avro topic=s-{src_id}"
+                    f" key-format=avro key-schema={KEY_SCHEMA}"
+                    f" schema={VAL_SCHEMA}"
+                    f" repeat={nk}\n"
+                    f'{{"k": ${{kafka-ingest.iteration}}}}'
+                    "\n",
                 )
-
-                if op == "cross-partition":
-                    part_id = random.randint(0, p - 1)
-                    c.testdrive(
-                        f"$ kafka-ingest format=avro topic=s-{src_id}"
-                        f" key-format=avro key-schema={KEY_SCHEMA}"
-                        f" schema={VAL_SCHEMA} partition={part_id}"
-                        f" repeat={nk}\n"
-                        f'{{"k": ${{kafka-ingest.iteration}}}} '
-                        f'{{"f_int": ${{kafka-ingest.iteration}}, '
-                        f'"f_long": {rnd * 100 + part_id}, '
-                        f'"f_str": "xp-t{thread_id}r{rnd}p{part_id}{PAD}", '
-                        f'"f_double": {part_id * 0.01:.4f}, '
-                        f'"f_bool": {str(random.choice([True, False])).lower()}, '
-                        f'"f_nullable": {{"string": "p{part_id}"}}}}'
-                        "\n",
-                    )
-
-                elif op == "fill":
+                for reinsert_round in range(3):
+                    time.sleep(1.1)  # Just enough to cross a 1s reclocking boundary
                     c.testdrive(
                         f"$ kafka-ingest format=avro topic=s-{src_id}"
                         f" key-format=avro key-schema={KEY_SCHEMA}"
@@ -309,77 +275,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         f" repeat={nk}\n"
                         f'{{"k": ${{kafka-ingest.iteration}}}} '
                         f'{{"f_int": ${{kafka-ingest.iteration}}, '
-                        f'"f_long": {rnd}, '
-                        f'"f_str": "fill-t{thread_id}r{rnd}{PAD}", '
-                        f'"f_double": {rnd * 0.1:.4f}, '
+                        f'"f_long": {rnd * 77 + reinsert_round}, '
+                        f'"f_str": "tr-t{thread_id}r{rnd}i{reinsert_round}{PAD}", '
+                        f'"f_double": {rnd * 0.01 + reinsert_round * 0.001:.6f}, '
                         f'"f_bool": true, '
-                        f'"f_nullable": {random.choice(["null", "{" + '"string": "x"' + "}"])}}}'
+                        f'"f_nullable": null}}'
                         "\n",
                     )
-
-                elif op == "churn":
-                    b = random.randint(nk // 4, nk)
-                    c.testdrive(
-                        f"$ kafka-ingest format=avro topic=s-{src_id}"
-                        f" key-format=avro key-schema={KEY_SCHEMA}"
-                        f" schema={VAL_SCHEMA}"
-                        f" repeat={b}\n"
-                        f'{{"k": ${{kafka-ingest.iteration}}}} '
-                        f'{{"f_int": ${{kafka-ingest.iteration}}, '
-                        f'"f_long": {rnd * 1000000}, '
-                        f'"f_str": "churn-t{thread_id}r{rnd}{PAD}", '
-                        f'"f_double": {rnd * 0.001:.6f}, '
-                        f'"f_bool": {str(rnd % 2 == 0).lower()}, '
-                        f'"f_nullable": {{"string": "v{rnd}"}}}}'
-                        "\n",
-                    )
-
-                elif op == "retract":
-                    b = random.randint(1, nk)
-                    c.testdrive(
-                        f"$ kafka-ingest format=avro topic=s-{src_id}"
-                        f" key-format=avro key-schema={KEY_SCHEMA}"
-                        f" schema={VAL_SCHEMA}"
-                        f" repeat={b}\n"
-                        f'{{"k": ${{kafka-ingest.iteration}}}}'
-                        "\n",
-                    )
-
-                elif op == "tombstone-reinsert":
-                    # Retract all keys, then immediately re-insert them
-                    # MULTIPLE times at different timestamps. With
-                    # snapshot_buffering_max=10000, the stash can
-                    # accumulate data at multiple timestamps for the same
-                    # key. The AtTime drain processes all of them in one
-                    # call — the second sees the provisional from the
-                    # first, triggering diff_sum=2 if finalized=None.
-                    c.testdrive(
-                        f"$ kafka-ingest format=avro topic=s-{src_id}"
-                        f" key-format=avro key-schema={KEY_SCHEMA}"
-                        f" schema={VAL_SCHEMA}"
-                        f" repeat={nk}\n"
-                        f'{{"k": ${{kafka-ingest.iteration}}}}'
-                        "\n",
-                    )
-                    # Multiple re-inserts at different Kafka timestamps.
-                    # Sleep 1.5s between rounds to ensure different MZ
-                    # reclocked timestamps (reclocking has ~1s granularity).
-                    for reinsert_round in range(5):
-                        time.sleep(1.5)
-                        c.testdrive(
-                            f"$ kafka-ingest format=avro topic=s-{src_id}"
-                            f" key-format=avro key-schema={KEY_SCHEMA}"
-                            f" schema={VAL_SCHEMA}"
-                            f" repeat={nk}\n"
-                            f'{{"k": ${{kafka-ingest.iteration}}}} '
-                            f'{{"f_int": ${{kafka-ingest.iteration}}, '
-                            f'"f_long": {rnd * 77 + reinsert_round}, '
-                            f'"f_str": "tr-t{thread_id}r{rnd}i{reinsert_round}{PAD}", '
-                            f'"f_double": {rnd * 0.01 + reinsert_round * 0.001:.6f}, '
-                            f'"f_bool": true, '
-                            f'"f_nullable": null}}'
-                            "\n",
-                        )
 
                 rnd += 1
             except Exception as e:
@@ -392,120 +294,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         threads.append(t)
         t.start()
 
-    # Alternating 0dt deploys and hard kills
-    deploy_gen = 1
-    mz1 = "mz_old"
-    mz2 = "mz_new"
-    restart_count = 0
-
-    while datetime.now() < end_time:
-        time.sleep(deploy_interval)
-
-        # Area 19 flow: tombstone → persist → inject data → kill → restart.
-        # The MZ_UPSERT_FORCE_ORPHAN_EXIT mechanism in Rust code will:
-        # 1. Keep partial_drain_time set during rehydration
-        # 2. Trigger AtTime drains for tombstoned keys
-        # 3. Detect BUG PRE-CONDITION (orphaned +1 for tombstoned key)
-        # 4. Sleep 15s to let persist_sink flush the orphaned +1s
-        # 5. Exit process
-        # 6. Docker restarts the container → next rehydration hits diff_sum=2 → PANIC
-        label = f"cycle-{deploy_gen}"
-        try:
-            # Step 1: Tombstone targeted keys and wait for tombstones to persist
-            targeted_tombstone_only(c, n, label)
-
-            # Step 2: Inject re-insertion data rapidly. This data goes to Kafka
-            # and the MZ instance starts processing it. We want some of this data
-            # to be in Kafka but NOT YET fully persisted when we kill.
-            targeted_inject_data(c, n, label, rounds=20, delay=0.02)
-
-            # Step 3: Kill the instance. Re-insertion data may be partially
-            # persisted. The key state in the shard: tombstoned (finalized=None)
-            # for targeted keys, with re-insertion data in Kafka.
-            print(f"  [{label}] Killing {mz1}...")
-            c.kill(mz1, signal="SIGKILL")
-            time.sleep(1)
-
-            # Step 4: Inject MORE re-insertion data while instance is dead.
-            # This ensures there's plenty of Kafka data at distinct timestamps
-            # for the targeted keys when the next instance rehydrates.
-            targeted_inject_data(c, n, label, rounds=30, delay=0.02)
-
-        except Exception as e:
-            print(f"  [{label}] Pre-kill setup failed: {e}")
-
-        # Step 5: Restart. The restarted instance rehydrates from the persist
-        # shard (tombstoned keys) and replays Kafka (re-insertions).
-        # With MZ_UPSERT_FORCE_ORPHAN_EXIT:
-        # - partial_drain_time stays set during rehydration
-        # - AtTime drains fire for tombstoned keys → orphaned +1s
-        # - BUG PRE-CONDITION fires → sleep 15s → exit(1)
-        # - Docker restarts → rehydration → diff_sum=2 → PANIC
-        print(f"  [{label}] Restarting {mz1}...")
-        try:
-            with c.override(
-                Materialized(
-                    name=mz1,
-                    sanity_restart=False,
-                    deploy_generation=deploy_gen - 1,
-                    system_parameter_defaults=SYSTEM_PARAMS,
-                    restart="on-failure",
-                    external_metadata_store=True,
-                    default_replication_factor=2,
-                    environment_extra=MZ_ENV_EXTRA,
-                ),
-                Testdrive(
-                    materialize_url=f"postgres://materialize@{mz1}:6875",
-                    materialize_url_internal=f"postgres://materialize@{mz1}:6877",
-                    mz_service=mz1,
-                    no_consistency_checks=True,
-                    no_reset=True,
-                    seed=1,
-                    default_timeout="600s",
-                ),
-            ):
-                c.up(mz1)
-                # Wait for the instance to come up. It may:
-                # a) Become leader normally (BUG PRE-CONDITION not hit)
-                # b) Exit during rehydration (force_orphan_exit triggered)
-                #    → Docker restarts → panic on next rehydration
-                # c) Panic during rehydration (diff_sum=2 from previous cycle)
-                #
-                # We wait up to 120s for it to become leader. If it panics
-                # or exits, the restart="on-failure" will restart it, and
-                # we should see the panic in the logs.
-                try:
-                    c.await_mz_deployment_status(
-                        DeploymentStatus.IS_LEADER, mz1, timeout=120
-                    )
-                    print(f"  [{label}] {mz1} is leader.")
-                except Exception as e:
-                    print(f"  [{label}] {mz1} did not become leader (expected if panic): {e}")
-                    # Check logs for the panic
-                    print(f"  [{label}] Check logs: bin/mzcompose --find upsert-panic-repro logs {mz1}")
-                    # Try to bring it back up
-                    time.sleep(5)
-                    c.up(mz1)
-                    try:
-                        c.await_mz_deployment_status(
-                            DeploymentStatus.IS_LEADER, mz1, timeout=120
-                        )
-                    except Exception:
-                        print(f"  [{label}] {mz1} still not up after retry. Moving on.")
-
-            restart_count += 1
-        except Exception as e:
-            print(f"  [{label}] Restart failed: {e}")
-
-        deploy_gen += 1
-
-    print("Waiting for data pump threads to finish...")
+    # Wait for data pump threads to finish (the bug should trigger naturally
+    # due to persist latency from toxiproxy)
+    remaining = (end_time - datetime.now()).total_seconds()
+    print(f"Waiting {remaining:.0f}s for data pump threads...")
     for t in threads:
-        t.join(timeout=30)
+        t.join(timeout=remaining + 30)
 
     if errors:
         print(f"Data pump errors: {len(errors)}")
         for e in errors[:5]:
             print(f"  {e}")
 
-    print(f"Done. Seed: {seed}. Completed {deploy_gen - 1} deploys, {restart_count} hard kills.")
+    print(f"Done. Seed: {seed}.")
