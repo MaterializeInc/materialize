@@ -11,6 +11,7 @@
 
 use futures::StreamExt;
 use timely::container::CapacityContainerBuilder;
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::vec::Map;
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
@@ -19,7 +20,9 @@ use mz_mysql_util::query_sys_var;
 use mz_ore::future::InTask;
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_storage_types::sources::mysql::{GtidPartition, GtidState, gtid_set_frontier};
-use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
+use mz_timely_util::builder_async::{
+    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
 
 use crate::source::types::Probe;
 use crate::source::{RawSourceCreationConfig, probe};
@@ -34,6 +37,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
     resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
+    replication_errors: StreamVec<G, ReplicationError>,
 ) -> (
     StreamVec<G, ReplicationError>,
     StreamVec<G, Probe<GtidPartition>>,
@@ -41,6 +45,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 ) {
     let op_name = format!("MySqlStatistics({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
+
+    let mut error_handle = builder.new_disconnected_input(replication_errors, Pipeline);
 
     let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
@@ -117,8 +123,26 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     }
                 }
             };
-
-            futures::future::join(probe_loop, commit_loop).await.0
+            let error_loop = async {
+                while let Some(event) = error_handle.next().await {
+                    if let AsyncEvent::Data(_, err_data) = event {
+                        for err in err_data {
+                            if let ReplicationError::Definite(_) = err {
+                                break;
+                            }
+                        }
+                    }
+                }
+                tracing::info!("Replication error stream closed, exiting statistics loop");
+                Ok(())
+            };
+            let res = tokio::select! {
+                res = probe_loop => res,
+                res = commit_loop => Ok(res),
+                res = error_loop => res,
+            };
+            tracing::info!("Statistics loop exited, shutting down");
+            res
         })
     });
 

@@ -171,8 +171,13 @@ impl SourceRender for MySqlSourceConnection {
             metrics,
         );
 
-        let (stats_err, probe_stream, stats_token) =
-            statistics::render(scope.clone(), config.clone(), self, resume_uppers);
+        let (stats_err, probe_stream, stats_token) = statistics::render(
+            scope.clone(),
+            config.clone(),
+            self,
+            resume_uppers,
+            snapshot_err.clone().concat(repl_err.clone()),
+        );
 
         let updates = snapshot_updates.concat(repl_updates);
         let partition_count = u64::cast_from(config.source_exports.len());
