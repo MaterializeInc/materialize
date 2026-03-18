@@ -458,17 +458,6 @@ impl HttpServer {
             router = router.merge(metrics_router);
         }
 
-        if routes_enabled.console_config {
-            let console_config_router = Router::new()
-                .route(
-                    "/api/console/config",
-                    routing::get(console::handle_console_config),
-                )
-                .layer(Extension(adapter_client_rx.clone()))
-                .layer(Extension(active_connection_counter.clone()));
-            router = router.merge(console_config_router);
-        }
-
         // MCP (Model Context Protocol) endpoints
         // Enabled via runtime `routes_enabled.mcp_agents` and `routes_enabled.mcp_observatory` configuration
         if routes_enabled.mcp_agents || routes_enabled.mcp_observatory {

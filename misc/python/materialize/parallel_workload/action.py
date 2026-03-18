@@ -1773,8 +1773,6 @@ class FlipFlagsAction(Action):
             "oidc_issuer",
             "oidc_audience",
             "oidc_authentication_claim",
-            "console_oidc_client_id",
-            "console_oidc_scopes",
         ]
 
     def run(self, exe: Executor) -> bool:
