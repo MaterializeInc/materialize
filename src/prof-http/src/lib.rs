@@ -30,35 +30,14 @@ cfg_if! {
     }
 }
 
-/// Annotates all unannotated stacks in a profile with the given label.
-#[cfg(all(feature = "jemalloc", not(miri)))]
-fn annotate_unannotated(profile: &mut StackProfile, annotation: &str) {
-    let anno_idx = profile
-        .annotations
-        .iter()
-        .position(|a| a == annotation)
-        .unwrap_or_else(|| {
-            profile.annotations.push(annotation.to_string());
-            profile.annotations.len() - 1
-        });
-    for (_, anno) in &mut profile.stacks {
-        if anno.is_none() {
-            *anno = Some(anno_idx);
-        }
-    }
-}
-
 /// Appends lgalloc heap profile data to an existing `StackProfile`.
-///
-/// Each lgalloc stack is annotated with `"lgalloc"` so it can be distinguished
-/// from jemalloc allocations when viewing the unified profile.
 fn append_lgalloc_heap_profile(profile: &mut StackProfile) {
     use pprof_util::WeightedStack;
 
     for (addrs, bytes) in mz_ore::lgalloc::heap_profile() {
         #[allow(clippy::as_conversions)]
         let weight = bytes as f64;
-        profile.push_stack(WeightedStack { addrs, weight }, Some("lgalloc"));
+        profile.push_stack(WeightedStack { addrs, weight }, None);
     }
 }
 
@@ -397,7 +376,7 @@ mod enabled {
                 let r = BufReader::new(f);
                 let mut stacks = parse_jeheap(r, MAPPINGS.as_deref())
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-                super::annotate_unannotated(&mut stacks, "jemalloc");
+
                 super::append_lgalloc_heap_profile(&mut stacks);
                 let stats = borrow
                     .stats()
@@ -427,7 +406,7 @@ mod enabled {
                 let r = BufReader::new(f);
                 let mut stacks = parse_jeheap(r, MAPPINGS.as_deref())
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-                super::annotate_unannotated(&mut stacks, "jemalloc");
+
                 super::append_lgalloc_heap_profile(&mut stacks);
                 let stats = borrow
                     .stats()
@@ -509,9 +488,7 @@ mod enabled {
         let dump_reader = BufReader::new(dump_file);
         let mut profile = parse_jeheap(dump_reader, MAPPINGS.as_deref())
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-        // Annotate jemalloc stacks, then append lgalloc stacks, so the unified
-        // profile distinguishes allocator sources.
-        super::annotate_unannotated(&mut profile, "jemalloc");
+        // Append lgalloc stacks for a unified view of all allocated memory.
         super::append_lgalloc_heap_profile(&mut profile);
         let pprof = profile.to_pprof(("inuse_space", "bytes"), ("space", "bytes"), None);
         Ok(pprof)
