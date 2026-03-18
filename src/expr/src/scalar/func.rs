@@ -2903,7 +2903,12 @@ fn array_array_concat<'a>(
     Ok(Some(datum.unwrap_array()))
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "||", propagates_nulls = false)]
+#[sqlfunc(
+    is_infix_op = true,
+    sqlname = "||",
+    propagates_nulls = false,
+    introduces_nulls = false
+)]
 fn list_list_concat<'a, T: FromDatum<'a>>(
     a: Option<DatumList<'a, T>>,
     b: Option<DatumList<'a, T>>,
@@ -2940,7 +2945,7 @@ fn element_list_concat<'a, T: FromDatum<'a>>(
     temp_storage.make_datum_list(std::iter::once(a).chain(b_elems))
 }
 
-#[sqlfunc(sqlname = "list_remove", propagates_nulls = false)]
+#[sqlfunc(sqlname = "list_remove")]
 fn list_remove<'a, T: FromDatum<'a>>(
     a: DatumList<'a, T>,
     b: T,
