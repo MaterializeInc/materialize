@@ -81,6 +81,9 @@ disallowed-methods = [
     # Panic when formatting the same value more than once, like our tracing macros do.
     { path = "itertools::Itertools::format", reason = "panics when passed to tracing macros; consider the methods in mz_ore::str instead" },
     { path = "itertools::Itertools::format_with", reason = "panics when passed to tracing macros; consider the methods in mz_ore::str instead" },
+
+    { path = "lgalloc::allocate", reason = "use `mz_ore::lgalloc::allocate` instead for memory profiling" },
+    { path = "lgalloc::deallocate", reason = "use `mz_ore::lgalloc::deallocate` instead for memory profiling" },
 ]
 
 disallowed-macros = [

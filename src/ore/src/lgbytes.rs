@@ -18,8 +18,8 @@
 use std::fmt::Debug;
 use std::time::Instant;
 
+use crate::lgalloc::AllocError;
 use bytes::Bytes;
-use lgalloc::AllocError;
 use prometheus::{Counter, CounterVec, Histogram, IntCounter, IntCounterVec};
 use tracing::debug;
 
@@ -200,8 +200,6 @@ impl LgBytesOpMetrics {
     pub fn new_region<T: Copy>(&self, capacity: usize) -> MetricsRegion<T> {
         let start = Instant::now();
 
-        // Round the capacity up to the minimum lgalloc mmap size.
-        let capacity = std::cmp::max(capacity, 1 << lgalloc::VALID_SIZE_CLASS.start);
         let region = match Region::new_mmap(capacity) {
             Ok(region) => region,
             Err(err) => {
@@ -235,9 +233,7 @@ impl LgBytesOpMetrics {
     ) -> Result<MetricsRegion<T>, AllocError> {
         let start = Instant::now();
         let buf = buf.as_ref();
-        // Round the capacity up to the minimum lgalloc mmap size.
-        let capacity = std::cmp::max(buf.len(), 1 << lgalloc::VALID_SIZE_CLASS.start);
-        let buf = match Region::new_mmap(capacity) {
+        let buf = match Region::new_mmap(buf.len()) {
             Ok(mut region) => {
                 region.extend_from_slice(buf);
                 Ok(region)

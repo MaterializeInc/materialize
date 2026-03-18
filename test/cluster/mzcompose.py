@@ -5716,7 +5716,6 @@ def workflow_test_memory_limiter(c: Composition) -> None:
     with c.override(
         Materialized(
             additional_system_parameter_defaults={
-                "enable_lgalloc": "false",
                 "memory_limiter_interval": "100ms",
                 "unsafe_enable_unorchestrated_cluster_replicas": "true",
             },

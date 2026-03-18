@@ -158,7 +158,9 @@ fn realloc_buffer(buffer: &Buffer, metrics: &ColumnarMetrics) -> Buffer {
         None
     };
     let Some(region) = region else {
-        return buffer.clone();
+        // Re-create the buffer through arrow's allocator to guarantee alignment.
+        // This is needed to work around parquet sometimes producing misaligned buffers.
+        return Buffer::from_slice_ref(buffer.as_slice());
     };
     let bytes: &[u8] = region.as_ref().to_byte_slice();
     let ptr: NonNull<[u8]> = bytes.into();

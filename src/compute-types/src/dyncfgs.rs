@@ -69,11 +69,11 @@ pub const LGALLOC_BACKGROUND_INTERVAL: Config<Duration> = Config::new(
     "Scheduling interval for lgalloc's background worker.",
 );
 
-/// Enable lgalloc's eager memory return/reclamation feature.
-pub const LGALLOC_FILE_GROWTH_DAMPENER: Config<usize> = Config::new(
-    "lgalloc_file_growth_dampener",
+/// Lgalloc's growth dampener parameter.
+pub const LGALLOC_GROWTH_DAMPENER: Config<usize> = Config::new(
+    "lgalloc_growth_dampener",
     2,
-    "Lgalloc's file growth dampener parameter.",
+    "Lgalloc's growth dampener parameter.",
 );
 
 /// Enable lgalloc's eager memory return/reclamation feature.
@@ -123,6 +123,13 @@ pub const ENABLE_COLUMNAR_LGALLOC: Config<bool> = Config::new(
     "enable_columnar_lgalloc",
     true,
     "Enable allocating aligned regions in columnar from lgalloc.",
+);
+
+/// Enable lgalloc heap profiling (backtrace capture on allocations).
+pub const ENABLE_LGALLOC_HEAP_PROFILING: Config<bool> = Config::new(
+    "enable_lgalloc_heap_profiling",
+    true,
+    "Enable capturing backtraces on lgalloc allocations for heap profiling.",
 );
 
 /// The interval at which the compute server performs maintenance tasks.
@@ -344,7 +351,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_LGALLOC)
         .add(&LGALLOC_BACKGROUND_INTERVAL)
-        .add(&LGALLOC_FILE_GROWTH_DAMPENER)
+        .add(&LGALLOC_GROWTH_DAMPENER)
         .add(&LGALLOC_LOCAL_BUFFER_BYTES)
         .add(&LGALLOC_SLOW_CLEAR_BYTES)
         .add(&MEMORY_LIMITER_INTERVAL)
@@ -353,6 +360,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
         .add(&ENABLE_COLUMNATION_LGALLOC)
         .add(&ENABLE_COLUMNAR_LGALLOC)
+        .add(&ENABLE_LGALLOC_HEAP_PROFILING)
         .add(&COMPUTE_SERVER_MAINTENANCE_INTERVAL)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES_CC)

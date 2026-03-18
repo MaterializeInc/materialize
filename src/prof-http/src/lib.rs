@@ -30,6 +30,17 @@ cfg_if! {
     }
 }
 
+/// Appends lgalloc heap profile data to an existing `StackProfile`.
+fn append_lgalloc_heap_profile(profile: &mut StackProfile) {
+    use pprof_util::WeightedStack;
+
+    for (addrs, bytes) in mz_ore::lgalloc::heap_profile() {
+        #[allow(clippy::as_conversions)]
+        let weight = bytes as f64;
+        profile.push_stack(WeightedStack { addrs, weight }, None);
+    }
+}
+
 static EXECUTABLE: LazyLock<String> = LazyLock::new(|| {
     {
         env::current_exe()
@@ -343,8 +354,10 @@ mod enabled {
                     .dump()
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 let r = BufReader::new(f);
-                let stacks = parse_jeheap(r, MAPPINGS.as_deref())
+                let mut stacks = parse_jeheap(r, MAPPINGS.as_deref())
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+                super::append_lgalloc_heap_profile(&mut stacks);
                 let stats = borrow
                     .stats()
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -371,8 +384,10 @@ mod enabled {
                     .dump()
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 let r = BufReader::new(f);
-                let stacks = parse_jeheap(r, MAPPINGS.as_deref())
+                let mut stacks = parse_jeheap(r, MAPPINGS.as_deref())
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+                super::append_lgalloc_heap_profile(&mut stacks);
                 let stats = borrow
                     .stats()
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -451,8 +466,10 @@ mod enabled {
             .dump()
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         let dump_reader = BufReader::new(dump_file);
-        let profile = parse_jeheap(dump_reader, MAPPINGS.as_deref())
+        let mut profile = parse_jeheap(dump_reader, MAPPINGS.as_deref())
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        // Append lgalloc stacks for a unified view of all allocated memory.
+        super::append_lgalloc_heap_profile(&mut profile);
         let pprof = profile.to_pprof(("inuse_space", "bytes"), ("space", "bytes"), None);
         Ok(pprof)
     }

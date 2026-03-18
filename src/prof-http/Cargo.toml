@@ -22,7 +22,7 @@ mappings = "0.7.2"
 mime = "0.3.16"
 mz-build-info = { path = "../build-info", default-features = false }
 mz-http-util = { path = "../http-util", default-features = false }
-mz-ore = { path = "../ore", default-features = false }
+mz-ore = { path = "../ore", default-features = false, features = ["lgalloc"] }
 mz-prof = { path = "../prof", default-features = false }
 jemalloc_pprof = { version = "0.8.2", optional = true }
 pprof_util = "0.8.2"

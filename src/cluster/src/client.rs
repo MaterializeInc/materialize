@@ -300,7 +300,7 @@ mod alloc {
     /// the request, otherwise we fall back to a heap allocation. In either case, the handle must
     /// be dropped to free the memory.
     pub(crate) fn lgalloc_refill(size: usize) -> LgallocHandle {
-        match lgalloc::allocate::<u8>(size) {
+        match mz_ore::lgalloc::allocate::<u8>(size) {
             Ok((pointer, capacity, handle)) => {
                 let handle = Some(handle);
                 LgallocHandle {
@@ -332,7 +332,7 @@ mod alloc {
     /// it's a regular heap allocation.
     pub(crate) struct LgallocHandle {
         /// Lgalloc handle, set if the memory was allocated by lgalloc.
-        handle: Option<lgalloc::Handle>,
+        handle: Option<mz_ore::lgalloc::Handle>,
         /// Pointer to the allocated memory. Always well-aligned, but can be dangling.
         pointer: std::ptr::NonNull<u8>,
         /// Capacity of the allocated memory in bytes.
@@ -358,7 +358,7 @@ mod alloc {
         fn drop(&mut self) {
             // If we have a handle, it's lgalloc memory. Otherwise, it's a heap allocation.
             if let Some(handle) = self.handle.take() {
-                lgalloc::deallocate(handle);
+                mz_ore::lgalloc::deallocate(handle);
             } else {
                 unsafe { Vec::from_raw_parts(self.pointer.as_ptr(), 0, self.capacity) };
             }
