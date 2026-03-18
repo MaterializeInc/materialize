@@ -1,0 +1,242 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for the CaseLiteral optimizer transform, which rewrites
+# CASE expr WHEN lit1 THEN res1 ... chains into BTreeMap lookups.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_case_literal_transform TO true;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t (x int, y text, z int)
+
+# A CASE with 2 arms matching the same column should be rewritten.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT
+  CASE x
+    WHEN 1 THEN 10
+    WHEN 2 THEN 20
+    ELSE 0
+  END
+FROM t
+----
+Explained Query:
+  Project (#3)
+    Map (case_lookup #0{x} when 1 then 10 when 2 then 20 else 0 end)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# A CASE with 5 arms matching the same column.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT
+  CASE x
+    WHEN 1 THEN 10
+    WHEN 2 THEN 20
+    WHEN 3 THEN 30
+    WHEN 4 THEN 40
+    WHEN 5 THEN 50
+    ELSE 0
+  END
+FROM t
+----
+Explained Query:
+  Project (#3)
+    Map (case_lookup #0{x} when 1 then 10 when 2 then 20 when 3 then 30 when 4 then 40 when 5 then 50 else 0 end)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# CASE with string results.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT
+  CASE x
+    WHEN 1 THEN 'one'
+    WHEN 2 THEN 'two'
+    WHEN 3 THEN 'three'
+    ELSE 'other'
+  END
+FROM t
+----
+Explained Query:
+  Project (#3)
+    Map (case_lookup #0{x} when 1 then "one" when 2 then "two" when 3 then "three" else "other" end)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# Single arm: should NOT be converted.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT
+  CASE x
+    WHEN 1 THEN 10
+    ELSE 0
+  END
+FROM t
+----
+Explained Query:
+  Project (#3)
+    Map (case when (#0{x} = 1) then 10 else 0 end)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# Mixed: CASE on different columns should not merge.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT
+  CASE
+    WHEN x = 1 THEN 10
+    WHEN z = 2 THEN 20
+    ELSE 0
+  END
+FROM t
+----
+Explained Query:
+  Project (#3)
+    Map (case when (#0{x} = 1) then 10 else case when (#2{z} = 2) then 20 else 0 end end)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# Searched CASE with an interrupting arm that compares a different column.
+# The first 3 arms compare x, then one compares z, then 3 more compare x.
+# The first group of 3 gets merged, the z arm stays as-is, and the trailing
+# group of 3 gets merged into a second case_literal in the else branch.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT
+  CASE
+    WHEN x = 1 THEN 'a'
+    WHEN x = 2 THEN 'b'
+    WHEN x = 3 THEN 'c'
+    WHEN z = 99 THEN 'z'
+    WHEN x = 4 THEN 'd'
+    WHEN x = 5 THEN 'e'
+    WHEN x = 6 THEN 'f'
+    ELSE 'other'
+  END
+FROM t
+----
+Explained Query:
+  Project (#3)
+    Map (case_lookup #0{x} when 1 then "a" when 2 then "b" when 3 then "c" else case when (#2{z} = 99) then "z" else case_lookup #0{x} when 4 then "d" when 5 then "e" when 6 then "f" else "other" end end end)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# Duplicate literal: first WHEN wins per SQL CASE semantics.
+# The entire chain should fold into a single case_lookup, with
+# the first arm's result (10) winning over the duplicate (99).
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT
+  CASE
+    WHEN x = 1 THEN 10
+    WHEN x = 1 THEN 99
+    WHEN x = 2 THEN 20
+    ELSE 0
+  END
+FROM t
+----
+Explained Query:
+  Project (#3)
+    Map (case_lookup #0{x} when 1 then 10 when 2 then 20 else 0 end)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+INSERT INTO t VALUES (1, 'dup', 0), (2, 'two', 0), (99, 'miss', 0), (NULL, 'null', 0)
+
+# Verify correctness: duplicate literal, first WHEN wins.
+query I
+SELECT
+  CASE
+    WHEN x = 1 THEN 10
+    WHEN x = 1 THEN 99
+    WHEN x = 2 THEN 20
+    ELSE 0
+  END
+FROM t WHERE y = 'dup'
+----
+10
+
+# Verify correctness: CASE with matching input.
+query I
+SELECT
+  CASE x
+    WHEN 1 THEN 10
+    WHEN 2 THEN 20
+    WHEN 3 THEN 30
+    ELSE 0
+  END
+FROM t WHERE y = 'two'
+----
+20
+
+# Verify correctness: CASE with no matching input.
+query I
+SELECT
+  CASE x
+    WHEN 1 THEN 10
+    WHEN 2 THEN 20
+    WHEN 3 THEN 30
+    ELSE 0
+  END
+FROM t WHERE y = 'miss'
+----
+0
+
+# Verify correctness: CASE with NULL input.
+query I
+SELECT
+  CASE x
+    WHEN 1 THEN 10
+    WHEN 2 THEN 20
+    WHEN 3 THEN 30
+    ELSE 0
+  END
+FROM t WHERE y = 'null'
+----
+0

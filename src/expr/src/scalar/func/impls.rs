@@ -10,6 +10,7 @@
 mod array;
 mod boolean;
 mod byte;
+mod case_literal;
 mod char;
 mod date;
 mod datum;
@@ -43,6 +44,7 @@ mod varchar;
 pub use crate::scalar::func::impls::array::*;
 pub use crate::scalar::func::impls::boolean::*;
 pub use crate::scalar::func::impls::byte::*;
+pub use crate::scalar::func::impls::case_literal::*;
 pub use crate::scalar::func::impls::char::*;
 pub use crate::scalar::func::impls::date::*;
 pub use crate::scalar::func::impls::datum::*;

@@ -66,6 +66,7 @@ pub use dataflow::optimize_dataflow;
 pub mod analysis;
 pub mod canonicalization;
 pub mod canonicalize_mfp;
+pub mod case_literal;
 pub mod collect_notices;
 pub mod column_knowledge;
 pub mod compound;
@@ -869,6 +870,10 @@ impl Optimizer {
             // Plans look nicer if we tidy MFPs again after ProjectionPushdown.
             Box::new(CanonicalizeMfp);
                 if ctx.features.enable_projection_pushdown_after_relation_cse,
+            // Rewrite If-chains matching a single expression against literals
+            // into a CaseLiteral lookup for O(log n) evaluation.
+            Box::new(case_literal::CaseLiteralTransform);
+                if ctx.features.enable_case_literal_transform,
             // Do a last run of constant folding. Importantly, this also runs `NormalizeLets`!
             // We need `NormalizeLets` at the end of the MIR pipeline for various reasons:
             // - The rendering expects some invariants about Let/LetRecs.
