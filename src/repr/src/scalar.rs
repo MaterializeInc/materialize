@@ -1933,6 +1933,23 @@ impl RustType<ProtoScalarType> for SqlScalarType {
     }
 }
 
+/// Trait for SQL container types whose element/value type can be extracted
+/// from or wrapped into a [`SqlScalarType`].
+///
+/// Implemented by [`DatumList`], [`Array`], [`DatumMap`], and [`Range`].
+/// The `#[sqlfunc]` proc macro emits calls to these associated functions so
+/// that Rust's type system resolves the correct unwrap/wrap behavior at compile
+/// time, instead of relying on string-matching type names in the AST.
+///
+/// The methods are deliberately associated functions (no `&self`) because they
+/// operate on [`SqlScalarType`] metadata, not on container values.
+pub trait SqlContainerType {
+    /// Extract the element type from a container scalar type.
+    fn unwrap_element_type(container: &SqlScalarType) -> &SqlScalarType;
+    /// Construct a container scalar type from an element type.
+    fn wrap_element_type(element: SqlScalarType) -> SqlScalarType;
+}
+
 /// Types that implement this trait can be stored in an SQL column with the specified SqlColumnType
 pub trait AsColumnType {
     /// The SQL column type of this Rust type
