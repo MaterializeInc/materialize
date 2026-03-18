@@ -62,13 +62,14 @@ pub use crate::relation::{
 pub use crate::row::encode::{RowColumnarDecoder, RowColumnarEncoder, preserves_order};
 pub use crate::row::iter::{IntoRowIterator, RowIterator};
 pub use crate::row::{
-    DatumList, DatumMap, ProtoNumeric, ProtoRow, Row, RowArena, RowPacker, RowRef, SharedRow,
-    datum_list_size, datum_size, datums_size, read_datum, row_size,
+    DatumDictTypedIter, DatumList, DatumListTypedIter, DatumMap, FromDatum, ProtoNumeric, ProtoRow,
+    Row, RowArena, RowPacker, RowRef, SharedRow, datum_list_size, datum_size, datums_size,
+    read_datum, row_size,
 };
 pub use crate::scalar::{
     ArrayRustType, AsColumnType, Datum, DatumKind, ExcludeNull, InputDatumType, Int2Vector,
     OptionalArg, OutputDatumType, PropArray, PropDatum, PropDict, PropList, ProtoScalarType,
-    ReprScalarBaseType, ReprScalarType, SqlScalarBaseType, SqlScalarType, Variadic, arb_datum,
-    arb_datum_for_column, arb_datum_for_scalar, arb_range_type,
+    ReprScalarBaseType, ReprScalarType, SqlContainerType, SqlScalarBaseType, SqlScalarType,
+    Variadic, arb_datum, arb_datum_for_column, arb_datum_for_scalar, arb_range_type,
 };
 pub use crate::timestamp::{Timestamp, TimestampManipulation};

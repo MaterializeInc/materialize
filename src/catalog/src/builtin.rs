@@ -6436,7 +6436,7 @@ pub static MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER: LazyLock<BuiltinView> =
                     element_type: Box::new(SqlScalarType::UInt64),
                     custom_id: None,
                 }
-                .nullable(true),
+                .nullable(false),
             )
             .with_column("to_operator_id", SqlScalarType::UInt64.nullable(true))
             .with_column(
@@ -6445,7 +6445,7 @@ pub static MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER: LazyLock<BuiltinView> =
                     element_type: Box::new(SqlScalarType::UInt64),
                     custom_id: None,
                 }
-                .nullable(true),
+                .nullable(false),
             )
             .with_column("type", SqlScalarType::String.nullable(false))
             .finish(),
@@ -6502,7 +6502,7 @@ pub static MZ_DATAFLOW_CHANNEL_OPERATORS: LazyLock<BuiltinView> = LazyLock::new(
                 element_type: Box::new(SqlScalarType::UInt64),
                 custom_id: None,
             }
-            .nullable(true),
+            .nullable(false),
         )
         .with_column("to_operator_id", SqlScalarType::UInt64.nullable(true))
         .with_column(
@@ -6511,7 +6511,7 @@ pub static MZ_DATAFLOW_CHANNEL_OPERATORS: LazyLock<BuiltinView> = LazyLock::new(
                 element_type: Box::new(SqlScalarType::UInt64),
                 custom_id: None,
             }
-            .nullable(true),
+            .nullable(false),
         )
         .with_column("type", SqlScalarType::String.nullable(false))
         .finish(),

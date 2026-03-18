@@ -225,4 +225,60 @@ mod test {
         let (output, input) = super::test_sqlfunc(attr, item);
         insta::assert_snapshot!("variadic_modifiers", output, &input);
     }
+
+    #[cfg_attr(miri, ignore)]
+    #[mz_ore::test]
+    fn insta_test_unary_generic_range() {
+        let attr = quote! {
+            sqlname = "rangelower",
+            is_monotone = true,
+        };
+        let item = quote! {
+            fn range_lower<'a, T>(a: Range<T>) -> Option<T> {
+                a.inner.map(|inner| inner.lower.bound).flatten()
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("unary_generic_range", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[mz_ore::test]
+    fn insta_test_binary_generic_list() {
+        let attr = quote! {
+            is_infix_op = true,
+            sqlname = "||",
+            propagates_nulls = false,
+            introduces_nulls = false,
+        };
+        let item = quote! {
+            fn list_list_concat<'a, T>(
+                a: Option<DatumList<'a, T>>,
+                b: Option<DatumList<'a, T>>,
+                temp_storage: &'a RowArena,
+            ) -> Option<DatumList<'a, T>> {
+                unimplemented!()
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("binary_generic_list", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[mz_ore::test]
+    fn insta_test_binary_multi_generic() {
+        let attr = quote! {
+            sqlname = "multi_generic",
+        };
+        let item = quote! {
+            fn multi_generic<'a, A, B>(
+                a: DatumList<'a, A>,
+                b: DatumList<'a, B>,
+            ) -> Option<B> {
+                unimplemented!()
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("binary_multi_generic", output, &input);
+    }
 }

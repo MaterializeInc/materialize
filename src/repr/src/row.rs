@@ -13,6 +13,7 @@ use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug};
 use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
 use std::mem::{size_of, transmute};
 use std::ops::Deref;
 use std::str;
@@ -42,7 +43,7 @@ use crate::adt::range::{
     self, InvalidRangeError, Range, RangeBound, RangeInner, RangeLowerBound, RangeUpperBound,
 };
 use crate::adt::timestamp::CheckedTimestamp;
-use crate::scalar::{DatumKind, arb_datum};
+use crate::scalar::{DatumKind, SqlScalarType, arb_datum};
 use crate::{Datum, RelationDesc, Timestamp};
 
 pub(crate) mod encode;
@@ -747,15 +748,57 @@ pub struct RowPacker<'a> {
     row: &'a mut Row,
 }
 
+/// Infallible conversion from a [`Datum`] to a typed value.
+///
+/// Used by [`DatumList::typed_iter`] to yield elements as `T` rather than
+/// raw `Datum`s. At runtime, `T` is always `Datum<'a>`, so the conversion
+/// is identity.
+///
+/// See `doc/developer/design/20260311_sqlfunc_generic.md` for the design
+/// behind the generic type parameter and type erasure.
+///
+/// This trait is sealed and cannot be implemented outside of this crate.
+pub trait FromDatum<'a>:
+    Sized + PartialEq + std::borrow::Borrow<Datum<'a>> + sealed::Sealed
+{
+    fn from_datum(datum: Datum<'a>) -> Self;
+}
+
+mod sealed {
+    use crate::Datum;
+
+    pub trait Sealed {}
+    impl<'a> Sealed for Datum<'a> {}
+}
+
+impl<'a> FromDatum<'a> for Datum<'a> {
+    #[inline]
+    fn from_datum(datum: Datum<'a>) -> Self {
+        datum
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DatumListIter<'a> {
     data: &'a [u8],
 }
 
 #[derive(Debug, Clone)]
+pub struct DatumListTypedIter<'a, T> {
+    inner: DatumListIter<'a>,
+    _phantom: PhantomData<fn() -> T>,
+}
+
+#[derive(Debug, Clone)]
 pub struct DatumDictIter<'a> {
     data: &'a [u8],
     prev_key: Option<&'a str>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DatumDictTypedIter<'a, T> {
+    inner: DatumDictIter<'a>,
+    _phantom: PhantomData<fn() -> T>,
 }
 
 /// `RowArena` is used to hold on to temporary `Row`s for functions like `eval` that need to create complex `Datum`s but don't have a `Row` to put them in yet.
@@ -773,28 +816,57 @@ pub struct RowArena {
 // DatumList and DatumDict defined here rather than near Datum because we need private access to the unsafe data field
 
 /// A sequence of Datums
-#[derive(Clone, Copy)]
-pub struct DatumList<'a> {
+///
+/// The type parameter `T` represents the element type of the list. It is a
+/// phantom parameter that carries no runtime data — the actual elements are
+/// stored as serialized bytes and `T` is not enforced at runtime. It is up
+/// to the caller to ensure `T` matches the actual element type. The default
+/// `T = Datum<'a>` means existing code that writes `DatumList<'a>` continues
+/// to work unchanged.
+///
+/// See `doc/developer/design/20260311_sqlfunc_generic.md` for the design
+/// behind the generic type parameter.
+pub struct DatumList<'a, T = Datum<'a>> {
     /// Points at the serialized datums
     data: &'a [u8],
+    _phantom: PhantomData<fn() -> T>,
 }
 
-impl<'a> Debug for DatumList<'a> {
+impl<'a, T> DatumList<'a, T> {
+    /// Private constructor. All `DatumList` values should be created through
+    /// this function to keep the `PhantomData` bookkeeping in one place.
+    pub(crate) fn new(data: &'a [u8]) -> Self {
+        DatumList {
+            data,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<'a, T> Clone for DatumList<'a, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'a, T> Copy for DatumList<'a, T> {}
+
+impl<'a, T> Debug for DatumList<'a, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list().entries(self.iter()).finish()
     }
 }
 
-impl<'a> PartialEq for DatumList<'a> {
+impl<'a, T> PartialEq for DatumList<'a, T> {
     #[inline(always)]
-    fn eq(&self, other: &DatumList<'a>) -> bool {
+    fn eq(&self, other: &DatumList<'a, T>) -> bool {
         self.iter().eq(other.iter())
     }
 }
 
-impl<'a> Eq for DatumList<'a> {}
+impl<'a, T> Eq for DatumList<'a, T> {}
 
-impl<'a> Hash for DatumList<'a> {
+impl<'a, T> Hash for DatumList<'a, T> {
     #[inline(always)]
     fn hash<H: Hasher>(&self, state: &mut H) {
         for d in self.iter() {
@@ -803,37 +875,65 @@ impl<'a> Hash for DatumList<'a> {
     }
 }
 
-impl Ord for DatumList<'_> {
+impl<T> Ord for DatumList<'_, T> {
     #[inline(always)]
-    fn cmp(&self, other: &DatumList) -> Ordering {
+    fn cmp(&self, other: &DatumList<'_, T>) -> Ordering {
         self.iter().cmp(other.iter())
     }
 }
 
-impl PartialOrd for DatumList<'_> {
+impl<T> PartialOrd for DatumList<'_, T> {
     #[inline(always)]
-    fn partial_cmp(&self, other: &DatumList) -> Option<Ordering> {
+    fn partial_cmp(&self, other: &DatumList<'_, T>) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 /// A mapping from string keys to Datums
-#[derive(Clone, Copy)]
-pub struct DatumMap<'a> {
+///
+/// The type parameter `T` represents the value type of the map. It is a
+/// phantom parameter — the actual values are stored as serialized bytes and
+/// `T` is not enforced at runtime. It is up to the caller to ensure `T`
+/// matches the actual value type. The default `T = Datum<'a>` means existing
+/// code that writes `DatumMap<'a>` continues to work unchanged.
+///
+/// See `doc/developer/design/20260311_sqlfunc_generic.md` for the design
+/// behind the generic type parameter.
+pub struct DatumMap<'a, T = Datum<'a>> {
     /// Points at the serialized datums, which should be sorted in key order
     data: &'a [u8],
+    _phantom: PhantomData<fn() -> T>,
 }
 
-impl<'a> PartialEq for DatumMap<'a> {
+impl<'a, T> DatumMap<'a, T> {
+    /// Private constructor. All `DatumMap` values should be created through
+    /// this function to keep the `PhantomData` bookkeeping in one place.
+    pub(crate) fn new(data: &'a [u8]) -> Self {
+        DatumMap {
+            data,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<'a, T> Clone for DatumMap<'a, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'a, T> Copy for DatumMap<'a, T> {}
+
+impl<'a, T> PartialEq for DatumMap<'a, T> {
     #[inline(always)]
-    fn eq(&self, other: &DatumMap<'a>) -> bool {
+    fn eq(&self, other: &DatumMap<'a, T>) -> bool {
         self.iter().eq(other.iter())
     }
 }
 
-impl<'a> Eq for DatumMap<'a> {}
+impl<'a, T> Eq for DatumMap<'a, T> {}
 
-impl<'a> Hash for DatumMap<'a> {
+impl<'a, T> Hash for DatumMap<'a, T> {
     #[inline(always)]
     fn hash<H: Hasher>(&self, state: &mut H) {
         for (k, v) in self.iter() {
@@ -843,17 +943,41 @@ impl<'a> Hash for DatumMap<'a> {
     }
 }
 
-impl<'a> Ord for DatumMap<'a> {
+impl<'a, T> Ord for DatumMap<'a, T> {
     #[inline(always)]
-    fn cmp(&self, other: &DatumMap<'a>) -> Ordering {
+    fn cmp(&self, other: &DatumMap<'a, T>) -> Ordering {
         self.iter().cmp(other.iter())
     }
 }
 
-impl<'a> PartialOrd for DatumMap<'a> {
+impl<'a, T> PartialOrd for DatumMap<'a, T> {
     #[inline(always)]
-    fn partial_cmp(&self, other: &DatumMap<'a>) -> Option<Ordering> {
+    fn partial_cmp(&self, other: &DatumMap<'a, T>) -> Option<Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+impl<'a> crate::scalar::SqlContainerType for DatumList<'a, Datum<'a>> {
+    fn unwrap_element_type(container: &SqlScalarType) -> &SqlScalarType {
+        container.unwrap_list_element_type()
+    }
+    fn wrap_element_type(element: SqlScalarType) -> SqlScalarType {
+        SqlScalarType::List {
+            element_type: Box::new(element),
+            custom_id: None,
+        }
+    }
+}
+
+impl<'a> crate::scalar::SqlContainerType for DatumMap<'a, Datum<'a>> {
+    fn unwrap_element_type(container: &SqlScalarType) -> &SqlScalarType {
+        container.unwrap_map_value_type()
+    }
+    fn wrap_element_type(element: SqlScalarType) -> SqlScalarType {
+        SqlScalarType::Map {
+            value_type: Box::new(element),
+            custom_id: None,
+        }
     }
 }
 
@@ -1115,7 +1239,7 @@ unsafe fn read_lengthed_datum<'a>(data: &mut &'a [u8], tag: Tag) -> Datum<'a> {
             Datum::String(str::from_utf8_unchecked(bytes))
         }
         Tag::ListTiny | Tag::ListShort | Tag::ListLong | Tag::ListHuge => {
-            Datum::List(DatumList { data: bytes })
+            Datum::List(DatumList::new(bytes))
         }
         _ => unreachable!(),
     }
@@ -1449,12 +1573,12 @@ pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
             let bytes = read_untagged_bytes(data);
             Datum::Array(Array {
                 dims: ArrayDimensions { data: dims },
-                elements: DatumList { data: bytes },
+                elements: DatumList::new(bytes),
             })
         }
         Tag::Dict => {
             let bytes = read_untagged_bytes(data);
-            Datum::Map(DatumMap { data: bytes })
+            Datum::Map(DatumMap::new(bytes))
         }
         Tag::JsonNull => Datum::JsonNull,
         Tag::Dummy => Datum::Dummy,
@@ -2745,18 +2869,35 @@ impl fmt::Display for Row {
     }
 }
 
-impl<'a> DatumList<'a> {
-    pub fn empty() -> DatumList<'static> {
-        DatumList { data: &[] }
-    }
-
+impl<'a, T> DatumList<'a, T> {
     pub fn iter(&self) -> DatumListIter<'a> {
         DatumListIter { data: self.data }
+    }
+
+    /// Iterate elements as typed `T` values rather than raw `Datum`s.
+    ///
+    /// Each datum is decoded and converted via [`FromDatum`]. Since generic
+    /// type parameters in `#[sqlfunc]` are erased to `Datum<'a>` before code
+    /// generation, this is monomorphized to an identity conversion at runtime.
+    pub fn typed_iter(&self) -> DatumListTypedIter<'a, T>
+    where
+        T: FromDatum<'a>,
+    {
+        DatumListTypedIter {
+            inner: self.iter(),
+            _phantom: PhantomData,
+        }
     }
 
     /// For debugging only
     pub fn data(&self) -> &'a [u8] {
         self.data
+    }
+}
+
+impl<T> DatumList<'static, T> {
+    pub fn empty() -> Self {
+        DatumList::new(&[])
     }
 }
 
@@ -2779,15 +2920,33 @@ impl<'a> Iterator for DatumListIter<'a> {
     }
 }
 
-impl<'a> DatumMap<'a> {
-    pub fn empty() -> DatumMap<'static> {
-        DatumMap { data: &[] }
+impl<'a, T: FromDatum<'a>> Iterator for DatumListTypedIter<'a, T> {
+    type Item = T;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(T::from_datum)
     }
+}
 
+impl<'a, T> DatumMap<'a, T> {
     pub fn iter(&self) -> DatumDictIter<'a> {
         DatumDictIter {
             data: self.data,
             prev_key: None,
+        }
+    }
+
+    /// Iterate entries as `(&str, T)` pairs rather than `(&str, Datum)`.
+    ///
+    /// Each value datum is converted via [`FromDatum`]. Since generic type
+    /// parameters in `#[sqlfunc]` are erased to `Datum<'a>` before code
+    /// generation, this is monomorphized to an identity conversion at runtime.
+    pub fn typed_iter(&self) -> DatumDictTypedIter<'a, T>
+    where
+        T: FromDatum<'a>,
+    {
+        DatumDictTypedIter {
+            inner: self.iter(),
+            _phantom: PhantomData,
         }
     }
 
@@ -2797,7 +2956,13 @@ impl<'a> DatumMap<'a> {
     }
 }
 
-impl<'a> Debug for DatumMap<'a> {
+impl<T> DatumMap<'static, T> {
+    pub fn empty() -> Self {
+        DatumMap::new(&[])
+    }
+}
+
+impl<'a, T> Debug for DatumMap<'a, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_map().entries(self.iter()).finish()
     }
@@ -2845,6 +3010,13 @@ impl<'a> Iterator for DatumDictIter<'a> {
 
             Some((key, val))
         }
+    }
+}
+
+impl<'a, T: FromDatum<'a>> Iterator for DatumDictTypedIter<'a, T> {
+    type Item = (&'a str, T);
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(k, v)| (k, T::from_datum(v)))
     }
 }
 
@@ -2958,6 +3130,26 @@ impl RowArena {
         let mut row = Row::default();
         f(&mut row.packer());
         self.push_unary_row(row)
+    }
+
+    /// Convenience function to build a list datum from an iterator of typed
+    /// elements and return it as a `DatumList<'a, T>`.
+    ///
+    /// By accepting an iterator of `T: Borrow<Datum>` instead of a raw
+    /// `RowPacker` closure, this guarantees that only elements of type `T`
+    /// are pushed.
+    pub fn make_datum_list<'a, T: std::borrow::Borrow<Datum<'a>>>(
+        &'a self,
+        iter: impl IntoIterator<Item = T>,
+    ) -> DatumList<'a, T> {
+        let datum = self.make_datum(|packer| {
+            packer.push_list_with(|packer| {
+                for elem in iter {
+                    packer.push(*elem.borrow());
+                }
+            });
+        });
+        DatumList::new(datum.unwrap_list().data())
     }
 
     /// Convenience function identical to `make_datum` but instead returns a
