@@ -2649,13 +2649,17 @@ impl<'a, E> OutputDatumType<'a, E> for String {
     }
 }
 
-impl AsColumnType for ArrayRustType<String> {
+impl<T: AsColumnType> AsColumnType for ArrayRustType<T> {
     fn as_column_type() -> SqlColumnType {
-        SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)
+        let inner = T::as_column_type();
+        SqlScalarType::Array(Box::new(inner.scalar_type)).nullable(false)
     }
 }
 
-impl<'a, E> InputDatumType<'a, E> for ArrayRustType<String> {
+impl<'a, T, E> InputDatumType<'a, E> for ArrayRustType<T>
+where
+    T: InputDatumType<'a, E>,
+{
     fn nullable() -> bool {
         false
     }
@@ -2665,15 +2669,18 @@ impl<'a, E> InputDatumType<'a, E> for ArrayRustType<String> {
             Ok(Datum::Array(arr)) => Ok(ArrayRustType(
                 arr.elements()
                     .into_iter()
-                    .map(|d| d.unwrap_str().to_string())
-                    .collect(),
+                    .map(|d| T::try_from_result(Ok(d)))
+                    .collect::<Result<_, _>>()?,
             )),
             _ => Err(res),
         }
     }
 }
 
-impl<'a, E> OutputDatumType<'a, E> for ArrayRustType<String> {
+impl<'a, T, E> OutputDatumType<'a, E> for ArrayRustType<T>
+where
+    T: OutputDatumType<'a, E>,
+{
     fn nullable() -> bool {
         false
     }
@@ -2683,65 +2690,19 @@ impl<'a, E> OutputDatumType<'a, E> for ArrayRustType<String> {
     }
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(temp_storage.make_datum(|packer| {
+        let dimensions = ArrayDimension {
+            lower_bound: 1,
+            length: self.0.len(),
+        };
+        let iter = self
+            .0
+            .into_iter()
+            .map(|elem| elem.into_result(temp_storage));
+        temp_storage.try_make_datum(|packer| {
             packer
-                .try_push_array(
-                    &[ArrayDimension {
-                        lower_bound: 1,
-                        length: self.0.len(),
-                    }],
-                    self.0.iter().map(|elem| Datum::String(elem.as_str())),
-                )
-                .expect("self is 1 dimensional, and its length is used for the array length");
-        }))
-    }
-}
-
-impl AsColumnType for ArrayRustType<Cow<'_, str>> {
-    fn as_column_type() -> SqlColumnType {
-        SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)
-    }
-}
-
-impl<'a, E> InputDatumType<'a, E> for ArrayRustType<Cow<'a, str>> {
-    fn nullable() -> bool {
-        false
-    }
-
-    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
-        match res {
-            Ok(Datum::Array(arr)) => Ok(ArrayRustType(
-                arr.elements()
-                    .into_iter()
-                    .map(|d| Cow::Borrowed(d.unwrap_str()))
-                    .collect(),
-            )),
-            _ => Err(res),
-        }
-    }
-}
-
-impl<'a, E> OutputDatumType<'a, E> for ArrayRustType<Cow<'a, str>> {
-    fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
-        false
-    }
-
-    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(temp_storage.make_datum(|packer| {
-            packer
-                .try_push_array(
-                    &[ArrayDimension {
-                        lower_bound: 1,
-                        length: self.0.len(),
-                    }],
-                    self.0.iter().map(|elem| Datum::String(elem.as_ref())),
-                )
-                .expect("self is 1 dimensional, and its length is used for the array length");
-        }))
+                .try_push_array_fallible(&[dimensions], iter)
+                .expect("self is 1 dimensional, and its length is used for the array length")
+        })
     }
 }
 
