@@ -41,25 +41,6 @@ fn append_lgalloc_heap_profile(profile: &mut StackProfile) {
     }
 }
 
-/// Returns the current lgalloc heap profile in pprof format.
-///
-/// Unlike jemalloc heap profiling which uses sampling, this captures every lgalloc
-/// allocation (which are large, infrequent region-level allocations) with full
-/// stack traces.
-#[allow(clippy::unused_async)]
-async fn handle_get_heap_lgalloc() -> impl IntoResponse {
-    use mappings::MAPPINGS;
-
-    let mut profile = StackProfile::default();
-    append_lgalloc_heap_profile(&mut profile);
-    if let Some(mappings) = MAPPINGS.as_deref() {
-        for mapping in mappings {
-            profile.push_mapping(mapping.clone());
-        }
-    }
-    profile.to_pprof(("inuse_space", "bytes"), ("space", "bytes"), None)
-}
-
 static EXECUTABLE: LazyLock<String> = LazyLock::new(|| {
     {
         env::current_exe()
@@ -90,7 +71,6 @@ pub fn router(build_info: &'static BuildInfo) -> Router {
             routing::post(move |form| handle_post(form, build_info)),
         )
         .route("/heap", routing::get(handle_get_heap))
-        .route("/heap/lgalloc", routing::get(handle_get_heap_lgalloc))
         .route("/static/{*path}", routing::get(handle_static))
 }
 
