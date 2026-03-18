@@ -551,6 +551,7 @@ class KafkaSink(Object):
 
 class IcebergSink(Object):
     can_refer: bool = False
+    _mode: str = "UPSERT"
 
     def __init__(self, name: str, references: Object | None, rng: random.Random):
         super().__init__(name, references, rng)
@@ -579,7 +580,7 @@ class IcebergSink(Object):
               FROM {self.references_str}
               INTO ICEBERG CATALOG CONNECTION polaris_conn (NAMESPACE 'default_namespace', TABLE '{table}')
               USING AWS CONNECTION aws_conn
-              MODE UPSERT WITH (COMMIT INTERVAL '1s')"""))
+              MODE {self._mode} WITH (COMMIT INTERVAL '1s')"""))
         return "\n".join(cmds)
 
     def destroy(self) -> str:
@@ -608,6 +609,10 @@ class IcebergSink(Object):
 
     def verify(self) -> str:
         raise NotImplementedError
+
+
+class IcebergAppendSink(IcebergSink):
+    _mode: str = "APPEND"
 
 
 class View(Object):
