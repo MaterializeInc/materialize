@@ -7,10 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apach
 
-//! Console Impersonation HTTP endpoint.
+//! HTTP endpoints for the web console.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use axum::Extension;
 use axum::Json;
@@ -53,6 +53,15 @@ impl ConsoleProxyConfig {
     }
 }
 
+/// OIDC configuration values needed by the Console to initiate OIDC login.
+static CONSOLE_CONFIG_VAR_NAMES: LazyLock<[&'static str; 3]> = LazyLock::new(|| {
+    [
+        OIDC_ISSUER.name(),
+        CONSOLE_OIDC_CLIENT_ID.name(),
+        CONSOLE_OIDC_SCOPES.name(),
+    ]
+});
+
 /// Returns system variable values the web console needs from
 /// environmentd. This endpoint requires no authentication.
 pub async fn handle_console_config(
@@ -66,20 +75,12 @@ pub async fn handle_console_config(
     })?;
 
     let system_vars = adapter_client.get_system_vars().await;
-
-    let var_names = [
-        // OIDC configuration values needed by the Console to initiate OIDC
-        // login.
-        OIDC_ISSUER.name(),
-        CONSOLE_OIDC_CLIENT_ID.name(),
-        CONSOLE_OIDC_SCOPES.name(),
-    ];
     let mut config: BTreeMap<&str, String> = BTreeMap::new();
-    for var_name in var_names {
+    for var_name in CONSOLE_CONFIG_VAR_NAMES.iter() {
         let value = system_vars.get(var_name).map(|v| v.value()).map_err(|_| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Unable to get system var {var_name}"),
+                format!("failed to retrieve system variable {var_name}"),
             )
         })?;
         config.insert(var_name, value);

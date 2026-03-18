@@ -464,7 +464,8 @@ impl HttpServer {
                     "/api/console/config",
                     routing::get(console::handle_console_config),
                 )
-                .layer(Extension(adapter_client_rx.clone()));
+                .layer(Extension(adapter_client_rx.clone()))
+                .layer(Extension(active_connection_counter.clone()));
             router = router.merge(console_config_router);
         }
 

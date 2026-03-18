@@ -39,7 +39,7 @@
         "internal": true,
         "metrics": true,
         "profiling": true,
-        "console_config": true
+        "console_config": false
       }
     }
   }

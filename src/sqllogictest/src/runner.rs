@@ -1130,7 +1130,7 @@ impl<'a> RunnerInner<'a> {
                         profiling: true,
                         mcp_agents: false,
                         mcp_observatory: false,
-                        console_config: true,
+                        console_config: false,
                     },
                 },
             ],

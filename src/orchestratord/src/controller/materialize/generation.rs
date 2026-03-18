@@ -1360,7 +1360,7 @@ fn create_connection_info(
                     profiling: true,
                     mcp_agents: false,
                     mcp_observatory: false,
-                    console_config: true,
+                    console_config: false,
                 }
             },
         },

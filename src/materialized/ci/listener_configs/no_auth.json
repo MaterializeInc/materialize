@@ -43,7 +43,7 @@
         "profiling": true,
         "mcp_agents": true,
         "mcp_observatory": true,
-        "console_config": true
+        "console_config": false
       }
     }
   }
