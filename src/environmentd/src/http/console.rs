@@ -7,11 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apach
 
-//! Console Impersonation HTTP endpoint.
+//! HTTP endpoints for the web console.
 
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::{Arc, LazyLock};
 
 use axum::Extension;
+use axum::Json;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -22,6 +24,9 @@ use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
+use mz_adapter_types::dyncfgs::{CONSOLE_OIDC_CLIENT_ID, CONSOLE_OIDC_SCOPES, OIDC_ISSUER};
+
+use crate::http::Delayed;
 
 pub(crate) struct ConsoleProxyConfig {
     /// Hyper http client, supports https.
@@ -46,6 +51,42 @@ impl ConsoleProxyConfig {
             route_prefix,
         }
     }
+}
+
+/// OIDC configuration values needed by the Console to initiate OIDC login.
+static CONSOLE_CONFIG_VAR_NAMES: LazyLock<[&'static str; 3]> = LazyLock::new(|| {
+    [
+        OIDC_ISSUER.name(),
+        CONSOLE_OIDC_CLIENT_ID.name(),
+        CONSOLE_OIDC_SCOPES.name(),
+    ]
+});
+
+/// Returns system variable values the web console needs from
+/// environmentd. This endpoint requires no authentication.
+pub async fn handle_console_config(
+    Extension(adapter_client_rx): Extension<Delayed<mz_adapter::Client>>,
+) -> Result<Response, (StatusCode, String)> {
+    let adapter_client = adapter_client_rx.await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Adapter client unavailable".to_string(),
+        )
+    })?;
+
+    let system_vars = adapter_client.get_system_vars().await;
+    let mut config: BTreeMap<&str, String> = BTreeMap::new();
+    for var_name in CONSOLE_CONFIG_VAR_NAMES.iter() {
+        let value = system_vars.get(var_name).map(|v| v.value()).map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to retrieve system variable {var_name}"),
+            )
+        })?;
+        config.insert(var_name, value);
+    }
+
+    Ok((StatusCode::OK, Json(config)).into_response())
 }
 
 /// The User Impersonation feature uses a Teleport proxy in front of the

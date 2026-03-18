@@ -1993,6 +1993,45 @@ fn test_max_statement_batch_size() {
 }
 
 #[mz_ore::test]
+fn test_console_config_endpoint() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let http_url = Url::parse(&format!(
+        "http://{}/api/console/config",
+        server.http_local_addr()
+    ))
+    .unwrap();
+
+    let res = Client::new().get(http_url.clone()).send().unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Response should be the default values.
+    let body: serde_json::Value = res.json().unwrap();
+    assert_eq!(body["oidc_issuer"], "");
+    assert_eq!(body["console_oidc_client_id"], "");
+    assert_eq!(body["console_oidc_scopes"], "");
+
+    // Setting the dyncfg via the internal SQL port should be reflected.
+    let mut internal_client = server.connect_internal(postgres::NoTls).unwrap();
+    internal_client
+        .batch_execute("ALTER SYSTEM SET oidc_issuer = 'https://my-issuer.com'")
+        .unwrap();
+    internal_client
+        .batch_execute("ALTER SYSTEM SET console_oidc_client_id = 'my-client-id'")
+        .unwrap();
+    internal_client
+        .batch_execute("ALTER SYSTEM SET console_oidc_scopes = 'openid email'")
+        .unwrap();
+
+    let res = Client::new().get(http_url).send().unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let body: serde_json::Value = res.json().unwrap();
+    assert_eq!(body["oidc_issuer"], "https://my-issuer.com");
+    assert_eq!(body["console_oidc_client_id"], "my-client-id");
+    assert_eq!(body["console_oidc_scopes"], "openid email");
+}
+
+#[mz_ore::test]
 fn test_mz_system_user_admin() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server
