@@ -24,7 +24,7 @@ Constant // { types: "(bigint, smallint)" }
   - (1, 2)
   - (1, 3)
 ----
-Constant // { types: "(rint64, rint16)" }
+Constant // { types: "(r_int64, r_int16)" }
   - (1, 2)
   - (1, 3)
 
@@ -32,7 +32,7 @@ Constant // { types: "(rint64, rint16)" }
 explain with=types
 Get t0
 ----
-Get t0 // { types: "(rint64, rint16)" }
+Get t0 // { types: "(r_int64, r_int16)" }
 
 # Local Get in a Let block
 explain with=types
@@ -44,9 +44,9 @@ With
 ----
 With
   cte l0 =
-    Get t0 // { types: "(rint64, rint16)" }
-Return // { types: "(rint64, rint16)" }
-  Get l0 // { types: "(rint64, rint16)" }
+    Get t0 // { types: "(r_int64, r_int16)" }
+Return // { types: "(r_int64, r_int16)" }
+  Get l0 // { types: "(r_int64, r_int16)" }
 
 # Local Get in a LetRec block
 explain with=types
@@ -58,81 +58,81 @@ With Mutually Recursive
 ----
 With Mutually Recursive
   cte l0 =
-    Get t0 // { types: "(rint64, rint16)" }
-Return // { types: "(rint64, rint16)" }
-  Get l0 // { types: "(rint64, rint16)" }
+    Get t0 // { types: "(r_int64, r_int16)" }
+Return // { types: "(r_int64, r_int16)" }
+  Get l0 // { types: "(r_int64, r_int16)" }
 
 # Project
 explain with=types
 Project (#1, #0, #1)
   Get t0
 ----
-Project (#1, #0, #1) // { types: "(rint16, rint64, rint16)" }
-  Get t0 // { types: "(rint64, rint16)" }
+Project (#1, #0, #1) // { types: "(r_int16, r_int64, r_int16)" }
+  Get t0 // { types: "(r_int64, r_int16)" }
 
 # Map
 explain with=types
 Map (#1, #0 + #1, #0)
   Get t0
 ----
-Map (#1, (#0 + #1), #0) // { types: "(rint64, rint16, rint16, rint64, rint64)" }
-  Get t0 // { types: "(rint64, rint16)" }
+Map (#1, (#0 + #1), #0) // { types: "(r_int64, r_int16, r_int16, r_int64, r_int64)" }
+  Get t0 // { types: "(r_int64, r_int16)" }
 
 # FlatMap
 explain with=types
 FlatMap generate_series(#0, #1, 1)
   Get t0
 ----
-FlatMap generate_series(#0, #1, 1) // { types: "(rint64, rint16, rint64)" }
-  Get t0 // { types: "(rint64, rint16)" }
+FlatMap generate_series(#0, #1, 1) // { types: "(r_int64, r_int16, r_int64)" }
+  Get t0 // { types: "(r_int64, r_int16)" }
 
 # Filter
 explain with=types
 Filter (#0 > #1 + 42)
   Get t0
 ----
-Filter (#0 > (#1 + 42)) // { types: "(rint64, rint16)" }
-  Get t0 // { types: "(rint64, rint16)" }
+Filter (#0 > (#1 + 42)) // { types: "(r_int64, r_int16)" }
+  Get t0 // { types: "(r_int64, r_int16)" }
 
 # Reduce
 explain with=types
 Reduce group_by=[#0] aggregates=[min(#1), max(#1)]
   Get t0
 ----
-Reduce group_by=[#0] aggregates=[min(#1), max(#1)] // { types: "(rint64, rint16, rint16)" }
-  Get t0 // { types: "(rint64, rint16)" }
+Reduce group_by=[#0] aggregates=[min(#1), max(#1)] // { types: "(r_int64, r_int16, r_int16)" }
+  Get t0 // { types: "(r_int64, r_int16)" }
 
 # TopK
 explain with=types
 TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=3
   Get t0
 ----
-TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=3 // { types: "(rint64, rint16)" }
-  Get t0 // { types: "(rint64, rint16)" }
+TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=3 // { types: "(r_int64, r_int16)" }
+  Get t0 // { types: "(r_int64, r_int16)" }
 
 # Negate
 explain with=types
 Negate
   Get t0
 ----
-Negate // { types: "(rint64, rint16)" }
-  Get t0 // { types: "(rint64, rint16)" }
+Negate // { types: "(r_int64, r_int16)" }
+  Get t0 // { types: "(r_int64, r_int16)" }
 
 # Threshold
 explain with=types
 Threshold
   Get t0
 ----
-Threshold // { types: "(rint64, rint16)" }
-  Get t0 // { types: "(rint64, rint16)" }
+Threshold // { types: "(r_int64, r_int16)" }
+  Get t0 // { types: "(r_int64, r_int16)" }
 
 # ArrangeBy
 explain with=types
 ArrangeBy keys=[[#1], [#0, #1]]
   Get t0
 ----
-ArrangeBy keys=[[#1], [#0, #1]] // { types: "(rint64, rint16)" }
-  Get t0 // { types: "(rint64, rint16)" }
+ArrangeBy keys=[[#1], [#0, #1]] // { types: "(r_int64, r_int16)" }
+  Get t0 // { types: "(r_int64, r_int16)" }
 
 # Union (anonymous last)
 explain with=types
@@ -140,9 +140,9 @@ Union
   Get t0
   Constant <empty> // { types: "(bigint, smallint)" }
 ----
-Union // { types: "(rint64, rint16)" }
-  Get t0 // { types: "(rint64, rint16)" }
-  Constant <empty> // { types: "(rint64, rint16)" }
+Union // { types: "(r_int64, r_int16)" }
+  Get t0 // { types: "(r_int64, r_int16)" }
+  Constant <empty> // { types: "(r_int64, r_int16)" }
 
 # Union (anonymous first)
 explain with=types
@@ -150,9 +150,9 @@ Union
   Constant <empty> // { types: "(bigint, smallint)" }
   Get t0
 ----
-Union // { types: "(rint64, rint16)" }
-  Constant <empty> // { types: "(rint64, rint16)" }
-  Get t0 // { types: "(rint64, rint16)" }
+Union // { types: "(r_int64, r_int16)" }
+  Constant <empty> // { types: "(r_int64, r_int16)" }
+  Get t0 // { types: "(r_int64, r_int16)" }
 
 # Join
 explain with=types
@@ -160,6 +160,6 @@ Join on=(#1 = #2)
   Get t0
   Get t0
 ----
-Join on=(#1 = #2) // { types: "(rint64, rint16, rint64, rint16)" }
-  Get t0 // { types: "(rint64, rint16)" }
-  Get t0 // { types: "(rint64, rint16)" }
+Join on=(#1 = #2) // { types: "(r_int64, r_int16, r_int64, r_int16)" }
+  Get t0 // { types: "(r_int64, r_int16)" }
+  Get t0 // { types: "(r_int64, r_int16)" }

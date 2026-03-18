@@ -876,39 +876,39 @@ EXPLAIN DECORRELATED PLAN WITH(arity, types) FOR SELECT CASE (SELECT 1) WHEN 1 T
 ----
 With
   cte l0 =
-    Project (#0) // { arity: 1, types: "(rint32)" }
-      Map (1) // { arity: 1, types: "(rint32)" }
+    Project (#0) // { arity: 1, types: "(r_int32)" }
+      Map (1) // { arity: 1, types: "(r_int32)" }
         Constant // { arity: 0, types: "()" }
           - ()
   cte l1 =
-    Union // { arity: 1, types: "(rint32)" }
-      Get l0 // { arity: 1, types: "(rint32)" }
-      Project (#1) // { arity: 1, types: "(rint32)" }
-        FlatMap guard_subquery_size(#0) // { arity: 2, types: "(rint64, rint32)" }
-          Reduce aggregates=[count(*)] // { arity: 1, types: "(rint64)" }
-            Get l0 // { arity: 1, types: "(rint32)" }
-Return // { arity: 2, types: "(rint32, rstring)" }
-  Project (#1, #2) // { arity: 2, types: "(rint32, rstring)" }
-    Map (case when (#0 = 1) then 0 else 2 end, "TEXT") // { arity: 3, types: "(rint32?, rint32, rstring)" }
-      Project (#0) // { arity: 1, types: "(rint32?)" }
-        CrossJoin // { arity: 1, types: "(rint32?)" }
+    Union // { arity: 1, types: "(r_int32)" }
+      Get l0 // { arity: 1, types: "(r_int32)" }
+      Project (#1) // { arity: 1, types: "(r_int32)" }
+        FlatMap guard_subquery_size(#0) // { arity: 2, types: "(r_int64, r_int32)" }
+          Reduce aggregates=[count(*)] // { arity: 1, types: "(r_int64)" }
+            Get l0 // { arity: 1, types: "(r_int32)" }
+Return // { arity: 2, types: "(r_int32, r_string)" }
+  Project (#1, #2) // { arity: 2, types: "(r_int32, r_string)" }
+    Map (case when (#0 = 1) then 0 else 2 end, "TEXT") // { arity: 3, types: "(r_int32?, r_int32, r_string)" }
+      Project (#0) // { arity: 1, types: "(r_int32?)" }
+        CrossJoin // { arity: 1, types: "(r_int32?)" }
           Constant // { arity: 0, types: "()" }
             - ()
-          Union // { arity: 1, types: "(rint32?)" }
-            Get l1 // { arity: 1, types: "(rint32)" }
-            CrossJoin // { arity: 1, types: "(rint32?)" }
+          Union // { arity: 1, types: "(r_int32?)" }
+            Get l1 // { arity: 1, types: "(r_int32)" }
+            CrossJoin // { arity: 1, types: "(r_int32?)" }
               Project () // { arity: 0, types: "()" }
                 CrossJoin // { arity: 0, types: "()" }
                   Union // { arity: 0, types: "()" }
                     Negate // { arity: 0, types: "()" }
                       Distinct project=[] // { arity: 0, types: "()" }
-                        Get l1 // { arity: 1, types: "(rint32)" }
+                        Get l1 // { arity: 1, types: "(r_int32)" }
                     Distinct project=[] // { arity: 0, types: "()" }
                       Constant // { arity: 0, types: "()" }
                         - ()
                   Constant // { arity: 0, types: "()" }
                     - ()
-              Constant // { arity: 1, types: "(rint32?)" }
+              Constant // { arity: 1, types: "(r_int32?)" }
                 - (null)
 
 Target cluster: quickstart

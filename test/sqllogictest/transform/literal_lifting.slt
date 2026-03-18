@@ -273,17 +273,17 @@ EXPLAIN OPTIMIZED PLAN WITH(types, humanized expressions) AS VERBOSE TEXT FOR
 select c.* from (select f1, f2 from (select f2, f1 from (select 1 as f1), generate_series(2, 4) as f2) group by f2, f1) as c, t;
 ----
 Explained Query:
-  Project (#1, #0) // { types: "(rint32, rint32)" }
-    Map (1) // { types: "(rint32, rint32)" }
-      CrossJoin type=differential // { types: "(rint32)" }
-        ArrangeBy keys=[[]] // { types: "(rint32)" }
-          Constant // { types: "(rint32)" }
+  Project (#1, #0) // { types: "(r_int32, r_int32)" }
+    Map (1) // { types: "(r_int32, r_int32)" }
+      CrossJoin type=differential // { types: "(r_int32)" }
+        ArrangeBy keys=[[]] // { types: "(r_int32)" }
+          Constant // { types: "(r_int32)" }
             - (2)
             - (3)
             - (4)
         ArrangeBy keys=[[]] // { types: "()" }
           Project () // { types: "()" }
-            ReadStorage materialize.public.t // { types: "(rint32?, rint32?)" }
+            ReadStorage materialize.public.t // { types: "(r_int32?, r_int32?)" }
 
 Source materialize.public.t
 
@@ -296,11 +296,11 @@ EXPLAIN OPTIMIZED PLAN WITH(types, humanized expressions) AS VERBOSE TEXT FOR
 select c.* from (select f2, f1, f3 from (select f3, f2, f1 from generate_series(2, 4) as f2, generate_series(3, 5) as f3, (select 1 as f1)) group by f2, f3, f1) as c, t;
 ----
 Explained Query:
-  Project (#0, #2, #1) // { types: "(rint32, rint32, rint32)" }
-    Map (1) // { types: "(rint32, rint32, rint32)" }
-      CrossJoin type=differential // { types: "(rint32, rint32)" }
-        ArrangeBy keys=[[]] // { types: "(rint32, rint32)" }
-          Constant // { types: "(rint32, rint32)" }
+  Project (#0, #2, #1) // { types: "(r_int32, r_int32, r_int32)" }
+    Map (1) // { types: "(r_int32, r_int32, r_int32)" }
+      CrossJoin type=differential // { types: "(r_int32, r_int32)" }
+        ArrangeBy keys=[[]] // { types: "(r_int32, r_int32)" }
+          Constant // { types: "(r_int32, r_int32)" }
             - (2, 3)
             - (2, 4)
             - (2, 5)
@@ -312,7 +312,7 @@ Explained Query:
             - (4, 5)
         ArrangeBy keys=[[]] // { types: "()" }
           Project () // { types: "()" }
-            ReadStorage materialize.public.t // { types: "(rint32?, rint32?)" }
+            ReadStorage materialize.public.t // { types: "(r_int32?, r_int32?)" }
 
 Source materialize.public.t
 
