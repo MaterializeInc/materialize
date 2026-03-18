@@ -99,6 +99,9 @@ pub trait LazyUnaryFunc {
     /// This property describes the behaviour of the function over ranges where the function is defined:
     /// ie. the argument and the result are non-error datums.
     fn is_monotone(&self) -> bool;
+
+    /// Returns true if the function does no actual work, but is merely a type-tracking cast.
+    fn is_eliminable_cast(&self) -> bool;
 }
 
 /// A description of an SQL unary function that operates on eagerly evaluated expressions
@@ -143,6 +146,10 @@ pub trait EagerUnaryFunc {
     }
 
     fn is_monotone(&self) -> bool {
+        false
+    }
+
+    fn is_eliminable_cast(&self) -> bool {
         false
     }
 }
@@ -192,6 +199,10 @@ impl<T: EagerUnaryFunc> LazyUnaryFunc for T {
 
     fn is_monotone(&self) -> bool {
         self.is_monotone()
+    }
+
+    fn is_eliminable_cast(&self) -> bool {
+        self.is_eliminable_cast()
     }
 }
 

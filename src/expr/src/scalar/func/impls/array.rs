@@ -95,6 +95,10 @@ impl LazyUnaryFunc for CastArrayToString {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastArrayToString {
@@ -198,6 +202,10 @@ impl LazyUnaryFunc for CastArrayToJsonb {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastArrayToJsonb {
@@ -271,6 +279,10 @@ impl LazyUnaryFunc for CastArrayToArray {
     }
 
     fn is_monotone(&self) -> bool {
+        false
+    }
+
+    fn is_eliminable_cast(&self) -> bool {
         false
     }
 }

@@ -74,6 +74,10 @@ impl LazyUnaryFunc for CastMapToString {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastMapToString {
@@ -162,6 +166,10 @@ impl LazyUnaryFunc for MapBuildFromRecordList {
     }
 
     fn is_monotone(&self) -> bool {
+        false
+    }
+
+    fn is_eliminable_cast(&self) -> bool {
         false
     }
 }
