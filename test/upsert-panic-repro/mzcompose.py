@@ -12,8 +12,6 @@ import time
 from datetime import datetime, timedelta
 from threading import Thread
 
-import requests
-
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import (
     Composition,
@@ -23,10 +21,8 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.minio import Minio, minio_blob_uri
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SYSTEM_PARAMS = {
@@ -43,7 +39,13 @@ SYSTEM_PARAMS = {
 }
 
 MZ_ENV_EXTRA = [
-    "MZ_PERSIST_COMPACTION_DISABLED=false",
+    "MZ_PERSIST_COMPACTION_DISABLED=true",
+    # Skip consolidation 500 times, simulating the RF=2 scenario where
+    # persist_upper advances from another replica's writes without our
+    # own feedback being consolidated. Tombstoned keys stay tombstoned,
+    # causing orphaned +1 insertions. When consolidation resumes after
+    # 500 skips, the orphaned +1s merge → diff_sum=2 → panic.
+    "FAILPOINTS=upsert_skip_consolidate=500*return",
 ]
 
 SERVICES = [
@@ -51,14 +53,10 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Cockroach(setup_materialize=True, in_memory=True),
-    Minio(setup_materialize=True),
-    Toxiproxy(),
     Materialized(
         sanity_restart=False,
         system_parameter_defaults=SYSTEM_PARAMS,
-        # Route persist blob and consensus through toxiproxy for latency injection
-        persist_blob_url=minio_blob_uri("toxiproxy"),
-        external_metadata_store="toxiproxy",
+        external_metadata_store=True,
         metadata_store="cockroach",
         default_replication_factor=1,
         environment_extra=MZ_ENV_EXTRA,
@@ -89,63 +87,6 @@ VAL_SCHEMA = (
 )
 
 
-def setup_toxiproxy_proxies(c):
-    """Create toxiproxy proxies for minio and postgres (no latency yet)."""
-    port = c.default_port("toxiproxy")
-    toxi_url = f"http://localhost:{port}"
-
-    # Proxy for minio (persist blob storage) - listen on 9000
-    r = requests.post(
-        f"{toxi_url}/proxies",
-        json={
-            "name": "minio",
-            "listen": "0.0.0.0:9000",
-            "upstream": "minio:9000",
-            "enabled": True,
-        },
-    )
-    assert r.status_code == 201, f"Failed to create minio proxy: {r.text}"
-
-    # Proxy for postgres-metadata (persist consensus) - listen on 26257
-    r = requests.post(
-        f"{toxi_url}/proxies",
-        json={
-            "name": "consensus",
-            "listen": "0.0.0.0:26257",
-            "upstream": "cockroach:26257",
-            "enabled": True,
-        },
-    )
-    assert r.status_code == 201, f"Failed to create consensus proxy: {r.text}"
-    print("Toxiproxy proxies created (no latency yet)")
-
-
-def add_toxiproxy_latency(c):
-    """Add latency to persist storage after materialized is healthy."""
-    port = c.default_port("toxiproxy")
-    toxi_url = f"http://localhost:{port}"
-
-    r = requests.post(
-        f"{toxi_url}/proxies/minio/toxics",
-        json={
-            "name": "blob-latency",
-            "type": "latency",
-            "attributes": {"latency": 100, "jitter": 0},
-        },
-    )
-    assert r.status_code == 200, f"Failed to add blob latency: {r.text}"
-
-    r = requests.post(
-        f"{toxi_url}/proxies/consensus/toxics",
-        json={
-            "name": "consensus-latency",
-            "type": "latency",
-            "attributes": {"latency": 100, "jitter": 0},
-        },
-    )
-    assert r.status_code == 200, f"Failed to add consensus latency: {r.text}"
-
-
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--runtime", type=int, default=900)
     parser.add_argument("--num-sources", type=int, default=10)
@@ -172,11 +113,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     print(f"Partition counts: {partitions}")
 
     c.down(destroy_volumes=True)
-    # Start infrastructure first, then set up toxiproxy proxies (no latency),
-    # then start materialized. Latency is added after sources are created.
-    c.up("zookeeper", "kafka", "schema-registry", "cockroach", "minio", "toxiproxy")
-    setup_toxiproxy_proxies(c)
-    c.up("materialized", Service("testdrive", idle=True))
+    c.up(
+        "zookeeper",
+        "kafka",
+        "schema-registry",
+        "materialized",
+        Service("testdrive", idle=True),
+    )
 
     c.testdrive(
         f"""\
@@ -246,11 +189,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     time.sleep(30)
     print("Pre-population done.")
 
-    # Now add latency to persist storage to slow down the feedback loop.
-    # This creates a window where two AtTime drains at different timestamps
-    # can fire for the same tombstoned key before feedback arrives.
-    add_toxiproxy_latency(c)
-
     errors = []
 
     def data_pump(thread_id):
@@ -307,8 +245,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         threads.append(t)
         t.start()
 
-    # Wait for data pump threads to finish (the bug should trigger naturally
-    # due to persist latency from toxiproxy)
+    # Wait for data pump threads to finish. The fail point skips
+    # consolidation 500 times then resumes — when it resumes, the
+    # accumulated orphaned +1s get merged → diff_sum=2 → panic.
     remaining = (end_time - datetime.now()).total_seconds()
     print(f"Waiting {remaining:.0f}s for data pump threads...")
     for t in threads:

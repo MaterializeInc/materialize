@@ -309,28 +309,32 @@ where
                         }
                     }
 
-                    let persist_stash_iter = persist_stash
-                        .drain(..)
-                        .map(|(key, val, _ts, diff)| (key, val, diff));
-
-                    match state
-                        .consolidate_chunk(
-                            persist_stash_iter,
-                            last_rehydration_chunk,
-                        )
-                        .await
+                    if !fail::eval("upsert_skip_consolidate", |_| true)
+                        .unwrap_or(false)
                     {
-                        Ok(_) => {}
-                        Err(e) => {
-                            // Make sure our persist source can shut down.
-                            persist_token.take();
-                            snapshot_cap.downgrade(&[]);
-                            UpsertErrorEmitter::<G>::emit(
-                                &mut error_emitter,
-                                "Failed to rehydrate state".to_string(),
-                                e,
+                        let persist_stash_iter = persist_stash
+                            .drain(..)
+                            .map(|(key, val, _ts, diff)| (key, val, diff));
+
+                        match state
+                            .consolidate_chunk(
+                                persist_stash_iter,
+                                last_rehydration_chunk,
                             )
-                            .await;
+                            .await
+                        {
+                            Ok(_) => {}
+                            Err(e) => {
+                                // Make sure our persist source can shut down.
+                                persist_token.take();
+                                snapshot_cap.downgrade(&[]);
+                                UpsertErrorEmitter::<G>::emit(
+                                    &mut error_emitter,
+                                    "Failed to rehydrate state".to_string(),
+                                    e,
+                                )
+                                .await;
+                            }
                         }
                     }
 
