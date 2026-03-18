@@ -153,14 +153,14 @@ The `mz_compute_operator_durations_histogram` view describes a histogram of the 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_operator_durations_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_operator_durations_histogram_raw -->
 
-## `mz_compute_prometheus_metrics`
+## `mz_cluster_prometheus_metrics`
 
-The `mz_compute_prometheus_metrics` source exposes Prometheus metrics collected from each compute replica's internal metrics registry.
+The `mz_cluster_prometheus_metrics` source exposes Prometheus metrics collected from each cluster replica process's internal metrics registry.
 Metrics are scraped periodically and presented as rows.
 Histograms are flattened into separate bucket, sum, and count rows.
 Summaries are flattened into separate quantile, sum, and count rows.
 
-<!-- RELATION_SPEC mz_introspection.mz_compute_prometheus_metrics NO_COMMENTS -->
+<!-- RELATION_SPEC mz_introspection.mz_cluster_prometheus_metrics NO_COMMENTS -->
 | Field         | Type                   | Meaning                                                              |
 |---------------|------------------------|----------------------------------------------------------------------|
 | `process_id`  | [`uint8`]              | The ID of the process that collected the metric.                     |

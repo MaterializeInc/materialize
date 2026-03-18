@@ -6744,7 +6744,7 @@ def workflow_test_item_parsing_expression_cache(c: Composition) -> None:
 
 
 def workflow_test_prometheus_metrics(c: Composition) -> None:
-    """Test that mz_compute_prometheus_metrics reports metrics."""
+    """Test that mz_cluster_prometheus_metrics reports metrics."""
 
     with c.override(
         Testdrive(no_reset=True, default_timeout="60s"),
@@ -6772,17 +6772,17 @@ def workflow_test_prometheus_metrics(c: Composition) -> None:
                 > SET cluster = cluster1
 
                 > SELECT count(*) > 0
-                  FROM mz_introspection.mz_compute_prometheus_metrics
+                  FROM mz_introspection.mz_cluster_prometheus_metrics
                 true
 
                 > SELECT DISTINCT metric_type
-                  FROM mz_introspection.mz_compute_prometheus_metrics
+                  FROM mz_introspection.mz_cluster_prometheus_metrics
                   WHERE metric_type IN ('counter', 'gauge')
                 counter
                 gauge
 
                 > SELECT DISTINCT process_id
-                  FROM mz_introspection.mz_compute_prometheus_metrics
+                  FROM mz_introspection.mz_cluster_prometheus_metrics
                   ORDER BY process_id
                 0
                 1
@@ -6805,7 +6805,7 @@ def workflow_test_prometheus_metrics(c: Composition) -> None:
                 > SET cluster = cluster1
 
                 > SELECT count(*) = 0
-                  FROM mz_introspection.mz_compute_prometheus_metrics
+                  FROM mz_introspection.mz_cluster_prometheus_metrics
                 true
                 """
             )

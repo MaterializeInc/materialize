@@ -87,18 +87,32 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         move |_frontiers| {
             let Some(cap) = &mut cap else { return };
 
-            // Compute the timestamp for the next scrape and downgrade
-            // the capability to it.
-            let next_scrape_elapsed = next_scrape - now;
-            let next_ms = next_scrape_elapsed.as_millis();
+            // Advance the capability to the next logging interval boundary.
+            // This keeps the output frontier progressing at the logging
+            // rate, even when scrapes happen less frequently. Note that
+            // advancing the frontier implies the data is up-to-date, but
+            // the metrics snapshot may be stale by up to the scrape
+            // interval when it exceeds the logging interval.
+            let elapsed = now.elapsed().as_millis();
             let time_ms: u128 =
-                ((next_ms + start_offset.as_millis()) / interval_ms + 1) * interval_ms;
+                ((elapsed + start_offset.as_millis()) / interval_ms + 1) * interval_ms;
             let ts: Timestamp = time_ms.try_into().expect("must fit");
             cap.downgrade(&ts);
 
-            // The effective scrape interval is the maximum of the
-            // configured prometheus interval and the logging interval.
-            // A zero prometheus interval disables scraping.
+            // Schedule the next activation at the interval boundary
+            // to avoid drift from wall-clock elapsed time.
+            let next_boundary_ms = time_ms - start_offset.as_millis();
+            let next_activation =
+                now + Duration::from_millis(next_boundary_ms.try_into().expect("must fit"));
+            activator.activate_after(next_activation.saturating_duration_since(Instant::now()));
+
+            // Only scrape when the scrape interval has elapsed.
+            // The operator wakes every logging interval to advance the
+            // capability, but scrapes less frequently if configured.
+            if Instant::now() < next_scrape {
+                return;
+            }
+
             let prom_interval =
                 COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL.get(&worker_config);
             let effective_interval = prom_interval.max(interval);
@@ -156,9 +170,6 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             }
 
             prev_snapshot = new_snapshot;
-
-            // Reschedule after the effective scrape interval.
-            activator.activate_after(effective_interval);
         }
     });
 

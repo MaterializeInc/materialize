@@ -92,7 +92,7 @@ duration_ns  uint8  The␠upper␠bound␠of␠the␠duration␠bucket␠in␠na
 count  numeric  The␠(noncumulative)␠count␠of␠invocations␠in␠the␠bucket.
 
 query TT
-SELECT name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_compute_prometheus_metrics' ORDER BY position
+SELECT name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_cluster_prometheus_metrics' ORDER BY position
 ----
 process_id  uint8
 metric_name  text
@@ -270,6 +270,7 @@ mz_arrangement_sharing_per_worker
 mz_arrangement_sharing_raw
 mz_arrangement_sizes
 mz_arrangement_sizes_per_worker
+mz_cluster_prometheus_metrics
 mz_compute_dataflow_global_ids_per_worker
 mz_compute_error_counts
 mz_compute_error_counts_per_worker
@@ -286,7 +287,6 @@ mz_compute_operator_durations_histogram
 mz_compute_operator_durations_histogram_per_worker
 mz_compute_operator_durations_histogram_raw
 mz_compute_operator_hydration_statuses_per_worker
-mz_compute_prometheus_metrics
 mz_dataflow_addresses
 mz_dataflow_addresses_per_worker
 mz_dataflow_arrangement_sizes
