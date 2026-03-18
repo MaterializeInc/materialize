@@ -2307,6 +2307,46 @@ impl RowPacker<'_> {
         }
     }
 
+    /// Like [`RowPacker::try_push_array`], but accepts a fallible iterator of
+    /// elements.
+    pub fn try_push_array_fallible<'a, I, D, E>(
+        &mut self,
+        dims: &[ArrayDimension],
+        iter: I,
+    ) -> Result<Result<(), E>, InvalidArrayError>
+    where
+        I: IntoIterator<Item = Result<D, E>>,
+        D: Borrow<Datum<'a>>,
+    {
+        enum Error<E> {
+            Usage(InvalidArrayError),
+            Inner(E),
+        }
+
+        impl<E> From<InvalidArrayError> for Error<E> {
+            fn from(e: InvalidArrayError) -> Self {
+                Self::Usage(e)
+            }
+        }
+
+        // SAFETY: The function returns the exact number of elements pushed into the array.
+        let result = unsafe {
+            self.push_array_with_unchecked(dims, |packer| {
+                let mut nelements = 0;
+                for datum in iter {
+                    packer.push(datum.map_err(Error::Inner)?);
+                    nelements += 1;
+                }
+                Ok(nelements)
+            })
+        };
+        match result {
+            Ok(()) => Ok(Ok(())),
+            Err(Error::Usage(e)) => Err(e),
+            Err(Error::Inner(e)) => Ok(Err(e)),
+        }
+    }
+
     /// Convenience function to construct an array from a function. The function must return the
     /// number of elements it pushed into the array. It is undefined behavior if the function returns
     /// a number different to the number of elements it pushed.
