@@ -9,8 +9,11 @@
 
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from threading import Thread
+
+import requests
 
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import (
@@ -21,8 +24,10 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Minio, minio_blob_uri
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SYSTEM_PARAMS = {
@@ -36,16 +41,17 @@ SYSTEM_PARAMS = {
     "storage_dataflow_max_inflight_bytes": "1048576",
     "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.001",
     "storage_dataflow_max_inflight_bytes_disk_only": "false",
+    "max_replicas_per_cluster": "10",
 }
 
 MZ_ENV_EXTRA = [
     "MZ_PERSIST_COMPACTION_DISABLED=true",
-    # Skip consolidation 500 times, simulating the RF=2 scenario where
-    # persist_upper advances from another replica's writes without our
-    # own feedback being consolidated. Tombstoned keys stay tombstoned,
-    # causing orphaned +1 insertions. When consolidation resumes after
-    # 500 skips, the orphaned +1s merge → diff_sum=2 → panic.
-    "FAILPOINTS=upsert_skip_consolidate=500*return",
+    # thread::sleep at key points — simulates OS scheduler starvation
+    # on an overloaded system:
+    "FAILPOINTS="
+    "upsert_post_persist_progress_delay=50%sleep(300);"
+    "upsert_pre_consolidate_delay=50%sleep(300);"
+    "upsert_pre_drain_delay=50%sleep(300)",
 ]
 
 SERVICES = [
@@ -53,12 +59,15 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Cockroach(setup_materialize=True, in_memory=True),
+    Minio(setup_materialize=True),
+    Toxiproxy(),
     Materialized(
         sanity_restart=False,
         system_parameter_defaults=SYSTEM_PARAMS,
-        external_metadata_store=True,
+        persist_blob_url=minio_blob_uri("toxiproxy"),
+        external_metadata_store="toxiproxy",
         metadata_store="cockroach",
-        default_replication_factor=1,
+        default_replication_factor=2,
         environment_extra=MZ_ENV_EXTRA,
     ),
     Testdrive(
@@ -69,8 +78,9 @@ SERVICES = [
     ),
 ]
 
-# Padding to make values ~500 bytes (closer to production 374-byte values)
-PAD = "x" * 400
+# Large values (~5KB) make persist batch parts big, so blob writes are
+# naturally slow — widens the window between AtTime drain and feedback.
+PAD = "x" * 5000
 
 KEY_SCHEMA = (
     '{"type": "record", "name": "Key", "fields": [{"name": "k", "type": "long"}]}'
@@ -87,12 +97,108 @@ VAL_SCHEMA = (
 )
 
 
+def setup_toxiproxy_proxies(c):
+    """Create toxiproxy proxies for minio and cockroach."""
+    port = c.default_port("toxiproxy")
+    toxi_url = f"http://localhost:{port}"
+
+    r = requests.post(
+        f"{toxi_url}/proxies",
+        json={
+            "name": "minio",
+            "listen": "0.0.0.0:9000",
+            "upstream": "minio:9000",
+            "enabled": True,
+        },
+    )
+    assert r.status_code == 201, f"Failed to create minio proxy: {r.text}"
+
+    r = requests.post(
+        f"{toxi_url}/proxies",
+        json={
+            "name": "consensus",
+            "listen": "0.0.0.0:26257",
+            "upstream": "cockroach:26257",
+            "enabled": True,
+        },
+    )
+    assert r.status_code == 201, f"Failed to create consensus proxy: {r.text}"
+
+    # Permanent jitter on consensus — mimics production network variability.
+    # Low base latency (50ms) with high jitter (200ms) means most operations
+    # are fast but some randomly take 50-250ms.  This occasionally delays
+    # persist CAS (compare_and_append) without consistently stalling reads.
+    r = requests.post(
+        f"{toxi_url}/proxies/consensus/toxics",
+        json={
+            "name": "consensus-jitter",
+            "type": "latency",
+            "attributes": {"latency": 50, "jitter": 200},
+        },
+    )
+    assert r.status_code == 200, f"Failed to add consensus-jitter: {r.text}"
+    print("Toxiproxy proxies created (consensus jitter=50±200ms)")
+
+
+def set_toxiproxy_blob_write_throttle(c, enabled, bandwidth_kb=50, latency_ms=500):
+    """Throttle blob WRITES (upstream) while keeping reads (downstream) fast.
+
+    This creates the key asymmetry for the bug:
+    - persist_source reads are fast -> persist_upper advances -> AtTime drains fire
+    - persist_sink writes are slow -> our output is delayed reaching the shard
+    - Gap between drain and feedback = orphaned +1 window
+    """
+    port = c.default_port("toxiproxy")
+    toxi_url = f"http://localhost:{port}"
+
+    if not enabled:
+        requests.delete(f"{toxi_url}/proxies/minio/toxics/blob-write-bw")
+        requests.delete(f"{toxi_url}/proxies/minio/toxics/blob-write-latency")
+        return
+
+    # Upstream bandwidth limit — throttles large PUT bodies (batch parts)
+    # while tiny GET requests (<1KB) pass through almost instantly.
+    r = requests.patch(
+        f"{toxi_url}/proxies/minio/toxics/blob-write-bw",
+        json={"attributes": {"rate": bandwidth_kb}},
+    )
+    if r.status_code == 404:
+        r = requests.post(
+            f"{toxi_url}/proxies/minio/toxics",
+            json={
+                "name": "blob-write-bw",
+                "type": "bandwidth",
+                "stream": "upstream",
+                "attributes": {"rate": bandwidth_kb},
+            },
+        )
+        assert r.status_code == 200, f"Failed to add blob-write-bw: {r.text}"
+
+    # Upstream latency — adds per-chunk delay on writes.
+    r = requests.patch(
+        f"{toxi_url}/proxies/minio/toxics/blob-write-latency",
+        json={"attributes": {"latency": latency_ms, "jitter": latency_ms // 2}},
+    )
+    if r.status_code == 404:
+        r = requests.post(
+            f"{toxi_url}/proxies/minio/toxics",
+            json={
+                "name": "blob-write-latency",
+                "type": "latency",
+                "stream": "upstream",
+                "attributes": {"latency": latency_ms, "jitter": latency_ms // 2},
+            },
+        )
+        assert r.status_code == 200, f"Failed to add blob-write-latency: {r.text}"
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--runtime", type=int, default=900)
-    parser.add_argument("--num-sources", type=int, default=10)
-    parser.add_argument("--num-keys", type=int, default=50000)
-    parser.add_argument("--num-hot-keys", type=int, default=100)
-    parser.add_argument("--parallelism", type=int, default=25)
+    # Fewer sources = more pressure per source = slower feedback per source
+    parser.add_argument("--num-sources", type=int, default=3)
+    parser.add_argument("--num-keys", type=int, default=500000)
+    parser.add_argument("--num-hot-keys", type=int, default=10000)
+    parser.add_argument("--parallelism", type=int, default=50)
     parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
 
@@ -105,21 +211,21 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # Per-source randomized partition counts (1..32)
     partitions = [random.choice([1, 2, 4, 8, 16, 32]) for _ in range(n)]
-    # Randomized cluster size
-    workers = random.choice([4, 8, 16])
-    replication_factor = 2
+    # Randomized cluster size and replication factor
+    workers = random.choice([1, 2, 4, 8, 16])
+    replication_factor = random.choice([1, 2, 4, 8])
+    # Randomize number of background pump threads
+    num_pump_threads = random.choice([1, 2, 4, 8])
 
-    print(f"Config: {n} sources, workers={workers}, rf={replication_factor}")
+    print(
+        f"Config: {n} sources, workers={workers}, rf={replication_factor}, pump_threads={num_pump_threads}"
+    )
     print(f"Partition counts: {partitions}")
 
     c.down(destroy_volumes=True)
-    c.up(
-        "zookeeper",
-        "kafka",
-        "schema-registry",
-        "materialized",
-        Service("testdrive", idle=True),
-    )
+    c.up("zookeeper", "kafka", "schema-registry", "cockroach", "minio", "toxiproxy")
+    setup_toxiproxy_proxies(c)
+    c.up("materialized", Service("testdrive", idle=True))
 
     c.testdrive(
         f"""\
@@ -168,7 +274,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     print(f"  {n}/{n}.")
 
     # Pre-populate all keys so the persist shard has meaningful size
-    # (~5000 keys × ~500 bytes = ~2.5MB per source → multi-batch rehydration)
     print(f"Pre-populating {args.num_keys} keys per source...")
     for i in range(n):
         c.testdrive(
@@ -185,77 +290,129 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             f'"f_nullable": null}}'
             "\n",
         )
-    # Wait for data to be ingested and persisted (longer for 50K+ keys)
+    # Wait for data to be ingested and persisted
     time.sleep(30)
     print("Pre-population done.")
 
-    errors = []
+    set_toxiproxy_blob_write_throttle(c, enabled=False)
 
-    def data_pump(thread_id):
-        rnd = 0
-        while datetime.now() < end_time:
+    # --- Helper: parallel testdrive across sources ---
+    def ingest_parallel(sources, gen_line):
+        """Run kafka-ingest on multiple sources in parallel via threads."""
+        with ThreadPoolExecutor(
+            max_workers=min(len(sources), args.parallelism)
+        ) as pool:
+            futs = {pool.submit(c.testdrive, gen_line(s)): s for s in sources}
+            for f in as_completed(futs):
+                f.result()
+
+    def ingest_one(src_id, nk, tag, round_num):
+        """Generate a testdrive snippet for one source."""
+        return (
+            f"$ kafka-ingest format=avro topic=s-{src_id}"
+            f" key-format=avro key-schema={KEY_SCHEMA}"
+            f" schema={VAL_SCHEMA}"
+            f" repeat={nk}\n"
+            f'{{"k": ${{kafka-ingest.iteration}}}} '
+            f'{{"f_int": ${{kafka-ingest.iteration}}, '
+            f'"f_long": {round_num}, '
+            f'"f_str": "{tag}{PAD}", '
+            f'"f_double": 0.0, '
+            f'"f_bool": true, '
+            f'"f_nullable": null}}'
+            "\n"
+        )
+
+    def tombstone_one(src_id, nk):
+        return (
+            f"$ kafka-ingest format=avro topic=s-{src_id}"
+            f" key-format=avro key-schema={KEY_SCHEMA}"
+            f" schema={VAL_SCHEMA}"
+            f" repeat={nk}\n"
+            f'{{"k": ${{kafka-ingest.iteration}}}}'
+            "\n"
+        )
+
+    # --- Background pump: continuously update random keys on all sources ---
+    pump_stop = False
+
+    def background_pump(thread_id):
+        rnd = random.Random(seed + thread_id * 1000 + 7)
+        round_num = 0
+        while not pump_stop:
+            round_num += 1
+            sid = rnd.randint(0, n - 1)
+            nk = rnd.randint(1, args.num_hot_keys)
             try:
-                src_id = random.randint(0, n - 1)
-                partitions[src_id]
-                # 80% of writes target "hot" keys (first num_hot_keys)
-                # 20% target the full key range (for shard size)
-                if random.random() < 0.8:
-                    nk = random.randint(1, args.num_hot_keys)
-                else:
-                    nk = random.randint(args.num_hot_keys, min(args.num_keys, 500))
-
-                # Tombstone keys, then re-insert at multiple timestamps.
-                # With toxiproxy adding ~4s latency to persist, the
-                # feedback loop takes ~8-10s. Re-inserts 1.5s apart get
-                # different MZ timestamps and can both emit +1 without
-                # retraction if the key is tombstoned (finalized=None).
                 c.testdrive(
-                    f"$ kafka-ingest format=avro topic=s-{src_id}"
-                    f" key-format=avro key-schema={KEY_SCHEMA}"
-                    f" schema={VAL_SCHEMA}"
-                    f" repeat={nk}\n"
-                    f'{{"k": ${{kafka-ingest.iteration}}}}'
-                    "\n",
+                    ingest_one(sid, nk, f"bg{thread_id}r{round_num}", round_num)
                 )
-                for reinsert_round in range(3):
-                    time.sleep(1.1)  # Just enough to cross a 1s reclocking boundary
-                    c.testdrive(
-                        f"$ kafka-ingest format=avro topic=s-{src_id}"
-                        f" key-format=avro key-schema={KEY_SCHEMA}"
-                        f" schema={VAL_SCHEMA}"
-                        f" repeat={nk}\n"
-                        f'{{"k": ${{kafka-ingest.iteration}}}} '
-                        f'{{"f_int": ${{kafka-ingest.iteration}}, '
-                        f'"f_long": {rnd * 77 + reinsert_round}, '
-                        f'"f_str": "tr-t{thread_id}r{rnd}i{reinsert_round}{PAD}", '
-                        f'"f_double": {rnd * 0.01 + reinsert_round * 0.001:.6f}, '
-                        f'"f_bool": true, '
-                        f'"f_nullable": null}}'
-                        "\n",
-                    )
+            except Exception:
+                time.sleep(1)
 
-                rnd += 1
-            except Exception as e:
-                errors.append(e)
-
-    print(f"Starting {args.parallelism} data pump threads for {args.runtime}s...")
-    threads = []
-    for i in range(args.parallelism):
-        t = Thread(name=f"pump_{i}", target=data_pump, args=(i,), daemon=True)
-        threads.append(t)
+    pump_threads = []
+    for tid in range(num_pump_threads):
+        t = Thread(target=background_pump, args=(tid,), daemon=True)
         t.start()
+        pump_threads.append(t)
+    print(f"Background pump started ({num_pump_threads} threads).")
 
-    # Wait for data pump threads to finish. The fail point skips
-    # consolidation 500 times then resumes — when it resumes, the
-    # accumulated orphaned +1s get merged → diff_sum=2 → panic.
-    remaining = (end_time - datetime.now()).total_seconds()
-    print(f"Waiting {remaining:.0f}s for data pump threads...")
-    for t in threads:
-        t.join(timeout=remaining + 30)
+    cycle = 0
+    all_srcs = list(range(n))
 
-    if errors:
-        print(f"Data pump errors: {len(errors)}")
-        for e in errors[:5]:
-            print(f"  {e}")
+    while datetime.now() < end_time:
+        cycle += 1
+        # Randomize per-cycle: hot key count, which sources, timing
+        nk = random.randint(1, args.num_hot_keys)
+        nsrc = random.randint(1, n)
+        srcs = random.sample(all_srcs, nsrc) if nsrc < n else all_srcs
 
-    print(f"Done. Seed: {seed}.")
+        t0 = time.monotonic()
+
+        # Step 1: Tombstone hot keys (parallel)
+        ingest_parallel(srcs, lambda s: tombstone_one(s, nk))
+        t1 = time.monotonic()
+
+        # Step 2: Brief wait for tombstones to persist
+        time.sleep(random.uniform(0.1, 1.0))
+
+        # Step 3: Throttle blob writes — reads stay fast
+        bw_kb = random.randint(10, 200)
+        lat_ms = random.randint(100, 2000)
+        set_toxiproxy_blob_write_throttle(
+            c, enabled=True, bandwidth_kb=bw_kb, latency_ms=lat_ms
+        )
+
+        # Step 4: Re-insert at T1 (parallel)
+        ingest_parallel(
+            srcs,
+            lambda s: ingest_one(s, nk, f"c{cycle}a", cycle * 100),
+        )
+        t4 = time.monotonic()
+
+        # Step 5: Cross reclocking boundary — randomized wait
+        time.sleep(random.uniform(1.0, 3.0))
+
+        # Step 6: Re-insert at T2 (parallel)
+        ingest_parallel(
+            srcs,
+            lambda s: ingest_one(s, nk, f"c{cycle}b", cycle * 100 + 1),
+        )
+        t6 = time.monotonic()
+
+        # Step 7: Drop throttle
+        set_toxiproxy_blob_write_throttle(c, enabled=False)
+        time.sleep(random.uniform(0.1, 0.5))
+        t7 = time.monotonic()
+
+        print(
+            f"  Cycle {cycle} ({nsrc}srcs {nk}keys bw={bw_kb}KB/s lat={lat_ms}ms): "
+            f"tomb={t1-t0:.1f}s T1={t4-t1:.1f}s T2={t6-t4:.1f}s "
+            f"total={t7-t0:.1f}s"
+        )
+
+    pump_stop = True
+    for t in pump_threads:
+        t.join(timeout=10)
+
+    print(f"Done. {cycle} cycles. Seed: {seed}.")

@@ -257,6 +257,11 @@ where
                                     ?upper,
                                     "received persist progress");
                                 persist_upper = upper;
+
+                                // Testing: sleep after each persist Progress event.
+                                // Simulates an overloaded system where this thread
+                                // gets starved by the OS scheduler.
+                                fail::fail_point!("upsert_post_persist_progress_delay");
                             }
                         }
                     }
@@ -309,32 +314,30 @@ where
                         }
                     }
 
-                    if !fail::eval("upsert_skip_consolidate", |_| true)
-                        .unwrap_or(false)
-                    {
-                        let persist_stash_iter = persist_stash
-                            .drain(..)
-                            .map(|(key, val, _ts, diff)| (key, val, diff));
+                    fail::fail_point!("upsert_pre_consolidate_delay");
 
-                        match state
-                            .consolidate_chunk(
-                                persist_stash_iter,
-                                last_rehydration_chunk,
+                    let persist_stash_iter = persist_stash
+                        .drain(..)
+                        .map(|(key, val, _ts, diff)| (key, val, diff));
+
+                    match state
+                        .consolidate_chunk(
+                            persist_stash_iter,
+                            last_rehydration_chunk,
+                        )
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(e) => {
+                            // Make sure our persist source can shut down.
+                            persist_token.take();
+                            snapshot_cap.downgrade(&[]);
+                            UpsertErrorEmitter::<G>::emit(
+                                &mut error_emitter,
+                                "Failed to rehydrate state".to_string(),
+                                e,
                             )
-                            .await
-                        {
-                            Ok(_) => {}
-                            Err(e) => {
-                                // Make sure our persist source can shut down.
-                                persist_token.take();
-                                snapshot_cap.downgrade(&[]);
-                                UpsertErrorEmitter::<G>::emit(
-                                    &mut error_emitter,
-                                    "Failed to rehydrate state".to_string(),
-                                    e,
-                                )
-                                .await;
-                            }
+                            .await;
                         }
                     }
 
@@ -483,6 +486,14 @@ where
             // loop. More of our stash can become eligible for draining both
             // when the source-input frontier advances or when the persist
             // frontier advances.
+            //
+            // Failpoint: delay before drain to let more source events
+            // accumulate in the stash across reclocking boundaries.
+            // With a sleep here, the next select iteration processes more
+            // source_input events before this drain runs, increasing the
+            // chance of same-key-different-timestamp entries in the stash.
+            fail::fail_point!("upsert_pre_drain_delay");
+
             if !stash.is_empty() {
                 let cap = stash_cap
                     .as_mut()
@@ -828,6 +839,22 @@ where
         match value {
             Some(value) => {
                 if let Some(old_value) = existing_state_cell.as_ref() {
+                    // Check for the diff_sum=2 bug precondition: AtTime drain
+                    // about to emit +1 for a key that has a provisional at a
+                    // different timestamp and finalized=None (tombstoned).
+                    // This means no retraction will be emitted for the previous
+                    // provisional's +1, creating an orphaned insertion.
+                    if matches!(&drain_style, DrainStyle::AtTime { .. })
+                        && old_value.has_cross_ts_provisional_with_no_finalized(&ts)
+                    {
+                        mz_ore::soft_panic_or_log!(
+                            "upsert AtTime drain: cross-timestamp provisional with \
+                             finalized=None for source {} at ts={:?} — \
+                             diff_sum=2 bug precondition",
+                            source_config.id,
+                            ts,
+                        );
+                    }
                     if let Some(old_value) = old_value.provisional_value_ref(&ts) {
                         output_updates.push((old_value.clone(), ts.clone(), Diff::MINUS_ONE));
                     }

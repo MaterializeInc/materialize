@@ -432,6 +432,21 @@ impl<T: Eq, O> StateValue<T, O> {
         }
     }
 
+    /// Returns true if this value has a provisional at a different timestamp
+    /// than `ts` AND finalized is None (tombstoned). This is the precondition
+    /// for the diff_sum=2 bug: the caller won't emit a retraction for the
+    /// previous provisional's +1.
+    pub fn has_cross_ts_provisional_with_no_finalized(&self, ts: &T) -> bool {
+        match self {
+            Self::Value(value) => {
+                value.provisional.is_some()
+                    && value.provisional.as_ref().map(|p| &p.timestamp) != Some(ts)
+                    && value.finalized.is_none()
+            }
+            _ => false,
+        }
+    }
+
     /// Returns the the finalized value, if one is present.
     pub fn into_finalized_value(self) -> Option<UpsertValue> {
         match self {
@@ -506,6 +521,17 @@ impl<T: Eq, O> StateValue<T, O> {
                 *checksum_sum +=
                     (seahash::hash(&*bincode_buffer) as i64).wrapping_mul(diff.into_inner());
 
+                if diff_sum.0 > 1 || diff_sum.0 < -1 {
+                    mz_ore::soft_panic_or_log!(
+                        "merge_update: unexpected diff_sum={} after applying diff={} \
+                         (len_sum={}, checksum_sum={})",
+                        diff_sum.0,
+                        diff.into_inner(),
+                        len_sum.0,
+                        checksum_sum.0,
+                    );
+                }
+
                 // XOR of even diffs cancel out, so we only do it if diff is odd
                 if diff.abs() % Diff::from(2) == Diff::ONE {
                     if value_xor.len() < bincode_buffer.len() {
@@ -567,6 +593,17 @@ impl<T: Eq, O> StateValue<T, O> {
                 *diff_sum += other_consolidating.diff_sum;
                 *len_sum += other_consolidating.len_sum;
                 *checksum_sum += other_consolidating.checksum_sum;
+
+                if diff_sum.0 > 1 || diff_sum.0 < -1 {
+                    mz_ore::soft_panic_or_log!(
+                        "merge_update_state: unexpected diff_sum={} after merging \
+                         other.diff_sum={} (len_sum={}, checksum_sum={})",
+                        diff_sum.0,
+                        other_consolidating.diff_sum.0,
+                        len_sum.0,
+                        checksum_sum.0,
+                    );
+                }
                 if other_consolidating.value_xor.len() > value_xor.len() {
                     value_xor.resize(other_consolidating.value_xor.len(), 0);
                 }
