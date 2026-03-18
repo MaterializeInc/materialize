@@ -2665,15 +2665,19 @@ where
     }
 
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
-        match res {
-            Ok(Datum::Array(arr)) => Ok(ArrayRustType(
-                arr.elements()
-                    .into_iter()
-                    .map(|d| T::try_from_result(Ok(d)))
-                    .collect::<Result<_, _>>()?,
-            )),
-            _ => Err(res),
+        if let Ok(Datum::Array(arr)) = &res {
+            let result = arr
+                .elements()
+                .into_iter()
+                .map(|d| T::try_from_result(Ok(d)))
+                .collect::<Result<_, _>>();
+            if let Ok(elements) = result {
+                return Ok(ArrayRustType(elements));
+            }
         }
+
+        // The `try_from_result` contract requires we return the original `res` on error.
+        Err(res)
     }
 }
 
@@ -2686,7 +2690,7 @@ where
     }
 
     fn fallible() -> bool {
-        false
+        T::fallible()
     }
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
