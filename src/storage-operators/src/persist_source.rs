@@ -310,7 +310,6 @@ where
 {
     let cfg = persist_clients.cfg().clone();
     let name = source_id.to_string();
-    let map_filter_project = map_filter_project.filter(|p| !p.is_identity());
     let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
 
     // N.B. `read_schema` may be a subset of the total columns for this shard.
