@@ -17,6 +17,7 @@ from parameterized import parameterized_class  # type: ignore
 
 import materialize.optbench.sql
 from materialize.feature_benchmark.action import Action, Kgen, TdAction
+from materialize.feature_benchmark.measurement import MeasurementType
 from materialize.feature_benchmark.measurement_source import (
     Lambda,
     MeasurementSource,
@@ -1715,6 +1716,12 @@ class ManyKafkaSourcesOnSameCluster(Scenario):
     # Runs ~2 hours with 300 sources
     SCALE = 1.4  # 25 sources
     FIXED_SCALE = True
+    # clusterd memory keeps growing and is only lazily collected, so not useful
+    RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
+        MeasurementType.WALLCLOCK: 0.10,
+        MeasurementType.MEMORY_MZ: 0.20,
+        MeasurementType.MEMORY_CLUSTERD: 100.0,
+    }
 
     COUNT_SOURCE_ENTRIES = 100000
 
