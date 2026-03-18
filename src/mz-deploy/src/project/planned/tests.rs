@@ -2805,3 +2805,72 @@ fn test_enforced_fk_constraint_dependency_graph() {
         "FK companion MV should depend on referenced MV (customers)"
     );
 }
+
+#[test]
+fn test_fk_referenced_table_not_in_parent_dependencies() {
+    use crate::project::raw;
+    use crate::project::typed;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let src_dir = temp_dir.path();
+
+    let db_path = src_dir.join("models").join("test_db");
+    let schema_path = db_path.join("public");
+    fs::create_dir_all(&schema_path).unwrap();
+
+    // Create referenced parent MV
+    fs::write(
+        schema_path.join("customers.sql"),
+        "CREATE MATERIALIZED VIEW customers IN CLUSTER c AS SELECT 1 AS id;",
+    )
+    .unwrap();
+
+    // Create child MV with enforced FK constraint
+    fs::write(
+        schema_path.join("orders.sql"),
+        "CREATE MATERIALIZED VIEW orders IN CLUSTER c AS SELECT 1 AS customer_id;\n\
+         CREATE FOREIGN KEY fk IN CLUSTER c ON orders (customer_id) REFERENCES customers (id);",
+    )
+    .unwrap();
+
+    let raw_project = raw::load_project(src_dir, "default", None, &BTreeMap::new()).unwrap();
+    let typed_project = typed::Project::try_from(raw_project).unwrap();
+    let planned_project = Project::from(typed_project);
+
+    let orders_id = ObjectId::new(
+        "test_db".to_string(),
+        "public".to_string(),
+        "orders".to_string(),
+    );
+    let customers_id = ObjectId::new(
+        "test_db".to_string(),
+        "public".to_string(),
+        "customers".to_string(),
+    );
+
+    // The parent object (orders) should NOT depend on the FK-referenced table (customers).
+    // Only the companion MV has a data dependency on customers.
+    let orders_deps = &planned_project.dependency_graph[&orders_id];
+    assert!(
+        !orders_deps.contains(&customers_id),
+        "orders should not depend on customers — FK references are not data dependencies"
+    );
+
+    // The FK companion MV should still depend on both orders and customers
+    let fk_id = ObjectId::new(
+        "test_db".to_string(),
+        "public".to_string(),
+        "fk".to_string(),
+    );
+    let fk_deps = &planned_project.dependency_graph[&fk_id];
+    assert!(
+        fk_deps.contains(&orders_id),
+        "FK companion MV should depend on orders"
+    );
+    assert!(
+        fk_deps.contains(&customers_id),
+        "FK companion MV should depend on customers"
+    );
+}

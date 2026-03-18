@@ -143,6 +143,12 @@ pub struct DocsConstraint {
     pub enforced: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub references: Option<String>,
+    /// Target columns for foreign key constraints.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference_columns: Option<Vec<String>>,
+    /// Generated SQL query for detecting constraint violations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub companion_sql: Option<String>,
     pub cluster: Option<String>,
 }
 
@@ -363,6 +369,7 @@ fn index_to_docs(
 /// Extract constraint metadata from a CREATE CONSTRAINT statement.
 fn constraint_to_docs(
     c: &mz_sql_parser::ast::CreateConstraintStatement<mz_sql_parser::ast::Raw>,
+    parent_fqn: &str,
 ) -> DocsConstraint {
     let kind = format!("{}", c.kind);
     let name = c.name.as_ref().map(|n| n.to_string()).unwrap_or_else(|| {
@@ -381,12 +388,44 @@ fn constraint_to_docs(
         _ => None,
     });
     let references = c.references.as_ref().map(|r| format!("{}", r.object));
+    let reference_columns = c
+        .references
+        .as_ref()
+        .map(|r| r.columns.iter().map(|col| col.to_string()).collect());
+
+    // Generate companion SQL for enforced constraints.
+    let companion_sql = if c.enforced {
+        let cols_str = columns.join(", ");
+        match &c.kind {
+            mz_sql_parser::ast::ConstraintKind::PrimaryKey
+            | mz_sql_parser::ast::ConstraintKind::Unique => Some(format!(
+                "SELECT {cols_str}, count(*) AS count FROM {parent_fqn} GROUP BY {cols_str} HAVING count(*) > 1"
+            )),
+            mz_sql_parser::ast::ConstraintKind::ForeignKey => c.references.as_ref().map(|r| {
+                let ref_cols = r
+                    .columns
+                    .iter()
+                    .map(|col| col.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let ref_obj = format!("{}", r.object);
+                format!(
+                    "SELECT {cols_str} FROM {parent_fqn} EXCEPT SELECT {ref_cols} FROM {ref_obj}"
+                )
+            }),
+        }
+    } else {
+        None
+    };
+
     DocsConstraint {
         kind,
         name,
         columns,
         enforced: c.enforced,
         references,
+        reference_columns,
+        companion_sql,
         cluster,
     }
 }
@@ -844,8 +883,11 @@ pub fn build_manifest(
                 let description = extract_description(&typed.comments);
 
                 let doc_indexes: Vec<DocsIndex> = typed.indexes.iter().map(index_to_docs).collect();
-                let doc_constraints: Vec<DocsConstraint> =
-                    typed.constraints.iter().map(constraint_to_docs).collect();
+                let doc_constraints: Vec<DocsConstraint> = typed
+                    .constraints
+                    .iter()
+                    .map(|c| constraint_to_docs(c, &id_str))
+                    .collect();
 
                 let grants = grants_to_docs(&typed.grants);
                 let comments: Vec<String> =

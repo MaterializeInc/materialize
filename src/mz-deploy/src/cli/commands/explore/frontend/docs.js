@@ -13,7 +13,7 @@
  *   Schema Browser— Sidebar tree of databases / schemas / objects
  *   Search        — Substring search across all objects
  *   Graph Layout  — Shared topological layering + crossing minimization
- *   Overview      — Project summary with domain grid, stats cards
+ *   Overview      — Project summary with stable APIs, stats cards
  *   Object Detail — Per-object detail pages (type-specific renderers)
  *   DAG View      — Domain-level and object-level dependency graph
  *   Clusters      — Cluster inventory view
@@ -124,6 +124,194 @@ function highlightSQL(sql) {
       .replace(/(--[^\n]*)/g, '<span class="comment">$1</span>');
 }
 
+// ====== Ontology Derivation Engine ======
+
+/** Forward FK index: source_object_id -> [{ target_id, fk_name, source_cols, target_cols, enforced }] */
+const fkForward = {};
+/** Reverse FK index: target_object_id -> [{ source_id, fk_name, source_cols, target_cols, enforced }] */
+const fkReverse = {};
+
+M.objects.forEach(function(obj) {
+    (obj.constraints || []).forEach(function(c) {
+        if (c.kind === 'FOREIGN KEY' && c.references) {
+            var rel = {
+                source_id: obj.id,
+                target_id: c.references,
+                fk_name: c.name,
+                source_cols: c.columns,
+                target_cols: c.reference_columns || [],
+                enforced: c.enforced
+            };
+            (fkForward[obj.id] = fkForward[obj.id] || []).push(rel);
+            (fkReverse[c.references] = fkReverse[c.references] || []).push(rel);
+        }
+    });
+});
+
+/**
+ * Classify an object's ontological roles based on its constraint patterns.
+ *
+ * @param {Object} obj - The manifest object.
+ * @returns {string[]} Array of role names (e.g. 'Entity', 'Subtype', 'Association').
+ */
+function classifyObject(obj) {
+    var roles = [];
+    var pks = (obj.constraints || []).filter(function(c) { return c.kind === 'PRIMARY KEY'; });
+    var fks = (obj.constraints || []).filter(function(c) { return c.kind === 'FOREIGN KEY'; });
+    var uniques = (obj.constraints || []).filter(function(c) { return c.kind === 'UNIQUE'; });
+
+    if (pks.length > 0) roles.push('Entity');
+
+    // Subtype: PK columns are also FK columns pointing to another entity
+    if (pks.length > 0 && fks.length > 0) {
+        var pkCols = new Set(pks[0].columns);
+        var fkMatchesPk = fks.some(function(fk) {
+            return fk.columns.length === pkCols.size &&
+                fk.columns.every(function(c) { return pkCols.has(c); });
+        });
+        if (fkMatchesPk) roles.push('Subtype');
+    }
+
+    // Association (junction table): composite PK where ALL columns are FK columns
+    if (pks.length > 0 && fks.length >= 2) {
+        var pkCols2 = new Set(pks[0].columns);
+        var allFkCols = new Set(fks.reduce(function(acc, fk) { return acc.concat(fk.columns); }, []));
+        if (pkCols2.size > 1 && Array.from(pkCols2).every(function(c) { return allFkCols.has(c); })) {
+            roles.push('Association');
+        }
+    }
+
+    // Hierarchy: self-referential FK
+    if (fks.some(function(fk) { return fk.references === obj.id; })) {
+        roles.push('Hierarchy');
+    }
+
+    // Defined Class: view with PK-as-FK to base table
+    if (obj.object_type === 'view' && roles.indexOf('Subtype') !== -1) {
+        roles.push('Defined Class');
+    }
+
+    // One-to-one: FK column has a UNIQUE constraint
+    var uniqueCols = new Set(uniques.reduce(function(acc, u) { return acc.concat(u.columns); }, []));
+    if (fks.some(function(fk) { return fk.columns.every(function(c) { return uniqueCols.has(c); }); })) {
+        roles.push('One-to-One');
+    }
+
+    return roles;
+}
+
+/**
+ * Classify the relationship type for a foreign key constraint.
+ *
+ * @param {Object} sourceObj - The source manifest object.
+ * @param {Object} fk - The FK constraint { columns, references, reference_columns }.
+ * @returns {{ type: string, label: string }} Relationship classification.
+ */
+function classifyRelationship(sourceObj, fk) {
+    var pks = (sourceObj.constraints || []).filter(function(c) { return c.kind === 'PRIMARY KEY'; });
+    var uniques = (sourceObj.constraints || []).filter(function(c) { return c.kind === 'UNIQUE'; });
+    var pkCols = pks.length > 0 ? new Set(pks[0].columns) : new Set();
+    var uniqueCols = new Set(uniques.reduce(function(acc, u) { return acc.concat(u.columns); }, []));
+    var fkColSet = new Set(fk.columns);
+
+    // Self-referential
+    if (fk.references === sourceObj.id) return { type: 'recursive', label: 'recursive' };
+
+    // Subclass: FK columns = PK columns
+    if (pkCols.size > 0 && fkColSet.size === pkCols.size &&
+        Array.from(fkColSet).every(function(c) { return pkCols.has(c); })) {
+        return { type: 'subclass', label: 'is-a' };
+    }
+
+    // One-to-one: FK columns have UNIQUE
+    if (fk.columns.every(function(c) { return uniqueCols.has(c); })) {
+        return { type: 'one-to-one', label: '1:1' };
+    }
+
+    // Check nullability via columns data
+    var colMap = {};
+    if (sourceObj.columns) sourceObj.columns.forEach(function(c) { colMap[c.name] = c; });
+    var allNonNull = fk.columns.every(function(c) { return colMap[c] && !colMap[c].nullable; });
+
+    if (allNonNull) return { type: 'mandatory', label: 'N:1' };
+    return { type: 'optional', label: '0..N:1' };
+}
+
+/**
+ * Find FK-connected paths between two objects using BFS.
+ *
+ * @param {string} fromId - Source object ID.
+ * @param {string} toId - Target object ID.
+ * @param {number} [maxDepth=6] - Maximum path length.
+ * @returns {string[][]} Array of paths (each path is an array of object IDs).
+ */
+function findFKPaths(fromId, toId, maxDepth) {
+    if (maxDepth === undefined) maxDepth = 6;
+    var paths = [];
+    var queue = [[fromId]];
+
+    while (queue.length > 0 && paths.length < 10) {
+        var path = queue.shift();
+        var current = path[path.length - 1];
+        if (path.length > maxDepth + 1) continue;
+
+        if (current === toId && path.length > 1) {
+            paths.push(path);
+            continue;
+        }
+
+        var neighbors = (fkForward[current] || []).map(function(r) { return r.target_id; })
+            .concat((fkReverse[current] || []).map(function(r) { return r.source_id; }));
+
+        for (var ni = 0; ni < neighbors.length; ni++) {
+            var next = neighbors[ni];
+            if (path.indexOf(next) === -1) {
+                queue.push(path.concat([next]));
+            }
+        }
+    }
+    return paths;
+}
+
+/**
+ * Detect polymorphic association patterns in the project.
+ *
+ * @returns {Array<Array<{view: Object, fk: Object, target: string}>>} Groups of polymorphic views.
+ */
+function detectPolymorphicAssociations() {
+    var groups = {};
+
+    M.objects.forEach(function(obj) {
+        if (obj.object_type !== 'view') return;
+        var fks = (obj.constraints || []).filter(function(c) { return c.kind === 'FOREIGN KEY'; });
+        if (fks.length !== 1) return;
+        var fk = fks[0];
+
+        obj.dependencies.forEach(function(dep) {
+            if (dep !== fk.references) {
+                var key = dep + ':' + fk.columns.join(',');
+                (groups[key] = groups[key] || []).push({
+                    view: obj, fk: fk, target: fk.references
+                });
+            }
+        });
+    });
+
+    return Object.keys(groups).map(function(k) { return groups[k]; })
+        .filter(function(g) { return g.length >= 2; });
+}
+
+/** Cached polymorphic associations, computed once. */
+var polymorphicGroups = detectPolymorphicAssociations();
+
+/** Map from object id to polymorphic group info. */
+var polymorphicMap = {};
+polymorphicGroups.forEach(function(group) {
+    group.forEach(function(entry) {
+        polymorphicMap[entry.view.id] = group;
+    });
+});
+
 // ====== Routing ======
 
 /**
@@ -147,6 +335,8 @@ function navigate(view, id) {
         if (link) link.classList.add('active');
         window.location.hash = view;
         if (view === 'dag') renderDAG();
+        if (view === 'er') renderERDiagram();
+        if (view === 'pathfinder') renderPathFinder();
     }
 }
 
@@ -179,7 +369,7 @@ function handleHash() {
         dagViewLevel = 'objects';
         dagDrillSchema = fqn;
         navigate('dag');
-    } else if (['dag', 'clusters', 'contracts', 'tests', 'governance'].includes(hash)) {
+    } else if (['dag', 'er', 'pathfinder', 'clusters', 'contracts', 'tests', 'governance'].includes(hash)) {
         navigate(hash);
     } else {
         navigate('overview');
@@ -466,68 +656,77 @@ function createArrowheadMarker(ns, markerId) {
 // ====== Overview ======
 
 /**
- * Render the domain grid (schema cards) for the overview page.
+ * Render the stable APIs section (replacement schema cards) for the overview page.
  *
- * @returns {string} HTML string for the domain grid section.
+ * @returns {string} HTML string for the stable APIs section.
  */
-function renderDomainGrid() {
-    let html = '<div class="section"><h2>Domains</h2>';
-    html += '<div class="domain-grid">';
-
+function renderStableAPIs() {
+    // Collect replacement schemas
+    const stableAPIs = [];
     M.databases.forEach(db => {
         db.schemas.forEach(schema => {
-            const fqn = db.name + '.' + schema.name;
-            const schemaObjIds = new Set(schema.object_ids);
-            const typeCounts = {};
-            schema.object_ids.forEach(oid => {
-                const obj = objMap[oid];
-                if (!obj) return;
-                typeCounts[obj.object_type] = (typeCounts[obj.object_type] || 0) + 1;
-            });
-
-            // Cross-schema edges
-            let inbound = 0, outbound = 0;
-            M.edges.forEach(e => {
-                const srcIn = schemaObjIds.has(e.source);
-                const tgtIn = schemaObjIds.has(e.target);
-                if (srcIn && !tgtIn) outbound++;
-                if (!srcIn && tgtIn) inbound++;
-            });
-
-            // Build type summary string
-            const parts = [];
-            TYPE_ORDER.forEach(t => {
-                if (typeCounts[t]) parts.push(typeCounts[t] + ' ' + t.replace(/-/g, ' ') + (typeCounts[t] > 1 ? 's' : ''));
-            });
-
-            // Schema type badge
-            let schemaTypeBadge = '';
-            if (schema.schema_type) {
-                schemaTypeBadge = '<span class="badge schema-type" title="Schema deployment layer">' + escapeHtml(schema.schema_type) + '</span>';
-            }
-            let replacementBadge = '';
             if (schema.is_replacement) {
-                replacementBadge = '<span class="badge replacement" title="This schema uses blue/green replacement for zero-downtime deployments">stable API</span>';
+                stableAPIs.push({ db: db, schema: schema });
             }
-
-            // Description or hint
-            let descHtml = '';
-            if (schema.description) {
-                descHtml = '<div class="domain-desc">' + escapeHtml(schema.description) + '</div>';
-            } else if (schema.file_hint) {
-                descHtml = '<div class="domain-hint" title="Add a description via COMMENT ON SCHEMA in ' + escapeHtml(schema.file_hint) + '">\u24d8</div>';
-            }
-
-            html += '<div class="domain-card">';
-            html += '<div class="domain-header"><span class="domain-name">' + escapeHtml(schema.name) + '</span> ' + schemaTypeBadge + replacementBadge + '</div>';
-            html += '<div class="domain-fqn">' + escapeHtml(fqn) + '</div>';
-            html += descHtml;
-            html += '<div class="domain-counts">' + (parts.length > 0 ? parts.join(', ') : 'empty') + '</div>';
-            html += '<div class="domain-edges">&larr; ' + inbound + ' deps &nbsp; &rarr; ' + outbound + ' dependents</div>';
-            html += '<a class="domain-link" data-schema="' + escapeHtml(fqn) + '">View in DAG</a>';
-            html += '</div>';
         });
     });
+
+    let html = '<div class="section"><h2>Stable APIs</h2>';
+
+    if (stableAPIs.length === 0) {
+        html += '<p style="color:var(--text-muted)">No stable APIs in project.</p></div>';
+        return html;
+    }
+
+    html += '<div class="domain-grid">';
+
+    stableAPIs.forEach(({ db, schema }) => {
+        const fqn = db.name + '.' + schema.name;
+        const schemaObjIds = new Set(schema.object_ids);
+
+        // Collect consumer roles from grants
+        const roles = new Set();
+        schema.object_ids.forEach(oid => {
+            const obj = objMap[oid];
+            if (!obj || !obj.grants) return;
+            obj.grants.forEach(g => {
+                if (typeof g === 'object') roles.add(g.role);
+            });
+        });
+
+        // Collect dependent schemas
+        const depSchemas = new Set();
+        schema.object_ids.forEach(oid => {
+            const obj = objMap[oid];
+            if (!obj) return;
+            (obj.dependents || []).forEach(depId => {
+                if (schemaObjIds.has(depId)) return;
+                const depObj = objMap[depId];
+                if (depObj) depSchemas.add(depObj.database + '.' + depObj.schema);
+            });
+        });
+
+        // Description or hint
+        let descHtml = '';
+        if (schema.description) {
+            descHtml = '<div class="domain-desc">' + escapeHtml(schema.description) + '</div>';
+        } else if (schema.file_hint) {
+            descHtml = '<div class="domain-hint" title="Add a description via COMMENT ON SCHEMA in ' + escapeHtml(schema.file_hint) + '">\u24d8</div>';
+        }
+
+        const roleList = roles.size > 0 ? Array.from(roles).map(escapeHtml).join(', ') : 'none';
+        const depList = depSchemas.size > 0 ? Array.from(depSchemas).map(escapeHtml).join(', ') : 'none';
+
+        html += '<div class="domain-card">';
+        html += '<div class="domain-header"><span class="domain-name">' + escapeHtml(schema.name) + '</span></div>';
+        html += '<div class="domain-fqn">' + escapeHtml(fqn) + '</div>';
+        html += descHtml;
+        html += '<div class="domain-counts">' + schema.object_ids.length + ' objects</div>';
+        html += '<div class="domain-edges">Roles: ' + roleList + '<br>Dependent schemas: ' + depList + '</div>';
+        html += '<a class="domain-link" data-schema="' + escapeHtml(fqn) + '">View in DAG</a>';
+        html += '</div>';
+    });
+
     html += '</div></div>';
     return html;
 }
@@ -652,7 +851,7 @@ function renderPipelineDepthCard() {
 }
 
 /**
- * Render the overview page with domain grid, summary cards, clusters table,
+ * Render the overview page with stable APIs, summary cards, clusters table,
  * and external dependencies table.
  */
 function renderOverview() {
@@ -662,8 +861,8 @@ function renderOverview() {
     let html = '<h1 style="margin-bottom:20px">' + escapeHtml(M.project_name) + '</h1>';
     html += '<p style="color:var(--text-muted);margin-bottom:24px">Generated ' + escapeHtml(M.generated_at) + '</p>';
 
-    // Domain grid
-    html += renderDomainGrid();
+    // Stable APIs
+    html += renderStableAPIs();
 
     // Summary cards
     html += '<div class="overview-summary">';
@@ -733,6 +932,13 @@ function renderHeader(obj, opts) {
     if (obj.is_replacement_schema) html += '<span class="badge replacement" title="This schema uses blue/green replacement for zero-downtime deployments">stable API</span>';
     if (obj.is_external) html += '<span class="badge type-external">external</span>';
     if (obj.dag_depth != null) html += '<span class="badge layer" title="Topological depth in the dependency graph (0 = no dependencies)">Layer ' + obj.dag_depth + '</span>';
+    var roles = classifyObject(obj);
+    roles.forEach(function(role) {
+        html += '<span class="badge badge-ontology" title="Ontological role: ' + escapeHtml(role) + '">' + escapeHtml(role) + '</span>';
+    });
+    if (polymorphicMap[obj.id]) {
+        html += '<span class="badge badge-polymorphic" title="Part of a polymorphic association pattern">Polymorphic</span>';
+    }
     html += '</div>';
     html += '<p style="color:var(--text-muted);margin-top:8px">' + escapeHtml(obj.database + '.' + obj.schema) + '</p>';
     html += '<button class="show-lineage-btn" data-id="' + escapeHtml(obj.id) + '">Show lineage</button>';
@@ -895,8 +1101,46 @@ function renderConstraints(obj) {
         html += '<td>' + escapeHtml(c.name || '\u2014') + '</td>';
         html += '<td>' + (c.columns ? c.columns.map(escapeHtml).join(', ') : '') + '</td>';
         html += '<td>' + (c.enforced ? 'Yes' : 'No') + '</td>';
-        html += '<td>' + escapeHtml(c.references || '\u2014') + '</td>';
+        html += '<td>';
+        if (c.references) {
+            html += '<a class="dep-link" data-id="' + escapeHtml(c.references) + '">' + escapeHtml(c.references) + '</a>';
+            if (c.reference_columns && c.reference_columns.length > 0) {
+                html += ' (' + c.reference_columns.map(escapeHtml).join(', ') + ')';
+            }
+        } else {
+            html += '\u2014';
+        }
+        html += '</td>';
         html += '<td>' + escapeHtml(c.cluster || '\u2014') + '</td></tr>';
+        if (c.enforced && c.companion_sql) {
+            html += '<tr><td colspan="6" class="companion-sql">';
+            html += '<details><summary>Monitoring query</summary>';
+            html += '<div class="sql-block"><pre>' + highlightSQL(c.companion_sql) + '</pre></div>';
+            html += '</details></td></tr>';
+        }
+    });
+    html += '</tbody></table></div>';
+    return html;
+}
+
+/**
+ * Render the "Referenced By" section showing objects with FKs pointing to this object.
+ *
+ * @param {Object} obj - The manifest object.
+ * @returns {string} HTML string, or empty string if no inbound FK references.
+ */
+function renderReferencedBy(obj) {
+    var refs = fkReverse[obj.id];
+    if (!refs || refs.length === 0) return '';
+    var html = '<div class="section"><h2>Referenced By (' + refs.length + ')</h2>';
+    html += '<table class="data-table"><thead><tr><th>Object</th><th>Constraint</th><th>Columns</th><th>Enforced</th></tr></thead><tbody>';
+    refs.forEach(function(r) {
+        html += '<tr>';
+        html += '<td><a class="dep-link" data-id="' + escapeHtml(r.source_id) + '">' + escapeHtml(r.source_id) + '</a></td>';
+        html += '<td>' + escapeHtml(r.fk_name) + '</td>';
+        html += '<td>' + r.source_cols.join(', ') + ' \u2192 ' + r.target_cols.join(', ') + '</td>';
+        html += '<td>' + (r.enforced ? 'Yes' : 'No') + '</td>';
+        html += '</tr>';
     });
     html += '</tbody></table></div>';
     return html;
@@ -1034,6 +1278,7 @@ function renderTableFromSourceDetail(obj) {
     html += renderDepsTable(obj.dependents, 'Dependents');
     html += renderIndexes(obj);
     html += renderConstraints(obj);
+    html += renderReferencedBy(obj);
     html += renderGrants(obj);
     html += renderObjectTests(obj);
     html += renderFilePath(obj);
@@ -1058,6 +1303,7 @@ function renderDefaultDetail(obj) {
     html += renderDepsTable(obj.dependents, 'Dependents');
     html += renderIndexes(obj);
     html += renderConstraints(obj);
+    html += renderReferencedBy(obj);
     html += renderGrants(obj);
     html += renderObjectTests(obj);
     html += renderFilePath(obj);
@@ -1126,7 +1372,7 @@ function buildDagControls(allObjects) {
     // View-level select
     html += '<label>View: </label>';
     html += '<select id="dag-view-level">';
-    html += '<option value="domains"' + (dagViewLevel === 'domains' ? ' selected' : '') + '>Domains</option>';
+    html += '<option value="domains"' + (dagViewLevel === 'domains' ? ' selected' : '') + '>Schemas</option>';
     html += '<option value="objects"' + (dagViewLevel === 'objects' ? ' selected' : '') + '>Objects</option>';
     html += '</select>';
 
@@ -1570,6 +1816,26 @@ function layoutAndRenderDAG(svg, objects, edges) {
         path.setAttribute('data-target', e.target);
         g.appendChild(path);
         dagEdgeElements.push({ source: e.source, target: e.target, kind: e.kind, path: path });
+
+        // Phase 6: Semantic FK edge labels
+        const targetObj = objMap[e.target];
+        const fkMatch = targetObj && (targetObj.constraints || []).find(function(c) {
+            return c.kind === 'FOREIGN KEY' && c.references === e.source;
+        });
+        if (fkMatch) {
+            path.setAttribute('class', path.getAttribute('class') + ' edge-fk');
+            const mx = (sx + tx2) / 2, mmy = (sy + ty2) / 2;
+            const fkLabel = document.createElementNS(ns, 'text');
+            var labelText = fkMatch.columns.join(',');
+            if (fkMatch.reference_columns && fkMatch.reference_columns.length > 0) {
+                labelText += ' \u2192 ' + fkMatch.reference_columns.join(',');
+            }
+            fkLabel.textContent = labelText;
+            fkLabel.setAttribute('x', mx);
+            fkLabel.setAttribute('y', mmy - 6);
+            fkLabel.setAttribute('class', 'dag-edge-fk-label');
+            g.appendChild(fkLabel);
+        }
     });
 
     // Nodes
@@ -1715,16 +1981,50 @@ function highlightLineage(objectId) {
         document.getElementById('dag-container').appendChild(panel);
     }
     const objName = objMap[objectId] ? objMap[objectId].name : objectId;
-    panel.innerHTML = '<span class="lineage-close" id="lineage-close">&times;</span>' +
+    var panelHtml = '<span class="lineage-close" id="lineage-close">&times;</span>' +
         '<div class="lineage-name">' + escapeHtml(objName) + '</div>' +
         '<div class="lineage-stats">' +
         '<span class="lineage-upstream">&uarr; ' + upstream.size + ' upstream</span>' +
         '<span class="lineage-downstream">&darr; ' + downstream.size + ' downstream</span>' +
         '</div>';
+
+    // Phase 7: Show FK relationships in lineage panel
+    var fksOut = fkForward[objectId] || [];
+    var fksIn = fkReverse[objectId] || [];
+    if (fksOut.length > 0 || fksIn.length > 0) {
+        panelHtml += '<div class="lineage-relationships">';
+        panelHtml += '<h4>Relationships</h4>';
+        fksOut.forEach(function(fk) {
+            var rel = classifyRelationship(objMap[objectId], {
+                columns: fk.source_cols, references: fk.target_id
+            });
+            panelHtml += '<div class="lineage-rel">';
+            panelHtml += '\u2192 <a class="lineage-nav" data-id="' + escapeHtml(fk.target_id) + '">' + escapeHtml(fk.target_id) + '</a>';
+            panelHtml += ' <span class="rel-type">' + escapeHtml(rel.label) + '</span>';
+            panelHtml += ' via ' + escapeHtml(fk.source_cols.join(', '));
+            panelHtml += '</div>';
+        });
+        fksIn.forEach(function(fk) {
+            panelHtml += '<div class="lineage-rel">';
+            panelHtml += '\u2190 <a class="lineage-nav" data-id="' + escapeHtml(fk.source_id) + '">' + escapeHtml(fk.source_id) + '</a>';
+            panelHtml += ' via ' + escapeHtml(fk.fk_name);
+            panelHtml += '</div>';
+        });
+        panelHtml += '</div>';
+    }
+
+    panel.innerHTML = panelHtml;
     panel.style.display = 'block';
     document.getElementById('lineage-close').addEventListener('click', function(ev) {
         ev.stopPropagation();
         clearLineage();
+    });
+    panel.querySelectorAll('.lineage-nav').forEach(function(link) {
+        link.style.cursor = 'pointer';
+        link.addEventListener('click', function(ev) {
+            ev.stopPropagation();
+            navigate('detail', link.dataset.id);
+        });
     });
 }
 
@@ -2051,6 +2351,650 @@ function renderGovernance() {
             });
         });
     });
+}
+
+// ====== ER Diagram ======
+
+/** Layout dimensions for ER diagram nodes. */
+var ER_DAG = { NODE_W: 220, NODE_H: 32, PAD_X: 60, PAD_Y: 60 };
+
+/**
+ * Render the Entity-Relationship diagram view.
+ */
+function renderERDiagram() {
+    var el = document.getElementById('view-er');
+
+    // Collect ER-relevant objects: those with PKs, FKs, or that are FK targets
+    var erObjectIds = new Set();
+    M.objects.forEach(function(obj) {
+        var hasPK = (obj.constraints || []).some(function(c) { return c.kind === 'PRIMARY KEY'; });
+        var hasFK = (obj.constraints || []).some(function(c) { return c.kind === 'FOREIGN KEY'; });
+        if (hasPK || hasFK) erObjectIds.add(obj.id);
+        if (fkReverse[obj.id]) erObjectIds.add(obj.id);
+    });
+
+    if (erObjectIds.size === 0) {
+        el.innerHTML = '<h1 style="margin-bottom:20px">Entity Relationships</h1>' +
+            '<p style="color:var(--text-muted)">No FK constraints found in project. Add CONSTRAINT ... FOREIGN KEY statements to see the ER diagram.</p>';
+        return;
+    }
+
+    var erObjects = M.objects.filter(function(o) { return erObjectIds.has(o.id); });
+
+    // Build FK edges for layout
+    var erEdges = [];
+    var edgeDetails = [];
+    erObjects.forEach(function(obj) {
+        (fkForward[obj.id] || []).forEach(function(fk) {
+            if (erObjectIds.has(fk.target_id)) {
+                var rel = classifyRelationship(obj, {
+                    columns: fk.source_cols, references: fk.target_id
+                });
+                erEdges.push({ source: fk.target_id, target: obj.id });
+                edgeDetails.push({
+                    source_id: obj.id,
+                    target_id: fk.target_id,
+                    fk_name: fk.fk_name,
+                    source_cols: fk.source_cols,
+                    target_cols: fk.target_cols,
+                    rel: rel,
+                    enforced: fk.enforced
+                });
+            }
+        });
+    });
+
+    // Compute dynamic node heights based on column count
+    var nodeHeights = {};
+    erObjects.forEach(function(obj) {
+        var pks = (obj.constraints || []).filter(function(c) { return c.kind === 'PRIMARY KEY'; });
+        var fks = (obj.constraints || []).filter(function(c) { return c.kind === 'FOREIGN KEY'; });
+        var pkCols = pks.length > 0 ? pks[0].columns : [];
+        var fkCols = [];
+        fks.forEach(function(fk) {
+            fk.columns.forEach(function(c) {
+                if (fkCols.indexOf(c) === -1 && pkCols.indexOf(c) === -1) fkCols.push(c);
+            });
+        });
+        var lineCount = 1 + pkCols.length + fkCols.length; // name + pk cols + fk cols
+        nodeHeights[obj.id] = Math.max(40, 28 + lineCount * 16);
+    });
+
+    // Use max height for uniform layout
+    var maxNodeH = 40;
+    erObjects.forEach(function(obj) { maxNodeH = Math.max(maxNodeH, nodeHeights[obj.id]); });
+
+    var erDims = { NODE_W: 220, NODE_H: maxNodeH, PAD_X: 60, PAD_Y: 50 };
+    var layout = computeGraphLayout(erObjects, erEdges, erDims);
+
+    // Build controls
+    var html = '<h1 style="margin-bottom:12px">Entity Relationships</h1>';
+    html += '<div class="er-controls" id="er-controls">';
+    html += '<button id="er-zoom-in">+</button>';
+    html += '<button id="er-zoom-out">\u2212</button>';
+    html += '<button id="er-reset">Reset</button>';
+    html += '<button id="er-export-jsonld">JSON-LD</button>';
+    html += '<button id="er-export-owl">OWL/XML</button>';
+    html += '</div>';
+    html += '<div id="er-container"><svg id="er-svg"></svg></div>';
+    html += '<div id="er-preview" style="display:none">';
+    html += '<div class="er-controls">';
+    html += '<button id="er-back">Back to Diagram</button>';
+    html += '<button id="er-download">Download</button>';
+    html += '</div>';
+    html += '<h2 id="er-preview-title"></h2>';
+    html += '<div class="sql-block"><pre id="er-preview-content"></pre></div>';
+    html += '</div>';
+    el.innerHTML = html;
+
+    var svg = document.getElementById('er-svg');
+    var ns = 'http://www.w3.org/2000/svg';
+    var g = document.createElementNS(ns, 'g');
+
+    g.appendChild(createArrowheadMarker(ns, 'er-arrowhead'));
+
+    // Render edges
+    edgeDetails.forEach(function(ed) {
+        var si = layout.idxMap[ed.target_id], ti = layout.idxMap[ed.source_id];
+        if (si === undefined || ti === undefined) return;
+        var sx = layout.x[si] + erDims.NODE_W / 2, sy = layout.y[si] + erDims.NODE_H;
+        var tx = layout.x[ti] + erDims.NODE_W / 2, ty = layout.y[ti];
+        var my = (sy + ty) / 2;
+
+        var edgeG = document.createElementNS(ns, 'g');
+        edgeG.setAttribute('class', 'er-edge er-edge-' + ed.rel.type);
+
+        var path = document.createElementNS(ns, 'path');
+        path.setAttribute('d', 'M' + sx + ' ' + sy + ' C' + sx + ' ' + my + ' ' + tx + ' ' + my + ' ' + tx + ' ' + ty);
+        path.setAttribute('marker-end', 'url(#er-arrowhead)');
+        edgeG.appendChild(path);
+
+        // Label — placed to the right, clear of the edge path
+        var label = document.createElementNS(ns, 'text');
+        var rightX = Math.max(sx, tx) + erDims.NODE_W / 2 + 16;
+        var labelY = (sy + ty) / 2 + 4;
+        label.setAttribute('x', rightX);
+        label.setAttribute('y', labelY);
+        label.setAttribute('class', 'er-edge-label');
+        label.setAttribute('text-anchor', 'start');
+        label.textContent = ed.rel.label + ': ' + ed.fk_name;
+        edgeG.appendChild(label);
+
+        // Source cardinality — just below source node, to the right
+        var srcCard = document.createElementNS(ns, 'text');
+        srcCard.setAttribute('x', rightX);
+        srcCard.setAttribute('y', sy + 16);
+        srcCard.setAttribute('class', 'er-cardinality');
+        srcCard.setAttribute('text-anchor', 'start');
+        if (ed.rel.type === 'one-to-one') srcCard.textContent = '1';
+        else if (ed.rel.type === 'subclass') srcCard.textContent = '1';
+        else srcCard.textContent = 'N';
+        edgeG.appendChild(srcCard);
+
+        // Target cardinality — just above target node, to the right
+        var tgtCard = document.createElementNS(ns, 'text');
+        tgtCard.setAttribute('x', rightX);
+        tgtCard.setAttribute('y', ty - 6);
+        tgtCard.setAttribute('class', 'er-cardinality');
+        tgtCard.setAttribute('text-anchor', 'start');
+        tgtCard.textContent = '1';
+        edgeG.appendChild(tgtCard);
+
+        // Tooltip
+        var title = document.createElementNS(ns, 'title');
+        title.textContent = ed.fk_name + ': ' + ed.source_cols.join(', ') + ' \u2192 ' + ed.target_cols.join(', ');
+        edgeG.appendChild(title);
+
+        g.appendChild(edgeG);
+    });
+
+    // Render nodes
+    erObjects.forEach(function(obj, i) {
+        var nodeH = nodeHeights[obj.id];
+        var node = document.createElementNS(ns, 'g');
+        node.setAttribute('class', 'er-node');
+        node.setAttribute('transform', 'translate(' + layout.x[i] + ',' + layout.y[i] + ')');
+
+        var rect = document.createElementNS(ns, 'rect');
+        rect.setAttribute('width', erDims.NODE_W);
+        rect.setAttribute('height', nodeH);
+        rect.setAttribute('rx', '6');
+        rect.setAttribute('stroke', TYPE_BORDER_COLORS[obj.object_type] || '#c0c0c6');
+        node.appendChild(rect);
+
+        // Name
+        var nameText = document.createElementNS(ns, 'text');
+        nameText.setAttribute('x', 10);
+        nameText.setAttribute('y', 18);
+        nameText.setAttribute('class', 'er-node-name');
+        nameText.textContent = obj.name.length > 24 ? obj.name.slice(0, 22) + '\u2026' : obj.name;
+        node.appendChild(nameText);
+
+        // Type badge
+        var typeBadge = document.createElementNS(ns, 'text');
+        typeBadge.setAttribute('x', erDims.NODE_W - 10);
+        typeBadge.setAttribute('y', 18);
+        typeBadge.setAttribute('text-anchor', 'end');
+        typeBadge.setAttribute('class', 'er-type-badge');
+        typeBadge.textContent = obj.object_type;
+        node.appendChild(typeBadge);
+
+        // Separator line
+        var sep = document.createElementNS(ns, 'line');
+        sep.setAttribute('x1', 0);
+        sep.setAttribute('y1', 26);
+        sep.setAttribute('x2', erDims.NODE_W);
+        sep.setAttribute('y2', 26);
+        sep.setAttribute('stroke', '#e0e0e3');
+        node.appendChild(sep);
+
+        // PK and FK columns
+        var yPos = 40;
+        var pks = (obj.constraints || []).filter(function(c) { return c.kind === 'PRIMARY KEY'; });
+        var fks = (obj.constraints || []).filter(function(c) { return c.kind === 'FOREIGN KEY'; });
+        var pkCols = pks.length > 0 ? pks[0].columns : [];
+        var fkColSet = new Set();
+        fks.forEach(function(fk) { fk.columns.forEach(function(c) { fkColSet.add(c); }); });
+
+        pkCols.forEach(function(col) {
+            var colText = document.createElementNS(ns, 'text');
+            colText.setAttribute('x', 10);
+            colText.setAttribute('y', yPos);
+            colText.setAttribute('class', 'er-pk-col');
+            colText.textContent = '\ud83d\udd11 ' + col;
+            node.appendChild(colText);
+            yPos += 16;
+        });
+
+        fks.forEach(function(fk) {
+            fk.columns.forEach(function(col) {
+                if (pkCols.indexOf(col) !== -1) return; // already shown as PK
+                var colText = document.createElementNS(ns, 'text');
+                colText.setAttribute('x', 10);
+                colText.setAttribute('y', yPos);
+                colText.setAttribute('class', 'er-fk-col');
+                colText.textContent = '\u2192 ' + col;
+                node.appendChild(colText);
+                yPos += 16;
+            });
+        });
+
+        node.addEventListener('click', function() { navigate('detail', obj.id); });
+        g.appendChild(node);
+    });
+
+    svg.setAttribute('viewBox', '0 0 ' + layout.totalW + ' ' + layout.totalH);
+    svg.appendChild(g);
+
+    // Pan/zoom
+    setupERPanZoom(svg, g, 'er-zoom-in', 'er-zoom-out', 'er-reset');
+
+    // Export preview state
+    var erPreviewContent = null;
+    var erPreviewFilename = null;
+    var erPreviewMimeType = null;
+
+    function showERPreview(title, content, filename, mimeType) {
+        erPreviewContent = content;
+        erPreviewFilename = filename;
+        erPreviewMimeType = mimeType;
+        document.getElementById('er-container').style.display = 'none';
+        document.getElementById('er-controls').style.display = 'none';
+        document.getElementById('er-preview').style.display = 'block';
+        document.getElementById('er-preview-title').textContent = title;
+        document.getElementById('er-preview-content').textContent = content;
+    }
+
+    function hideERPreview() {
+        document.getElementById('er-preview').style.display = 'none';
+        document.getElementById('er-container').style.display = '';
+        document.getElementById('er-controls').style.display = '';
+    }
+
+    // Export handlers
+    document.getElementById('er-export-jsonld').addEventListener('click', function() {
+        var content = generateOntologyJsonLD();
+        showERPreview('JSON-LD', content, M.project_name + '-ontology.jsonld', 'application/ld+json');
+    });
+    document.getElementById('er-export-owl').addEventListener('click', function() {
+        var content = generateOntologyOWL();
+        showERPreview('OWL/XML', content, M.project_name + '-ontology.owl', 'application/rdf+xml');
+    });
+    document.getElementById('er-back').addEventListener('click', function() {
+        hideERPreview();
+    });
+    document.getElementById('er-download').addEventListener('click', function() {
+        downloadText(erPreviewContent, erPreviewFilename, erPreviewMimeType);
+    });
+}
+
+/**
+ * Set up pan and zoom controls for an SVG element.
+ *
+ * @param {SVGElement} svg - The SVG element.
+ * @param {SVGGElement} g - The root group element inside the SVG.
+ * @param {string} zoomInId - Button element ID for zoom in.
+ * @param {string} zoomOutId - Button element ID for zoom out.
+ * @param {string} resetId - Button element ID for reset.
+ */
+function setupERPanZoom(svg, g, zoomInId, zoomOutId, resetId) {
+    var scale = 1, panX = 0, panY = 0;
+    var isPanning = false, startX, startY;
+
+    function applyTransform() {
+        g.setAttribute('transform', 'translate(' + panX + ',' + panY + ') scale(' + scale + ')');
+    }
+
+    svg.addEventListener('wheel', function(e) {
+        e.preventDefault();
+        var delta = e.deltaY > 0 ? 0.9 : 1.1;
+        scale = Math.max(0.1, Math.min(5, scale * delta));
+        applyTransform();
+    });
+
+    svg.addEventListener('mousedown', function(e) {
+        isPanning = true;
+        startX = e.clientX - panX;
+        startY = e.clientY - panY;
+        svg.style.cursor = 'grabbing';
+    });
+
+    svg.addEventListener('mousemove', function(e) {
+        if (!isPanning) return;
+        panX = e.clientX - startX;
+        panY = e.clientY - startY;
+        applyTransform();
+    });
+
+    svg.addEventListener('mouseup', function() { isPanning = false; svg.style.cursor = 'grab'; });
+    svg.addEventListener('mouseleave', function() { isPanning = false; svg.style.cursor = 'default'; });
+
+    document.getElementById(zoomInId).addEventListener('click', function() {
+        scale = Math.min(5, scale * 1.2);
+        applyTransform();
+    });
+    document.getElementById(zoomOutId).addEventListener('click', function() {
+        scale = Math.max(0.1, scale * 0.8);
+        applyTransform();
+    });
+    document.getElementById(resetId).addEventListener('click', function() {
+        scale = 1; panX = 0; panY = 0;
+        applyTransform();
+    });
+}
+
+// ====== Path Finder ======
+
+/**
+ * Render the Path Finder view for discovering FK paths between objects.
+ */
+function renderPathFinder() {
+    var el = document.getElementById('view-pathfinder');
+
+    // Collect objects that participate in FK relationships
+    var fkParticipants = [];
+    M.objects.forEach(function(obj) {
+        if (fkForward[obj.id] || fkReverse[obj.id]) {
+            fkParticipants.push(obj);
+        }
+    });
+
+    var html = '<h1 style="margin-bottom:12px">Path Finder</h1>';
+    html += '<p style="color:var(--text-muted);margin-bottom:16px">Find foreign key paths between any two objects in the project.</p>';
+
+    if (fkParticipants.length < 2) {
+        html += '<p style="color:var(--text-muted)">Need at least 2 objects with FK constraints to find paths.</p>';
+        el.innerHTML = html;
+        return;
+    }
+
+    html += '<div class="pathfinder-controls">';
+    html += '<select id="pf-from"><option value="">From...</option>';
+    fkParticipants.forEach(function(o) {
+        html += '<option value="' + escapeHtml(o.id) + '">' + escapeHtml(o.id) + '</option>';
+    });
+    html += '</select>';
+    html += '<select id="pf-to"><option value="">To...</option>';
+    fkParticipants.forEach(function(o) {
+        html += '<option value="' + escapeHtml(o.id) + '">' + escapeHtml(o.id) + '</option>';
+    });
+    html += '</select>';
+    html += '<button id="pf-find">Find Paths</button>';
+    html += '</div>';
+    html += '<div id="pf-results"></div>';
+
+    el.innerHTML = html;
+
+    document.getElementById('pf-find').addEventListener('click', function() {
+        var fromId = document.getElementById('pf-from').value;
+        var toId = document.getElementById('pf-to').value;
+        var resultsEl = document.getElementById('pf-results');
+        if (!fromId || !toId) {
+            resultsEl.innerHTML = '<p style="color:var(--text-muted)">Select both From and To objects.</p>';
+            return;
+        }
+        if (fromId === toId) {
+            resultsEl.innerHTML = '<p style="color:var(--text-muted)">From and To must be different objects.</p>';
+            return;
+        }
+
+        var paths = findFKPaths(fromId, toId);
+        if (paths.length === 0) {
+            resultsEl.innerHTML = '<p style="color:var(--text-muted)">No FK paths found between these objects (max depth: 6).</p>';
+            return;
+        }
+
+        var rhtml = '<p style="color:var(--text-muted);margin-bottom:12px">Found ' + paths.length + ' path(s):</p>';
+        paths.forEach(function(path, pidx) {
+            rhtml += '<div class="pathfinder-result">';
+
+            // Path chain visualization
+            rhtml += '<div class="path-chain">';
+            path.forEach(function(nodeId, ni) {
+                if (ni > 0) {
+                    // Find the FK between consecutive nodes
+                    var prev = path[ni - 1];
+                    var fkInfo = findFKBetween(prev, nodeId);
+                    rhtml += '<span class="path-arrow">\u2192</span>';
+                }
+                var nodeObj = objMap[nodeId];
+                var label = nodeObj ? nodeObj.name : nodeId;
+                rhtml += '<span class="path-node" data-id="' + escapeHtml(nodeId) + '">' + escapeHtml(label) + '</span>';
+            });
+            rhtml += '</div>';
+
+            // Step details
+            for (var si = 1; si < path.length; si++) {
+                var fkInfo = findFKBetween(path[si - 1], path[si]);
+                if (fkInfo) {
+                    rhtml += '<div class="path-step">' + escapeHtml(fkInfo.fk_name) + ': ' +
+                        escapeHtml(fkInfo.source_cols.join(', ')) + ' \u2192 ' +
+                        escapeHtml(fkInfo.target_cols.join(', ')) +
+                        ' <span class="rel-type" style="display:inline-block;padding:0 4px;background:var(--bg-tertiary);border-radius:3px;font-size:10px">' +
+                        escapeHtml(fkInfo.relLabel) + '</span></div>';
+                }
+            }
+
+            // Generate JOIN SQL
+            var joinSql = generateJoinSQL(path);
+            if (joinSql) {
+                rhtml += '<details class="path-sql"><summary>JOIN SQL</summary>';
+                rhtml += '<div class="sql-block"><pre>' + highlightSQL(joinSql) + '</pre></div></details>';
+            }
+
+            rhtml += '</div>';
+        });
+
+        resultsEl.innerHTML = rhtml;
+
+        // Click handlers for path nodes
+        resultsEl.querySelectorAll('.path-node').forEach(function(n) {
+            n.addEventListener('click', function() { navigate('detail', n.dataset.id); });
+        });
+    });
+}
+
+/**
+ * Find the FK constraint between two adjacent nodes in a path.
+ *
+ * @param {string} a - First object ID.
+ * @param {string} b - Second object ID.
+ * @returns {Object|null} FK info with source_cols, target_cols, fk_name, relLabel.
+ */
+function findFKBetween(a, b) {
+    // Check forward: a has FK referencing b
+    var fwd = (fkForward[a] || []).find(function(r) { return r.target_id === b; });
+    if (fwd) {
+        var rel = classifyRelationship(objMap[a], { columns: fwd.source_cols, references: b });
+        return { fk_name: fwd.fk_name, source_cols: fwd.source_cols, target_cols: fwd.target_cols, relLabel: rel.label, direction: 'forward' };
+    }
+    // Check reverse: b has FK referencing a
+    var rev = (fkForward[b] || []).find(function(r) { return r.target_id === a; });
+    if (rev) {
+        var rel2 = classifyRelationship(objMap[b], { columns: rev.source_cols, references: a });
+        return { fk_name: rev.fk_name, source_cols: rev.source_cols, target_cols: rev.target_cols, relLabel: rel2.label, direction: 'reverse' };
+    }
+    return null;
+}
+
+/**
+ * Generate a SQL JOIN statement for a path of objects.
+ *
+ * @param {string[]} path - Array of object IDs in path order.
+ * @returns {string} SQL SELECT ... FROM ... JOIN statement.
+ */
+function generateJoinSQL(path) {
+    if (path.length < 2) return '';
+    var aliases = {};
+    var aliasIdx = 0;
+
+    function getAlias(id) {
+        if (!aliases[id]) {
+            var obj = objMap[id];
+            var name = obj ? obj.name : id;
+            // Use first letter + index as alias
+            aliases[id] = name.charAt(0).toLowerCase() + (aliasIdx++);
+        }
+        return aliases[id];
+    }
+
+    var firstAlias = getAlias(path[0]);
+    var firstObj = objMap[path[0]];
+    var firstFqn = firstObj ? firstObj.id : path[0];
+    var sql = 'SELECT *\nFROM ' + firstFqn + ' ' + firstAlias;
+
+    for (var i = 1; i < path.length; i++) {
+        var fkInfo = findFKBetween(path[i - 1], path[i]);
+        if (!fkInfo) continue;
+
+        var curAlias = getAlias(path[i]);
+        var curObj = objMap[path[i]];
+        var curFqn = curObj ? curObj.id : path[i];
+        var prevAlias = getAlias(path[i - 1]);
+
+        sql += '\nJOIN ' + curFqn + ' ' + curAlias + ' ON ';
+
+        if (fkInfo.direction === 'forward') {
+            // path[i-1] has FK to path[i]
+            var conditions = [];
+            for (var j = 0; j < fkInfo.source_cols.length; j++) {
+                conditions.push(prevAlias + '.' + fkInfo.source_cols[j] + ' = ' +
+                    curAlias + '.' + (fkInfo.target_cols[j] || fkInfo.source_cols[j]));
+            }
+            sql += conditions.join(' AND ');
+        } else {
+            // path[i] has FK to path[i-1]
+            var conditions2 = [];
+            for (var j2 = 0; j2 < fkInfo.source_cols.length; j2++) {
+                conditions2.push(curAlias + '.' + fkInfo.source_cols[j2] + ' = ' +
+                    prevAlias + '.' + (fkInfo.target_cols[j2] || fkInfo.source_cols[j2]));
+            }
+            sql += conditions2.join(' AND ');
+        }
+    }
+
+    return sql;
+}
+
+// ====== Ontology Export ======
+
+/**
+ * Generate the project's FK ontology as a JSON-LD string.
+ *
+ * @returns {string} Pretty-printed JSON-LD.
+ */
+function generateOntologyJsonLD() {
+    var graph = [];
+
+    // Classes
+    M.objects.forEach(function(obj) {
+        if (!fkForward[obj.id] && !fkReverse[obj.id]) return;
+        var classEntry = {
+            '@id': 'mz:' + obj.name,
+            '@type': 'owl:Class',
+            'rdfs:label': obj.id
+        };
+        var roles = classifyObject(obj);
+        if (roles.length > 0) {
+            classEntry['mz:ontologyRoles'] = roles;
+        }
+        graph.push(classEntry);
+    });
+
+    // Properties (FK relationships)
+    M.objects.forEach(function(obj) {
+        (fkForward[obj.id] || []).forEach(function(fk) {
+            var targetObj = objMap[fk.target_id];
+            if (!targetObj) return;
+            var rel = classifyRelationship(obj, { columns: fk.source_cols, references: fk.target_id });
+            var prop = {
+                '@id': 'mz:' + fk.fk_name,
+                '@type': rel.type === 'one-to-one' ? 'owl:FunctionalProperty' : 'owl:ObjectProperty',
+                'rdfs:domain': { '@id': 'mz:' + obj.name },
+                'rdfs:range': { '@id': 'mz:' + targetObj.name },
+                'mz:relationType': rel.label,
+                'mz:columns': fk.source_cols.join(', ') + ' \u2192 ' + fk.target_cols.join(', ')
+            };
+            graph.push(prop);
+        });
+    });
+
+    var jsonld = {
+        '@context': {
+            'owl': 'http://www.w3.org/2002/07/owl#',
+            'rdfs': 'http://www.w3.org/2000/01/rdf-schema#',
+            'mz': 'http://materialize.com/ontology/'
+        },
+        '@graph': graph
+    };
+
+    return JSON.stringify(jsonld, null, 2);
+}
+
+/**
+ * Generate the project's FK ontology as an OWL/XML string.
+ *
+ * @returns {string} OWL/XML document.
+ */
+function generateOntologyOWL() {
+    var xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
+    xml += '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"\n';
+    xml += '         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"\n';
+    xml += '         xmlns:owl="http://www.w3.org/2002/07/owl#"\n';
+    xml += '         xmlns:mz="http://materialize.com/ontology/">\n\n';
+
+    // Classes
+    M.objects.forEach(function(obj) {
+        if (!fkForward[obj.id] && !fkReverse[obj.id]) return;
+        xml += '  <owl:Class rdf:about="mz:' + escapeXml(obj.name) + '">\n';
+        xml += '    <rdfs:label>' + escapeXml(obj.id) + '</rdfs:label>\n';
+        xml += '  </owl:Class>\n\n';
+    });
+
+    // Properties
+    M.objects.forEach(function(obj) {
+        (fkForward[obj.id] || []).forEach(function(fk) {
+            var targetObj = objMap[fk.target_id];
+            if (!targetObj) return;
+            var rel = classifyRelationship(obj, { columns: fk.source_cols, references: fk.target_id });
+            var propType = rel.type === 'one-to-one' ? 'owl:FunctionalProperty' : 'owl:ObjectProperty';
+            xml += '  <' + propType + ' rdf:about="mz:' + escapeXml(fk.fk_name) + '">\n';
+            xml += '    <rdfs:domain rdf:resource="mz:' + escapeXml(obj.name) + '"/>\n';
+            xml += '    <rdfs:range rdf:resource="mz:' + escapeXml(targetObj.name) + '"/>\n';
+            xml += '  </' + propType + '>\n\n';
+        });
+    });
+
+    xml += '</rdf:RDF>\n';
+
+    return xml;
+}
+
+/**
+ * Create a Blob from text content and trigger a browser download.
+ *
+ * @param {string} content - File content.
+ * @param {string} filename - Suggested download filename.
+ * @param {string} mimeType - MIME type for the Blob.
+ */
+function downloadText(content, filename, mimeType) {
+    var blob = new Blob([content], { type: mimeType });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+/**
+ * Escape a string for safe insertion into XML.
+ *
+ * @param {string} str - Value to escape.
+ * @returns {string} XML-safe string.
+ */
+function escapeXml(str) {
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
 // ====== Boot ======

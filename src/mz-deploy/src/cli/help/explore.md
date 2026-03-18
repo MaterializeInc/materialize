@@ -29,9 +29,10 @@ and works via `file://` — no web server needed.
 
 ## What's Included
 
-- **Overview** — Domain cards with type breakdowns and cross-schema edge counts,
-  stats cards showing object counts by type, cluster summary, external
-  dependencies list, test coverage ring, and pipeline depth sparkline.
+- **Overview** — Stable API cards for replacement schemas (consumer roles,
+  dependent schemas, "View in DAG" link), stats cards showing object counts by
+  type, cluster summary, external dependencies list, test coverage ring, and
+  pipeline depth sparkline.
 - **DAG** — Two-level interactive dependency graph with zoom/pan. The default
   *domain-level* view shows schemas as nodes with aggregated cross-schema edges;
   click a domain to drill into the *object-level* view. Object-level view
@@ -39,8 +40,11 @@ and works via `file://` — no web server needed.
   tracing highlights upstream/downstream on click with a lineage panel. Deep
   links supported (`#dag/lineage/{id}`, `#dag/schema/{fqn}`, `#object/{id}`).
 - **Object detail** — For each object: type/cluster/schema badges, layer badge,
-  description (from COMMENT ON), "Show lineage" button, syntax-highlighted SQL,
-  columns table, dependency and dependent lists, indexes, grants, and tests.
+  ontology role badges (Entity, Subtype, Association, Hierarchy, Defined Class,
+  One-to-One), description (from COMMENT ON), "Show lineage" button,
+  syntax-highlighted SQL, columns table, dependency and dependent lists, indexes,
+  constraints (PRIMARY KEY, UNIQUE, FOREIGN KEY with references), grants, and
+  tests.
 - **Data Contracts** — Dedicated view for external dependencies with column
   schemas from `types.lock`.
 - **Tests** — Test results view with pass/fail/validation-failed summary and
@@ -49,16 +53,90 @@ and works via `file://` — no web server needed.
 - **Governance** — Role-to-schema privilege matrix with drill-down into
   individual grants. Object-level grants only; schema-level grants and role
   inheritance are not reflected.
+- **ER Diagram** — Entity-relationship visualization built from FOREIGN KEY
+  constraints. Nodes show table columns; edges show FK relationships classified
+  by type (is-a, 1:1, N:1, 0..N:1, recursive). Detects polymorphic associations
+  (views referencing a shared FK target from different base tables). Supports
+  JSON-LD and OWL/XML export for integration with external ontology tools
+  (available via export buttons in the ER diagram view).
+- **Path Finder** — Interactive tool for discovering FK-connected paths between
+  any two objects. Select source and target, then view all paths (up to depth 6)
+  with relationship classifications and generated JOIN SQL.
 - **Cluster view** — Objects grouped by cluster with index counts.
 - **Schema browser** — Sidebar tree: Database → Schema → Objects with type
   indicators.
 - **Search** — Client-side substring search over object names.
 
+## Ontology Relationships
+
+These classifications help you understand your data model's structure at a
+glance — identifying inheritance hierarchies, junction tables, and
+one-to-one relationships without reading SQL or querying the information
+schema. They appear as badges on object detail pages and as edge labels in
+the ER diagram.
+
+The generated documentation infers several categories of ontological
+relationships from your project's SQL definitions — no additional
+configuration required.
+
+### Entity classification
+
+Each table or view is classified based on its constraint patterns:
+
+- **Entity** — Has a PRIMARY KEY.
+- **Subtype** — PK columns are also FK columns pointing to a parent entity
+  (is-a / inheritance pattern).
+- **Association** — Composite PK where all columns are FK columns (junction /
+  bridge table).
+- **Hierarchy** — Self-referential FK (tree / adjacency-list pattern).
+- **Defined Class** — View whose PK-as-FK references a base table (virtual
+  subtype).
+- **One-to-One** — FK column(s) carry a UNIQUE constraint.
+
+These roles appear as badges on object detail pages and as labels in the ER
+diagram.
+
+### Relationship types
+
+Foreign key constraints are classified into relationship types:
+
+- **is-a** — FK columns match the source PK (subclass relationship).
+- **1:1** — FK columns have a UNIQUE constraint.
+- **N:1** — FK columns are all NOT NULL (mandatory reference).
+- **0..N:1** — FK columns are nullable (optional reference).
+- **recursive** — FK references the same table (self-referential).
+
+### Polymorphic associations
+
+Views that reference different base tables but share a common FK target are
+detected as polymorphic associations. These appear as grouped entries in the
+ER diagram, indicating a shared interface pattern.
+
+### Structural relationships
+
+Beyond constraints, the tool surfaces:
+
+- **Data lineage** — Upstream/downstream dependency chains through views,
+  materialized views, sources, and sinks (visible in the DAG and lineage
+  panel).
+- **Infrastructure graph** — Secret → Connection → Source → Table-from-Source
+  chains showing how external data enters the pipeline.
+- **Schema domains** — Schema boundaries act as domain boundaries; cross-schema
+  edges reveal inter-domain coupling.
+- **Stable APIs** — Replacement schemas mark public API boundaries; consumer
+  roles and dependent schemas show who uses them.
+- **Governance** — Role-to-schema privilege matrix shows access control
+  patterns across domains.
+
 ## Security
 
 The generated HTML contains full SQL definitions including connection details
-(hostnames, usernames, database names). Secret values are redacted. Treat this
-file with the same sensitivity as your SQL source files.
+(hostnames, usernames, database names) that reveal your internal network
+topology. Secret values are redacted, but hostnames, ports, and database
+usernames are visible.
+
+Do not publish this file to public web servers or commit it to public
+repositories. Treat it with the same sensitivity as your SQL source files.
 
 ## Examples
 
@@ -66,13 +144,26 @@ file with the same sensitivity as your SQL source files.
     mz-deploy explore --no-open                 # Generate without opening
     mz-deploy explore --output-dir ./site       # Custom output directory
     mz-deploy explore -d ./my-project           # Specify project directory
+    mz-deploy test && mz-deploy explore --no-open  # Include test results in docs
 
 ## Exit Codes
 
 - **0** — Documentation generated successfully.
 - **1** — Project compilation failed (same errors as `compile`).
 
+## Error Recovery
+
+- **Compilation errors** — Fix the reported errors and re-run. Errors are
+  identical to `mz-deploy compile`.
+- **Missing columns** — If column information is missing from object detail
+  pages, run `mz-deploy lock` to generate `types.lock` and `types.cache`.
+- **Empty Tests view** — Run `mz-deploy test` first to generate
+  `target/test-results.json`.
+- **Empty Governance matrix** — Grants are extracted from project SQL files.
+  Ensure your project includes `GRANT` statements.
+
 ## Related Commands
 
 - `mz-deploy compile` — Validate project without generating docs.
-- `mz-deploy describe` — Show details about a specific deployment.
+- `mz-deploy test` — Run tests; generates `target/test-results.json` for the
+  Tests view.

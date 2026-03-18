@@ -185,7 +185,7 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
 .dag-edge marker { fill: var(--border); }
 
 /* ====== Feature 1: Domain Map ====== */
-.domain-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.domain-grid { display: flex; flex-direction: column; gap: 16px; margin-bottom: 24px; }
 .domain-card { background: var(--bg); border: 1px solid var(--border-light); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; padding: 16px; transition: box-shadow 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
 .domain-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
 .domain-card .domain-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
@@ -294,3 +294,65 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
 
 /* ====== Connector Type Subtitle ====== */
 .connector-type { font-size: 13px; font-weight: 500; color: var(--text-muted); margin-top: 4px; font-family: 'JetBrains Mono', monospace; }
+
+/* ====== Ontology Badges ====== */
+.badge.badge-ontology { background: #fef3e0; color: #ad5700; border: 1px dashed #ad5700; }
+
+/* ====== Companion SQL (Constraint Validation Preview) ====== */
+.companion-sql { padding: 0 !important; border-bottom: none !important; }
+.companion-sql details { padding: 4px 12px 8px; }
+.companion-sql summary { font-size: 12px; color: var(--accent); cursor: pointer; user-select: none; }
+.companion-sql .sql-block { margin-top: 4px; padding: 8px 12px; font-size: 12px; }
+
+/* ====== ER Diagram ====== */
+#er-container { width: 100%; height: calc(100vh - 120px); overflow: hidden; position: relative; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; }
+#er-svg { width: 100%; height: 100%; }
+.er-controls { display: flex; gap: 12px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
+.er-controls button, .er-controls select, .er-controls label { padding: 4px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
+.er-controls button:hover { border-color: var(--accent); }
+.er-controls label { display: flex; align-items: center; gap: 4px; border: none; padding: 0; cursor: default; }
+.er-node rect { fill: var(--bg); stroke: var(--border); stroke-width: 1.5; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.06)); }
+.er-node-name { font-size: 13px; font-weight: 700; fill: var(--text); font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+.er-pk-col { font-size: 11px; fill: var(--text-secondary); font-family: 'JetBrains Mono', monospace; text-decoration: underline; }
+.er-fk-col { font-size: 11px; fill: var(--text-muted); font-family: 'JetBrains Mono', monospace; font-style: italic; }
+.er-col { font-size: 11px; fill: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
+.er-type-badge { font-size: 9px; fill: var(--text-muted); font-family: 'Inter', sans-serif; text-transform: uppercase; letter-spacing: 0.05em; }
+.er-node { cursor: pointer; }
+.er-node:hover rect { filter: drop-shadow(0 2px 6px rgba(0,0,0,0.12)); }
+.er-edge-subclass path { stroke: var(--purple); stroke-dasharray: 6 3; stroke-width: 1.5; }
+.er-edge-mandatory path { stroke: var(--color-view); stroke-width: 2; }
+.er-edge-optional path { stroke: var(--text-muted); stroke-width: 1.5; }
+.er-edge-one-to-one path { stroke: var(--green); stroke-width: 1.5; }
+.er-edge-recursive path { stroke: var(--orange); stroke-width: 1.5; }
+.er-edge path { fill: none; }
+.er-edge-label { font-size: 10px; fill: var(--text-muted); text-anchor: middle; font-family: 'Inter', sans-serif; }
+.er-cardinality { font-size: 9px; fill: var(--text-secondary); font-family: 'Inter', sans-serif; }
+
+/* ====== Path Finder ====== */
+.pathfinder-controls { display: flex; gap: 12px; margin-bottom: 24px; align-items: center; flex-wrap: wrap; }
+.pathfinder-controls select { padding: 6px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; min-width: 200px; font-family: 'Inter', sans-serif; }
+.pathfinder-controls button { padding: 6px 16px; background: var(--accent); border: none; border-radius: 6px; color: white; font-size: 13px; cursor: pointer; font-weight: 500; font-family: 'Inter', sans-serif; }
+.pathfinder-controls button:hover { background: var(--accent-hover); }
+.pathfinder-result { background: var(--bg); border: 1px solid var(--border-light); border-radius: 8px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+.path-chain { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.path-chain .path-node { padding: 4px 10px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; color: var(--accent); }
+.path-chain .path-node:hover { background: var(--accent-subtle); text-decoration: underline; }
+.path-chain .path-arrow { color: var(--text-muted); font-size: 14px; }
+.path-step { font-size: 11px; color: var(--text-muted); margin-left: 4px; }
+.path-sql { margin-top: 8px; }
+.path-sql summary { font-size: 12px; color: var(--accent); cursor: pointer; }
+.path-sql .sql-block { margin-top: 4px; }
+
+/* ====== DAG FK Edge Labels ====== */
+.dag-edge.edge-fk { stroke-width: 2.5; stroke: var(--color-mv); }
+.dag-edge-fk-label { font-size: 9px; fill: var(--text-secondary); text-anchor: middle; font-family: 'JetBrains Mono', monospace; }
+
+/* ====== Lineage Relationships ====== */
+.lineage-relationships { margin-top: 8px; border-top: 1px solid var(--border-light); padding-top: 8px; }
+.lineage-relationships h4 { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+.lineage-rel { font-size: 12px; margin-bottom: 2px; }
+.lineage-rel .rel-type { display: inline-block; padding: 0 4px; background: var(--bg-tertiary); border-radius: 3px; font-size: 10px; font-weight: 600; color: var(--text-muted); }
+.lineage-rel a { color: var(--accent); cursor: pointer; }
+
+/* ====== Polymorphic Badge ====== */
+.badge.badge-polymorphic { background: #f2eeff; color: var(--purple); border: 1px dashed var(--purple); }

@@ -101,24 +101,12 @@ impl From<typed::Project> for Project {
                     );
 
                     // Extract dependencies from the statement
-                    let (mut dependencies, clusters) =
+                    let (dependencies, clusters) =
                         extract_dependencies(&typed_obj.stmt, &typed_db.name, &typed_schema.name);
 
                     // Track cluster dependencies
                     for cluster in clusters {
                         cluster_dependencies.insert(cluster);
-                    }
-
-                    // Extract dependencies from constraints (FK references)
-                    for c in &typed_obj.constraints {
-                        if let Some(ref refs) = c.references {
-                            let ref_id = ObjectId::from_raw_item_name(
-                                &refs.object,
-                                &typed_db.name,
-                                &typed_schema.name,
-                            );
-                            dependencies.insert(ref_id);
-                        }
                     }
 
                     // ── Constraint lowering ──────────────────────────────────────
