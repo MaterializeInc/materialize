@@ -43,6 +43,7 @@ The following supporting statements are allowed in the same file, but they
 - `COMMENT ON` — comments on the object or its columns
 - `GRANT` — permissions on the object
 - `EXECUTE UNIT TEST` — inline unit tests
+- `CREATE CONSTRAINT` — data quality constraints (PRIMARY KEY, UNIQUE, FOREIGN KEY)
 
 ### Schema separation rule
 
@@ -144,6 +145,17 @@ validates schemas before execution.
 
 Run `mz-deploy help test` for the full syntax reference, mock resolution
 rules, AT TIME usage, and examples.
+
+## Constraints
+
+SQL files can include inline constraint statements that declare data quality
+rules on their primary object. Constraints come in two flavors: **enforced**
+constraints are compiled into companion materialized views that continuously
+monitor for violations; **not-enforced** constraints are metadata-only, recorded
+for documentation purposes.
+
+See `references/constraints.md` for the full syntax, enforcement rules,
+naming conventions, and examples.
 
 ## Getting detailed command help
 

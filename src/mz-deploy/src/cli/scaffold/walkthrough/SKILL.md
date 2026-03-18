@@ -2,7 +2,7 @@
 name: walkthrough
 description: >
   Interactive tutorial that guides a user through building a data mesh with
-  mz-deploy across 9 modules and ~60 steps, ending with `explore` to visualize
+  mz-deploy across 10 modules and ~65 steps, ending with `explore` to visualize
   the result. Framed as a Middle-earth quest where the user is a Lorekeeper
   forging the Great Ontology.
 user_invocable: true
@@ -12,11 +12,11 @@ user_invocable: true
 
 You are conducting an interactive educational session to teach a user how to build a real data mesh with mz-deploy — the declarative CLI for Materialize blue-green deployments. The tutorial is framed as a quest through Middle-earth: the user is a **Lorekeeper** tasked with forging the Great Ontology (a unified source of truth) that the kingdoms (applications) can depend on.
 
-**Hybrid format**: You (Claude) write all SQL files directly. The user runs `mz-deploy` commands in a second terminal. This keeps the session flowing — you inscribe the scrolls, they invoke the magic. At three key moments, the user writes SQL themselves to build muscle memory.
+**Hybrid format**: You (Claude) write all SQL files directly. The user runs `mz-deploy` commands in a second terminal. This keeps the session flowing — you inscribe the scrolls, they invoke the magic. At four key moments, the user writes SQL themselves to build muscle memory.
 
 **Tone**: Light fantasy flavor in `Say:` blocks. Technical content stays clear and direct. Don't overdo the theme — a sentence or two of flavor per step, then get practical.
 
-This session covers 9 modules plus setup. Estimate 90–120 minutes total. Always wait for user confirmation before proceeding to the next module. Follow the STEP / WAIT FOR / CHECKPOINT structure precisely.
+This session covers 10 modules plus setup. Estimate 90–120 minutes total. Always wait for user confirmation before proceeding to the next module. Follow the STEP / WAIT FOR / CHECKPOINT structure precisely.
 
 ---
 
@@ -1056,19 +1056,120 @@ What does the output show?"
 
 WAIT FOR: User confirms the deploy cycle succeeds.
 
-Say: "The fulfillment application in Module 8 will safely depend on `materialize.public.*` knowing it will **never break**, even when the ontology team changes internal logic."
+Say: "The fulfillment application in Module 9 will safely depend on `materialize.public.*` knowing it will **never break**, even when the ontology team changes internal logic."
 
-CHECKPOINT: Say: "The Citadel stands. The ontology has a stable, unbreakable API. Ready to build the Kingdom of Fulfillment in Module 8?"
+CHECKPOINT: Say: "The Citadel stands. The ontology has a stable, unbreakable API. Ready to set the Seal of Trust in Module 8?"
 
 WAIT FOR: User confirmation to proceed.
 
 ---
 
-## MODULE 8: "The Kingdom of Fulfillment" — Building an Application
+## MODULE 8: "The Seal of Trust" — Constraints
 
-STEP 50: Introduce the application pattern.
+STEP 50: Introduce constraints.
 
-Say: "**Module 8: The Kingdom of Fulfillment**
+Read `references/constraints.md` for the full specification before proceeding.
+
+Say: "**Module 8: The Seal of Trust**
+
+Your ontology has a stable API, but how do you declare that `customers.id` is unique, or that every `orders.customer_id` references a real customer? That's what **constraints** are for.
+
+Constraints are unique to mz-deploy — they declare data quality rules on objects. Three kinds:
+- **PRIMARY KEY** — no duplicate values
+- **UNIQUE CONSTRAINT** — no duplicate values (same semantics as PK)
+- **FOREIGN KEY** — every value in child columns must exist in the referenced parent
+
+Two modes:
+- **Enforced** (default) — compiled into a companion materialized view that continuously monitors for violations. Requires `IN CLUSTER`.
+- **NOT ENFORCED** — metadata-only, recorded for documentation. No monitoring MV. `IN CLUSTER` is forbidden."
+
+STEP 51: Add an enforced PRIMARY KEY to customers.
+
+Edit `models/materialize/public/customers.sql` to append the constraint after the existing `CREATE MATERIALIZED VIEW` statement:
+```sql
+CREATE PRIMARY KEY customers_pk IN CLUSTER compute ON customers (id);
+```
+
+Say: "This is an **enforced** primary key. Under the hood, mz-deploy compiles it into a companion materialized view on the `compute` cluster that continuously checks for duplicate `id` values — something like:
+
+```sql
+SELECT id, count(*) FROM customers GROUP BY id HAVING count(*) > 1
+```
+
+If the result is ever non-empty, you have a violation. The companion MV participates in the full deployment pipeline — dependency tracking, blue/green, change detection — but it's hidden from explorer docs."
+
+STEP 52: User writes a FOREIGN KEY on orders.
+
+Say: "Your turn, Lorekeeper. Take the quill.
+
+Add an **enforced FOREIGN KEY** to `models/materialize/public/orders.sql` that ensures every `customer_id` references a real customer in `materialize.public.customers (id)`. Name it `orders_customer_fk` and run it on the `compute` cluster.
+
+Append the constraint after the existing `CREATE MATERIALIZED VIEW` statement, then tell me when you're done."
+
+WAIT FOR: User confirms they've written the constraint.
+
+Say: "Here's the expected result:
+
+```sql
+CREATE FOREIGN KEY orders_customer_fk IN CLUSTER compute ON orders (customer_id) REFERENCES materialize.public.customers (id);
+```
+
+Common mistakes:
+- Forgetting `REFERENCES` — FK always needs a target
+- Omitting `IN CLUSTER` — enforced constraints require it
+- Wrong column name — the child column is `customer_id`, not `id`
+
+If yours doesn't match, go ahead and fix it now."
+
+STEP 53: Add a NOT ENFORCED UNIQUE on products.
+
+Edit `models/materialize/public/products.sql` to append the constraint after the existing statement:
+```sql
+CREATE UNIQUE CONSTRAINT NOT ENFORCED products_name_unique ON products (name);
+```
+
+Say: "This one is **not enforced** — it's metadata-only. It documents the expectation that product names are unique without creating a monitoring MV. Notice: no `IN CLUSTER` clause. Not-enforced constraints are forbidden from specifying a cluster."
+
+STEP 54: Compile and verify.
+
+Say: "Let's make sure everything compiles cleanly. Run:
+
+```
+mz-deploy compile --verbose
+```
+
+In the verbose output, look for:
+- Constraint validation passing for all three constraints
+- The two enforced constraints (`customers_pk`, `orders_customer_fk`) appearing as companion MVs in the plan
+- The not-enforced constraint (`products_name_unique`) appearing as metadata only — no companion MV
+
+What do you see?"
+
+WAIT FOR: User confirms compile succeeds.
+
+STEP 55: Explore to see constraints.
+
+Say: "Now let's see how constraints appear in the docs:
+
+```
+mz-deploy explore
+```
+
+Look at the object detail cards for `customers`, `orders`, and `products`. Each one shows its constraints. But the companion MVs themselves are hidden — they're implementation details, not part of your public ontology."
+
+WAIT FOR: User confirms they see constraints in the docs.
+
+CHECKPOINT: Say: "The Seal of Trust is set. Your ontology now declares its data quality guarantees. Ready to build the Kingdom of Fulfillment in Module 9?"
+
+WAIT FOR: User confirmation to proceed.
+
+---
+
+## MODULE 9: "The Kingdom of Fulfillment" — Building an Application
+
+STEP 56: Introduce the application pattern.
+
+Say: "**Module 9: The Kingdom of Fulfillment**
 
 In the data mesh pattern:
 - The **ontology** defines canonical entities with a stable API
@@ -1078,7 +1179,7 @@ In the data mesh pattern:
 
 The fulfillment application will track pending orders and shipment readiness."
 
-STEP 51: Create the fulfillment cluster.
+STEP 57: Create the fulfillment cluster.
 
 Create `clusters/fulfillment.sql`:
 ```sql
@@ -1087,7 +1188,7 @@ CREATE CLUSTER fulfillment SIZE = '50cc';
 
 Say: "A dedicated cluster for the fulfillment domain. It scales independently of the ontology's compute cluster."
 
-STEP 52: Create fulfillment views.
+STEP 58: Create fulfillment views.
 
 Create `models/materialize/fulfillment/pending_orders.sql`:
 ```sql
@@ -1126,7 +1227,7 @@ JOIN materialize.public.products p ON po.product_id = p.id;
 
 Say: "Shipment readiness — joins pending orders with product inventory from the ontology. This tells the fulfillment team which orders can ship and which are blocked by low stock."
 
-STEP 53: Compile and validate.
+STEP 59: Compile and validate.
 
 Say: "Let's validate the cross-schema references:
 
@@ -1138,7 +1239,7 @@ mz-deploy resolves dependencies across schemas — fulfillment views depend on p
 
 WAIT FOR: User confirms compile succeeds.
 
-STEP 54: Deploy the fulfillment application.
+STEP 60: Deploy the fulfillment application.
 
 Say: "Now we need to apply the new fulfillment cluster, then deploy the new views. First:
 
@@ -1171,7 +1272,7 @@ What does the final promotion show?"
 
 WAIT FOR: User confirms the full deploy cycle succeeds.
 
-STEP 55: Explain the power of this pattern.
+STEP 61: Explain the power of this pattern.
 
 Say: "The ontology team can update internal logic — change how `display_name` is computed, add new columns, refactor joins — and the fulfillment application **never breaks**. The stable public MVs absorb changes via replacement. Both teams deploy independently on their own clusters.
 
@@ -1185,21 +1286,21 @@ Postgres ──► raw ──► internal ──► public (stable API)
 
 **Independent teams, shared truth, stable contracts.**"
 
-CHECKPOINT: Say: "The Kingdom of Fulfillment stands. Ready to raise the Watchtower in Module 9?"
+CHECKPOINT: Say: "The Kingdom of Fulfillment stands. Ready to raise the Watchtower in Module 10?"
 
 WAIT FOR: User confirmation.
 
 ---
 
-## MODULE 9: "The Watchtower" — CI/CD & Automation
+## MODULE 10: "The Watchtower" — CI/CD & Automation
 
-STEP 56: Introduce CI/CD patterns.
+STEP 62: Introduce CI/CD patterns.
 
-Say: "**Module 9: The Watchtower** — You've been deploying by hand. That works for learning, but production needs automation.
+Say: "**Module 10: The Watchtower** — You've been deploying by hand. That works for learning, but production needs automation.
 
 This module covers the mz-deploy flags and patterns for CI/CD: machine-readable output, exit codes, a pipeline skeleton, and rollback."
 
-STEP 57: Teach `--output json` for pipeline integration.
+STEP 63: Teach `--output json` for pipeline integration.
 
 Say: "For machine-readable output, most mz-deploy commands support `--output json`. Three patterns you'll use in CI:
 
@@ -1225,7 +1326,7 @@ Try running `mz-deploy list --output json` in your terminal to see the JSON outp
 
 WAIT FOR: User confirms they see the JSON output.
 
-STEP 58: Teach exit codes.
+STEP 64: Teach exit codes.
 
 Say: "Every mz-deploy command exits **0 on success, 1 on failure**. Your CI pipeline gates on this — if any step fails, the pipeline stops.
 
@@ -1246,7 +1347,7 @@ GitHub Actions, Jenkins, and other CI tools parse this format to show test resul
 
 ## SESSION COMPLETION: "The Quest is Complete"
 
-STEP 59: Introduce the explore command.
+STEP 65: Introduce the explore command.
 
 Say: "One more thing before we close the book, Lorekeeper. You've built an entire data mesh — sources, transformations, stable APIs, an application, tests, and CI patterns. Let's see it all at once.
 
@@ -1269,11 +1370,11 @@ Say: "Take a minute to explore what you've built:
 - Check **Data Contracts** to see external dependency schemas from `types.lock`
 - The **Governance** tab shows your role-to-schema privilege matrix
 
-Everything you built across all nine modules is here in one place.
+Everything you built across all ten modules is here in one place.
 
 If you ever want to generate the docs without opening the browser, use `mz-deploy explore --no-open`."
 
-STEP 60: Summary and celebration.
+STEP 66: Summary and celebration.
 
 Say: "**The Quest is Complete, Lorekeeper.**
 
@@ -1286,8 +1387,9 @@ Let's look back at the journey:
 5. **The Crucible of Proof** — You wrote unit tests with `EXECUTE UNIT TEST` — including one yourself
 6. **The Great Forging** — You deployed to production with `stage -> wait -> promote`
 7. **Raising the Citadel** — You built the stable API pattern with `SET api = stable` and converted an MV yourself
-8. **The Kingdom of Fulfillment** — You built an application on top of the ontology
-9. **The Watchtower** — You learned CI/CD patterns: `--output json`, exit codes, pipeline design, and rollback
+8. **The Seal of Trust** — You declared data quality constraints — including a FOREIGN KEY yourself
+9. **The Kingdom of Fulfillment** — You built an application on top of the ontology
+10. **The Watchtower** — You learned CI/CD patterns: `--output json`, exit codes, pipeline design, and rollback
 
 **Next steps for your realm:**
 - Add more ontology entities (payments, shipments, inventory events)
