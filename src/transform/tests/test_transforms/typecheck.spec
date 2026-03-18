@@ -50,7 +50,7 @@ typecheck
 Constant // { types: "(bigint, bigint)" }
   - (1, 3)
 ----
-(Int64, Int64)
+(r_int64, r_int64)
 
 typecheck
 Constant // { types: "(bigint, bigint)" }
@@ -66,12 +66,12 @@ Constant
 
 bad constant row
       got 2 mismatches
-expected row of type (Int64, Int64)
+expected row of type (r_int64, r_int64)
 
       column #0:
-        got datum String("oh"), expected representation type Int64
+        got datum String("oh"), expected representation type r_int64
       column #1:
-        got datum String("no"), expected representation type Int64
+        got datum String("no"), expected representation type r_int64
 ----
 ----
 
@@ -83,13 +83,13 @@ expected row of type (Int64, Int64)
 typecheck
 Get t0
 ----
-(Int64, Int64?, String)
+(r_int64, r_int64?, r_string)
 
 
 typecheck
 Get t1
 ----
-(String, Int64, Bool)
+(r_string, r_int64, r_bool)
 
 ############################################################################
 # Case: Let
@@ -102,7 +102,7 @@ With
   cte l0 =
     Get t0
 ----
-(Int64, Int64?, String)
+(r_int64, r_int64?, r_string)
 
 # no shadowing
 typecheck
@@ -116,7 +116,7 @@ With
       cte l0 =
         Get t0
 ----
-(Int64, Int64?, String)
+(r_int64, r_int64?, r_string)
 
 # shadowing
 typecheck
@@ -164,7 +164,7 @@ With Mutually Recursive
           Filter (#0 > 42)
             Get t0
 ----
-(Int64, Int64?, String, String)
+(r_int64, r_int64?, r_string, r_string)
 
 typecheck
 Return
@@ -228,9 +228,9 @@ Return
 
 
 mismatched column types: couldn't compute union of column types in LetRec
-      got Int64
-expected Bool?
-  Bool is a not a subtype of Int64
+      got r_int64
+expected r_bool?
+  r_bool is a not a subtype of r_int64
 ----
 ----
 
@@ -242,7 +242,7 @@ typecheck
 Project (#0, #2)
   Get t0
 ----
-(Int64, String)
+(r_int64, r_string)
 
 typecheck
 Project ()
@@ -265,7 +265,7 @@ typecheck
 Map (#0 + #1)
   Get t0
 ----
-(Int64, Int64?, String, Int64?)
+(r_int64, r_int64?, r_string, r_int64?)
 
 # ok constant
 typecheck
@@ -274,7 +274,7 @@ Map (#0 + #1)
     - (1, 3)
     - (2, 4)
 ----
-(Int64, Int64, Int64)
+(r_int64, r_int64, r_int64)
 
 # bad constant
 typecheck
@@ -292,10 +292,10 @@ Constant
 
 bad constant row
       got 1 mismatch
-expected row of type (Int64, Int64)
+expected row of type (r_int64, r_int64)
 
       column #1:
-        got datum String("uh oh"), expected representation type Int64
+        got datum String("uh oh"), expected representation type r_int64
 ----
 ----
 
@@ -307,7 +307,7 @@ typecheck
 FlatMap generate_series(#0, #1 + 3, 5)
   Get t0
 ----
-(Int64, Int64?, String, Int64)
+(r_int64, r_int64?, r_string, r_int64)
 
 ############################################################################
 # Case: Filter
@@ -318,7 +318,7 @@ typecheck
 Filter (#0 = #1)
   Get t0
 ----
-(Int64, Int64, String)
+(r_int64, r_int64, r_string)
 
 
 # nullability narrowing
@@ -326,7 +326,7 @@ typecheck
 Filter (#0 > #1)
   Get t0
 ----
-(Int64, Int64, String)
+(r_int64, r_int64, r_string)
 
 
 # multiple predicates
@@ -334,7 +334,7 @@ typecheck
 Filter (#0 = "hi" AND #1 > 2 AND #2)
   Get t1
 ----
-(String, Int64, Bool)
+(r_string, r_int64, r_bool)
 
 
 # bad predicate
@@ -349,9 +349,9 @@ Filter #2
 
 
 mismatched column types: expected boolean condition
-      got String
-expected Bool?
-  String is a not a subtype of Bool
+      got r_string
+expected r_bool?
+  r_string is a not a subtype of r_bool
 ----
 ----
 
@@ -364,7 +364,7 @@ Join on=(#0 = #3)
   Get t0
   Get t0
 ----
-(Int64, Int64?, String, Int64, Int64?, String)
+(r_int64, r_int64?, r_string, r_int64, r_int64?, r_string)
 
 # TODO(mgree): should narrow to non-null with typechecker improvements
 typecheck
@@ -372,7 +372,7 @@ Join on=(#0 = #1 = #3 = #4)
   Get t0
   Get t0
 ----
-(Int64, Int64?, String, Int64, Int64?, String)
+(r_int64, r_int64?, r_string, r_int64, r_int64?, r_string)
 
 # TODO(mgree): should narrow to non-null with typechecker improvements
 typecheck
@@ -380,7 +380,7 @@ Join on=(#0 = #4 AND #2 = #5 AND #1 = #3)
   Get t0
   Get t0
 ----
-(Int64, Int64?, String, Int64, Int64?, String)
+(r_int64, r_int64?, r_string, r_int64, r_int64?, r_string)
 
 # TODO(mgree): panics in `col_with_input_cols` src/expr/src/relation/mod.rs:448:63
 #typecheck
@@ -412,7 +412,7 @@ Reduce aggregates=[max(#1), min(#1), count(*)] monotonic
     - ("a", 2)
     - ("a", 4)
 ----
-(Int64, Int64, Int64)
+(r_int64, r_int64, r_int64)
 
 typecheck
 Reduce group_by=[#0] aggregates=[max(#1), min(#1), sum(distinct #1)] monotonic exp_group_size=4
@@ -420,7 +420,7 @@ Reduce group_by=[#0] aggregates=[max(#1), min(#1), sum(distinct #1)] monotonic e
     - ("a", 2)
     - ("a", 4)
 ----
-(String, Int64, Int64, Numeric { max_scale: None })
+(r_string, r_int64, r_int64, r_numeric)
 
 # empty output type (no keys!)
 typecheck
@@ -437,7 +437,7 @@ Distinct project=[#0, #1] exp_group_size=4
     - ("a", 2)
     - ("a", 4)
 ----
-(String, Int64)
+(r_string, r_int64)
 
 ############################################################################
 # Case: TopK
@@ -449,19 +449,19 @@ TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5
     - (1, 2)
     - (3, 4)
 ----
-(Int64, Int64)
+(r_int64, r_int64)
 
 typecheck
 TopK group_by=[#1] limit=5 offset=2 monotonic
   Get t0
 ----
-(Int64, Int64?, String)
+(r_int64, r_int64?, r_string)
 
 typecheck
 TopK group_by=[#1] limit=5 offset=2 monotonic exp_group_size=4
   Get t0
 ----
-(Int64, Int64?, String)
+(r_int64, r_int64?, r_string)
 
 typecheck
 TopK group_by=[#3] limit=5 offset=2 monotonic
@@ -473,7 +473,7 @@ TopK group_by=[#3] limit=5 offset=2 monotonic
   Get t0
 
 
-TopK group key component references invalid column 3 in columns: (Int64, Int64?, String)
+TopK group key component references invalid column 3 in columns: (r_int64, r_int64?, r_string)
 ----
 ----
 
@@ -488,7 +488,7 @@ TopK group_by=[#0] order_by=[#3 asc nulls_first]
 
 
 TopK ordering #3 asc nulls_first references invalid column 3
-there are 3 columns: (Int64, Int64?, String)
+there are 3 columns: (r_int64, r_int64?, r_string)
 ----
 ----
 
@@ -505,7 +505,7 @@ TopK group_by=[#0] order_by=[#1 asc nulls_first]
 
 
 TopK ordering #1 asc nulls_first references invalid column 1
-there is 1 column: (Int64)
+there is 1 column: (r_int64)
 ----
 ----
 
@@ -520,7 +520,7 @@ Union
   Project (#1)
     Get t1
 ----
-(Int64)
+(r_int64)
 
 typecheck
 Union
@@ -532,7 +532,7 @@ Union
   Project (#1)
     Get t1
 ----
-(Int64)
+(r_int64)
 
 # appropriate union types (widening nullability)
 typecheck
@@ -544,7 +544,7 @@ Union
   Project (#1)
     Get t1
 ----
-(Int64?)
+(r_int64?)
 
 # TODO(mgree): another parser rejection
 # union of incompatible types
@@ -583,7 +583,7 @@ ArrangeBy keys=[[#0], [#1]]
     - (1, 2)
     - (3, 4)
 ----
-(Int64, Int64)
+(r_int64, r_int64)
 
 typecheck
 ArrangeBy keys=[[#2]]

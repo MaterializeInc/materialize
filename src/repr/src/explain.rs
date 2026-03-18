@@ -458,9 +458,11 @@ pub trait ExprHumanizer: fmt::Debug + Sync {
     fn humanize_sql_scalar_type(&self, ty: &SqlScalarType, postgres_compat: bool) -> String;
 
     /// Returns a human-readable name for the specified scalar type.
-    /// Calls `humanize_scalar_type` with the `SqlScalarType` representation of the specified type.
-    fn humanize_scalar_type(&self, typ: &ReprScalarType, postgres_compat: bool) -> String {
-        self.humanize_sql_scalar_type(&SqlScalarType::from_repr(typ), postgres_compat)
+    ///
+    /// Uses std::fmt::Display, since we don't need to worry about resolving
+    ///  custom type IDs or postgres compatibility.
+    fn humanize_scalar_type(&self, typ: &ReprScalarType) -> String {
+        typ.to_string()
     }
 
     /// Returns a human-readable name for the specified column type.
@@ -476,9 +478,11 @@ pub trait ExprHumanizer: fmt::Debug + Sync {
     }
 
     /// Returns a human-readable name for the specified column type.
-    /// Calls `humanize_column_type` with the `SqlColumnType` representation of the specified type.
-    fn humanize_column_type(&self, typ: &ReprColumnType, postgres_compat: bool) -> String {
-        self.humanize_sql_column_type(&SqlColumnType::from_repr(typ), postgres_compat)
+    ///
+    /// Uses std::fmt::Display, since we don't need to worry about resolving
+    ///  custom type IDs or postgres compatibility.
+    fn humanize_column_type(&self, typ: &ReprColumnType) -> String {
+        typ.to_string()
     }
 
     /// Returns a vector of column names for the relation identified by `id`.
@@ -715,7 +719,7 @@ impl<'a> Display for HumanizedAnalyses<'a> {
                 Some(types) => {
                     let types = types
                         .into_iter()
-                        .map(|c| self.humanizer.humanize_column_type(c, false))
+                        .map(|c| self.humanizer.humanize_column_type(c))
                         .collect::<Vec<_>>();
 
                     bracketed("(", ")", separated(", ", types)).to_string()
