@@ -1825,6 +1825,14 @@ impl GroupCommitWriteLocks {
         self.locks.extend(existing);
     }
 
+    /// Insert a single lock into this collection.
+    ///
+    /// Used for internal writes (e.g. blind writes from frontend RTW) that
+    /// acquire locks directly in group commit rather than through a session.
+    pub fn insert_lock(&mut self, id: CatalogItemId, lock: tokio::sync::OwnedMutexGuard<()>) {
+        self.locks.insert(id, lock);
+    }
+
     /// Returns the collections we're missing locks for, if any.
     pub fn missing_locks(
         &self,

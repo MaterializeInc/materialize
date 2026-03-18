@@ -143,6 +143,94 @@ macro_rules! return_if_err {
 
 pub(super) use return_if_err;
 
+/// Validates that all dependencies are valid for read-then-write operations.
+///
+/// Ensures all objects the selection depends on are valid for `ReadThenWrite` operations:
+///
+/// - They do not refer to any objects whose notion of time moves differently than that of
+///   user tables. This limitation is meant to ensure no writes occur between this read and the
+///   subsequent write.
+/// - They do not use mz_now(), whose time produced during read will differ from the write
+///   timestamp.
+pub(crate) fn validate_read_dependencies(
+    catalog: &Catalog,
+    id: &CatalogItemId,
+) -> Result<(), AdapterError> {
+    use CatalogItemType::*;
+    use mz_catalog::memory::objects;
+    let mut ids_to_check = Vec::new();
+    let valid = match catalog.try_get_entry(id) {
+        Some(entry) => {
+            if let CatalogItem::View(objects::View { optimized_expr, .. })
+            | CatalogItem::MaterializedView(objects::MaterializedView {
+                optimized_expr, ..
+            }) = entry.item()
+            {
+                if optimized_expr.contains_temporal() {
+                    return Err(AdapterError::Unsupported(
+                        "calls to mz_now in write statements",
+                    ));
+                }
+            }
+            match entry.item().typ() {
+                typ @ (Func | View | MaterializedView | ContinualTask) => {
+                    ids_to_check.extend(entry.uses());
+                    let valid_id = id.is_user() || matches!(typ, Func);
+                    valid_id
+                }
+                Source | Secret | Connection => false,
+                // Cannot select from sinks or indexes.
+                Sink | Index => unreachable!(),
+                Table => {
+                    if !id.is_user() {
+                        // We can't read from non-user tables
+                        false
+                    } else {
+                        // We can't read from tables that are source-exports
+                        entry.source_export_details().is_none()
+                    }
+                }
+                Type => true,
+            }
+        }
+        None => false,
+    };
+    if !valid {
+        let (object_name, object_type) = match catalog.try_get_entry(id) {
+            Some(entry) => {
+                let object_name = catalog.resolve_full_name(entry.name(), None).to_string();
+                let object_type = match entry.item().typ() {
+                    // We only need the disallowed types here; the allowed types are handled above.
+                    Source => "source",
+                    Secret => "secret",
+                    Connection => "connection",
+                    Table => {
+                        if !id.is_user() {
+                            "system table"
+                        } else {
+                            "source-export table"
+                        }
+                    }
+                    View => "system view",
+                    MaterializedView => "system materialized view",
+                    ContinualTask => "system task",
+                    _ => "invalid dependency",
+                };
+                (object_name, object_type.to_string())
+            }
+            None => (id.to_string(), "unknown".to_string()),
+        };
+        return Err(AdapterError::InvalidTableMutationSelection {
+            object_name,
+            object_type,
+        });
+    }
+    for id in ids_to_check {
+        validate_read_dependencies(catalog, &id)?;
+    }
+    Ok(())
+}
+
 struct DropOps {
     ops: Vec<catalog::Op>,
     dropped_active_db: bool,
@@ -158,10 +246,16 @@ struct CreateSourceInner {
 }
 
 impl Coordinator {
-    /// Sequences the next staged of a [Staged] plan. This is designed for use with plans that
-    /// execute both on and off of the coordinator thread. Stages can either produce another stage
-    /// to execute or a final response. An explicit [Span] is passed to allow for convenient
-    /// tracing.
+    /// Sequences a [Staged] plan.
+    ///
+    /// This is designed for plans that execute both on and off the coordinator
+    /// thread. Stages can either produce another stage to execute or a final
+    /// response.
+    ///
+    /// While a stage is cancelable, this method installs a
+    /// connection-scoped cancel watch entry so background work can observe
+    /// cancellation requests consistently with other frontend/coordinator
+    /// sequencing paths.
     pub(crate) async fn sequence_staged<S>(
         &mut self,
         mut ctx: S::Ctx,
@@ -179,7 +273,7 @@ impl Coordinator {
                     // Channel to await cancellation. Insert a new channel, but check if the previous one
                     // was already canceled.
                     if let Some((_prev_tx, prev_rx)) = self
-                        .staged_cancellation
+                        .connection_cancel_watches
                         .insert(session.conn_id().clone(), watch::channel(false))
                     {
                         let was_canceled = *prev_rx.borrow();
@@ -191,7 +285,7 @@ impl Coordinator {
                 } else {
                     // If no cancel allowed, remove it so handle_spawn doesn't observe any previous value
                     // when cancel_enabled may have been true on an earlier stage.
-                    self.staged_cancellation.remove(session.conn_id());
+                    self.connection_cancel_watches.remove(session.conn_id());
                 }
             } else {
                 cancel_enabled = false
@@ -224,6 +318,8 @@ impl Coordinator {
         }
     }
 
+    /// Waits for either the spawned stage work to complete or cancellation to
+    /// be signaled through the connection-scoped cancel watch.
     fn handle_spawn<C, T, F>(
         &self,
         ctx: C,
@@ -237,7 +333,7 @@ impl Coordinator {
     {
         let rx: BoxFuture<()> = if let Some((_tx, rx)) = ctx
             .session()
-            .and_then(|session| self.staged_cancellation.get(session.conn_id()))
+            .and_then(|session| self.connection_cancel_watches.get(session.conn_id()))
         {
             let mut rx = rx.clone();
             Box::pin(async move {
@@ -2672,93 +2768,7 @@ impl Coordinator {
             return;
         }
 
-        // Ensure all objects `selection` depends on are valid for `ReadThenWrite` operations:
-        //
-        // - They do not refer to any objects whose notion of time moves differently than that of
-        // user tables. This limitation is meant to ensure no writes occur between this read and the
-        // subsequent write.
-        // - They do not use mz_now(), whose time produced during read will differ from the write
-        //   timestamp.
-        fn validate_read_dependencies(
-            catalog: &Catalog,
-            id: &CatalogItemId,
-        ) -> Result<(), AdapterError> {
-            use CatalogItemType::*;
-            use mz_catalog::memory::objects;
-            let mut ids_to_check = Vec::new();
-            let valid = match catalog.try_get_entry(id) {
-                Some(entry) => {
-                    if let CatalogItem::View(objects::View { optimized_expr, .. })
-                    | CatalogItem::MaterializedView(objects::MaterializedView {
-                        optimized_expr,
-                        ..
-                    }) = entry.item()
-                    {
-                        if optimized_expr.contains_temporal() {
-                            return Err(AdapterError::Unsupported(
-                                "calls to mz_now in write statements",
-                            ));
-                        }
-                    }
-                    match entry.item().typ() {
-                        typ @ (Func | View | MaterializedView | ContinualTask) => {
-                            ids_to_check.extend(entry.uses());
-                            let valid_id = id.is_user() || matches!(typ, Func);
-                            valid_id
-                        }
-                        Source | Secret | Connection => false,
-                        // Cannot select from sinks or indexes.
-                        Sink | Index => unreachable!(),
-                        Table => {
-                            if !id.is_user() {
-                                // We can't read from non-user tables
-                                false
-                            } else {
-                                // We can't read from tables that are source-exports
-                                entry.source_export_details().is_none()
-                            }
-                        }
-                        Type => true,
-                    }
-                }
-                None => false,
-            };
-            if !valid {
-                let (object_name, object_type) = match catalog.try_get_entry(id) {
-                    Some(entry) => {
-                        let object_name = catalog.resolve_full_name(entry.name(), None).to_string();
-                        let object_type = match entry.item().typ() {
-                            // We only need the disallowed types here; the allowed types are handled above.
-                            Source => "source",
-                            Secret => "secret",
-                            Connection => "connection",
-                            Table => {
-                                if !id.is_user() {
-                                    "system table"
-                                } else {
-                                    "source-export table"
-                                }
-                            }
-                            View => "system view",
-                            MaterializedView => "system materialized view",
-                            ContinualTask => "system task",
-                            _ => "invalid dependency",
-                        };
-                        (object_name, object_type.to_string())
-                    }
-                    None => (id.to_string(), "unknown".to_string()),
-                };
-                return Err(AdapterError::InvalidTableMutationSelection {
-                    object_name,
-                    object_type,
-                });
-            }
-            for id in ids_to_check {
-                validate_read_dependencies(catalog, &id)?;
-            }
-            Ok(())
-        }
-
+        // Ensure all objects `selection` depends on are valid for `ReadThenWrite` operations.
         for gid in selection.depends_on() {
             let item_id = self.catalog().resolve_item_id(&gid);
             if let Err(err) = validate_read_dependencies(self.catalog(), &item_id) {
@@ -2928,6 +2938,7 @@ impl Coordinator {
                                 PeekResponseUnary::Error(e) => {
                                     break Err(AdapterError::Unstructured(anyhow!(e)));
                                 }
+                                PeekResponseUnary::SubscribeFinished => break Ok(diffs),
                             },
                             Ok(None) => break Ok(diffs),
                             Err(_) => {

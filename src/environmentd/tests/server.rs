@@ -1219,6 +1219,102 @@ fn test_cancel_long_running_query() {
         .expect("simple query succeeds after cancellation");
 }
 
+// Test that frontend-sequenced read-then-write statements honor pgwire cancel
+// requests and do not run to completion after cancellation.
+#[mz_ore::test]
+fn test_cancel_frontend_read_then_write_long_running_query() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
+    server.enable_feature_flags(&["unsafe_enable_unsafe_functions"]);
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let cancel_token = client.cancel_token();
+
+    client
+        .batch_execute("CREATE TABLE t (a TEXT, ts INT)")
+        .unwrap();
+    client
+        .batch_execute("INSERT INTO t VALUES ('hello', 10)")
+        .unwrap();
+
+    let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
+    let cancel_thread = thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_millis(200));
+            match shutdown_rx.try_recv() {
+                Ok(()) => return,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    let _ = cancel_token.cancel_query(postgres::NoTls);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+            }
+        }
+    });
+
+    match client.batch_execute(
+        "INSERT INTO t SELECT a, CASE WHEN mz_unsafe.mz_sleep(ts) > 0 THEN 0 END AS ts FROM t",
+    ) {
+        Err(e) if e.code() == Some(&SqlState::QUERY_CANCELED) => {}
+        Err(e) => panic!("expected error SqlState::QUERY_CANCELED, but got {e:?}"),
+        Ok(_) => panic!("expected error SqlState::QUERY_CANCELED, but query succeeded"),
+    }
+
+    shutdown_tx.send(()).unwrap();
+    cancel_thread.join().unwrap();
+
+    let rows = client
+        .query_one("SELECT count(*) FROM t", &[])
+        .unwrap()
+        .get::<_, i64>(0);
+    assert_eq!(
+        rows, 1,
+        "cancelled statement should not have committed writes"
+    );
+
+    // NOTE: mz_sleep with a constant ts get's evaluated differently. This gives
+    // us additional coverage for cancelling at different moments in the
+    // processing pipeline.
+    let cancel_token = client.cancel_token();
+    let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
+    let cancel_thread = thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_millis(200));
+            match shutdown_rx.try_recv() {
+                Ok(()) => return,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    let _ = cancel_token.cancel_query(postgres::NoTls);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+            }
+        }
+    });
+
+    match client.batch_execute(
+        "INSERT INTO t SELECT a, CASE WHEN mz_unsafe.mz_sleep(10) > 0 THEN 0 END AS ts FROM t",
+    ) {
+        Err(e) if e.code() == Some(&SqlState::QUERY_CANCELED) => {}
+        Err(e) => panic!("expected error SqlState::QUERY_CANCELED, but got {e:?}"),
+        Ok(_) => panic!("expected error SqlState::QUERY_CANCELED, but query succeeded"),
+    }
+
+    shutdown_tx.send(()).unwrap();
+    cancel_thread.join().unwrap();
+
+    let rows = client
+        .query_one("SELECT count(*) FROM t", &[])
+        .unwrap()
+        .get::<_, i64>(0);
+    assert_eq!(
+        rows, 1,
+        "cancelled statement should not have committed writes"
+    );
+}
+
 fn test_cancellation_cancels_dataflows(query: &str) {
     // Query that returns how many dataflows are currently installed.
     // Accounts for the presence of introspection subscribe dataflows by ignoring those.
@@ -3266,11 +3362,11 @@ fn test_github_20262() {
     }
 }
 
-// Test that the server properly handles cancellation requests of read-then-write queries.
+// Test that a timed-out read-then-write query does not commit its writes.
 // See database-issues#6134.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
-fn test_cancel_read_then_write() {
+fn test_timeout_read_then_write() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start_blocking();
@@ -3280,53 +3376,27 @@ fn test_cancel_read_then_write() {
     client
         .batch_execute("CREATE TABLE foo (a TEXT, ts INT)")
         .unwrap();
-
-    // Lots of races here, so try this whole thing in a loop.
-    Retry::default()
-        .clamp_backoff(Duration::ZERO)
-        .retry(|_state| {
-            let mut client1 = server.connect(postgres::NoTls).unwrap();
-            let mut client2 = server.connect(postgres::NoTls).unwrap();
-            let cancel_token = client2.cancel_token();
-
-            client1.batch_execute("DELETE FROM foo").unwrap();
-            client1.batch_execute("SET statement_timeout = '5s'").unwrap();
-            client1
-                .batch_execute("INSERT INTO foo VALUES ('hello', 10)")
-                .unwrap();
-
-            let handle1 = thread::spawn(move || {
-                let err =  client1
-                    .batch_execute("insert into foo select a, case when mz_unsafe.mz_sleep(ts) > 0 then 0 end as ts from foo")
-                    .unwrap_err();
-                assert_contains!(
-                    err.to_string_with_causes(),
-                    "statement timeout"
-                );
-                client1
-            });
-            std::thread::sleep(Duration::from_millis(100));
-            let handle2 = thread::spawn(move || {
-                let err = client2
-                .batch_execute("insert into foo values ('blah', 1);")
-                .unwrap_err();
-                assert_contains!(
-                    err.to_string_with_causes(),
-                    "canceling statement"
-                );
-            });
-            std::thread::sleep(Duration::from_millis(100));
-            cancel_token.cancel_query(postgres::NoTls)?;
-            let mut client1 = handle1.join().unwrap();
-            handle2.join().unwrap();
-            let rows:i64 = client1.query_one ("SELECT count(*) FROM foo", &[]).unwrap().get(0);
-            // We ran 3 inserts. First succeeded. Second timedout. Third cancelled.
-            if rows !=1 {
-                anyhow::bail!("unexpected row count: {rows}");
-            }
-            Ok::<_, anyhow::Error>(())
-        })
+    client
+        .batch_execute("INSERT INTO foo VALUES ('hello', 10)")
         .unwrap();
+
+    client
+        .batch_execute("SET statement_timeout = '5s'")
+        .unwrap();
+
+    let err = client
+        .batch_execute("INSERT INTO foo SELECT a, CASE WHEN mz_unsafe.mz_sleep(ts) > 0 THEN 0 END AS ts FROM foo")
+        .unwrap_err();
+    assert_contains!(err.to_string_with_causes(), "statement timeout");
+
+    let rows: i64 = client
+        .query_one("SELECT count(*) FROM foo", &[])
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        rows, 1,
+        "timed-out statement should not have committed writes"
+    );
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]

@@ -86,6 +86,10 @@ pub enum PeekResponseUnary {
     Rows(Box<dyn RowIterator + Send + Sync>),
     Error(String),
     Canceled,
+    /// The subscribe's upper frontier advanced to the empty antichain,
+    /// meaning compute will never produce more data for this subscribe.
+    /// All data rows have already been delivered via prior `Rows` messages.
+    SubscribeFinished,
 }
 
 #[derive(Clone, Debug)]

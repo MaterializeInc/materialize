@@ -633,6 +633,20 @@ pub static ALLOWED_CLUSTER_REPLICA_SIZES: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static MAX_CONCURRENT_OCC_WRITES: VarDefinition = VarDefinition::new(
+    "max_concurrent_occ_writes",
+    value!(u32; 4),
+    "Maximum number of concurrent read-then-write (DELETE/UPDATE) operations using OCC. Read at startup; changes require an environmentd restart (Materialize).",
+    false,
+);
+
+pub static MAX_OCC_RETRIES: VarDefinition = VarDefinition::new(
+    "max_occ_retries",
+    value!(u32; 1000),
+    "Maximum number of OCC retry attempts per read-then-write operation before giving up (Materialize).",
+    false,
+);
+
 pub static PERSIST_FAST_PATH_LIMIT: VarDefinition = VarDefinition::new(
     "persist_fast_path_limit",
     value!(usize; 25),

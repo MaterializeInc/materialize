@@ -184,6 +184,12 @@ pub const USER_ID_POOL_BATCH_SIZE: Config<u32> = Config::new(
     "Number of user IDs to pre-allocate in a batch for DDL operations.",
 );
 
+pub const FRONTEND_READ_THEN_WRITE: Config<bool> = Config::new(
+    "enable_adapter_frontend_occ_read_then_write",
+    // WIP: true for testing in ci, Should be false before merging.
+    true,
+    "Use frontend sequencing for DELETE/UPDATE operations.",
+);
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -211,4 +217,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_MCP_AGENTS_QUERY_TOOL)
         .add(&ENABLE_MCP_OBSERVATORY)
         .add(&USER_ID_POOL_BATCH_SIZE)
+        .add(&FRONTEND_READ_THEN_WRITE)
 }

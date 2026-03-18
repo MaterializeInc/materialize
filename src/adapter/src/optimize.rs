@@ -86,8 +86,8 @@ use mz_transform::{MaybeShouldPanic, TransformCtx, TransformError};
 /// by the optimizer implementations.
 type MirDataflowDescription = DataflowDescription<OptimizedMirRelationExpr>;
 /// A type for a [`DataflowDescription`] backed by `Lir~` plans. Used internally
-/// by the optimizer implementations.
-type LirDataflowDescription = DataflowDescription<Plan>;
+/// by the optimizer implementations and for read-then-write subscribes.
+pub type LirDataflowDescription = DataflowDescription<Plan>;
 
 // Core API
 // --------

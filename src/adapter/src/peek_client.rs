@@ -29,19 +29,22 @@ use mz_timestamp_oracle::TimestampOracle;
 use prometheus::Histogram;
 use thiserror::Error;
 use timely::progress::Antichain;
-use tokio::sync::oneshot;
+use tokio::sync::{Semaphore, oneshot};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
-use crate::command::{CatalogSnapshot, Command};
-use crate::coord::Coordinator;
+use crate::command::{CatalogSnapshot, Command, ExecuteResponse};
 use crate::coord::peek::FastPathPlan;
-use crate::statement_logging::WatchSetCreation;
+use crate::coord::{Coordinator, ExecuteContextGuard};
+use crate::session::{LifecycleTimestamps, Session};
 use crate::statement_logging::{
-    FrontendStatementLoggingEvent, PreparedStatementEvent, StatementLoggingFrontend,
-    StatementLoggingId,
+    FrontendStatementLoggingEvent, PreparedStatementEvent, PreparedStatementLoggingInfo,
+    StatementLoggingFrontend, StatementLoggingId, WatchSetCreation,
 };
 use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds, statement_logging};
+
+use mz_sql::plan::Params;
+use qcell::QCell;
 
 /// Storage collections trait alias we need to consult for since/frontiers.
 pub type StorageCollectionsHandle = Arc<
@@ -69,6 +72,12 @@ pub struct PeekClient {
     persist_client: PersistClient,
     /// Statement logging state for frontend peek sequencing.
     pub statement_logging_frontend: StatementLoggingFrontend,
+    /// Semaphore for limiting concurrent OCC (optimistic concurrency control) write operations.
+    pub occ_write_semaphore: Arc<Semaphore>,
+    /// Whether frontend OCC read-then-write is enabled (determined once at process startup).
+    pub frontend_read_then_write_enabled: bool,
+    /// Whether the coordinator is in read-only mode. Mutations must be rejected.
+    pub read_only: bool,
 }
 
 impl PeekClient {
@@ -80,6 +89,9 @@ impl PeekClient {
         optimizer_metrics: OptimizerMetrics,
         persist_client: PersistClient,
         statement_logging_frontend: StatementLoggingFrontend,
+        occ_write_semaphore: Arc<Semaphore>,
+        frontend_read_then_write_enabled: bool,
+        read_only: bool,
     ) -> Self {
         Self {
             coordinator_client,
@@ -90,6 +102,9 @@ impl PeekClient {
             statement_logging_frontend,
             oracles: Default::default(), // lazily populated
             persist_client,
+            occ_write_semaphore,
+            frontend_read_then_write_enabled,
+            read_only,
         }
     }
 
@@ -152,6 +167,12 @@ impl PeekClient {
         self.coordinator_client.send(f(tx));
         rx.await
             .expect("if the coordinator is still alive, it shouldn't have dropped our call")
+    }
+
+    /// Returns a clone of the coordinator client, for use in cleanup guards
+    /// that need to send fire-and-forget commands.
+    pub(crate) fn coordinator_client(&self) -> &crate::Client {
+        &self.coordinator_client
     }
 
     /// Acquire read holds on the given compute/storage collections, and
@@ -419,7 +440,59 @@ impl PeekClient {
         })
     }
 
-    // Statement logging helper methods
+    /// Set up statement logging for a frontend-sequenced operation.
+    ///
+    /// If `outer_ctx_extra` is `None`, begins a new statement execution log
+    /// entry. If `outer_ctx_extra` is `Some` (e.g. EXECUTE/FETCH), reuses and
+    /// retires the existing logging context.
+    ///
+    /// Returns the logging ID if this statement is being logged, or `None` if
+    /// it was not sampled.
+    pub(crate) fn begin_statement_logging(
+        &self,
+        session: &mut Session,
+        params: &Params,
+        logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
+        catalog: &Catalog,
+        lifecycle_timestamps: Option<LifecycleTimestamps>,
+        outer_ctx_extra: &mut Option<ExecuteContextGuard>,
+    ) -> Option<StatementLoggingId> {
+        if outer_ctx_extra.is_none() {
+            let result = self.statement_logging_frontend.begin_statement_execution(
+                session,
+                params,
+                logging,
+                catalog.system_config(),
+                lifecycle_timestamps,
+            );
+
+            if let Some((logging_id, began_execution, mseh_update, prepared_statement)) = result {
+                self.log_began_execution(began_execution, mseh_update, prepared_statement);
+                Some(logging_id)
+            } else {
+                None
+            }
+        } else {
+            outer_ctx_extra
+                .take()
+                .and_then(|guard| guard.defuse().retire())
+        }
+    }
+
+    /// Log the end of a frontend-sequenced statement execution.
+    pub(crate) fn end_statement_logging(
+        &self,
+        logging_id: StatementLoggingId,
+        result: &Result<ExecuteResponse, AdapterError>,
+    ) {
+        let reason = match result {
+            Ok(resp) => resp.into(),
+            Err(e) => statement_logging::StatementEndedExecutionReason::Errored {
+                error: e.to_string(),
+            },
+        };
+        self.log_ended_execution(logging_id, reason);
+    }
 
     /// Log the beginning of statement execution.
     pub(crate) fn log_began_execution(

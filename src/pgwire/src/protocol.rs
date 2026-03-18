@@ -2404,6 +2404,7 @@ where
                         Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
                         Some(PeekResponseUnary::Error(err)) => FetchResult::Error(err),
                         Some(PeekResponseUnary::Canceled) => FetchResult::Canceled,
+                        Some(PeekResponseUnary::SubscribeFinished) => FetchResult::Rows(None),
                     },
                 }
             };
@@ -2631,6 +2632,7 @@ where
                             ))
                             .await.map(|state| (state, SendRowsEndedReason::Canceled));
                     }
+                    Some(PeekResponseUnary::SubscribeFinished) => break,
                     Some(PeekResponseUnary::Rows(mut rows)) => {
                         count += rows.count();
                         while let Some(row) = rows.next() {
