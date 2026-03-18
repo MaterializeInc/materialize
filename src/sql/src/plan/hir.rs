@@ -16,10 +16,11 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use std::{fmt, mem};
 
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use mz_expr::virtual_syntax::{AlgExcept, Except, IR};
 use mz_expr::visit::{Visit, VisitChildren};
-use mz_expr::{CollectionPlan, Id, LetRecLimit, RowSetFinishing, func};
+use mz_expr::{CollectionPlan, EvalError, Id, LetRecLimit, RowSetFinishing, func};
 // these happen to be unchanged at the moment, but there might be additions later
 use mz_expr::AggregateFunc::{FusedWindowAggregate, WindowAggregate};
 use mz_expr::func::variadic::{And, Or};
@@ -3830,6 +3831,29 @@ impl HirScalarExpr {
             Ok(())
         });
         contains_parameters
+    }
+
+    /// Substitutes `now()` function calls with the current wall time.
+    pub fn resolve_now(&mut self, wall_time: DateTime<Utc>) -> Result<(), PlanError> {
+        self.try_visit_mut_pre(&mut |e| {
+            Ok(match e {
+                HirScalarExpr::CallUnmaterializable(
+                    UnmaterializableFunc::CurrentTimestamp,
+                    _col_names,
+                ) => {
+                    let d: Datum = wall_time.try_into().map_err(EvalError::from)?;
+                    *e = HirScalarExpr::literal(
+                        d,
+                        SqlScalarType::from_repr(
+                            &UnmaterializableFunc::CurrentTimestamp
+                                .output_type()
+                                .scalar_type,
+                        ),
+                    );
+                }
+                _ => {}
+            })
+        })
     }
 }
 
