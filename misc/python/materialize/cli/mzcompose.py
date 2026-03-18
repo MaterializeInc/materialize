@@ -961,24 +961,44 @@ class DownCommand(DockerComposeCommand):
 
 
 EventsCommand = DockerComposeCommand(
-    "events", "receive real time events from containers"
+    "events",
+    "receive real time events from containers",
+    resolve_image_specs=False,
 )
-ExecCommand = DockerComposeCommand("exec", "execute a command in a running container")
-ImagesCommand = DockerComposeCommand("images", "list images")
-KillCommand = DockerComposeCommand("kill", "kill containers")
-LogsCommand = DockerComposeCommand("logs", "view output from containers")
-PauseCommand = DockerComposeCommand("pause", "pause services")
-PortCommand = DockerComposeCommand("port", "print the public port for a port binding")
-PsCommand = DockerComposeCommand("ps", "list containers")
+ExecCommand = DockerComposeCommand(
+    "exec", "execute a command in a running container", resolve_image_specs=False
+)
+ImagesCommand = DockerComposeCommand("images", "list images", resolve_image_specs=False)
+KillCommand = DockerComposeCommand("kill", "kill containers", resolve_image_specs=False)
+LogsCommand = DockerComposeCommand(
+    "logs", "view output from containers", resolve_image_specs=False
+)
+PauseCommand = DockerComposeCommand(
+    "pause", "pause services", resolve_image_specs=False
+)
+PortCommand = DockerComposeCommand(
+    "port",
+    "print the public port for a port binding",
+    resolve_image_specs=False,
+)
+PsCommand = DockerComposeCommand("ps", "list containers", resolve_image_specs=False)
 PullCommand = DockerComposeCommand("pull", "pull service images")
 PushCommand = DockerComposeCommand("push", "push service images")
-RestartCommand = DockerComposeCommand("restart", "restart services")
-RmCommand = DockerComposeCommand("rm", "remove stopped containers")
+RestartCommand = DockerComposeCommand(
+    "restart", "restart services", resolve_image_specs=False
+)
+RmCommand = DockerComposeCommand(
+    "rm", "remove stopped containers", resolve_image_specs=False
+)
 ScaleCommand = DockerComposeCommand("scale", "set number of containers for a service")
 StartCommand = DockerComposeCommand("start", "start services", runs_containers=True)
-StopCommand = DockerComposeCommand("stop", "stop services")
-TopCommand = DockerComposeCommand("top", "display the running processes")
-UnpauseCommand = DockerComposeCommand("unpause", "unpause services")
+StopCommand = DockerComposeCommand("stop", "stop services", resolve_image_specs=False)
+TopCommand = DockerComposeCommand(
+    "top", "display the running processes", resolve_image_specs=False
+)
+UnpauseCommand = DockerComposeCommand(
+    "unpause", "unpause services", resolve_image_specs=False
+)
 UpCommand = DockerComposeCommand(
     "up", "create and start containers", runs_containers=True
 )
