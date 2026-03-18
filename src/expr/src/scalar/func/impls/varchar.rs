@@ -14,10 +14,11 @@ use mz_repr::adt::varchar::VarChar;
 #[sqlfunc(
     sqlname = "varchar_to_text",
     preserves_uniqueness = true,
+    is_eliminable_cast = true,
     inverse = to_unary!(super::CastStringToVarChar {
         length: None,
         fail_on_len: false,
-    })
+    }),
 )]
 fn cast_var_char_to_string<'a>(a: VarChar<&'a str>) -> &'a str {
     a.0

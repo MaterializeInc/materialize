@@ -206,6 +206,11 @@ macro_rules! derive_unary {
                     $(Self::$name(f) => LazyUnaryFunc::could_error(f),)*
                 }
             }
+            pub fn is_eliminable_cast(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyUnaryFunc::is_eliminable_cast(f),)*
+                }
+            }
         }
 
         impl fmt::Display for UnaryFunc {

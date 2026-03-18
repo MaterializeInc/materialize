@@ -403,6 +403,10 @@ impl LazyUnaryFunc for CastStringToArray {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastStringToArray {
@@ -491,6 +495,10 @@ impl LazyUnaryFunc for CastStringToList {
     }
 
     fn is_monotone(&self) -> bool {
+        false
+    }
+
+    fn is_eliminable_cast(&self) -> bool {
         false
     }
 }
@@ -589,6 +597,10 @@ impl LazyUnaryFunc for CastStringToMap {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastStringToMap {
@@ -643,6 +655,11 @@ impl EagerUnaryFunc for CastStringToChar {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastCharToString)
+    }
+
+    fn is_eliminable_cast(&self) -> bool {
+        // even when `length` is `None`, we'll trim whitespace at the end
+        false
     }
 }
 
@@ -742,6 +759,10 @@ impl LazyUnaryFunc for CastStringToRange {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastStringToRange {
@@ -801,6 +822,10 @@ impl EagerUnaryFunc for CastStringToVarChar {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastVarCharToString)
+    }
+
+    fn is_eliminable_cast(&self) -> bool {
+        self.length.is_none()
     }
 }
 
@@ -888,6 +913,10 @@ impl LazyUnaryFunc for CastStringToInt2Vector {
     }
 
     fn is_monotone(&self) -> bool {
+        false
+    }
+
+    fn is_eliminable_cast(&self) -> bool {
         false
     }
 }
@@ -1121,6 +1150,10 @@ impl LazyUnaryFunc for RegexpMatch {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for RegexpMatch {
@@ -1187,6 +1220,10 @@ impl LazyUnaryFunc for RegexpSplitToArray {
     }
 
     fn is_monotone(&self) -> bool {
+        false
+    }
+
+    fn is_eliminable_cast(&self) -> bool {
         false
     }
 }

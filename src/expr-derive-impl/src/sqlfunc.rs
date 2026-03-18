@@ -43,6 +43,8 @@ pub(crate) struct Modifiers {
     introduces_nulls: Option<Expr>,
     /// Whether the function is associative. Applies to variadic functions.
     is_associative: Option<Expr>,
+    /// Whether the function is a noop cast. Applies to unary functions.
+    is_eliminable_cast: Option<Expr>,
     /// Whether to generate a snapshot test for the function. Defaults to false.
     test: Option<bool>,
 }
@@ -871,6 +873,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         propagates_nulls,
         mut introduces_nulls,
         is_associative,
+        is_eliminable_cast,
         test: _,
     } = modifiers;
 
@@ -985,6 +988,14 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         }
     });
 
+    let is_eliminable_cast_fn = is_eliminable_cast.map(|is_eliminable_cast| {
+        quote! {
+            fn is_eliminable_cast(&self) -> bool {
+                #is_eliminable_cast
+            }
+        }
+    });
+
     let result = quote! {
         #[derive(
             proptest_derive::Arbitrary, Ord, PartialOrd, Clone,
@@ -1019,6 +1030,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
             #inverse_fn
             #is_monotone_fn
             #preserves_uniqueness_fn
+            #is_eliminable_cast_fn
         }
 
         impl std::fmt::Display for #struct_name {
@@ -1062,6 +1074,7 @@ fn binary_func(
         propagates_nulls,
         mut introduces_nulls,
         is_associative,
+        is_eliminable_cast,
         test: _,
     } = modifiers;
 
@@ -1107,6 +1120,11 @@ fn binary_func(
     if is_associative.is_some() {
         return Err(darling::Error::unknown_field(
             "is_associative not supported for binary functions",
+        ));
+    }
+    if is_eliminable_cast.is_some() {
+        return Err(darling::Error::unknown_field(
+            "is_eliminable_cast not supported for binary functions",
         ));
     }
 
@@ -1287,6 +1305,7 @@ fn variadic_func(
         propagates_nulls,
         mut introduces_nulls,
         is_associative,
+        is_eliminable_cast,
         test: _,
     } = modifiers;
 
@@ -1304,6 +1323,11 @@ fn variadic_func(
     if negate.is_some() {
         return Err(darling::Error::unknown_field(
             "negate not supported for variadic functions",
+        ));
+    }
+    if is_eliminable_cast.is_some() {
+        return Err(darling::Error::unknown_field(
+            "is_eliminable_cast not supported for variadic functions",
         ));
     }
     if output_type.is_some() && output_type_expr.is_some() {
