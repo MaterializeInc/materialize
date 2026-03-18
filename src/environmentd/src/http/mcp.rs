@@ -671,46 +671,35 @@ async fn get_data_product_details(
     }))
 }
 
-/// Read rows from a data product. Validates the name exists in `mz_mcp_data_products`
-/// and queries it on the correct cluster with a row limit.
+/// Read rows from a data product. Issues a single read-only query.
+///
+/// When `cluster_override` is provided, sets the cluster explicitly.
+/// Otherwise the query runs on the session's default cluster.
+///
+/// The name is expected to come from `get_data_products()` / `get_data_product_details()`.
+/// The query runs inside a READ ONLY transaction, preventing mutations.
 async fn read_data_product(
     client: &mut AuthedClient,
     name: &str,
     limit: u32,
     cluster_override: Option<&str>,
 ) -> Result<McpResult, McpRequestError> {
-    debug!(name = %name, limit = limit, "Executing read_data_product");
+    debug!(name = %name, limit = limit, cluster_override = ?cluster_override, "Executing read_data_product");
 
     let clamped_limit = limit.min(MAX_READ_LIMIT);
 
-    // Verify this is a registered data product and get its canonical name + cluster.
-    let lookup_query = format!(
-        "SELECT object_name, cluster FROM mz_internal.mz_mcp_data_products WHERE object_name = {}",
-        escaped_string_literal(name)
-    );
-    let lookup_rows = execute_sql(client, &lookup_query).await?;
-
-    if lookup_rows.is_empty() {
-        return Err(McpRequestError::DataProductNotFound(name.to_string()));
-    }
-
-    // Use the canonical name from the catalog, not the user-supplied value.
-    let canonical_name = lookup_rows[0][0]
-        .as_str()
-        .ok_or_else(|| McpRequestError::Internal(anyhow!("object_name is not a string")))?;
-
-    let catalog_cluster = lookup_rows[0][1]
-        .as_str()
-        .ok_or_else(|| McpRequestError::Internal(anyhow!("cluster name is not a string")))?;
-
-    let cluster = cluster_override.unwrap_or(catalog_cluster);
-
-    let read_query = format!(
-        "BEGIN READ ONLY; SET CLUSTER = {}; SELECT * FROM {} LIMIT {}; COMMIT;",
-        escaped_string_literal(cluster),
-        canonical_name,
-        clamped_limit,
-    );
+    let read_query = match cluster_override {
+        Some(cluster) => format!(
+            "BEGIN READ ONLY; SET CLUSTER = {}; SELECT * FROM {} LIMIT {}; COMMIT;",
+            escaped_string_literal(cluster),
+            name,
+            clamped_limit,
+        ),
+        None => format!(
+            "BEGIN READ ONLY; SELECT * FROM {} LIMIT {}; COMMIT;",
+            name, clamped_limit,
+        ),
+    };
 
     let rows = execute_sql(client, &read_query).await?;
 
