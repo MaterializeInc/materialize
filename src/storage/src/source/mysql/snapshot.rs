@@ -379,6 +379,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         .await;
                     trace!(%id, "timely-{worker_id} stopping snapshot of output {output:?} \
                                 due to schema mismatch");
+                    tracing::info!(%id, "timely-{worker_id} stopping snapshot of output {output:?} \
+                                due to schema mismatch");
                     removed_outputs.insert(output.output_index);
                 }
                 for (_, outputs) in reader_snapshot_table_info.iter_mut() {

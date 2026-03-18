@@ -96,6 +96,9 @@ pub(super) async fn handle_query_event(
                     trace!(%id, "timely-{worker_id} DDL change \
                            verification error for {table:?}[{}]: {err:?}",
                            err_output.output_index);
+                    tracing::info!(%id, "timely-{worker_id} DDL change \
+                           verification error for {table:?}[{}]: {err:?}",
+                           err_output.output_index);
                     let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
                     ctx.data_output
                         .give_fueled(

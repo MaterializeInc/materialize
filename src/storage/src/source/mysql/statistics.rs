@@ -125,9 +125,12 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             };
             let error_loop = async {
                 while let Some(event) = error_handle.next().await {
-                    if let AsyncEvent::Data(_, err_data) = event {
+                    if let AsyncEvent::Data(ts, err_data) = event {
                         for err in err_data {
-                            if let ReplicationError::Definite(_) = err {
+                            if let ReplicationError::Definite(def_err) = err {
+                                tracing::info!(
+                                    "ts: {:?} Definite replication error detected in statistics operator: {def_err}, exiting", ts
+                                );
                                 break;
                             }
                         }
