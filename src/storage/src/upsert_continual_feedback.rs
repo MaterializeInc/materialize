@@ -182,6 +182,13 @@ where
         // source.
         let mut hydrating = true;
 
+        // DEBUG: When set, forces the conditions needed to produce orphaned +1s
+        // during rehydration: keeps partial_drain_time alive across Progress
+        // events, and exits the process after the BUG PRE-CONDITION fires
+        // (two orphaned +1s for a tombstoned key). The next instance's
+        // rehydration should then encounter diff_sum=2 and panic.
+        let force_orphan_exit = std::env::var("MZ_UPSERT_FORCE_ORPHAN_EXIT").is_ok();
+
         // A re-usable buffer of changes, per key. This is an `IndexMap`
         // because it has to be `drain`-able and have a consistent iteration
         // order.
@@ -224,6 +231,16 @@ where
 
         let mut error_emitter = (&mut health_output, &health_cap);
 
+        // FORCE_ORPHAN_EXIT: Skip consolidate_chunk for the first N
+        // steady-state persist_input iterations. This delays persist
+        // feedback processing, allowing multiple AtTime drains to emit
+        // orphaned +1s for the same tombstoned key. When consolidation
+        // resumes, the merge function sees both +1s → diff_sum=2.
+        let mut consolidate_skip_counter: usize = 0;
+        // How many persist_input iterations to skip before consolidating.
+        // During this window, AtTime drains can create orphaned +1s.
+        let consolidate_skip_threshold: usize = 10;
+
         loop {
             tokio::select! {
                 _ = persist_input.ready() => {
@@ -257,6 +274,16 @@ where
                                     ?upper,
                                     "received persist progress");
                                 persist_upper = upper;
+                                // Process one batch at a time during
+                                // rehydration. This forces persist_upper to
+                                // advance one batch boundary at a time,
+                                // maximizing AtTime drain opportunities and
+                                // the chance of hitting the
+                                // provisional_value_ref cross-timestamp
+                                // fallback bug (diff_sum=2 panic).
+                                if hydrating {
+                                    break;
+                                }
                             }
                         }
                     }
@@ -309,28 +336,64 @@ where
                         }
                     }
 
-                    let persist_stash_iter = persist_stash
-                        .drain(..)
-                        .map(|(key, val, _ts, diff)| (key, val, diff));
+                    // FORCE_ORPHAN_EXIT: In steady state, skip consolidation
+                    // for the first N iterations. This delays persist feedback
+                    // from being merged into RocksDB, so AtTime drains see
+                    // stale provisional values and emit orphaned +1s.
+                    // The persist_stash is NOT drained — it accumulates.
+                    // When we finally consolidate, the merge function sees
+                    // multiple +1s for the same key → diff_sum=2.
+                    let should_skip_consolidate = force_orphan_exit
+                        && !hydrating
+                        && consolidate_skip_counter < consolidate_skip_threshold;
 
-                    match state
-                        .consolidate_chunk(
-                            persist_stash_iter,
-                            last_rehydration_chunk,
-                        )
-                        .await
-                    {
-                        Ok(_) => {}
-                        Err(e) => {
-                            // Make sure our persist source can shut down.
-                            persist_token.take();
-                            snapshot_cap.downgrade(&[]);
-                            UpsertErrorEmitter::<G>::emit(
-                                &mut error_emitter,
-                                "Failed to rehydrate state".to_string(),
-                                e,
+                    if should_skip_consolidate {
+                        consolidate_skip_counter += 1;
+                        if consolidate_skip_counter % 50 == 0 || consolidate_skip_counter == 1 {
+                            tracing::info!(
+                                worker_id = %source_config.worker_id,
+                                source_id = %source_config.id,
+                                consolidate_skip_counter,
+                                consolidate_skip_threshold,
+                                persist_stash_len = %persist_stash.len(),
+                                "FORCE_ORPHAN_EXIT: skipping consolidate_chunk"
+                            );
+                        }
+                        // Don't drain persist_stash — keep accumulating
+                    } else {
+                        if force_orphan_exit && consolidate_skip_counter == consolidate_skip_threshold {
+                            tracing::error!(
+                                worker_id = %source_config.worker_id,
+                                source_id = %source_config.id,
+                                persist_stash_len = %persist_stash.len(),
+                                "FORCE_ORPHAN_EXIT: resuming consolidate_chunk after skip window"
+                            );
+                            consolidate_skip_counter += 1; // Don't log again
+                        }
+
+                        let persist_stash_iter = persist_stash
+                            .drain(..)
+                            .map(|(key, val, _ts, diff)| (key, val, diff));
+
+                        match state
+                            .consolidate_chunk(
+                                persist_stash_iter,
+                                last_rehydration_chunk,
                             )
-                            .await;
+                            .await
+                        {
+                            Ok(_) => {}
+                            Err(e) => {
+                                // Make sure our persist source can shut down.
+                                persist_token.take();
+                                snapshot_cap.downgrade(&[]);
+                                UpsertErrorEmitter::<G>::emit(
+                                    &mut error_emitter,
+                                    "Failed to rehydrate state".to_string(),
+                                    e,
+                                )
+                                .await;
+                            }
                         }
                     }
 
@@ -402,7 +465,14 @@ where
                                     };
                                 }
 
-                                if prevent_snapshot_buffering
+                                if force_orphan_exit {
+                                    // FORCE: Always set partial_drain_time to ensure
+                                    // AtTime drains fire. During steady state this
+                                    // maximizes chances of hitting the BUG PRE-CONDITION
+                                    // (two AtTime drains at different timestamps for
+                                    // a tombstoned key).
+                                    partial_drain_time = Some(event_time.clone());
+                                } else if prevent_snapshot_buffering
                                     && input_upper.as_option()
                                         == Some(&event_time)
                                 {
@@ -448,7 +518,9 @@ where
                                 // update has moved the frontier. We might allow
                                 // it again once we receive data right at the
                                 // frontier again.
-                                partial_drain_time = None;
+                                if !force_orphan_exit {
+                                    partial_drain_time = None;
+                                }
                                 input_upper = upper;
                             }
                         }
@@ -491,6 +563,7 @@ where
                     ?stash,
                     "stashed updates");
 
+                let mut _toupper_bug_flag = false;
                 let mut min_remaining_time = drain_staged_input::<_, G, _, _, _>(
                     &mut stash,
                     &mut commands_state,
@@ -503,6 +576,10 @@ where
                     &mut error_emitter,
                     &mut state,
                     &source_config,
+                    &mut _toupper_bug_flag,
+                    force_orphan_exit,
+                    consolidate_skip_counter,
+                    consolidate_skip_threshold,
                 )
                 .await;
 
@@ -548,13 +625,17 @@ where
                         .as_mut()
                         .expect("missing capability for non-empty stash");
 
-                    tracing::trace!(
+                    // INSTRUMENTATION: Log AtTime drain with key context
+                    tracing::info!(
                         worker_id = %source_config.worker_id,
                         source_id = %source_config.id,
-                        ?cap,
-                        ?stash,
-                        "stashed updates");
+                        %hydrating,
+                        ?partial_drain_time,
+                        ?persist_upper,
+                        stash_size = %stash.len(),
+                        "AtTime drain triggered");
 
+                    let mut at_time_bug_precondition = false;
                     let mut min_remaining_time = drain_staged_input::<_, G, _, _, _>(
                         &mut stash,
                         &mut commands_state,
@@ -563,10 +644,15 @@ where
                         DrainStyle::AtTime {
                             time: partial_drain_time.clone(),
                             persist_upper: &persist_upper,
+                            skip_persist_checks: force_orphan_exit,
                         },
                         &mut error_emitter,
                         &mut state,
                         &source_config,
+                        &mut at_time_bug_precondition,
+                        force_orphan_exit,
+                        consolidate_skip_counter,
+                        consolidate_skip_threshold,
                     )
                     .await;
 
@@ -578,6 +664,23 @@ where
 
                     for (update, ts, diff) in output_updates.drain(..) {
                         output_handle.give(cap, (update, ts, diff));
+                    }
+
+                    // FORCE_ORPHAN_EXIT: If the BUG PRE-CONDITION fired,
+                    // orphaned +1s are now in the output pipeline. Sleep to
+                    // let persist_sink flush them to the shard, then exit.
+                    // The next instance's rehydration will read the shard
+                    // with cumulative diff_sum=2 and panic on ensure_decoded.
+                    if at_time_bug_precondition && force_orphan_exit {
+                        tracing::error!(
+                            worker_id = %source_config.worker_id,
+                            source_id = %source_config.id,
+                            "FORCE_ORPHAN_EXIT: BUG PRE-CONDITION hit! \
+                            Sleeping 15s to let persist_sink flush orphaned +1s, \
+                            then exiting process.");
+                        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                        tracing::error!("FORCE_ORPHAN_EXIT: Exiting now.");
+                        std::process::exit(1);
                     }
 
                     if !stash.is_empty() {
@@ -640,6 +743,11 @@ enum DrainStyle<'a, T> {
     AtTime {
         time: T,
         persist_upper: &'a Antichain<T>,
+        /// When true, skip persist_upper eligibility and relevance checks.
+        /// Used by force_orphan_exit to allow AtTime drains during rehydration
+        /// when Kafka timestamps are ahead of persist_upper (which is still
+        /// advancing through the snapshot).
+        skip_persist_checks: bool,
     },
 }
 
@@ -667,6 +775,10 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     error_emitter: &mut E,
     state: &mut UpsertState<'_, S, T, FromTime>,
     source_config: &crate::source::SourceExportCreationConfig,
+    bug_precondition_hit: &mut bool,
+    force_orphan_exit: bool,
+    consolidate_skip_counter: usize,
+    consolidate_skip_threshold: usize,
 ) -> Option<T>
 where
     S: UpsertStateBackend<T, FromTime>,
@@ -696,10 +808,19 @@ where
                 DrainStyle::AtTime {
                     time,
                     persist_upper,
+                    skip_persist_checks,
                 } => {
-                    // Even when emitting partial updates, we still need to wait
-                    // until "previous" times in the persist input are complete.
-                    *ts <= *time && !persist_upper.less_than(ts)
+                    if *skip_persist_checks {
+                        // Force eligibility for all stash entries at or below
+                        // the drain time. Used during rehydration with
+                        // force_orphan_exit to allow AtTime drains even when
+                        // persist_upper hasn't caught up to Kafka timestamps.
+                        *ts <= *time
+                    } else {
+                        // Even when emitting partial updates, we still need to wait
+                        // until "previous" times in the persist input are complete.
+                        *ts <= *time && !persist_upper.less_than(ts)
+                    }
                 }
             };
 
@@ -710,16 +831,24 @@ where
             eligible
         })
         .filter(|(ts, _, _, _)| {
-            let persist_upper = match &drain_style {
+            let (persist_upper, skip_persist_checks) = match &drain_style {
                 DrainStyle::ToUpper {
                     input_upper: _,
                     persist_upper,
-                } => persist_upper,
+                } => (*persist_upper, false),
                 DrainStyle::AtTime {
                     time: _,
                     persist_upper,
-                } => persist_upper,
+                    skip_persist_checks,
+                } => (*persist_upper, *skip_persist_checks),
             };
+
+            if skip_persist_checks {
+                // During force_orphan_exit rehydration, all eligible entries
+                // are relevant. The Kafka timestamps are >= resume_upper
+                // (>= shard upper), so persist_sink will accept the output.
+                return true;
+            }
 
             // Any update that is "in the past" of the persist upper is not
             // relevant anymore. We _can_ emit changes for it, but the
@@ -824,7 +953,56 @@ where
         match value {
             Some(value) => {
                 if let Some(old_value) = existing_state_cell.as_ref() {
-                    if let Some(old_value) = old_value.provisional_value_ref(&ts) {
+                    // INSTRUMENTATION: Detect the pre-condition for diff_sum=2 panic.
+                    // If we have a provisional at a DIFFERENT timestamp and finalized=None,
+                    // the provisional_value_ref will fall back to finalized=None and we'll
+                    // emit +1 without retracting the previous provisional's +1.
+                    if matches!(&drain_style, DrainStyle::AtTime { .. }) {
+                        if let Some((prov_ts, has_finalized)) = old_value.provisional_diagnostic(&ts) {
+                            if !has_finalized {
+                                tracing::error!(
+                                    worker_id = %source_config.worker_id,
+                                    source_id = %source_config.id,
+                                    ?key,
+                                    ?ts,
+                                    ?prov_ts,
+                                    "BUG PRE-CONDITION: AtTime drain at ts for key with \
+                                    provisional at different timestamp and finalized=None. \
+                                    This will emit +1 without retracting the previous +1, \
+                                    leading to diff_sum=2 panic on next ensure_decoded!"
+                                );
+                                *bug_precondition_hit = true;
+                            } else {
+                                tracing::warn!(
+                                    worker_id = %source_config.worker_id,
+                                    source_id = %source_config.id,
+                                    ?key,
+                                    ?ts,
+                                    ?prov_ts,
+                                    "AtTime drain at ts for key with provisional at different \
+                                    timestamp (finalized is Some, so retraction will be correct)"
+                                );
+                            }
+                        }
+                    }
+                    // FORCE_ORPHAN_EXIT: Suppress the retraction on
+                    // some AtTime drains to create orphaned +1s.
+                    // Output has +1 for new value but no -1 for old.
+                    // When persist feedback merges this with the existing
+                    // Value base, diff_sum=2 → panic on next ensure_decoded.
+                    let suppress = force_orphan_exit
+                        && matches!(&drain_style, DrainStyle::AtTime { .. })
+                        && old_value.provisional_value_ref(&ts).is_some()
+                        && consolidate_skip_counter < consolidate_skip_threshold;
+                    if suppress {
+                        tracing::error!(
+                            worker_id = %source_config.worker_id,
+                            source_id = %source_config.id,
+                            ?key,
+                            ?ts,
+                            "FORCE_ORPHAN_EXIT: suppressing retraction to create orphaned +1"
+                        );
+                    } else if let Some(old_value) = old_value.provisional_value_ref(&ts) {
                         output_updates.push((old_value.clone(), ts.clone(), Diff::MINUS_ONE));
                     }
                 }
