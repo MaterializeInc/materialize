@@ -76,17 +76,6 @@ name = "Reference"
 weight = 76
 
 #
-# Releases
-#
-
-[[menu.main]]
-identifier = "changelogs"
-name = "Changelog ↗️"
-parent = "releases"
-weight = 20
-url = "https://materialize.com/changelog/"
-
-#
 # About
 #
 
