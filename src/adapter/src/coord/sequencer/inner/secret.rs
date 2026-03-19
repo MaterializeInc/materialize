@@ -232,6 +232,8 @@ impl Coordinator {
                         "Dropping newly created secrets has encountered an error: {}",
                         e
                     );
+                } else {
+                    self.caching_secrets_reader.invalidate(item_id);
                 }
                 Err(err)
             }
@@ -267,6 +269,7 @@ impl Coordinator {
         plan: plan::AlterSecretPlan,
     ) -> Result<StageResult<Box<SecretStage>>, AdapterError> {
         let plan::AlterSecretPlan { id, mut secret_as } = plan;
+        let caching_secrets_reader = self.caching_secrets_reader.clone();
         let secrets_controller = Arc::clone(&self.secrets_controller);
         let payload = self.extract_secret(session, &mut secret_as)?;
         let span = Span::current();
@@ -274,6 +277,7 @@ impl Coordinator {
             || "alter secret ensure",
             async move {
                 secrets_controller.ensure(id, &payload).await?;
+                caching_secrets_reader.invalidate(id);
                 Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
             }
             .instrument(span),
@@ -304,6 +308,7 @@ impl Coordinator {
         &self,
         RotateKeysSecretEnsure { validity, id }: RotateKeysSecretEnsure,
     ) -> Result<StageResult<Box<SecretStage>>, AdapterError> {
+        let caching_secrets_reader = self.caching_secrets_reader.clone();
         let secrets_controller = Arc::clone(&self.secrets_controller);
         let entry = self.catalog().get_entry(&id).clone();
         let span = Span::current();
@@ -316,6 +321,7 @@ impl Coordinator {
                 secrets_controller
                     .ensure(id, &new_key_set.to_bytes())
                     .await?;
+                caching_secrets_reader.invalidate(id);
 
                 let mut to_item = entry.item;
                 match &mut to_item {
