@@ -432,21 +432,6 @@ impl<T: Eq, O> StateValue<T, O> {
         }
     }
 
-    /// Returns true if this value has a provisional at a different timestamp
-    /// than `ts` AND finalized is None (tombstoned). This is the precondition
-    /// for the diff_sum=2 bug: the caller won't emit a retraction for the
-    /// previous provisional's +1.
-    pub fn has_cross_ts_provisional_with_no_finalized(&self, ts: &T) -> bool {
-        match self {
-            Self::Value(value) => {
-                value.provisional.is_some()
-                    && value.provisional.as_ref().map(|p| &p.timestamp) != Some(ts)
-                    && value.finalized.is_none()
-            }
-            _ => false,
-        }
-    }
-
     /// Returns the the finalized value, if one is present.
     pub fn into_finalized_value(self) -> Option<UpsertValue> {
         match self {
@@ -521,17 +506,6 @@ impl<T: Eq, O> StateValue<T, O> {
                 *checksum_sum +=
                     (seahash::hash(&*bincode_buffer) as i64).wrapping_mul(diff.into_inner());
 
-                if diff_sum.0 > 1 || diff_sum.0 < -1 {
-                    tracing::error!(
-                        "merge_update: unexpected diff_sum={} after applying diff={} \
-                         (len_sum={}, checksum_sum={})",
-                        diff_sum.0,
-                        diff.into_inner(),
-                        len_sum.0,
-                        checksum_sum.0,
-                    );
-                }
-
                 // XOR of even diffs cancel out, so we only do it if diff is odd
                 if diff.abs() % Diff::from(2) == Diff::ONE {
                     if value_xor.len() < bincode_buffer.len() {
@@ -593,17 +567,6 @@ impl<T: Eq, O> StateValue<T, O> {
                 *diff_sum += other_consolidating.diff_sum;
                 *len_sum += other_consolidating.len_sum;
                 *checksum_sum += other_consolidating.checksum_sum;
-
-                if diff_sum.0 > 1 || diff_sum.0 < -1 {
-                    tracing::error!(
-                        "merge_update_state: unexpected diff_sum={} after merging \
-                         other.diff_sum={} (len_sum={}, checksum_sum={})",
-                        diff_sum.0,
-                        other_consolidating.diff_sum.0,
-                        len_sum.0,
-                        checksum_sum.0,
-                    );
-                }
                 if other_consolidating.value_xor.len() > value_xor.len() {
                     value_xor.resize(other_consolidating.value_xor.len(), 0);
                 }
@@ -970,36 +933,20 @@ where
 ///
 /// The function should return the new value for the key after merging all the updates.
 pub(crate) fn consolidating_merge_function<T: Eq, O>(
-    key: UpsertKey,
+    _key: UpsertKey,
     updates: impl Iterator<Item = StateValue<T, O>>,
 ) -> StateValue<T, O> {
     let mut current: StateValue<T, O> = Default::default();
 
-    // Track merge inputs for diagnostics when diff_sum goes out of range.
-    let mut input_log: Vec<&'static str> = Vec::new();
-    let mut diff_trace: Vec<i64> = Vec::new();
-
     let mut bincode_buf = Vec::new();
     for update in updates {
         match update {
-            StateValue::Consolidating(ref c) => {
-                input_log.push("Consolidating");
-                diff_trace.push(c.diff_sum.0);
+            StateValue::Consolidating(_) => {
                 current.merge_update_state(&update);
             }
-            StateValue::Value(ref v) => {
-                let has_finalized = v.finalized.is_some();
-                let has_provisional = v.provisional.is_some();
-                if has_finalized {
-                    input_log.push("Value(finalized=Some)");
-                    diff_trace.push(1); // finalized contributes +1
-                } else if has_provisional {
-                    input_log.push("Value(finalized=None,prov=Some)");
-                    diff_trace.push(0);
-                } else {
-                    input_log.push("Value(tombstone)");
-                    diff_trace.push(0);
-                }
+            StateValue::Value(_) => {
+                // This branch is more expensive, but we hopefully rarely hit
+                // it.
                 if let Some(finalized_value) = update.into_finalized_value() {
                     let mut update = StateValue::default();
                     update.merge_update(
@@ -1011,26 +958,6 @@ pub(crate) fn consolidating_merge_function<T: Eq, O>(
                     current.merge_update_state(&update);
                 }
             }
-        }
-    }
-
-    // Panic with full merge trace when the final result has unexpected diff_sum.
-    // This is the state that will be returned to multi_get and cause the
-    // ensure_decoded panic. Panicking here gives us better diagnostics.
-    if let StateValue::Consolidating(ref c) = current {
-        if c.diff_sum.0 > 1 || c.diff_sum.0 < -1 {
-            panic!(
-                "consolidating_merge_function: FINAL diff_sum={} out of range \
-                 (len_sum={}, checksum_sum={}, key={:?}, num_inputs={}, \
-                 inputs={:?}, diffs={:?})",
-                c.diff_sum.0,
-                c.len_sum.0,
-                c.checksum_sum.0,
-                key,
-                input_log.len(),
-                input_log,
-                diff_trace,
-            );
         }
     }
 
