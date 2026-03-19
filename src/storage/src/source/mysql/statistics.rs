@@ -81,6 +81,16 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     &config.config.connection_context.ssh_tunnel_manager,
                 )
                 .await?;
+
+            // Verify the MySQL system settings are correct for consistent row-based replication using GTIDs
+            // match validate_mysql_repl_settings(&mut stats_conn).await {
+            //     Err(err @ MySqlError::InvalidSystemSetting { .. }) => {
+            //         tracing::error!(%worker_id, "MySQL replication settings are not valid: {err}");
+            //         return Ok(());
+            //     }
+            //     Err(err) => Err(err)?,
+            //     Ok(()) => (),
+            // };
             let binlog_purged_set = query_sys_var(&mut stats_conn, "global.gtid_purged").await?;
             if let Err(_) = gtid_set_frontier(&binlog_purged_set) {
                 tracing::warn!("Restore detected, exiting");
