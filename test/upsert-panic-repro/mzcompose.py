@@ -13,6 +13,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from threading import Thread
 
+import requests
+
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import (
     Composition,
@@ -25,6 +27,7 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio, minio_blob_uri
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SYSTEM_PARAMS = {
@@ -36,6 +39,10 @@ SYSTEM_PARAMS = {
     # that change timing behavior:
     "storage_use_continual_feedback_upsert": "true",
     "storage_rocksdb_use_merge_operator": "true",
+    # Tiny memtable = very frequent RocksDB flushes. Each flush triggers
+    # a partial merge that can produce the corrupt diff_sum=2 SST.
+    # Default is ~170MB; 256KB forces flushes after just a few keys.
+    "upsert_rocksdb_optimize_compaction_memtable_budget": "262144",
     # Production defaults (don't override these — they affect the bug timing):
     # storage_upsert_prevent_snapshot_buffering: true (compiled default)
     # storage_upsert_max_snapshot_batch_buffering: None (compiled default, no limit)
@@ -50,16 +57,21 @@ SERVICES = [
     SchemaRegistry(),
     Cockroach(setup_materialize=True, in_memory=True),
     Minio(setup_materialize=True),
+    Toxiproxy(),
     Materialized(
         sanity_restart=False,
         system_parameter_defaults=SYSTEM_PARAMS,
-        environment_extra=[
-            # Slow persist feedback processing so the correction -1
-            # arrives AFTER the corrupt diff_sum=2 SST is read by drain.
-            "FAILPOINTS=upsert_post_persist_progress_delay=sleep(500)",
-        ],
+        # Route blob and consensus through toxiproxy to add latency
+        # that delays the persist feedback loop — the correction -1
+        # arrives later, widening the window where drain reads the
+        # corrupt diff_sum=2 SST.
+        persist_blob_url=minio_blob_uri("toxiproxy"),
+        external_metadata_store="toxiproxy",
         metadata_store="cockroach",
         default_replication_factor=2,
+        environment_extra=[
+            "FAILPOINTS=upsert_post_persist_progress_delay=sleep(500)",
+        ],
     ),
     Testdrive(
         no_consistency_checks=True,
@@ -70,6 +82,69 @@ SERVICES = [
 ]
 
 PAD = "x" * 5000
+
+def setup_toxiproxy(c):
+    """Create proxies for blob and consensus (no toxics yet)."""
+    port = c.default_port("toxiproxy")
+    toxi_url = f"http://localhost:{port}"
+
+    r = requests.post(f"{toxi_url}/proxies", json={
+        "name": "minio", "listen": "0.0.0.0:9000",
+        "upstream": "minio:9000", "enabled": True,
+    })
+    assert r.status_code == 201, f"Failed: {r.text}"
+
+    r = requests.post(f"{toxi_url}/proxies", json={
+        "name": "consensus", "listen": "0.0.0.0:26257",
+        "upstream": "cockroach:26257", "enabled": True,
+    })
+    assert r.status_code == 201, f"Failed: {r.text}"
+    print("Toxiproxy proxies created (no toxics yet)")
+
+
+def set_toxiproxy_latency(c, enabled):
+    """Toggle persist feedback latency on/off.
+    Enable during steady-state data flow to slow the correction batch.
+    Disable during setup, pre-population, and replica transitions."""
+    port = c.default_port("toxiproxy")
+    toxi_url = f"http://localhost:{port}"
+
+    if not enabled:
+        for name in ["blob-latency", "blob-bw", "consensus-jitter"]:
+            proxy = "minio" if "blob" in name else "consensus"
+            requests.delete(f"{toxi_url}/proxies/{proxy}/toxics/{name}")
+        return
+
+    # Blob: upstream latency + bandwidth limit.
+    # Slows persist_sink writes — the correction batch takes longer
+    # to reach the shard.
+    r = requests.post(f"{toxi_url}/proxies/minio/toxics", json={
+        "name": "blob-latency", "type": "latency",
+        "stream": "upstream",
+        "attributes": {"latency": 200, "jitter": 300},
+    })
+    if r.status_code != 200:
+        requests.patch(f"{toxi_url}/proxies/minio/toxics/blob-latency",
+                       json={"attributes": {"latency": 200, "jitter": 300}})
+
+    r = requests.post(f"{toxi_url}/proxies/minio/toxics", json={
+        "name": "blob-bw", "type": "bandwidth",
+        "stream": "upstream",
+        "attributes": {"rate": 100},
+    })
+    if r.status_code != 200:
+        requests.patch(f"{toxi_url}/proxies/minio/toxics/blob-bw",
+                       json={"attributes": {"rate": 100}})
+
+    # Consensus: jitter on CAS and state watches.
+    r = requests.post(f"{toxi_url}/proxies/consensus/toxics", json={
+        "name": "consensus-jitter", "type": "latency",
+        "attributes": {"latency": 100, "jitter": 300},
+    })
+    if r.status_code != 200:
+        requests.patch(f"{toxi_url}/proxies/consensus/toxics/consensus-jitter",
+                       json={"attributes": {"latency": 100, "jitter": 300}})
+
 
 KEY_SCHEMA = (
     '{"type": "record", "name": "Key", "fields": [{"name": "k", "type": "long"}]}'
@@ -118,7 +193,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     print(f"Partition counts: {partitions}")
 
     c.down(destroy_volumes=True)
-    c.up("zookeeper", "kafka", "schema-registry", "cockroach", "minio")
+    c.up("zookeeper", "kafka", "schema-registry", "cockroach", "minio", "toxiproxy")
+    setup_toxiproxy(c)
     c.up("materialized", Service("testdrive", idle=True))
 
     # Use a managed cluster so we can DROP/CREATE replicas
@@ -279,7 +355,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             replica_drops += 1
             print(f"\n  >>> DROP/CREATE REPLICA (#{replica_drops}) <<<")
 
-            # Switch to unmanaged so we can drop/create replicas
+            # Disable latency for clean replica transition
+            set_toxiproxy_latency(c, enabled=False)
+
             try:
                 c.testdrive(
                     "> ALTER CLUSTER upsert_cluster SET (MANAGED = false);\n"
@@ -287,7 +365,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             except Exception:
                 pass
 
-            # Drop all replicas by dropping the whole set with known names
             c.testdrive(
                 "> SET CLUSTER = default;\n"
             )
@@ -299,11 +376,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 except Exception:
                     pass
 
-            # Pump keeps running — data flows into Kafka while replicas are gone
             time.sleep(random.uniform(0.5, 1.5))
 
-            # Recreate replicas — triggers rehydration of all sources
-            # while background pump keeps injecting data
             for r in range(replication_factor):
                 c.testdrive(
                     f"> CREATE CLUSTER REPLICA upsert_cluster.r{r+1}"
@@ -313,6 +387,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             c.testdrive(
                 "> SET CLUSTER = upsert_cluster;\n"
             )
+
+            # Enable latency NOW — during rehydration + steady state.
+            # This slows the persist feedback loop so the correction
+            # -1 batch arrives late, after drain reads the corrupt SST.
+            set_toxiproxy_latency(c, enabled=True)
 
             # Blast data during rehydration
             for rnd_i in range(5):
@@ -327,7 +406,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
             t7 = time.monotonic()
             print(
-                f"  >>> Replica recreated, rehydrating "
+                f"  >>> Replica recreated, latency ON "
                 f"({t7-t0:.1f}s) <<<\n"
             )
             continue
