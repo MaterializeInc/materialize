@@ -43,9 +43,9 @@ use crate::cfg::{COMPACTION_MEMORY_BOUND_BYTES, RetryParameters};
 use crate::fetch::FetchConfig;
 use crate::fetch::{FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart, fetch_leased_part};
 use crate::internal::encoding::Schemas;
-use crate::internal::machine::Machine;
+use crate::internal::machine::{Machine, next_listen_batch_retry_params};
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
-use crate::internal::state::{HollowBatch, LeasedReaderState};
+use crate::internal::state::{HollowBatch, LeasedReaderState, SnapshotErr};
 use crate::internal::watch::{AwaitableState, StateWatch};
 use crate::iter::{Consolidator, StructuredSort};
 use crate::schema::SchemaCache;
@@ -287,19 +287,34 @@ where
         // If Some, an override for the default listen sleep retry parameters.
         retry: Option<RetryParameters>,
     ) -> (Vec<LeasedBatchPart<T>>, Antichain<T>) {
-        let batch = loop {
-            let min_elapsed = self.handle.heartbeat_duration();
-            let next_batch = self.handle.machine.next_listen_batch(
+        // Wait until the upper is past our frontier - ie. there is another batch for us to process.
+        let retry = retry
+            .unwrap_or_else(|| next_listen_batch_retry_params(&self.handle.machine.applier.cfg));
+        self.handle
+            .machine
+            .wait_for_upper_past(
                 &self.frontier,
                 &mut self.handle.watch,
                 Some(&self.handle.reader_id),
+                &self.handle.metrics.retries.next_listen_batch,
                 retry,
-            );
-            match tokio::time::timeout(min_elapsed, next_batch).await {
-                Ok(batch) => break batch,
-                Err(_elapsed) => {
-                    self.handle.maybe_downgrade_since(&self.since).await;
-                }
+            )
+            .await;
+
+        // Obtain a lease before grabbing the upcoming batch from state.
+        let lease = self.handle.lease_seqno().await;
+        let batch = match self
+            .handle
+            .machine
+            .applier
+            .next_listen_batch(&self.frontier)
+        {
+            Ok(batch) => batch,
+            Err(seqno) => {
+                panic!(
+                    "waited for upper past {frontier:?}, but no listen batch was available at {seqno:?}!",
+                    frontier = self.frontier.elements()
+                );
             }
         };
 
@@ -385,7 +400,11 @@ where
             as_of: self.as_of.clone(),
             lower: self.frontier.clone(),
         };
-        let parts = self.handle.lease_batch_parts(batch, filter).collect().await;
+        let parts = self
+            .handle
+            .lease_batch_parts(lease, batch, filter)
+            .collect()
+            .await;
 
         self.handle.maybe_downgrade_since(&self.since).await;
 
@@ -824,6 +843,34 @@ where
         Listen::new(self, as_of).await
     }
 
+    async fn snapshot_batches(
+        &mut self,
+        as_of: Antichain<T>,
+    ) -> Result<(Lease, Vec<HollowBatch<T>>), Since<T>> {
+        self.machine
+            .wait_for_upper_past(
+                &as_of,
+                &mut self.watch,
+                Some(&self.reader_id),
+                &self.metrics.retries.snapshot,
+                RetryParameters::persist_defaults(),
+            )
+            .await;
+        let lease = self.lease_seqno().await;
+        let batches = match self.machine.applier.snapshot(&as_of) {
+            Ok(data) => data,
+            Err(SnapshotErr::AsOfHistoricalDistinctionsLost(since)) => return Err(since),
+            Err(SnapshotErr::AsOfNotYetAvailable(seqno, upper)) => {
+                panic!(
+                    "waited for upper past {as_of:?}, but at latest seqno {seqno:?} the frontier was only {upper:?}",
+                    as_of = as_of.elements(),
+                    upper = upper.0.elements(),
+                )
+            }
+        };
+        Ok((lease, batches))
+    }
+
     /// Returns all of the contents of the shard TVC at `as_of` broken up into
     /// [`LeasedBatchPart`]es. These parts can be "turned in" via
     /// `crate::fetch::fetch_batch_part` to receive the data they contain.
@@ -842,17 +889,7 @@ where
         &mut self,
         as_of: Antichain<T>,
     ) -> Result<Vec<LeasedBatchPart<T>>, Since<T>> {
-        let batches = loop {
-            let min_elapsed = self.heartbeat_duration();
-            match tokio::time::timeout(min_elapsed, self.machine.snapshot(&as_of)).await {
-                Ok(Ok(batches)) => break batches,
-                Ok(Err(since)) => return Err(since),
-                Err(_timeout) => {
-                    let since = self.since().clone();
-                    self.maybe_downgrade_since(&since).await;
-                }
-            }
-        };
+        let (lease, batches) = self.snapshot_batches(as_of.clone()).await?;
 
         if !PartialOrder::less_equal(self.since(), &as_of) {
             return Err(Since(self.since().clone()));
@@ -866,7 +903,7 @@ where
             // to distribute work by parts (smallish, more even size) instead of
             // batches (arbitrarily large).
             leased_parts.extend(
-                self.lease_batch_parts(batch, filter.clone())
+                self.lease_batch_parts(lease.clone(), batch, filter.clone())
                     .collect::<Vec<_>>()
                     .await,
             );
@@ -891,6 +928,7 @@ where
 
     fn lease_batch_parts(
         &mut self,
+        lease: Lease,
         batch: HollowBatch<T>,
         filter: FetchBatchFilter<T>,
     ) -> impl Stream<Item = LeasedBatchPart<T>> + '_ {
@@ -898,7 +936,6 @@ where
             let blob = Arc::clone(&self.blob);
             let metrics = Arc::clone(&self.metrics);
             let desc = batch.desc.clone();
-            let lease = self.lease_seqno().await;
             for await part in batch.part_stream(self.shard_id(), &*blob, &*metrics) {
                 yield LeasedBatchPart {
                     metrics: Arc::clone(&self.metrics),
@@ -964,10 +1001,6 @@ where
         )
         .await;
         new_reader
-    }
-
-    fn heartbeat_duration(&self) -> Duration {
-        READER_LEASE_DURATION.get(&self.cfg) / 4
     }
 
     /// A rate-limited version of [Self::downgrade_since].
@@ -1139,8 +1172,7 @@ where
         as_of: Antichain<T>,
         should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
     ) -> Result<Cursor<K, V, T, D>, Since<T>> {
-        let batches = self.machine.snapshot(&as_of).await?;
-        let lease = self.lease_seqno().await;
+        let (lease, batches) = self.snapshot_batches(as_of.clone()).await?;
 
         Self::read_batches_consolidated(
             &self.cfg,
@@ -1234,7 +1266,7 @@ where
         let machine = self.machine.clone();
         async move {
             let batches = match as_of {
-                Some(as_of) => machine.snapshot(&as_of).await?,
+                Some(as_of) => machine.unleased_snapshot(&as_of).await?,
                 None => machine.applier.all_batches(),
             };
             let num_updates = batches.iter().map(|b| b.len).sum();
@@ -1259,7 +1291,7 @@ where
         &self,
         as_of: Antichain<T>,
     ) -> Result<SnapshotPartsStats, Since<T>> {
-        let batches = self.machine.snapshot(&as_of).await?;
+        let batches = self.machine.unleased_snapshot(&as_of).await?;
         let parts = stream::iter(&batches)
             .flat_map(|b| b.part_stream(self.shard_id(), &*self.blob, &*self.metrics))
             .map(|p| {
