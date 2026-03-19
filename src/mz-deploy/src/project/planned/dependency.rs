@@ -32,6 +32,7 @@ use super::super::typed;
 use super::types::{Database, DatabaseObject, Project, Schema, SchemaType};
 use crate::project::object_id::ObjectId;
 use mz_sql_parser::ast::*;
+use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Determine the schema type based on the objects it contains.
@@ -77,7 +78,11 @@ struct ProcessedObject {
     typed_object: typed::DatabaseObject,
     dependencies: BTreeSet<ObjectId>,
     clusters: BTreeSet<Cluster>,
-    constraint_mvs: Vec<(ObjectId, CreateConstraintStatement<Raw>, typed::DatabaseObject)>,
+    constraint_mvs: Vec<(
+        ObjectId,
+        CreateConstraintStatement<Raw>,
+        typed::DatabaseObject,
+    )>,
     tests: Vec<(ObjectId, crate::unit_test::UnitTest)>,
 }
 
@@ -155,7 +160,7 @@ impl From<typed::Project> for Project {
         // Extract dependencies and clusters from each object.
 
         let processed: Vec<ProcessedObject> = object_tasks
-            .into_iter()
+            .into_par_iter()
             .map(|task| {
                 let object_id = ObjectId::new(
                     task.db_name.clone(),
@@ -163,11 +168,8 @@ impl From<typed::Project> for Project {
                     task.typed_obj.stmt.ident().object.clone(),
                 );
 
-                let (dependencies, clusters) = extract_dependencies(
-                    &task.typed_obj.stmt,
-                    &task.db_name,
-                    &task.schema_name,
-                );
+                let (dependencies, clusters) =
+                    extract_dependencies(&task.typed_obj.stmt, &task.db_name, &task.schema_name);
 
                 // Constraint lowering: enforced constraints become companion MVs
                 let mut constraint_mvs = Vec::new();
@@ -263,11 +265,8 @@ impl From<typed::Project> for Project {
                 mv_deps.insert(parent_id);
 
                 if let Some(ref refs) = constraint_stmt.references {
-                    let ref_id = ObjectId::from_raw_item_name(
-                        &refs.object,
-                        &po.db_name,
-                        &po.schema_name,
-                    );
+                    let ref_id =
+                        ObjectId::from_raw_item_name(&refs.object, &po.db_name, &po.schema_name);
                     mv_deps.insert(ref_id);
                 }
 

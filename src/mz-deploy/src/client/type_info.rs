@@ -1,9 +1,14 @@
-//! Column-schema introspection for the `types.lock` system.
+//! Column-schema introspection for the data-contract and type-checking systems.
 //!
 //! Methods on [`TypeInfoClient`] run `SHOW COLUMNS` against external
-//! dependencies and project tables on the live region, returning their
-//! column names, types, and nullability as a [`Types`](crate::types::Types)
-//! snapshot. This is the data source for `gen-data-contracts`.
+//! dependencies and project tables, returning their column names, types, and
+//! nullability as a [`Types`](crate::types::Types) snapshot.
+//!
+//! - **`gen-data-contracts`** uses [`query_external_types`](TypeInfoClient::query_external_types)
+//!   to generate `types.lock` from the live region.
+//! - **Incremental type checking** uses [`query_object_columns`](TypeInfoClient::query_object_columns)
+//!   to query a single view's output columns inline after validation, enabling
+//!   type-hash comparison for dirty propagation.
 
 use crate::client::connection::TypeInfoClient;
 use crate::client::errors::ConnectionError;
@@ -115,6 +120,48 @@ impl TypeInfoClient<'_> {
         })
     }
 
+    /// Query column types for a single object via `SHOW COLUMNS`.
+    ///
+    /// When `flatten` is true, the object is referenced using the flattened
+    /// `"db.schema.object"` form (for temporary views). Otherwise it uses
+    /// the standard `db.schema.object` quoting.
+    pub async fn query_object_columns(
+        &self,
+        oid: &ObjectId,
+        flatten: bool,
+    ) -> Result<BTreeMap<String, ColumnType>, ConnectionError> {
+        let object_ref = if flatten {
+            format!("\"{}.{}.{}\"", oid.database, oid.schema, oid.object)
+        } else {
+            let quoted_db = quote_identifier(&oid.database);
+            let quoted_schema = quote_identifier(&oid.schema);
+            let quoted_object = quote_identifier(&oid.object);
+            format!("{}.{}.{}", quoted_db, quoted_schema, quoted_object)
+        };
+
+        let rows = self
+            .client
+            .query(&format!("SHOW COLUMNS FROM {}", object_ref), &[])
+            .await?;
+
+        let mut columns = BTreeMap::new();
+        for row in rows {
+            let name: String = row.get("name");
+            let type_str: String = row.get("type");
+            let nullable: bool = row.get("nullable");
+
+            columns.insert(
+                name,
+                ColumnType {
+                    r#type: type_str,
+                    nullable,
+                },
+            );
+        }
+
+        Ok(columns)
+    }
+
     /// Query types for internal project views from the database.
     pub async fn query_internal_types(
         &self,
@@ -124,35 +171,7 @@ impl TypeInfoClient<'_> {
         let mut objects = BTreeMap::new();
 
         for oid in object_ids {
-            let object_ref = if flatten {
-                format!("\"{}.{}.{}\"", oid.database, oid.schema, oid.object)
-            } else {
-                let quoted_db = quote_identifier(&oid.database);
-                let quoted_schema = quote_identifier(&oid.schema);
-                let quoted_object = quote_identifier(&oid.object);
-                format!("{}.{}.{}", quoted_db, quoted_schema, quoted_object)
-            };
-
-            let rows = self
-                .client
-                .query(&format!("SHOW COLUMNS FROM {}", object_ref), &[])
-                .await?;
-
-            let mut columns = BTreeMap::new();
-            for row in rows {
-                let name: String = row.get("name");
-                let type_str: String = row.get("type");
-                let nullable: bool = row.get("nullable");
-
-                columns.insert(
-                    name,
-                    ColumnType {
-                        r#type: type_str,
-                        nullable,
-                    },
-                );
-            }
-
+            let columns = self.query_object_columns(oid, flatten).await?;
             objects.insert(oid.to_string(), columns);
         }
 

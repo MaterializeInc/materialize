@@ -42,11 +42,12 @@ pub async fn run(settings: &Settings) -> Result<(), CliError> {
 
     // Load and plan the project
     let planned_project = project::plan(
-        directory,
-        &settings.profile_name,
-        settings.profile_suffix(),
-        settings.variables(),
-    )?;
+        directory.clone(),
+        settings.profile_name.clone(),
+        settings.profile_suffix().map(|s| s.to_owned()),
+        settings.variables().clone(),
+    )
+    .await?;
 
     let has_tables = planned_project.get_tables().next().is_some();
     if planned_project.external_dependencies.is_empty() && !has_tables {

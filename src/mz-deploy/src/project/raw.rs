@@ -56,6 +56,7 @@ use super::error::{LoadError, ProjectError};
 use super::parser::parse_statements_with_context;
 use super::profile_files::collect_all_sql_files;
 use mz_sql_parser::ast::{Raw, Statement};
+use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -428,7 +429,7 @@ pub fn load_project<P: AsRef<Path>>(
     }
 
     // ── Step 2: Process ─────────────────────────────────────────────────
-    // Read and parse each object file. Fail-fast on first error.
+    // Read and parse each object file in parallel. Collect all errors.
 
     struct ParsedObject {
         db_name: String,
@@ -437,21 +438,19 @@ pub fn load_project<P: AsRef<Path>>(
         variants: Vec<ObjectVariant>,
     }
 
-    let parsed_objects: Vec<ParsedObject> = parse_tasks
-        .into_iter()
+    let results: Vec<Result<ParsedObject, ProjectError>> = parse_tasks
+        .into_par_iter()
         .map(|task| {
             let mut variants = Vec::new();
             for vt in task.variants {
-                let sql_content =
-                    fs::read_to_string(&vt.file_path).map_err(|source| LoadError::FileReadFailed {
+                let sql_content = fs::read_to_string(&vt.file_path).map_err(|source| {
+                    LoadError::FileReadFailed {
                         path: vt.file_path.clone(),
                         source,
-                    })?;
-                let statements = parse_statements_with_context(
-                    &sql_content,
-                    vt.file_path.clone(),
-                    variables,
-                )?;
+                    }
+                })?;
+                let statements =
+                    parse_statements_with_context(&sql_content, vt.file_path.clone(), variables)?;
                 variants.push(ObjectVariant {
                     path: vt.file_path,
                     profile: vt.profile,
@@ -465,7 +464,19 @@ pub fn load_project<P: AsRef<Path>>(
                 variants,
             })
         })
-        .collect::<Result<Vec<_>, ProjectError>>()?;
+        .collect();
+
+    let mut parsed_objects = Vec::new();
+    let mut errors = Vec::new();
+    for result in results {
+        match result {
+            Ok(parsed) => parsed_objects.push(parsed),
+            Err(e) => errors.push(e),
+        }
+    }
+    if let Some(first_error) = errors.into_iter().next() {
+        return Err(first_error);
+    }
 
     // ── Step 3: Reassemble ──────────────────────────────────────────────
     // Group parsed objects back into the hierarchical Project structure.
@@ -967,7 +978,8 @@ mod tests {
         // Need a project.toml for the project to load
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let planned = project::plan(root, "default", Some("_staging"), &BTreeMap::new()).unwrap();
+        let planned =
+            project::plan_sync(root, "default", Some("_staging"), &BTreeMap::new()).unwrap();
 
         assert_eq!(planned.databases.len(), 1);
         assert_eq!(planned.databases[0].name, "testdb_staging");
@@ -999,7 +1011,7 @@ mod tests {
 
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let planned = project::plan(root, "default", Some("_stg"), &BTreeMap::new()).unwrap();
+        let planned = project::plan_sync(root, "default", Some("_stg"), &BTreeMap::new()).unwrap();
 
         // Find the view in db2_stg
         let db2 = planned
@@ -1033,7 +1045,7 @@ mod tests {
 
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let planned = project::plan(root, "default", Some("_stg"), &BTreeMap::new()).unwrap();
+        let planned = project::plan_sync(root, "default", Some("_stg"), &BTreeMap::new()).unwrap();
 
         let view = &planned.databases[0].schemas[0].objects[0];
         let sql = format!("{}", view.typed_object.stmt);
@@ -1063,7 +1075,7 @@ mod tests {
 
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let planned = project::plan(root, "default", None, &BTreeMap::new()).unwrap();
+        let planned = project::plan_sync(root, "default", None, &BTreeMap::new()).unwrap();
 
         assert_eq!(planned.databases[0].name, "mydb");
         assert_eq!(
@@ -1143,7 +1155,7 @@ mod tests {
 
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let result = project::plan(root, "default", None, &BTreeMap::new());
+        let result = project::plan_sync(root, "default", None, &BTreeMap::new());
         assert!(
             result.is_err(),
             "type mismatch between profiles should error"
@@ -1175,7 +1187,7 @@ mod tests {
 
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let result = project::plan(root, "default", None, &BTreeMap::new());
+        let result = project::plan_sync(root, "default", None, &BTreeMap::new());
         assert!(result.is_err(), "views cannot have profile overrides");
         let err_str = result.unwrap_err().to_string();
         assert!(
@@ -1208,7 +1220,7 @@ mod tests {
 
         fs::write(root.join("project.toml"), "profile = \"default\"").unwrap();
 
-        let result = project::plan(root, "default", None, &BTreeMap::new());
+        let result = project::plan_sync(root, "default", None, &BTreeMap::new());
         assert!(
             result.is_ok(),
             "consistent secret profiles should work: {:?}",

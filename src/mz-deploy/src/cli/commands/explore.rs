@@ -24,17 +24,22 @@ const DOCS_TEMPLATE: &str = include_str!(concat!(env!("OUT_DIR"), "/docs_templat
 /// * `settings` - Project settings (directory, profile, etc.)
 /// * `output_dir` - Directory for generated docs (default: `target/docs/`)
 /// * `open` - Whether to open the generated HTML in a browser (default: true)
-pub fn run(settings: &Settings, output_dir: Option<PathBuf>, open: bool) -> Result<(), CliError> {
+pub async fn run(
+    settings: &Settings,
+    output_dir: Option<PathBuf>,
+    open: bool,
+) -> Result<(), CliError> {
     let directory = &settings.directory;
 
     verbose!("Compiling project for documentation...");
 
     let planned_project = project::plan(
-        directory,
-        &settings.profile_name,
-        settings.profile_suffix(),
-        settings.variables(),
-    )?;
+        directory.clone(),
+        settings.profile_name.clone(),
+        settings.profile_suffix().map(|s| s.to_owned()),
+        settings.variables().clone(),
+    )
+    .await?;
 
     // Load types if available
     let types_lock = crate::types::load_types_lock(directory).ok();

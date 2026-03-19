@@ -5,14 +5,6 @@
 //! it can type-check views that depend on them. This module manages that contract
 //! through the `types.lock` file.
 //!
-//! ## Key Types
-//!
-//! - [`Types`] — In-memory representation of a `types.lock` (or `types.cache`)
-//!   file: a versioned map from fully-qualified object names to column schemas.
-//! - [`ColumnType`] — A single column's type name and nullability.
-//! - [`TypeChecker`] — Trait for validating a planned project's SQL against a
-//!   real Materialize instance (implemented via a Docker container).
-//!
 //! ## Lock File Flow
 //!
 //! 1. `gen-data-contracts` queries the live region via [`client::type_info`] and
@@ -24,20 +16,54 @@
 //!    the lock file schemas, and validates every project view in topological
 //!    order.
 //!
+//! ## Incremental Type Checking
+//!
+//! To avoid re-validating every view on each compile, mz-deploy supports
+//! incremental type checking via a `typecheck.snapshot` file stored in the
+//! build directory alongside `types.cache`.
+//!
+//! - **[`type_hash`]** — Computes a deterministic SHA-256 hash of a column
+//!   schema map. Used to detect whether a view's output type changed after
+//!   re-checking, which determines whether downstream dependents need
+//!   re-validation.
+//! - **[`IncrementalState`]** — Bundles the cached column types and dirty set
+//!   for [`typecheck_with_client`]. Clean objects are stubbed as temporary
+//!   tables from cached types; dirty objects are validated and their output
+//!   columns queried inline.
+//! - **[`load_typecheck_snapshot`]** / **[`write_typecheck_snapshot`]** —
+//!   Read/write the `typecheck.snapshot` file, which maps fully-qualified
+//!   object names to AST content hashes. The compile command diffs current
+//!   hashes against this snapshot to determine the initial dirty set.
+//!
+//! ## Key Types
+//!
+//! - [`Types`] — In-memory representation of a `types.lock` (or `types.cache`)
+//!   file: a versioned map from fully-qualified object names to column schemas.
+//! - [`ColumnType`] — A single column's type name and nullability.
+//! - [`TypeChecker`] — Trait for validating a planned project's SQL against a
+//!   real Materialize instance (implemented via a Docker container).
+//! - [`IncrementalState`] — Cached types plus dirty set for incremental
+//!   type checking.
+//!
 //! ## Submodules
 //!
 //! - **[`typechecker`]** — [`TypeChecker`] trait definition, the
-//!   [`typecheck_with_client`] helper, and structured error types for
-//!   per-object type-check failures.
+//!   [`typecheck_with_client`] helper, [`IncrementalState`], and structured
+//!   error types for per-object type-check failures.
+//! - **Build artifacts** — The `target/` directory holds `types.cache` (column
+//!   schemas after type checking) and `typecheck.snapshot` (AST hashes for
+//!   incremental diffing).
 
 pub mod docker_runtime;
 mod typechecker;
 
 pub use typechecker::{
-    ObjectTypeCheckError, TypeCheckError, TypeCheckErrors, TypeChecker, typecheck_with_client,
+    IncrementalState, ObjectTypeCheckError, TypeCheckError, TypeCheckErrors, TypeChecker,
+    typecheck_with_client,
 };
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
@@ -392,6 +418,78 @@ impl Types {
     pub fn get_kind(&self, fqn: &str) -> ObjectKind {
         self.kinds.get(fqn).copied().unwrap_or(ObjectKind::Table)
     }
+}
+
+/// Compute a deterministic hash of a column schema map.
+///
+/// Since `BTreeMap` iterates in sorted key order, the hash is stable across runs.
+/// Each `(column_name, type, nullable)` triple is fed into SHA-256 in order.
+/// The output format matches `compute_typed_hash`: `sha256:<hex>`.
+pub fn type_hash(columns: &BTreeMap<String, ColumnType>) -> String {
+    let mut hasher = Sha256::new();
+    for (name, col_type) in columns {
+        hasher.update(name.as_bytes());
+        hasher.update(col_type.r#type.as_bytes());
+        hasher.update(if col_type.nullable { b"1" } else { b"0" });
+    }
+    let result = hasher.finalize();
+    format!("sha256:{:x}", result)
+}
+
+/// The filename for the typecheck snapshot inside the build directory.
+const TYPECHECK_SNAPSHOT_FILE: &str = "typecheck.snapshot";
+
+/// Serialization wrapper for the typecheck snapshot file.
+#[derive(Serialize, Deserialize)]
+struct TypecheckSnapshot {
+    /// Map from fully-qualified object name to AST content hash.
+    hashes: BTreeMap<String, String>,
+}
+
+/// Load a previously written typecheck snapshot from the build directory.
+///
+/// Returns `None` if the file does not exist. Returns an error only on parse failures.
+pub fn load_typecheck_snapshot(
+    directory: &Path,
+) -> Result<Option<BTreeMap<String, String>>, TypesError> {
+    let path = directory.join(BUILD_DIR).join(TYPECHECK_SNAPSHOT_FILE);
+
+    let contents = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(TypesError::FileReadFailed { path, source });
+        }
+    };
+
+    let snapshot: TypecheckSnapshot = toml::from_str(&contents)
+        .map_err(|source| TypesError::CacheParseFailed { path, source })?;
+    Ok(Some(snapshot.hashes))
+}
+
+/// Write a typecheck snapshot to the build directory.
+///
+/// Creates the build directory if it does not exist.
+pub fn write_typecheck_snapshot(
+    directory: &Path,
+    hashes: &BTreeMap<String, String>,
+) -> Result<(), TypesError> {
+    let cache_dir = directory.join(BUILD_DIR);
+    if !cache_dir.exists() {
+        fs::create_dir_all(&cache_dir).map_err(|source| TypesError::DirectoryCreationFailed {
+            path: cache_dir.clone(),
+            source,
+        })?;
+    }
+
+    let snapshot = TypecheckSnapshot {
+        hashes: hashes.clone(),
+    };
+    let contents = toml::to_string_pretty(&snapshot)
+        .expect("TypecheckSnapshot should always serialize to valid TOML");
+
+    let path = cache_dir.join(TYPECHECK_SNAPSHOT_FILE);
+    fs::write(&path, contents).map_err(|source| TypesError::FileWriteFailed { path, source })
 }
 
 /// Load the types.cache file from the target directory.

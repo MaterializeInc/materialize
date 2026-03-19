@@ -46,6 +46,7 @@ use super::validation::{
 use crate::project::SchemaQualifier;
 use crate::project::error::{ValidationError, ValidationErrorKind, ValidationErrors};
 use mz_sql_parser::ast::*;
+use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
@@ -623,7 +624,8 @@ impl TryFrom<super::super::raw::Project> for Project {
             name: String,
             mod_statements: Option<Vec<mz_sql_parser::ast::Statement<Raw>>>,
             schema_names: Vec<String>,
-            schema_mod_statements: BTreeMap<String, Option<Vec<mz_sql_parser::ast::Statement<Raw>>>>,
+            schema_mod_statements:
+                BTreeMap<String, Option<Vec<mz_sql_parser::ast::Statement<Raw>>>>,
         }
         // Use Vec to preserve BTreeMap ordering from raw project
         let mut db_metas: Vec<DbMeta> = Vec::new();
@@ -680,29 +682,44 @@ impl TryFrom<super::super::raw::Project> for Project {
         }
 
         // ── Step 2: Process ─────────────────────────────────────────────
-        // Validate each object, collecting all errors.
+        // Validate each object in parallel, collecting all errors.
 
-        struct ValidatedObject {
-            db_name: String,
-            schema_name: String,
-            object: DatabaseObject,
+        enum ValidatedResult {
+            Ok {
+                db_name: String,
+                schema_name: String,
+                object: DatabaseObject,
+            },
+            Skipped,
+            Err(Vec<ValidationError>),
         }
+
+        let results: Vec<ValidatedResult> = object_tasks
+            .into_par_iter()
+            .map(
+                |task| match DatabaseObject::validate(task.raw_object, &profile) {
+                    Ok(Some(db_obj)) => ValidatedResult::Ok {
+                        db_name: task.db_name,
+                        schema_name: task.schema_name,
+                        object: db_obj,
+                    },
+                    Ok(None) => ValidatedResult::Skipped,
+                    Err(errs) => ValidatedResult::Err(errs.errors),
+                },
+            )
+            .collect();
 
         let mut validated_objects = Vec::new();
 
-        for task in object_tasks {
-            match DatabaseObject::validate(task.raw_object, &profile) {
-                Ok(Some(db_obj)) => validated_objects.push(ValidatedObject {
-                    db_name: task.db_name,
-                    schema_name: task.schema_name,
-                    object: db_obj,
-                }),
-                Ok(None) => {
-                    // Object belongs to a different profile — skip it
-                }
-                Err(errs) => {
-                    all_errors.extend(errs.errors);
-                }
+        for result in results {
+            match result {
+                ValidatedResult::Ok {
+                    db_name,
+                    schema_name,
+                    object,
+                } => validated_objects.push((db_name, schema_name, object)),
+                ValidatedResult::Skipped => {}
+                ValidatedResult::Err(errs) => all_errors.extend(errs),
             }
         }
 
@@ -712,11 +729,11 @@ impl TryFrom<super::super::raw::Project> for Project {
         // Group objects by (db_name, schema_name)
         let mut objects_by_location: BTreeMap<(String, String), Vec<DatabaseObject>> =
             BTreeMap::new();
-        for vo in validated_objects {
+        for (db_name, schema_name, object) in validated_objects {
             objects_by_location
-                .entry((vo.db_name, vo.schema_name))
+                .entry((db_name, schema_name))
                 .or_default()
-                .push(vo.object);
+                .push(object);
         }
 
         let mut databases = Vec::new();

@@ -15,7 +15,8 @@
 //! 3. **`planned`** — Extracts dependency graphs from the typed representation,
 //!    computes topological sort order, and produces the final deployment plan.
 //!
-//! The top-level [`plan()`] function runs the full pipeline.
+//! The top-level [`plan_sync()`] function runs the full pipeline, and [`plan()`]
+//! wraps it in an async context via `spawn_blocking`.
 //!
 //! ## Layer 2 — Deployment Analysis
 //!
@@ -45,7 +46,7 @@
 //! - **`error`** — Structured error types for every stage.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub mod ast;
 pub mod changeset;
@@ -87,8 +88,23 @@ impl SchemaQualifier {
     }
 }
 
+/// Async wrapper around [`plan_sync`] that runs the CPU-bound pipeline
+/// on a blocking thread pool.
+pub async fn plan(
+    root: PathBuf,
+    profile: String,
+    profile_suffix: Option<String>,
+    variables: BTreeMap<String, String>,
+) -> Result<planned::Project, error::ProjectError> {
+    mz_ore::task::spawn_blocking(
+        || "project::plan",
+        move || plan_sync(root, &profile, profile_suffix.as_deref(), &variables),
+    )
+    .await
+}
+
 /// Load, validate, and convert a project to a planned deployment representation.
-pub fn plan<P: AsRef<Path>>(
+pub fn plan_sync<P: AsRef<Path>>(
     root: P,
     profile: &str,
     profile_suffix: Option<&str>,

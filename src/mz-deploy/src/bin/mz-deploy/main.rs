@@ -826,7 +826,7 @@ async fn run(args: Args) -> Result<(), CliError> {
                     "--output json is not supported for the 'explore' command".to_string(),
                 ));
             }
-            cli::commands::explore::run(&settings, output_dir, !no_open)
+            cli::commands::explore::run(&settings, output_dir, !no_open).await
         }
         Some(Command::Apply {
             skip_secrets,

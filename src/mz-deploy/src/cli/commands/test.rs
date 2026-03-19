@@ -335,11 +335,12 @@ pub async fn run(
 ) -> Result<(), CliError> {
     let directory = &settings.directory;
     let planned_project = project::plan(
-        directory,
-        &settings.profile_name,
-        settings.profile_suffix(),
-        settings.variables(),
-    )?;
+        directory.clone(),
+        settings.profile_name.clone(),
+        settings.profile_suffix().map(|s| s.to_owned()),
+        settings.variables().clone(),
+    )
+    .await?;
     let empty_types = Types::default();
     let runtime = DockerRuntime::new().with_image(&settings.docker_image);
     let test_filter = filter.map(TestFilter::parse);
@@ -821,21 +822,77 @@ fn extract_assertion_data(
 }
 
 /// Load types.cache or generate it by running type checking if stale/missing.
+///
+/// Uses the same incremental logic as `compile`: compares current AST hashes
+/// against the typecheck snapshot to determine which objects need re-checking.
 async fn load_or_generate_types_cache(
     directory: &Path,
     planned_project: &project::planned::Project,
     runtime: &DockerRuntime,
 ) -> Result<Types, CliError> {
-    // Check if types.cache exists and is up-to-date
-    if !types::is_types_cache_stale(directory) {
-        if let Ok(cached) = types::load_types_cache(directory) {
-            info!(
-                "{}",
-                format!("Using cached types from {}/types.cache", types::BUILD_DIR).dimmed()
-            );
-            return Ok(cached);
+    use crate::project::ast::Statement;
+    use crate::project::deployment_snapshot::compute_typed_hash;
+
+    // Build incremental state from snapshot + AST hash diff
+    let cached_types = types::load_types_cache(directory).unwrap_or_default();
+    let old_snapshot = types::load_typecheck_snapshot(directory)
+        .map_err(|e| CliError::Message(format!("failed to load typecheck snapshot: {}", e)))?;
+
+    let incremental_state = match old_snapshot {
+        Some(old_hashes) => {
+            let sorted = planned_project.get_sorted_objects()?;
+            let mut current_hashes = std::collections::BTreeMap::new();
+            let mut dirty = std::collections::BTreeSet::new();
+
+            for (oid, typed_obj) in &sorted {
+                if matches!(
+                    typed_obj.stmt,
+                    Statement::CreateView(_) | Statement::CreateMaterializedView(_)
+                ) {
+                    let hash = compute_typed_hash(typed_obj);
+                    let fqn = oid.to_string();
+                    match old_hashes.get(&fqn) {
+                        Some(old_hash) if *old_hash == hash => {}
+                        _ => {
+                            dirty.insert(oid.clone());
+                        }
+                    }
+                    current_hashes.insert(fqn, hash);
+                }
+            }
+
+            // Check for removed objects
+            let current_fqns: std::collections::BTreeSet<&String> = current_hashes.keys().collect();
+            let old_fqns: std::collections::BTreeSet<&String> = old_hashes.keys().collect();
+            let has_removals = old_fqns.difference(&current_fqns).next().is_some();
+
+            if dirty.is_empty() && !has_removals && !cached_types.tables.is_empty() {
+                // Nothing changed — use cached types directly
+                info!(
+                    "{}",
+                    format!("Using cached types from {}/types.cache", types::BUILD_DIR).dimmed()
+                );
+                return Ok(cached_types);
+            }
+
+            Some(types::IncrementalState {
+                cached_types,
+                dirty,
+            })
         }
-    }
+        None => {
+            if !cached_types.tables.is_empty() && !types::is_types_cache_stale(directory) {
+                // No snapshot but cache exists and is fresh — use it
+                info!(
+                    "{}",
+                    format!("Using cached types from {}/types.cache", types::BUILD_DIR).dimmed()
+                );
+                return Ok(cached_types);
+            }
+            // No snapshot and no usable cache — full recheck
+            None
+        }
+    };
 
     // Types cache is stale or missing - regenerate by type checking
     info!(
@@ -872,8 +929,25 @@ async fn load_or_generate_types_cache(
     };
 
     // Run type checking (this will also generate types.cache)
-    match types::typecheck_with_client(&mut client, planned_project, directory).await {
+    match types::typecheck_with_client(&mut client, planned_project, directory, incremental_state)
+        .await
+    {
         Ok(()) => {
+            // Write snapshot after successful typecheck
+            let sorted = planned_project.get_sorted_objects()?;
+            let mut hashes = std::collections::BTreeMap::new();
+            for (oid, typed_obj) in &sorted {
+                if matches!(
+                    typed_obj.stmt,
+                    Statement::CreateView(_) | Statement::CreateMaterializedView(_)
+                ) {
+                    hashes.insert(oid.to_string(), compute_typed_hash(typed_obj));
+                }
+            }
+            types::write_typecheck_snapshot(directory, &hashes).map_err(|e| {
+                CliError::Message(format!("failed to write typecheck snapshot: {}", e))
+            })?;
+
             // Type checking succeeded and wrote types.cache - load it
             types::load_types_cache(directory).map_err(|e| {
                 CliError::Message(format!("Failed to load generated types.cache: {}", e))

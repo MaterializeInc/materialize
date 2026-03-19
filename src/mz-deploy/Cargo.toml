@@ -16,6 +16,7 @@ aws-sdk-secretsmanager = { version = "1.99.0", default-features = false, feature
 async-trait = "0.1"
 futures = "0.3"
 itertools = "0.14.0"
+rayon = "1.10"
 junit-report = "0.8.3"
 mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
