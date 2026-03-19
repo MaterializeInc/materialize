@@ -433,6 +433,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_null_literal_skipped() {
         // If(Eq(#0, NULL::int64), 10, If(Eq(#0, 2), 20, If(Eq(#0, 3), 30, 0)))
         // The NULL arm breaks the chain at the top level because
@@ -468,6 +469,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_64_arm_chain() {
         // Build a 64-arm If-chain and verify it converts to a single CaseLiteral.
         let n: usize = 64;
@@ -502,6 +504,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_eval_basic() {
         // Verify that evaluating the CaseLiteral produces correct results.
         let expr = build_2_arm_chain();
@@ -527,6 +530,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_string_literals() {
         // CASE #0 WHEN 'a' THEN 1 WHEN 'b' THEN 2 ELSE 0 END
         // Verify that non-i64 literal types also work.
