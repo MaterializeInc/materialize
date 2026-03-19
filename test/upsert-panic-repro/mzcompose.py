@@ -121,7 +121,7 @@ def set_toxiproxy_latency(c, enabled):
     r = requests.post(f"{toxi_url}/proxies/minio/toxics", json={
         "name": "blob-latency", "type": "latency",
         "stream": "upstream",
-        "attributes": {"latency": 200, "jitter": 300},
+        "attributes": {"latency": 500, "jitter": 1000},
     })
     if r.status_code != 200:
         requests.patch(f"{toxi_url}/proxies/minio/toxics/blob-latency",
@@ -130,7 +130,7 @@ def set_toxiproxy_latency(c, enabled):
     r = requests.post(f"{toxi_url}/proxies/minio/toxics", json={
         "name": "blob-bw", "type": "bandwidth",
         "stream": "upstream",
-        "attributes": {"rate": 100},
+        "attributes": {"rate": 50},  # 50 KB/s
     })
     if r.status_code != 200:
         requests.patch(f"{toxi_url}/proxies/minio/toxics/blob-bw",
@@ -160,13 +160,11 @@ VAL_SCHEMA = (
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    parser.add_argument("--runtime", type=int, default=900)
-    # Many sources = genuine system overload when replica drops/creates.
-    # Platform-checks runs ~80 checks concurrently — we need similar load.
-    parser.add_argument("--num-sources", type=int, default=40)
+    parser.add_argument("--runtime", type=int, default=3600)
+    parser.add_argument("--num-sources", type=int, default=5)
     parser.add_argument("--num-keys", type=int, default=50000)
     parser.add_argument("--num-hot-keys", type=int, default=10000)
-    parser.add_argument("--parallelism", type=int, default=25)
+    parser.add_argument("--parallelism", type=int, default=10)
     parser.add_argument("--seed", type=int, default=None)
     # How many cycles between DROP/CREATE REPLICA
     parser.add_argument("--replica-cycle", type=int, default=10)
@@ -183,7 +181,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # workers=16 is what triggered the first reproduction.
     partitions = [random.choice([8, 16, 32]) for _ in range(n)]
     workers = 16
-    replication_factor = 1
+    replication_factor = 2
     num_pump_threads = 8
 
     print(
