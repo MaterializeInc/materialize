@@ -2125,6 +2125,138 @@ mod tests {
         assert!(is_finalized, "shard must still be finalized");
     }
 
+    #[mz_persist_proc::test(tokio::test(flavor = "multi_thread"))]
+    async fn listen_lease_seqno_race(dyncfgs: ConfigUpdates) {
+        use std::sync::Arc;
+
+        use crate::Schemas;
+        use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
+        use crate::internal::gc::{GarbageCollector, GcReq};
+        use crate::internal::trace::FueledMergeRes;
+        use crate::read::{LISTEN_NEXT_SLEEP, READER_LEASE_DURATION};
+
+        let cache = new_test_client_cache(&dyncfgs);
+
+        // Short lease so the heartbeat fires frequently during the sleep.
+        // The heartbeat is what causes the reader's applier to fetch state updates from consensus.
+        cache
+            .cfg
+            .set_config(&READER_LEASE_DURATION, Duration::from_secs(4));
+
+        let location = PersistLocation::new_in_mem();
+        let client = cache.open(location).await.unwrap();
+        let shard_id = ShardId::new();
+        let (mut write, read) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+
+        // Write several batches to populate the spine.
+        for t in 0..10 {
+            let data = vec![((format!("k{t}"), format!("v{t}")), t, 1i64)];
+            write.expect_compare_and_append(&data, t, t + 1).await;
+        }
+
+        let mut listen = read.expect_listen(0).await;
+
+        // Invoke `listen::next()` with an artificial sleep between fetching the batch and getting
+        // the seqno lease, to guarantee the race.
+        // Concurrently, force a shard compaction + GC.
+
+        let compaction = mz_ore::task::spawn(|| "compaction", async move {
+            // Brief delay so listen.next() has time to fetch the batch first.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+
+            // Compact all pending merge requests.
+            let schemas: Schemas<String, String> = Schemas {
+                id: None,
+                key: Default::default(),
+                val: Default::default(),
+            };
+            let blob = Arc::clone(&write.machine.applier.state_versions.blob);
+            let metrics = Arc::clone(&write.machine.applier.metrics);
+            let shard_metrics = Arc::clone(&write.machine.applier.shard_metrics);
+            let iso = Arc::clone(&write.machine.isolated_runtime);
+
+            for req in write.machine.applier.all_fueled_merge_reqs() {
+                let compact_req = CompactReq {
+                    shard_id,
+                    desc: req.desc,
+                    inputs: req.inputs,
+                };
+                let res = Compactor::<String, String, u64, i64>::compact(
+                    CompactConfig::new(&write.cfg, shard_id),
+                    Arc::clone(&blob),
+                    Arc::clone(&metrics),
+                    Arc::clone(&shard_metrics),
+                    Arc::clone(&iso),
+                    compact_req,
+                    schemas.clone(),
+                )
+                .await
+                .unwrap();
+                let (apply, _) = write
+                    .machine
+                    .merge_res(&FueledMergeRes {
+                        output: res.output,
+                        input: res.input,
+                        new_active_compaction: None,
+                    })
+                    .await;
+                assert!(apply.applied());
+            }
+
+            let _ = write.machine.add_rollup_for_current_seqno().await;
+
+            // Wait for the reader's heartbeat to fire and advance its seqno hold past the
+            // compaction.
+            tokio::time::sleep(Duration::from_secs(4)).await;
+
+            // Fetch the latest state so we see the reader's updated hold.
+            write.machine.applier.fetch_and_update_state(None).await;
+
+            // Run GC.
+            let gc_req = GcReq {
+                shard_id,
+                new_seqno_since: write.machine.applier.seqno_since(),
+            };
+            let _ = GarbageCollector::<String, String, u64, i64>::gc_and_truncate(
+                &write.machine,
+                gc_req,
+            )
+            .await;
+        });
+
+        *LISTEN_NEXT_SLEEP.lock().unwrap() = Duration::from_secs(5);
+        let (parts, _progress) = listen.next(None).await;
+        *LISTEN_NEXT_SLEEP.lock().unwrap() = Duration::ZERO;
+
+        // Wait for the adversary to finish.
+        compaction.await;
+
+        // Try to fetch the parts returned by `listen.next()`.
+        let mut fetcher = client
+            .create_batch_fetcher::<String, String, u64, i64>(
+                shard_id,
+                Arc::new(Default::default()),
+                Arc::new(Default::default()),
+                false,
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("creating batch fetcher should succeed");
+
+        for part in parts {
+            let (exchangeable, _lease) = part.into_exchangeable_part();
+            let result = fetcher
+                .fetch_leased_part(exchangeable)
+                .await
+                .expect("valid usage");
+
+            // This should fail, confirming the bug.
+            assert_ok!(result);
+        }
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]
 

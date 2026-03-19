@@ -55,6 +55,9 @@ use crate::{GarbageCollector, PersistConfig, ShardId, parse_id};
 pub use crate::internal::encoding::LazyPartStats;
 pub use crate::internal::state::Since;
 
+pub(crate) static LISTEN_NEXT_SLEEP: std::sync::Mutex<Duration> =
+    std::sync::Mutex::new(Duration::ZERO);
+
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
 #[derive(
     Arbitrary,
@@ -381,6 +384,12 @@ where
         // `maybe_downgrade_since` call. Otherwise, we might give up our
         // capability on the batch's SeqNo before we lease it, which could lead
         // to blobs that it references being GC'd.
+
+        {
+            let duration = *LISTEN_NEXT_SLEEP.lock().unwrap();
+            tokio::time::sleep(duration).await;
+        }
+
         let filter = FetchBatchFilter::Listen {
             as_of: self.as_of.clone(),
             lower: self.frontier.clone(),
