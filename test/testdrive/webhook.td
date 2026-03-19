@@ -11,6 +11,9 @@ $ set-sql-timeout duration=60s
 $ set-arg-default replicas=2
 $ set-arg-default default-storage-size=scale=1,workers=1
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET webhooks_secrets_caching_ttl_secs = 300
+
 
 # Exercises Webhook sources.
 
@@ -214,6 +217,22 @@ using an mz secret
 
 > SELECT * FROM webhook_bytes_with_secret;
 "using an mz secret"
+
+# Rotating the secret should invalidate webhook validation immediately, rather
+# than continuing to accept the old signature until TTL expiry.
+> ALTER SECRET webhook_secret AS 'rotated_key';
+
+$ webhook-append name=webhook_bytes_with_secret x-signature=j3SCbCSIZkqSPp4/92jFfx7er2Hvo983exMJ+tCMis8= status=400
+stale signature should fail
+
+$ webhook-append name=webhook_bytes_with_secret x-signature=j3tHunMI70qMa/t47VAz6DsUJ/TflkLI9A4SlDEKBz8=
+fresh signature should pass
+
+> SELECT * FROM webhook_bytes_with_secret;
+"using an mz secret"
+"fresh signature should pass"
+
+> ALTER SECRET webhook_secret AS 'shared_key';
 
 > CREATE SOURCE webhook_buildkite IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT TEXT
