@@ -495,6 +495,21 @@ steps:
               "--seed=$BUILDKITE_JOB_ID"
           ]
 
+  - id: upgrade-smoke-test
+    label: "0dt Upgrade Smoke Test"
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [
+              --scenario=ZeroDowntimeUpgradeEntireMzOnce,
+              --check=ConstantPlan,
+              "--seed=$BUILDKITE_JOB_ID"
+          ]
+    agents:
+      queue: hetzner-x86-64-4cpu-8gb
+
   - id: source-sink-errors
     label: "S&S error reporting"
     depends_on: build-aarch64
@@ -612,18 +627,6 @@ steps:
           composition: rtr-combined
     agents:
       queue: hetzner-aarch64-16cpu-32gb
-
-  - id: skip-version-upgrade
-    label: "Skip Version Upgrade"
-    depends_on: build-aarch64
-    timeout_in_minutes: 30
-    inputs: [doc/user/content/releases]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: skip-version-upgrade
-    agents:
-      queue: hetzner-aarch64-4cpu-8gb
-    skip: "Version upgrade skips are allowed for Self-Managed releases now"
 
   - id: mz-debug
     label: "mz-debug tool"
