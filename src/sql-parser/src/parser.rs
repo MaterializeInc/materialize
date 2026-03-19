@@ -2910,9 +2910,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_subsource_option(&mut self) -> Result<CreateSubsourceOption<Raw>, ParserError> {
-        let option = match self
-            .expect_one_of_keywords(&[EXTERNAL, PROGRESS, TEXT, EXCLUDE, IGNORE, DETAILS, RETAIN])?
-        {
+        let option = match self.expect_one_of_keywords(&[
+            EXTERNAL, PROGRESS, TEXT, EXCLUDE, IGNORE, DETAILS, RETAIN, METADATA,
+        ])? {
             EXTERNAL => {
                 self.expect_keyword(REFERENCE)?;
                 CreateSubsourceOption {
@@ -2922,6 +2922,10 @@ impl<'a> Parser<'a> {
             }
             PROGRESS => CreateSubsourceOption {
                 name: CreateSubsourceOptionName::Progress,
+                value: self.parse_optional_option_value()?,
+            },
+            METADATA => CreateSubsourceOption {
+                name: CreateSubsourceOptionName::Metadata,
                 value: self.parse_optional_option_value()?,
             },
             ref keyword @ (TEXT | EXCLUDE | IGNORE) => {
@@ -3021,6 +3025,12 @@ impl<'a> Parser<'a> {
             None
         };
 
+        let metadata_subsource = if self.parse_keywords(&[EXPOSE, METADATA, AS]) {
+            Some(self.parse_deferred_item_name()?)
+        } else {
+            None
+        };
+
         // New WITH block
         let with_options = if self.parse_keyword(WITH) {
             self.expect_token(&Token::LParen)?;
@@ -3043,6 +3053,7 @@ impl<'a> Parser<'a> {
             key_constraint,
             external_references: referenced_subsources,
             progress_subsource,
+            metadata_subsource,
             with_options,
         }))
     }

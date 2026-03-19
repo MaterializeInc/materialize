@@ -380,6 +380,7 @@ fn rewrite_sources_to_tables(
             with_options,
             external_references,
             progress_subsource,
+            metadata_subsource: _,
         } = source_stmt;
 
         let (progress_name, progress_item) = match progress_subsource {
@@ -494,6 +495,7 @@ fn rewrite_sources_to_tables(
                         with_options,
                         external_references: None,
                         progress_subsource: None,
+                        metadata_subsource: None,
                     };
 
                     migrated_source_ids.insert(source_item.id, progress_item.id());
@@ -573,6 +575,7 @@ fn rewrite_sources_to_tables(
                         with_options,
                         external_references: None,
                         progress_subsource: None,
+                        metadata_subsource: None,
                     };
                     (
                         progress_item.name().item.clone(),
@@ -651,6 +654,7 @@ fn rewrite_sources_to_tables(
                         with_options,
                         external_references: None,
                         progress_subsource: None,
+                        metadata_subsource: None,
                     };
                     (
                         progress_item.name().item.clone(),
@@ -746,6 +750,9 @@ fn rewrite_sources_to_tables(
                             }
                             CreateSubsourceOptionName::ExternalReference => {
                                 unreachable!("This option is handled separately above.")
+                            }
+                            CreateSubsourceOptionName::Metadata => {
+                                panic!("metadata option should not exist on this subsource")
                             }
                         }
                     })

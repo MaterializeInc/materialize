@@ -1390,6 +1390,7 @@ impl Catalog {
                     )
                     .map(|item| item.mz_acl_item(owner_id));
                 // mz_support can read all progress sources.
+                // TODO(maz): give permission to read metadata source
                 let progress_source_privilege = if item.is_progress_source() {
                     Some(MzAclItem {
                         grantee: MZ_SUPPORT_ROLE_ID,

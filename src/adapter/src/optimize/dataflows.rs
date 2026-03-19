@@ -469,7 +469,8 @@ impl<'a> DataflowBuilder<'a> {
             }
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Progress
-            | DataSourceDesc::Catalog => false,
+            | DataSourceDesc::Catalog
+            | DataSourceDesc::Metadata => false,
         }
     }
 

@@ -228,6 +228,8 @@ impl Coordinator {
                         resolved_ids.is_empty(),
                         "each plan has separate resolved_ids"
                     );
+                    tracing::info!("------ Create Sources!!!! plan={:#?}", plans);
+
                     let result = self.sequence_create_source(&mut ctx, plans).await;
                     ctx.retire(result);
                 }

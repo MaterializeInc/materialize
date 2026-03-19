@@ -138,6 +138,7 @@ fn parse_item_update_common(
 ) -> (CatalogItem, Option<GenericSourceConnection>, String) {
     let entry = catalog.get_entry(item_id);
 
+    tracing::info!("==== parsed_item: {entry:#?}");
     let parsed_item = entry.item().clone();
     let parsed_full_name = catalog
         .resolve_full_name(entry.name(), entry.conn_id())

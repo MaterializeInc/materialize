@@ -299,6 +299,8 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 // This might quite a large clone, but its just during rendering
                 config: storage_state.storage_configuration.clone(),
                 remap_collection_id: description.remap_collection_id,
+                metadata_collection_id: description.metadata_collection_id,
+                metadata_collection_metadata: description.metadata_collection_metadata.clone(),
                 busy_signal: Arc::clone(&busy_signal),
             };
 

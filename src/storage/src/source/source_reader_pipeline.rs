@@ -115,8 +115,12 @@ pub struct RawSourceCreationConfig {
     pub config: StorageConfiguration,
     /// The ID of this source remap/progress collection.
     pub remap_collection_id: GlobalId,
-    /// The storage metadata for the remap/progress collection
+    /// The storage metadata for the remap/progress collection.
     pub remap_metadata: CollectionMetadata,
+    /// Optional metadata collection ID for source-specific persistent state.
+    pub metadata_collection_id: Option<GlobalId>,
+    /// Storage metadata for the optional metadata collection.
+    pub metadata_collection_metadata: Option<CollectionMetadata>,
     // A semaphore that should be acquired by async operators in order to signal that upstream
     // operators should slow down.
     pub busy_signal: Arc<Semaphore>,
@@ -427,6 +431,8 @@ where
         shared_remap_upper,
         config: _,
         remap_collection_id,
+        metadata_collection_id: _,
+        metadata_collection_metadata: _,
         busy_signal: _,
     } = config;
 

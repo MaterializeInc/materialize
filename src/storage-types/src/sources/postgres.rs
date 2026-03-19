@@ -63,6 +63,15 @@ pub static PG_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
         .finish()
 });
 
+/// Schema for PostgreSQL timeline history metadata collection.
+/// Stores the timeline history from pg_timeline_history() for failover detection.
+pub static PG_TIMELINE_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
+    RelationDesc::builder()
+        .with_column("timeline_id", SqlScalarType::UInt64.nullable(false))
+        .with_column("switchpoint_lsn", SqlScalarType::UInt64.nullable(true))
+        .finish()
+});
+
 impl PostgresSourceConnection {
     pub async fn fetch_write_frontier(
         self,

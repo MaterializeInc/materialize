@@ -223,7 +223,7 @@ pub async fn get_timeline_id(client: &Client) -> Result<u64, PostgresError> {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MzPgTimelineHistoryEntry {
     pub timeline_id: u64, // TODO (maz) should declare a type of timeline id
     pub switchpoint_lsn: Option<PgLsn>,
@@ -232,6 +232,14 @@ pub struct MzPgTimelineHistoryEntry {
 #[derive(Debug, PartialEq, Eq)]
 pub struct MzPgTimelineHistory {
     pub history: Vec<MzPgTimelineHistoryEntry>,
+}
+
+impl Default for MzPgTimelineHistory {
+    fn default() -> Self {
+        Self {
+            history: Default::default(),
+        }
+    }
 }
 
 impl MzPgTimelineHistory {
@@ -259,9 +267,9 @@ impl MzPgTimelineHistory {
 
 impl FromIterator<MzPgTimelineHistoryEntry> for MzPgTimelineHistory {
     fn from_iter<T: IntoIterator<Item = MzPgTimelineHistoryEntry>>(iter: T) -> Self {
-        MzPgTimelineHistory {
-            history: iter.into_iter().collect(),
-        }
+        let mut history: Vec<_> = iter.into_iter().collect();
+        history.sort_unstable();
+        MzPgTimelineHistory { history }
     }
 }
 
@@ -291,6 +299,7 @@ impl TryFrom<SimpleQueryRow> for MzPgTimelineHistory {
             timeline_id: current_timeline_id,
             switchpoint_lsn: None,
         });
+        history.sort_unstable();
         Ok(MzPgTimelineHistory { history })
     }
 }

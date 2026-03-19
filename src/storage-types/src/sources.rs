@@ -74,6 +74,53 @@ pub use crate::sources::sql_server::{SqlServerSourceConnection, SqlServerSourceE
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sources.rs"));
 
+/// Schema types for optional per-source metadata collections.
+///
+/// Each variant defines a schema for source-specific metadata that needs
+/// to be persisted across restarts. Not all source types require a metadata
+/// collection.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum SourceMetadataSchema {
+    /// PostgreSQL timeline history for failover/recovery tracking.
+    /// Stores timeline history entries to detect when the upstream database
+    /// has undergone point-in-time recovery or failover.
+    PostgresTimelineHistory,
+}
+
+impl SourceMetadataSchema {
+    /// Returns the relation description for this metadata schema type.
+    pub fn relation_desc(&self) -> RelationDesc {
+        match self {
+            Self::PostgresTimelineHistory => postgres::PG_TIMELINE_HISTORY_DESC.clone(),
+        }
+    }
+}
+
+impl RustType<ProtoSourceMetadataSchema> for SourceMetadataSchema {
+    fn into_proto(&self) -> ProtoSourceMetadataSchema {
+        use proto_source_metadata_schema::Kind;
+        match self {
+            SourceMetadataSchema::PostgresTimelineHistory => ProtoSourceMetadataSchema {
+                kind: Some(Kind::PostgresTimelineHistory(
+                    ProtoPostgresTimelineHistorySchema {},
+                )),
+            },
+        }
+    }
+
+    fn from_proto(proto: ProtoSourceMetadataSchema) -> Result<Self, TryFromProtoError> {
+        use proto_source_metadata_schema::Kind;
+        match proto.kind {
+            Some(Kind::PostgresTimelineHistory(_)) => {
+                Ok(SourceMetadataSchema::PostgresTimelineHistory)
+            }
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoSourceMetadataSchema::kind",
+            )),
+        }
+    }
+}
+
 /// A description of a source ingestion
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedConnection> {
@@ -97,8 +144,17 @@ pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedCo
     pub instance_id: StorageInstanceId,
     /// The ID of this ingestion's remap/progress collection.
     pub remap_collection_id: GlobalId,
-    /// The storage metadata for the remap/progress collection
+    /// The storage metadata for the remap/progress collection.
     pub remap_metadata: S,
+    /// Optional metadata collection ID for source-specific persistent state.
+    /// Not all source types require a metadata collection.
+    pub metadata_collection_id: Option<GlobalId>,
+    /// Storage metadata for the optional metadata collection.
+    /// Only present if `metadata_collection_id` is `Some`.
+    pub metadata_collection_metadata: Option<S>,
+    /// The schema type for the metadata collection.
+    /// Determines how data is encoded/decoded in the metadata collection.
+    pub metadata_schema: Option<SourceMetadataSchema>,
 }
 
 impl IngestionDescription {
@@ -113,6 +169,9 @@ impl IngestionDescription {
             source_exports: BTreeMap::new(),
             instance_id,
             remap_collection_id,
+            metadata_collection_id: None,
+            metadata_collection_metadata: None,
+            metadata_schema: None,
         }
     }
 }
@@ -131,12 +190,16 @@ impl<S> IngestionDescription<S> {
             source_exports,
             instance_id: _,
             remap_collection_id,
+            metadata_collection_id,
+            metadata_collection_metadata: _,
+            metadata_schema: _,
         } = &self;
 
         source_exports
             .keys()
             .copied()
             .chain(std::iter::once(*remap_collection_id))
+            .chain(metadata_collection_id.iter().copied())
     }
 }
 
@@ -155,6 +218,9 @@ impl<S: Debug + Eq + PartialEq + AlterCompatible> AlterCompatible for IngestionD
             source_exports,
             instance_id,
             remap_collection_id,
+            metadata_collection_id,
+            metadata_collection_metadata,
+            metadata_schema,
         } = self;
 
         let compatibility_checks = [
@@ -198,6 +264,15 @@ impl<S: Debug + Eq + PartialEq + AlterCompatible> AlterCompatible for IngestionD
                 remap_collection_id == &other.remap_collection_id,
                 "remap_collection_id",
             ),
+            (
+                metadata_collection_id == &other.metadata_collection_id,
+                "metadata_collection_id",
+            ),
+            (
+                metadata_collection_metadata == &other.metadata_collection_metadata,
+                "metadata_collection_metadata",
+            ),
+            (metadata_schema == &other.metadata_schema, "metadata_schema"),
         ];
         for (compatible, field) in compatibility_checks {
             if !compatible {
@@ -225,6 +300,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
             source_exports,
             instance_id,
             remap_collection_id,
+            metadata_collection_id,
+            metadata_collection_metadata,
+            metadata_schema,
         } = self;
 
         IngestionDescription {
@@ -233,6 +311,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
             source_exports,
             instance_id,
             remap_collection_id,
+            metadata_collection_id,
+            metadata_collection_metadata,
+            metadata_schema,
         }
     }
 }

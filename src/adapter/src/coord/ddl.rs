@@ -106,6 +106,8 @@ impl Coordinator {
             .catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops)
             .await?;
 
+        tracing::info!("==== resulting catalog updates: {catalog_updates:#?}");
+
         // We can't run this concurrently with the explicit side effects,
         // because both want to borrow self mutably.
         let apply_implications_res = self
@@ -316,7 +318,7 @@ impl Coordinator {
         if self.controller.read_only() {
             return Err(AdapterError::ReadOnly);
         }
-
+        tracing::info!("==== catalog transact: ops={ops:#?}");
         event!(Level::TRACE, ops = format!("{:?}", ops));
 
         let mut webhook_sources_to_restart = BTreeSet::new();
