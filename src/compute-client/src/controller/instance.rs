@@ -263,11 +263,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         &self,
         id: GlobalId,
     ) -> Result<impl Iterator<Item = &ReplicaState<T>>, CollectionMissing> {
-        let target = self
-            .collections
-            .get(&id)
-            .ok_or(CollectionMissing(id))?
-            .target_replica;
+        let target = self.collection(id)?.target_replica;
         Ok(self
             .replicas
             .values()
@@ -685,17 +681,11 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// replica.
     ///
     /// This also returns `true` in case this cluster does not have any
-    /// replicas.
+    /// replicas that host the given collection.
     #[mz_ore::instrument(level = "debug")]
     pub fn collection_hydrated(&self, collection_id: GlobalId) -> Result<bool, CollectionMissing> {
-        if self.replicas.is_empty() {
-            return Ok(true);
-        }
         let mut hosting_replicas = self.replicas_hosting(collection_id)?.peekable();
         if hosting_replicas.peek().is_none() {
-            // The target replica for this collection doesn't exist (yet or
-            // anymore). Consider it hydrated to avoid blocking the caught-up
-            // check indefinitely.
             return Ok(true);
         }
         for replica_state in hosting_replicas {
