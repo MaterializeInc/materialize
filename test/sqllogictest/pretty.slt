@@ -74,6 +74,19 @@ SELECT replace(pretty_sql(create_sql), on_id, '<on_id>') FROM mz_indexes WHERE n
 CREATE INDEX t_primary_idx IN CLUSTER [u1] ON [<on_id> AS materialize.public.t] (i);
 EOF
 
+# Test default index on a table with multiple columns.
+statement ok
+CREATE TABLE t_multi (a INT, b TEXT, c BOOL)
+
+statement ok
+CREATE DEFAULT INDEX ON t_multi
+
+query T multiline
+SELECT replace(pretty_sql(create_sql), on_id, '<on_id>') FROM mz_indexes WHERE name = 't_multi_primary_idx'
+----
+CREATE INDEX t_multi_primary_idx IN CLUSTER [u1] ON [<on_id> AS materialize.public.t_multi] (a, b, c);
+EOF
+
 statement ok
 CREATE VIEW v AS SELECT 1
 
