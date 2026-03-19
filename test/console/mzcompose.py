@@ -89,6 +89,9 @@ def workflow_sql_tests(c: Composition) -> None:
         "corepack enable",
         env_extra={"COREPACK_ENABLE_DOWNLOAD_PROMPT": "0"},
     )
+    # On macOS Docker Desktop the socket is owned by root with no group access,
+    # so the non-root host user cannot reach it.
+    c.exec("console-runner", "chmod", "o+rw", "/var/run/docker.sock")
 
     # Run yarn as the host user so it doesn't create root-owned files
     # in the bind-mounted node_modules directory.
