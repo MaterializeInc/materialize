@@ -253,6 +253,23 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         self.collections.iter().map(|(id, coll)| (*id, coll))
     }
 
+    /// Returns an iterator over replicas that host the given collection.
+    ///
+    /// For replica-targeted collections, this returns only the target replica.
+    /// For non-targeted collections, this returns all replicas.
+    ///
+    /// Returns `Err` if the collection does not exist.
+    fn replicas_hosting(
+        &self,
+        id: GlobalId,
+    ) -> Result<impl Iterator<Item = &ReplicaState<T>>, CollectionMissing> {
+        let target = self.collection(id)?.target_replica;
+        Ok(self
+            .replicas
+            .values()
+            .filter(move |r| target.map_or(true, |t| t == r.id)))
+    }
+
     /// Add a collection to the instance state.
     ///
     /// # Panics
@@ -664,17 +681,18 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// replica.
     ///
     /// This also returns `true` in case this cluster does not have any
-    /// replicas.
+    /// replicas that host the given collection.
     #[mz_ore::instrument(level = "debug")]
     pub fn collection_hydrated(&self, collection_id: GlobalId) -> Result<bool, CollectionMissing> {
-        if self.replicas.is_empty() {
+        let mut hosting_replicas = self.replicas_hosting(collection_id)?.peekable();
+        if hosting_replicas.peek().is_none() {
             return Ok(true);
         }
-        for replica_state in self.replicas.values() {
+        for replica_state in hosting_replicas {
             let collection_state = replica_state
                 .collections
                 .get(&collection_id)
-                .ok_or(CollectionMissing(collection_id))?;
+                .expect("hosting replica must have per-replica collection state");
 
             if collection_state.hydrated() {
                 return Ok(true);
@@ -720,14 +738,16 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             }
 
             let mut collection_hydrated = false;
-            for replica_state in self.replicas.values() {
+            // `replicas_hosting` cannot fail here because `collections_iter`
+            // only yields collections that exist.
+            for replica_state in self.replicas_hosting(id).expect("collection must exist") {
                 if !target_replicas.contains(&replica_state.id) {
                     continue;
                 }
                 let collection_state = replica_state
                     .collections
                     .get(&id)
-                    .expect("missing collection state");
+                    .expect("hosting replica must have per-replica collection state");
 
                 if collection_state.hydrated() {
                     collection_hydrated = true;
