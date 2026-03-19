@@ -17,9 +17,7 @@ class KnownIssuesStorage(BaseDataStorage):
         self,
         issue: KnownGitHubIssue,
     ) -> None:
-        issue_str = (
-            f"{issue.info['repository_url'].split('/')[-1]}/{issue.info['number']}"
-        )
+        issue_str = f"{issue.info['repository']['nameWithOwner'].split('/')[-1]}/{issue.info['number']}"
         sql_statements = [
             f"""
             UPDATE issue
