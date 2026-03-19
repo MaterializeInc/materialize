@@ -19,20 +19,18 @@ cd "$(dirname "$0")/../../../.."
 
 if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
     pyright_version=$(sh ci/builder/pyright-version.sh)
-    typecheck_cmd="npx --yes pyright@$pyright_version --warnings --threads 4"
 
-    python_folders=(ci misc/python)
+    python_files_list=$(mktemp)
+    dbt_files_list=$(mktemp)
+    trap 'rm -f "$python_files_list" "$dbt_files_list"' EXIT
+    { git ls-files 'ci/*.py' 'misc/python/*.py' 'test/*.py'; git ls-files '**/mzcompose.py' | grep -v -e 'test/' -e 'misc/dbt-materialize/'; } > "$python_files_list"
+    git ls-files 'misc/dbt-materialize/*.py' > "$dbt_files_list"
 
-    compose_files=$(git_files "**/mzcompose.py" | grep -v "test/")
+    try xargs npx --yes "pyright@$pyright_version" --warnings --threads 4 < "$python_files_list"
 
-    # NOTE: we actually _want_ the word-splitting behavior on `typecheck_cmd` below,
-    # so turn off the warning
-    # shellcheck disable=SC2086
-    try $typecheck_cmd "${python_folders[@]}" $compose_files "test/"
-
-    try bin/pyactivate -m ruff --extend-exclude=misc/dbt-materialize .
+    try xargs bin/pyactivate -m ruff < "$python_files_list"
     # We need to maintain compatibility with older Python versions for this
-    try bin/pyactivate -m ruff --target-version=py38 misc/dbt-materialize
+    try xargs bin/pyactivate -m ruff --target-version=py38 < "$dbt_files_list"
 fi
 
 try_status_report
